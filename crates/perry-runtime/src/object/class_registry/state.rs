@@ -920,12 +920,6 @@ fn class_recorded_prototype_bits(class_id: u32) -> Option<u64> {
         .then_some(actual)
 }
 
-/// True when `Object.setPrototypeOf(Ctor, null)` explicitly severed the
-/// constructor's prototype chain, as opposed to never having linked one.
-pub(crate) fn class_static_prototype_is_nulled(class_id: u32) -> bool {
-    class_recorded_prototype_bits(class_id) == Some(crate::value::TAG_NULL)
-}
-
 /// The constructor-side `[[Prototype]]` recorded for `class_id`, or null.
 pub(crate) fn class_static_prototype(class_id: u32) -> *mut ObjectHeader {
     match class_recorded_prototype_bits(class_id) {
@@ -1415,7 +1409,7 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
 /// is a ConstFn lane (step 5C), and a later store of anything else to it
 /// generalizes the lane through the store check.
 fn learn_decl_prototype_method_lanes(proto: *mut ObjectHeader, class_id: u32) {
-    let home = super::super::class_prototype_ref_value(class_id).to_bits();
+    let home = super::super::class_method_home_word(class_id).to_bits();
     unsafe {
         crate::object::shapes::learn_object_constfn_lanes(proto, |_, bits| {
             class_method_entry_object_of(bits, home)
@@ -1782,32 +1776,40 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                 }
             }
         };
-        let parent_proto = evaluated_parent_proto.or_else(|| {
-            get_parent_class_id(class_id)
-                .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
-                .and_then(|parent_id| {
-                    let parent_proto = class_decl_prototype_value(parent_id);
-                    let parent_bits = parent_proto.to_bits();
-                    if (parent_bits >> 48) == 0x7FFD {
-                        return Some(parent_bits);
-                    }
-                    // #10599: `parent_id` may be a RESERVED native-builtin class id
-                    // rather than a declared class -- `builtin_parent_reserved_class_id`
-                    // in perry-codegen wires this edge for `class Sub extends
-                    // EventEmitter {}`, which has no `js_register_class_name`
-                    // registration of its own. `class_decl_prototype_value` bails
-                    // immediately for such an id (`class_name_for_id` is `None`), so
-                    // without this fallback the lookup above always misses and
-                    // execution falls through to the runtime-function-valued branch
-                    // below, which also misses (there is no dynamic-parent VALUE for
-                    // a statically-resolved reserved id) -- landing `Sub.prototype`'s
-                    // `[[Prototype]]` on `Object.prototype` instead of
-                    // `EventEmitter.prototype`.
-                    reserved_native_parent_prototype_bits(parent_id)
-                })
-        });
-        parent_proto.or_else(global_object_prototype_bits)
+        evaluated_parent_proto.or_else(|| static_parent_prototype_bits(class_id))
     }
+}
+
+/// The [[Prototype]] of `class_id`'s prototype object that its declaration
+/// fixes statically: the declared parent class's prototype, a reserved native
+/// parent's, or `Object.prototype`. It reads declaration facts only, never
+/// `class_id`'s own declaration holder, so a per-evaluation prototype with no
+/// pinned heritage links through it without building the template's holder
+/// (`finish_class_evaluation_prototype`, S7b).
+pub(crate) fn static_parent_prototype_bits(class_id: u32) -> Option<u64> {
+    let parent_proto = get_parent_class_id(class_id)
+        .filter(|parent_id| *parent_id != 0 && *parent_id != class_id)
+        .and_then(|parent_id| {
+            let parent_proto = class_decl_prototype_value(parent_id);
+            let parent_bits = parent_proto.to_bits();
+            if (parent_bits >> 48) == 0x7FFD {
+                return Some(parent_bits);
+            }
+            // #10599: `parent_id` may be a RESERVED native-builtin class id
+            // rather than a declared class -- `builtin_parent_reserved_class_id`
+            // in perry-codegen wires this edge for `class Sub extends
+            // EventEmitter {}`, which has no `js_register_class_name`
+            // registration of its own. `class_decl_prototype_value` bails
+            // immediately for such an id (`class_name_for_id` is `None`), so
+            // without this fallback the lookup above always misses and
+            // execution falls through to the runtime-function-valued branch
+            // below, which also misses (there is no dynamic-parent VALUE for
+            // a statically-resolved reserved id) -- landing `Sub.prototype`'s
+            // `[[Prototype]]` on `Object.prototype` instead of
+            // `EventEmitter.prototype`.
+            reserved_native_parent_prototype_bits(parent_id)
+        });
+    parent_proto.or_else(global_object_prototype_bits)
 }
 
 pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {

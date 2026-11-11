@@ -99,9 +99,12 @@ pub use header::resizable_max_byte_length;
 pub(crate) use header::{resizable_info, set_resizable, ResizableInfo};
 #[cfg(test)]
 pub(crate) use resizable::alloc_resizable_array_buffer;
-pub(crate) use resizable::array_buffer_resize;
+pub(crate) use resizable::{
+    array_buffer_resize, buffer_new_with_options, shared_array_buffer_grow,
+};
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
+    js_shared_array_buffer_new_with_options,
 };
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----

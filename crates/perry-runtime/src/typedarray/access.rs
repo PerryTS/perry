@@ -493,7 +493,7 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
         let header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let obj_type = (*header).obj_type;
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             let arr = addr as *const ArrayHeader;
             let len = crate::array::js_array_length(arr) as usize;
             return Some(SetSource::Array(arr, len));

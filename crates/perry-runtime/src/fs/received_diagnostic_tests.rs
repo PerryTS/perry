@@ -59,10 +59,7 @@ fn received_primitives_and_numbers() {
     ] {
         check(value, &format!("type number ({expected})"));
     }
-    check(
-        f64::from_bits(JSValue::int32(-42).bits()),
-        "type number (-42)",
-    );
+    check(f64::from(-42), "type number (-42)");
 }
 
 #[test]

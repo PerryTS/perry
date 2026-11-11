@@ -17,6 +17,85 @@ fn emitted_roots() -> Vec<u64> {
 }
 
 #[test]
+fn worker_listener_admission_preserves_received_values_and_web_null() {
+    std::thread::spawn(|| {
+        let owner = enter_worker_agent();
+        perry_runtime::gc::gc_init();
+        let scope = RuntimeHandleScope::new();
+        let id = thread_exit_probe::insert_worker_for_test(
+            JSValue::undefined().bits(),
+            JSValue::undefined().bits(),
+        );
+        let worker = scope.root_nanbox_f64(object_value(worker_surface::worker_object(
+            id,
+            &WorkerOptions::default(),
+        )));
+        WORKERS.lock().unwrap().get_mut(&id).unwrap().object_bits = worker.get_nanbox_u64();
+        let event = scope.root_nanbox_f64(string_value("message"));
+        let object =
+            scope.root_nanbox_f64(object_value(perry_runtime::object::js_object_alloc(0, 0)));
+        for method in ["on", "once", "addListener", "off", "removeListener"] {
+            for (index, received) in [
+                "null",
+                "undefined",
+                "type number (1)",
+                "an instance of Object",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let value = scope.root_nanbox_f64(match index {
+                    0 => js_null(),
+                    1 => js_undefined(),
+                    2 => 1.0,
+                    _ => object.get_nanbox_f64(),
+                });
+                let caught = perry_runtime::exception::catch_thrown(|| {
+                    super::port_transfer_tests::call(
+                        worker.get_nanbox_f64(),
+                        method,
+                        &[event.get_nanbox_f64(), value.get_nanbox_f64()],
+                    )
+                })
+                .expect_err(method);
+                let error = scope.root_nanbox_f64(caught.value());
+                for (key, expected) in [
+                    ("name", "TypeError".to_string()),
+                    ("code", "ERR_INVALID_ARG_TYPE".to_string()),
+                    (
+                        "message",
+                        format!(
+                        "The \"listener\" argument must be of type function. Received {received}"
+                    ),
+                    ),
+                ] {
+                    assert_eq!(
+                        string_value_to_string(get_object_field_from_value(
+                            error.get_nanbox_f64(),
+                            key,
+                        ))
+                        .as_deref(),
+                        Some(expected.as_str()),
+                        "{method}: {key}",
+                    );
+                }
+            }
+        }
+        for method in ["addEventListener", "removeEventListener"] {
+            super::port_transfer_tests::call(
+                worker.get_nanbox_f64(),
+                method,
+                &[event.get_nanbox_f64(), js_null()],
+            );
+        }
+        WORKERS.lock().unwrap().remove(&id);
+        perry_runtime::agent::retire_agent(owner);
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
 fn worker_scanner_keeps_owner_roots_and_excludes_another_agents_heap() {
     std::thread::spawn(|| {
         let owner = enter_worker_agent();

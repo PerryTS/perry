@@ -278,6 +278,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         {
             true
         }
+        // I32 at rest B2: a present at-rest slot is decoded to its int32
+        // Number (`rest_elems::number_read`).
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
         Expr::LocalGet(id) => {
             local_is_number(ctx, *id)
                 || ctx.integer_locals.contains(id)
@@ -800,6 +803,8 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         {
             true
         }
+        // I32 at rest B2: the decoded word of a present at-rest slot.
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
         // #10777: a `Ptr<Shape>`-proven receiver whose field is in the fact's
         // `numeric_fields` already lowers to a BARE `load double` —
         // `expr/property_get.rs` and `expr/property_get/helpers.rs` emit

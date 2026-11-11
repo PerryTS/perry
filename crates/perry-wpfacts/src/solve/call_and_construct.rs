@@ -101,7 +101,11 @@ impl Model {
                     self.this_into(call, t, this_tok);
                 }
             }
-            TokKind::Bound(_) => self.call_bound(call, t),
+            TokKind::Bound(_) => {
+                // −0 tolerance: a bound function's arguments are observed.
+                self.zs_call_args(call);
+                self.call_bound(call, t)
+            }
             TokKind::ClassObj(_) => {
                 // Calling a class without `new` throws; nothing flows.
             }
@@ -227,6 +231,8 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
+        // −0 tolerance: unknown code receives the arguments.
+        self.zs_call_args(call);
         if t == TOP {
             self.top_calls += 1;
         }
@@ -542,7 +548,7 @@ impl Model {
             return;
         }
         let name = self.atoms[name as usize].clone();
-        self.with_b(|m| builtins::construct_named(m, &name, call));
+        self.with_native(call, |m| builtins::construct_named(m, &name, call));
     }
 
     /// The token `new` at `call` gives template `tm`: one per birth site. A
@@ -667,11 +673,23 @@ impl Model {
             // (TypeError): nothing flows.
             TokKind::BuiltinFn(Native::Member { .. })
                 if !builtins::native_constructible(self, t) => {}
+            // A realm constructor whose declaration says what `new` does
+            // (declared at the body its dispatch arm calls): the declaration
+            // runs, as for a global constructor by name. Any value of it
+            // (`const S = inspector.Session; new S()`) is that constructor.
+            TokKind::BuiltinFn(Native::Member { identity, .. })
+                if !self.unit_mode && builtins::declared_construct(identity).is_some() =>
+            {
+                let e = builtins::declared_construct(identity).expect("guarded");
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m| builtins::run_construct(m, e, call));
+            }
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }
                 let r = self.reason("passed to `new` of an unknown constructor");
+                self.zs_call_args(call);
                 for &a in c.args.iter().chain(c.spread.iter()) {
                     self.sink_node(a, r);
                 }
@@ -684,6 +702,7 @@ impl Model {
                 }
             }
             TokKind::Bound(b) => {
+                self.zs_call_args(call);
                 if self.bound_synth.contains(&call) {
                     self.into_merged(call, b, true);
                     return;
@@ -706,7 +725,9 @@ impl Model {
                 self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
             }
-            TokKind::Builtin(ns) => self.with_b(|m| builtins::new_builtin_ns(m, ns, call)),
+            TokKind::Builtin(ns) => {
+                self.with_native(call, |m| builtins::new_builtin_ns(m, ns, call))
+            }
             _ => {}
         }
     }
@@ -849,7 +870,7 @@ impl Model {
                 self.add_tok(receiver, inst);
             }
             (None, None, Some(_)) => {
-                self.with_b(|m| builtins::native_parent_ctor(m, tm, call, inst))
+                self.with_native(call, |m| builtins::native_parent_ctor(m, tm, call, inst))
             }
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
@@ -896,7 +917,9 @@ impl Model {
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
         // Object tokens only (a primitive return is ignored by `new`).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        self.edge(ret, filt);
+        // A body that completes returns `undefined` (`narrow::may_complete`),
+        // which `new` never yields.
+        self.cons(ret, Cons::NotNullish { dst: filt });
         // `filt` keeps prims; dst gets them too, which is a harmless
         // over-approximation for kinds only when the ctor returns
         // primitives — but it would pollute `new` results, so relay

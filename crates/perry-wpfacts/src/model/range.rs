@@ -83,7 +83,7 @@ pub fn widen(old: Iv, next: Iv) -> Iv {
     } else {
         next.lo
     };
-    Iv::int(lo, hi)
+    Iv::int(lo, hi).with_nz(next.nz)
 }
 
 /// The two lattices a value-copy delivers beside the values: the Numbers'
@@ -102,18 +102,19 @@ impl Rg {
 }
 
 /// Every String is `""` (code -1) or one code unit.
-pub const CHAR_ANY: Iv = Iv { lo: -1, hi: 65535 };
+pub const CHAR_ANY: Iv = Iv {
+    lo: -1,
+    hi: 65535,
+    nz: false,
+};
 
 /// The code interval of a String literal: a point for at most one code
 /// unit (`""` is -1), ⊤ for a longer one.
 pub fn char_literal(s: &str) -> Iv {
     let mut units = s.encode_utf16();
     match (units.next(), units.next()) {
-        (None, _) => Iv { lo: -1, hi: -1 },
-        (Some(u), None) => Iv {
-            lo: u as i64,
-            hi: u as i64,
-        },
+        (None, _) => Iv::int(-1, -1),
+        (Some(u), None) => Iv::int(u as i64, u as i64),
         _ => Iv::TOP,
     }
 }
@@ -128,13 +129,10 @@ pub fn chars_to_number(c: Iv) -> Iv {
         return Iv::TOP;
     }
     if c.lo == -1 && c.hi == -1 {
-        return Iv { lo: 0, hi: 0 };
+        return Iv::int(0, 0);
     }
     if c.lo >= 0x30 && c.hi <= 0x39 {
-        return Iv {
-            lo: c.lo - 0x30,
-            hi: c.hi - 0x30,
-        };
+        return Iv::int(c.lo - 0x30, c.hi - 0x30);
     }
     Iv::TOP
 }
@@ -143,6 +141,12 @@ pub fn chars_to_number(c: Iv) -> Iv {
 pub struct Iv {
     pub lo: i64,
     pub hi: i64,
+    /// −0 tolerance (RFC §10.3 as amended, PR D): besides the integers in
+    /// `[lo, hi]` the node may hold `-0`. Only the solve sets it (rules
+    /// under `eval_with(.., true)`); `0` then lies in `[lo, hi]`. After the
+    /// zero-sign solve no exported interval carries it (`zero_sign`): a node
+    /// whose `-0` some use can observe is ⊤, any other drops the bit.
+    pub nz: bool,
 }
 
 impl Default for Iv {
@@ -153,19 +157,26 @@ impl Default for Iv {
 
 impl Iv {
     /// No Number (the bottom; `lo > hi`).
-    pub const EMPTY: Iv = Iv { lo: 1, hi: 0 };
+    pub const EMPTY: Iv = Iv {
+        lo: 1,
+        hi: 0,
+        nz: false,
+    };
     /// Any Number.
     pub const TOP: Iv = Iv {
         lo: i64::MIN,
         hi: i64::MAX,
+        nz: false,
     };
     pub const I32: Iv = Iv {
         lo: i32::MIN as i64,
         hi: i32::MAX as i64,
+        nz: false,
     };
     pub const U32: Iv = Iv {
         lo: 0,
         hi: u32::MAX as i64,
+        nz: false,
     };
 
     pub fn is_empty(self) -> bool {
@@ -185,7 +196,20 @@ impl Iv {
         }
         let lo = if lo < -SAFE { -BIG } else { lo };
         let hi = if hi > SAFE { BIG } else { hi };
-        Iv { lo, hi }
+        Iv { lo, hi, nz: false }
+    }
+
+    /// `self`, which may also hold `-0` when `nz` (a tolerant rule's
+    /// result): the hull then keeps `0`. Empty and ⊤ stay as they are.
+    pub fn with_nz(self, nz: bool) -> Iv {
+        if !nz || self.is_empty() || self.is_top() {
+            return self;
+        }
+        Iv {
+            lo: self.lo.min(0),
+            hi: self.hi.max(0),
+            nz: true,
+        }
     }
 
     /// Some bound is past ±2^53.
@@ -217,6 +241,7 @@ impl Iv {
         Iv {
             lo: self.lo.min(o.lo),
             hi: self.hi.max(o.hi),
+            nz: self.nz || o.nz,
         }
     }
 
@@ -225,8 +250,13 @@ impl Iv {
         self.is_empty() || (!self.is_top() && o.lo <= self.lo && self.hi <= o.hi)
     }
 
-    fn has_zero(self) -> bool {
+    pub(crate) fn has_zero(self) -> bool {
         self.lo <= 0 && 0 <= self.hi
+    }
+
+    /// The interval without the `-0` bit.
+    pub fn strip(self) -> Iv {
+        Iv { nz: false, ..self }
     }
 }
 
@@ -351,6 +381,82 @@ fn mask_above(v: i64) -> i64 {
 /// operand holds only Numbers (the caller's purity test): an arithmetic
 /// operator then coerces nothing. A unary operator ignores `r`.
 pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
+    eval_with(op, l, r, false)
+}
+
+/// [`eval`], with −0 tolerance when `tol` (RFC §10.3 as amended, PR D;
+/// `Model::zero_sign`): a result that is ⊤ under the strict rule only because
+/// it may be `-0` (`0 * negative`, `-x` of an interval holding 0, `%` of a
+/// possibly negative dividend) is the integer hull with [`Iv::nz`], and the
+/// bit propagates: `-0 + -0`, `-0 - 0`, `-0 * x`, `++`/`--`, a loop test's
+/// clip, `Math.sign`/`min`/`max`/the roundings keep it; `Math.abs`, the
+/// bitwise operators and `Math.imul`/`clz32` clear it (their results are
+/// never `-0`). Without `tol` no operand carries the bit and this is
+/// [`eval`].
+pub fn eval_with(op: RangeOp, l: Iv, r: Iv, tol: bool) -> Iv {
+    if !tol {
+        return eval_strict(op, l, r);
+    }
+    let unary = matches!(
+        op,
+        RangeOp::Neg
+            | RangeOp::BitNot
+            | RangeOp::Step(_)
+            | RangeOp::Abs
+            | RangeOp::Integral
+            | RangeOp::Sign
+            | RangeOp::Clz32
+    );
+    if l.is_empty() || (!unary && r.is_empty()) {
+        return Iv::EMPTY;
+    }
+    let (ls, rs) = (l.strip(), r.strip());
+    match op {
+        RangeOp::Mul if !l.is_top() && !r.is_top() && !l.big() && !r.big() => {
+            let ps = [
+                l.lo.checked_mul(r.lo),
+                l.lo.checked_mul(r.hi),
+                l.hi.checked_mul(r.lo),
+                l.hi.checked_mul(r.hi),
+            ];
+            if ps.iter().any(Option::is_none) {
+                return Iv::TOP;
+            }
+            let ps: Vec<i64> = ps.into_iter().flatten().collect();
+            let iv = Iv::int(*ps.iter().min().unwrap(), *ps.iter().max().unwrap());
+            // `-0 * x` (x ≥ 0 or -0), `0 * negative`: -0.
+            let nz = l.nz || r.nz || (l.has_zero() && r.lo < 0) || (r.has_zero() && l.lo < 0);
+            iv.with_nz(nz)
+        }
+        RangeOp::Neg if !l.is_top() => Iv::int(-l.hi, -l.lo).with_nz(l.has_zero()),
+        // The result has the dividend's sign and is smaller than the
+        // divisor in magnitude; `-4 % 2` and `-0 % 3` are -0. A zero
+        // divisor is NaN.
+        RangeOp::Mod if !l.is_top() && !r.is_top() && !r.has_zero() && (l.lo < 0 || l.nz) => {
+            let m = r.lo.unsigned_abs().max(r.hi.unsigned_abs()) as i64 - 1;
+            let lo = if l.lo < 0 {
+                -(l.lo.unsigned_abs().min(m as u64) as i64)
+            } else {
+                0
+            };
+            Iv::int(lo, l.hi.max(0).min(m)).with_nz(true)
+        }
+        _ => {
+            let iv = eval_strict(op, ls, rs);
+            let nz = match op {
+                RangeOp::Add => l.nz && r.nz,
+                RangeOp::Sub => l.nz && r.has_zero(),
+                RangeOp::Step(_) | RangeOp::Clip(_) | RangeOp::Integral | RangeOp::Sign => l.nz,
+                RangeOp::Min | RangeOp::Max => l.nz || r.nz,
+                _ => false,
+            };
+            iv.with_nz(nz && iv.has_zero())
+        }
+    }
+}
+
+/// The strict rule ([`eval`]): no result may be `-0`.
+fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
     let unary = matches!(
         op,
         RangeOp::Neg
@@ -418,7 +524,7 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
         RangeOp::Shr => {
             let a = to_int32(l);
             match r {
-                Iv { lo, hi } if lo == hi && !r.is_top() => {
+                Iv { lo, hi, .. } if lo == hi && !r.is_top() => {
                     let k = (lo & 31) as u32;
                     Iv::int(a.lo >> k, a.hi >> k)
                 }
@@ -426,7 +532,7 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
             }
         }
         RangeOp::UShr => match r {
-            Iv { lo, hi } if lo == hi && !r.is_top() => {
+            Iv { lo, hi, .. } if lo == hi && !r.is_top() => {
                 let k = (lo & 31) as u32;
                 let a = to_int32(l);
                 if a.lo >= 0 {
@@ -474,9 +580,82 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
     }
 }
 
+/// N6 (`Model::const_numbers`): the exact result of a bitwise operator where
+/// [`eval`] gives only its int32 hull. Two operands that are each one int32
+/// value give the one value the operator computes; a left shift by one
+/// count scales both bounds when neither leaves the int32 range. `None`:
+/// `eval` decides. Each result lies inside `eval`'s for the same operands.
+pub fn eval_exact(op: RangeOp, l: Iv, r: Iv) -> Option<Iv> {
+    let point = |a: Iv| (!a.is_empty() && !a.is_top() && a.lo == a.hi).then_some(a.lo);
+    if l.is_empty() || l.is_top() || !l.within(Iv::I32) {
+        return None;
+    }
+    // ToUint32 of the count, masked to five bits.
+    let count = point(r).map(|k| (k & 31) as u32);
+    if op == RangeOp::Shl {
+        let (lo, hi) = (l.lo << count?, l.hi << count?);
+        let iv = Iv::int(lo, hi);
+        return iv.within(Iv::I32).then_some(iv);
+    }
+    let a = point(l)? as i32;
+    let v = match op {
+        RangeOp::UShr => i64::from((a as u32) >> count?),
+        RangeOp::BitAnd | RangeOp::BitOr | RangeOp::BitXor => {
+            let b = point(r).filter(|_| r.within(Iv::I32))? as i32;
+            i64::from(match op {
+                RangeOp::BitAnd => a & b,
+                RangeOp::BitOr => a | b,
+                _ => a ^ b,
+            })
+        }
+        _ => return None,
+    };
+    Some(Iv::int(v, v))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_bitwise_results_lie_inside_the_hull() {
+        let p = |v: i64| Iv::int(v, v);
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(17)), Some(p(131072)));
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(49)), Some(p(131072)));
+        assert_eq!(eval_exact(RangeOp::Shl, p(-3), p(4)), Some(p(-48)));
+        assert_eq!(
+            eval_exact(RangeOp::Shl, Iv::int(0, 7), p(4)),
+            Some(Iv::int(0, 112))
+        );
+        // `1 << 31` is int32 MIN: the bounds leave the range.
+        assert_eq!(eval_exact(RangeOp::Shl, p(1), p(31)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::int(0, 7), Iv::int(1, 2)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::TOP, p(1)), None);
+        assert_eq!(eval_exact(RangeOp::Shl, Iv::int(0, 1 << 40), p(1)), None);
+        assert_eq!(
+            eval_exact(RangeOp::BitOr, p(1 << 17), p(1 << 18)),
+            Some(p(393216))
+        );
+        assert_eq!(eval_exact(RangeOp::BitAnd, p(-1), p(255)), Some(p(255)));
+        assert_eq!(eval_exact(RangeOp::BitXor, p(-1), p(1)), Some(p(-2)));
+        assert_eq!(eval_exact(RangeOp::BitOr, p(1), Iv::int(0, 1)), None);
+        assert_eq!(eval_exact(RangeOp::BitOr, p(1), p(1 << 40)), None);
+        assert_eq!(
+            eval_exact(RangeOp::UShr, p(-1), p(0)),
+            Some(p(u32::MAX as i64))
+        );
+        assert_eq!(eval_exact(RangeOp::Add, p(1), p(1)), None);
+        for (op, l, r) in [
+            (RangeOp::Shl, p(5), p(3)),
+            (RangeOp::Shl, Iv::int(-4, 9), p(2)),
+            (RangeOp::BitAnd, p(-7), p(12)),
+            (RangeOp::BitOr, p(6), p(9)),
+            (RangeOp::BitXor, p(6), p(-9)),
+            (RangeOp::UShr, p(-6), p(3)),
+        ] {
+            assert!(eval_exact(op, l, r).unwrap().within(eval(op, l, r)));
+        }
+    }
 
     #[test]
     fn literals_are_points_except_negative_zero_and_fractions() {
@@ -533,6 +712,54 @@ mod tests {
             Iv::int(0, 7)
         );
         assert!(eval(RangeOp::Mod, Iv::int(0, 100), Iv::int(0, 8)).is_top());
+    }
+
+    #[test]
+    fn tolerance_gives_the_hull_and_marks_negative_zero() {
+        let t = |op, l, r| eval_with(op, l, r, true);
+        let nzz = Iv::int(0, 0).with_nz(true);
+        // `color * promotion`: [-1,1] x [0,7] may be -0.
+        let m = t(RangeOp::Mul, Iv::int(-1, 1), Iv::int(0, 7));
+        assert_eq!((m.lo, m.hi, m.nz), (-7, 7, true));
+        // No zero and no negative operand: no -0.
+        assert!(!t(RangeOp::Mul, Iv::int(-1, 1), Iv::int(4, 4)).nz);
+        assert!(!t(RangeOp::Mul, Iv::int(0, 3), Iv::int(2, 5)).nz);
+        // `-0 * 5` is -0, `-0 * -5` is 0 (kept: the rule is a hull).
+        assert!(t(RangeOp::Mul, nzz, Iv::int(5, 5)).nz);
+        let n = t(RangeOp::Neg, Iv::int(0, 6), Iv::EMPTY);
+        assert_eq!((n.lo, n.hi, n.nz), (-6, 0, true));
+        assert_eq!(t(RangeOp::Neg, Iv::int(1, 6), Iv::EMPTY), Iv::int(-6, -1));
+        let md = t(RangeOp::Mod, Iv::int(-9, 4), Iv::int(4, 4));
+        assert_eq!((md.lo, md.hi, md.nz), (-3, 3, true));
+        assert!(t(RangeOp::Mod, Iv::int(-9, 4), Iv::int(0, 4)).is_top());
+        // `-0 + -0` is -0; `-0 + x` for an x that is never -0 is not.
+        assert!(t(RangeOp::Add, nzz, nzz).nz);
+        assert!(!t(RangeOp::Add, nzz, Iv::int(0, 6)).nz);
+        assert!(t(RangeOp::Sub, nzz, Iv::int(0, 6)).nz);
+        assert!(!t(RangeOp::Sub, nzz, Iv::int(1, 6)).nz);
+        // A clip that excludes 0 excludes -0.
+        let c = Iv::int(-6, 6).with_nz(true);
+        assert!(!t(RangeOp::Clip(CLIP_GT), c, Iv::int(0, 0)).nz);
+        assert!(t(RangeOp::Clip(CLIP_GE), c, Iv::int(0, 0)).nz);
+        // The never-negative-zero results.
+        for op in [
+            RangeOp::Abs,
+            RangeOp::BitOr,
+            RangeOp::BitAnd,
+            RangeOp::Shr,
+            RangeOp::Imul,
+        ] {
+            assert!(!t(op, c, Iv::int(0, 0)).nz, "{op:?}");
+        }
+        assert!(t(RangeOp::Sign, c, Iv::EMPTY).nz);
+        assert!(t(RangeOp::Min, c, Iv::int(0, 0)).nz);
+        assert!(!t(RangeOp::Max, c, Iv::int(1, 1)).nz);
+        // A join keeps the bit, widening keeps it, ⊤ absorbs it.
+        assert!(Iv::int(1, 3).join(nzz).nz);
+        assert!(widen(Iv::int(0, 3).with_nz(true), Iv::int(0, 4).with_nz(true)).nz);
+        assert!(c.join(Iv::TOP).is_top());
+        // Without tolerance the strict rules, whatever the operands.
+        assert!(eval(RangeOp::Mul, Iv::int(-1, 1), Iv::int(0, 7)).is_top());
     }
 
     #[test]

@@ -2,11 +2,10 @@
 //! proven Numbers.
 //!
 //! The public entry of such a method guards a boxed argument with the exact
-//! i32 test: an INT32 box or a double that converts exactly, then a sign
-//! test. A call site that proves the argument a canonical double
-//! (`expr_produces_canonical_raw_f64`) applies that predicate's plain-double
-//! half (`emit_typed_i32_plain_guard_and_raw`, the very half the public guard
-//! uses) inline and selects the clone or the generic body itself: the clone
+//! i32 test: a double that converts exactly, then a sign test. A call site
+//! that proves the argument a canonical double
+//! (`expr_produces_canonical_raw_f64`) applies that predicate
+//! (`emit_typed_i32_plain_guard_and_raw`) inline and selects the clone or the generic body itself: the clone
 //! admits exactly the values the public guard admits (no `-0`, NaN, fraction
 //! or value outside the i32 range).
 //!
@@ -153,8 +152,8 @@ pub(crate) fn number_index_positions(
 }
 
 /// Check mode (`PERRY_VERIFY_FACTS=1`): the argument the proof covers is an
-/// exact int32 (a plain double or an INT32 box, never `-0`) and not
-/// negative (fact `index argument`).
+/// exact int32 (a plain double, never `-0`) and not negative (fact `index
+/// argument`).
 fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::IndexArgument,
@@ -165,7 +164,9 @@ fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
         return;
     }
     let blk = ctx.block();
-    let (exact, int) = crate::codegen::emit_typed_i32_guard_and_raw(blk, value);
+    // A Number is a plain double: the witness admits an exact int32 double.
+    let bits = blk.bitcast_double_to_i64(value);
+    let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, value, &bits);
     let nonnegative = blk.icmp_sge(I32, &int, "0");
     let ok = blk.and(I1, &exact, &nonnegative);
     crate::verify_facts::tick(ctx);
@@ -197,12 +198,18 @@ fn witness_nonneg(ctx: &mut FnCtx<'_>, value: &str, proof: Proof) {
 }
 
 /// The i32 of a proven non-negative int32 local: its canonical i32 slot, or
-/// its double (an exact int32: plain or an INT32 box).
+/// its double (an exact int32, `proven_number_raw`).
 fn proven_raw(ctx: &mut FnCtx<'_>, id: u32, value: &str) -> String {
     if let Some((slot, _)) = crate::expr::canonical_local_i32_slot(ctx, id) {
         return ctx.block().load(I32, &slot);
     }
-    crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), value)
+    proven_number_raw(ctx, value)
+}
+
+/// The i32 of `value`, a Number the facts prove an int32: a plain double, so
+/// one `fptosi`.
+fn proven_number_raw(ctx: &mut FnCtx<'_>, value: &str) -> String {
+    ctx.block().fptosi(crate::types::DOUBLE, value, I32)
 }
 
 /// Call `target`'s `$idx_u31` clone when every selected argument is a
@@ -225,16 +232,13 @@ pub(crate) fn emit_number_index_split(
             witness_nonneg(ctx, &value, proof);
             let raw = match proof {
                 Proof::Local(id) | Proof::Site(Some(id)) => proven_raw(ctx, id, &value),
-                Proof::Site(None) => {
-                    crate::codegen::emit_typed_i32_raw_assuming_guarded(ctx.block(), &value)
-                }
+                Proof::Site(None) => proven_number_raw(ctx, &value),
             };
             raws.push(raw);
             continue;
         }
         let blk = ctx.block();
-        // The public entry's own predicate, restricted to a canonical double
-        // (its INT32-box half can never match): both admit the same set, and
+        // The public entry's own predicate: both admit the same set, and
         // `-0` is excluded because the clone reads its index back as `+0`.
         let bits = blk.bitcast_double_to_i64(&value);
         let (exact, int) = crate::codegen::emit_typed_i32_plain_guard_and_raw(blk, &value, &bits);
@@ -285,3 +289,7 @@ pub(crate) fn emit_number_index_split(
         &[(fast.as_str(), &fast_end), (slow.as_str(), &slow_end)],
     )
 }
+
+#[cfg(test)]
+#[path = "index_split_tests.rs"]
+mod tests;

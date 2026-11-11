@@ -27,14 +27,23 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
-/// The value of the global object's declared constructor that class `tm`'s
-/// built-in parent names (`extends Error`: the realm's `Error`); `None`
-/// when the class has no built-in parent or the global declares none
-/// under that name (`EventEmitter` is a module export).
+/// The value of the declared constructor that class `tm`'s built-in parent
+/// names, read where the heritage binding reads it: the global object's
+/// (`extends Error`: the realm's `Error`) or the node module's export
+/// (`import { EventEmitter } from "events"`: the module's `EventEmitter`,
+/// the value the class object's [[Prototype]] holds). `None` when the class
+/// has no built-in parent or its holder declares none under that name.
 pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
-    let (_, name) = m.tmpls[tm as usize].native_parent.clone()?;
-    let identity = m.namespace_property(BuiltinNs::GlobalThis, &name)?.native?;
-    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity })))
+    let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let ns = if module == "builtin" {
+        BuiltinNs::GlobalThis
+    } else {
+        let ns = node_module_ns(&module)?;
+        m.tok(TokKind::Builtin(ns));
+        ns
+    };
+    let identity = m.namespace_property(ns, &name)?.native?;
+    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
 }
 
 /// `super(...)` into a native parent.
@@ -158,10 +167,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // its value is in the global's field.
     let stored = |t: Tok| {
         field_carries_stores
-            && matches!(
-                m.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-            )
+            && super::global_object(m, t)
             && !m.accessors.contains_key(&(t, a))
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
@@ -178,10 +184,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // The HIR global sentinel (`Other`, what a bare global name is read
     // off) is the global object: a write through either token is a write
     // of the one object.
-    let is_global = matches!(
-        m.toks[np as usize],
-        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-    );
+    let is_global = super::global_object(m, np);
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
         _ => is_global,
@@ -257,8 +260,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         _ => None,
     };
     if k.is_none() && !m.shared_replay && t != TOP {
-        m.global_written_own |=
-            matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+        m.global_written_own |= super::global_object(m, t);
     }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
@@ -310,13 +312,26 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 continue;
             }
             more = true;
-            // The census names the given prototype `src` as the write's
-            // source (no call runs it): a ⊤ there makes it derived.
+            // The census attributes the write to the operation that gave the
+            // prototype (its receiver node, or its call), and keeps the given
+            // value as `proto`: a ⊤ on either side makes the write derived.
+            let (by_node, by_call) = match m.census_given_by(t, src) {
+                Some((n, c)) => (
+                    if n == NO_NODE { src } else { n },
+                    (c != u32::MAX).then_some(c),
+                ),
+                None => (src, None),
+            };
             let saved = m
                 .diagnostic
                 .as_mut()
-                .map(|d| (d.cur_call.take(), d.cause_node.replace(src)));
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(by_node)));
+            if let Some(d) = m.diagnostic.as_mut() {
+                d.cur_call = by_call;
+            }
+            m.census_settling(Some(src));
             note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            m.census_settling(None);
             if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
                 (d.cur_call, d.cause_node) = saved;
             }
@@ -456,8 +471,6 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     });
                 }
                 NativeMiss::Load(dst) => {
-                    let bf = builtin_fn(m, "written key replay");
-                    m.add_tok(dst, bf);
                     m.add_top(dst, |_| {
                         "member of a builtin prototype written through ⊤".into()
                     });
@@ -490,6 +503,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     // Unmodeled code may also read what the program stored.
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
                     m.sink_node(f, r);
+                }
+                NativeMiss::Store(src, site) => {
+                    let prev = m.store_at.take();
+                    m.store_into(np, Key::Named(a), src, site);
+                    m.store_at = prev;
                 }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
@@ -536,6 +554,20 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     m.add_tok(cache, c);
     m.add_tok(ext, e);
     (c, e)
+}
+
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    t
 }
 
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
@@ -733,7 +765,6 @@ pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
 pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
     match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
-        _ => false,
+        _ => super::global_object(m, np),
     }
 }

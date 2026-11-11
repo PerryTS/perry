@@ -23,9 +23,58 @@ pub enum OwnGateAt {
     Value,
 }
 
+/// Where a program observes the identity of what a node holds
+/// (`Cons::Identity`; DESIGN-p4l4 §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityRoute {
+    /// `===` / `!==` between two values neither of which is a primitive
+    /// literal (a comparison with one is a presence test).
+    StrictEq,
+    /// `==` / `!=`: object against object is identity.
+    LooseEq,
+    /// A `switch` discriminant and its case expressions (`===`).
+    Switch,
+    /// `Object.is`.
+    ObjectIs,
+    /// `Object.prototype.isPrototypeOf`: the receiver against each object on
+    /// the argument's chain.
+    IsPrototypeOf,
+    /// A Map/Set/WeakMap/WeakSet key (SameValueZero, or identity).
+    Collection,
+    /// `structuredClone` keeps the sharing of what it copies.
+    Clone,
+    /// A realm declaration's `identity(slot)`.
+    Native,
+    /// `JSON.stringify` with a replacer that is no literal `null`,
+    /// `undefined` or array: the replacer receives every value serialized,
+    /// unseen by the model (DESIGN-p4l4 finding 14).
+    JsonReplacer,
+}
+
+impl IdentityRoute {
+    pub fn name(self) -> &'static str {
+        match self {
+            IdentityRoute::StrictEq => "===",
+            IdentityRoute::LooseEq => "==",
+            IdentityRoute::Switch => "switch",
+            IdentityRoute::ObjectIs => "Object.is",
+            IdentityRoute::IsPrototypeOf => "isPrototypeOf",
+            IdentityRoute::Collection => "collection-key",
+            IdentityRoute::Clone => "structuredClone",
+            IdentityRoute::Native => "native",
+            IdentityRoute::JsonReplacer => "JSON replacer",
+        }
+    }
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The program observes the identity of every object the node holds
+    /// (`route`). No flow and no effect on the solve: a fact the value-record
+    /// derive reads (DESIGN-p4l4 R4). Generated only under
+    /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
+    Identity { route: IdentityRoute },
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -151,12 +200,17 @@ pub enum Cons {
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
-    /// (`reason` `None`: only `from`, no ⊤.)
+    /// (`reason` `None`: only `from`, no ⊤; `from` = `dst`: only ⊤.)
     TopIfAny {
         dst: NodeId,
         from: NodeId,
         reason: Option<u32>,
     },
+    /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
+    /// data value or a marker leaves it inert (an instance's ⊤ arrives as
+    /// ⊤). The result of a rule that is unknown only when the node is: an
+    /// accessor walk over a holder whose any-key node holds ⊤.
+    TopIfTop { dst: NodeId, reason: u32 },
     /// `from` flows into `dst` once the node may hold a value `test`
     /// admits (`guard`): a conditional's branch, a logical operator's right
     /// operand, a destructuring default reach the result only when their
@@ -305,7 +359,14 @@ pub enum Cons {
     },
     /// Internal: install accessor `f` on every token of the node.
     /// `f`: the accessor's callable token (a known body or opaque callback).
-    AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// `from`: the node that held `f` (`NO_NODE`: none), the source the
+    /// census attributes an opaque accessor's ⊤ to.
+    AccessorInstall {
+        key: Atom,
+        f: Tok,
+        setter: bool,
+        from: NodeId,
+    },
     /// A direct Annex B runtime entry, dispatched per receiver token.
     AnnexBDefine { call: CallId, setter: bool },
     /// Reflect an accessor descriptor after ToPropertyKey.
@@ -361,6 +422,14 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
+    /// The past-the-end `undefined` of a computed-key read `o[key]` of
+    /// program Array token `obj` (DESIGN-p4l1 §2.8, PR-C1). Watches both
+    /// inputs: it sits on the key node and on `arr_len(obj)`. `dst` ⊇
+    /// `undefined` once the read may be at or past the length: the length
+    /// is ⊤, or the key may be anything but an integer Number in
+    /// `[0, arr_len(obj).lo)`. Below the length the read is an element or a
+    /// hole, which the read's own edges carry (`all_fields`, `hole`).
+    ElemUndef { obj: Tok, key: NodeId, dst: NodeId },
     /// `IdxLoad` of a read that runs only after an own-property test of the
     /// same object and key (`gen/own_guard.rs`): a program object's own
     /// fields under the key (`IdxOwnKey`), never its prototype chain; any
@@ -469,6 +538,10 @@ pub enum Cons {
     /// `[lo, hi]`: each keeps its birth length only when that interval lies
     /// inside it (`Model::arr_len_index`).
     LenIndex { lo: i64, hi: i64 },
+    /// The node is token `t`'s length node (`Model::arr_len`), and `t` is
+    /// permuted in place (`reverse`, `copyWithin`): once the length is not
+    /// a point it is ⊤ (`Model::arr_len_permuted`).
+    LenPermuted { t: Tok },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -507,8 +580,13 @@ pub enum Cons {
     /// by key, into each target (`Model::spread_into`), never through one
     /// any-key bucket.
     Spread { into: NodeId, site: SiteId },
-    /// The node holds the targets of a spread from source token `src`.
-    SpreadFrom { src: Tok, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`; `from` is the node of the
+    /// spread's source value (the census attributes a spread of ⊤ to it).
+    SpreadFrom {
+        src: Tok,
+        site: SiteId,
+        from: NodeId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -565,6 +643,8 @@ impl Cons {
         matches!(
             self,
             Cons::Range { .. }
+                | Cons::LenPermuted { .. }
+                | Cons::ElemUndef { .. }
                 | Cons::StoreIndexed { .. }
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
@@ -576,6 +656,7 @@ impl Cons {
 
     pub fn kind_name(&self) -> &'static str {
         match self {
+            Cons::Identity { .. } => "identity",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
@@ -601,6 +682,7 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
@@ -644,10 +726,12 @@ impl Cons {
             Cons::Arith { .. } => "arith",
             Cons::Range { .. } => "range",
             Cons::LenIndex { .. } => "lenindex",
+            Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ElemUndef { .. } => "elemundef",
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",

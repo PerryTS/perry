@@ -105,6 +105,8 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
+// DESIGN-p4l4 VR-3a: record bindings as their fields, before lowering.
+mod value_records;
 #[cfg(feature = "target-wasi")]
 pub mod wasi_toolchain;
 #[cfg(feature = "target-wasi")]
@@ -117,11 +119,14 @@ pub use codegen::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
     resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
-    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsBody,
-    FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv,
-    FpContractMode, ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth,
-    NamespaceEntry, NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
-    ProgramFactsView, ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
+    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
+    FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
+    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
+    FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
+    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};

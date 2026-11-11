@@ -28,9 +28,11 @@ pub(super) fn try_lower_scalar_replaced_new(
     // no fields populated. The call must go through the standard
     // heap-allocation path so `lower_new` emits the cross-module
     // `<prefix>__<class>_constructor` call.
-    if let Some(perry_hir::Expr::New {
-        class_name, args, ..
-    }) = init
+    if let Some(
+        literal @ perry_hir::Expr::New {
+            class_name, args, ..
+        },
+    ) = init
     {
         let is_imported = ctx.imported_class_ctors.contains_key(class_name);
         if ctx.non_escaping_news.contains_key(&id) && !is_imported {
@@ -103,10 +105,18 @@ pub(super) fn try_lower_scalar_replaced_new(
                                 .and_then(|fields| fields.get(fname))
                                 .cloned()
                         });
-                        if slot.is_none() && lower_unused_expr(ctx, arg)? {
+                        // SNAP census: the argument's parent is the literal.
+                        let unused = slot.is_none()
+                            && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_unused_expr(ctx, arg)
+                            })?;
+                        if unused {
                             continue;
                         }
-                        let arg_val = lower_expr(ctx, arg)?;
+                        let arg_val =
+                            crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_expr(ctx, arg)
+                            })?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
                             // #6968: anonymous-shape scalar replacement stores
@@ -150,11 +160,19 @@ pub(super) fn try_lower_scalar_replaced_new(
                     .map(|arg| crate::type_analysis::proven_type_from_init(ctx, arg))
                     .collect();
 
-                // Lower args first
-                let mut lowered_args: Vec<String> = Vec::new();
+                // Lower args first, into a rooted group. Each one is live
+                // until the parameter stores below: across the later
+                // arguments, the class value read for `new.target` (its
+                // first read builds the class object) and the field
+                // initializers that run before the constructor body. A
+                // `double` register is not a statepoint root, so a moving
+                // collection anywhere in that window would leave the
+                // parameter naming from-space.
+                let mut args_group = crate::rooting::open_rooted_group(args.len());
                 for a in args {
-                    lowered_args.push(lower_expr(ctx, a)?);
+                    args_group.lower(ctx, a, true)?;
                 }
+                let mut args_group = Some(args_group);
 
                 // Push scalar ctor target so PropertySet on `this` routes to allocas
                 ctx.scalar_ctor_target.push(id);
@@ -229,6 +247,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                     let saved_locals = ctx.locals.clone();
                     let saved_local_types = ctx.local_types.clone();
                     let saved_proven_local_types = ctx.proven_local_types.clone();
+                    let group = args_group.take().expect("arguments are stored once");
+                    let lowered_args = group.reread_all(ctx)?;
                     for (index, (param, arg_val)) in
                         ctor.params.iter().zip(lowered_args.iter()).enumerate()
                     {
@@ -243,6 +263,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                             }
                         }
                     }
+                    // The parameter slots hold the arguments from here on.
+                    group.release(ctx);
                     // #9081: the body is spliced into the enclosing frame,
                     // whose slot map never saw the ctor's locals.
                     crate::expr::root_inlined_ctor_pointer_locals(ctx, &ctor.params, &ctor.body);
@@ -259,6 +281,8 @@ pub(super) fn try_lower_scalar_replaced_new(
                         let saved_locals = ctx.locals.clone();
                         let saved_local_types = ctx.local_types.clone();
                         let saved_proven_local_types = ctx.proven_local_types.clone();
+                        let group = args_group.take().expect("arguments are stored once");
+                        let lowered_args = group.reread_all(ctx)?;
                         for (i, param) in parent_ctor.params.iter().enumerate() {
                             let slot = ctx.func.alloca_entry(DOUBLE);
                             if i < lowered_args.len() {
@@ -278,6 +302,7 @@ pub(super) fn try_lower_scalar_replaced_new(
                                 }
                             }
                         }
+                        group.release(ctx);
                         ctx.class_stack.pop();
                         ctx.class_stack.push(pname.to_string());
                         // #9081: same frame-splice rooting as the
@@ -308,6 +333,12 @@ pub(super) fn try_lower_scalar_replaced_new(
                     crate::lower_call::apply_field_initializers_recursive(
                         ctx, class_name, post_mode,
                     )?;
+                }
+
+                // No constructor body took the arguments: they were
+                // evaluated for their effects only.
+                if let Some(group) = args_group.take() {
+                    group.release(ctx);
                 }
 
                 ctx.new_target_stack.pop();

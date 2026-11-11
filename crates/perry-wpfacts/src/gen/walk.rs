@@ -224,7 +224,10 @@ impl<'a> Gen<'a> {
             if !i.is_deferred_require {
                 continue;
             }
-            let t = i.resolved_path.as_ref().and_then(|p| self.path_index.get(p).copied());
+            let t = i
+                .resolved_path
+                .as_ref()
+                .and_then(|p| self.path_index.get(p).copied());
             if let Some(t) = t {
                 let rt = self.module_raise(t);
                 self.m.edge(rt, self.m.lazy_raise);
@@ -323,6 +326,13 @@ impl<'a> Gen<'a> {
             self.name_enum_object(mi, s);
         }
         (self.order_ok, self.loop_depth) = saved;
+        // Codegen invokes this owned body when the module evaluates. Follow
+        // that explicit FuncId edge only after the owning init is activated.
+        if let Some(id) = self.modules[mi as usize].1.async_init_function {
+            if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
+                self.m.activate(f, "module-init");
+            }
+        }
         for f in self.functions_of(mi as usize) {
             if self.m.aborted {
                 return;
@@ -645,7 +655,13 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         #[cfg(test)]
         self.m.packet_declarations(&f.body);
-        let r = self.m.raise_of(fxi);
+        // An async function body that runs untransformed throws into its
+        // promise (`async_body`), never into its caller.
+        let r = if f.is_async && !f.is_generator {
+            self.thrown
+        } else {
+            self.m.raise_of(fxi)
+        };
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_fn_body_inner(mi, fxi, f, class, ctor_of);
         self.m.gen_region = region;
@@ -668,7 +684,7 @@ impl<'a> Gen<'a> {
         self.m.note_walked(fxi);
         let info = self.m.funcs[fxi as usize].clone();
         let fn_ctor = class.is_none() && ctor_of.is_none();
-        let fx = Fx {
+        let mut fx = Fx {
             guard: None,
             module: mi,
             f: fxi,
@@ -679,8 +695,17 @@ impl<'a> Gen<'a> {
             new_target: self.m.all_prim_node,
             fn_ctor,
         };
+        if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
+            // The view belongs to the function's body, like its parameters.
+            let prev = std::mem::replace(&mut self.m.cur_fn, fxi);
+            fx.this = self.sloppy_this(info.this);
+            self.m.cur_fn = prev;
+        }
+        if f.is_async && !f.is_generator {
+            fx = self.async_body(&fx).0;
+        }
         self.params(&fx, &f.params);
-        if f.is_async || f.is_generator {
+        if f.is_generator {
             // Not transformed (rare at this point): results are runtime
             // objects.
             self.m.add_top(info.ret, |_| {
@@ -702,13 +727,42 @@ impl<'a> Gen<'a> {
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
-        let scope = self
-            .int_ranges
-            .then(|| (fxi, narrow::scope_locals(&f.params, &f.body)));
-        let saved_scope = std::mem::replace(&mut self.narrow_scope, scope);
+        let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
         self.stmts(&fx, &f.body);
-        self.narrow_scope = saved_scope;
+        if ctor_of.is_none() && narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined` (a class
+            // constructor's completion is never its result: `new` and
+            // `super()` yield `this`).
+            self.m.add_prim(fx.ret, prim::UNDEF);
+        }
+        self.narrow_exit_body(scope);
         self.own_helper_finish(fxi, own);
+    }
+
+    /// The `this` a sloppy function's body reads: its callers' `this`,
+    /// where a nullish one is the global object and a primitive one is
+    /// boxed, an object the model does not hold (anything). The function's
+    /// own `this` node, its interface, stays what callers pass.
+    pub(crate) fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+        let view = self.m.node_l("sloppy-this");
+        self.m.own(view);
+        self.m.edge(this, view);
+        let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let global = self.tok_node(global_tok);
+        for (test, from) in [
+            (crate::model::guard::NULLISH, global),
+            (crate::model::guard::BOXED, self.m.top_tok_node),
+        ] {
+            self.m.cons(
+                view,
+                Cons::Guard {
+                    test,
+                    from,
+                    dst: view,
+                },
+            );
+        }
+        view
     }
 
     pub(crate) fn params(&mut self, fx: &Fx, params: &[perry_hir::Param]) {
@@ -1125,7 +1179,7 @@ impl<'a> Gen<'a> {
                 }
                 match init {
                     Some(e) => {
-                        let v = self.expr(fx, e);
+                        let v = self.expr_zs(fx, e);
                         self.m.edge(v, n);
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
@@ -1137,11 +1191,11 @@ impl<'a> Gen<'a> {
                 }
             }
             Stmt::Expr(e) => {
-                let _ = self.expr(fx, e);
+                let _ = self.expr_zs(fx, e);
             }
             Stmt::Return(e) => {
                 if let Some(e) = e {
-                    let v = self.expr(fx, e);
+                    let v = self.expr_zs(fx, e);
                     self.m.edge(v, fx.ret);
                 } else {
                     self.m.add_prim(fx.ret, prim::UNDEF);
@@ -1159,34 +1213,44 @@ impl<'a> Gen<'a> {
                     guard: Some((t, then_test)),
                     ..fx.clone()
                 };
+                // A branch that always leaves: its writes reach only where
+                // it jumps to (`narrow_leave`).
+                let pre = self.narrow_snapshot();
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(&then_fx, then_branch);
                 self.narrow_pop(k);
+                self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         ..fx.clone()
                     };
+                    let pre = self.narrow_snapshot();
                     let k = self.narrow_guard(fx, condition, false);
                     self.stmts(&else_fx, e);
                     self.narrow_pop(k);
+                    self.narrow_leave(e, pre);
                 }
             }
             Stmt::While { condition, body } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
-                let _ = self.expr(fx, condition);
+                self.jumps += 1;
+                let _ = self.expr_zs(fx, condition);
                 let k = self.narrow_guard(fx, condition, true);
                 self.stmts(fx, body);
                 self.narrow_pop(k);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::DoWhile { body, condition } => {
                 self.narrow_enter_loop(s);
                 self.loop_depth += 1;
-                let _ = self.expr(fx, condition);
+                self.jumps += 1;
+                let _ = self.expr_zs(fx, condition);
                 self.stmts(fx, body);
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::For {
@@ -1200,8 +1264,9 @@ impl<'a> Gen<'a> {
                     self.stmt(fx, i);
                 }
                 self.loop_depth += 1;
+                self.jumps += 1;
                 if let Some(c) = condition {
-                    let _ = self.expr(fx, c);
+                    let _ = self.expr_zs(fx, c);
                 }
                 // The update runs after the body: it reads the end node.
                 let narrowed = self.narrow_for(
@@ -1215,7 +1280,7 @@ impl<'a> Gen<'a> {
                     self.narrow_in_update(true);
                 }
                 if let Some(u) = update {
-                    let _ = self.expr(fx, u);
+                    let _ = self.expr_zs(fx, u);
                 }
                 if narrowed {
                     self.narrow_in_update(false);
@@ -1227,6 +1292,7 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_end();
                 }
+                self.jumps -= 1;
                 self.loop_depth -= 1;
             }
             Stmt::Labeled { body, .. } => self.stmt(fx, body),
@@ -1256,6 +1322,7 @@ impl<'a> Gen<'a> {
                 // finally run in the enclosing one.
                 let rt = self.m.node_l("RAISE-try");
                 let outer = std::mem::replace(&mut self.m.gen_region, Some(rt));
+                self.tries += 1;
                 self.stmts(fx, body);
                 self.m.gen_region = outer;
                 if let Some(c) = catch {
@@ -1272,20 +1339,26 @@ impl<'a> Gen<'a> {
                 if let Some(f) = finally {
                     self.stmts(fx, f);
                 }
+                self.tries -= 1;
             }
             Stmt::Switch {
                 discriminant,
                 cases,
             } => {
-                let d = self.expr(fx, discriminant);
-                // `===` against case values: no coercion.
-                let _ = d;
+                let d = self.expr_zs(fx, discriminant);
+                // `===` against case values: no coercion, identity.
+                self.jumps += 1;
+                self.m.identity(d, IdentityRoute::Switch);
                 for c in cases {
                     if let Some(t) = &c.test {
-                        let _ = self.expr(fx, t);
+                        let tv = self.expr_zs(fx, t);
+                        self.m.identity(tv, IdentityRoute::Switch);
+                        // N1: a case test is the strict equality it means.
+                        self.equality_demand(discriminant, t, d, tv);
                     }
                     self.stmts(fx, &c.body);
                 }
+                self.jumps -= 1;
             }
         }
     }

@@ -974,6 +974,9 @@ pub(crate) fn birth_literal(
 ) -> Option<anyhow::Result<String>> {
     if !super::static_shape_ids::has_static_final_shapes()
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+        // I32 at rest (PR C): this birth stores raw value words; a class with
+        // I32 lanes takes its constructor birth, whose stores encode.
+        || crate::expr::rest_fields::lanes_of_rep(base_rep) != 0
     {
         return None;
     }
@@ -1107,6 +1110,13 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
         let rep = *ctx
             .class_birth_reps
             .get(ctx.class_keys_globals.get(name)?)?;
+        // I32 at rest (PR C): a ConstFn final of a class with I32 lanes would
+        // drop them (`rest_fields`); such a class keeps its birth shape.
+        if crate::expr::rest_fields::lanes_of_rep(rep) != 0
+            || crate::expr::rest_fields::lanes_of(ctx, name) != 0
+        {
+            return None;
+        }
         let cid = *ctx.class_ids.get(name)?;
         super::static_constfn_class::class_final(
             ctx.strings.module_prefix(),

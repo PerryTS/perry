@@ -1,8 +1,4 @@
 use super::*;
-// Array.prototype thunks live in the sibling `array_error` module (split out of
-// `global_this`); pull them in directly so the prototype-install tables resolve
-// `array_proto_*_thunk` without routing through the trunk re-exports.
-use super::array_error::*;
 
 /// The prototype's Fetch getter delegates to the native storage of its
 /// receiver, including a source-compiled subclass's stashed native handle.
@@ -152,36 +148,11 @@ unsafe fn install_web_builtin_to_string_tag(proto_obj: *mut ObjectHeader, tag: &
     );
 }
 
-/// Universal `Object.prototype` methods inherited by every receiver in
-/// JS. Installed on every built-in constructor's prototype since Perry's
-/// prototype chain on these built-ins doesn't walk back up to a shared
-/// `Object.prototype` — so `Number.prototype.hasOwnProperty` would
-/// otherwise be missing.
-#[rustfmt::skip] const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
-    ("hasOwnProperty", 1),
-    ("isPrototypeOf", 1),
-    ("propertyIsEnumerable", 1),
-    ("toLocaleString", realm_noop_tolocalestring_0_metadata!(length)),
-    ("valueOf", 0),
-    // Annex B §B.2.2 legacy accessor helpers.
-    ("__defineGetter__", 2),
-    ("__defineSetter__", 2),
-    ("__lookupGetter__", 1),
-    ("__lookupSetter__", 1),
-    // `toString` is installed separately on Object/typed arrays etc. with
-    // dedicated thunks; do not include it here to avoid clobbering those.
-];
-
-/// [`OBJECT_PROTO_METHODS`] minus the members only `%Object.prototype%` owns
-/// (`hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and the Annex B
-/// accessor helpers; ECMA-262 20.1.3, B.2.2): the members a builtin prototype
-/// other than `Object.prototype` still installs. Every other builtin
-/// prototype INHERITS the Object-only ones (#11915) — a copy would hide a
-/// replacement on `Object.prototype` from arrays, Maps, functions and
-/// primitives alike.
-#[rustfmt::skip] const SHARED_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length)), ("valueOf", 0)];
-
-/// The Annex B §B.2.2 legacy accessor helpers of [`OBJECT_PROTO_METHODS`].
+/// The Annex B §B.2.2 legacy accessor helpers, own methods of
+/// `%Object.prototype%` only (ECMA-262 B.2.2). Every other builtin prototype
+/// inherits every `Object.prototype` member through its [[Prototype]] chain,
+/// as node does: a copy would be an own key node does not have and would
+/// hide `Object.prototype`'s method from the chain.
 const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("__defineGetter__", 2),
     ("__defineSetter__", 2),
@@ -189,39 +160,20 @@ const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("__lookupSetter__", 1),
 ];
 
-/// [`OBJECT_PROTO_METHODS`] for `builtin_name`'s prototype: all of them on
-/// `Object.prototype`, and on any other prototype only the members that are
-/// not `Object.prototype`'s alone.
-fn install_object_proto_copies(builtin_name: &str, proto_obj: *mut ObjectHeader) {
-    if builtin_name == "Object" {
-        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-    } else {
-        install_noop_proto_methods(proto_obj, SHARED_OBJECT_PROTO_METHODS);
+/// An accessor on a buffer kind's prototype (`ArrayBuffer.prototype.byteLength`
+/// and friends): a getter closure, no setter.
+fn install_buffer_proto_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    thunk: *const crate::closure::JsFunctionInfo,
+) {
+    unsafe {
+        let getter = crate::closure::js_closure_alloc(thunk, 0);
+        if !getter.is_null() {
+            let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+            install_builtin_getter(proto_obj, name, getter_bits);
+        }
     }
-}
-
-#[cfg(test)]
-#[test]
-fn shared_object_proto_methods_are_the_complement_of_the_object_only_ones() {
-    const OBJECT_ONLY_METHODS: [&str; 7] = [
-        "hasOwnProperty",
-        "isPrototypeOf",
-        "propertyIsEnumerable",
-        "__defineGetter__",
-        "__defineSetter__",
-        "__lookupGetter__",
-        "__lookupSetter__",
-    ];
-    let shared: Vec<&str> = OBJECT_PROTO_METHODS
-        .iter()
-        .map(|(name, _)| *name)
-        .filter(|name| !OBJECT_ONLY_METHODS.contains(name))
-        .collect();
-    let listed: Vec<&str> = SHARED_OBJECT_PROTO_METHODS
-        .iter()
-        .map(|(n, _)| *n)
-        .collect();
-    assert_eq!(shared, listed);
 }
 
 /// Populate well-known method properties on a built-in constructor's
@@ -246,10 +198,20 @@ fn shared_object_proto_methods_are_the_complement_of_the_object_only_ones() {
 /// spec descriptor. Mirrors `collection_proto_thunks::install_collection_iterator_symbol`;
 /// kept here because `Array.prototype` is populated in this module.
 fn install_builtin_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
+    install_builtin_well_known_symbol_method(proto_obj, "iterator", value);
+}
+
+/// `proto[Symbol.<symbol_name>] = value` as a method alias (`{ writable,
+/// configurable }`): the same function object as the named member.
+pub(crate) fn install_builtin_well_known_symbol_method(
+    proto_obj: *mut ObjectHeader,
+    symbol_name: &str,
+    value: f64,
+) {
     if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
-    let iter = crate::symbol::well_known_symbol("iterator");
+    let iter = crate::symbol::well_known_symbol(symbol_name);
     if iter.is_null() {
         return;
     }
@@ -440,25 +402,12 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
         set_intrinsic_to_string_tag(proto_obj, builtin_name);
-        install_object_proto_copies(builtin_name, proto_obj);
-        // `Object.prototype.toLocaleString` is a real generic method: it calls
-        // the receiver's `toString`. A no-op-backed copy is re-dispatched by
-        // name and would incorrectly call `receiver.toLocaleString` again.
-        // Keep this override collection-only; Array has its own element-wise
-        // locale-string behavior.
-        install_proto_method(
-            proto_obj,
-            "toLocaleString",
-            crate::fn_info!(#[realm(realm_decl! { Map.prototype.toLocaleString; Object.prototype.toLocaleString; Set.prototype.toLocaleString; WeakMap.prototype.toLocaleString; WeakSet.prototype.toLocaleString; })] export crate::object::global_this::array_error::object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-            0,
-        );
         return;
     }
     // #7947: WeakRef / FinalizationRegistry prototypes get brand-checking
     // thunks, so `WeakRef.prototype.deref.call(wr)`, `wr.deref.bind(wr)` and
     // `typeof wr.deref` resolve instead of answering `undefined`.
     if super::super::weakref_proto_thunks::install_weakref_proto_methods(builtin_name, proto_obj) {
-        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4795: TC39 explicit-resource-management stacks.
@@ -466,19 +415,16 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         builtin_name,
         proto_obj,
     ) {
-        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4100: primitive wrapper prototypes need real thunks for their own
     // methods so reflective calls brand-check `this` instead of hitting the
     // generic Object no-op/valueOf fallbacks.
     if primitive_proto_thunks::install_primitive_proto_methods(builtin_name, proto_obj) {
-        // #11915: `hasOwnProperty` / `isPrototypeOf` / `propertyIsEnumerable`
-        // are inherited from `%Object.prototype%`, never copied, so a
-        // replacement there is what every primitive reads.
-        if !matches!(builtin_name, "Number" | "BigInt") {
-            install_noop_proto_methods(proto_obj, &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length))]);
-        }
+        // #11915: every `Object.prototype` member the wrapper prototype does
+        // not own in node (`toLocaleString` on Boolean/String/Symbol,
+        // `hasOwnProperty`, ...) is inherited from `%Object.prototype%`, never
+        // copied.
         return;
     }
     match builtin_name {
@@ -688,7 +634,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
@@ -698,7 +644,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "includes",
-                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];
@@ -723,15 +669,21 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 crate::fn_info!(#[realm(Array.prototype.concat)] export native_args crate::object::global_this::array_error::array_prototype_concat_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "ArrayBuffer" => {
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // resizable resize transfer transferToFixedLength detached
+            // @@toStringTag. `valueOf` / `toLocaleString` are Object.prototype's
+            // (the chain), not own copies.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)));
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
@@ -739,8 +691,8 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.resize)] export crate::object::global_this::typed_array::array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            // The thunks take the optional `newLength` (call arity 1); the
-            // spec `.length` of both is 0.
+            // The transfer thunks take the optional `newLength` (call arity 1);
+            // the spec `.length` of both is 0.
             let transfers: [(&str, *const crate::closure::JsFunctionInfo); 2] = [
                 (
                     "transfer",
@@ -758,59 +710,30 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     super::super::native_module::set_builtin_closure_length(closure, realm_arraybuffer_transfer_public!(length));
                 }
             }
-            let getters: [(&str, *const crate::closure::JsFunctionInfo); 4] = [
-                (
-                    "byteLength",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "resizable",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "maxByteLength",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "detached",
-                    crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)),
-                ),
-            ];
-            for (name, thunk) in getters {
-                unsafe {
-                    let getter = crate::closure::js_closure_alloc(thunk, 0);
-                    if !getter.is_null() {
-                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                        install_builtin_getter(proto_obj, name, getter_bits);
-                    }
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)));
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SharedArrayBuffer" => {
-            // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
-            // (instances dispatch through buffer_dispatch; `.call(notSab)`
-            // throws here), a `byteLength` accessor whose getter brand-checks
-            // the shared registry, and the `Symbol.toStringTag`.
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // growable grow @@toStringTag. The brand-checking `slice` / `grow`
+            // and getters serve `.call(notSab)`; instances dispatch through
+            // buffer_dispatch.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(SharedArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            unsafe {
-                let getter = crate::closure::js_closure_alloc(
-                    crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                    0,
-                );
-                if !getter.is_null() {
-                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_declared(0)));
+            install_proto_method(
+                proto_obj,
+                "grow",
+                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.grow)] export crate::object::global_this::typed_array::shared_array_buffer_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "DataView" => {
             // Install the reflectable `byteLength`/`byteOffset`/`buffer`
@@ -820,7 +743,6 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // `DataView.prototype.getInt32.call(dv, …)` cascade.
             super::super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
             set_intrinsic_to_string_tag(proto_obj, "DataView");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "Object" => {
             install_proto_method(
@@ -832,13 +754,13 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                crate::fn_info!(#[realm(realm_decl! { AggregateError.prototype.isPrototypeOf; Date.prototype.isPrototypeOf; Error.prototype.isPrototypeOf; EvalError.prototype.isPrototypeOf; Object.prototype.isPrototypeOf; RangeError.prototype.isPrototypeOf; ReferenceError.prototype.isPrototypeOf; SyntaxError.prototype.isPrototypeOf; TypeError.prototype.isPrototypeOf; URIError.prototype.isPrototypeOf; })] export crate::object::global_this::array_error::object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.isPrototypeOf)] export crate::object::global_this::array_error::object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(#[realm(realm_decl! { AggregateError.prototype.hasOwnProperty; Error.prototype.hasOwnProperty; EvalError.prototype.hasOwnProperty; Object.prototype.hasOwnProperty; RangeError.prototype.hasOwnProperty; ReferenceError.prototype.hasOwnProperty; SyntaxError.prototype.hasOwnProperty; TypeError.prototype.hasOwnProperty; URIError.prototype.hasOwnProperty; })] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.hasOwnProperty, effects = { coerce(arg(0), ToPrimitive); returns(prim(bool)) })] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
@@ -850,13 +772,13 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.toLocaleString)] export crate::object::global_this::array_error::object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(#[realm(Object.prototype.valueOf)] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.valueOf, effects = { returns(this) })] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // Annex B §B.2.2: own methods of `%Object.prototype%`, as its
@@ -927,11 +849,9 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // `String.prototype.slice.call(receiver, …)` works on a boxed/object
             // receiver.
             string_proto_thunks::install_string_proto_methods("String", proto_obj);
-            // Install noop Object methods first (includes a noop `valueOf`), then
-            // override `toString` and `valueOf` with brand-checking thunks — they
+            // `toString` and `valueOf` are brand-checking thunks — they
             // must throw TypeError for non-String receivers (ECMA-262 §22.1.3.28
             // `thisStringValue`), unlike the generic coercing methods above.
-            install_object_proto_copies(builtin_name, proto_obj);
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -955,10 +875,6 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     ("toString", 1),
                 ],
             );
-            // OBJECT_PROTO_METHODS installs noop `valueOf`/`toLocaleString`, so
-            // it must run BEFORE the brand thunks below — otherwise it clobbers
-            // them back to no-ops.
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: `valueOf`/`toLocaleString` brand-check `this` and throw a
             // `TypeError` on an incompatible reflective receiver instead of
             // falling back to `Object.prototype` (`"[object Object]"`).
@@ -976,9 +892,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
         }
         "Boolean" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: brand-checking `toString`/`valueOf` (mirror `Number`).
-            // Installed after OBJECT_PROTO_METHODS so the brand `valueOf` wins.
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -993,14 +907,12 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
         }
         "Symbol" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: Symbol.prototype previously had no own methods, so
             // reflective `Symbol.prototype.toString.call(sym)` resolved to
             // `Object.prototype.toString` (`"[object Symbol]"`) and an
             // incompatible receiver returned `"[object Object]"` instead of
             // throwing. Install brand-checking thunks that re-dispatch to the
-            // canonical symbol logic (`"Symbol(x)"`). After OBJECT_PROTO_METHODS
-            // so the brand `valueOf` wins.
+            // canonical symbol logic (`"Symbol(x)"`).
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -1015,10 +927,9 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             );
         }
         "BigInt" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: mirror `Symbol` — brand-checking `toString`(radix)/`valueOf`
             // re-dispatched to the canonical BigInt logic (`(5n).toString(2)`
-            // → `"101"`). After OBJECT_PROTO_METHODS so the brand `valueOf` wins.
+            // → `"101"`).
             let to_string = install_proto_method(
                 proto_obj,
                 "toString",
@@ -1086,26 +997,19 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     ("valueOf", 0),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             // Overwrite the no-op getter entries with brand-checking thunks so
             // `Date.prototype.getX.call(this)` performs `thisTimeValue(this)`
             // (TypeError on a non-Date receiver) and dispatches correctly.
-            // MUST run after the OBJECT_PROTO_METHODS block, which would
-            // otherwise re-clobber `valueOf` with the generic Object no-op.
+            // MUST run after the no-op list above, which installs a generic
+            // `valueOf` placeholder.
             date_proto_thunks::install_date_proto_getters(proto_obj);
             // Same treatment for the mutating setters: `Date.prototype.setX`
             // brand-checks `this`, reads `[[DateValue]]` before coercing args,
-            // then mutates the cell. Also after the OBJECT_PROTO_METHODS block.
+            // then mutates the cell. Also after the no-op list above.
             date_proto_thunks::install_date_proto_setters(proto_obj);
             // Overwrite the no-op toLocaleString with a real Intl-aware thunk
             // that forwards locale/options to temporal_locale_string.
             date_proto_thunks::install_date_proto_to_locale_string(proto_obj);
-            install_proto_method(
-                proto_obj,
-                "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -1127,7 +1031,6 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // engine it falls back to the Annex-B no-op here.
             #[cfg(not(feature = "regex-engine"))]
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "URLPattern" | "URLSearchParams" => {
             super::web_hooks::proto_methods(
@@ -1169,7 +1072,6 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         // #340/#341: these carried `install_noop_proto_methods` placeholders —
         // the prototype looked right to reflection while the real work went
@@ -1248,25 +1150,17 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
         | "AggregateError" | "EvalError" | "URIError" => {
-            install_object_proto_copies(builtin_name, proto_obj);
-            install_proto_method(
-                proto_obj,
-                "toString",
-                crate::fn_info!(#[realm(realm_decl! { AggregateError.prototype.toString; Error.prototype.toString; EvalError.prototype.toString; RangeError.prototype.toString; ReferenceError.prototype.toString; SyntaxError.prototype.toString; TypeError.prototype.toString; URIError.prototype.toString; })] export crate::object::global_this::array_error::error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
-            );
-            install_proto_method(
-                proto_obj,
-                "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            install_proto_method(
-                proto_obj,
-                "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
+            // ECMA-262 20.5.3: `toString` is an own member of `Error.prototype`
+            // only; the NativeError prototypes inherit it (and every
+            // `Object.prototype` member) through their [[Prototype]] chain.
+            if builtin_name == "Error" {
+                install_proto_method(
+                    proto_obj,
+                    "toString",
+                    crate::fn_info!(#[realm(Error.prototype.toString, effects = { reads(field(this, name), field(this, message)); coerce(field(this, name), ToPrimitive); coerce(field(this, message), ToPrimitive); returns(prim(str)) })] export crate::object::global_this::array_error::error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    0,
+                );
+            }
         }
         // Typed-array constructors: keep the reified per-kind prototype
         // method set (#2142) on each per-kind `.prototype` so direct
@@ -1350,6 +1244,17 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 0,
             );
             web_method_enumerable(proto(), "toJSON");
+        }
+        // Node's getters, installed only for a program that reaches navigator.
+        "Navigator" => crate::navigator::populate_prototype(proto_obj),
+        // External families (members from their provider), then the fixed tag.
+        "ReadableStream"
+        | "ReadableStreamDefaultController"
+        | "ReadableStreamDefaultReader"
+        | "ReadableByteStreamController"
+        | "ReadableStreamBYOBReader"
+        | "ReadableStreamBYOBRequest" => {
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
         | "DOMException" | "MessageEvent" => {
@@ -1539,7 +1444,6 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                 "size",
                 crate::fn_info!(#[realm("URLSearchParams.prototype.size.<get>")] export crate::url::search_params::usp_proto_size_getter, 0; with_declared(0)),
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
         }
         "URLPattern" => {
@@ -1604,7 +1508,6 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
             for name in ["encode", "encodeInto"] {
                 make_proto_member_enumerable(proto_obj, name);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         "TextDecoder" => {
@@ -1630,7 +1533,6 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
                 crate::fn_info!(#[realm("TextDecoder.prototype.ignoreBOM.<get>")] export crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
             );
             make_proto_member_enumerable(proto_obj, "decode");
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
         _ => {}
@@ -1666,7 +1568,6 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     ("values", realm_noop_values_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         "Request" | "Response" => {
@@ -1727,7 +1628,6 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     install_fetch_prototype_getter(proto_obj, name);
                 }
             }
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "Blob" | "File" => {
@@ -1741,7 +1641,6 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     ("text", realm_noop_text_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "FormData" => {
@@ -1760,7 +1659,15 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     ("values", realm_noop_values_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
+            if let Some(entries) = unsafe {
+                crate::object::own_property_get_by_bytes(
+                    proto_obj,
+                    b"entries",
+                    crate::value::js_nanbox_pointer(proto_obj as i64),
+                )
+            } {
+                install_builtin_iterator_symbol(proto_obj, f64::from_bits(entries.bits()));
+            }
             unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         _ => {}
@@ -1772,7 +1679,6 @@ pub(super) fn web_websocket_proto_methods(builtin_name: &str, proto_obj: *mut Ob
     match builtin_name {
         "WebSocket" => {
             websocket_global::install_proto_methods(proto_obj);
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         _ => {}
     }
@@ -1799,7 +1705,6 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
                 crate::fn_info!(#[realm(Crypto.prototype.randomUUID)] export crate::object::global_this::ctor_thunks::webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "CryptoKey" => {
             for (name, func_ptr) in [
@@ -1822,7 +1727,6 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             ] {
                 install_webcrypto_proto_getter(proto_obj, name, func_ptr);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SubtleCrypto" => {
             for (name, func_ptr, length) in [
@@ -1849,7 +1753,6 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             ] {
                 install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         _ => {}
     }

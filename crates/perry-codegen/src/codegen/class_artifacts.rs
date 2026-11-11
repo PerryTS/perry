@@ -95,6 +95,52 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
         true,
         |llmod, strings, class| {
             for method in &class.methods {
+                // P2 (DESIGN-p2 §3.2): a typed method is `M$sig` plus its
+                // boxed entry; no other tier is emitted for it.
+                if let Some(tm) = cross_module.typed_methods.get(&method.id) {
+                    let body = super::record_sig::sig_body(
+                        method,
+                        &tm.plan.sig_defaults,
+                        tm.plan.record.as_ref(),
+                    )
+                    .expect("a selected typed method's prologue");
+                    compile_method(
+                        llmod,
+                        class,
+                        &body,
+                        func_names,
+                        strings,
+                        class_table,
+                        method_names,
+                        module_globals,
+                        module_global_types,
+                        opts.import_function_prefixes,
+                        enum_table,
+                        static_field_globals,
+                        class_ids,
+                        func_signatures,
+                        func_synthetic_arguments,
+                        module_boxed_vars,
+                        closure_rest_params,
+                        cross_module,
+                        None,
+                        false,
+                        tm.proven_this.clone(),
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        false,
+                        Some(tm),
+                    )
+                    .with_context(|| {
+                        format!("lowering typed method '{}::{}'", class.name, method.name)
+                    })?;
+                    let public = &method_names[&(class.name.clone(), method.name.clone())];
+                    super::signature_entry::emit_boxed_method_entry(llmod, method, public, tm);
+                    continue;
+                }
                 let typed_public_trampoline = if cross_module
                     .typed_f64_methods
                     .contains(&(class.name.clone(), method.name.clone()))
@@ -278,6 +324,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                     false,
                     false,
+                    None,
                 )
                 .with_context(|| {
                     format!(
@@ -352,6 +399,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                     false,
                     false,
+                    None,
                 )
                 .with_context(|| format!("lowering getter '{}::{}'", class.name, prop))?;
                 if let Some(fact) = cross_module
@@ -401,6 +449,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                             false,
                             false,
                             false,
+                            None,
                         )
                         .with_context(|| {
                             format!("lowering proven-this getter '{}::{}'", class.name, prop)
@@ -485,6 +534,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                     false,
                     false,
+                    None,
                 )
                 .with_context(|| format!("lowering setter '{}::{}'", class.name, prop))?;
                 // Direct accessor sites use the ordinary body. Give compact bodies
@@ -527,6 +577,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         false,
                         false,
                         false,
+                        None,
                     )
                     .with_context(|| {
                         format!("lowering proven-this setter '{}::{}'", class.name, prop)
@@ -626,6 +677,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         false,
                         false,
                         false,
+                        None,
                     )
                     .with_context(|| {
                         format!(
@@ -751,6 +803,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     false,
                     false,
                     false,
+                    None,
                 )
                 .with_context(|| format!("lowering constructor for '{}'", class.name))?;
                 if class.is_default_derived() {
@@ -791,6 +844,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         false,
                         false,
                         false,
+                        None,
                     )
                     .with_context(|| format!("lowering default fields for '{}'", class.name))?;
                 }
@@ -929,6 +983,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         false,
                         false,
                         true,
+                        None,
                     )?;
                 }
                 if fresh.contains(&class.name)

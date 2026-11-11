@@ -215,6 +215,11 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    if let Some(result) =
+        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
+    {
+        return result;
+    }
     // The probe's presence mode (`layout_probe::probe_has`), else the
     // complete operation.
     match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
@@ -237,6 +242,11 @@ pub(crate) fn in_operator_generic(obj: f64, key: f64) -> f64 {
 /// This implements the JavaScript 'in' operator: "key" in obj
 #[no_mangle]
 pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
+    if let Some(result) =
+        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
+    {
+        return result;
+    }
     match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
@@ -359,8 +369,8 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     // Dispatch common/small handles (including crypto) here too: they fail the
     // heap-only is_pointer guard below and cannot reach its legacy handle-band
     // path. Use the same string-property dispatcher as reads, so numeric zero
-    // is present and an undefined result is absent. Symbol keys remain absent,
-    // and no native handle falls through to a heap dereference.
+    // is present and an undefined result is absent. Symbol presence walks
+    // property holders without reading values or invoking getters.
     if obj_val.is_handle() {
         let addr = obj_val.as_handle();
         if key_val.is_any_string() {
@@ -378,6 +388,46 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                         }
                     }
                 }
+            }
+        } else if crate::value::addr_class::is_small_handle(addr as usize)
+            && unsafe { crate::symbol::js_is_symbol(key) } != 0
+        {
+            if unsafe { crate::symbol::has_own_symbol_property(obj, key) } {
+                return nanbox_true;
+            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let key = scope.root_nanbox_f64(key);
+            let prototype = super::super::prototype_chain::object_static_prototype(addr as usize)
+                .map(f64::from_bits)
+                .unwrap_or_else(|| super::super::object_ops::get_prototype_of_resolved(obj));
+            let mut prototype = scope.root_nanbox_f64(prototype);
+            loop {
+                let value = prototype.get_nanbox_f64();
+                if JSValue::from_bits(value.to_bits()).is_handle()
+                    || crate::object::class_ref_id(value).is_some()
+                {
+                    return js_object_has_property(value, key.get_nanbox_f64());
+                }
+                if !JSValue::from_bits(value.to_bits()).is_pointer() {
+                    break;
+                }
+                if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+                    return if crate::value::js_is_truthy(crate::proxy_hooks::proxy_has(
+                        value,
+                        key.get_nanbox_f64(),
+                    )) != 0
+                    {
+                        nanbox_true
+                    } else {
+                        nanbox_false
+                    };
+                }
+                if unsafe { crate::symbol::has_own_symbol_property(value, key.get_nanbox_f64()) } {
+                    return nanbox_true;
+                }
+                prototype = scope.root_nanbox_f64(
+                    super::super::object_ops::get_prototype_of_resolved(prototype.get_nanbox_f64()),
+                );
             }
         }
         return nanbox_false;
@@ -429,12 +479,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         let bits = obj.to_bits();
         if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
             // Symbol key path.
-            let found = if crate::object::class_prototype_ref_id(obj).is_some() {
-                crate::symbol::class_static_symbol_lookup(class_id, key)
-            } else {
-                crate::symbol::class_static_symbol_lookup_in_chain(class_id, key)
-            };
-            if found.is_some() {
+            if crate::symbol::class_static_symbol_lookup_in_chain(class_id, key).is_some() {
                 return nanbox_true;
             }
             // #6149: string key on a class ref (`"prototype" in C`,
@@ -480,15 +525,12 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     }
                     // #11492: a constructor's chain ends at %Function.prototype%;
                     // a user member installed there is `in` every class, as
-                    // `C.myHelper` reads it. A prototype ref is excluded — its
-                    // chain is `Object.prototype`, not `Function.prototype`.
-                    if crate::object::class_prototype_ref_id(obj).is_none() {
-                        if let Some(proto_ptr) =
-                            crate::closure::function_prototype_fallback_target(0, name)
-                        {
-                            let proto = crate::value::js_nanbox_pointer(proto_ptr as i64);
-                            return js_object_has_property(f64::from_bits(proto.to_bits()), key);
-                        }
+                    // `C.myHelper` reads it.
+                    if let Some(proto_ptr) =
+                        crate::closure::function_prototype_fallback_target(0, name)
+                    {
+                        let proto = crate::value::js_nanbox_pointer(proto_ptr as i64);
+                        return js_object_has_property(f64::from_bits(proto.to_bits()), key);
                     }
                 }
             }
@@ -681,7 +723,22 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                             nanbox_false
                         };
                     }
+                    // #BUFNS: an ordinary object: own, else its [[Prototype]]
+                    // chain (node's members are on the intrinsic), never the
+                    // Buffer method table.
+                    if crate::buffer::buffer_has_own_prop(obj_addr as usize, name)
+                        || crate::object::get_accessor_descriptor(obj_addr as usize, name).is_some()
+                    {
+                        return nanbox_true;
+                    }
                 }
+            }
+            if key_val.is_any_string() || unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+                let proto = crate::object::view_prototype_bits(obj_addr as usize);
+                if proto == crate::value::TAG_NULL {
+                    return nanbox_false;
+                }
+                return js_object_has_property(f64::from_bits(proto), key);
             }
         }
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
@@ -860,7 +917,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         unsafe {
             let gc_header =
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Issue #233: resolve a grow forwarding pointer so `index in arr`
                 // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
                 let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
@@ -1129,6 +1186,21 @@ unsafe fn ordinary_has_property(
         {
             break;
         }
+        if key_name != Some("then") {
+            if let Some(result) = super::super::deferred_namespace::with_key_target(
+                crate::value::js_nanbox_pointer(cur as i64),
+                crate::value::js_nanbox_string(key as i64),
+                |target, property_key| {
+                    ordinary_has_property(
+                        JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                        crate::value::js_get_string_pointer_unified(property_key)
+                            as *const crate::StringHeader,
+                    )
+                },
+            ) {
+                return result;
+            }
+        }
         last_valid = cur;
         // A class object made at run time (`class X extends make(..) {}`, one
         // declaration evaluated many times) owns exactly the statics it was
@@ -1173,7 +1245,7 @@ unsafe fn ordinary_has_property(
                 crate::value::js_nanbox_string(key as i64),
             );
         }
-        let cur_is_array = cur_type == Some(crate::gc::GC_TYPE_ARRAY);
+        let cur_is_array = cur_type == Some(crate::gc_array_type_pat!());
         if cur_is_array {
             if super::super::has_own_helpers::array_own_key_present(
                 cur as *const crate::array::ArrayHeader,

@@ -70,8 +70,22 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+            if ctx.deferred_namespace_imports.contains(name) {
+                return lower_runtime_property_get_by_name(ctx, object, property);
+            }
+        }
+    }
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    // I32 at rest (PR C): a read of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     // Object model step 1: a literal family's added key, one slot load.
     if let Expr::PropertyGet {
         object, property, ..
@@ -549,7 +563,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let gc_type_addr = ctx.block().sub(I64, &recv_handle, "8");
             let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
             let gc_type = ctx.block().load(I8, &gc_type_ptr);
-            let is_array = ctx.block().icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
             let is_string = ctx.block().icmp_eq(I8, &gc_type, "3"); // GC_TYPE_STRING
             let has_length = ctx.block().or(I1, &is_array, &is_string);
             // Issue #233: a FORWARDED array's first 4 bytes are no

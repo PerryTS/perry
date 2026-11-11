@@ -570,6 +570,20 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     {
         return a + b;
     }
+    dynamic_add_tagged(a, b)
+}
+
+// Two short ASCII strings whose join fits inline (`from + to` over
+// `squareName` results): no scope, no ToPrimitive, the same bits the string
+// arm of `dynamic_add_non_plain` builds (see `string::short_pair`). A step of
+// its own so the two-Numbers path above stays without a frame.
+#[inline(never)]
+unsafe extern "C" fn dynamic_add_tagged(a: f64, b: f64) -> f64 {
+    if crate::string::short_pair::short_pairs_enabled() {
+        if let Some(joined) = crate::string::short_pair::concat_short_pair(a, b) {
+            return joined;
+        }
+    }
     dynamic_add_non_plain(a, b)
 }
 
@@ -1172,7 +1186,7 @@ mod tests {
         }
     }
     fn int32(n: i32) -> f64 {
-        f64::from_bits(JSValue::int32(n).bits())
+        f64::from(n)
     }
 
     // An int32-tagged operand (e.g. a better-sqlite3 integer column) must be

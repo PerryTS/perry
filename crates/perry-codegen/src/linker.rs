@@ -38,6 +38,13 @@ use linker_temp::{
 pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
     "always-inline,function(mem2reg,sccp,dce),rewrite-statepoints-for-gc";
 
+/// [`STATEPOINT_REWRITE_PASSES`] in two runs, for the in-process pass that
+/// works on inlined bodies before their calls become statepoints
+/// (`inprocess/stack_checks.rs`). Same passes, same order.
+pub(crate) const STATEPOINT_INLINE_PASS: &str = "always-inline";
+pub(crate) const STATEPOINT_REWRITE_AFTER_INLINE: &str =
+    "function(mem2reg,sccp,dce),rewrite-statepoints-for-gc";
+
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
 static CLANG_PROBE: OnceLock<Option<String>> = OnceLock::new();

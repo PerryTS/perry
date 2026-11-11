@@ -104,11 +104,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -164,6 +167,7 @@ fn module_with_classes_and_params(
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -1275,10 +1279,9 @@ fn guards_number_arg(ir: impl AsRef<str>) -> bool {
         && ir_line_with(ir, &["icmp ule i64 %", ", 9221401712017801215"])
 }
 
-/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number || is_int32`
-/// decided by the sign-closed magnitude compare
-/// `(bits & 0x7FFF_FFFF_FFFF_FFFF) <u 0x7FF9_0000_0000_0000` plus the INT32
-/// identity. Two-tiering is a PUBLIC ENTRY transform, so a direct call site
+/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number`, decided
+/// by the sign-closed magnitude compare
+/// `(bits & 0x7FFF_FFFF_FFFF_FFFF) <u 0x7FF9_0000_0000_0000`. Two-tiering is a PUBLIC ENTRY transform, so a direct call site
 /// still proves its arguments this way; the strict `<u` form distinguishes it
 /// from the public entry's tier-1 `<=u` compare, with the neighbouring opcode
 /// so the constant alone cannot satisfy it.
@@ -1286,15 +1289,14 @@ fn guards_number_arg_banded(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
     ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
         && ir_line_with(ir, &["icmp ult i64 %", ", 9221401712017801216"])
-        && ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
-/// Number lane, tier 2: the INT32 identity test and the `sitofp` that converts
-/// the box to the double the clone wants. Replaces
-/// `call double @js_typed_f64_arg_to_raw`.
-fn unboxes_number_arg(ir: impl AsRef<str>) -> bool {
-    let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"]) && ir.contains("sitofp i32 %")
+/// A test of the 0x7FFE word. A Number has one encoding, the plain double, so
+/// a Number lane passes its guarded argument as it is: no INT32 identity test
+/// and no decode. Replaces the assertions of
+/// `call double @js_typed_f64_arg_to_raw` and of the inline INT32 decode.
+fn tests_int32_tag(ir: impl AsRef<str>) -> bool {
+    ir_line_with(ir.as_ref(), &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
 /// Boolean lane (`emit_typed_i1_guard`): `bits - TAG_FALSE <u 2`, the adjacent
@@ -1312,7 +1314,7 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
     ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
 }
 
-/// Int32 lane (`emit_typed_i32_guard_and_raw`): the INT32 identity test plus
+/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`): the INT32 identity test plus
 /// the plain-double range bounds that admit an integral double.
 /// Replaces `call i32 @js_typed_i32_arg_guard`.
 fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
@@ -1352,7 +1354,7 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     for (name, matched) in [
         ("number", guards_number_arg(unguarded)),
         ("number_banded", guards_number_arg_banded(unguarded)),
-        ("number_unbox", unboxes_number_arg(unguarded)),
+        ("int32_tag", tests_int32_tag(unguarded)),
         ("bool", guards_bool_arg(unguarded)),
         ("bool_unbox", unboxes_bool_arg(unguarded)),
         ("i32", guards_i32_arg(unguarded)),
@@ -9011,6 +9013,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9196,6 +9199,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9297,6 +9301,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9420,6 +9425,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9506,6 +9512,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9641,6 +9648,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -11860,7 +11868,7 @@ fn typed_f64_function_clone_emits_internal_clone_and_guarded_call() {
     // converts an INT32 box. `, 32761` alone no longer says that — the string
     // and i32 lanes carry the same constant.
     assert!(guards_number_arg(&ir), "{ir}");
-    assert!(unboxes_number_arg(&ir), "{ir}");
+    assert!(!tests_int32_tag(&ir), "{ir}");
     assert!(ir.contains(&format!("call double @{typed}")), "{ir}");
     assert!(
         ir.contains(&format!("call double @{generic_body}(")),
@@ -11884,7 +11892,7 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
         "typed function should keep a separate generic body:\n{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -12104,7 +12112,7 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     assert!(
         typed_ir.contains("sitofp i32 %arg2 to double")
             && typed_ir.contains("fadd double")
-            && !unboxes_number_arg(&typed_ir)
+            && !tests_int32_tag(&typed_ir)
             && !typed_ir.contains("js_nanbox"),
         "typed clone body should avoid JSValue traffic on the hot path:\n{typed_ir}"
     );
@@ -12601,7 +12609,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
     );
     assert!(
         guards_number_arg(&wrapper_ir)
-            && unboxes_number_arg(&wrapper_ir)
+            && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
@@ -12610,7 +12618,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
         "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
     );
     assert!(
-        guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
+        guards_number_arg_banded(&caller_ir) && !tests_int32_tag(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "direct FuncRef lowering should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -13374,13 +13382,13 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
     );
     assert!(
         guards_number_arg(&wrapper_ir)
-            && unboxes_number_arg(&wrapper_ir)
+            && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public method wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
     assert!(
         contains_inline_direct_method_shape_guard(caller_ir)
-            && guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
+            && guards_number_arg_banded(&caller_ir) && !tests_int32_tag(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "exact direct method call should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -13500,7 +13508,7 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
     // converts an INT32 box. `, 32761` alone no longer says that — the string
     // and i32 lanes carry the same constant.
     assert!(guards_number_arg(&ir), "{ir}");
-    assert!(unboxes_number_arg(&ir), "{ir}");
+    assert!(!tests_int32_tag(&ir), "{ir}");
     assert!(
         ir.contains(&format!("call double @{typed}(double ")),
         "typed direct call should target the clone:\n{ir}"
@@ -13534,7 +13542,7 @@ fn typed_f64_method_public_trampoline_dispatches_before_generic_body() {
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public method wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -13879,7 +13887,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public closure wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -13966,7 +13974,7 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
     assert!(
         loads_entry_capture_word(typed_ir, 0)
             && typed_ir.contains("bitcast i64")
-            && unboxes_number_arg(&typed_ir),
+            && !tests_int32_tag(&typed_ir),
         "typed-f64 captured closure should load immutable numeric capture as JSValue bits inline from the closure handle:\n{typed_ir}"
     );
     assert!(
@@ -14312,7 +14320,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
         "numeric-predicate typed closure clone should use f64 params and i1 return:\n{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir)
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(i64 %this_closure")),
         "public closure wrapper should guard/unbox numeric JSValue args and call the typed clone:\n{wrapper_ir}"
     );
@@ -14323,7 +14331,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 "))
             && guards_number_arg_banded(&ir)
-            && unboxes_number_arg(&ir),
+            && !tests_int32_tag(&ir),
         "direct local closure call should guard/unbox numeric args and call the typed clone:\n{ir}"
     );
     assert!(
@@ -15078,8 +15086,8 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
             ir.contains("scalar_method_arg_guard.fast")
                 && ir.contains("scalar_method_arg_guard.fallback")
                 && guards_number_arg(&ir)
-                && ir.contains("sitofp i32 %"),
-            "{case} public numeric arg should guard/unbox before scalar inline:\n{ir}"
+                && !tests_int32_tag(&ir),
+            "{case} public numeric arg should guard before scalar inline:\n{ir}"
         );
         assert!(
             ir.contains("call double @js_native_call_method_by_id"),
@@ -15160,10 +15168,10 @@ fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() 
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
             && ir.matches(", 9221401712017801215").count() >= 2
-            && ir.matches("sitofp i32 %").count() >= 2
+            && !tests_int32_tag(&ir)
             && ir.contains("fmul double")
             && ir.contains("fadd double"),
-        "public numeric arg expression should guard/unbox locals and rebuild arithmetic as raw f64 before scalar inline:\n{ir}"
+        "public numeric arg expression should guard locals and rebuild arithmetic as raw f64 before scalar inline:\n{ir}"
     );
     assert!(
         ir.contains("call double @js_native_call_method_by_id"),

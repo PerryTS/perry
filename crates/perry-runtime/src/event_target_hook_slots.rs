@@ -283,6 +283,14 @@ pub(crate) extern "C" fn js_abort_signal_any(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(signals_arr))
 }
+static JS_ABORT_SIGNAL_REASON: Hook<extern "C" fn(*mut ObjectHeader) -> f64> = Hook::empty();
+/// An aborted signal's `reason` (`undefined` before it aborts).
+pub extern "C" fn js_abort_signal_reason(signal: *mut ObjectHeader) -> f64 {
+    JS_ABORT_SIGNAL_REASON.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(signal),
+    )
+}
 static JS_ABORT_SIGNAL_IS_ABORTED: Hook<extern "C" fn(*mut ObjectHeader) -> i32> = Hook::empty();
 pub extern "C" fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32 {
     JS_ABORT_SIGNAL_IS_ABORTED
@@ -400,6 +408,7 @@ pub(crate) fn install() {
         JS_ABORT_SIGNAL_ADD_LISTENER.set(crate::event_target::abort::js_abort_signal_add_listener);
         JS_ABORT_SIGNAL_ANY.set(crate::event_target::abort::js_abort_signal_any);
         JS_ABORT_SIGNAL_IS_ABORTED.set(crate::event_target::abort::js_abort_signal_is_aborted);
+        JS_ABORT_SIGNAL_REASON.set(crate::event_target::abort::abort_signal_reason);
         JS_ABORT_SIGNAL_LISTENER_COUNT
             .set(crate::event_target::abort::js_abort_signal_listener_count);
         JS_ABORT_SIGNAL_LISTENERS_COPY

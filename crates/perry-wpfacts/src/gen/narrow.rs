@@ -23,8 +23,38 @@
 //! Only a local of the body being walked that no closure captures mutably
 //! (and no hoisted box holds) is narrowed (`scope_locals`).
 //!
+//! The same conditions narrow a local by presence (`Implied::Present`): a
+//! truthy test of it (`x`, `!x` false), `x != null` true or `x == null`
+//! false leave its values but `null` and `undefined` (`Cons::NotNullish`),
+//! and `x !== undefined` true or `x === undefined` false leave its values
+//! but `undefined` (`Cons::NotUndefined`). It is one predicate with the
+//! clips: what an `if` implies, `&&`, `||`, `?:`, a `while` and an early
+//! exit imply alike, and a write in the guarded code joins the written
+//! value back (the end node). `PERRY_FACTS_GUARD_PRESENCE=0` turns it off.
+//!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
+//!
+//! ## Writes on a leaving path
+//!
+//! A write ends the start reads for the code it can reach, not for the
+//! program text after it. A branch of an `if` that always leaves
+//! (`always_exits`) reaches the code after the `if` only through its jumps,
+//! so after the branch each narrowing's `written` is what it was before it
+//! when every way out of the branch lands outside the narrowing's code
+//! (`jumps_leave`):
+//! - an unlabeled `break`/`continue` out of the branch, with no loop or
+//!   `switch` between the `if` and the narrowing (`Gen::jumps`): it lands at
+//!   the narrowed loop's update (which reads the end node) or past the
+//!   guarded code;
+//! - a `return` or `throw`, and any exception, with no `try` between them
+//!   (`Gen::tries`): no `catch` or `finally` of the narrowing's code runs
+//!   after it;
+//! - no labeled jump (where it lands is not followed).
+//!
+//! The write still reaches the end node and the local, so the update and
+//! every read the jump reaches see it. `PERRY_FACTS_LEAVING_WRITES=0` ends
+//! the start reads at the first write in the text again.
 //!
 //! The rule only applies where no other code can write `i` during the loop:
 //! `i` is declared by the loop's `init` and no closure appears in the loop.
@@ -46,6 +76,10 @@ pub(crate) struct Narrow {
     /// The update is walked: it reads the end node, and its write (which
     /// runs after the body) reaches only the counter.
     in_update: bool,
+    /// `Gen::jumps` and `Gen::tries` where the narrowed code starts (for a
+    /// loop, inside it): "Writes on a leaving path".
+    jumps: u32,
+    tries: u32,
 }
 
 fn expr_has(e: &Expr, p: &mut impl FnMut(&Expr) -> bool) -> bool {
@@ -108,6 +142,10 @@ impl<'a> Gen<'a> {
         let simple = self.guard_ranges || matches!(cond, Expr::Compare { .. });
         let clips: Vec<(u8, Bound)> = facts
             .into_iter()
+            .filter_map(|f| match f {
+                Implied::Clip(l, k, b) => Some((l, k, b)),
+                Implied::Present(..) => None,
+            })
             .filter(|(l, _, b)| {
                 *l == id
                     && !matches!(b, Bound::Char(_))
@@ -133,11 +171,13 @@ impl<'a> Gen<'a> {
         for (kind, bound) in clips {
             let b = self.bound_node(mi, bound);
             let dst = self.tmp("narrow");
+            self.zs_carrier(dst);
             self.m.edge(start, dst);
             self.range_rule(crate::model::RangeOp::Clip(kind), start, Some(b), dst);
             start = dst;
         }
         let end = self.tmp("narrow-end");
+        self.zs_carrier(end);
         self.m.edge(start, end);
         self.narrow.push(Narrow {
             mi,
@@ -147,6 +187,8 @@ impl<'a> Gen<'a> {
             end,
             written: false,
             in_update: false,
+            jumps: self.jumps,
+            tries: self.tries,
         });
         true
     }
@@ -189,6 +231,34 @@ impl<'a> Gen<'a> {
             .collect();
         for e in ends {
             self.m.edge(vn, e);
+        }
+    }
+
+    /// Before walking a branch of an `if`: each narrowing's `written`.
+    pub(crate) fn narrow_snapshot(&self) -> Vec<bool> {
+        if !self.leaving_writes {
+            return Vec::new();
+        }
+        self.narrow.iter().map(|n| n.written).collect()
+    }
+
+    /// After walking `branch` (`pre` from `narrow_snapshot` before it): a
+    /// write in a branch that always leaves past a narrowing's code does
+    /// not reach the reads after the `if` (module docs, "Writes on a
+    /// leaving path").
+    pub(crate) fn narrow_leave(&mut self, branch: &[Stmt], pre: Vec<bool>) {
+        if pre.is_empty() {
+            return;
+        }
+        let sabotage = self.leaving_write_sabotage;
+        if !sabotage && !(always_exits(branch) && jumps_leave(branch)) {
+            return;
+        }
+        let (f, jumps, tries) = (self.m.cur_fn, self.jumps, self.tries);
+        for (n, w) in self.narrow.iter_mut().zip(pre) {
+            if n.f == f && (sabotage || (n.jumps == jumps && n.tries == tries)) {
+                n.written = w;
+            }
         }
     }
 
@@ -308,6 +378,107 @@ fn closure_writes(e: &Expr, excl: &mut crate::pts::FxHashSet<u32>) {
     });
 }
 
+/// The `const` bindings a body declares itself (`Stmt::Let` with an
+/// initializer and no `mutable`), outside its nested function bodies (each
+/// adds its own when walked). A const is written once, by its
+/// initialization, and a read before it throws (TDZ): every read sees the
+/// one value, in this body and in every closure that captures it.
+fn own_consts(ss: &[Stmt], out: &mut Vec<u32>) {
+    for s in ss {
+        match s {
+            Stmt::Let {
+                id,
+                mutable: false,
+                init: Some(_),
+                ..
+            } => out.push(*id),
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                own_consts(then_branch, out);
+                if let Some(e) = else_branch {
+                    own_consts(e, out);
+                }
+            }
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => own_consts(body, out),
+            Stmt::For { init, body, .. } => {
+                if let Some(i) = init {
+                    own_consts(std::slice::from_ref(i), out);
+                }
+                own_consts(body, out);
+            }
+            Stmt::Labeled { body, .. } => own_consts(std::slice::from_ref(body), out),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                own_consts(body, out);
+                if let Some(c) = catch {
+                    own_consts(&c.body, out);
+                }
+                if let Some(f) = finally {
+                    own_consts(f, out);
+                }
+            }
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    own_consts(&c.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a guard may narrow in the body walked next: its own locals
+/// (`scope_locals`) and the consts of the bodies around it that it
+/// captures (`Gen::narrow_consts`). `exit` restores the walk's state.
+pub(crate) struct Scope {
+    saved: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    mi: u32,
+    own: Vec<u32>,
+}
+
+impl<'a> Gen<'a> {
+    pub(crate) fn narrow_enter_body(
+        &mut self,
+        mi: u32,
+        f: FnIdx,
+        params: &[perry_hir::Param],
+        body: &[Stmt],
+        captures: &[u32],
+    ) -> Scope {
+        let mut own = Vec::new();
+        let scope = (self.int_ranges || self.guard_presence).then(|| {
+            let mut ls = scope_locals(params, body);
+            ls.extend(
+                captures
+                    .iter()
+                    .filter(|c| self.narrow_consts.contains(&(mi, **c)))
+                    .copied(),
+            );
+            own_consts(body, &mut own);
+            self.narrow_consts.extend(own.iter().map(|&c| (mi, c)));
+            (f, ls)
+        });
+        Scope {
+            saved: std::mem::replace(&mut self.narrow_scope, scope),
+            mi,
+            own,
+        }
+    }
+
+    pub(crate) fn narrow_exit_body(&mut self, s: Scope) {
+        for &id in &s.own {
+            self.narrow_consts.remove(&(s.mi, id));
+        }
+        self.narrow_scope = s.saved;
+    }
+}
+
 /// Whether `ss` always leaves the enclosing statement list.
 pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     matches!(
@@ -321,6 +492,134 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
                 | Stmt::LabeledContinue(_)
         )
     )
+}
+
+/// Whether every jump out of `ss` lands where an unlabeled jump at the
+/// statement around `ss` lands, or leaves the function: no labeled `break`
+/// or `continue` (where it lands is not followed). A `break` inside a loop
+/// or `switch` of `ss`, and a `continue` inside a loop of it, stay in `ss`.
+/// Nested function bodies are expressions: not walked.
+pub(crate) fn jumps_leave(ss: &[Stmt]) -> bool {
+    ss.iter().all(|s| match s {
+        Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => false,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => jumps_leave(then_branch) && else_branch.as_deref().is_none_or(jumps_leave),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            jumps_leave(body)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().all(|c| jumps_leave(&c.body)),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            jumps_leave(body)
+                && catch.as_ref().is_none_or(|c| jumps_leave(&c.body))
+                && finally.as_deref().is_none_or(jumps_leave)
+        }
+        Stmt::Labeled { body, .. } => jumps_leave(std::slice::from_ref(body)),
+        _ => true,
+    })
+}
+
+/// Whether running `ss` may reach its end: a function body that does
+/// returns `undefined` there. Conservative: a `return` or `throw` on every
+/// path (through `if`/`else`, `try`, a `switch` with a `default` and an
+/// infinite loop, none of them broken out of) ends it abruptly; anything
+/// else may complete.
+pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
+    !ss.iter().any(|s| match s {
+        Stmt::Switch { cases, .. } => {
+            cases.iter().any(|c| c.test.is_none())
+                && !cases.iter().any(|c| breaks_out(&c.body))
+                && cases.last().is_some_and(|c| !may_complete(&c.body))
+        }
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body,
+        }
+        | Stmt::DoWhile {
+            condition: Expr::Bool(true),
+            body,
+        }
+        | Stmt::For {
+            condition: None,
+            body,
+            ..
+        } => !breaks_out(body),
+        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => !may_complete(then_branch) && !may_complete(else_branch),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            finally.as_deref().is_some_and(|f| !may_complete(f))
+                || (!may_complete(body) && catch.as_ref().is_none_or(|c| !may_complete(&c.body)))
+        }
+        _ => false,
+    })
+}
+
+/// Whether `ss` may leave the loop or `switch` it is the body of by a
+/// `break` (any labeled `break` counts, wherever it is).
+fn breaks_out(ss: &[Stmt]) -> bool {
+    fn labeled(ss: &[Stmt]) -> bool {
+        ss.iter().any(|s| match s {
+            Stmt::LabeledBreak(_) => true,
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => labeled(then_branch) || else_branch.as_deref().is_some_and(labeled),
+            Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+                labeled(body)
+            }
+            Stmt::Switch { cases, .. } => cases.iter().any(|c| labeled(&c.body)),
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                labeled(body)
+                    || catch.as_ref().is_some_and(|c| labeled(&c.body))
+                    || finally.as_deref().is_some_and(labeled)
+            }
+            Stmt::Labeled { body, .. } => labeled(std::slice::from_ref(body)),
+            _ => false,
+        })
+    }
+    ss.iter().any(|s| match s {
+        Stmt::Break | Stmt::LabeledBreak(_) => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => breaks_out(then_branch) || else_branch.as_deref().is_some_and(breaks_out),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            breaks_out(body)
+                || catch.as_ref().is_some_and(|c| breaks_out(&c.body))
+                || finally.as_deref().is_some_and(breaks_out)
+        }
+        Stmt::Labeled { body, .. } => breaks_out(std::slice::from_ref(body)),
+        // An inner loop's or switch's own `break` stays inside it.
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            labeled(body)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| labeled(&c.body)),
+        _ => false,
+    })
 }
 
 /// A clip's bound: a literal, a local, a local's `length`, or a pure
@@ -353,17 +652,41 @@ impl Bound {
 /// A predicate function: one `return <expr>` over its plain parameters.
 pub(crate) type Predicate<'e> = (&'e [perry_hir::Param], &'e Expr);
 
-/// The clips condition `c` implies when it is `positive`ly true (false):
-/// `(local, clip kind, bound)` for each ordered comparison of a local.
-/// `pred` resolves a called function to its predicate body (`subst` maps
-/// its parameters to the caller's locals and literals).
+/// What a guard's outcome implies of one local.
+#[derive(Clone, Debug)]
+pub(crate) enum Implied {
+    /// `(local, clip kind, bound)`: an ordered comparison of the local.
+    Clip(u32, u8, Bound),
+    /// The local holds no value the presence excludes: a truthy test of
+    /// it, or a failed (passed) comparison of it with `null`/`undefined`.
+    Present(u32, Presence),
+}
+
+/// The values a guard proves a local is not.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Presence {
+    /// Neither `null` nor `undefined` (`Cons::NotNullish`): a truthy value,
+    /// or one that is not `== null`.
+    NotNullish,
+    /// Not `undefined` (`Cons::NotUndefined`): one that is not
+    /// `=== undefined`.
+    NotUndefined,
+}
+
+/// What condition `c` implies when it is `positive`ly true (false): a clip
+/// for each ordered comparison of a local, and a presence for each truthy
+/// test of a local or nullish comparison it decides. Both go through `&&`
+/// (true), `||` (false), `!` and predicates alike, the one rule of every
+/// guard (module docs, "Guards"). `pred` resolves a called function to its
+/// predicate body (`subst` maps its parameters to the caller's locals and
+/// literals).
 fn implied<'p>(
     c: &Expr,
     positive: bool,
     subst: &dyn Fn(u32) -> Option<Bound>,
     pred: &dyn Fn(u32) -> Option<Predicate<'p>>,
     depth: u8,
-    out: &mut Vec<(u32, u8, Bound)>,
+    out: &mut Vec<Implied>,
 ) {
     use crate::model::range::{CLIP_GE, CLIP_GT, CLIP_LE, CLIP_LT};
     use perry_hir::{LogicalOp, UnaryOp};
@@ -409,8 +732,40 @@ fn implied<'p>(
             };
             let mut found = Vec::new();
             implied(body, positive, &inner, pred, depth + 1, &mut found);
-            // Only a clip of a parameter that the call binds to a local.
+            // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
+        }
+        // A truthy local is neither `null` nor `undefined`.
+        Expr::LocalGet(_) if positive => {
+            if let Some(Bound::Local(id)) = bound_of(c, subst) {
+                out.push(Implied::Present(id, Presence::NotNullish));
+            }
+        }
+        // `local == null` (`undefined`) false, `local != null` true: not
+        // nullish. `local === undefined` false, `!==` true: not
+        // `undefined`. (`=== null` decides no presence a filter keeps.)
+        Expr::Compare { op, left, right }
+            if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
+                || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
+        {
+            let (x, nil) = match (left.as_ref(), right.as_ref()) {
+                (n @ (Expr::Undefined | Expr::Null), x) => (x, n),
+                (x, n) => (x, n),
+            };
+            let presence = match (op, positive) {
+                (CompareOp::LooseEq, false) | (CompareOp::LooseNe, true) => {
+                    Some(Presence::NotNullish)
+                }
+                (CompareOp::Eq, false) | (CompareOp::Ne, true)
+                    if matches!(nil, Expr::Undefined) =>
+                {
+                    Some(Presence::NotUndefined)
+                }
+                _ => None,
+            };
+            if let (Some(p), Some(Bound::Local(id))) = (presence, bound_of(x, subst)) {
+                out.push(Implied::Present(id, p));
+            }
         }
         Expr::Compare { op, left, right } => {
             // The clip of `local OP bound`, `OP` read for a true comparison.
@@ -434,14 +789,14 @@ fn implied<'p>(
             if let (Some(Bound::Local(id)), Some(b)) = (&l, &r) {
                 if !b.reads(*id) {
                     if let Some(kind) = k(op, positive) {
-                        out.push((*id, kind, b.clone()));
+                        out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
             if let (Some(Bound::Local(id)), Some(b)) = (&r, &l) {
                 if !b.reads(*id) {
                     if let Some(kind) = k(&mirror(op), positive) {
-                        out.push((*id, kind, b.clone()));
+                        out.push(Implied::Clip(*id, kind, b.clone()));
                     }
                 }
             }
@@ -539,6 +894,7 @@ impl<'a> Gen<'a> {
                 let an = self.bound_node(mi, a);
                 let bn = b2.map(|b2| self.bound_node(mi, b2));
                 let dst = self.tmp("narrow-bound");
+                self.zs_carrier(dst);
                 self.range_rule(op, an, bn, dst);
                 self.m.add_prim(dst, prim::NUM);
                 dst
@@ -560,6 +916,7 @@ impl<'a> Gen<'a> {
                     .narrowed_read(mi, o)
                     .unwrap_or_else(|| self.local(mi, o));
                 let len = self.tmp("narrow-length");
+                self.zs_carrier(len);
                 let key = crate::model::Key::Named(self.m.atom("length"));
                 self.m.cons(on, crate::model::Cons::Load { key, dst: len });
                 len
@@ -571,7 +928,7 @@ impl<'a> Gen<'a> {
     /// (false) for the code walked next (module docs, "Guards"); how many
     /// narrowings to pop after it (`narrow_pop`).
     pub(crate) fn narrow_guard(&mut self, fx: &Fx, cond: &Expr, positive: bool) -> usize {
-        if !self.guard_ranges {
+        if !self.guard_ranges && !self.guard_presence {
             return 0;
         }
         // The body being walked (`stmts` runs outside `stmt`'s `cur_fn`).
@@ -596,6 +953,13 @@ impl<'a> Gen<'a> {
             0,
             &mut facts,
         );
+        // Without guard ranges (`FactsConfig::no_guard_ranges`) no clip;
+        // without guard presence (`FactsConfig::no_guard_presence`) no
+        // presence.
+        facts.retain(|x| match x {
+            Implied::Clip(..) => self.guard_ranges,
+            Implied::Present(..) => self.guard_presence,
+        });
         if facts.is_empty() {
             return 0;
         }
@@ -606,11 +970,14 @@ impl<'a> Gen<'a> {
         pushed
     }
 
-    fn narrow_guard_facts(&mut self, fx: &Fx, facts: Vec<(u32, u8, Bound)>) -> usize {
+    fn narrow_guard_facts(&mut self, fx: &Fx, facts: Vec<Implied>) -> usize {
         let f = fx.f;
         let mi = fx.module;
         let mut pushed = 0;
-        for (id, kind, bound) in facts {
+        for fact in facts {
+            let id = match &fact {
+                Implied::Clip(id, ..) | Implied::Present(id, _) => *id,
+            };
             if !self
                 .narrow_scope
                 .as_ref()
@@ -618,19 +985,33 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            let is_char = matches!(bound, Bound::Char(_));
-            let b = self.bound_node(mi, bound);
-            let op = match is_char {
-                true => crate::model::RangeOp::SClip(kind),
-                false => crate::model::RangeOp::Clip(kind),
-            };
             let src = self
                 .narrowed_read(mi, id)
                 .unwrap_or_else(|| self.local(mi, id));
             let start = self.tmp("guard");
-            self.m.edge(src, start);
-            self.range_rule(op, src, Some(b), start);
+            self.zs_carrier(start);
+            match fact {
+                Implied::Clip(_, kind, bound) => {
+                    let is_char = matches!(bound, Bound::Char(_));
+                    let b = self.bound_node(mi, bound);
+                    let op = match is_char {
+                        true => crate::model::RangeOp::SClip(kind),
+                        false => crate::model::RangeOp::Clip(kind),
+                    };
+                    self.m.edge(src, start);
+                    self.range_rule(op, src, Some(b), start);
+                }
+                // The local's values but the ones the guard excludes: a
+                // filter of the program text, so a summary replays it.
+                Implied::Present(_, Presence::NotNullish) => {
+                    self.m.cons(src, Cons::NotNullish { dst: start })
+                }
+                Implied::Present(_, Presence::NotUndefined) => {
+                    self.m.cons(src, Cons::NotUndefined { dst: start })
+                }
+            }
             let end = self.tmp("guard-end");
+            self.zs_carrier(end);
             self.m.edge(start, end);
             self.narrow.push(Narrow {
                 mi,
@@ -640,6 +1021,8 @@ impl<'a> Gen<'a> {
                 end,
                 written: false,
                 in_update: false,
+                jumps: self.jumps,
+                tries: self.tries,
             });
             pushed += 1;
         }

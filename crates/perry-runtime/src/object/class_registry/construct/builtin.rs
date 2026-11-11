@@ -51,7 +51,26 @@ pub(super) unsafe fn construct(
         // WHATWG: the `AbortSignal` constructor throws; signals come from an
         // `AbortController` or the static factories. A direct `new`, a value
         // `new` and a live `super()` of a subclass all reach this switch.
-        BuiltinConstructorIdentity::Navigator | BuiltinConstructorIdentity::AbortSignal => {
+        // The two constructible reader families: the provider (the stdlib's
+        // streams install) checks the stream argument.
+        BuiltinConstructorIdentity::ReadableStreamDefaultReader
+        | BuiltinConstructorIdentity::ReadableStreamBYOBReader => {
+            return Some(
+                crate::external_family::construct(name, args)
+                .unwrap_or_else(|| {
+                    // No provider linked: nothing can be a ReadableStream.
+                    crate::fs::validate::throw_type_error_with_code(
+                        "The \"stream\" argument must be an instance of ReadableStream.",
+                        "ERR_INVALID_ARG_TYPE",
+                    )
+                }),
+            );
+        }
+        BuiltinConstructorIdentity::Navigator
+        | BuiltinConstructorIdentity::AbortSignal
+        | BuiltinConstructorIdentity::ReadableStreamDefaultController
+        | BuiltinConstructorIdentity::ReadableByteStreamController
+        | BuiltinConstructorIdentity::ReadableStreamBYOBRequest => {
             return Some(crate::error::js_throw_illegal_constructor_type_error());
         }
         BuiltinConstructorIdentity::Iterator => {
@@ -517,17 +536,18 @@ pub(super) unsafe fn construct(
         // "not a function". Mirror the static lowering exactly.
         BuiltinConstructorIdentity::ArrayBuffer | BuiltinConstructorIdentity::SharedArrayBuffer => {
             let size = args.first().copied().unwrap_or(0.0);
-            let buf = if name == BuiltinConstructorIdentity::SharedArrayBuffer {
-                crate::buffer::js_shared_array_buffer_new_value(size)
-            } else {
-                // #10873: the `{ maxByteLength }` options bag, exactly as
-                // the static lowering passes it.
-                let options = args
-                    .get(1)
-                    .copied()
-                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                crate::buffer::js_array_buffer_new_with_options(size, options)
-            };
+            // #10873: the `{ maxByteLength }` options bag, exactly as the
+            // static lowering passes it (a growable SharedArrayBuffer like a
+            // resizable ArrayBuffer).
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+            let buf = crate::buffer::buffer_new_with_options(
+                size,
+                options,
+                name == BuiltinConstructorIdentity::SharedArrayBuffer,
+            );
             return Some(crate::value::js_nanbox_pointer(buf as i64));
         }
         // The Web Streams constructors reached as values (`const RS =

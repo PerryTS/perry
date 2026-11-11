@@ -797,6 +797,8 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     // Capture wall-clock start before any string decoding or TLS overhead
     // so the stored Instant reflects the call site, not the bookkeeping cost.
     let start = Instant::now();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.console_time", 0);
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(
         #[inline(never)]

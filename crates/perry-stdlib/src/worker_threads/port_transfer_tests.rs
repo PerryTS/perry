@@ -1,9 +1,14 @@
 use super::*;
 
-fn call(port: f64, method: &str, args: &[f64]) -> f64 {
+pub(super) fn call(port: f64, method: &str, args: &[f64]) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let port = scope.root_nanbox_f64(port);
+    let args: Vec<_> = args
+        .iter()
+        .map(|value| scope.root_nanbox_f64(*value))
+        .collect();
     let method = scope.root_nanbox_f64(get_object_field_from_value(port.get_nanbox_f64(), method));
+    let args: Vec<_> = args.iter().map(|value| value.get_nanbox_f64()).collect();
     unsafe {
         perry_runtime::closure::js_native_call_value(
             method.get_nanbox_f64(),
@@ -350,5 +355,170 @@ fn ordinary_transferred_replies_survive_sender_close_and_retirement() {
                 call(peer.get_nanbox_f64(), "close", &[]);
             }
         }
+    });
+}
+
+static CLOSING_ORDER: AtomicU64 = AtomicU64::new(0);
+static CLOSING_PEER: AtomicU64 = AtomicU64::new(0);
+static CLOSING_SYNC_RECEIVE: AtomicU64 = AtomicU64::new(0);
+
+extern "C" fn close_while_receiving(
+    _closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let order = CLOSING_ORDER.load(Ordering::Relaxed);
+    CLOSING_ORDER.store(order * 10 + value as u64, Ordering::Relaxed);
+    if value == 1.0 {
+        let port = this.as_f64();
+        call(port, "close", &[]);
+        assert!(
+            perry_runtime::messaging::port_transfer::prepare(transfer_list(port, None), None,)
+                .is_err()
+        );
+        if CLOSING_SYNC_RECEIVE.load(Ordering::Relaxed) != 0 {
+            assert_eq!(received(port), 2.0);
+        }
+        call(
+            f64::from_bits(CLOSING_PEER.load(Ordering::Relaxed)),
+            "postMessage",
+            &[4.0],
+        );
+    }
+    js_undefined()
+}
+
+extern "C" fn record_closing_order(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    let order = CLOSING_ORDER.load(Ordering::Relaxed);
+    CLOSING_ORDER.store(order * 10 + 9, Ordering::Relaxed);
+    js_undefined()
+}
+
+#[test]
+fn closing_dispatch_drains_the_shared_inbox_before_close_but_cannot_transfer() {
+    isolated(|| {
+        for (outside, synchronous, expected) in
+            [(true, false, 9), (false, false, 12349), (false, true, 1349)]
+        {
+            CLOSING_ORDER.store(0, Ordering::Relaxed);
+            CLOSING_SYNC_RECEIVE.store(u64::from(synchronous), Ordering::Relaxed);
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let (port, peer) = channel();
+            let port = scope.root_nanbox_f64(port);
+            let peer = scope.root_nanbox_f64(peer);
+            CLOSING_PEER.store(peer.get_nanbox_u64(), Ordering::Relaxed);
+            for (event, info) in [
+                (
+                    "message",
+                    perry_runtime::fn_info!(close_while_receiving, 1; with_declared(1)),
+                ),
+                (
+                    "close",
+                    perry_runtime::fn_info!(record_closing_order, 0; with_declared(0)),
+                ),
+            ] {
+                let callback =
+                    scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(info, 0));
+                call(
+                    port.get_nanbox_f64(),
+                    "on",
+                    &[
+                        string_value(event),
+                        object_value(callback.get_raw_mut_ptr::<ClosureHeader>().cast()),
+                    ],
+                );
+            }
+            for value in [1.0, 2.0, 3.0] {
+                call(peer.get_nanbox_f64(), "postMessage", &[value]);
+            }
+            if outside {
+                call(port.get_nanbox_f64(), "close", &[]);
+            }
+            js_worker_threads_channels_process_pending();
+            assert_eq!(CLOSING_ORDER.load(Ordering::Relaxed), expected);
+            assert!(is_undefined(js_worker_threads_receive_message_on_port(
+                port.get_nanbox_f64()
+            )));
+            js_worker_threads_channels_process_pending();
+            assert_eq!(
+                CLOSING_ORDER.load(Ordering::Relaxed),
+                expected,
+                "close fires once"
+            );
+            call(peer.get_nanbox_f64(), "close", &[]);
+        }
+    });
+}
+
+#[test]
+fn port_listener_admission_rejects_primitives_without_changing_valid_delivery() {
+    isolated(|| {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let (port, peer) = channel();
+        let port = scope.root_nanbox_f64(port);
+        let peer = scope.root_nanbox_f64(peer);
+        let event = scope.root_nanbox_f64(string_value("message"));
+        let callback = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc(
+            perry_runtime::fn_info!(retired_message, 1; with_declared(1)),
+            0,
+        ));
+        call(
+            port.get_nanbox_f64(),
+            "on",
+            &[
+                event.get_nanbox_f64(),
+                object_value(callback.get_raw_mut_ptr::<ClosureHeader>().cast()),
+            ],
+        );
+        for method in [
+            "on",
+            "once",
+            "addListener",
+            "off",
+            "removeListener",
+            "addEventListener",
+            "removeEventListener",
+        ] {
+            let caught = perry_runtime::exception::catch_thrown(|| {
+                call(
+                    port.get_nanbox_f64(),
+                    method,
+                    &[event.get_nanbox_f64(), 1.0],
+                )
+            })
+            .expect_err(method);
+            let error = scope.root_nanbox_f64(caught.value());
+            for (key, expected) in [
+                ("name", "TypeError"),
+                ("code", "ERR_INVALID_ARG_TYPE"),
+                ("message", "The \"listener\" argument must be an instance of EventListener. Received type number (1)"),
+            ] {
+                assert_eq!(string_value_to_string(get_object_field_from_value(error.get_nanbox_f64(), key)).as_deref(), Some(expected), "{method}: {key}");
+            }
+            for listener in [
+                js_null(),
+                js_undefined(),
+                object_value(
+                    scope
+                        .root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0))
+                        .get_raw_mut_ptr(),
+                ),
+            ] {
+                call(
+                    port.get_nanbox_f64(),
+                    method,
+                    &[event.get_nanbox_f64(), listener],
+                );
+            }
+        }
+        RETIRED_ORDER.store(0, Ordering::Relaxed);
+        call(peer.get_nanbox_f64(), "postMessage", &[7.0]);
+        js_worker_threads_channels_process_pending();
+        assert_eq!(RETIRED_ORDER.load(Ordering::Relaxed), 7);
+        call(port.get_nanbox_f64(), "close", &[]);
+        call(peer.get_nanbox_f64(), "close", &[]);
     });
 }

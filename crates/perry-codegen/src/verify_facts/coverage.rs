@@ -36,6 +36,22 @@ pub(crate) enum Fact {
     NumericResult,
     ProtoHolder,
     ProtoAdd,
+    ElementRead,
+    FieldReadCall,
+    CanonicalNumber,
+    ElementFloor,
+    ConstNumber,
+    Signature,
+    ArrayRep,
+    ConstArray,
+    RecordIdentity,
+    RecordMutation,
+    /// DESIGN-p4l4 VR-3b: a value record reached a boxed entry (B3).
+    RecordEntry,
+    FieldRep,
+    UnsignedBound,
+    ZeroSign,
+    KeySign,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -71,6 +87,21 @@ impl Fact {
             Self::NumericResult => "numeric result",
             Self::ProtoHolder => "prototype holder",
             Self::ProtoAdd => "prototype add",
+            Self::ElementRead => "proven element read",
+            Self::FieldReadCall => "field read call",
+            Self::CanonicalNumber => "canonical number",
+            Self::ElementFloor => "element floor",
+            Self::ConstNumber => "constant number",
+            Self::Signature => "signature",
+            Self::ArrayRep => "array rep",
+            Self::ConstArray => "constant array",
+            Self::RecordIdentity => "value record identity",
+            Self::RecordMutation => "value record mutation",
+            Self::RecordEntry => "value record boxed entry",
+            Self::FieldRep => "field rep",
+            Self::UnsignedBound => "unsigned bound",
+            Self::ZeroSign => "zero sign",
+            Self::KeySign => "key sign",
         }
     }
 }

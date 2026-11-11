@@ -112,22 +112,18 @@ fn inspect_finish_circular(ptr_addr: usize, body: String) -> String {
 }
 
 /// Format a finite, non-zero, non-integer-like f64 per ECMAScript
-/// NumberToString. Caller has already filtered NaN / ±Infinity / ±0 /
-/// integer-shaped values; this only decides decimal vs scientific
-/// notation per the |n| < 10^-6 / |n| >= 10^21 thresholds.
+/// Number::toString: the same formatter as `String(n)` (`js_format_f64`).
+/// Caller has already filtered NaN / ±Infinity / ±0 / integer-shaped values.
 ///
-/// Without the threshold split, Rust's Display impl produces 300-digit
-/// decimals for `Number.MAX_VALUE` (`1.7976931348623157e+308` → 309
-/// zeros) and 16-digit `0.000…0002…` decimals for `Number.EPSILON`,
-/// neither of which matches Node.
+/// Rust's `{}` / `{:e}` also emit a shortest round-tripping decimal, but when
+/// the two shortest candidates are equidistant they can pick the odd final
+/// digit (`2 ** -25` printed `2.9802322387695313e-8`); ECMA-262 requires the
+/// even one (`…312e-8`). `ryu-js` implements that tie-break together with the
+/// |n| < 10^-6 / |n| >= 10^21 notation thresholds.
 #[inline]
 pub(crate) fn format_finite_number_js(value: f64) -> String {
-    let abs = value.abs();
-    if !(1e-6..1e21).contains(&abs) {
-        crate::string::fix_exponent_format(&format!("{:e}", value))
-    } else {
-        format!("{}", value)
-    }
+    let mut buffer = ryu_js::Buffer::new();
+    buffer.format_finite(value).to_owned()
 }
 
 /// 2^53 — the largest magnitude below which every integer is exactly
@@ -724,7 +720,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 if gc_type == crate::gc::GC_TYPE_ERROR {
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
                     errors::format_error_value(error_ptr, depth)
-                } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                } else if crate::gc_type_is_array!(gc_type) {
                     // A grown array's old head is a forwarding stub; inspect the
                     // live header (and key the cycle check on it) instead.
                     let ptr = crate::array::clean_arr_ptr(ptr);
@@ -1519,7 +1515,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     if gc_type == crate::gc::GC_TYPE_ERROR {
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
                         errors::format_error_value(error_ptr, depth)
-                    } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                    } else if crate::gc_type_is_array!(gc_type) {
                         // A grown array's old head is a forwarding stub; inspect the
                         // live header (and key the cycle check on it) instead.
                         let ptr = crate::array::clean_arr_ptr(ptr);

@@ -386,7 +386,7 @@ impl W {
     }
 }
 
-fn body_mentions_this(body: &[Stmt]) -> bool {
+pub(crate) fn body_mentions_this(body: &[Stmt]) -> bool {
     fn ex(e: &Expr) -> bool {
         if matches!(e, Expr::This) {
             return true;

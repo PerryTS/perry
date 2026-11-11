@@ -766,24 +766,13 @@ dependencies = [
 
 [[package]]
 name = "brotli"
-version = "8.0.4"
+version = "9.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
-dependencies = [
- "alloc-no-stdlib 2.0.4",
- "alloc-stdlib 0.2.4",
- "brotli-decompressor 5.0.3",
-]
-
-[[package]]
-name = "brotli"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
+checksum = "627b7cfb0578f0eafce087a90fcd40add1231900b69e4d4de2d456260a4f5d81"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
- "brotli-decompressor 6.0.1",
+ "brotli-decompressor 6.2.0",
 ]
 
 [[package]]
@@ -798,9 +787,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "6.0.1"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "941cd9bd4ddab83cb46fa5a2d428f1c857b24ac78cb876cf7beb710840934bd7"
+checksum = "34c6783f42c21c952ad7112b354f0ba2f10760e9decea5b1b60523d6e270faaf"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
@@ -5434,7 +5423,7 @@ name = "perry-ext-zlib"
 version = "0.5.1663"
 dependencies = [
  "adler2",
- "brotli 9.0.0",
+ "brotli",
  "flate2",
  "libz-ng-sys",
  "libz-rs-sys",
@@ -5657,7 +5646,7 @@ dependencies = [
  "aes-kw",
  "argon2",
  "bcrypt",
- "brotli 9.0.0",
+ "brotli",
  "bytes",
  "cbc 0.2.1",
  "chacha20poly1305",
@@ -5755,6 +5744,7 @@ dependencies = [
  "perry-ffi",
  "perry-ui-model",
  "tempfile",
+ "url",
 ]
 
 [[package]]
@@ -8394,7 +8384,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop"
-version = "0.1.0-alpha.10"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e2f1ca53e1247f717acf892f0f36d25b962f865e4e9d6b3c579ddc93d1b40f"
 dependencies = [
  "futures-io",
  "js-sys",
@@ -8408,10 +8400,12 @@ dependencies = [
 
 [[package]]
 name = "turnloop-http"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a57a11136eddf56f1d52ce07af559dfe1717497199abdce67364db4e69675da2"
 dependencies = [
  "base64 0.22.1",
- "brotli 8.0.4",
+ "brotli-decompressor 6.2.0",
  "bytes",
  "flate2",
  "http",
@@ -8425,9 +8419,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-io"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "381c4502cdcb2a813ae95948a5e06d7091d35298d7d1d73eb6e1f41e941d9056"
+checksum = "cb6044aef41d0fc2af39648c9d7ea3ab1abe57994c09f701804759f1654f3770"
 dependencies = [
  "futures-io",
  "turnloop",
@@ -8436,9 +8430,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-tls"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eaf0347a3e2f9bb6b41d279c81008c206c155bb28e489913f1e81c7d167a72f"
+checksum = "0c6308700a76da125d8b53576026c370ebe7a671dedbbfd946b8a8e45e517d5a"
 dependencies = [
  "ring",
  "rustls",
@@ -8449,9 +8443,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-wasi-random"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d8c3ed99aa6b0a51deeb5d84343429b9345d7d9b6f242a6548aa3449ebf1c28"
+checksum = "0d3e6fa029884eef57a4e24faa1ae21e5657c77d020dcfdde7f4f6e68d3d71dd"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
@@ -8459,9 +8453,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-websocket"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3515aca297ec16b09c45be8912dd2da689e54f18b5773924fac8c30acea41ab5"
+checksum = "e1f630fae8dd2c1660982661d39521c498a02ea5ffd1f3352984e7bf13dea7fe"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -8474,9 +8468,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-zstd-decoder"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7e01a0da61b511c891847364765aa2fd9d4fe4b1ae3738d6c3afe3f1c0dce8c"
+checksum = "f57a70f62c361a4fc8bf539a90b0ab6dd7a2e9420411cf2c3f09af30d5ffdb19"
 dependencies = [
  "twox-hash",
 ]

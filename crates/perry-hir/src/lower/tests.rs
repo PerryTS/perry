@@ -16,6 +16,50 @@ fn make_ctx() -> LoweringContext {
 }
 
 #[test]
+fn import_defer_preserves_static_phase() {
+    let parsed = perry_parser::parse_typescript(
+        "import defer * as lazy from './lazy.js'; import * as eager from './eager.js';",
+        "defer-phase.ts",
+    )
+    .expect("source parses");
+    let hir = super::lower_module(&parsed, "defer-phase", "defer-phase.ts").expect("source lowers");
+    assert!(hir.imports[0].is_deferred);
+    assert!(!hir.imports[1].is_deferred);
+    let mut evaluation_phase = hir.clone();
+    evaluation_phase.imports[0].is_deferred = false;
+    assert_ne!(
+        crate::stable_hash::hash_module(&hir),
+        crate::stable_hash::hash_module(&evaluation_phase)
+    );
+}
+
+#[test]
+fn import_defer_preserves_dynamic_phase() {
+    let parsed = perry_parser::parse_typescript(
+        "const lazy = import.defer('./lazy.js'); const eager = import('./eager.js');",
+        "dynamic-defer-phase.ts",
+    )
+    .expect("source parses");
+    let hir = super::lower_module(&parsed, "dynamic-defer-phase", "dynamic-defer-phase.ts")
+        .expect("source lowers");
+    let mut phases = Vec::new();
+    fn collect_phases(expr: &Expr, phases: &mut Vec<bool>) {
+        if let Expr::DynamicImport { deferred, .. } = expr {
+            phases.push(*deferred);
+        }
+        crate::walker::walk_expr_children(expr, &mut |child| collect_phases(child, phases));
+    }
+    for stmt in &hir.init {
+        crate::walker::stmt_any_expr(stmt, &mut |expr| {
+            collect_phases(expr, &mut phases);
+            false
+        });
+    }
+    assert_eq!(phases, vec![true, false]);
+    assert_eq!(format!("{:?}", hir.init), format!("{:?}", hir.clone().init));
+}
+
+#[test]
 fn a_computed_instance_field_key_is_not_a_constructor_capture() {
     let source = r#"
         function make() {
@@ -1277,6 +1321,7 @@ mod anonymous_class_outer_binding;
 mod class_expr_self_new_instanceof;
 mod forward_class_captures;
 mod function_constructor_shadow;
+mod function_decl_store_binding;
 mod issue_11157_class_decl_self_statics;
 mod issue_11298_class_expr_evaluation_identity;
 
@@ -1535,3 +1580,5 @@ export function make(k: number) {
         "wrapper captures k and n only (visit's parameters are {own:?})"
     );
 }
+
+mod imported_class_new_spread;

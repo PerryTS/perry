@@ -118,9 +118,11 @@ fn proven_bindings_take_raw_double_ops_and_own_no_root_slot() {
         0,
         "a proven Number binding never holds a pointer:\n{body}"
     );
+    // A Number is a plain double, so the parameter takes its argument's bits
+    // with no decode at entry; the entry witness checks it in check mode.
     assert!(
-        body.contains(crate::nanbox::INT32_TAG_I64),
-        "a proven parameter converts an INT32 box at entry:\n{body}"
+        !body.contains(crate::nanbox::INT32_TAG_I64),
+        "a proven parameter takes its argument's bits at entry:\n{body}"
     );
 }
 

@@ -487,6 +487,11 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }
+            // I32 at rest B2: a present at-rest slot is decoded to its int32
+            // Number; there is no boxed fallback edge.
+            if crate::expr::rest_elems::number_read(ctx, expr) {
+                return false;
+            }
             // A flat-const table element is a native `[N x i32]` load
             // (issue #50): no boxed fallback edge exists.
             if let Expr::IndexGet { index, .. } = expr {

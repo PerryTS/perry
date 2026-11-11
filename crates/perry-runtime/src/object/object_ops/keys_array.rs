@@ -888,7 +888,7 @@ unsafe fn own_key_via_index(
         return Some(found.is_some());
     }
     match crate::value::addr_class::try_read_gc_header(keys.arr() as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
         _ => return None,
     }
     let key_count = keys.count();
@@ -994,7 +994,7 @@ unsafe fn own_key_lookup(
     let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if !matches!(
         (*keys_gc).obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_OVERFLOW
     ) {
         return false;
     }

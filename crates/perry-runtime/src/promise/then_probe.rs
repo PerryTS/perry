@@ -194,7 +194,7 @@ unsafe fn proto_signature(proto_addr: usize) -> Option<(usize, u32, u16, u32)> {
             return None;
         }
         let kh = crate::value::addr_class::try_read_gc_header(keys_addr)?;
-        if kh.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(kh.obj_type)
             || kh.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -346,7 +346,7 @@ unsafe fn own_then_scan(obj: *const ObjectHeader) -> OwnScan {
     let Some(header) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return OwnScan::Unknown;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || crate::array::array_has_named_layout(keys as *const crate::array::ArrayHeader)
     {

@@ -285,7 +285,7 @@ mod platform_impl {
     /// Best-effort i32 from a NaN-boxed numeric argument.
     fn pty_arg_i32(v: f64) -> i32 {
         let bits = v.to_bits();
-        if (bits >> 48) == 0x7FFE {
+        if crate::value::is_int32_bits(bits) {
             return (bits & 0xFFFF_FFFF) as u32 as i32;
         }
         if v.is_finite() {

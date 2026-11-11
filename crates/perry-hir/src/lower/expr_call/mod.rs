@@ -23,6 +23,11 @@ use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
 
+/// A remaining qualified name does not establish an Array receiver.
+fn is_qualified_type_name(name: &str) -> bool {
+    name.contains('.')
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,
@@ -877,7 +882,7 @@ fn lower_call_inner(
                 })
             }
         }
-        ast::Callee::Import(_) => {
+        ast::Callee::Import(import) => {
             // Issue #100: dynamic import() — lower to Expr::DynamicImport with
             // an empty `paths` list. `collect_modules` runs the path-const
             // folder and populates `paths`. If the argument can't be folded
@@ -894,6 +899,7 @@ fn lower_call_inner(
                 byte_offset: call.span.lo.0,
                 deferred_error: None,
                 synchronous: false,
+                deferred: import.phase == ast::ImportPhase::Defer,
             })
         }
     }

@@ -310,6 +310,16 @@ pub fn try_lower_property_get_method_call(
     // `js_set_call_location` from this captured value, immediately before the
     // throwing dispatch. `0` (and the default build) → no emission.
     let call_byte_offset = ctx.strings.pending_call_offset();
+    // A deferred namespace evaluates its module in `[[Get]]`, so the receiver
+    // must be resolved before the arguments run. Every arm below binds the
+    // call to a native builtin from the property name alone and reads the
+    // receiver afterwards, so a deferred receiver takes the generic split
+    // dispatch (callee first) that `ns.export(arg())` already uses.
+    if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+        if ctx.deferred_namespace_imports.contains(name) {
+            return Ok(None);
+        }
+    }
     if property == "apply"
         && args.len() == 2
         && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),

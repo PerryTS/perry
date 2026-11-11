@@ -290,7 +290,7 @@ pub(super) unsafe fn dispatch_handle(
             let arr_gc_hdr =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let arr_obj_type = (*arr_gc_hdr).obj_type;
-            if arr_obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(arr_obj_type)
                 || arr_obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
                 // A user-stored callable own property on the array

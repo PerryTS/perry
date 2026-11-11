@@ -790,13 +790,20 @@ unsafe fn construct_registered_class_ref_entry(
 /// it is an object" rule: returns `newTarget.prototype`'s bits when that value
 /// is an object (so a typed-array view should adopt it as its `[[Prototype]]`),
 /// or `None` when it is a primitive (so the default per-kind prototype applies).
+// One out-of-line copy for its three construct paths: P3 B2 made the body
+// small enough for LLVM to inline it into each, which grew `.text` by
+// ~1.2 KB (CWN: binaries must not grow).
+#[inline(never)]
 fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
     if let Some(class_id) = constructor_class_ref_id(new_target) {
         let declared = super::class_decl_prototype_value(class_id);
         if unsafe { super::super::value_is_object_like(declared) } {
             return Some(declared.to_bits());
         }
-        return Some(super::super::class_prototype_ref_value(class_id).to_bits());
+        // P3 B2 (REVIEW-p3 D3): `newTarget.prototype` is not an object (an id
+        // with no declaration reads `undefined`, the same answer as the
+        // `prototype` read), so the default per-kind prototype applies.
+        return None;
     }
     let proto = new_target_prototype_get(new_target)?;
     if unsafe { super::super::value_is_object_like(proto) }
@@ -926,6 +933,11 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | BuiltinConstructorIdentity::CryptoKey
                 | BuiltinConstructorIdentity::SubtleCrypto
                 | BuiltinConstructorIdentity::Navigator
+                | BuiltinConstructorIdentity::ReadableStreamDefaultController
+                | BuiltinConstructorIdentity::ReadableStreamDefaultReader
+                | BuiltinConstructorIdentity::ReadableByteStreamController
+                | BuiltinConstructorIdentity::ReadableStreamBYOBReader
+                | BuiltinConstructorIdentity::ReadableStreamBYOBRequest
                 | BuiltinConstructorIdentity::MessagePort
                 | BuiltinConstructorIdentity::Storage
         ) {

@@ -65,6 +65,12 @@ pub(crate) fn namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> S
     }
 }
 
+/// A module-owned cached identity, without evaluating its synchronous body.
+pub(crate) fn deferred_namespace_value_for_prefix(ctx: &mut FnCtx<'_>, prefix: &str) -> String {
+    ctx.block()
+        .call(DOUBLE, &format!("{prefix}__deferred_namespace"), &[])
+}
+
 /// What `require` returns for a compiled target: its `module.exports` when the
 /// namespace carries that alias (CommonJS and JSON targets), else the
 /// namespace itself, which is what `require` of an ES module returns.
@@ -514,7 +520,11 @@ fn materialize_compiled_namespace(ctx: &mut FnCtx<'_>, name: &str) -> Result<Opt
         // The module graph owns one namespace and its init guard. Reading a
         // static namespace must load that same object as dynamic import(),
         // rather than rebuilding a projection of its members in the consumer.
-        return Ok(Some(namespace_value_for_prefix(ctx, &prefix)));
+        return Ok(Some(if ctx.deferred_namespace_imports.contains(name) {
+            deferred_namespace_value_for_prefix(ctx, &prefix)
+        } else {
+            namespace_value_for_prefix(ctx, &prefix)
+        }));
     }
 
     let mut members: Vec<String> = ctx
@@ -631,6 +641,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             options,
             deferred_error,
             synchronous,
+            deferred,
             ..
         } => {
             // #5389 Tier 2: a synchronous CommonJS `require(expr)` returns the
@@ -808,6 +819,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             "js_create_native_module_namespace",
                             &[(PTR, &mod_label), (I64, &mod_len.to_string())],
                         )
+                    } else if *deferred {
+                        deferred_namespace_value_for_prefix(ctx, target_prefix)
+                    } else if ctx.program_has_tla {
+                        let blk = ctx.block();
+                        let record = blk.call(I64, &format!("{}__async_record", target_prefix), &[]);
+                        let promise = blk.call(DOUBLE, "js_async_module_import", &[(I64, &record)]);
+                        blk.store(DOUBLE, &promise, &result_slot);
+                        blk.br(&join_label);
+                        ctx.current_block = next_label;
+                        continue;
                     } else {
                         let blk = ctx.block();
                         blk.call_void(&format!("{}__init", target_prefix), &[]);

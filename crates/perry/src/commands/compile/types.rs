@@ -107,6 +107,10 @@ pub struct CompileArgs {
     #[arg(long, value_name = "PATH")]
     pub source_root_target: Option<String>,
 
+    /// Compiler-owned ancestry for recursive build-time macro expansion.
+    #[arg(long, hide = true)]
+    pub macro_import_stack: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -196,6 +200,11 @@ pub struct CompileArgs {
     /// `perry.embed` (package.json) / `[compile] embed` (perry.toml). Repeatable.
     #[arg(long)]
     pub embed: Vec<String>,
+
+    /// Package explicitly embedded files as Node SEA assets. Ordinary
+    /// `--embed` builds do not activate the `node:sea` API.
+    #[arg(long)]
+    pub sea: bool,
 
     /// Map Bun standalone-executable virtual paths below `/$bunfs/root/` to
     /// an extracted filesystem tree. Static module edges resolve through the
@@ -681,6 +690,10 @@ pub struct GeneratedAssetModule {
 
 /// Compilation context tracking all modules
 pub struct CompilationContext {
+    /// This compilation executed build-time code with external inputs.
+    pub(crate) has_build_time_execution: bool,
+    /// Active importing modules, forwarded to native macro compiler children.
+    pub(crate) macro_import_stack: Vec<PathBuf>,
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
@@ -694,6 +707,9 @@ pub struct CompilationContext {
     pub(crate) uses_os: bool,
     pub(crate) uses_messaging: bool,
     pub(crate) uses_event_target: bool,
+    /// The program may read `navigator` / `Navigator` (named, or through an
+    /// escaped global object): `Navigator.prototype` gets its getters.
+    pub(crate) uses_navigator: bool,
     pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
@@ -1422,9 +1438,23 @@ impl CompilationContext {
             .collect()
     }
 
+    /// Perry C functions available to approved native addons.
+    ///
+    /// Export the full, currently small inventory whenever an addon is linked.
+    /// A shared library used by the addon can call these functions without
+    /// leaving an import in the top-level addon binary for our scanner to see.
+    /// Projects without native addons keep the exports out of the host binary.
+    pub fn perry_c_host_exports(&self) -> Vec<&'static str> {
+        perry_runtime_manifest::perry_c_host_symbols()
+            .filter(|_| !self.native_addons.is_empty())
+            .collect()
+    }
+
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            has_build_time_execution: false,
+            macro_import_stack: Vec::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
             uses_thread_codec: false,
@@ -1433,6 +1463,7 @@ impl CompilationContext {
             uses_os: false,
             uses_messaging: false,
             uses_event_target: false,
+            uses_navigator: false,
             uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),

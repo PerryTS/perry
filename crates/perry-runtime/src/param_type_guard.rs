@@ -258,7 +258,7 @@ impl GuardState<'_> {
         }
         let address = (value.bits() & POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(address)?;
-        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || crate::array::array_has_element_descriptors(
                 address as *const crate::array::ArrayHeader,
@@ -417,7 +417,7 @@ impl GuardState<'_> {
         let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
             return ObjectKeys::Invalid;
         };
-        if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_header.obj_type)
             || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return ObjectKeys::Invalid;
@@ -1148,7 +1148,7 @@ mod tests {
     fn primitive_descriptors_reject_lying_values() {
         let number = one_node(&[OP_NUMBER]);
         assert_eq!(guard(JSValue::number(12.5), &number), 1);
-        assert_eq!(guard(JSValue::int32(12), &number), 1);
+        assert_eq!(guard(JSValue::number(f64::from(12)), &number), 1);
         assert_eq!(guard(JSValue::bool(true), &number), 0);
 
         let boolean = one_node(&[OP_BOOLEAN]);

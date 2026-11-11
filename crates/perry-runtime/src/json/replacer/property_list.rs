@@ -63,11 +63,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
             field_val.get_nanbox_f64(),
             field_key,
         ));
-        let field_bits = field_val.get_nanbox_f64().to_bits();
-        if field_bits == TAG_UNDEFINED
-            || is_closure_value(field_bits)
-            || super::super::stringify::is_symbol_value(field_bits)
-        {
+        if !serializable_member(field_val.get_nanbox_f64()) {
             continue;
         }
         if !first {
@@ -113,6 +109,16 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }
 
+/// A member with no JSON text: `undefined`, a function, a symbol, or a proxy
+/// that wraps a callable. Shared with the root, which serializes to `undefined`.
+pub(super) unsafe fn serializable_member(value: f64) -> bool {
+    let bits = value.to_bits();
+    !(bits == TAG_UNDEFINED
+        || is_closure_value(bits)
+        || super::super::stringify::is_symbol_value(bits)
+        || crate::proxy_hooks::proxy_wraps_callable(value))
+}
+
 /// Serialize one value while an array replacer (PropertyList) is active. Per
 /// spec the key whitelist applies to EVERY nested object in the tree, not just
 /// the top-level one — so a plain object recurses through
@@ -143,7 +149,7 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             && crate::builtins::boxed_primitive_json_value(val).is_none()
         {
             match gc_obj_type(ptr) {
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     stringify_array_with_array_replacer(
                         ptr,
                         allowed_keys,
@@ -169,6 +175,9 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             }
         }
     }
+    // The ordinary serializer probes `toJSON` on an object it is handed; the
+    // one-shot guard tells that probe the step already ran for `val`.
+    arm_to_json_result_guard(val);
     if use_pretty {
         stringify_value_pretty(val, TYPE_UNKNOWN, buf, indent, depth);
     } else {

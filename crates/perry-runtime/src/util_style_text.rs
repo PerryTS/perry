@@ -416,7 +416,7 @@ fn heap_ptr_object(value: f64) -> Option<*const u8> {
 }
 
 fn array_ptr(value: f64) -> Option<*const ArrayHeader> {
-    heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY).map(|ptr| ptr as *const ArrayHeader)
+    heap_ptr_with_gc_type(value, crate::gc_array_type_pat!()).map(|ptr| ptr as *const ArrayHeader)
 }
 
 fn object_ptr(value: f64) -> Option<*const ObjectHeader> {
@@ -474,14 +474,7 @@ fn should_style(options: f64) -> bool {
     if !validate_stream {
         return true;
     }
-    if let Some(force) = std::env::var_os("FORCE_COLOR") {
-        let force = force.to_string_lossy();
-        return !force.is_empty() && force != "0" && force.to_ascii_lowercase() != "false";
-    }
-    if std::env::var_os("NO_COLOR").is_some() || std::env::var_os("NODE_DISABLE_COLORS").is_some() {
-        return false;
-    }
-    crate::tty::is_tty_fd(1)
+    crate::tty::stdout_style_bit()
 }
 
 fn csi(code: i32) -> String {

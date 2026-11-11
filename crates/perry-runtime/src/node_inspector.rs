@@ -162,7 +162,7 @@ fn pending_promise_values(session: f64) -> Vec<f64> {
     let raw = raw_ptr_from_value(value);
     if !JSValue::from_bits(value.to_bits()).is_pointer()
         || !crate::value::addr_class::is_plausible_heap_addr(raw)
-        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_ARRAY)
+        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc_array_type_pat!())
     {
         return Vec::new();
     }
@@ -1651,11 +1651,18 @@ pub extern "C" fn js_node_inspector_session_call_without_new() -> f64 {
     ))
 }
 
+// `new Session(...)` makes a session object whose [[Prototype]] is
+// `Session.prototype`: it ignores its arguments and keeps nothing of the
+// program's; what it stores goes into the session it creates
+// (`stores(fresh)`).
+crate::realm_decl! { "node:inspector.Session", effects = { stores(fresh); returns(fresh("node:inspector.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_new() -> f64 {
     session_new(false)
 }
 
+// The `node:inspector/promises` session, as `node:inspector.Session`.
+crate::realm_decl! { "node:inspector/promises.Session", effects = { stores(fresh); returns(fresh("node:inspector/promises.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_promises_session_new() -> f64 {
     session_new(true)

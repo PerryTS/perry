@@ -123,6 +123,7 @@ mod io;
 mod iter_object;
 mod locale;
 pub(crate) mod normalize_hooked;
+pub(crate) mod short_pair;
 mod pad;
 mod provenance;
 use provenance::{combine_string_flags, raw_string_metadata};
@@ -210,7 +211,6 @@ pub use concat_parts::{
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
-pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
 
 /// The canonical `StringHeader` for a runtime-internal constant property name.

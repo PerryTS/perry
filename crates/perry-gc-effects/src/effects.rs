@@ -159,7 +159,8 @@ fn species(o: &RealmOperand) -> bool {
 
 fn fresh(o: &RealmOperand) -> bool {
     match o {
-        RealmOperand::Fresh { .. } => true,
+        // A promise is an object the call makes.
+        RealmOperand::Fresh { .. } | RealmOperand::Promise { .. } => true,
         RealmOperand::Union(members) => members.iter().any(fresh),
         _ => false,
     }
@@ -171,18 +172,26 @@ fn runs_code(e: &RealmEffect) -> bool {
         | RealmEffect::Coerce { .. }
         | RealmEffect::Reads(_)
         | RealmEffect::Stores { .. }
+        | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
         | RealmEffect::Open => true,
         RealmEffect::Returns(o) => species(o),
-        RealmEffect::StoresFresh => false,
+        // A comparison runs no program code.
+        RealmEffect::StoresFresh | RealmEffect::Identity(_) => false,
     }
 }
 
 fn keeps(e: &RealmEffect) -> bool {
     match e {
-        RealmEffect::Stores { .. } | RealmEffect::StoresFresh | RealmEffect::Open => true,
+        RealmEffect::Stores { .. }
+        | RealmEffect::StoresFresh
+        | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
+        | RealmEffect::Open => true,
+
         RealmEffect::Returns(o) => fresh(o) || species(o),
         RealmEffect::Calls { args, this, .. } => species(this) || args.iter().any(species),
-        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } => false,
+        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } | RealmEffect::Identity(_) => false,
     }
 }
 
@@ -358,6 +367,7 @@ mod tests {
             proto: Cow::Borrowed("Array.prototype"),
             elems: Cow::Borrowed(&[]),
             fields: Cow::Borrowed(&[]),
+            slots: Cow::Borrowed(&[]),
         })];
         assert!(violations(&fresh, false, true).is_empty());
         let stores = [RealmEffect::Stores {

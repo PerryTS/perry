@@ -24,6 +24,8 @@ use super::{
     TrustedBoxCapturePtr,
 };
 
+mod facts_const_number;
+
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
 /// retain their existing ABI; trusted inline loads pass the name only on
 /// their cold TDZ arm. Names come from permanent, GC-rooted string globals.
@@ -473,6 +475,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::LocalGet(id) => {
             crate::codegen::arguments::ensure_arguments_object(ctx, *id);
+            if let Some(value) = facts_const_number::read(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }
@@ -1372,6 +1377,15 @@ pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) 
 /// plain-slot store with its shadow-frame mirror and i32 mirror, module
 /// globals, the arena owner, buffer views and int facts.
 ///
+/// `id = v` for a value lowering holds already (a value record lane,
+/// `codegen::record_sig`): the write obligations of the `LocalSet` arm, then
+/// the one binding. `hint` is the expression the boxed program assigns.
+pub(crate) fn bind_local(ctx: &mut FnCtx<'_>, id: u32, v: &str, hint: &Expr) -> Result<()> {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, hint);
+    bind_lowered_value_to_local(ctx, id, v, hint)
+}
+
 /// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
 /// a caller holding a value it did not lower through `lower_expr` — a
 /// region's fast arm, which loads the slot directly — binds it through the

@@ -104,8 +104,8 @@ pub(crate) fn collection_proto_method_value(builtin_name: &str, method_name: &st
 
 /// Install the brand-checking `.prototype` methods for the collection named
 /// `builtin_name` (`Map`/`Set`/`WeakMap`/`WeakSet`). Returns `true` when
-/// `builtin_name` is one of those collections — the caller then adds the
-/// shared `OBJECT_PROTO_METHODS` — and `false` otherwise. Lives here rather
+/// `builtin_name` is one of those collections (the caller then adds its
+/// `Symbol.toStringTag`) and `false` otherwise. Lives here rather
 /// than inline in `global_this::populate_builtin_prototype_methods` to keep
 /// that file under the 2000-line size gate. #3662.
 #[optimize(size)]
@@ -446,7 +446,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
                 .obj_type
         };
         match obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 return "[object Array]".to_string();
             }
             crate::gc::GC_TYPE_PROMISE => return "#<Promise>".to_string(),

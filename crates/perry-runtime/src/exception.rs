@@ -346,6 +346,12 @@ crate::perry_thread_local! {
 /// listener), and an unhandled rejection. `Err(value)` is that exception. The
 /// caller ends the worker; the process keeps running, as in Node.
 pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    run_worker_body_caught(f).map_err(|caught| caught.value())
+}
+
+/// The typed worker base retains exception provenance when an execution
+/// phase observes the value before handing it to an outer worker base.
+pub fn run_worker_body_caught<R>(f: impl FnOnce() -> R) -> Result<R, Caught> {
     let outer = IN_WORKER_BASE.with(|d| d.replace(true));
     let outcome = trap_with::<true, R, _>(f);
     IN_WORKER_BASE.with(|d| d.set(outer));
@@ -354,7 +360,11 @@ pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
     with_exception_state(|s| unsafe { (*s).to_worker_base = false });
     match outcome {
         Some(r) => Ok(r),
-        None => Err(take_exception()),
+        None => {
+            let caught = pending_exception();
+            js_clear_exception();
+            Err(caught)
+        }
     }
 }
 
@@ -479,10 +489,21 @@ pub(crate) fn test_throw(value: f64) -> ! {
     js_throw(value)
 }
 
-/// The one raise behind `js_throw` and the four typed leaves: store the
-/// value and transport it to the handler.
-#[inline(never)]
-fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
+/// A `throw` whose handler is a scope of the throwing function itself: the
+/// generated code makes the value pending here, restores the managed stacks
+/// (`js_eh_pad_enter`, as the scope's landing pad does) and branches to the
+/// block that pad continues at. No frame is abandoned, so nothing is
+/// transported; everything else a throw does happens exactly as in
+/// [`raise_thrown`].
+#[no_mangle]
+pub extern "C" fn js_throw_local(value: f64) {
+    set_thrown(value, ThrowKind::Compiled);
+}
+
+/// Make `value` the pending exception of this thread: the part of a throw
+/// that does not depend on where its handler is.
+#[inline]
+fn set_thrown(value: f64, kind: ThrowKind) {
     // The throws premise of the generated GC-effects table: a collection never
     // unwinds. Throw path only (see `forbid_throw_in_collection`).
     crate::gc::allocation_pacing::forbid_throw_in_collection();
@@ -502,6 +523,13 @@ fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
     if trace_throw_enabled() {
         trace_throw(value, kind);
     }
+}
+
+/// The one raise behind `js_throw` and the four typed leaves: store the
+/// value and transport it to the handler.
+#[inline(never)]
+fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
+    set_thrown(value, kind);
     #[cfg(target_os = "wasi")]
     crate::eh::raise_wasm_exception();
     #[cfg(not(target_os = "wasi"))]
@@ -1111,4 +1139,18 @@ pub(crate) fn test_caught(value: f64) -> Caught {
         (*s).has_exception = had_exception;
     });
     caught
+}
+
+#[cfg(test)]
+mod typed_worker_base_tests {
+    use super::*;
+
+    #[test]
+    fn typed_worker_base_rethrows_to_the_outer_base() {
+        let result = run_worker_body::<()>(|| {
+            let caught = run_worker_body_caught(|| -> () { test_throw(42.0) }).unwrap_err();
+            rethrow_caught(caught);
+        });
+        assert_eq!(result, Err(42.0));
+    }
 }

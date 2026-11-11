@@ -146,10 +146,21 @@ pub(super) fn extend_body_symbol_display_names(
         .defined_function_names()
         .filter(|symbol| !by_base.contains_key(symbol))
         .filter_map(|symbol| {
-            let (base, suffix) = symbol.split_once('$')?;
-            if !(suffix.starts_with("spec_") || suffix == "generic") {
-                return None;
-            }
+            // P2: a typed body (`F$sig`, `M$sig`, DESIGN-p2 §3) is the ABI
+            // clone of its public body that every typed site and the boxed
+            // entry enter, so it is that function's frame. It replaces the
+            // spec clone or public body main registered here, and takes
+            // their record, and with it their place in the JS text section.
+            let base = match symbol.strip_suffix("$sig") {
+                Some(base) => base,
+                None => {
+                    let (base, suffix) = symbol.split_once('$')?;
+                    if !(suffix.starts_with("spec_") || suffix == "generic") {
+                        return None;
+                    }
+                    base
+                }
+            };
             let display = by_base.get(base)?;
             Some((symbol.to_string(), display.to_string()))
         })

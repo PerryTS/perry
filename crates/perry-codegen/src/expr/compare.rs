@@ -507,7 +507,7 @@ pub(crate) fn lower_string_literal_strict_eq_with_others(
 /// **misses**, so a fast path that settles only the hit is worth nothing —
 /// each case below settles one direction of the real traffic.
 ///
-/// Three cases leave without a call. Each is an exact restatement of what
+/// Two cases leave without a call. Each is an exact restatement of what
 /// `js_jsvalue_equals` computes for that input, not an approximation:
 ///
 /// * **identical bits** ⇒ equal, *unless* the value is a plain (untagged)
@@ -520,7 +520,6 @@ pub(crate) fn lower_string_literal_strict_eq_with_others(
 ///   encoding is canonical — same bytes and same length give the same bit
 ///   pattern — which is the argument `lower_string_strict_eq_inline` and the
 ///   runtime's own both-short-string arm already rely on.
-/// * **both INT32, different bits** ⇒ different integers, same argument.
 ///
 /// Distinct `POINTER_TAG` values always take the runtime call. Not every
 /// pointer-tag payload is a GC allocation: registered and well-known symbols,
@@ -766,15 +765,7 @@ fn lower_strict_eq_inline_any(
         .block()
         .icmp_eq(I64, &r_tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
     let both_sso = ctx.block().and(I1, &l_sso, &r_sso);
-    let l_i32 = ctx
-        .block()
-        .icmp_eq(I64, &l_tag, crate::nanbox::INT32_TAG_TOP16_I64);
-    let r_i32 = ctx
-        .block()
-        .icmp_eq(I64, &r_tag, crate::nanbox::INT32_TAG_TOP16_I64);
-    let both_i32 = ctx.block().and(I1, &l_i32, &r_i32);
-    let canonical = ctx.block().or(I1, &both_sso, &both_i32);
-    ctx.block().cond_br(&canonical, &false_l, &slow_l);
+    ctx.block().cond_br(&both_sso, &false_l, &slow_l);
 
     ctx.current_block = slow_idx;
     let slow_res = ctx
@@ -819,29 +810,14 @@ fn is_plain_number_or_undefined(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     }
 }
 
-/// Normalize Perry's compact INT32 immediate to an ordinary IEEE double.
-/// Every other bit pattern is left unchanged. That makes a subsequent `fcmp`
-/// exact for an arbitrary JS value against a proven Number: non-number tags
-/// remain NaNs (and therefore compare unequal), while both Number encodings
-/// participate in the numeric comparison.
-fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
-    let bits = ctx.block().bitcast_double_to_i64(value);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
-    let raw = ctx.block().trunc(I64, &bits, I32);
-    let decoded = ctx.block().sitofp(I32, &raw, DOUBLE);
-    ctx.block().select(I1, &is_i32, DOUBLE, &decoded, value)
-}
-
 /// Strict equality where exactly one operand is a proven Number.
 ///
-/// An i32-proven operand needs one numeric comparison after compact INT32
-/// normalization. General Numbers keep the encoding comparison: encode the
-/// proven operand rather than converting the varying operand, preserving
-/// fractional byte-dependent recurrences. Saturation and the round trip reject
-/// NaN, infinity, out-of-range Numbers and fractions on the compact arm.
+/// A Number has one encoding, the plain double, and every other JS value is a
+/// NaN bit pattern. So an arbitrary value against a proven Number is one
+/// numeric comparison: a non-number compares unequal. An i32-proven operand
+/// takes the `fcmp`. General Numbers keep the comparison on the bits, which
+/// leaves the varying operand out of the floating-point domain and so
+/// preserves fractional byte-dependent recurrences.
 fn lower_strict_eq_against_number(
     ctx: &mut FnCtx<'_>,
     dynamic_expr: &Expr,
@@ -851,21 +827,16 @@ fn lower_strict_eq_against_number(
     dynamic_is_left: bool,
     integer_operand: bool,
 ) -> String {
-    let plain = is_plain_number_or_undefined(ctx, dynamic_expr);
-    // Raw checked bytes must not take compact-integer normalization. Keep
-    // this admission compatible with main's integer-operand emitter.
-    let integer_operand = integer_operand && !plain;
-    let _ = integer_operand;
+    // Raw checked bytes keep the bits comparison below.
+    let integer_operand = integer_operand && !is_plain_number_or_undefined(ctx, dynamic_expr);
     let (dynamic, number) = if dynamic_is_left { (l, r) } else { (r, l) };
     if integer_operand {
-        let dynamic = normalize_int32_immediate(ctx, dynamic);
-        let number = normalize_int32_immediate(ctx, number);
         let predicate = if matches!(op, CompareOp::Ne) {
             "une"
         } else {
             "oeq"
         };
-        let bit = ctx.block().fcmp(predicate, &dynamic, &number);
+        let bit = ctx.block().fcmp(predicate, dynamic, number);
         let tagged = ctx.block().select(
             I1,
             &bit,
@@ -875,27 +846,7 @@ fn lower_strict_eq_against_number(
         );
         return ctx.block().bitcast_i64_to_double(&tagged);
     }
-    let number = normalize_int32_immediate(ctx, number);
-    let number = number.as_str();
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
-    let compact = if plain {
-        None
-    } else {
-        let tag = ctx.block().lshr(I64, &bits, "48");
-        let is_i32 = ctx
-            .block()
-            .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
-        let integer = ctx
-            .block()
-            .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
-        let roundtrip = ctx.block().sitofp(I32, &integer, DOUBLE);
-        let exact = ctx.block().fcmp("oeq", &roundtrip, number);
-        let payload = ctx.block().trunc(I64, &bits, I32);
-        let same_integer = ctx.block().icmp_eq(I32, &payload, &integer);
-        let compact = ctx.block().and(I1, &is_i32, &exact);
-        let compact = ctx.block().and(I1, &compact, &same_integer);
-        Some(compact)
-    };
     // Raw doubles compare by bits, except that both signed zeros are equal and
     // NaN is unequal to itself. Keeping the NaN check on the proven operand
     // avoids a floating-point round trip through the varying value as well.
@@ -908,11 +859,7 @@ fn lower_strict_eq_against_number(
     let both_zero = ctx.block().and(I1, &dynamic_zero, &number_zero);
     let raw = ctx.block().or(I1, &same_bits, &both_zero);
     let ordered = ctx.block().fcmp("oeq", number, number);
-    let raw = ctx.block().and(I1, &raw, &ordered);
-    let equal = match compact {
-        Some(compact) => ctx.block().or(I1, &raw, &compact),
-        None => raw,
-    };
+    let equal = ctx.block().and(I1, &raw, &ordered);
     let bit = if matches!(op, CompareOp::Ne) {
         ctx.block().xor(I1, &equal, "true")
     } else {
@@ -931,7 +878,7 @@ fn lower_strict_eq_against_number(
 /// Inline the primitive-number arm of Abstract Relational Comparison when one
 /// operand is already proven numeric.
 ///
-/// Ordinary Numbers, compact INT32 values, `undefined`, `null`, and booleans
+/// Ordinary Numbers, `undefined`, `null`, and booleans
 /// have a side-effect-free `ToPrimitive`/`ToNumber` result. Strings, BigInts,
 /// Symbols, and objects retain the complete runtime helper because their
 /// coercion either follows different rules or may execute user code.
@@ -941,18 +888,13 @@ fn lower_relational_against_number(
     l: &str,
     r: &str,
     dynamic_is_left: bool,
-    proven_expr: &Expr,
     fallback_fn: &str,
 ) -> String {
     let dynamic = if dynamic_is_left { l } else { r };
     let bits = ctx.block().bitcast_double_to_i64(dynamic);
-    let top16 = ctx.block().lshr(I64, &bits, "48");
     // Use the same raw-Number admission as the fully dynamic comparison.
     // Negative IEEE values and canonical NaNs precede the positive tag band.
     let is_plain_number = emit_is_unboxed_number(ctx, &bits);
-    let is_i32 = ctx
-        .block()
-        .icmp_eq(I64, &top16, crate::nanbox::INT32_TAG_TOP16_I64);
     // undefined/null/false/true are four consecutive immediate values.
     // A range decides admission without separately classifying each value.
     debug_assert_eq!(crate::nanbox::TAG_UNDEFINED + 3, crate::nanbox::TAG_TRUE);
@@ -963,8 +905,7 @@ fn lower_relational_against_number(
     let zero_offset = ctx.block().sub(I64, &bits, crate::nanbox::TAG_NULL_I64);
     let is_zero = ctx.block().icmp_ult(I64, &zero_offset, "2");
     let is_true = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
-    let primitive = ctx.block().or(I1, &is_plain_number, &is_i32);
-    let primitive = ctx.block().or(I1, &primitive, &is_singleton);
+    let primitive = ctx.block().or(I1, &is_plain_number, &is_singleton);
 
     let fast_idx = ctx.new_block("relnum.fast");
     let slow_idx = ctx.new_block("relnum.slow");
@@ -975,26 +916,17 @@ fn lower_relational_against_number(
     ctx.block().cond_br(&primitive, &fast_l, &slow_l);
 
     ctx.current_block = fast_idx;
-    let raw = ctx.block().trunc(I64, &bits, I32);
-    let int_value = ctx.block().sitofp(I32, &raw, DOUBLE);
-    let dynamic_number = ctx.block().select(I1, &is_i32, DOUBLE, &int_value, dynamic);
-    let dynamic_number = ctx
-        .block()
-        .select(I1, &is_zero, DOUBLE, "0.0", &dynamic_number);
+    let dynamic_number = ctx.block().select(I1, &is_zero, DOUBLE, "0.0", dynamic);
     let dynamic_number = ctx
         .block()
         .select(I1, &is_true, DOUBLE, "1.0", &dynamic_number);
     // `undefined` deliberately retains its tagged NaN. Ordered fcmp then
     // returns false for all four relational operators, exactly as ToNumber.
-    let proven_number = if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, proven_expr) {
-        (if dynamic_is_left { r } else { l }).to_string()
-    } else {
-        normalize_int32_immediate(ctx, if dynamic_is_left { r } else { l })
-    };
+    let proven_number = if dynamic_is_left { r } else { l };
     let (left_number, right_number) = if dynamic_is_left {
-        (&dynamic_number, &proven_number)
+        (dynamic_number.as_str(), proven_number)
     } else {
-        (&proven_number, &dynamic_number)
+        (proven_number, dynamic_number.as_str())
     };
     let pred = match op {
         CompareOp::Lt => "olt",
@@ -1266,6 +1198,87 @@ fn lower_string_strict_eq_inline(
 /// A compare operand that is statically a number (not a BigInt, not a value
 /// that may come back boxed from a raw-f64 fallback): two of them take the
 /// bare `fcmp`.
+/// P3 B1, C1 (DESIGN-p3 rev 3.1 §2.3): a compare whose operands are both
+/// proven plain Numbers, or Number-or-undefined, at least one of them by the
+/// facts (`facts_canonical`). There is no INT32 prefix and no runtime helper:
+///
+/// - relational: the ordered `fcmp` (`undefined` is a NaN pattern, so every
+///   comparison with it is false, as in JS);
+/// - `===` with at least one plain Number: `fcmp oeq` (`une` for `!==`);
+/// - `===` of two Number-or-undefined: `fcmp oeq || (bits equal and
+///   undefined)`, and `!==` is its exact negation (REVIEW-p3 D1).
+///
+/// Check mode tests each fact-trusted operand (`facts_canonical::witness`).
+fn lower_facts_number_compare(
+    ctx: &mut FnCtx<'_>,
+    op: CompareOp,
+    left: &Expr,
+    right: &Expr,
+    l: &str,
+    r: &str,
+) -> Result<Option<String>> {
+    use super::facts_canonical::{self, Num};
+    if matches!(op, CompareOp::LooseEq | CompareOp::LooseNe) {
+        return Ok(None);
+    }
+    let fl = facts_canonical::of(ctx, left);
+    let fr = facts_canonical::of(ctx, right);
+    if fl.is_none() && fr.is_none() {
+        return Ok(None);
+    }
+    let side = |ctx: &FnCtx<'_>, e: &Expr, f: Option<Num>| {
+        f.or_else(|| compare_operand_is_numeric(ctx, e).then_some(Num::Number))
+    };
+    let (Some(kl), Some(kr)) = (side(ctx, left, fl), side(ctx, right, fr)) else {
+        return Ok(None);
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "compare": format!("{op:?}") }),
+    );
+    crate::facts_consumed::used();
+    if let Some(f) = fl {
+        facts_canonical::witness(ctx, l, f, "compare operand")?;
+    }
+    if let Some(f) = fr {
+        facts_canonical::witness(ctx, r, f, "compare operand")?;
+    }
+    let blk = ctx.block();
+    let bit = match op {
+        CompareOp::Lt => blk.fcmp("olt", l, r),
+        CompareOp::Le => blk.fcmp("ole", l, r),
+        CompareOp::Gt => blk.fcmp("ogt", l, r),
+        CompareOp::Ge => blk.fcmp("oge", l, r),
+        CompareOp::Eq | CompareOp::Ne
+            if kl == Num::NumberOrUndefined && kr == Num::NumberOrUndefined =>
+        {
+            let oeq = blk.fcmp("oeq", l, r);
+            let lb = blk.bitcast_double_to_i64(l);
+            let rb = blk.bitcast_double_to_i64(r);
+            let same = blk.icmp_eq(I64, &lb, &rb);
+            let undef = blk.icmp_eq(I64, &lb, crate::nanbox::TAG_UNDEFINED_I64);
+            let both_undef = blk.and(I1, &same, &undef);
+            let eq = blk.or(I1, &oeq, &both_undef);
+            if matches!(op, CompareOp::Ne) {
+                blk.xor(I1, &eq, "true")
+            } else {
+                eq
+            }
+        }
+        CompareOp::Eq => blk.fcmp("oeq", l, r),
+        CompareOp::Ne => blk.fcmp("une", l, r),
+        CompareOp::LooseEq | CompareOp::LooseNe => unreachable!(),
+    };
+    let tagged = blk.select(
+        I1,
+        &bit,
+        I64,
+        crate::nanbox::TAG_TRUE_I64,
+        crate::nanbox::TAG_FALSE_I64,
+    );
+    Ok(Some(blk.bitcast_i64_to_double(&tagged)))
+}
+
 fn compare_operand_is_numeric(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
     is_numeric_expr(ctx, operand)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, operand)
@@ -1369,6 +1382,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                 let l = operand_value(ctx, &left_literal);
                 let r = operand_value(ctx, &right_literal);
+                // SNAPK2b census (instrumented compiles only): the hook reads
+                // the two values this compare reads, here, where they are
+                // live. A numeric-literal operand is never a string, so that
+                // compare keeps no row and emits none.
+                if left_literal.is_none() && right_literal.is_none() {
+                    super::snap_compare_site::emit(ctx, *op, left, right, &l, &r);
+                }
+                // Value records' check mode (DESIGN-p4l4 L4).
+                crate::expr::record_witness::compare(ctx, op, left, right, &l, &r);
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints
                 // always returns false. Route through js_bigint_cmp which
@@ -1906,6 +1928,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(blk.bitcast_i64_to_double(&result_bits));
                 }
 
+                // P3 B1, C1 (`facts_canonical`): both operands proven plain
+                // Numbers (or Number-or-undefined), at least one by the facts.
+                if let Some(v) = lower_facts_number_compare(ctx, *op, left, right, &l, &r)? {
+                    return Ok(v);
+                }
+
                 // An ordered relational compare (`<`, `<=`, `>`, `>=`) whose
                 // operands aren't BOTH statically numeric needs the full ECMAScript
                 // Abstract Relational Comparison: ToPrimitive (`{valueOf}`/`Date`),
@@ -1955,7 +1983,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &l,
                             &r,
                             !left_numeric,
-                            if left_numeric { left } else { right },
                             fname,
                         ));
                     }

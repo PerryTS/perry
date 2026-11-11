@@ -22,6 +22,7 @@ use std::ffi::c_void;
 /// 32-bit blob-relative offsets on every target.)
 #[cfg(target_vendor = "apple")]
 pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
+    crate::snap_funnel!(StackMaps);
     use mach2::dyld::{_dyld_get_image_header, _dyld_get_image_vmaddr_slide, _dyld_image_count};
 
     const LC_SEGMENT_64: u32 = 0x19;
@@ -134,6 +135,7 @@ pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> 
 
 #[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
 pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
+    crate::snap_funnel!(StackMaps);
     Ok(loaded_stack_map_section().into_iter().collect())
 }
 
@@ -149,6 +151,7 @@ pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> 
 /// disappear from the collector exactly when a full collection evacuates.
 #[cfg(target_os = "linux")]
 pub(super) fn loaded_stack_map_sections() -> Result<Vec<&'static [u8]>, String> {
+    crate::snap_funnel!(StackMaps);
     use std::ffi::CStr;
     use std::os::unix::ffi::OsStrExt;
     use std::path::Path;

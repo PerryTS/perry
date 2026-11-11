@@ -335,6 +335,29 @@ fn constfn_body_symbols_are_seedable_final_static_content() {
     );
 }
 
+/// A `11` lane without a body is an I32 lane (I32 at rest), not a ConstFn
+/// lane missing its body: the sidecar line of `{ j: 1, text: "" }` must
+/// decode to the shape the cold build seeded, or every warm build of such a
+/// literal loses its cache entry.
+#[test]
+fn i32_lane_seed_round_trips_through_the_sidecar_line() {
+    let shape = BirthShape {
+        keys: b"j\0text\0".to_vec(),
+        key_count: 2,
+        live: 2,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep: 0b11,
+        constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
+        attrs: Vec::new(),
+    };
+    let line = encode_static_seed(0x8000_0058, &shape);
+    assert_eq!(line, "2147483736 2 2 6a007465787400 0x3 -");
+    assert_eq!(decode_static_seed(&line), Some((0x8000_0058, shape)));
+}
+
 #[test]
 fn constfn_birth_cannot_publish_a_static_guard_or_seed() {
     let shape = BirthShape {

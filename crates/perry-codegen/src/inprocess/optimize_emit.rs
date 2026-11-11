@@ -128,6 +128,8 @@ pub(super) fn optimize_and_emit(
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
     super::coff::coalesce_helpers(module, effective_target);
+    // Before the statepoint rewrite hides the callees (see `cold_paths`).
+    super::cold_paths::apply(module);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
@@ -173,14 +175,27 @@ pub(super) fn optimize_and_emit(
         // post-rewrite census bounds unrelated optimizer expansion without
         // changing the rooting mechanism.
         let rewrite_started = std::time::Instant::now();
-        module
-            .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
-            .map_err(|e| {
-                anyhow!(
-                    "in-process rewrite-statepoints-for-gc failed:\n{}",
-                    e.to_string()
-                )
-            })?;
+        // With the switch off this is the one run it always was. On, the
+        // same passes run in two parts around the dominated stack checks
+        // (`stack_checks`): after the inlining that duplicates them, before
+        // the rewrite turns their overflow arms into statepoints.
+        let rewrite = |passes: &str| {
+            module
+                .run_passes(passes, &tm, PassBuilderOptions::create())
+                .map_err(|e| {
+                    anyhow!(
+                        "in-process rewrite-statepoints-for-gc failed:\n{}",
+                        e.to_string()
+                    )
+                })
+        };
+        if super::stack_checks::prologue_cost_enabled() {
+            rewrite(crate::linker::STATEPOINT_INLINE_PASS)?;
+            super::stack_checks::apply(module);
+            rewrite(crate::linker::STATEPOINT_REWRITE_AFTER_INLINE)?;
+        } else {
+            rewrite(STATEPOINT_REWRITE_PASSES)?;
+        }
         // Verify the rewritten module before it reaches the backend. RS4GC
         // has produced verifier-invalid IR in the wild (#8121: it wrapped an
         // inline-asm barrier into a gc.statepoint), and unlike the external

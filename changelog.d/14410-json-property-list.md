@@ -1,3 +1,3 @@
 JSON.stringify array replacers read properties in whitelist order without evaluating excluded getters or snapshotting later values. PropertyList membership is indexed separately while preserving first occurrence, lazy key coercion and repeated wrapper conversion effects.
  Symbol-valued members are omitted instead of serialized as `null`, compact output still enforces the 1000-level nesting limit, and the replacer array is re-read after user code can grow it.
- The whitelist walk now applies `toJSON` — at the root, on each listed member and on each array element — before filtering or serializing the value.
+The whitelist walk keeps `toJSON` applied (root, listed member and array element) after replacing the snapshot with per-key reads.

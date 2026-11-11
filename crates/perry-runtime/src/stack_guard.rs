@@ -78,6 +78,20 @@ pub(crate) fn publish_stack_limit() {
     publish(AGENT_PTR_STACK_LIMIT, limit as *const u8);
 }
 
+/// A compiled prologue's stack check, for a runtime entry that a cycle of
+/// runtime frames alone can re-enter (a builtin that dispatches by name back
+/// into the same lookup) and that no compiled body's check would bound.
+/// Throws `RangeError: Maximum call stack size exceeded` once the calling
+/// frame is below this agent's limit; a null limit never fires.
+#[inline(always)]
+pub(crate) fn check_native_stack() {
+    let limit = crate::agent_ptrs::read(AGENT_PTR_STACK_LIMIT) as usize;
+    let here = std::ptr::addr_of!(limit) as usize;
+    if here < limit {
+        js_stack_overflow();
+    }
+}
+
 /// Called by a function prologue whose frame is below this thread's limit.
 /// Never returns (it throws, or exits when the error itself overflows).
 ///

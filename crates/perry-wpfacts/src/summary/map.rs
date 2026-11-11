@@ -34,7 +34,9 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        Identity { route } => Identity { route },
         LenIndex { lo, hi } => LenIndex { lo, hi },
+        LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
         Store { key, src, site } => Store {
             key,
@@ -121,6 +123,7 @@ pub fn map_cons(
             from: n(from),
             reason,
         },
+        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -222,7 +225,17 @@ pub fn map_cons(
             key,
             setter,
         },
-        AccessorInstall { key, f, setter } => AccessorInstall { key, f, setter },
+        AccessorInstall {
+            key,
+            f,
+            setter,
+            from,
+        } => AccessorInstall {
+            key,
+            f,
+            setter,
+            from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
         AnnexBDefine { call, setter } => AnnexBDefine {
             call: k(call),
             setter,
@@ -254,6 +267,11 @@ pub fn map_cons(
             obj,
             dst: n(dst),
             shape,
+        },
+        ElemUndef { obj, key, dst } => ElemUndef {
+            obj,
+            key: n(key),
+            dst: n(dst),
         },
         IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
             idx: n(idx),
@@ -358,7 +376,11 @@ pub fn map_cons(
             into: n(into),
             site,
         },
-        SpreadFrom { src, site } => SpreadFrom { src, site },
+        SpreadFrom { src, site, from } => SpreadFrom {
+            src,
+            site,
+            from: if from == NO_NODE { NO_NODE } else { n(from) },
+        },
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
@@ -427,7 +449,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     use Cons::*;
     matches!(
         c,
-        Load { .. }
+        Identity { .. }
+            | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }
             | CjsPublish { .. }
@@ -448,6 +471,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }
             | Falsy { .. }
@@ -505,6 +529,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | IdxKey { dst, .. }
+        | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }

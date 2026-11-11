@@ -58,8 +58,12 @@ use super::{
 /// `INT32_TAG`-boxed integer (a loop counter that was boxed on the way in).
 /// The conversion never feeds `fptosi` an out-of-range or NaN input, which
 /// would be poison.
+///
+/// N10: the guard's one bound is `idx <u capacity`, so a widened native
+/// index enters as it is: a negative one is at least 2^31 unsigned and
+/// declines onto the same arm as `-1` (`index_key::normalize_unsigned`).
 pub(super) fn emit_canonical_element_index_i32(ctx: &mut FnCtx<'_>, idx_double: &str) -> String {
-    super::index_key::normalize(ctx, idx_double, None)
+    super::index_key::normalize_unsigned(ctx, idx_double, None)
 }
 
 /// The raw-f64 element-kind bits in `_reserved`: `GC_ARRAY_RAW_F64_LAYOUT`
@@ -288,7 +292,7 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             blk.inttoptr(I64, &addr)
         };
         let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let gc_flags_ptr = {
             let addr = blk.sub(I64, &arr_handle, "7");
             blk.inttoptr(I64, &addr)

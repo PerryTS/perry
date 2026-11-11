@@ -195,7 +195,7 @@ pub(crate) fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::Arra
     }
     unsafe {
         let gc = crate::value::addr_class::try_read_gc_header(raw)?;
-        if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!((*gc).obj_type)
             || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         {
             Some(raw as *mut crate::array::ArrayHeader)
@@ -381,7 +381,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                     && (*meta).overflow == 0)
                     .then_some(addr)
             }
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(header) if crate::gc_type_is_array!(header.obj_type) => {
                 let bag = crate::object::shape_store::named_bag(
                     addr as *const crate::ObjectHeader,
                     key.to_bits(),
@@ -531,10 +531,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
     let target = f64::from_bits(target_handle.get_nanbox_u64());
     // Class constructors have an immutable own prototype even though their
     // ClassRef representation has no heap address or descriptor side table.
-    if key_name == "prototype"
-        && crate::object::class_ref_id(target).is_some()
-        && crate::object::class_prototype_ref_id(target).is_none()
-    {
+    if key_name == "prototype" && crate::object::class_ref_id(target).is_some() {
         return Some(OwnSetDescriptor::Data { writable: false });
     }
     let obj_ptr = extract_pointer(target.to_bits()) as usize;
@@ -614,6 +611,15 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
             // property. Preserve its attributes when the first operation is
             // an assignment, before any read materializes the default object.
             if key_name == "prototype" && crate::object::function_would_have_own_prototype(target) {
+                // An unborn lazy builtin family's constructor: its birth gives
+                // `prototype` the builtin's attributes.
+                if unsafe { crate::object::birth_unborn_family_of(obj_ptr) } {
+                    if let Some(attrs) = crate::object::get_property_attrs(obj_ptr, &key_name) {
+                        return Some(OwnSetDescriptor::Data {
+                            writable: attrs.writable(),
+                        });
+                    }
+                }
                 crate::object::set_builtin_property_attrs(
                     obj_ptr,
                     key_name.clone(),
@@ -856,6 +862,10 @@ pub(crate) unsafe fn build_value_only_descriptor(value: f64) -> f64 {
 }
 
 pub(crate) fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
+    if crate::object::deferred_namespace::with_key_target(receiver, key, |_, _| ()).is_some() {
+        return false;
+    }
+
     if !reflect_value_is_object(receiver) {
         return false;
     }
@@ -947,6 +957,9 @@ pub(crate) fn create_or_update_receiver_property(receiver: f64, key: f64, value:
 }
 
 pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    if crate::object::deferred_namespace::is_deferred(target) {
+        return false;
+    }
     if let Some(ok) = set_handle_property(target, key, value) {
         return ok;
     }
@@ -1387,5 +1400,23 @@ pub extern "C" fn js_super_put_value_set(
     // for a missing key + no inherited setter creates an own data property on
     // the receiver. Do that ordinary set instead of throwing. (Test262
     // syntax/class-body-method-definition-super-property.)
+    if crate::object::deferred_namespace::is_deferred(receiver) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
+        let key = scope.root_nanbox_f64(key);
+        let value = scope.root_nanbox_f64(value);
+        crate::object::deferred_namespace::with_key_target(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            |_, _| (),
+        );
+        return js_put_value_set(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            strict,
+        );
+    }
     js_put_value_set(receiver, key, value, receiver, strict)
 }

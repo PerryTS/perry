@@ -234,7 +234,7 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
     }
 
     if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(header.obj_type) {
             // Every own named property of an array (data or accessor, string
             // or symbol key) lives in its named layout object (§6a), so the
             // array owns `key` exactly when that object does.
@@ -486,7 +486,7 @@ unsafe fn array_owning_push(
     arr: *mut crate::array::ArrayHeader,
 ) -> Option<*mut crate::array::ArrayHeader> {
     let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     // A forwarded head's own header is a stub's: the flag that matters is the
@@ -612,7 +612,7 @@ unsafe fn push_custom_proto(
     own_out: *mut u32,
 ) -> Option<u64> {
     let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let live = crate::array::clean_arr_ptr_mut(arr);

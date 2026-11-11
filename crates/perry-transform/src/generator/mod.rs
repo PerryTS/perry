@@ -41,7 +41,9 @@ pub(crate) use helpers::{
     strip_tdz_preallocs_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
-pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
+pub(crate) use id_scan::compute_max_func_id;
+// Also codegen's value-record rewrite (perry-codegen `value_records`).
+pub use id_scan::compute_max_local_id;
 pub(crate) use iter_result_rewrite::rewrite_stmt;
 pub(crate) use linearize::{
     linearize_body, CatchRoute, DelegationRoute, FinallyRoute, State, StateExit,

@@ -469,7 +469,7 @@ fn visit_function(function: &Function, out: &mut Refs) {
 }
 
 fn visit_expr(expr: &Expr, out: &mut Refs) {
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::NewDynamicSpread { callee, .. } = expr {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
             out.called_or_constructed.insert(name.clone());
         }
@@ -579,6 +579,36 @@ fn visit_stmt(stmt: &Stmt, out: &mut Refs) {
 #[cfg(test)]
 mod unresolved_import_tests {
     use super::{is_bare_package_specifier, package_name};
+
+    fn constructed_imports(source: &str) -> std::collections::HashSet<String> {
+        let parsed = perry_parser::parse_typescript(source, "import-new.ts").unwrap();
+        let hir = perry_hir::lower::lower_module(&parsed, "import-new", "import-new.ts").unwrap();
+        super::called_or_constructed_import_names(&hir)
+    }
+
+    #[test]
+    fn imported_spread_construction_is_a_constructed_reference() {
+        for declaration in ["{ Plain }", "Plain"] {
+            for package in ["missing-package", "@scope/missing/subpath"] {
+                let names = constructed_imports(&format!(
+                    "import {declaration} from '{package}'; new Plain(...['kind']);"
+                ));
+                assert_eq!(names, ["Plain".to_owned()].into_iter().collect());
+            }
+        }
+    }
+
+    #[test]
+    fn value_reads_and_shadowed_spread_constructors_do_not_call_the_import() {
+        for source in [
+            "import { Plain } from 'missing'; console.log(typeof Plain, Plain.name);",
+            "import type { Plain } from 'missing'; let value: Plain;",
+            "import { Plain } from 'missing'; function make(Plain: any) { return new Plain(...[]); }",
+            "import { Plain } from 'missing'; function make() { class Plain {} return new Plain(...[]); }",
+        ] {
+            assert!(constructed_imports(source).is_empty(), "{source}");
+        }
+    }
 
     #[test]
     fn bare_specifiers_are_the_packages_node_would_look_up() {

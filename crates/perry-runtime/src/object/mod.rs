@@ -156,6 +156,7 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
+pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -215,8 +216,11 @@ pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
 pub mod method_site;
-mod slot_store;
+pub(crate) mod slot_store;
 pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
+pub(crate) mod deferred_namespace;
+#[cfg(test)]
+mod deferred_namespace_tests;
 mod namespace_create;
 pub(crate) mod native_call_method;
 pub(crate) mod native_get;
@@ -229,7 +233,7 @@ pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 pub(crate) use native_module::{class_instance_has_method, class_method_value_target};
 pub(crate) use native_module::{
-    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+    class_method_entry_source_func_ptr, class_method_home_id, SYMBOL_BOUND_METHOD_NAME,
 };
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
@@ -240,12 +244,12 @@ pub(crate) use native_module_registry::js_nm_enable_install_all;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
 // Re-exported for submodule installers that delegate to a native module.
+#[cfg(test)]
+pub(crate) use native_module_registry::js_nm_install_events;
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf,
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
     js_nm_install_process, js_nm_install_tls, js_nm_install_util,
 };
-#[cfg(test)]
-pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -358,6 +362,7 @@ pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
 pub(crate) use global_this_tables::*;
+pub use global_this_tables::BuiltinConstructorIdentity;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
@@ -448,9 +453,12 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
-pub use to_string_tag::js_object_to_string;
+pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub(crate) use to_string_tag::web_stream_interface_name;
+pub use to_string_tag::web_stream_prototype_value;
+pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
@@ -1270,7 +1278,7 @@ fn transition_edge_places_key(
     unsafe {
         let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
             as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*gc_header).obj_type) {
             return false;
         }
         let keys = next_keys as *const ArrayHeader;
@@ -1434,7 +1442,7 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     }
     let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
         as *mut crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*gc_header).obj_type) {
         return false;
     }
     (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;

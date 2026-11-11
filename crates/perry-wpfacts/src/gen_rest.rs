@@ -97,18 +97,18 @@ impl<'a> Gen<'a> {
                 // `require("process") === globalThis.process`); HIR names
                 // the value of `require("process")` and of a namespace
                 // import `process.namespace`.
-                if matches!(name, "process" | "process.namespace") {
-                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
-                    return self.tok_node(t);
-                }
                 // node:module as a value hands out `Module._cache`.
                 if name == "module" {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
                 }
                 // A module the realm declares is its namespace object.
-                if let Some(ns) = crate::builtins::node_module_ns(m) {
-                    let t = self.m.tok(TokKind::Builtin(ns));
+                let name = if name == "process.namespace" {
+                    "process"
+                } else {
+                    name
+                };
+                if let Some(t) = crate::builtins::builtin_module_tok(&mut self.m, name) {
                     return self.tok_node(t);
                 }
                 self.m.top_val(&format!("native module ref {m}"))
@@ -130,6 +130,21 @@ impl<'a> Gen<'a> {
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
+                } else if let (true, Some(o)) = (
+                    matches!(module.as_str(), "readable_stream" | "readable_stream_reader"),
+                    o,
+                ) {
+                    // The HIR's dispatch of a member of a stream or reader it
+                    // tracked (`s.getReader()`, `r.read()`, `s.locked`): the
+                    // member access itself (node: a lookup on the receiver's
+                    // chain), which the realm's stream families declare. A
+                    // getter (`locked`, `closed`) is a read of the key.
+                    let key = Key::Named(self.m.atom(method));
+                    if matches!(method.as_str(), "locked" | "closed") && a.is_empty() {
+                        self.load(o, key)
+                    } else {
+                        self.mcall(o, key, a, vec![])
+                    }
                 } else if let (true, Some(o)) =
                     (module == "array" && method == "push_field_single", o)
                 {
@@ -156,6 +171,59 @@ impl<'a> Gen<'a> {
                         }
                     }
                     self.prim_node(prim::NUM)
+                } else if let Some(recv) =
+                    o.filter(|_| perry_hir::folded_call::fs_receiver_dispatch(module, method))
+                {
+                    // A folded fs receiver's method no stream arm lowers is
+                    // the runtime dispatch on the receiver value: the method
+                    // call `recv.method(..args)`. The dispatch returns 0 for
+                    // a nullish receiver (no TypeError), reads a member of a
+                    // string or host handle for a call without arguments,
+                    // and gives undefined where it resolves no callee.
+                    let key = Key::Named(self.m.atom(method));
+                    let ret = self.mcall(recv, key, a, vec![]);
+                    let num = self.prim_node(prim::NUM);
+                    self.m.cons(
+                        recv,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: num,
+                            dst: ret,
+                        },
+                    );
+                    if args.is_empty() {
+                        let member = self.load(recv, key);
+                        self.m.edge(member, ret);
+                    }
+                    self.m.add_prim(ret, prim::UNDEF);
+                    ret
+                } else if let Some(ctor) = object
+                    .is_none()
+                    .then(|| self.native_construct_fold(module, method))
+                    .flatten()
+                {
+                    // The HIR's fold of `new <module>.<method>(..args)`:
+                    // `new` of the realm constructor itself, whatever the
+                    // program stored under the name (codegen calls its
+                    // runtime function directly). The construct runs what
+                    // the constructor's declaration says (`construct`).
+                    let callee = self.tok_node(ctor);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::New { call });
+                    ret
+                } else if let Some(t) = object
+                    .is_none()
+                    .then(|| self.namespace_member_callee(m0, method))
+                    .flatten()
+                {
+                    // A member the HIR calls directly (`import { createHook }
+                    // from "async_hooks"`) whose call the solver models by
+                    // its token: the call of that native value, as a call
+                    // through the namespace member runs.
+                    let callee = self.tok_node(t);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::Call { call });
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -372,7 +440,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessAvailableMemory
             | Expr::ProcessConstrainedMemory
             | Expr::ProcessPosixCredential(..)
-            | Expr::ProcessEmitWarning(..)
             | Expr::ProcessTitle
             | Expr::ProcessSetTitle(..)
             | Expr::ProcessStdinSetRawMode(..)
@@ -383,12 +450,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessStdoutColumns
             | Expr::ProcessStdoutRows
             | Expr::TtyIsAtty(..)
-            | Expr::FsReadFileSync(..)
-            | Expr::FsWriteFileSync(..)
-            | Expr::FsMkdirSync(..)
-            | Expr::FsUnlinkSync(..)
-            | Expr::FsAppendFileSync(..)
-            | Expr::FsRmRecursive(..)
             | Expr::PathJoin(..)
             | Expr::PathDirname(..)
             | Expr::PathBasename(..)
@@ -398,14 +459,12 @@ impl<'a> Gen<'a> {
             | Expr::PathIsAbsolute(..)
             | Expr::PathRelative(..)
             | Expr::PathNormalize(..)
-            | Expr::PathFormat(..)
             | Expr::PathSep
             | Expr::PathDelimiter
             | Expr::PathToNamespacedPath(..)
             | Expr::PathMatchesGlob(..)
             | Expr::PathResolveJoin(..)
             | Expr::PathWin32Join(..)
-            | Expr::PathWin32 { .. }
             | Expr::ObjectIsFrozen(..)
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
@@ -416,11 +475,9 @@ impl<'a> Gen<'a> {
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
             | Expr::SymbolToString(..)
-            | Expr::FileURLToPath(..)
             | Expr::RegExpExecIndex
             | Expr::JsonIsRawJson(..)
             | Expr::PerformanceNow
-            | Expr::WebAssemblyValidate(..)
             | Expr::Atob(..)
             | Expr::Btoa(..)
             | Expr::IterResultGetDone
@@ -444,39 +501,66 @@ impl<'a> Gen<'a> {
             | Expr::OsEndianness
             | Expr::OsMachine
             | Expr::OsVersion
-            | Expr::BufferIsBuffer(..)
             | Expr::BufferIsEncoding(..)
-            | Expr::BufferByteLength { .. }
-            | Expr::BufferToString { .. }
-            | Expr::BufferCopy { .. }
-            | Expr::BufferWrite { .. }
-            | Expr::BufferFill { .. }
-            | Expr::BufferEquals { .. }
             | Expr::PodLayoutSizeOf { .. }
             | Expr::PodLayoutAlignOf { .. }
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
             | Expr::StringFromCharCode(..)
-            | Expr::StringFromCharCodeSpread(..)
             | Expr::StringFromCodePoint(..)
-            | Expr::StringRaw { .. }
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
-            | Expr::MapSize(..)
             | Expr::ArrayIterationPatched
-            | Expr::ImportMetaUrl(..)
-            | Expr::ProxyRevoke(..) => {
-                // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
+            | Expr::ImportMetaUrl(..) => {
+                // These operations only convert an object operand to a primitive
+                // (the lowering ToString's / ToNumber's it, or the runtime reads
+                // an internal slot): ToPrimitive (`@@toPrimitive`, else
+                // `valueOf` / `toString`) runs on it; no other key is read and
+                // no function found under some key is called back.
+                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::ToPrimitive)
+            }
+            Expr::StringRaw { .. }
+            | Expr::StringFromCharCodeSpread(..)
+            | Expr::PathFormat(..)
+            | Expr::PathWin32 { .. }
+            | Expr::FsReadFileSync(..)
+            | Expr::FsWriteFileSync(..)
+            | Expr::FsAppendFileSync(..)
+            | Expr::FileURLToPath(..)
+            | Expr::BufferIsBuffer(..)
+            | Expr::BufferByteLength { .. }
+            | Expr::BufferToString { .. }
+            | Expr::BufferCopy { .. }
+            | Expr::BufferWrite { .. }
+            | Expr::BufferFill { .. }
+            | Expr::BufferEquals { .. }
+            | Expr::MapSize(..)
+            | Expr::ProxyRevoke(..)
+            | Expr::WebAssemblyValidate(..)
+            | Expr::ProcessEmitWarning(..) => {
+                // The runtime reads named keys or elements of these operands
+                // (`raw`, a path object's parts, a file URL, an Error, a
+                // spread's elements) or takes a buffer; each is its own model.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
-            Expr::FsExistsSync(path) => {
-                match self.declared_member_call(fx, "node:fs.existsSync", &[path]) {
-                    Some(ret) => ret,
-                    None => {
-                        self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
-                    }
-                }
+            Expr::FsExistsSync(path)
+            | Expr::FsMkdirSync(path)
+            | Expr::FsUnlinkSync(path)
+            | Expr::FsRmRecursive(path) => {
+                // A path operand is read as node's getValidatedPath reads it
+                // (a string or a Buffer as is, a file URL by its named keys,
+                // else ERR_INVALID_ARG_TYPE): the member's effects, declared
+                // at the runtime body its dispatch arm calls (`path(arg(0))`),
+                // run on it. The HIR variant is that member's call.
+                let member = match e {
+                    Expr::FsMkdirSync(..) => "node:fs.mkdirSync",
+                    Expr::FsUnlinkSync(..) => "node:fs.unlinkSync",
+                    Expr::FsRmRecursive(..) => "node:fs.rmSync",
+                    _ => "node:fs.existsSync",
+                };
+                self.declared_member_call(fx, member, &[path])
+                    .expect("an fs path member is declared at its runtime body")
             }
             Expr::MapClear(map) => {
                 let recv = self.expr(fx, map);
@@ -633,8 +717,14 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
+            Expr::ObjectIs(a, b) => self.prim_op_identity(
+                fx,
+                &[a, b],
+                prim::BOOL,
+                "primitive builtin operand",
+                IdentityRoute::ObjectIs,
+            ),
+            Expr::ObjectHasOwn(..)
             | Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
             | Expr::IsNaN(..)

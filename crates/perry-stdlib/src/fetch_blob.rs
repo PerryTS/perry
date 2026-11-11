@@ -87,7 +87,7 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
                 let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                     as *const perry_runtime::gc::GcHeader;
                 let obj_type = (*gc_header).obj_type;
-                if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
+                if perry_runtime::gc_type_is_array!(obj_type)
                     || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
                 {
                     let len = perry_runtime::array::js_array_length(arr_ptr);
@@ -212,6 +212,37 @@ pub unsafe extern "C" fn js_blob_new(parts: f64, content_type: f64) -> f64 {
     append_blob_parts(parts, &mut body);
     let type_str = normalize_blob_type(&blob_string_option(content_type));
     handle_to_f64(alloc_blob(BlobData::blob(body, type_str)))
+}
+
+/// Build a Blob handle from raw bytes supplied by the SEA asset registry.
+/// This keeps SEA blobs in the same registry as `new Blob()` and
+/// `URL.createObjectURL()`.
+#[no_mangle]
+pub unsafe extern "C" fn js_blob_from_raw_bytes_v1(
+    bytes: *const u8,
+    bytes_len: usize,
+    content_type: *const u8,
+    content_type_len: usize,
+) -> f64 {
+    let body = if bytes_len == 0 {
+        Vec::new()
+    } else if bytes.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    } else {
+        std::slice::from_raw_parts(bytes, bytes_len).to_vec()
+    };
+    let raw_type = if content_type_len == 0 {
+        String::new()
+    } else if content_type.is_null() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(content_type, content_type_len))
+            .into_owned()
+    };
+    handle_to_f64(alloc_blob(BlobData::blob(
+        body,
+        normalize_blob_type(&raw_type),
+    )))
 }
 
 /// `new File(parts, name, { type, lastModified })` — same registry as

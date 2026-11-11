@@ -411,6 +411,7 @@ fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<Stri
     } else {
         let f = m.tok(TokKind::BuiltinFn(Native::Member {
             identity: "setTimeout",
+            holder: None,
         }));
         m.apply(recv, &Cons::Call { call: 0 }, &[f], 0);
     }
@@ -813,7 +814,7 @@ fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
             })
             .collect();
     for identity in identities {
-        m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+        m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
     }
     let f = m.tok(TokKind::BuiltinFn(Native::Any));
     let dst = m.node_l("bounded-native-read");

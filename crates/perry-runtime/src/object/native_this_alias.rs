@@ -76,7 +76,7 @@ fn decode_alias_word(word: u64) -> Option<(f64, bool)> {
     }
     let addr = (word & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let record = addr as *const crate::array::ArrayHeader;

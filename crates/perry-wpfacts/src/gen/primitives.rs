@@ -78,6 +78,40 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The primitive type of an enum member's value. One lookup order, the
+    /// one codegen's enum table has: the module's own enum member by its
+    /// declaration (a string is a string, a number a number, a computed one
+    /// either). An `Expr::EnumMember` with no such own member is an imported
+    /// one that `perry_hir::fix_imported_enums` already resolved before this
+    /// walk: it writes `EnumMember` only for a numeric member (a string member
+    /// is inlined as `Expr::String`, a computed one is left a property read),
+    /// and any other member would fail codegen. So it is a number.
+    pub(crate) fn enum_member_prim(&self, mi: u32, enum_name: &str, member_name: &str) -> u16 {
+        use perry_hir::EnumValue;
+        match self.modules[mi as usize]
+            .1
+            .enums
+            .iter()
+            .filter(|e| e.name == enum_name)
+            .find_map(|e| e.members.iter().find(|m| m.name == member_name))
+            .map(|m| &m.value)
+        {
+            Some(EnumValue::String(_)) => prim::STR,
+            Some(EnumValue::Computed) => prim::NUM | prim::STR,
+            Some(EnumValue::Number(_)) | None => prim::NUM,
+        }
+    }
+
+    /// A computed-key read with a source offset: its value node, for the
+    /// element facts (`Gen::element_values`).
+    pub(crate) fn note_element_value(&mut self, fx: &Fx, e: &perry_hir::Expr, n: NodeId) {
+        if let perry_hir::Expr::IndexGet { element_offset, .. } = e {
+            if *element_offset != 0 {
+                self.element_values.push((fx.module, *element_offset, n));
+            }
+        }
+    }
+
     /// The node of a numeric literal: a shared node per integer value,
     /// carrying its point interval (`model::range`), or the Number node.
     pub fn num_literal(&mut self, v: f64) -> NodeId {
@@ -99,6 +133,27 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// N1 (`demand::compare_demand`): a strict equality test of node `l`
+    /// (`left`) and node `r` (`right`) against an int32 constant is an int
+    /// consumer of the other operand.
+    pub(crate) fn equality_demand(
+        &mut self,
+        left: &perry_hir::Expr,
+        right: &perry_hir::Expr,
+        l: NodeId,
+        r: NodeId,
+    ) {
+        if !self.int_ranges || !crate::demand::compare_demand() {
+            return;
+        }
+        if crate::demand::int32_constant(right) {
+            self.m.nodes[l as usize].int_use = true;
+        }
+        if crate::demand::int32_constant(left) {
+            self.m.nodes[r as usize].int_use = true;
+        }
+    }
+
     /// Register the interval rule of a numeric operator: `dst` takes its
     /// interval from `op` over `l` (and `r`). On both operands, so a growth
     /// of either re-evaluates it.
@@ -111,6 +166,12 @@ impl<'a> Gen<'a> {
     ) {
         if !self.int_ranges {
             return;
+        }
+        if crate::demand::int_operands(op) {
+            self.m.nodes[l as usize].int_use = true;
+            if let Some(r) = r {
+                self.m.nodes[r as usize].int_use = true;
+            }
         }
         let other = r.unwrap_or(crate::model::NO_NODE);
         self.m.cons(
@@ -147,7 +208,13 @@ impl<'a> Gen<'a> {
         let r = self.m.reason("ToNumber of a Math operand");
         let mut nodes = Vec::with_capacity(operands.len());
         for o in operands {
-            let v = self.expr(fx, o);
+            // `Math.abs` of `-0` is `0`; `sign`, `min` and `max` observe the
+            // sign (`zero_sign`): their operands keep the default.
+            let v = if op == crate::model::RangeOp::Abs {
+                self.expr_zs(fx, o)
+            } else {
+                self.expr(fx, o)
+            };
             self.m.cons(
                 v,
                 Cons::Implicit {

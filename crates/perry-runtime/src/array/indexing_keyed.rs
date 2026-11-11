@@ -54,7 +54,7 @@ pub extern "C" fn js_array_set_string_key(
     // memory (the old one-page floor dereferenced both); a rejected word goes
     // to the by-name setter, which routes handles to their property setter.
     let is_array = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type));
     if !is_array {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
@@ -128,8 +128,8 @@ pub extern "C" fn js_array_set_string_key(
     }
     // Non-numeric string key — fall through to the array's own named
     // properties (`named_props.rs`). Arrays with named properties are rare but
-    // spec-legal. The FIRST expando on a full array grows it, so hand the live
-    // head back exactly as the extending index store above does.
+    // spec-legal. They live in a separate bag object: the elements, length
+    // and capacity stay as they are, and the head returned is the receiver's.
     unsafe { array_named_property_set(arr, key, value) }
 }
 
@@ -145,7 +145,7 @@ fn negative_integer_key_is_absent(arr: *const ArrayHeader) -> bool {
     else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return false;
     }
     // Resolve growth/GC forwarding before reading the live array's layout.
@@ -175,7 +175,7 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
         return array_get_property_by_key(arr, key);
     }
 
-    let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+    let numeric = if crate::value::is_int32_bits(bits) {
         Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
     } else if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
@@ -278,7 +278,7 @@ pub extern "C" fn js_array_set_index_or_string(
     // Treat numeric keys according to the array-index boundary. Only
     // integers in 0..2^32-2 extend element storage; 2^32-1 and larger are
     // ordinary string properties.
-    let numeric = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+    let numeric = if crate::value::is_int32_bits(bits) {
         Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
     } else if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
@@ -449,7 +449,7 @@ fn canonical_index_of_set_key(idx: f64) -> Option<u32> {
         return crate::object::canonical_array_index(name);
     }
     // Numeric key.
-    let n = if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+    let n = if crate::value::is_int32_bits(bits) {
         crate::value::JSValue::from_bits(bits).as_int32() as f64
     } else if !(0x7FF8..=0x7FFF).contains(&top16) {
         idx

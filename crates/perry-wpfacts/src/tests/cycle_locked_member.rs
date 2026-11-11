@@ -7,6 +7,7 @@
 //! prototype may still gain are not final.
 
 use super::*;
+use crate::model::prim;
 
 /// One store into a value unknown code returns, under a computed key: it
 /// may write any key of any builtin prototype the lock leaves open.
@@ -30,17 +31,19 @@ fn facts_of(src: &str) -> ProgramFacts {
 }
 
 /// The `size` read on `x` (a `Svc` or what member read `m` gives): `.0`
-/// `m` took the opaque member (`builtin-fn`, the value a store into ⊤ may
-/// have written), `.1` the read is refused for a receiver from unmodeled
-/// code.
+/// `m` took the opaque member (⊤ and any primitive, the value a store into
+/// ⊤ may have written: every primitive kind reaches `x`), `.1` the read is
+/// refused for a receiver from unmodeled code.
 fn reads_top(member: &str) -> (bool, bool, String) {
     let pf = facts_of(&format!(
         "const m: any = {member}; const x: any = process.argv[5] ? new Svc() : m; console.log(x.size);"
     ));
     let s = site(&pf, "size");
-    let opaque = s.receivers.iter().any(|r| r == "builtin-fn");
+    let any = prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF | prim::BIGINT | prim::SYMBOL;
+    let opaque = s.receiver_prims & any == any;
     let top = matches!(&s.verdict, Verdict::No(w) if w.contains("unmodeled code"));
-    (opaque, top, format!("{:?} {:?}", s.receivers, s.verdict))
+    let r = format!("{:?} {:#x} {:?}", s.receivers, s.receiver_prims, s.verdict);
+    (opaque, top, r)
 }
 
 /// node: prints `undefined` or `3`. `length` of a string: an image member
@@ -54,7 +57,10 @@ fn a_locked_primitive_member_read_is_final() {
 /// node: prints `undefined` or `3`. `Object.prototype.toString`: an image
 /// member of the add-locked `Object.prototype`. (The read stays refused:
 /// `Object.prototype` is the token that stands for every builtin
-/// prototype, and the global `Object` read is open here.)
+/// prototype, and the global `Object` read is open here.) A plain
+/// `builtin-fn` receiver is no sign of the opaque member: the open
+/// `Object.prototype` may be any primitive, and `toString` of a bigint is
+/// a builtin function value without a declared identity.
 #[test]
 fn a_locked_object_prototype_member_read_is_final() {
     let (opaque, _, r) = reads_top("Object.prototype.toString");
@@ -62,11 +68,11 @@ fn a_locked_object_prototype_member_read_is_final() {
 }
 
 /// Controls: a key `String.prototype` may gain, and the exempt
-/// `constructor`, may be what the store wrote.
+/// `constructor`, may be what the store wrote: the read is ⊤.
 #[test]
 fn unlocked_member_reads_stay_open() {
     for member in ["\"abc\".zzq", "Object.prototype.constructor"] {
-        let (opaque, top, r) = reads_top(member);
-        assert!(opaque && top, "{member}: {r}");
+        let (_, top, r) = reads_top(member);
+        assert!(top, "{member}: {r}");
     }
 }

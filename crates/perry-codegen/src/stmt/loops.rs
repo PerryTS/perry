@@ -3,6 +3,7 @@
 mod accumulator_scope;
 mod i32_counter;
 mod iterator_record;
+mod rest_counter;
 pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
 use accumulator_scope::{emit_packed_numeric_accumulator_admission, PackedAccumulatorScope};
 
@@ -874,7 +875,7 @@ fn emit_range_loop_accumulator_admission(
 /// Materialize the address half shared by packed clones and phase 3 ordinary
 /// counted loops. The returned box is a precise root, while the handle slot is
 /// refreshed from it after every fired loop poll.
-fn create_poll_refreshed_receiver_cache(
+pub(crate) fn create_poll_refreshed_receiver_cache(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
 ) -> Option<(String, String, String)> {
@@ -3046,7 +3047,7 @@ fn emit_packed_range_receiver_forwarding_repair(ctx: &mut FnCtx<'_>, array_id: u
         let type_addr = blk.sub(I64, &handle, "8");
         let type_ptr = blk.inttoptr(I64, &type_addr);
         let gc_type = blk.load(I8, &type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1");
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let flags_addr = blk.sub(I64, &handle, "7");
         let flags_ptr = blk.inttoptr(I64, &flags_addr);
         let flags = blk.load(I8, &flags_ptr);
@@ -6721,8 +6722,7 @@ fn dynamic_bound_private_counter_is_safe(
 pub(crate) fn emit_js_value_is_number(ctx: &mut FnCtx<'_>, value: &str) -> String {
     let n_bits = ctx.block().bitcast_double_to_i64(value);
     // Every boxed tag occupies the positive suffix [0x7FF9_0000_0000_0000,
-    // 0x7FFF_FFFF_FFFF_FFFF]. INT32 boxes are excluded too: their payload
-    // still needs unboxing before floating-point arithmetic.
+    // 0x7FFF_FFFF_FFFF_FFFF].
     //
     // The test ignores the sign bit, so it also rejects the MIRROR of the tag
     // band (negative NaNs whose magnitude lies in it). A value that passes
@@ -6777,7 +6777,21 @@ pub(crate) fn lower_for(
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
     }
+    // PR-D: the element bases this loop holds (`stmt::field_base`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    let based = super::field_base::begin(ctx, condition, &controls, body)?;
+    let lowered = lower_for_after_bases(ctx, init, condition, update, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
 
+fn lower_for_after_bases(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     if iterator_record::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
@@ -6799,6 +6813,17 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    // I32 at rest: the tiers below read element words raw; a loop with an
+    // at-rest site keeps only the counter tiers (`expr::rest_elems`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    if crate::expr::rest_elems::in_loop(ctx, &controls, body) {
+        return lower_static_counter_versioned(ctx, init, condition, update, body, &mut |ctx| {
+            match i32_counter::lower(ctx, init, condition, update, body)? {
+                true => Ok(()),
+                false => lower_for_after_init(ctx, init, condition, update, body, "for"),
+            }
+        });
+    }
     // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
     // JS: one receiver admission proves the whole loop (`byte_view_loop`).
     if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
@@ -6978,7 +7003,7 @@ fn lower_static_counter_versioned(
     // gets no entry check, not even a dead one.
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
-    if views.is_empty() {
+    if views.is_empty() && rest_counter::collect(ctx, body, counter_id).is_empty() {
         return lower_copy(ctx);
     }
     let Some(entry) = counter_entry_check(ctx, counter_id, None, condition, Some(update), body)?
@@ -7007,6 +7032,9 @@ fn lower_counter_versions(
 
     ctx.current_block = fast_idx;
     let scope_id = ctx.next_loop_proof_scope_id();
+    for &(local, _) in &entry.rest {
+        ctx.rest_counter.push((counter_id, local, scope_id));
+    }
     for buffer_local_id in &entry.views {
         ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
             index_local_id: counter_id,
@@ -7018,7 +7046,9 @@ fn lower_counter_versions(
             },
         });
     }
-    lower_copy(ctx, true)?;
+    let lowered = lower_copy(ctx, true);
+    ctx.rest_counter.retain(|&(_, _, scope)| scope != scope_id);
+    lowered?;
     ctx.bounded_buffer_index_pairs
         .retain(|fact| fact.scope_id != scope_id);
     if !ctx.block().is_terminated() {
@@ -7392,6 +7422,9 @@ struct CounterEntryCheck {
     passed: String,
     /// Buffer views the body indexes by the counter itself.
     views: Vec<u32>,
+    /// At-rest locals the body indexes by the counter, with their floor
+    /// (I32 at rest B2, `rest_counter::collect`).
+    rest: Vec<(u32, u32)>,
 }
 
 /// Build the entry check that licenses the fast copy of an overflow-exit
@@ -7404,7 +7437,10 @@ struct CounterEntryCheck {
 ///   the step runs only after `counter <= B` held this iteration, so it
 ///   cannot overflow;
 /// * `B + 1 <= length` (`B <= length` under `<`) for every fixed-length view
-///   indexed by the counter: every index the guard admits is in bounds.
+///   indexed by the counter: every index the guard admits is in bounds;
+/// * `B + 1 <= floor` (`B <= floor` under `<`) for every at-rest local the
+///   body indexes by the counter (I32 at rest B2): every index the guard
+///   admits is a present slot.
 ///
 /// `B` and the step must be loop-invariant int32 slots or literals and the
 /// body must not write the counter (the overflow-exit rule already requires
@@ -7452,6 +7488,7 @@ fn counter_entry_check(
     };
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
+    let rest = rest_counter::collect(ctx, body, counter_id);
 
     let bound_i32 = load_i32(ctx, &bound);
     let step_i32 = match step {
@@ -7481,6 +7518,7 @@ fn counter_entry_check(
         };
         lengths.push(len);
     }
+    lengths.extend(rest.iter().map(|&(_, floor)| floor.to_string()));
     let blk = ctx.block();
     let mut passed = blk.xor(I1, &overflowed, "true");
     let counter_nonneg = blk.icmp_sge(I32, &counter, "0");
@@ -7503,7 +7541,11 @@ fn counter_entry_check(
         let in_bounds = blk.icmp_sle(I64, &end, len);
         passed = blk.and(I1, &passed, &in_bounds);
     }
-    Ok(Some(CounterEntryCheck { passed, views }))
+    Ok(Some(CounterEntryCheck {
+        passed,
+        views,
+        rest,
+    }))
 }
 
 /// The views a body indexes by exactly `counter` (or `counter | 0`): element
@@ -7973,6 +8015,9 @@ fn lower_for_after_init_impl(
         } else {
             false
         };
+    // b2: cold-arm descriptors for the loop's other array reads.
+    let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
+    let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
 
     // Issue #168: when the `i < arr.length` peephole didn't fire, also
     // detect the simpler `i < n` shape where `n` is a statically proven
@@ -8375,6 +8420,7 @@ fn lower_for_after_init_impl(
 
     ctx.loop_targets.pop();
 
+    super::descriptor_read::uninstall(ctx, cold_arm);
     if ordinary_receiver_descriptor_installed {
         let arr_id = hoisted_length_arr_id.expect("installed descriptor has a length receiver");
         let removed = ctx.receiver_descriptors.dematerialize(arr_id);
@@ -8691,6 +8737,9 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
     }
+    // PR-D: the held element bases, from `this`'s GC-updated root.
+    crate::expr::index_get::field_base::emit_poll_refresh(ctx)
+        .expect("a held field base re-derives at the poll");
     // Cached element bases of validated windows, from their refreshed handles.
     let element_refresh: Vec<(String, String)> = ctx
         .receiver_descriptors
@@ -10482,13 +10531,31 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    let based = super::field_base::begin(ctx, Some(condition), &[condition], body)?;
+    let lowered = lower_while_after_bases(ctx, condition, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
+
+fn lower_while_after_bases(
+    ctx: &mut FnCtx<'_>,
+    condition: &perry_hir::Expr,
+    body: &[Stmt],
+) -> Result<()> {
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        return super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        });
+    }
     // A while loop is the same Number induction with no init/update clause.
     if super::number_local_loop::lower(ctx, None, Some(condition), None, body)? {
         return Ok(());
     }
     let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
     let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_while_impl(ctx, condition, body)
+        super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        })
     });
     super::region_loop::end(ctx, region);
     lowered
@@ -10573,11 +10640,25 @@ pub(crate) fn lower_do_while(
     body: &[Stmt],
     condition: &perry_hir::Expr,
 ) -> Result<()> {
-    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
-    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        lower_do_while_impl(ctx, body, condition)
+    let based = super::field_base::begin(ctx, None, &[condition], body)?;
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        let lowered = super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_do_while_impl(c, body, condition)
+        });
+        super::field_base::end(ctx, based);
+        return lowered;
+    }
+    let region = super::region_loop::begin(ctx, Some(condition), body, None);
+    let lowered = region.and_then(|region| {
+        let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+            super::cold_scoped(ctx, body, &[condition], |c| {
+                lower_do_while_impl(c, body, condition)
+            })
+        });
+        super::region_loop::end(ctx, region);
+        lowered
     });
-    super::region_loop::end(ctx, region);
+    super::field_base::end(ctx, based);
     lowered
 }
 

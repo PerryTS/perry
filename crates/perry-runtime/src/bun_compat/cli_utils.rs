@@ -1136,7 +1136,7 @@ unsafe fn yaml_add_js_value(
     };
     if !matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc_object_type_pat!()
+        crate::gc_array_type_pat!() | crate::gc_object_type_pat!()
     ) {
         return 0;
     }
@@ -1146,7 +1146,7 @@ unsafe fn yaml_add_js_value(
         }
     }
 
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(header.obj_type) {
         let style = if flow {
             unsafe_libyaml::YAML_FLOW_SEQUENCE_STYLE
         } else {

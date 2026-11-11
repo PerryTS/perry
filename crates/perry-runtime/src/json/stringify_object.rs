@@ -61,7 +61,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
         return None;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
+        crate::gc_array_type_pat!() => array_get_to_json(ptr as *const crate::ArrayHeader),
         crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
@@ -88,6 +88,9 @@ pub(super) fn refresh_environment_receiver(ptr: *const u8) -> *const u8 {
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // I32 at rest (PR C): no object with an I32 lane reaches a generic
+    // reader (check mode).
+    crate::layout_slot::generic_object_reader(ptr as *const crate::object::ObjectHeader);
     // Taken unconditionally so a verdict for this object can never reach a
     // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
     // means this object IS a `toJSON` result, which also settles the question
@@ -309,6 +312,7 @@ unsafe fn stringify_object_walk(
         && num_fields >= 5
         && !has_overflow_fields
         && crate::object::key_attrs::object_summary(obj) == 0
+        && class_plain_record
         && !inherited_to_json_possible
         // A private field (#11791) is an own key no template may emit.
         && crate::object::key_attrs::object_summary(obj)
@@ -419,6 +423,7 @@ unsafe fn stringify_object_walk(
         || (actual_fields == 1
             && super::stringify_primitive_object::field_is_primitive(read_field_bits(0))))
         && !has_overflow_fields
+        && class_plain_record
         && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
         // A private field (#11791) is an own key the raw walk would emit.
@@ -512,7 +517,18 @@ unsafe fn stringify_object_walk(
     // slots were last derived. The probe can do both even when it finds no
     // `toJSON` (a getter-valued `toJSON`, the first `Object.prototype` lookup).
     let mut keys_stale = false;
-    if (has_closure_field || inherited_to_json_possible || has_own_accessors) && !to_json_resolved {
+    // With no inherited `toJSON` possible, only an own key can supply one:
+    // the own-key half of `to_json_definitely_absent` decides it without the
+    // inherited half the walk has already answered.
+    let to_json_possible = inherited_to_json_possible
+        || ((has_closure_field || has_own_accessors)
+            && super::stringify_tojson_probe::keys_array_may_carry_to_json(keys_view));
+    if !to_json_possible && (has_closure_field || has_own_accessors) && !to_json_resolved {
+        // What `object_get_to_json` does when it proves `toJSON` absent:
+        // consume a `toJSON` result's one-shot suppression, then answer none.
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
+    if to_json_possible && !to_json_resolved {
         *global_proof = false;
         if let Some(to_json_val) = object_get_to_json(ptr) {
             if depth > MAX_FAST_DEPTH {

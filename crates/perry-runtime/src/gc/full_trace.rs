@@ -156,7 +156,7 @@ pub(crate) fn handle_trace_active() -> bool {
 /// their own observer gates independently of this source-word contract.
 #[inline(always)]
 pub(super) unsafe fn object_words_may_name_handles(header: *const super::GcHeader) -> bool {
-    if (*header).obj_type != super::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & super::GC_FLAG_SHAPE_SHARED == 0
     {
         return true;

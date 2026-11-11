@@ -104,7 +104,7 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
             {
                 let hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+                if crate::gc_type_is_array!((*hdr).obj_type)
                     && (*hdr)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
                     && !super::named_props::array_named_property_has_by_name(arr, "constructor")
                     && crate::object::get_accessor_descriptor(
@@ -219,7 +219,7 @@ pub(crate) unsafe fn species_result_is_plain_array(result: f64) -> bool {
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+    crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
 }
 
 /// Store `value` at `index` on a species `result` (NaN-boxed). A plain array
@@ -235,7 +235,7 @@ pub(crate) unsafe fn species_result_set(result: f64, index: usize, value: f64) {
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 (*hdr).obj_type
             };
-            if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let arr = raw as *mut ArrayHeader;
                 super::js_array_set_f64(arr, index as u32, value);
                 return;

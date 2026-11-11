@@ -773,6 +773,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #10873: `new ArrayBuffer(length, { maxByteLength })`.
     module.declare_function("js_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
+    module.declare_function("js_shared_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
@@ -835,6 +836,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_event_loop_host_driven", I32, &[]);
     module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
+    // A throw handled by a scope of the throwing function: makes the value
+    // pending and returns (`stmt/try_stmt.rs::emit_throw`).
+    module.declare_function("js_throw_local", VOID, &[DOUBLE]);
 
     // Exception handling: invoke/landingpad-based try/catch (#7302).
     // Entering a `try` costs nothing (ehfree slice 1): every landing pad

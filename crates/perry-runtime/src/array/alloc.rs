@@ -104,7 +104,7 @@ unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
         GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
     };
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert!(crate::gc_type_is_array!((*header).obj_type));
     debug_assert_eq!(
         (*header)._reserved
             & (GC_LAYOUT_STATE_MASK
@@ -471,8 +471,8 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
         // dense, but represent a large fresh holey array exactly like a later
         // sparse length extension: a small backing store plus the full logical
         // length. Indexed reads already treat `index >= capacity` as a hole.
-        const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
-        let arr = if length > MAX_FRESH_DENSE_ARRAY_LENGTH {
+        // wpfacts admits a proven element read only up to the same bound.
+        let arr = if length > perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH {
             let arr = js_array_alloc(0);
             unsafe {
                 (*arr).length = length;

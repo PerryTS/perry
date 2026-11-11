@@ -491,7 +491,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 // now so every later named write reaches a sealed object, and
                 // recognise the array itself by its memoized address
                 // ([`note_array_prototype_write`]).
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     // DEC 250 (i): it never holds an element, so it keeps no
                     // element room: every element it could gain must then
                     // grow it, and `js_array_grow` refuses that. Its length is
@@ -1025,7 +1025,7 @@ pub(crate) fn note_write_addr(addr: usize, mutation: Mutation<'_>, site: &'stati
         crate::gc_object_type_pat!() => unsafe {
             note_write(addr as *const ObjectHeader, mutation, site)
         },
-        crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, mutation, site),
+        crate::gc_array_type_pat!() => note_array_prototype_write(addr, mutation, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(
                 (*(addr as *const crate::closure::ClosureHeader)).props,
@@ -1093,7 +1093,7 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 }
                 sealed_write_refused(addr as *const ObjectHeader, key)
             }
-            crate::gc::GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
                 if live.is_null() {
                     return false;
@@ -1302,7 +1302,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
     if matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
@@ -1315,7 +1315,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     }
     let family = match header.obj_type {
         crate::gc::GC_TYPE_PROXY => return Some(ReceiverFact::Proxy),
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
         crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
         crate::gc::GC_TYPE_SET => BuiltinProto::Set,
         crate::gc::GC_TYPE_DATE_CELL => BuiltinProto::Date,
@@ -1668,27 +1668,19 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the
 /// spec call, `Call(Get(recv, name), recv, args)` — `m.isPrototypeOf(x)`,
-/// `m.foo()` on a relinked `Map.prototype`, or the TypeError for a missing
-/// method — instead of the old silent `undefined`. A builtin closure found
-/// here is called as a value; one level only, so a builtin body that
-/// dispatches the same name by name again answers `undefined` as before
-/// rather than recursing.
+/// `m.toLocaleString()` (whose body invokes `toString`, an ordinary nested
+/// call here), `m.foo()` on a relinked `Map.prototype`, or the TypeError for
+/// a missing method.
+///
+/// A method reached here that dispatches by name back into this lookup can
+/// form a cycle of runtime frames only, which no compiled prologue's stack
+/// check sees; the same check at this entry bounds it, so a runaway
+/// recursion through this path throws node's `RangeError` instead of running
+/// into the guard page. No state of its own: the agent's stack limit is the
+/// one every prologue reads.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
-    thread_local! {
-        static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if ACTIVE.with(|a| a.get()) {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(false));
-        }
-    }
-    ACTIVE.with(|a| a.set(true));
-    let _reset = Reset;
+    crate::stack_guard::check_native_stack();
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }

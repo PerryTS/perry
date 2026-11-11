@@ -253,6 +253,9 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
         }
     };
     for _ in 0..MAX_HOPS {
+        if (*next).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
+            return hole();
+        }
         let w = (*next).parent_class_id;
         let rn = record_of(dir, LayoutWord(w));
         if rn.is_null() {
@@ -464,6 +467,9 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
     hash: u64,
 ) -> f64 {
     for _ in 0..MAX_HOPS {
+        if (*next).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
+            return hole();
+        }
         let w = (*next).parent_class_id;
         let rn = record_of(dir, LayoutWord(w));
         if rn.is_null() {

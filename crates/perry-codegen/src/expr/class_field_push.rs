@@ -58,7 +58,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
         let ptr = blk.inttoptr(I64, &handle);
         let kind_ptr = blk.gep(I8, &ptr, &[(I64, "-8")]);
         let kind = blk.load(I8, &kind_ptr);
-        let array = blk.icmp_eq(I8, &kind, "1");
+        let array = crate::target_layout::emit_gc_type_is_array(blk, I8, &kind);
         let flags_ptr = blk.gep(I8, &ptr, &[(I64, "-7")]);
         let flags = blk.load(I8, &flags_ptr);
         let forwarded = blk.and(I8, &flags, "128");

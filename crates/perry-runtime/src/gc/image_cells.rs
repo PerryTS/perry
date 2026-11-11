@@ -204,7 +204,9 @@ unsafe fn cell_shape_needs_visit(header: *mut GcHeader) -> bool {
     if sabotage::knocked(sabotage::DYNAMIC) {
         return false;
     }
-    if (*header).obj_type == GC_TYPE_ARRAY && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
+    if crate::gc_type_is_array!((*header).obj_type)
+        && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0
+    {
         return false;
     }
     if crate::gc_type_is_not_object!((*header).obj_type) {

@@ -47,7 +47,7 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> 
     }
     unsafe {
         match gc_type_for_ptr(raw) {
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 Some(raw as *const crate::array::ArrayHeader)
             }
             _ => None,

@@ -61,6 +61,7 @@ pub(crate) fn stack_top() -> usize {
 /// consistency check.
 #[cfg(target_os = "linux")]
 fn main_thread_bounds() -> Option<(usize, usize)> {
+    crate::snap_funnel!(StackBounds);
     // The main thread is the one whose tid is the pid. Every other thread
     // (the runtime's own, or an embedder's) takes the pthread path, whose
     // answer is read from its descriptor.

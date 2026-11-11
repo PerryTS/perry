@@ -3,6 +3,8 @@
 // Handles NaN-boxing, string management, handle store, and browser API access.
 
 // NaN-boxing constants (matching perry-runtime/src/value.rs)
+const __hostGlobal = globalThis;
+
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
 const TAG_FALSE     = 0x7FFC_0000_0000_0003n;
@@ -61,9 +63,13 @@ const stringTable = [];
 // Handle store — maps handle_id to JS objects/arrays/closures/etc.
 const handleStore = new Map();
 let nextHandleId = 1;
+const objectHandles = new WeakMap();
 
 function allocHandle(obj) {
+  const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
+  if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
   const id = nextHandleId++;
+  if (reference) objectHandles.set(obj, id);
   handleStore.set(id, obj);
   return id;
 }
@@ -509,7 +515,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 1, [f64ToU64(a0)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_2: (handle, a0, a1) => {
@@ -517,7 +523,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 2, [f64ToU64(a0), f64ToU64(a1)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0), f64ToU64(a1)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       closure_call_3: (handle, a0, a1, a2) => {
@@ -525,7 +531,7 @@ function buildImports() {
         if (!c || !wasmInstance) return u64ToF64(TAG_UNDEFINED);
         const fn = wasmInstance.exports.__indirect_function_table?.get(c.funcIdx | 0);
         if (!fn) return u64ToF64(TAG_UNDEFINED);
-        const padded = __padBigintArgs(fn, c.captures.length + 3, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
+        const padded = __padBigintArgs(fn, c.captures.length, [f64ToU64(a0), f64ToU64(a1), f64ToU64(a2)]);
         return u64ToF64(fn(...c.captures, ...padded));
       },
       // closure_call_spread(handle, args_array_handle) -> result
@@ -550,7 +556,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return nanboxPointer(allocHandle([]));
         const result = arr.map((v, i) => {
-          const r = fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
           return __bitsToJsValue(r);
         });
         return nanboxPointer(allocHandle(result));
@@ -562,7 +568,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return nanboxPointer(allocHandle([]));
         const result = arr.filter((v, i) => {
-          const r = fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
           const rv = __bitsToJsValue(r);
           if (rv === true) return true;
           if (rv === false || rv === null || rv === undefined) return false;
@@ -576,7 +582,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return;
-        arr.forEach((v, i) => fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)));
+        arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
       },
       array_reduce: (handle, cbHandle, initial) => {
         const arr = getHandle(handle);
@@ -587,7 +593,7 @@ function buildImports() {
         let acc = isUndefined(initial) ? __jsValueToBits(arr[0]) : f64ToU64(initial);
         const startIdx = isUndefined(initial) ? 1 : 0;
         for (let i = startIdx; i < arr.length; i++) {
-          acc = fn(...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i));
+          acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
         }
         return u64ToF64(acc);
       },
@@ -599,7 +605,7 @@ function buildImports() {
         if (!fn) return u64ToF64(TAG_UNDEFINED);
         for (let i = 0; i < arr.length; i++) {
           const vBits = __jsValueToBits(arr[i]);
-          const r = fn(...cb.captures, vBits, __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i), __jsValueToBits(arr));
           if (__bitsToJsValue(r)) return fromJsValue(arr[i]);
         }
         return u64ToF64(TAG_UNDEFINED);
@@ -611,7 +617,7 @@ function buildImports() {
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return -1;
         for (let i = 0; i < arr.length; i++) {
-          const r = fn(...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i));
+          const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
           if (__bitsToJsValue(r)) return i;
         }
         return -1;
@@ -627,7 +633,7 @@ function buildImports() {
         if (!cb || !wasmInstance) { arr.sort(); return handle; }
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) { arr.sort(); return handle; }
-        arr.sort((a, b) => { const r = fn(...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
+        arr.sort((a, b) => { const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
         return handle;
       },
       array_some: (handle, cbHandle) => {
@@ -636,7 +642,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return 0;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return 0;
-        return arr.some((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+        return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
       },
       array_every: (handle, cbHandle) => {
         const arr = getHandle(handle);
@@ -644,7 +650,7 @@ function buildImports() {
         if (!arr || !cb || !wasmInstance) return 0;
         const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
         if (!fn) return 0;
-        return arr.every((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+        return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
       },
 
       // ===== Phase 3: Classes =====
@@ -990,11 +996,11 @@ function buildImports() {
       try_start: () => { tryDepth++; },
       try_end: () => { if (tryDepth > 0) tryDepth--; },
       throw_value: (val) => { currentException = val; },
-      has_exception: () => currentException !== null ? 1 : 0,
+      has_exception: () => currentException !== NO_EXCEPTION ? 1 : 0,
       get_exception: () => {
         const e = currentException;
-        currentException = null;
-        return e !== null ? e : u64ToF64(TAG_UNDEFINED);
+        currentException = NO_EXCEPTION;
+        return e !== NO_EXCEPTION ? e : u64ToF64(TAG_UNDEFINED);
       },
 
       // ===== Phase 4: URL =====
@@ -1405,15 +1411,20 @@ function buildImports() {
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
         const coreFn = __memDispatch[name];
-        if (coreFn) {
-          result = coreFn(...args);
-        } else {
-          const uiFn = __perryUiDispatch[name];
-          if (uiFn) {
-            result = uiFn(...args);
-          } else if (argc > 0) {
-            result = __classDispatch(args[0], name, args.slice(1));
+        try {
+          if (coreFn) {
+            result = coreFn(...args);
+          } else {
+            const uiFn = __perryUiDispatch[name];
+            if (uiFn) {
+              result = uiFn(...args);
+            } else if (argc > 0) {
+              result = __classDispatch(args[0], name, args.slice(1));
+            }
           }
+        } catch (error) {
+          if (tryDepth === 0) throw error;
+          currentException = error;
         }
         // Write result back to same base address
         const outU64 = new BigUint64Array(wasmMemory.buffer, base, 1);
@@ -1429,7 +1440,13 @@ function buildImports() {
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         const fn = __memDispatch[name];
         if (!fn) return 0;
-        return fn(...args) | 0;
+        try {
+          return fn(...args) | 0;
+        } catch (error) {
+          if (tryDepth === 0) throw error;
+          currentException = error;
+          return 0;
+        }
       },
 
       // Async function implementations (merged from generated code)
@@ -1739,11 +1756,13 @@ const __memDispatch = {
     const e = end === undefined ? undefined : (typeof end === 'number' ? end : end);
     return arr.slice(s, e);
   },
-  array_splice: (arr, start, deleteCount) => {
+  array_splice: (arr, start, deleteCount, ...items) => {
     if (!Array.isArray(arr)) return [];
     const s = typeof start === 'number' ? start : 0;
     const dc = deleteCount === undefined ? arr.length - s : deleteCount;
-    return arr.splice(s, dc);
+    // Non-numeric start must reach splice uncoerced: JS ToIntegerOrInfinity
+    // coerces "1" to 1, while the pre-coerced 0 silently shifts insertions.
+    return arr.splice(typeof start === 'number' ? s : start, dc, ...items);
   },
   array_shift: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.shift(); },
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
@@ -1800,6 +1819,7 @@ const __memDispatch = {
     return closure;
   },
   closure_call_0: (closure) => {
+    if (typeof closure === 'function') return __callHostFunction(closure, []);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1808,28 +1828,32 @@ const __memDispatch = {
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_1: (closure, a0) => {
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 1, [__jsValueToBits(a0)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_2: (closure, a0, a1) => {
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0, a1]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 2, [__jsValueToBits(a0), __jsValueToBits(a1)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0), __jsValueToBits(a1)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_3: (closure, a0, a1, a2) => {
+    if (typeof closure === 'function') return __callHostFunction(closure, [a0, a1, a2]);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
-    const padded = __padBigintArgs(fn, closure.captures.length + 3, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
+    const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
+    if (typeof closure === 'function') return __callHostFunction(closure, argArr);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return undefined;
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
@@ -1842,14 +1866,14 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return [];
-    return arr.map((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i))));
+    return arr.map((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr))));
   },
   array_filter: (arr, cb) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return [];
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return [];
     return arr.filter((v, i) => {
-      const r = fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i));
+      const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr));
       const rv = __bitsToJsValue(r);
       if (rv === true) return true;
       if (rv === false || rv === null || rv === undefined) return false;
@@ -1860,7 +1884,7 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return;
-    arr.forEach((v, i) => fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)));
+    arr.forEach((v, i) => __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
   },
   array_reduce: (arr, cb, initial) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
@@ -1868,7 +1892,7 @@ const __memDispatch = {
     if (!fn) return undefined;
     let acc = initial === undefined ? __jsValueToBits(arr[0]) : __jsValueToBits(initial);
     const startIdx = initial === undefined ? 1 : 0;
-    for (let i = startIdx; i < arr.length; i++) acc = fn(...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i));
+    for (let i = startIdx; i < arr.length; i++) acc = __invokeWasmCallback(fn, ...cb.captures, acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
     return __bitsToJsValue(acc);
   },
   array_find: (arr, cb) => {
@@ -1877,7 +1901,7 @@ const __memDispatch = {
     if (!fn) return undefined;
     for (let i = 0; i < arr.length; i++) {
       const vBits = __jsValueToBits(arr[i]);
-      if (__bitsToJsValue(fn(...cb.captures, vBits, __jsValueToBits(i)))) return arr[i];
+      if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
     }
     return undefined;
   },
@@ -1885,7 +1909,7 @@ const __memDispatch = {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return -1;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return -1;
-    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(fn(...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i)))) return i; }
+    for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
   array_sort: (arr, cb) => {
@@ -1894,20 +1918,20 @@ const __memDispatch = {
     if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) { arr.sort(); return arr; }
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) { arr.sort(); return arr; }
-    arr.sort((a, b) => { const r = fn(...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
+    arr.sort((a, b) => { const r = __invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
   array_some: (arr, cb) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return 0;
-    return arr.some((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+    return arr.some((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
   array_every: (arr, cb) => {
     if (!Array.isArray(arr) || !cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return 0;
     const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
     if (!fn) return 0;
-    return arr.every((v, i) => __bitsToJsValue(fn(...cb.captures, __jsValueToBits(v), __jsValueToBits(i)))) ? 1 : 0;
+    return arr.every((v, i) => __bitsToJsValue(__invokeWasmCallback(fn, ...cb.captures, __jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
   },
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
@@ -2106,6 +2130,9 @@ const __memDispatch = {
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
 
+  global_receiver: () => __hostGlobal,
+  global_property: (name) => __hostGlobal[name],
+
   // RegExp — args are plain JS values
   regexp_new: (pattern, flags) => { try { return new RegExp(String(pattern), String(flags)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
   regexp_test: (re, str) => { if (!(re instanceof RegExp)) return 0; return re.test(String(str)) ? 1 : 0; },
@@ -2119,8 +2146,15 @@ const __memDispatch = {
   try_start: () => { tryDepth++; },
   try_end: () => { if (tryDepth > 0) tryDepth--; },
   throw_value: (val) => { currentException = val; },
-  has_exception: () => currentException !== null ? 1 : 0,
-  get_exception: () => { const e = currentException; currentException = null; return e !== null ? e : undefined; },
+  propagate_exception: (callbackBoundary = false) => {
+    if ((callbackBoundary || tryDepth === 0) && currentException !== NO_EXCEPTION) {
+      const error = currentException;
+      currentException = NO_EXCEPTION;
+      throw error;
+    }
+  },
+  has_exception: () => currentException !== NO_EXCEPTION ? 1 : 0,
+  get_exception: () => { const e = currentException; currentException = NO_EXCEPTION; return e !== NO_EXCEPTION ? e : undefined; },
 
   // URL — args are plain JS values (u is the URL object itself)
   url_parse: (urlStr) => { try { return new URL(String(urlStr)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
@@ -2301,7 +2335,15 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 const stringTable = [];
 const handleStore = new Map();
 let nextHandleId = 1;
-function allocHandle(obj) { const id = nextHandleId++; handleStore.set(id, obj); return id; }
+const objectHandles = new WeakMap();
+function allocHandle(obj) {
+  const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
+  if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
+  const id = nextHandleId++;
+  if (reference) objectHandles.set(obj, id);
+  handleStore.set(id, obj);
+  return id;
+}
 
 function __bitsToJsValue(bits) {
   if (bits === TAG_UNDEFINED) return undefined;
@@ -2591,7 +2633,8 @@ self.onmessage = async function(e) {
 
 // Exception state for try/catch bridge
 let tryDepth = 0;
-let currentException = null;
+const NO_EXCEPTION = Symbol('no exception');
+let currentException = NO_EXCEPTION;
 
 // ===== Perry UI Runtime (DOM-based, for --target wasm) =====
 // Ported from perry-codegen-js/web_runtime.js — maps perry/ui widgets to DOM elements.
@@ -2608,11 +2651,14 @@ function uiAlloc(el) {
 }
 function uiGet(h) { return uiHandles.get(h); }
 
-// Helper: call a WASM closure — accepts either a raw NaN-boxed f64 handle,
-// or a JS closure object ({funcIdx, captures}) from toJsValue conversion.
-// Extra args must be plain JS values: this function owns their one conversion
-// to i64 bits. Pre-boxing a string as f64 lets JS canonicalize its NaN payload.
-// WASM functions use i64 (BigInt) params/returns.
+function __invokeWasmCallback(fn, ...bigintArgs) {
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
+  __memDispatch.propagate_exception(true);
+  return result;
+}
+
+// Accept a boxed handle or decoded closure; extra arguments are plain JS values.
+// Convert them once to i64: boxing strings through f64 can erase NaN payloads.
 function callWasmClosure(closureVal, ...extraArgs) {
   let closure;
   if (typeof closureVal === 'object' && closureVal !== null) {
@@ -2629,7 +2675,8 @@ function callWasmClosure(closureVal, ...extraArgs) {
     // Extra args need to be BigInt (i64) for WASM functions. Captures are already BigInt.
     const wasmArgs = extraArgs.map(v => __jsValueToBits(v));
     if (fn) {
-      const result = fn(...(closure.captures || []), ...wasmArgs);
+      const captures = closure.captures || [];
+      const result = fn(...captures, ...__padBigintArgs(fn, captures.length, wasmArgs));
       return (typeof result === 'bigint') ? __bitsToJsValue(result) : undefined;
     }
   }
@@ -4851,7 +4898,7 @@ const __perryUiDispatch = {
 const __perryUi = __perryUiDispatch;
 
 // Unified method dispatch for class_call_N imports.
-// Tries: 1) class method table, 2) UI widget methods, 3) state methods.
+// Class methods precede host methods, then UI widget/state methods.
 // When called from mem_call, obj and args are plain JS values (decoded by __bitsToJsValue).
 const __uiMethodMap = {
   addChild: "perry_ui_widget_add_child", removeAllChildren: "perry_ui_widget_remove_all_children",
@@ -4893,23 +4940,44 @@ const __uiMethodMap = {
   addOverlay: "perry_ui_widget_add_overlay",
 };
 
+function __callHostFunction(fn, args, receiver = undefined) {
+  try {
+    return Reflect.apply(fn, receiver, args.map(__hostCallback));
+  } catch (error) {
+    if (tryDepth === 0) throw error;
+    currentException = error;
+    return undefined;
+  }
+}
+
+const hostCallbacks = new WeakMap();
+
+// Host APIs require a stable function identity for Perry closure objects.
+function __hostCallback(value) {
+  if (!value || typeof value !== 'object' || typeof value.funcIdx === 'undefined') return value;
+  if (!hostCallbacks.has(value)) {
+    hostCallbacks.set(value, (...args) => {
+      const result = callWasmClosure(value, ...args);
+      __memDispatch.propagate_exception(true);
+      return result;
+    });
+  }
+  return hostCallbacks.get(value);
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
-  // objVal and rawArgs are already plain JS values (decoded by __bitsToJsValue in mem_call)
-  // Primitive/built-in fast-path (Issue #133 item 1): plain strings/numbers have no
-  // __class__ and aren't in __uiMethodMap, so method calls like `str.charCodeAt(i)`
-  // previously fell through and returned undefined. Route to the native prototype.
   if (typeof objVal === 'string') {
     const fn = String.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (typeof objVal === 'number') {
     const fn = Number.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (Array.isArray(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
     // handle) are routed through __memDispatch before reaching here — this fallback
     // catches methods the codegen doesn't special-case (at, findLast, flat, etc.).
     const fn = Array.prototype[mname];
-    if (typeof fn === 'function') return fn.apply(objVal, rawArgs);
+    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   }
   // 1) Try class method table (for user-defined classes)
   // WASM functions use i64 (BigInt) params/returns
@@ -4926,6 +4994,16 @@ function __classDispatch(objVal, mname, rawArgs) {
         }
       }
       cls = classParentTable[cls] || null;
+    }
+  }
+  if (objVal && (typeof objVal === 'object' || typeof objVal === 'function')) {
+    try {
+      const method = objVal[mname];
+      if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
+    } catch (error) {
+      if (tryDepth === 0) throw error;
+      currentException = error;
+      return undefined;
     }
   }
   // 2) Try UI widget/state method dispatch

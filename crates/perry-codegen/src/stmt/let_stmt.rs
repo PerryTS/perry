@@ -775,7 +775,7 @@ pub(crate) fn lower_let(
     // load directly from the corresponding slot. See the
     // `collect_non_escaping_arrays` pass in collectors.rs for the
     // escape criteria.
-    if let Some(perry_hir::Expr::Array(elements, _)) = init {
+    if let Some(literal @ perry_hir::Expr::Array(elements, _)) = init {
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
@@ -802,10 +802,17 @@ pub(crate) fn lower_let(
                 .unwrap_or_default();
             for (i, elem) in elements.iter().enumerate() {
                 let index_is_observed = used_indices.contains(&(i as u32));
-                if !index_is_observed && lower_unused_expr(ctx, elem)? {
+                // SNAP census: the element's parent is the literal.
+                let unused = !index_is_observed
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, elem)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, elem)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, elem)
+                })?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
                 // #6968: same rooting hole as the object-literal fields —
                 // the element alloca is the only reference to a heap value
@@ -867,7 +874,7 @@ pub(crate) fn lower_let(
     // unique field; PropertyGet/Set already resolve through
     // `ctx.scalar_replaced`, so no additional read path is needed.
     // See `collect_non_escaping_object_literals` in collectors.rs.
-    if let Some(perry_hir::Expr::Object(props)) = init {
+    if let Some(literal @ perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
             let existing = ctx.scalar_replaced.get(&id).cloned();
             let mut field_slots: std::collections::HashMap<String, String> =
@@ -887,10 +894,17 @@ pub(crate) fn lower_let(
                 .cloned()
                 .unwrap_or_default();
             for (key, value_expr) in props {
-                if !used_fields.contains(key) && lower_unused_expr(ctx, value_expr)? {
+                // SNAP census: the field value's parent is the literal.
+                let unused = !used_fields.contains(key)
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, value_expr)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, value_expr)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, value_expr)
+                })?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
                     // #6968: the field alloca is this heap value's only
@@ -1169,17 +1183,29 @@ pub(crate) fn lower_let(
     // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
     // where the mixed representation additionally costs the loop its
     // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    let unprofitable = ctx
-        .native_facts
-        .unprofitable_canonical_i32_locals()
-        .contains(&id);
+    // Representation RFC §10 (P1): the whole-program facts' representation
+    // is the decision for a local they cover (`codegen/facts_rep.rs`).
+    let facts_rep = crate::codegen::facts_rep::local(ctx, id);
+    let unprofitable = match facts_rep {
+        Some(crate::codegen::FactsRep::I32) => false,
+        Some(_) => true,
+        None => ctx
+            .native_facts
+            .unprofitable_canonical_i32_locals()
+            .contains(&id),
+    };
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
-    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // A local the facts give `I32` is proven int32 (never -0) on every
+    // write by the whole-program interval: that proof is the value-level
+    // admission, and the per-function collectors' proofs are not needed.
+    let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
+    let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
         && !unprofitable
-        && init_in_i32_range
+        && init_in_i32_range;
+    let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
@@ -1602,7 +1628,9 @@ pub(crate) fn lower_let(
                     // for a local source. A declared numeric/object type can
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
-                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                        && !const_array_walk::holds_no_string(ctx, id, &v)
+                    {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
                     let v = crate::codegen::facts_number_locals::accept_let_value(
@@ -1628,7 +1656,9 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                    && !const_array_walk::holds_no_string(ctx, id, &v)
+                {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
                 let v =

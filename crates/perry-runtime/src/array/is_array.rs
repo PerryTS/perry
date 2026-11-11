@@ -4,7 +4,7 @@
 /// Returns a NaN-boxed TAG_TRUE/TAG_FALSE JS boolean per JS semantics.
 #[no_mangle]
 pub extern "C" fn js_array_is_array(value: f64) -> f64 {
-    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY};
+    use crate::gc::{GcHeader, GC_HEADER_SIZE};
     use crate::value::JSValue;
 
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -53,7 +53,7 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     unsafe {
         let gc_header = raw_ptr.sub(GC_HEADER_SIZE) as *const GcHeader;
         let obj_type = (*gc_header).obj_type;
-        if obj_type == GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             true_val
         } else if crate::object_has_meta_word!(obj_type) {
             // `class X extends Array` — the instance is a plain ObjectHeader, but

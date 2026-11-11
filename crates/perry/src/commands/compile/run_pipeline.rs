@@ -25,6 +25,9 @@ use std::time::Instant;
 
 use crate::OutputFormat;
 
+mod codegen_helpers;
+use codegen_helpers::{configured_module_codegen_threads, namespace_local_function_wrapper_symbol};
+
 mod dylib_target;
 use dylib_target::{apple_dylib_cross_target, apple_sdk_sysroot, verify_dylib_target_linkable};
 
@@ -33,30 +36,6 @@ use dylib_target::{apple_dylib_cross_target, apple_sdk_sysroot, verify_dylib_tar
 /// the wild are a handful of levels deep at most; the cap is a belt-and-braces
 /// stop so a pathological (or cyclic) re-export graph can never spin forever.
 const MAX_REEXPORT_HOPS: usize = 16;
-
-/// How many module codegen jobs may run at once: `PERRY_MODULE_JOBS` when set
-/// to a positive count, else one per CPU slot of the compile's budget. Memory,
-/// not this count, is what keeps large graphs in bounds (see
-/// `module_schedule`).
-fn configured_module_codegen_threads(total_modules: usize, budget_cpus: usize) -> usize {
-    std::env::var("PERRY_MODULE_JOBS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or(budget_cpus)
-        .clamp(1, total_modules.max(1))
-}
-
-/// Wrapper symbol used when a dynamic-import namespace materializes a local
-/// function as a JavaScript value. Keep this routed through codegen's own
-/// function mangler: module-name sanitization is intentionally not injective
-/// for `$` and would point `$a` at `_a`'s symbol instead.
-fn namespace_local_function_wrapper_symbol(module_name: &str, function_name: &str) -> String {
-    format!(
-        "__perry_wrap_{}",
-        perry_codegen::user_function_symbol(module_name, function_name)
-    )
-}
 
 /// Design §4.4: a module's emitted registry symbols (or a cached object's
 /// manifest) must name only providers the HIR pass put in the link set.
@@ -213,22 +192,6 @@ impl Drop for ModuleCodegenCompletion<'_> {
             elapsed / 60.0,
             eta / 60.0
         );
-    }
-}
-
-#[cfg(test)]
-mod module_codegen_job_tests {
-    use super::configured_module_codegen_threads;
-
-    #[test]
-    fn one_job_per_cpu_slot_but_never_more_than_modules() {
-        if std::env::var("PERRY_MODULE_JOBS").is_ok() {
-            return;
-        }
-        assert_eq!(configured_module_codegen_threads(764, 48), 48);
-        assert_eq!(configured_module_codegen_threads(3, 48), 3);
-        assert_eq!(configured_module_codegen_threads(0, 48), 1);
-        assert_eq!(configured_module_codegen_threads(10, 0), 1);
     }
 }
 
@@ -812,6 +775,7 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut ctx = CompilationContext::new(project_root.clone());
+    ctx.macro_import_stack = args.macro_import_stack.clone();
     ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
     // #10281: the package `exports` / `imports` resolvers rank `bun` above
     // `node` for this target, so a package shipping both entries resolves the
@@ -1218,6 +1182,19 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|_| args.input.clone());
 
     classify_eager_modules(&mut ctx, &entry_path);
+    let deferred_paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
+    let mut deferred_readiness = std::collections::HashMap::new();
+    for path in deferred_paths {
+        let requested = super::init_order::direct_requested_module_dependencies(&mut ctx, &path)
+            .into_iter()
+            .filter_map(|p| {
+                ctx.native_modules
+                    .get(&p)
+                    .map(|m| perry_codegen::symbol_names::module_prefix(&m.name))
+            })
+            .collect::<Vec<_>>();
+        deferred_readiness.insert(path.clone(), requested);
+    }
 
     let sanitize_name = perry_codegen::symbol_names::module_prefix;
 
@@ -3160,6 +3137,7 @@ pub fn run_with_parse_cache(
     // Keyed by re-exporting module path → exported alias → target module path.
     let mut namespace_reexport_targets: HashMap<String, BTreeMap<String, PathBuf>> = HashMap::new();
     let lookup = |name: &str| module_name_to_module.get(name);
+    let mut deferred_namespace_export_targets = std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         // Do not stop at declarations written directly in this module. A
         // namespace value retains its identity through ordinary named and
@@ -3184,6 +3162,12 @@ pub fn run_with_parse_cache(
                 // object/global to register here.
                 continue;
             };
+            if flat.nested_namespace_deferred {
+                deferred_namespace_export_targets.insert(
+                    (path.to_string_lossy().to_string(), flat.name.clone()),
+                    target_path.clone(),
+                );
+            }
             namespace_reexport_targets
                 .entry(path.to_string_lossy().to_string())
                 .or_default()
@@ -3242,8 +3226,14 @@ pub fn run_with_parse_cache(
                         .get(nested)
                         .map(|view| sanitize_module_name(&view.module.name))
                         .unwrap_or_else(|| sanitize_module_name(nested));
-                    perry_codegen::NamespaceEntryKind::NestedNamespace {
-                        source_prefix: nested_prefix,
+                    if fe.nested_namespace_deferred {
+                        perry_codegen::NamespaceEntryKind::DeferredNamespace {
+                            source_prefix: nested_prefix,
+                        }
+                    } else {
+                        perry_codegen::NamespaceEntryKind::NestedNamespace {
+                            source_prefix: nested_prefix,
+                        }
                     }
                 }
             } else if fe.source_module == target_name {
@@ -3936,7 +3926,9 @@ pub fn run_with_parse_cache(
         // module's re-export chain. For Eager modules the calls
         // short-circuit on the idempotent guard's first-write
         // check (one load + cmp + cond_br each).
-        let module_init_deps: Vec<String> = if is_entry && !program_has_worker {
+        let program_has_tla = ctx.native_modules.values().any(|m| m.has_top_level_await);
+        let module_graph_has_tla = super::init_order::graph_has_tla(&ctx, path);
+        let module_init_deps: Vec<String> = if is_entry && !program_has_worker && !program_has_tla {
             Vec::new()
         } else {
             let mut deps: Vec<String> = Vec::new();
@@ -3948,7 +3940,7 @@ pub fn run_with_parse_cache(
             let push_dep = |deps: &mut Vec<String>,
                             seen: &mut std::collections::HashSet<String>,
                             prefix: String| {
-                if Some(&prefix) == entry_prefix.as_ref() {
+                if !program_has_tla && Some(&prefix) == entry_prefix.as_ref() {
                     return;
                 }
                 if seen.insert(prefix.clone()) {
@@ -3960,6 +3952,7 @@ pub fn run_with_parse_cache(
                 // (lazy in Node). S must NOT chain into this module's init
                 // — it inits only when the require shim is actually called.
                 if import.is_dynamic
+                    || import.is_deferred
                     || import.type_only
                     || import.runtime_erased
                     || import.is_deferred_require
@@ -4033,11 +4026,31 @@ pub fn run_with_parse_cache(
             // Eager ordering #6463 fixed: a module statically imported by an
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
+            if !program_has_tla {
             if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
                 deps.retain(|dep| {
                     deferred_module_prefixes.contains(dep)
                         || init_pos.get(dep).map_or(true, |&p| p < self_pos)
                 });
+            }
+            }
+            if program_has_tla {
+                // A `defer` request is not an evaluation dependency: the
+                // scheduler must not run the provider before this body. The
+                // readiness walk still sees the edge.
+                let mut ordered = super::init_order::static_evaluation_paths(&ctx, path);
+                // The open CommonJS cache exists before any user module runs.
+                // This is the same support edge the synchronous eager driver seeds.
+                if is_entry && !ctx.cjs_closed {
+                    if let Some(support) = &ctx.cjs_support_path {
+                        if ctx.native_modules.contains_key(support) {
+                            ordered.retain(|p| p != support);
+                            ordered.insert(0, support.clone());
+                        }
+                    }
+                }
+                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name)).collect();
             }
             deps
         };
@@ -4120,6 +4133,7 @@ pub fn run_with_parse_cache(
         let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
         let mut namespace_imports: Vec<String> = Vec::new();
+        let mut deferred_namespace_imports = std::collections::HashSet::new();
         let mut namespace_source_prefixes = HashMap::new();
         // #7189: members of a namespace whose value is ITSELF a module
         // namespace, from `export * as ns from "./m.ts"` in the imported
@@ -4330,6 +4344,9 @@ pub fn run_with_parse_cache(
                     _ => None,
                 };
                 if let Some(local) = namespace_like_local {
+                    if import.is_deferred {
+                        deferred_namespace_imports.insert(local.clone());
+                    }
                     namespace_imports.push(local.clone());
                     namespace_source_prefixes.insert(
                         local.clone(),
@@ -4959,6 +4976,22 @@ pub fn run_with_parse_cache(
                 // `NamespaceReExport` whose name matches the imported
                 // name, then route the local through `namespace_imports`
                 // + register the namespace target's full export surface.
+                // Keep phase on named aliases through Named/ReExport/ExportAll barrels.
+                if let Some(target) = deferred_namespace_export_targets
+                    .get(&(resolved_path_str.clone(), exported_name.clone()))
+                {
+                    namespace_imports.push(local_name.clone());
+                    deferred_namespace_imports.insert(local_name.clone());
+                    namespace_source_prefixes.insert(
+                        local_name.clone(),
+                        compute_module_prefix(
+                            &target.to_string_lossy(),
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        ),
+                    );
+                    continue;
+                }
                 let mut handled_as_namespace_reexport = false;
                 if let Some(src_hir) = ns_scan_hir {
                     for export in &src_hir.exports {
@@ -6218,6 +6251,7 @@ pub fn run_with_parse_cache(
             verify_native_regions,
             disable_buffer_fast_path,
             namespace_imports,
+            deferred_namespace_imports,
             namespace_source_prefixes,
             // A module that namespace-imports ITSELF (`import * as Self from
             // "./this-module.ts"`) is its own namespace consumer: its
@@ -6229,6 +6263,7 @@ pub fn run_with_parse_cache(
                 hir_module.imports.iter().any(|import| {
                     !import.type_only
                         && !import.runtime_erased
+                        && !import.is_deferred
                         && import.specifiers.iter().any(|spec| {
                             matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
                         })
@@ -6279,24 +6314,13 @@ pub fn run_with_parse_cache(
             i18n_table: i18n_snapshot.clone(),
             fast_math: ctx.fast_math,
             fp_contract_mode: ctx.fp_contract_mode,
-            app_metadata: perry_codegen::AppMetadata {
-                entry_source_path: if is_entry && args.output_type == "executable" {
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    None
-                },
-                entry_declared_esm: if is_entry {
-                    super::cjs_wrap::declared_module_format_is_esm(path)
-                } else {
-                    None
-                },
-                native_provider_installs: if is_entry {
-                    native_provider_installs.clone()
-                } else {
-                    Vec::new()
-                },
-                ..ctx.app_metadata.clone()
-            },
+            app_metadata: super::app_metadata::for_module(
+                &ctx.app_metadata,
+                path,
+                is_entry,
+                &args.output_type,
+                &native_provider_installs,
+            ),
             // Issue #100: namespace_entries empty unless this
             // module is a dynamic-import target; the consumer-side
             // dispatch map is empty unless this module performs
@@ -6313,6 +6337,10 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
+            module_deferred_init_deps: Vec::new(),
+            module_deferred_readiness: deferred_readiness.get(path).cloned().unwrap_or_default(),
+            program_has_tla,
+            module_graph_has_tla,
             // Issue #842: signal side-effect-only dynamic-import
             // targets to codegen so it still emits
             // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
@@ -6448,6 +6476,40 @@ pub fn run_with_parse_cache(
             ),
         }
     };
+    // I32 at rest (PR C): the facts run before the births pre-pass, whose
+    // class birth contents carry the I32 field lanes the facts admit
+    // (`perry_codegen` `expr::rest_fields`), so a module's mint and the
+    // program's static ids name the same contents.
+    // wpfacts (whole-program invariance facts, slice 1): one more
+    // whole-program pre-pass over the final HIR. It removes no check yet:
+    // each module's codegen gets only the digest of the facts it can observe
+    // (object-cache key) and, in a contract build, the claims section the
+    // runtime checks. See `program_facts.rs` for the knobs.
+    let facts_started = Instant::now();
+    program_step("whole-program facts", None);
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+    );
+    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
@@ -6466,6 +6528,7 @@ pub fn run_with_parse_cache(
                         &mut opts,
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                    opts.program_facts = super::program_facts::view_for(&program_facts, path);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6585,36 +6648,6 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
-    // wpfacts (whole-program invariance facts, slice 1): one more
-    // whole-program pre-pass over the final HIR. It removes no check yet:
-    // each module's codegen gets only the digest of the facts it can observe
-    // (object-cache key) and, in a contract build, the claims section the
-    // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         PathBuf,
@@ -6844,7 +6877,7 @@ pub fn run_with_parse_cache(
             object_output_dir.join(format!("{}.{}", obj_name, ext))
         };
 
-        if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+        if let Some((key, cached_path, ffi_symbols, seeds)) = cache_key.and_then(|k| {
             object_cache
                 .lookup_path_with_ffi(k)
                 .map(|(p, s, seeds)| (k, p, s, seeds))
@@ -6858,15 +6891,9 @@ pub fn run_with_parse_cache(
             )?;
             // Design step 4: a hit replays the module's static shape
             // seeds exactly as the skipped codegen reported them, so the
-            // seed unit is the same cold and warm. A malformed line makes
-            // the entry unusable rather than silently dropping a seed.
-            let seeds = seed_lines
-                .iter()
-                .map(|line| perry_codegen::decode_static_seed(line))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    format!("corrupt static shape seed sidecar for cache key {key:016x}")
-                })?;
+            // seed unit is the same cold and warm. A sidecar that does not
+            // decode was already a miss in the lookup, so a hit never drops
+            // a seed.
             program_static_seeds
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -7010,15 +7037,13 @@ pub fn run_with_parse_cache(
             // as a miss to a concurrent build (correct, just a wasted
             // recompile), whereas the reverse ordering can never mislead.
             object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
-            let seed_lines: Vec<String> = module_static_seeds
-                .iter()
-                .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
-                .collect();
-            object_cache.store_static_seeds(
-                k,
-                &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
-            );
-            object_cache.store_and_get_path(k, &object_code)
+            // Seeds the sidecar cannot replay exactly leave no entry: the
+            // next build recompiles this module instead of linking another
+            // seed set.
+            object_cache
+                .store_static_seeds(k, &module_static_seeds)
+                .then(|| object_cache.store_and_get_path(k, &object_code))
+                .flatten()
         }) {
             // #7167: handing back the cache path saves a copy for a
             // compile that is going to *link* — the linker is the only
@@ -7131,17 +7156,21 @@ pub fn run_with_parse_cache(
     // messages print after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
     let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
-    for result in compile_results {
+    // `run_module_jobs` returns one result per job in job order, so the
+    // module of a failed job is `codegen_modules[index]`, whatever its error
+    // says: a failure whose message names no module still fails that module
+    // (an entry that failed this way used to link without its object).
+    for (index, result) in compile_results.into_iter().enumerate() {
         match result {
             Ok(artifact) => artifacts.push(artifact),
             Err(msg) => {
                 eprintln!("{}", msg);
-                // Extract module name from error message for
-                // failed_modules. Error format is
-                // `Error compiling module '<name>' (<path>) ...`.
-                if let Some(name) = msg.split('\'').nth(1) {
-                    failed_modules.push(name.to_string());
-                }
+                let name = ctx
+                    .native_modules
+                    .get(&codegen_modules[index])
+                    .map(|module| module.name.clone())
+                    .unwrap_or_else(|| codegen_modules[index].display().to_string());
+                failed_modules.push(name);
             }
         }
     }
@@ -8084,12 +8113,14 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    if !embedded_assets.is_empty() {
+    if !embedded_assets.is_empty() || args.sea || args.output_type == "staticlib" {
         if let Some(obj) = embed::generate_embedded_asset_object(
             &embedded_assets,
             &object_output_dir,
             &bunfs_text_modules,
             ctx.bun_platform,
+            args.sea,
+            target.as_deref(),
         )? {
             obj_cleanup_paths.push(obj.clone());
             obj_paths.push(obj);
@@ -8099,12 +8130,14 @@ pub fn run_with_parse_cache(
             .iter()
             .filter_map(|(_, p)| fs::metadata(p).ok().map(|m| m.len()))
             .sum();
-        if let OutputFormat::Text = format {
-            println!(
-                "Embedding {} asset(s) ({} bytes) into the executable",
-                embedded_assets.len(),
-                total
-            );
+        if !embedded_assets.is_empty() {
+            if let OutputFormat::Text = format {
+                println!(
+                    "Embedding {} asset(s) ({} bytes) into the executable",
+                    embedded_assets.len(),
+                    total
+                );
+            }
         }
     }
 

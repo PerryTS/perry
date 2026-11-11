@@ -491,7 +491,9 @@ fn stable_value_kind(bits: u64) -> u16 {
         BIGINT_TAG => STABLE_VALUE_BIGINT,
         JS_HANDLE_TAG => STABLE_VALUE_JS_HANDLE,
         SHORT_STRING_TAG => STABLE_VALUE_SHORT_STRING,
-        INT32_TAG => STABLE_VALUE_INT32,
+        INT32_TAG if crate::value::is_int32_bits(bits) => STABLE_VALUE_INT32,
+        // A non-Number `0x7FFE` word (a `C.prototype` ref): no stable kind.
+        INT32_TAG => STABLE_VALUE_POINTER,
         _ => STABLE_VALUE_NUMBER,
     }
 }
@@ -649,7 +651,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
                 STABLE_VALUE_POINTER,
             );
         }
-        if gc_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(gc_type) {
             return (
                 0,
                 gc_type as u16,
@@ -705,7 +707,7 @@ fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     }
 
     match raw_heap_type(addr) as u8 {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
             (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
@@ -1204,7 +1206,7 @@ fn is_numeric_value_bits(bits: u64) -> bool {
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         let index = crate::value::JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index as u32);
     }
@@ -1217,7 +1219,7 @@ fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         let index = crate::value::JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index);
     }
@@ -1271,7 +1273,7 @@ fn plain_array_index_guard_impl(
         // patterns. Same applies to the sibling check in
         // `numeric_array_push_guard`. Do not remove either arm without
         // routing the guard through `clean_arr_ptr`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1407,7 +1409,7 @@ fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
     unsafe {
         // A pre-grow pointer is rejected before any length/capacity read
         // (#6486); see `plain_array_index_guard_impl`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1803,7 +1805,7 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         return false;
     };
     unsafe {
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -2336,7 +2338,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // Fast path: a plain non-negative integer double indexes
                 // element storage directly.
                 if is_plain_number_bits(index.to_bits())
@@ -2593,7 +2595,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
         return numeric_array_push_guard(raw_addr as *const ArrayHeader, value) as i32;
     }
     let push_index = match gc_header_for_user_addr(raw_addr) {
-        Some(header) if unsafe { (*header).obj_type == crate::gc::GC_TYPE_ARRAY } => unsafe {
+        Some(header) if unsafe { crate::gc_type_is_array!((*header).obj_type) } => unsafe {
             (*(raw_addr as *const ArrayHeader)).length
         },
         _ => u32::MAX,
@@ -2695,7 +2697,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // #9220: the inherited-descriptor walk must run in BOTH
                 // modes — a prototype setter fires on a sloppy assignment
                 // too, and the pre-#9220 non-strict helper bypassed it

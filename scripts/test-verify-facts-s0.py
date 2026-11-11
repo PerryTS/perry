@@ -39,6 +39,9 @@ def main():
     parser.add_argument("--perry", type=Path, required=True)
     parser.add_argument("--node", default="node")
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--canonnum-runtime", type=Path,
+                        help="target/release of a runtime built with PERRY_FACTS_SABOTAGE=canonnum "
+                             "(scripts/p3-canonnum-runtime.sh); without it only the correct arm runs")
     args = parser.parse_args()
     args.perry = args.perry.resolve()
     args.out = args.out.resolve()
@@ -103,12 +106,64 @@ def main():
         ("receiver-negative", "unchecked", "F4 receiver set"),
         ("kind-negative", "kind:Box.v=num", "F2 kind"),
         ("int32-negative", "range", "int32 input"),
+        ("int32-compare-negative", "range", "int32 input"),
         ("arrlen-negative", "arrlen", "array constant length"),
+        ("element-read-negative", "arrlen", "proven element read"),
+        ("element-read-sparse-birth", "densebirth", "proven element read"),
+        ("array-floor-negative", "arrfloor", "proven element read"),
+        ("array-append-negative", "arrappend", "int32 input"),
+        ("array-cap-negative", "arrcap", "proven element read"),
+        ("array-fwd-negative", "arrfwd", "proven element read"),
+        ("array-dense-negative", "arrdense", "array rep"),
+        ("array-elem-negative", "arrelem", "array rep"),
+        ("array-lazy-negative", "arrlazy", "array rep"),
+        ("array-front-negative", "arrfront", "array rep"),
+        ("const-array-negative", "arrconst", "constant array"),
+        ("array-field-negative", "arrfield", "array rep"),
+        ("array-b1-negative", "arrb1", "array rep"),
+        ("range-sum-negative", "exactrule", "array rep"),
+        ("leaving-write-negative", "leavingwrite", "array rep"),
+        ("array-base-negative", "arrbase", "array rep"),
+        ("array-base-admit-negative", "arrbaseadm", "array rep"),
+        ("fn-base-admit-negative", "fnbaseadm", "array rep"),
+        ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
+        ("key-sign-negative", "keysign", "key sign"),
+        ("number-call-negative", "numbercall", "numeric result"),
+        ("field-read-call-negative", "fieldreadcall", "field read call"),
+        ("array-undef-negative", "arrundef", "element floor"),
+        ("const-number-negative", "constnum", "constant number"),
+        ("signature-negative", "signature", "signature"),
+        ("signature-escape-negative", "signature-escape", "signature"),
+        ("signature-range-negative", "signature-range", "signature"),
+        ("signed-index-negative", "signature-range", "signature"),
+        ("local-range-negative", "localrange", "int32 input"),
+        ("rest-field-negative", "restfield", "field rep"),
+        ("rest-field-zero-negative", "restfield", "field rep"),
+        ("rest-elem-negative", "restelem", "array rep"),
+        ("rest-raw-negative", "restraw", "array rep"),
+        ("rest-lane-negative", "restlane", "field rep"),
+        ("rest-lane-raw-negative", "restlaneraw", "field rep"),
+        ("rest-held-negative", "restheld", "field read call"),
+        ("rest-rep-negative", "restrep", "array rep"),
+        ("rest-cap-negative", "restcap", "array rep"),
+        ("zero-sign-negative", "zerosign", "zero sign"),
+        ("zero-sign-elem-negative", "zerosign", "zero sign"),
     ]:
         source = fixtures / (name + ".ts")
+        # The array arms written before PR-B (DESIGN-p4l1) test the
+        # element-read and int32 witnesses. With `Rep::Arr` on, the array
+        # rep witness reports the same false length first, so these arms
+        # run with it off to reach the witness each was written for.
+        older_array_arm = wrong_claim in ("arrlen", "densebirth", "arrfloor", "arrappend", "arrcap", "arrfwd")
+        extra = {"PERRY_FACTS_ARRAY_REPS": "0"} if older_array_arm else {}
+        # I32 at rest (PR B): a cell array the sabotaged tolerance makes I32 is
+        # stored at rest, and the at-rest store witness reports the -0 first
+        # ("array rep"); the arm runs with B off to reach the sign witness.
+        if name == "zero-sign-elem-negative":
+            extra = {"PERRY_REST_ELEMS": "0"}
         for claim in ["", wrong_claim]:
             arm = name + ("-false" if claim else "-correct")
-            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim)
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, **extra)
             observed = observe(exe, e)
             if claim:
                 value = report(observed)
@@ -116,6 +171,51 @@ def main():
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
+
+    # Value records (DESIGN-p4l4 §10.3, VR-2): check mode keeps records on and
+    # claims every instance of an admitted template at birth; the facts say
+    # its identity is never compared, so a compiled identity compare that
+    # sees a claimed operand reports "value record identity".
+    # VR-3a: a record binding is its fields, and every other use takes a
+    # materialized copy, claimed in check mode: a store into a copy reports
+    # "value record mutation".
+    for name, wrong_claim, predicate in [
+        ("vr-ident-negative", "vrident", "value record identity"),
+        ("vr-switch-negative", "vrswitch", "value record identity"),
+        ("vr-inline-negative", "vrinline", "value record identity"),
+        ("vr-write-negative", "vrwrite", "value record mutation"),
+        # VR-3b: a record crosses a typed call as its lanes; a call that is
+        # no typed call would hand a copy to the callee's boxed entry, which
+        # reports "value record boxed entry".
+        ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
+    ]:
+        source = fixtures / (name + ".ts")
+        for claim in ["", wrong_claim]:
+            arm = name + ("-false" if claim else "-correct")
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, PERRY_FACTS_VALUE_RECORDS="1")
+            observed = observe(exe, e)
+            if claim:
+                value = report(observed)
+                assert value["predicate"] == predicate, value
+            else:
+                assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+            save(arm, status=observed.returncode)
+
+    # P3 B1 (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): this arm sabotages the
+    # RUNTIME, not the facts. `js_math_round` built with
+    # PERRY_FACTS_SABOTAGE=canonnum returns an INT32-boxed word, and the
+    # canonical-number witness must report it with rc 86 exactly.
+    source = fixtures / "canonical-number-negative.ts"
+    exe, e = compile_(source, "canonical-number-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("canonical-number-negative-correct", status=0)
+    if args.canonnum_runtime:
+        runtime = str(args.canonnum_runtime.resolve())
+        exe, e = compile_(source, "canonical-number-negative-false", PERRY_RUNTIME_DIR=runtime)
+        value = report(observe(exe, e))
+        assert value["predicate"] == "canonical number", value
+        save("canonical-number-negative-false", status=86)
 
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
@@ -157,7 +257,9 @@ def main():
     assert all(row.get("emitted_checks") for row in inventory if row.get("check")), inventory
     uncovered = sum(bool(row.get("reason")) for row in inventory)
     assert uncovered == 3, (uncovered, inventory)
-    assert sum(row.get("consumed", False) for row in inventory) == 2, inventory
+    # `value.call(undefined)` is a Number call (P2): consumed and checked.
+    assert sum(row.get("consumed", False) for row in inventory) == 3, inventory
+    assert any(row.get("check") == "numeric result" and row.get("emitted_checks") for row in inventory), inventory
     save("manifest", consumed=len(inventory), uncovered=uncovered)
 
     samples = []
