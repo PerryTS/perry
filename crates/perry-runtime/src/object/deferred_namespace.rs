@@ -30,6 +30,8 @@ unsafe fn evaluate(value: f64) -> f64 {
         .expect("deferred namespace evaluator slot");
     let address = key_attrs::private_element_word(obj, keys.storage_slot(pos))
         .expect("deferred namespace evaluator value");
+    // NOT-A-JS-BODY: this is the compiler's own `double ()` module evaluator,
+    // which takes no callee and no receiver, so it is not a JS function body.
     let callback: extern "C" fn() -> f64 = std::mem::transmute(address as usize);
     callback()
 }
@@ -172,7 +174,7 @@ pub extern "C" fn js_deferred_namespace_not_ready() -> f64 {
     super::property_ops::throw_type_error("Deferred module is not ready for synchronous evaluation")
 }
 
-thread_local! {
+crate::perry_thread_local! {
     // Only compiler-owned guard addresses for the current pure readiness walk.
     // No JS heap pointers or persistent module state are cached here.
     static READY_STACK: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
