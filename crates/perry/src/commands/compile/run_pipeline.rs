@@ -1182,6 +1182,19 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|_| args.input.clone());
 
     classify_eager_modules(&mut ctx, &entry_path);
+    let deferred_paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
+    let mut deferred_readiness = std::collections::HashMap::new();
+    for path in deferred_paths {
+        let requested = super::init_order::direct_requested_module_dependencies(&mut ctx, &path)
+            .into_iter()
+            .filter_map(|p| {
+                ctx.native_modules
+                    .get(&p)
+                    .map(|m| perry_codegen::symbol_names::module_prefix(&m.name))
+            })
+            .collect::<Vec<_>>();
+        deferred_readiness.insert(path.clone(), requested);
+    }
 
     let sanitize_name = perry_codegen::symbol_names::module_prefix;
 
@@ -3124,6 +3137,7 @@ pub fn run_with_parse_cache(
     // Keyed by re-exporting module path → exported alias → target module path.
     let mut namespace_reexport_targets: HashMap<String, BTreeMap<String, PathBuf>> = HashMap::new();
     let lookup = |name: &str| module_name_to_module.get(name);
+    let mut deferred_namespace_export_targets = std::collections::HashMap::new();
     for (path, hir_module) in &ctx.native_modules {
         // Do not stop at declarations written directly in this module. A
         // namespace value retains its identity through ordinary named and
@@ -3148,6 +3162,12 @@ pub fn run_with_parse_cache(
                 // object/global to register here.
                 continue;
             };
+            if flat.nested_namespace_deferred {
+                deferred_namespace_export_targets.insert(
+                    (path.to_string_lossy().to_string(), flat.name.clone()),
+                    target_path.clone(),
+                );
+            }
             namespace_reexport_targets
                 .entry(path.to_string_lossy().to_string())
                 .or_default()
@@ -3206,8 +3226,14 @@ pub fn run_with_parse_cache(
                         .get(nested)
                         .map(|view| sanitize_module_name(&view.module.name))
                         .unwrap_or_else(|| sanitize_module_name(nested));
-                    perry_codegen::NamespaceEntryKind::NestedNamespace {
-                        source_prefix: nested_prefix,
+                    if fe.nested_namespace_deferred {
+                        perry_codegen::NamespaceEntryKind::DeferredNamespace {
+                            source_prefix: nested_prefix,
+                        }
+                    } else {
+                        perry_codegen::NamespaceEntryKind::NestedNamespace {
+                            source_prefix: nested_prefix,
+                        }
                     }
                 }
             } else if fe.source_module == target_name {
@@ -3926,6 +3952,7 @@ pub fn run_with_parse_cache(
                 // (lazy in Node). S must NOT chain into this module's init
                 // — it inits only when the require shim is actually called.
                 if import.is_dynamic
+                    || import.is_deferred
                     || import.type_only
                     || import.runtime_erased
                     || import.is_deferred_require
@@ -4008,7 +4035,10 @@ pub fn run_with_parse_cache(
             }
             }
             if program_has_tla {
-                let mut ordered = super::init_order::static_requested_paths(&ctx, path);
+                // A `defer` request is not an evaluation dependency: the
+                // scheduler must not run the provider before this body. The
+                // readiness walk still sees the edge.
+                let mut ordered = super::init_order::static_evaluation_paths(&ctx, path);
                 // The open CommonJS cache exists before any user module runs.
                 // This is the same support edge the synchronous eager driver seeds.
                 if is_entry && !ctx.cjs_closed {
@@ -4103,6 +4133,7 @@ pub fn run_with_parse_cache(
         let mut namespace_member_origin_names: std::collections::HashMap<(String, String), String> =
             std::collections::HashMap::new();
         let mut namespace_imports: Vec<String> = Vec::new();
+        let mut deferred_namespace_imports = std::collections::HashSet::new();
         let mut namespace_source_prefixes = HashMap::new();
         // #7189: members of a namespace whose value is ITSELF a module
         // namespace, from `export * as ns from "./m.ts"` in the imported
@@ -4313,6 +4344,9 @@ pub fn run_with_parse_cache(
                     _ => None,
                 };
                 if let Some(local) = namespace_like_local {
+                    if import.is_deferred {
+                        deferred_namespace_imports.insert(local.clone());
+                    }
                     namespace_imports.push(local.clone());
                     namespace_source_prefixes.insert(
                         local.clone(),
@@ -4942,6 +4976,22 @@ pub fn run_with_parse_cache(
                 // `NamespaceReExport` whose name matches the imported
                 // name, then route the local through `namespace_imports`
                 // + register the namespace target's full export surface.
+                // Keep phase on named aliases through Named/ReExport/ExportAll barrels.
+                if let Some(target) = deferred_namespace_export_targets
+                    .get(&(resolved_path_str.clone(), exported_name.clone()))
+                {
+                    namespace_imports.push(local_name.clone());
+                    deferred_namespace_imports.insert(local_name.clone());
+                    namespace_source_prefixes.insert(
+                        local_name.clone(),
+                        compute_module_prefix(
+                            &target.to_string_lossy(),
+                            &ctx.project_root,
+                            &ctx.module_prefix_overrides,
+                        ),
+                    );
+                    continue;
+                }
                 let mut handled_as_namespace_reexport = false;
                 if let Some(src_hir) = ns_scan_hir {
                     for export in &src_hir.exports {
@@ -6201,6 +6251,7 @@ pub fn run_with_parse_cache(
             verify_native_regions,
             disable_buffer_fast_path,
             namespace_imports,
+            deferred_namespace_imports,
             namespace_source_prefixes,
             // A module that namespace-imports ITSELF (`import * as Self from
             // "./this-module.ts"`) is its own namespace consumer: its
@@ -6212,6 +6263,7 @@ pub fn run_with_parse_cache(
                 hir_module.imports.iter().any(|import| {
                     !import.type_only
                         && !import.runtime_erased
+                        && !import.is_deferred
                         && import.specifiers.iter().any(|spec| {
                             matches!(spec, perry_hir::ImportSpecifier::Namespace { .. })
                         })
@@ -6285,6 +6337,8 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
+            module_deferred_init_deps: Vec::new(),
+            module_deferred_readiness: deferred_readiness.get(path).cloned().unwrap_or_default(),
             program_has_tla,
             module_graph_has_tla,
             // Issue #842: signal side-effect-only dynamic-import
@@ -6823,7 +6877,7 @@ pub fn run_with_parse_cache(
             object_output_dir.join(format!("{}.{}", obj_name, ext))
         };
 
-        if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+        if let Some((key, cached_path, ffi_symbols, seeds)) = cache_key.and_then(|k| {
             object_cache
                 .lookup_path_with_ffi(k)
                 .map(|(p, s, seeds)| (k, p, s, seeds))
@@ -6837,15 +6891,9 @@ pub fn run_with_parse_cache(
             )?;
             // Design step 4: a hit replays the module's static shape
             // seeds exactly as the skipped codegen reported them, so the
-            // seed unit is the same cold and warm. A malformed line makes
-            // the entry unusable rather than silently dropping a seed.
-            let seeds = seed_lines
-                .iter()
-                .map(|line| perry_codegen::decode_static_seed(line))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    format!("corrupt static shape seed sidecar for cache key {key:016x}")
-                })?;
+            // seed unit is the same cold and warm. A sidecar that does not
+            // decode was already a miss in the lookup, so a hit never drops
+            // a seed.
             program_static_seeds
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -6989,15 +7037,13 @@ pub fn run_with_parse_cache(
             // as a miss to a concurrent build (correct, just a wasted
             // recompile), whereas the reverse ordering can never mislead.
             object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
-            let seed_lines: Vec<String> = module_static_seeds
-                .iter()
-                .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
-                .collect();
-            object_cache.store_static_seeds(
-                k,
-                &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
-            );
-            object_cache.store_and_get_path(k, &object_code)
+            // Seeds the sidecar cannot replay exactly leave no entry: the
+            // next build recompiles this module instead of linking another
+            // seed set.
+            object_cache
+                .store_static_seeds(k, &module_static_seeds)
+                .then(|| object_cache.store_and_get_path(k, &object_code))
+                .flatten()
         }) {
             // #7167: handing back the cache path saves a copy for a
             // compile that is going to *link* — the linker is the only
@@ -7110,17 +7156,21 @@ pub fn run_with_parse_cache(
     // messages print after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
     let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
-    for result in compile_results {
+    // `run_module_jobs` returns one result per job in job order, so the
+    // module of a failed job is `codegen_modules[index]`, whatever its error
+    // says: a failure whose message names no module still fails that module
+    // (an entry that failed this way used to link without its object).
+    for (index, result) in compile_results.into_iter().enumerate() {
         match result {
             Ok(artifact) => artifacts.push(artifact),
             Err(msg) => {
                 eprintln!("{}", msg);
-                // Extract module name from error message for
-                // failed_modules. Error format is
-                // `Error compiling module '<name>' (<path>) ...`.
-                if let Some(name) = msg.split('\'').nth(1) {
-                    failed_modules.push(name.to_string());
-                }
+                let name = ctx
+                    .native_modules
+                    .get(&codegen_modules[index])
+                    .map(|module| module.name.clone())
+                    .unwrap_or_else(|| codegen_modules[index].display().to_string());
+                failed_modules.push(name);
             }
         }
     }

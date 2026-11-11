@@ -99,6 +99,7 @@ pub(super) fn compile_module_init(
                 "js_run_module_init_guarded",
                 &[(I64, &evaluate_addr), (I64, &guard_addr)],
             );
+            blk.store(I8, "2", &format!("@{}", done_global));
             blk.ret_void();
         }
     }
@@ -417,6 +418,7 @@ pub(super) fn compile_module_init(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -505,6 +507,7 @@ pub(super) fn compile_module_init(
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
         sig_return: None,
+        sig_record_return: None,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),

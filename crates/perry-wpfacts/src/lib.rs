@@ -98,6 +98,10 @@ pub struct FactsConfig {
     /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
     /// set until VR-6): identity observations become `Cons::Identity`.
     pub value_records: bool,
+    /// No record signature slots (`PERRY_FACTS_RECORD_SIGNATURES=0`,
+    /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
+    /// rejects its template.
+    pub no_record_signatures: bool,
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
@@ -523,6 +527,7 @@ fn generate<'a>(
     g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.m.value_records = cfg.value_records;
+    g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
@@ -530,6 +535,8 @@ fn generate<'a>(
     g.m.rest_capacity = rest_elems::capacity_enabled();
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
+    g.m.key_sign = element_keys::sign_enabled();
+    g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
@@ -1005,7 +1012,7 @@ fn compute_act<'a>(
         rest_fields::admit(&g, &mut templates, interp_guard.is_some())
     };
     rest_fields::export_reads(&g, &templates, &mut bindings);
-    let rep_probe = if cfg.diagnostics && !g.m.aborted {
+    let mut rep_probe = if cfg.diagnostics && !g.m.aborted {
         let mut p = bindings::rep_probe(&g);
         p.extend(rest_lanes);
         if g.m.zero_sign {
@@ -1036,6 +1043,7 @@ fn compute_act<'a>(
     }
     const_arrays::collect(&g, &mut bindings);
     element_keys::collect(&g, &mut bindings);
+    element_keys::collect_signs(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
@@ -1043,6 +1051,7 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
     if g.m.aborted {

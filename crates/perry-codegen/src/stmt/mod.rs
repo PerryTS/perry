@@ -83,7 +83,7 @@ mod stable_packed_loop_tests;
 mod stable_packed_typed_array;
 mod string_length_loop;
 mod switch_stmt;
-mod try_stmt;
+pub(crate) mod try_stmt;
 mod unused_expr;
 mod versioned_indexed_loop;
 mod wasm_eh;
@@ -92,7 +92,7 @@ pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
 pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
-pub(crate) use try_stmt::lower_try;
+pub(crate) use try_stmt::{emit_throw, lower_try};
 
 pub(crate) fn record_boxed_slot_js_value_bits(
     ctx: &mut FnCtx<'_>,
@@ -563,6 +563,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
+            // DESIGN-p4l4 VR-3b: a record `$sig` returns its result lanes.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
+            }
             let v = lower_return_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
@@ -615,6 +619,11 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 }
                 ctx.block().br(&target.after_label);
                 return Ok(());
+            }
+            // DESIGN-p4l4 VR-3b: `return;` of a record `$sig` is the absent
+            // record.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, None);
             }
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
@@ -911,8 +920,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 blk.ret(DOUBLE, &boxed);
             } else {
                 crate::expr::resume_locals::write_back(ctx)?;
-                ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
-                ctx.block().unreachable();
+                try_stmt::emit_throw(ctx, &val);
             }
             Ok(())
         }

@@ -107,6 +107,7 @@ mod promoted_cohort;
 mod proxy_registry;
 mod residual_prototype_relocation;
 mod restore_coverage;
+mod restore_walk;
 mod retention_9628_9629;
 mod retired_handle_carrier;
 mod root_words;

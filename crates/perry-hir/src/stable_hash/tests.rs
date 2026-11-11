@@ -21,6 +21,30 @@ fn same_hir_hashes_identically() {
 }
 
 #[test]
+fn dynamic_import_phase_changes_hash_and_survives_clone() {
+    let mut ordinary = empty_module();
+    ordinary.init.push(Stmt::Expr(Expr::DynamicImport {
+        paths: vec!["./provider.js".to_string()],
+        arg: Box::new(Expr::String("./provider.js".to_string())),
+        options: None,
+        byte_offset: 0,
+        deferred_error: None,
+        synchronous: false,
+        deferred: false,
+    }));
+    let mut deferred = ordinary.clone();
+    let Stmt::Expr(Expr::DynamicImport {
+        deferred: phase, ..
+    }) = &mut deferred.init[0]
+    else {
+        panic!("expected dynamic import");
+    };
+    *phase = true;
+    assert_ne!(hash_module(&ordinary), hash_module(&deferred));
+    assert_eq!(hash_module(&deferred), hash_module(&deferred.clone()));
+}
+
+#[test]
 fn report_only_local_spans_do_not_change_the_stable_hash() {
     let module = empty_module();
     let mut with_span = module.clone();
@@ -265,6 +289,7 @@ fn module_metadata_affects_hash() {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,

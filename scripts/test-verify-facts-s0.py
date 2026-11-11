@@ -127,6 +127,7 @@ def main():
         ("array-base-admit-negative", "arrbaseadm", "array rep"),
         ("fn-base-admit-negative", "fnbaseadm", "array rep"),
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
+        ("key-sign-negative", "keysign", "key sign"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
@@ -134,6 +135,8 @@ def main():
         ("signature-negative", "signature", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
+        ("signed-index-negative", "signature-range", "signature"),
+        ("local-range-negative", "localrange", "int32 input"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),
@@ -181,6 +184,10 @@ def main():
         ("vr-switch-negative", "vrswitch", "value record identity"),
         ("vr-inline-negative", "vrinline", "value record identity"),
         ("vr-write-negative", "vrwrite", "value record mutation"),
+        # VR-3b: a record crosses a typed call as its lanes; a call that is
+        # no typed call would hand a copy to the callee's boxed entry, which
+        # reports "value record boxed entry".
+        ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

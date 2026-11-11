@@ -242,7 +242,7 @@ mod cycle;
 /// `malloc_trim` maintenance, split out of `cycle.rs` for the 2000-line cap.
 mod cycle_malloc_trim;
 use cycle::*;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub(crate) use cycle_malloc_trim::purge_allocator_on_region_growth;
 #[cfg(test)]
 pub(crate) use cycle_malloc_trim::{
@@ -261,6 +261,7 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) mod image_cells;
 mod remembered;
 use remembered::*;
+mod restore_walk;
 mod rewrite;
 pub use rewrite::*;
 mod verify;

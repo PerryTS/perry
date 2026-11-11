@@ -93,6 +93,9 @@ pub fn try_lower_namespace_member_call(
     let Expr::ExternFuncRef { name: ns_name, .. } = object.as_ref() else {
         return Ok(None);
     };
+    if ctx.deferred_namespace_imports.contains(ns_name) {
+        return Ok(None);
+    }
     if !ctx.namespace_imports.contains(ns_name) {
         return Ok(None);
     }

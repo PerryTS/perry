@@ -1,7 +1,7 @@
 //! VR-1 (DESIGN-p4l4 §2): the value-record verdicts, one rule at a time,
-//! each with its negative control. Since VR-3a a record crosses no typed
-//! call slot (`RECORD_SIGNATURES`), so each source births its record in the
-//! body that uses it.
+//! each with its negative control. Most sources birth their record in the
+//! body that uses it; the record signature slots (VR-3b) have their own
+//! tests.
 use super::facts_with;
 use crate::records::RecordReject;
 use crate::FactsConfig;
@@ -35,8 +35,7 @@ fn verdict(src: &str, keys: &[&str], cfg: FactsConfig) -> Result<String, String>
 
 const MK: &str = "function mk(n: number) { return { a: n, b: n > 1 }; }\nfunction use(r: { a: number; b: boolean }): number { return r.b ? r.a : 0; }\n";
 
-/// One literal site of the template, used inside its body (VR-3a: a record
-/// crosses no typed call slot until the VR-3b signature ABI).
+/// One literal site of the template, used inside its body.
 const U: &str = "const u = { a: Math.random() > 2 ? 1 : 2, b: Math.random() > 2 };\n";
 
 fn rejected(src: &str) -> String {
@@ -79,28 +78,76 @@ fn a_value_read_and_logged_is_admitted() {
     );
 }
 
-/// VR-3a (`RECORD_SIGNATURES`): a record in a typed call's argument or
-/// result waits for the VR-3b signature ABI; a Boxed helper parameter
-/// receives a copy (owner ruling §4.4) and is no such slot.
+/// The signatures with a Record slot, as `(parameters, result)` flags, and
+/// the number of typed call sites.
+fn record_slots(src: &str, cfg: FactsConfig) -> (Vec<(Vec<bool>, bool)>, usize) {
+    use crate::bindings::Rep;
+    let pf = facts_with(src, cfg);
+    let is = |r: &Rep| matches!(r, Rep::Record(_));
+    let mut sigs: Vec<(Vec<bool>, bool)> = pf
+        .bindings
+        .iter()
+        .flat_map(|b| b.signatures.iter())
+        .filter(|(_, s)| s.has_record())
+        .map(|(_, s)| (s.params.iter().map(is).collect(), is(&s.ret)))
+        .collect();
+    sigs.sort();
+    let calls = pf.bindings.iter().map(|b| b.typed_calls.len()).sum();
+    (sigs, calls)
+}
+
+fn no_record_signatures() -> FactsConfig {
+    FactsConfig {
+        no_record_signatures: true,
+        ..on()
+    }
+}
+
+/// VR-3b (§5.2): a record crosses a typed call in the callee's Record
+/// signature slot; a Boxed helper parameter receives a copy (owner ruling
+/// §4.4) and is no such slot.
 #[test]
-fn a_record_signature_slot_waits_for_vr3b() {
-    let r = verdict(
-        &format!("{MK}console.log(use(mk(1)));\n"),
-        &["a", "b"],
-        on(),
-    )
-    .expect_err("a record result of a typed call");
+fn a_record_crosses_a_typed_call_in_a_record_slot() {
+    let src = format!("{MK}console.log(use(mk(1)));\n");
+    assert!(verdict(&src, &["a", "b"], on()).is_ok());
+    let (sigs, calls) = record_slots(&src, on());
+    // `mk` returns the record, `use` takes it; both calls are typed.
+    assert_eq!(sigs, vec![(vec![false], true), (vec![true], false)]);
+    assert_eq!(calls, 2);
+    // Negative control: record signatures off, the slot rejects (VR-3a).
+    let r = verdict(&src, &["a", "b"], no_record_signatures())
+        .expect_err("a record result of a typed call");
     assert!(
-        r.starts_with("R5UntypedCall(") && r.contains("VR-3b"),
+        r.starts_with("R5UntypedCall(") && r.contains("record signatures are off"),
         "{r}"
     );
-    let r = rejected("function use2(r: { a: number; b: boolean }): number { return r.a; }\nconsole.log(use2(u), use2(u));\n");
+    assert_eq!(record_slots(&src, no_record_signatures()).0, vec![]);
+    let src = format!("{U}function use2(r: {{ a: number; b: boolean }}): number {{ return r.a; }}\nconsole.log(use2(u), use2(u));\n");
+    assert!(verdict(&src, &["a", "b"], on()).is_ok());
+    let r = verdict(&src, &["a", "b"], no_record_signatures()).expect_err("an argument");
     assert!(
         r.starts_with("R5UntypedCall(") && r.contains("arg(0)"),
         "{r}"
     );
-    // Negative control: a Boxed helper parameter.
-    admitted("function show(x: unknown) { console.log(x); }\nshow(u);\nshow(5);\n");
+    // Negative control: a Boxed helper parameter is a copy, not a slot.
+    let src = format!("{U}function show(x: unknown) {{ console.log(x); }}\nshow(u);\nshow(5);\n");
+    assert!(verdict(&src, &["a", "b"], on()).is_ok());
+    assert_eq!(record_slots(&src, on()).0, vec![]);
+}
+
+/// An optional record parameter is a Record slot with `opt`; a call that
+/// is no typed call of one body still rejects (B3), and the negative
+/// control `vruntyped` ignores exactly that rule.
+#[test]
+fn an_untyped_call_of_a_record_rejects() {
+    let src = format!("{U}function use3(r: {{ a: number; b: boolean }}): number {{ return r.a; }}\nfunction other(r: {{ a: number; b: boolean }}): number {{ return r.b ? 1 : 2; }}\nconst fs = [use3, other];\nconsole.log(fs[u.a](u), use3(u));\n");
+    let r = verdict(&src, &["a", "b"], on()).expect_err("an untyped call");
+    assert!(r.starts_with("R5UntypedCall("), "{r}");
+    let sabotaged = FactsConfig {
+        sabotage: Some("vruntyped".into()),
+        ..on()
+    };
+    assert!(verdict(&src, &["a", "b"], sabotaged).is_ok());
 }
 
 #[test]
@@ -122,7 +169,9 @@ fn identity_rejects() {
         "R4Identity(collection-key)"
     );
     assert_eq!(
-        rejected(&format!("{FR}const k = {{}};\nfr.register(k, 1, u);\nconsole.log(u.a);\n")),
+        rejected(&format!(
+            "{FR}const k = {{}};\nfr.register(k, 1, u);\nconsole.log(u.a);\n"
+        )),
         "R4Identity(collection-key)"
     );
     assert_eq!(
@@ -277,8 +326,8 @@ fn an_admitted_record_binding_is_a_record_rep() {
         "{:?}",
         reps["q"]
     );
-    // Until VR-3 a record's slot is the Boxed word: no signature changes.
-    assert_eq!(r.encoding(), Enc::Boxed);
+    // VR-3b: a record's slot is its lanes.
+    assert_eq!(r.encoding(), Enc::Record);
     assert!(r.name().starts_with("rec<"));
     // Negative controls: the switch off, and a rejected template.
     let off = super::array_reps::reps_with(&src, FactsConfig::default());

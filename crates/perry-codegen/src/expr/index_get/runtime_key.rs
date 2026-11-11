@@ -62,7 +62,35 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     preserve_claimed_receiver_fallback: bool,
     receiver_slot: Option<&str>,
     proven: Option<super::proven_array::Proven>,
+    key: Option<crate::expr::index_key::KeyFact>,
 ) -> Result<String> {
+    // Key signs: a key the facts prove a non-negative int32 is an array
+    // index at every evaluation. It takes the element tier with no
+    // normalizer and no sign test, the tier's own cold read serves every
+    // miss, and the property-key arm does not exist.
+    if let Some(fact) = key.filter(|k| k.nonneg) {
+        let idx_i32 = crate::expr::index_key::exact_i32(ctx, idx_double, fact);
+        return match proven {
+            Some(proven) => Ok(super::proven_array::lower_bounded(
+                ctx,
+                arr_box,
+                &idx_i32,
+                proven,
+                coerce_numeric_fallback,
+                None,
+            )),
+            None => super::guarded_array::lower_guarded_array_index_get_bounded(
+                ctx,
+                arr_box,
+                &idx_i32,
+                "aidx.dynamic",
+                require_numeric_layout,
+                coerce_numeric_fallback,
+                receiver_slot,
+                None,
+            ),
+        };
+    }
     let element_idx = ctx.new_block("aidx.canonical");
     let runtime_idx = ctx.new_block("aidx.runtime_key");
     let merge_idx = ctx.new_block("aidx.dynamic_merge");
@@ -76,10 +104,12 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     // to the runtime arm below before its own cold read. A non-negative miss
     // keeps the tier's cold read, so every key takes the arm it takes today.
     let fold = super::guarded_array::unsigned_bound_covers(proven);
-    let idx_i32 = if fold {
-        crate::expr::index_key::normalize_unsigned(ctx, idx_double, Some(index))
-    } else {
-        crate::expr::index_key::normalize(ctx, idx_double, Some(index))
+    // Key signs: an int32 key that may be negative is its `i32` with no
+    // normalizer; its sign is tested as any other key's.
+    let idx_i32 = match key {
+        Some(fact) => crate::expr::index_key::exact_i32(ctx, idx_double, fact),
+        None if fold => crate::expr::index_key::normalize_unsigned(ctx, idx_double, Some(index)),
+        None => crate::expr::index_key::normalize(ctx, idx_double, Some(index)),
     };
     let negative_exit = fold.then(|| runtime_label.clone());
     if fold {
