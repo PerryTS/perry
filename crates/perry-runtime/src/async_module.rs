@@ -112,7 +112,15 @@ unsafe fn fail(m: *mut AsyncModule, error: f64) {
 
 unsafe fn run_body(m: *mut AsyncModule) -> Result<f64, crate::exception::Caught> {
     let body = js_bare_body_fn!((*m).body as *const u8;);
-    crate::exception::catch_thrown(|| body())
+    // A record evaluation is one census init, as in the guarded path. It
+    // closes at the body's synchronous return: a top-level await's
+    // continuation is a job row.
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::record_enter(m as usize, (*m).body, (*m).reserved as u8);
+    let result = crate::exception::catch_thrown(|| body());
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::init_exit(result.is_err());
+    result
 }
 
 unsafe fn handler(
@@ -161,6 +169,11 @@ unsafe fn inner(w: *mut Walk, m: *mut AsyncModule) {
         return;
     }
     (*m).status = EVALUATING;
+    // The walk that first reaches a record decides its census reach.
+    #[cfg(perry_gc_instruments)]
+    {
+        (*m).reserved = crate::snap_census::walk_origin() as u64;
+    }
     (*m).dfs = (*w).index;
     (*m).ancestor = (*w).index;
     (*w).index += 1;
@@ -348,6 +361,8 @@ extern "C" fn import_job(c: *const ClosureHeader, _this: JsThis, _value: f64) ->
         let m = js_closure_get_capture_ptr(c, 0) as *mut AsyncModule;
         let scope = crate::gc::RuntimeHandleScope::new();
         let result = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 1));
+        #[cfg(perry_gc_instruments)]
+        let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_IMPORT);
         let root = evaluate(m);
         let fulfilled = scope.root_nanbox_f64(js_nanbox_pointer(handler(
             &IMPORT_FULFILLED,
@@ -419,7 +434,14 @@ unsafe fn settled(m: *mut AsyncModule) -> bool {
 /// `addr` is the compiled entry module's record.
 #[no_mangle]
 pub unsafe extern "C" fn js_async_module_entry(addr: i64) {
+    #[cfg(perry_gc_instruments)]
+    let walk = {
+        crate::snap_census::entry_record(addr as usize);
+        crate::snap_census::walk_scope(crate::snap_census::WALK_ENTRY)
+    };
     let m = evaluate(addr as *mut AsyncModule);
+    #[cfg(perry_gc_instruments)]
+    drop(walk);
     // Entry evaluation owns the host's startup await. Dependency traversal
     // has finished before the first checkpoint can resume a suspended body.
     // Each turn is the one the synchronous `await` loop runs (fs_await.rs):
@@ -459,6 +481,8 @@ pub unsafe extern "C" fn js_async_module_require(addr: i64) {
             "ERR_REQUIRE_ASYNC_MODULE",
         );
     }
+    #[cfg(perry_gc_instruments)]
+    let _walk = crate::snap_census::walk_scope(crate::snap_census::WALK_REQUIRE);
     let m = evaluate(m);
     if (*m).status == FAILED {
         crate::exception::throw_open((*m).error);

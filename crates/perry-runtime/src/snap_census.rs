@@ -219,6 +219,67 @@ pub(crate) fn attached(obj: usize, cells: &[usize]) {
     let _ = (obj, cells);
 }
 
+/// Walk origins of an async module evaluation (async_module.rs): the walk
+/// that first reached a record decides its reach (static order is not call
+/// nesting there).
+#[cfg(perry_gc_instruments)]
+pub(crate) const WALK_ENTRY: u8 = 1;
+#[cfg(perry_gc_instruments)]
+pub(crate) const WALK_IMPORT: u8 = 2;
+#[cfg(perry_gc_instruments)]
+pub(crate) const WALK_REQUIRE: u8 = 3;
+
+/// An async module walk of `origin` starts; the previous origin returns on drop.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn walk_scope(origin: u8) -> WalkScope {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return WalkScope(runner::walk_origin(origin));
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = origin;
+        WalkScope(0)
+    }
+}
+
+#[cfg(perry_gc_instruments)]
+pub(crate) struct WalkScope(u8);
+
+#[cfg(perry_gc_instruments)]
+impl Drop for WalkScope {
+    fn drop(&mut self) {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        runner::walk_origin(self.0);
+    }
+}
+
+/// The origin of the walk in progress (0: none).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn walk_origin() -> u8 {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return runner::walk_origin_now();
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    0
+}
+
+/// `js_async_module_entry` names the entry module's record.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn entry_record(addr: usize) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    runner::entry_record(addr);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = addr;
+}
+
+/// An async module record's body starts; the caller closes it with
+/// [`init_exit`].
+#[cfg(perry_gc_instruments)]
+pub(crate) fn record_enter(record: usize, body: usize, origin: u8) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    runner::record_enter(record, body, origin);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (record, body, origin);
+}
+
 /// A module evaluation (`run_path_initializer`) starts: `addr` is its
 /// evaluation body (a guarded module's `<prefix>__init_evaluate`, a path
 /// module's initializer).
@@ -513,11 +574,11 @@ impl Drop for RuntimeScope {
 /// census compiles only, right before the entry module's `__init`.
 #[cfg(perry_gc_instruments)]
 #[no_mangle]
-pub extern "C" fn js_snap_entry_module() {
+pub extern "C" fn js_snap_entry_module(worker: i32) {
     crate::effect!(pure);
     #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() || runner::start_if_requested() {
-        runner::entry_module();
+        runner::entry_module(worker != 0);
     }
 }
 

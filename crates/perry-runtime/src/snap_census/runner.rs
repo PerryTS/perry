@@ -707,6 +707,12 @@ struct State {
     /// `js_snap_entry_module`: the next evaluation is the entry module's own
     /// (its body is the entry body, design §2.3).
     entry_module_next: bool,
+    /// The entry module's async module record (`js_async_module_entry`), whose
+    /// body is the entry body in a program evaluated as async module records.
+    entry_record: usize,
+    /// The walk origin of the async module evaluation now in progress
+    /// (0: none, else `WALK_*` in snap_census.rs).
+    walk_origin: u8,
     /// Global root slots on no tracked page that are not the runtime's own
     /// thread-locals (a program slot the census does not watch): must be 0.
     untracked_slots: u64,
@@ -1015,6 +1021,8 @@ unsafe fn start_census(out: String) {
         meta_owned: 0,
         marks: 0,
         entry_module_next: false,
+        entry_record: 0,
+        walk_origin: 0,
         untracked_slots: 0,
         untracked_first: 0,
         runtime_tls_roots: 0,
@@ -1371,6 +1379,56 @@ fn set_mode_for_top(st: &mut State) {
 }
 
 pub(super) fn init_enter(addr: usize) {
+    init_enter_with(addr, None);
+}
+
+/// An async module record's body starts (the guarded path's `init_enter` for
+/// a program evaluated as records): `origin` is the walk that first reached
+/// the record (`WALK_*`). Static order is no longer call nesting there, so the
+/// reach comes from the origin, not from the frame heuristic. The entry
+/// record's body is the entry body.
+pub(super) fn record_enter(record: usize, body: usize, origin: u8) {
+    if !on() && !start_if_requested() {
+        return;
+    }
+    let st = state();
+    if record == st.entry_record {
+        st.entry_module_next = false;
+        entry_body();
+        return;
+    }
+    let forced = match origin {
+        super::WALK_ENTRY => Some(Reach::EntryEager),
+        super::WALK_IMPORT => Some(Reach::DynImport),
+        super::WALK_REQUIRE => Some(Reach::Require),
+        _ => None,
+    };
+    init_enter_with(body, forced);
+    init_guard(body, record);
+}
+
+pub(super) fn entry_record(addr: usize) {
+    if on() || start_if_requested() {
+        state().entry_record = addr;
+    }
+}
+
+pub(super) fn walk_origin(origin: u8) -> u8 {
+    if !on() {
+        return 0;
+    }
+    std::mem::replace(&mut state().walk_origin, origin)
+}
+
+pub(super) fn walk_origin_now() -> u8 {
+    if on() {
+        state().walk_origin
+    } else {
+        0
+    }
+}
+
+fn init_enter_with(addr: usize, forced: Option<Reach>) {
     if !on() && !start_if_requested() {
         return;
     }
@@ -1389,10 +1447,13 @@ pub(super) fn init_enter(addr: usize) {
         }
     };
     let edge = st.require_edge.take() == Some(parent_id);
-    let entry_module = std::mem::take(&mut st.entry_module_next)
+    let entry_module = forced.is_none()
+        && std::mem::take(&mut st.entry_module_next)
         && st.entry_init != 0
         && parent_id == st.entry_init;
-    let reach = if entry_module {
+    let reach = if let Some(reach) = forced {
+        reach
+    } else if entry_module {
         Reach::EntryEager
     } else if st.require_depth > 0 || edge {
         Reach::Require
@@ -1608,13 +1669,14 @@ pub(super) fn entry_body() {
 }
 
 /// The entry module's evaluation is next (`js_snap_entry_module`).
-pub(super) fn entry_module() {
+pub(super) fn entry_module(worker: bool) {
     let st = state();
     st.entry_module_next = true;
-    // Codegen emits this hook only for a program with worker_threads use
-    // (entry.rs `entry_in_init`): its init flags are thread-local, which an
-    // image cannot initialize (DESIGN27 §1.5), so the cut is 0.
-    if st.worker_rule && inputs_on() && on_main_thread() {
+    // Codegen emits this hook for a program whose entry runs in its init
+    // (entry.rs `entry_in_init`: a worker or top-level await); `worker` tells
+    // which. A worker program's init flags are thread-local, which an image
+    // cannot initialize (DESIGN27 §1.5), so the cut is 0.
+    if worker && st.worker_rule && inputs_on() && on_main_thread() {
         let _input_logging = input_record::Scope::enter();
         input_record::event(
             st,

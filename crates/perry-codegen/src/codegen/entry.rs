@@ -203,7 +203,7 @@ pub(super) fn compile_module_entry(
                 llmod.add_external_tls_global(anchor, "i8", "localexec");
             }
             if entry_in_init {
-                llmod.declare_function("js_snap_entry_module", VOID, &[]);
+                llmod.declare_function("js_snap_entry_module", VOID, &[I32]);
             }
         }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
@@ -781,7 +781,12 @@ pub(super) fn compile_module_entry(
             }
             // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
             // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
-            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+            // A program with top-level await evaluates its entry as an async
+            // module record; the runtime opens the entry body at that
+            // record's body, not here, before any module body has run.
+            if !cross_module.program_has_tla
+                && std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
+            {
                 blk.call_void("js_snap_entry_body", &[]);
             }
         }
@@ -1222,7 +1227,8 @@ pub(super) fn compile_module_entry(
         if entry_in_init {
             // SNAP census: the entry module's evaluation is the entry body.
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
-                ctx.block().call_void("js_snap_entry_module", &[]);
+                let worker = if cross_module.program_has_worker { "1" } else { "0" };
+                ctx.block().call_void("js_snap_entry_module", &[(I32, worker)]);
             }
             if cross_module.program_has_tla {
                 if entry_evaluates_as_esm(hir, cross_module) {

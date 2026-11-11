@@ -94,6 +94,38 @@ elif name == "f12":
         need(r.get("pending") == str(len(js)), "job_queue jobs= does not list every pending job")
         need(all(len(j) == 3 and int(j[1]) not in (0, int(r["init"])) and int(j[2], 16) != 0 for j in js),
              "a job without its queueing init or callback")
+elif name in ("f12t", "f12tj"):
+    # SNAPK6: a program with top-level await evaluates every module as an
+    # async module record; each body is one census init, reached statically
+    # (reach 0/1, not dynamic) whatever job runs it, and the entry body opens
+    # at the entry record's body, after the dependencies.
+    lines = open(report).read().splitlines()
+    head = dict(p.split("=", 1) for p in lines[0].split("\t") if "=" in p)
+    hdr = next(i for i, l in enumerate(lines) if l.startswith("#id\t"))
+    cols = lines[hdr].split("\t")
+    idrows = []
+    for l in lines[hdr + 1:]:
+        if l.startswith("#"):
+            break
+        idrows.append(dict(zip(cols, l.split("\t"))))
+    mods = [r for r in idrows if r["id"] != "0" and r["addr"] != "1"]
+    entry = [r for r in idrows if r["addr"] == "1"]
+    want = 3 if name == "f12t" else 4
+    info = f"head={ {k: head.get(k) for k in (seq, entry_body_seq, inits, w)} } mods={[(r[id], r[reach], r[dynamic]) for r in mods]}"
+    need(len(inits("init_enter")) == want and len(vals("init_enter")) == want,
+         f"want {want} init_enter rows, got {len(vals(init_enter))}")
+    need(head.get("inits") == str(want + 1), f"inits={head.get(inits)}, want {want + 1}")
+    need(len(vals("entry_body")) == 1, "entry body not opened exactly once")
+    need(head.get("w") == "0", f"w={head.get(w)}, want 0")
+    need(not vals("worker_flag"), "a worker_flag row in a program without a worker")
+    need(len(mods) == want and len({r["addr"] for r in mods}) == want, "module inits missing or repeated")
+    need(all(r["reach"] in ("0", "1") and r["dynamic"] == "0" for r in mods),
+         "a static dependency is not EntryEager/StaticDep")
+    need(all(r["exit"] != "0" and r["open"] == "0" and r["threw"] == "0" for r in mods), "a module init not closed")
+    need(len(entry) == 1 and entry[0]["open"] == "1", "no open entry body")
+    if entry and mods:
+        need(all(int(entry[0]["enter"]) > int(r["exit"]) for r in mods), "entry body opened before a dependency exited")
+        need(head.get("entry_body_seq") == entry[0]["enter"], "entry_body_seq is not the entry body's enter")
 elif name == "f14q":
     # SNAPK4: the run queues beside TASK_QUEUE, each named from its own store.
     # m.ts queues a nextTick, a util.aborted resolution, a timeout (25), an
