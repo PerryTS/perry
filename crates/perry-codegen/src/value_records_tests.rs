@@ -333,9 +333,11 @@ fn a_record_result_is_an_aggregate() {
     assert_eq!(abi.aggs.len(), 2);
     let text = ir(&m, on);
     let define = sig_define(&text, "mk").expect("mk$sig");
-    assert!(define.contains("[3 x double]"), "{define}");
-    assert!(text.contains("insertvalue [3 x double]"));
-    assert!(text.contains("extractvalue [3 x double]"));
+    assert!(define.contains("ptr %perry_record_ret"), "{define}");
+    // The result lanes are stored through it, and the caller hands words
+    // of its own frame.
+    assert!(text.contains("getelementptr double, ptr %perry_record_ret"));
+    assert!(text.contains("alloca [2 x double]"));
     // The boxed entry of a record-returning function has no caller.
     assert!(text.contains("call void @llvm.trap()"));
     // Negative control: without the signature the result is a boxed object,
@@ -343,7 +345,7 @@ fn a_record_result_is_an_aggregate() {
     let (_, c, _) = rewrite(&m, &base).expect("rewritten");
     assert_eq!((c.returns, c.calls), (0, 0), "{c:?}");
     assert!(c.unpacked >= 1, "{c:?}");
-    assert!(!ir(&m, base).contains("[3 x double]"));
+    assert!(!ir(&m, base).contains("%perry_record_ret"));
 }
 
 #[test]
@@ -383,7 +385,7 @@ fn a_self_recursive_record_function_has_a_record_sig() {
     let define = sig_define(&text, "use").expect("use$sig");
     assert_eq!(define.matches("double %arg").count(), 3, "{define}");
     let define = sig_define(&text, "mk").expect("mk$sig");
-    assert!(define.contains("[3 x double]"), "{define}");
+    assert!(define.contains("ptr %perry_record_ret"), "{define}");
 }
 
 /// The instructions that birth an instance of a literal-shape class.
@@ -426,7 +428,7 @@ console.log(f(1), f(3), f(5));\n";
     let text = ir(&m, on);
     for name in ["mk", "pick", "maybe"] {
         let define = sig_define(&text, name).unwrap_or_else(|| panic!("{name}$sig"));
-        assert!(define.contains("[3 x double]"), "{define}");
+        assert!(define.contains("ptr %perry_record_ret"), "{define}");
     }
     assert!(sig_define(&text, "use").is_some());
     // No copy is born anywhere: every record crosses as lanes.

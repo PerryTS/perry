@@ -339,17 +339,17 @@ pub(super) fn compile_method(
         llvm_name
     };
     let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
-    // DESIGN-p4l4 VR-3b: a record result is its lanes.
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
     let sig_record_return = sig
         .and_then(|tm| tm.plan.record.as_ref())
         .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((crate::types::PTR, super::record_sig::RESULT_PARAM.to_string()));
+    }
     let lf = llmod.define_function(
         &llvm_name,
-        sig_record_return
-            .and_then(|r| super::record_sig::agg_ty(&cross_module.wpfacts, r))
-            .unwrap_or_else(|| {
-                super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed))
-            }),
+        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
         params,
     );
     if sig.is_some() {

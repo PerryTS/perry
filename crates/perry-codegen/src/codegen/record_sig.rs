@@ -9,9 +9,10 @@
 //!   immediate for the others (§1.2: every lane is a valid JSValue word).
 //!   LLVM passes the first lanes in registers and the rest in the caller's
 //!   frame, so there is no `RECORD_SCALAR_WORDS` threshold and no pointer;
-//! - a record result is `[1 + words x double]`, lane 0 the presence word:
-//!   LLVM returns a small one in registers and a larger one through `sret`
-//!   into the caller's frame.
+//! - a record result is returned as the presence word, its lanes written to
+//!   words of the caller's frame that `F$sig` receives as its last register
+//!   (`RESULT_PARAM`, an explicit `sret`: a call that may collect is a
+//!   statepoint, whose result LLVM lowers as one scalar, not an aggregate).
 //!
 //! The `value_records` rewrite writes both sides of a call in a form that is
 //! also the boxed program (its module docs); this module lowers that form
@@ -19,7 +20,8 @@
 //!
 //! - `sig_body`: `F$sig`'s body is F's without the entry prologue, its record
 //!   parameters replaced by their lane locals;
-//! - `lower_return`: `return <copy>` returns the copy's lanes;
+//! - `lower_return`: `return <copy>` stores the copy's lanes to the result
+//!   words and returns the presence word;
 //! - `try_lower_call`: an argument in a record slot is the lanes of the copy
 //!   the rewrite wrote there (`copy_lanes`), no object is born;
 //! - `try_lower_agg_set`: the result lanes go to the destination's field
@@ -39,7 +41,7 @@ use perry_hir::{Expr, Function, Param};
 use super::{ElisionFacts, FactsRecRep, FactsRecordFn, FactsRecordLanes, FactsRep, FactsSignature};
 use crate::expr::{lower_expr, FnCtx};
 use crate::nanbox::double_literal;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 /// How one parameter of F crosses into `F$sig`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,35 +79,12 @@ impl RecordPlan {
     }
 }
 
-/// `[n x double]` for a record result of `n - 1` words.
-const AGG_TYPES: [LlvmType; 18] = [
-    "[0 x double]",
-    "[1 x double]",
-    "[2 x double]",
-    "[3 x double]",
-    "[4 x double]",
-    "[5 x double]",
-    "[6 x double]",
-    "[7 x double]",
-    "[8 x double]",
-    "[9 x double]",
-    "[10 x double]",
-    "[11 x double]",
-    "[12 x double]",
-    "[13 x double]",
-    "[14 x double]",
-    "[15 x double]",
-    "[16 x double]",
-    "[17 x double]",
-];
+/// The register of `F$sig` that points to the caller's result words: a
+/// record result is returned through it (module docs).
+pub(crate) const RESULT_PARAM: &str = "%perry_record_ret";
 
 fn words(facts: &ElisionFacts, tmpl: u32) -> Option<usize> {
     facts.record_layouts.get(&tmpl).map(|l| l.keys.len())
-}
-
-/// The LLVM type of a record result of template `r`.
-pub(crate) fn agg_ty(facts: &ElisionFacts, r: FactsRecRep) -> Option<LlvmType> {
-    AGG_TYPES.get(words(facts, r.tmpl)? + 1).copied()
 }
 
 fn undefined_lit() -> String {
@@ -144,7 +123,7 @@ pub(crate) fn expand(
     }
     let ret = sig
         .record_ret
-        .filter(|r| fact.ret && agg_ty(facts, *r).is_some());
+        .filter(|r| fact.ret && words(facts, r.tmpl).is_some());
     let mut slots = Vec::with_capacity(sig.params.len());
     let mut params = Vec::new();
     let mut ranges = Vec::new();
@@ -334,18 +313,15 @@ fn split_copy(e: &Expr) -> (&[Expr], &Expr) {
 }
 
 /// `return e` of a body whose `$sig` returns record `r`: the lanes of the
-/// copy the rewrite returns, as `[1 + words x double]`.
+/// copy the rewrite returns are stored to the caller's result words, and the
+/// presence word is the value returned.
 pub(crate) fn lower_return(ctx: &mut FnCtx<'_>, r: FactsRecRep, e: Option<&Expr>) -> Result<()> {
     let facts = ctx.wpfacts.clone();
-    let ty = agg_ty(&facts, r).ok_or_else(|| anyhow!("ICE: value record result has no layout"))?;
-    let n = words(&facts, r.tmpl).expect("a layout");
-    let numeric = facts.record_layouts[&r.tmpl].numeric.clone();
-    let mut lanes: Vec<String> = Vec::with_capacity(n + 1);
-    match e {
-        None => {
-            lanes.push(bool_lit(false));
-            lanes.extend((0..n).map(|j| filler(numeric.get(j) == Some(&true))));
-        }
+    let n =
+        words(&facts, r.tmpl).ok_or_else(|| anyhow!("ICE: value record result has no layout"))?;
+    let (present, lanes): (String, Vec<String>) = match e {
+        // The absent record: its words are not read.
+        None => (bool_lit(false), Vec::new()),
         Some(e) => {
             let (first, copy) = split_copy(e);
             for x in first {
@@ -354,21 +330,21 @@ pub(crate) fn lower_return(ctx: &mut FnCtx<'_>, r: FactsRecRep, e: Option<&Expr>
             let Some(l) = copy_lanes(&facts, r.tmpl, copy) else {
                 bail!("ICE: a value record `$sig` returns a value that is no copy of its result lanes");
             };
-            lanes.push(match l.present {
+            let present = match l.present {
                 Some(p) => lower_expr(ctx, &Expr::LocalGet(p))?,
                 None => bool_lit(true),
-            });
+            };
+            let mut lanes = Vec::with_capacity(n);
             for id in &l.fields {
                 lanes.push(lower_expr(ctx, &Expr::LocalGet(*id))?);
             }
+            (present, lanes)
         }
-    }
-    let mut agg = "undef".to_string();
+    };
     for (j, v) in lanes.iter().enumerate() {
-        let reg = ctx.block().next_reg();
-        ctx.block()
-            .emit_raw(format!("{reg} = insertvalue {ty} {agg}, double {v}, {j}"));
-        agg = reg;
+        let blk = ctx.block();
+        let slot = blk.gep(DOUBLE, RESULT_PARAM, &[(I64, &j.to_string())]);
+        blk.store(DOUBLE, v, &slot);
     }
     for _ in 0..ctx.try_depth {
         crate::stmt::try_stmt::emit_try_end(ctx);
@@ -378,7 +354,7 @@ pub(crate) fn lower_return(ctx: &mut FnCtx<'_>, r: FactsRecRep, e: Option<&Expr>
     }
     crate::expr::private_resume_frame::write_out_kind(ctx)?;
     crate::expr::resume_locals::write_back(ctx)?;
-    ctx.block().ret(ty, &agg);
+    ctx.block().ret(DOUBLE, &present);
     Ok(())
 }
 
@@ -386,8 +362,13 @@ pub(crate) fn lower_return(ctx: &mut FnCtx<'_>, r: FactsRecRep, e: Option<&Expr>
 pub(crate) enum Called {
     /// The call's value (a canonical double).
     Value(String),
-    /// The result lanes, an aggregate of `agg_ty`.
-    Record(String, FactsRecRep),
+    /// A record result: the presence word, and the pointer to the result
+    /// words in this frame.
+    Record {
+        present: String,
+        words: String,
+        rep: FactsRecRep,
+    },
 }
 
 /// The callee of the typed call at this site when its plan is a record
@@ -621,21 +602,29 @@ pub(crate) fn try_lower_call(
         }
     }
     crate::expr::stack_guard::emit_stack_guard_before_clone_call(ctx, &site.name);
+    // A record result is written to words of this frame (an entry-block
+    // slot), never to memory another body reaches.
+    let result_words = site.plan.ret.map(|r| {
+        let n = words(&facts, r.tmpl).expect("a record plan's result layout");
+        ctx.func.alloca_entry_array(DOUBLE, n.max(1))
+    });
+    if let Some(words) = &result_words {
+        raw.push((PTR, words.clone()));
+    }
     let call_args: Vec<(LlvmType, &str)> = raw.iter().map(|(t, v)| (*t, v.as_str())).collect();
-    let out = match site.plan.ret {
-        Some(r) => {
-            let ty = agg_ty(&facts, r).expect("a record plan's result type");
-            Called::Record(ctx.block().call(ty, &site.name, &call_args), r)
-        }
-        None => {
-            let ty = super::signature_entry::sig_llvm_ty(site.sig.ret);
-            let value = ctx.block().call(ty, &site.name, &call_args);
-            Called::Value(if site.sig.ret == FactsRep::I32 {
-                ctx.block().sitofp(I32, &value, DOUBLE)
-            } else {
-                value
-            })
-        }
+    let ty = super::signature_entry::sig_llvm_ty(site.sig.ret);
+    let value = ctx.block().call(ty, &site.name, &call_args);
+    let out = match (site.plan.ret, result_words) {
+        (Some(rep), Some(words)) => Called::Record {
+            present: value,
+            words,
+            rep,
+        },
+        _ => Called::Value(if site.sig.ret == FactsRep::I32 {
+            ctx.block().sitofp(I32, &value, DOUBLE)
+        } else {
+            value
+        }),
     };
     roots.release(ctx);
     Ok(Some(out))
@@ -668,28 +657,29 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     let called = super::signature_entry::with_direct_call(*byte_offset, || {
         try_lower_call(ctx, callee, args)
     })?;
-    let (agg, r) = match called {
+    let (present, result_words, r) = match called {
         None => return Ok(None),
         Some(Called::Value(v)) => {
             crate::expr::bind_local(ctx, *id, &v, value)?;
             return Ok(Some(v));
         }
-        Some(Called::Record(agg, r)) => (agg, r),
+        Some(Called::Record {
+            present,
+            words,
+            rep,
+        }) => (present, words, rep),
     };
     if r.tmpl != dest.tmpl {
         bail!("ICE: a value record result is bound to another template's lanes");
     }
     let facts = ctx.wpfacts.clone();
-    let ty = agg_ty(&facts, r).expect("a record result type");
     let keys = facts.record_layouts[&r.tmpl].keys.clone();
-    let extract = |ctx: &mut FnCtx<'_>, j: usize| {
-        let reg = ctx.block().next_reg();
-        ctx.block()
-            .emit_raw(format!("{reg} = extractvalue {ty} {agg}, {j}"));
-        reg
-    };
+    // An absent result leaves its words unwritten: the lanes read then are
+    // never used (every read of the destination tests its presence).
     for (j, field) in dest.fields.iter().enumerate() {
-        let lane = extract(ctx, j + 1);
+        let blk = ctx.block();
+        let slot = blk.gep(DOUBLE, &result_words, &[(I64, &j.to_string())]);
+        let lane = blk.load(DOUBLE, &slot);
         // The hint is the boxed program's read of this lane.
         let hint = Expr::PropertyGet {
             object: Box::new(Expr::LocalGet(*id)),
@@ -700,7 +690,6 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
         crate::expr::bind_local(ctx, *field, &lane, &hint)?;
     }
     let state = if r.opt {
-        let present = extract(ctx, 0);
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(&present);
         let is_true = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
@@ -723,7 +712,7 @@ pub(crate) fn try_lower_value_call(
     match try_lower_call(ctx, callee, args)? {
         None => Ok(None),
         Some(Called::Value(v)) => Ok(Some(v)),
-        Some(Called::Record(..)) => {
+        Some(Called::Record { .. }) => {
             bail!("ICE: a value record result of a typed call is not bound to its lanes")
         }
     }
