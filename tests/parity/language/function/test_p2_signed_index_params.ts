@@ -136,9 +136,9 @@ console.log(
   Object.keys(k1.cells).length,
 );
 
-// 6. The method retained and called indirectly: extracted, `call`, `apply`,
-// `bind`, and through an array of functions. These enter the boxed entry
-// (or keep the method untyped); in-range direct sites stand beside them.
+// 6. The method retained and called indirectly with int32 keys and values
+// of either sign: extracted, `call`, `apply`, `bind`, and through an array of
+// functions. These enter the boxed entry; direct sites stand beside them.
 class Kept {
   cells: number[] = new Array<number>(32).fill(0);
   h = 0;
@@ -151,35 +151,63 @@ class Kept {
 }
 const kept = new Kept();
 for (let i = 0; i < 32 * RUN; i++) kept.set(i, (i % 7) - 3);
-const loose = kept.set;
-loose.call(kept, 2, -6);
-loose.apply(kept, [3, 6]);
-const bound = kept.set.bind(kept);
-bound(4, -1);
-const fns = [bound, (s: number, p: number) => kept.set(s, p)];
-for (let i = 0; i < 8 * RUN; i++) fns[i & 1](5 + i, i - 4);
-loose.call(kept, -2, 9);
-loose.call(kept, 2.5, 9);
-loose.call(kept, 6, 0.25);
+const keptSet = kept.set;
+keptSet.call(kept, 2, -6);
+keptSet.apply(kept, [3, 6]);
+const keptBound = kept.set.bind(kept);
+keptBound(4, -1);
+const keptFns = [keptBound, (s: number, p: number) => kept.set(s, p)];
+for (let i = 0; i < 8 * RUN; i++) keptFns[i & 1](5 + i, i - 4);
+keptSet.call(kept, -2, 5);
+console.log("kept", kept.h, kept.cells.join(","), (kept.cells as any)[-2]);
+
+// 6b. The same shape, but the indirect calls pass a fraction, a fractional
+// key and another receiver: the parameters are no int32.
+class KeptLoose {
+  cells: number[] = new Array<number>(32).fill(0);
+  h = 0;
+  set(square: number, piece: number): void {
+    const old = this.cells[square] ?? 0;
+    if (old !== 0) this.h = (this.h - old) | 0;
+    this.cells[square] = piece;
+    if (piece !== 0) this.h = (this.h + (piece + 6) * 32 + square) | 0;
+  }
+}
+const keptLoose = new KeptLoose();
+for (let i = 0; i < 32 * RUN; i++) keptLoose.set(i, (i % 7) - 3);
+const looseSet = keptLoose.set;
+looseSet.call(keptLoose, -2, 9);
+looseSet.call(keptLoose, 2.5, 9);
+looseSet.call(keptLoose, 6, 0.25);
 const other = { cells: [1, 2, 3], h: 100 };
-loose.call(other as any, 1, 5);
+looseSet.call(other as any, 1, 5);
 console.log(
-  "kept",
-  kept.h,
-  kept.cells.join(","),
-  (kept.cells as any)[-2],
-  (kept.cells as any)[2.5],
+  "kept loose",
+  keptLoose.h,
+  keptLoose.cells.join(","),
+  (keptLoose.cells as any)[-2],
+  (keptLoose.cells as any)[2.5],
   other.cells.join(","),
   other.h,
 );
 
 // 7. A subclass that overrides the helper: the site has two bodies.
-class Sub extends Kept {
+class Base7 {
+  cells: number[] = new Array<number>(32).fill(0);
+  h = 0;
+  set(square: number, piece: number): void {
+    const old = this.cells[square] ?? 0;
+    if (old !== 0) this.h = (this.h - old) | 0;
+    this.cells[square] = piece;
+    if (piece !== 0) this.h = (this.h + (piece + 6) * 32 + square) | 0;
+  }
+}
+class Sub7 extends Base7 {
   set(square: number, piece: number): void {
     this.cells[square] = piece * 2;
   }
 }
-const mixed: Kept[] = [new Kept(), new Sub()];
+const mixed: Base7[] = [new Base7(), new Sub7()];
 for (let i = 0; i < 16 * RUN; i++) mixed[i & 1].set(i, i - 8);
 console.log("override", mixed[0].cells.join(","), mixed[1].cells.join(","), mixed[0].h, mixed[1].h);
 
