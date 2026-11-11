@@ -268,11 +268,6 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
             let o = site_tmpl(m, call, "TextCodec");
             ret_tok(m, call, o);
         }
-        "Headers" => {
-            implicit_args(m, call, "builtin constructor argument", Protocol::Any);
-            let o = site_tmpl(m, call, "builtin");
-            ret_tok(m, call, o);
-        }
         "Proxy" => {
             let c = m.calls[call as usize].clone();
             let r = m.reason("E9 new Proxy (by name)");

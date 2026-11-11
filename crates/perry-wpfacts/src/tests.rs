@@ -117,6 +117,7 @@ mod logical_and;
 mod map_identity_ops;
 mod function_call_value;
 mod static_call_value;
+mod fetch_headers;
 mod json_protocol;
 mod memo_context;
 mod named_accessors;
