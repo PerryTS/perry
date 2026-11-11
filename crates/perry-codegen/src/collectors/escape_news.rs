@@ -14,6 +14,7 @@ pub fn collect_non_escaping_news(
     find_new_candidates(stmts, boxed_vars, module_globals, &mut candidates);
 
     if candidates.is_empty() {
+        super::life_census::observe(stmts, boxed_vars, module_globals, &candidates);
         return candidates;
     }
 
@@ -97,6 +98,7 @@ pub fn collect_non_escaping_news(
     );
 
     candidates.retain(|id, _| !escaped.contains(id));
+    super::life_census::observe(stmts, boxed_vars, module_globals, &candidates);
     candidates
 }
 
