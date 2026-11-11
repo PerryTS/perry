@@ -75,6 +75,7 @@ mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
 mod elem_undef;
+mod call_kinds;
 mod int32_reads;
 mod element_reads;
 mod element_sites;

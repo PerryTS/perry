@@ -1373,6 +1373,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 {
                     return lower_string_concat(ctx, left, right);
                 }
+                // The same pairwise concat for operands the whole-program
+                // facts call strings (a call's result kinds).
+                if super::facts_string::both_strings(ctx, left, right) {
+                    return super::facts_string::lower_concat(ctx, left, right);
+                }
                 if l_is_str || r_is_str {
                     let other_known_primitive = if l_is_str {
                         crate::type_analysis::is_numeric_expr(ctx, right)

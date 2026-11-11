@@ -494,3 +494,14 @@ fn small_strings_switch_is_a_cache_input() {
         "PERRY_SMALL_STRINGS must key the compile caches"
     );
 }
+
+/// The call-kinds switch decides whether the facts export a call's result
+/// kinds, and so how a `+` of two calls is lowered: `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn call_kinds_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CALL_KINDS"),
+        "PERRY_FACTS_CALL_KINDS must key the compile caches"
+    );
+}
