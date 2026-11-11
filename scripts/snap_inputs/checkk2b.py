@@ -115,7 +115,8 @@ elif name in ("f12t", "f12tj"):
     need(len(mods) == want and len({r["addr"] for r in mods}) == want, f"want {want} distinct module inits, got {len(mods)}")
     need(all(r["enter"] != "0" for r in mods), "a module init without its enter")
     need(head.get("inits") == str(want + 1), f"inits={head.get('inits')}, want {want + 1}")
-    need(head.get("w") == "0", f"w={head.get('w')}, want 0")
+    # w = write-faulted ranges: 0 without a timer (f12t); a timer (f12tj) writes its own state.
+    need(name != "f12t" or head.get("w") == "0", f"w={head.get('w')}, want 0")
     need(not vals("worker_flag"), "a worker_flag row in a program without a worker")
     need(all(r["reach"] in ("0", "1") and r["dynamic"] == "0" for r in mods),
          "a static dependency is not EntryEager/StaticDep")
