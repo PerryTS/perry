@@ -293,6 +293,52 @@ pub(crate) struct TypedMethod {
     pub typed_trampoline: bool,
 }
 
+/// An index clone's parameter is covered by an I32 signature slot of any
+/// sign. The clone proves its index parameters non-negative int32s so that an
+/// element key built from them needs no sign test. Since the unsigned bound
+/// (N10, `index_key::unsigned_bound`) an int32 key is bounded by one unsigned
+/// compare that declines every negative key, so the sign of an I32 slot buys
+/// the clone nothing a typed body lacks; the typed body also takes the
+/// parameter as a word at every site, where the clone needs each site to
+/// prove the whole tuple non-negative, or its guarded entry.
+/// `PERRY_SIG_SIGNED_INDEX=0` (`off`, `false`) keeps the clone unless the
+/// parameter's interval is non-negative.
+pub(crate) fn signed_index_params() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        crate::expr::index_key::unsigned_bound()
+            && !matches!(
+                std::env::var("PERRY_SIG_SIGNED_INDEX").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+    })
+}
+
+/// The probe `PERRY_SIG_DIAG=1`: one line per method a `typed_calls` site
+/// reaches and the facts give a signature, with the selector's verdict
+/// (`typed=1`, or the tier or shape that refuses it).
+fn probe(class: &str, method: &str, sig: &FactsSignature, refused: Option<&str>) {
+    if std::env::var("PERRY_SIG_DIAG").as_deref() != Ok("1") {
+        return;
+    }
+    let params: Vec<String> = sig
+        .params
+        .iter()
+        .zip(&sig.ranges)
+        .map(|(r, iv)| match iv {
+            Some((lo, hi)) => format!("{r:?}[{lo},{hi}]"),
+            None => format!("{r:?}"),
+        })
+        .collect();
+    match refused {
+        None => eprintln!("[perry sig] {class}.{method} typed=1 params=({})", params.join(",")),
+        Some(why) => eprintln!(
+            "[perry sig] {class}.{method} typed=0 why={why} params=({})",
+            params.join(",")
+        ),
+    }
+}
+
 /// The typed methods of `hir` (T2), installed after every method selector
 /// ran as on main; their subsumed tiers (proven-`this`, the proven-argument clone, the
 /// index clones, typed_abi `typed_f64`/`typed_i32`) are dropped for them
@@ -328,6 +374,7 @@ pub(crate) fn select_methods(
                     .iter()
                     .any(|p| p.is_rest || p.arguments_object.is_some())
             {
+                probe(&class.name, &m.name, sig, Some("excluded-shape"));
                 continue;
             }
             let key = (class.name.clone(), m.name.clone());
@@ -340,6 +387,7 @@ pub(crate) fn select_methods(
                 || crate::collectors::ptr_array_cached_method(class, m).is_some()
                 || super::arguments::method_supports_arguments_length_direct_abi(m)
             {
+                probe(&class.name, &m.name, sig, Some("excluded-tier"));
                 continue;
             }
             let mut defaults = Vec::with_capacity(m.params.len());
@@ -357,9 +405,11 @@ pub(crate) fn select_methods(
                 });
             }
             if !ok {
+                probe(&class.name, &m.name, sig, Some("default"));
                 continue;
             }
             let Some(body) = sig_function(m, &defaults) else {
+                probe(&class.name, &m.name, sig, Some("default"));
                 continue;
             };
             let demoted = crate::collectors::callee_demoted_params(&body);
@@ -385,6 +435,7 @@ pub(crate) fn select_methods(
             // routes to the boxed entry.
             let tower = cm.pshape_tower_routable.contains(&key);
             if tower && proven_this.is_none() {
+                probe(&class.name, &m.name, sig, Some("tower"));
                 continue;
             }
             // CWN 11-09 (T6 as the selector): every tier `M$sig` would
@@ -394,21 +445,32 @@ pub(crate) fn select_methods(
             // proven-`this` layout, and the proven-argument clone's proven argument shapes
             // (which no representation carries).
             let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
+            let signed_index = signed_index_params();
             let index_ok = cm.nonnegative_index_methods.get(&key).is_none_or(|ids| {
                 m.params
                     .iter()
                     .zip(sig.params.iter().zip(sig.ranges.iter()))
                     .all(|(p, (rep, range))| {
                         !ids.contains(&p.id)
-                            || *rep == FactsRep::I32 && range.is_some_and(|(lo, _)| lo >= 0)
+                            || *rep == FactsRep::I32
+                                && (signed_index || range.is_some_and(|(lo, _)| lo >= 0))
                     })
             });
-            if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
+            let less_precise = if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
                 || cm.typed_f64_methods.contains(&key) && !all(FactsRep::F64)
-                || !index_ok
-                || cm.pshape_methods.contains_key(&key) && proven_this.is_none()
-                || cm.pshape_arg_methods.contains_key(&key)
             {
+                Some("typed-abi-clone")
+            } else if !index_ok {
+                Some("index-clone")
+            } else if cm.pshape_methods.contains_key(&key) && proven_this.is_none() {
+                Some("proven-this")
+            } else if cm.pshape_arg_methods.contains_key(&key) {
+                Some("proven-argument")
+            } else {
+                None
+            };
+            if less_precise.is_some() {
+                probe(&class.name, &m.name, sig, less_precise);
                 continue;
             }
             // A signature whose every slot is Boxed changes the body only
@@ -418,8 +480,10 @@ pub(crate) fn select_methods(
                 && sig.ret.encoding() == FactsEnc::Boxed
                 && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed)
             {
+                probe(&class.name, &m.name, sig, Some("all-boxed"));
                 continue;
             }
+            probe(&class.name, &m.name, sig, None);
             typed.push(TypedMethod {
                 published_pshape: cm.pshape_methods.contains_key(&key),
                 index_admission: cm.nonnegative_index_methods.contains_key(&key),
