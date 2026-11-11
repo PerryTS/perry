@@ -371,6 +371,8 @@ pub struct Gen<'a> {
     /// The push-filled births and their fill pushes (`push_fills`), by
     /// expression identity.
     pub(crate) push_fill: crate::push_fills::Fills,
+    /// The fill whose birth is the `new Array()` being generated.
+    pub(crate) push_fill_new: Option<u32>,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
@@ -722,6 +724,7 @@ impl<'a> Gen<'a> {
             arr_lengths: true,
             new_array_site: None,
             push_fill: Default::default(),
+            push_fill_new: None,
             guard_ranges: true,
             guard_presence: true,
             leaving_writes: true,

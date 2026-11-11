@@ -886,16 +886,18 @@ impl<'a> Gen<'a> {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);
             let v = match &f.init {
                 Some(e) => {
-                    self.new_array_site = None;
-                    let v = self.expr(&ffx, e);
                     // A push-filled `new Array()`: the builtin's birth at
-                    // this call site is the fill's (`builtins::site_tmpl_born`).
-                    let fill = self.push_fill.births.get(&(e as *const Expr as usize));
-                    if let (Some(&fill), Some(site), Expr::New { .. }) =
-                        (fill, self.new_array_site.take(), e)
-                    {
-                        self.m.push_fill_new_sites.insert(site, fill);
+                    // its call site is the fill's (`new_builtin` names the
+                    // site before the call exists: the solve is online).
+                    if matches!(e, Expr::New { .. }) {
+                        self.push_fill_new = self
+                            .push_fill
+                            .births
+                            .get(&(e as *const Expr as usize))
+                            .copied();
                     }
+                    let v = self.expr(&ffx, e);
+                    self.push_fill_new = None;
                     v
                 }
                 // `x: T;` defines `undefined` first; when the constructor
