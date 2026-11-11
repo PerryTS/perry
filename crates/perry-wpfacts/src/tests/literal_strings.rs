@@ -188,3 +188,25 @@ fn the_probe_says_what_ends_a_string_fields_fact() {
         .unwrap_or_else(|| panic!("no note line in {lines:#?}"));
     assert!(note.contains("refused=any_string:n"), "{note}");
 }
+
+#[test]
+fn an_instantiated_body_keeps_the_constants_of_its_seeds() {
+    // `flip` is solved per receiver context: the instance's copy of the
+    // selection's node is seeded with what the body's own node held when
+    // its summary was built, with that node's constants.
+    let src = r#"
+    class B {
+      side: string = "white";
+      flip(): void { this.side = this.side === "white" ? "black" : "white"; }
+    }
+    const b = new B();
+    b.side = process.argv.length > 100 ? "white" : "black";
+    b.flip();
+    console.log(b.side);
+    "#;
+    assert!(
+        field_fact(src, "B", "side", FactsConfig::default()),
+        "{:#?}",
+        probe(src)
+    );
+}

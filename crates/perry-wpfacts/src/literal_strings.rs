@@ -7,7 +7,9 @@
 //! its one constant, a copy edge and the nullish filters hand a set on
 //! unchanged, and every other String birth (a concatenation, a method
 //! result, a coercion, a value of ⊤ or of another unit) is any string
-//! (`STRS_TOP`). So a node whose set is finite, and which holds no ⊤ and no
+//! (`STRS_TOP`). An instantiated body's seeds carry their original node's
+//! constants (`summary.rs`, as they carry its interval): without that a
+//! selection of literals in a method solved per receiver is any string. So a node whose set is finite, and which holds no ⊤ and no
 //! bare marker, holds a String only by an unbroken chain of copies from a
 //! literal: at run time that String is the literal's own value, which is
 //! born shared (`StringHeader::refcount == 0`: an image record or a pool
