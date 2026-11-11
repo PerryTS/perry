@@ -474,6 +474,32 @@ fn site_dense_arr(m: &mut Model, call: CallId) -> Tok {
     site_tmpl_born(m, call, "DenseArray", true, false)
 }
 
+/// The Array `Array.prototype.slice` bears from an Array receiver, with
+/// `Model::array_reps` on a plain one (`TmplKind::Arr::plain`): the default
+/// species arm of `js_array_slice` (`array::species::
+/// array_species_create`) allocates a fresh `GC_TYPE_ARRAY` with its elements
+/// at the front (`js_array_alloc_with_length`), never a lazy header, never
+/// frozen, and copies the receiver's slots (its holes with them). A program
+/// species constructor's result is another value of the call
+/// (`species_from`), with its own token; a realm constructor other than
+/// `%Array%` makes this token's value itself, so `bindings::arr_rep` admits
+/// the token only while `derive::exact_array` holds. No birth length is
+/// recorded: the rep's floor is 0. `PERRY_FACTS_SLICE_BIRTHS=0` keeps the
+/// dense, not plain, birth.
+fn site_slice_arr(m: &mut Model, call: CallId) -> Tok {
+    let reps = m.array_reps;
+    site_tmpl_born(m, call, "DenseArray", true, reps)
+}
+
+/// `PERRY_FACTS_SLICE_BIRTHS=0` (`off`, `false`): a `slice` result is no
+/// plain Array (`site_slice_arr`).
+pub(crate) fn slice_births_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_SLICE_BIRTHS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 /// The Array `new Array(...)` or `Array(...)` births (`BuiltinNs::Array`):
 /// `js_array_constructor*` allocates a fresh `GC_TYPE_ARRAY` with its
 /// elements at the front, of at least its recorded birth length

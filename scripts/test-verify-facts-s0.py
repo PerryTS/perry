@@ -117,6 +117,7 @@ def main():
         ("array-dense-negative", "arrdense", "array rep"),
         ("array-elem-negative", "arrelem", "array rep"),
         ("array-store-negative", "arrelem", "array rep"),
+        ("slice-birth-negative", "slicebirth", "array rep"),
         ("array-lazy-negative", "arrlazy", "array rep"),
         ("array-front-negative", "arrfront", "array rep"),
         ("const-array-negative", "arrconst", "constant array"),

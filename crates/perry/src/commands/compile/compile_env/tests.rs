@@ -416,6 +416,16 @@ fn array_store_switch_is_a_cache_input() {
     );
 }
 
+/// Plain `slice` births: the switch changes the exported array reps, so `=0`
+/// must never reuse an `=1` object.
+#[test]
+fn slice_births_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_SLICE_BIRTHS"),
+        "PERRY_FACTS_SLICE_BIRTHS must key the compile caches"
+    );
+}
+
 /// Typed `set`: the signed-index switch decides which methods get a typed
 /// body in place of their index clones, so `=0` must never reuse an `=1`
 /// object.

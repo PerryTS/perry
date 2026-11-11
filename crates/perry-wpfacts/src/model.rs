@@ -1418,6 +1418,14 @@ pub struct Model {
     /// is claimed non-negative, a wrong claim the witness at the element
     /// site must catch.
     pub key_sign_sabotage: bool,
+    /// A `slice` of an Array bears a plain Array (`builtins::
+    /// site_slice_arr`; `PERRY_FACTS_SLICE_BIRTHS=0` turns it off).
+    pub slice_births: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=slicebirth`): a `slice`
+    /// birth is claimed a plain Array whatever its species constructor (an
+    /// `Object` species makes a Number object), a wrong claim the array rep
+    /// witness must catch.
+    pub slice_birth_sabotage: bool,
     /// The wide keys (`element_keys::collect_wide`;
     /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
     pub wide_keys: bool,
