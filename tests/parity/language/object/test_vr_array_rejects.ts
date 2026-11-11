@@ -9,7 +9,9 @@
 // vr-expect: ca,cb REJECTED R6
 // vr-expect: ba,bb REJECTED R6ArrayHolder(birth
 // vr-expect: ja,jb REJECTED R6Join
-function len(a: unknown[]): number {
+// It calls itself so that the inliner leaves the calls in place.
+function len(a: unknown[], depth: number): number {
+  if (depth > 0) return len(a, depth - 1);
   return a.length;
 }
 const s: { sa: number; sb: number }[] = [];
@@ -30,4 +32,4 @@ b.push({ ba: 3, bb: 4 });
 console.log(b.length, b[1].bb);
 const j: { ja: number; jb: number }[] = [];
 j.push({ ja: 1, jb: 2 });
-console.log(len(j), len([1, 2, 3]), j[0].ja);
+console.log(len(j, 1), len([1, 2, 3], 1), j[0].ja);

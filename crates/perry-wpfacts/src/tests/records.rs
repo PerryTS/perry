@@ -477,3 +477,62 @@ fn a_chess_like_undo_stack_is_a_record_array() {
         );
     }
 }
+
+/// A class that holds a record array in `played`, with `BOARD` among its
+/// fields, `USE` in `play` and `MAIN` at the top level.
+fn owner(board: &str, used: &str, main: &str) -> Result<String, String> {
+    let src = "interface U { a: number; b: number }\nclass G {\n  private played: U[] = [];\n  BOARD\n  mk(n: number): U { return { a: n, b: 2 }; }\n  play(n: number): void { this.played.push(this.mk(n)); USE }\n  depth(): number { return this.played.length; }\n}\nconst g = new G(); g.play(1); MAIN console.log(g.depth());\n"
+        .replace("BOARD", board)
+        .replace("USE", used)
+        .replace("MAIN", main);
+    verdict(&src, &["a", "b"], on())
+}
+
+#[test]
+fn a_record_array_beside_other_array_fields_is_admitted() {
+    // The owner's fields under any key (`all_fields`) hold every field's
+    // Arrays: an aggregate, no holder of the program, and no reason to link
+    // the other Arrays to the record.
+    for (board, used, main) in [
+        ("board: number[] = new Array(64).fill(0);", "", ""),
+        ("board: number[] = [];", "this.board[n & 63] = 1;", ""),
+        (
+            "board: number[] = new Array(64).fill(0);",
+            "",
+            "for (let i = 0; i < 64; i++) g.board[i] = i % 7;",
+        ),
+        (
+            "junk: string[] = [];",
+            "this.junk.push(\"j\" + n);",
+            "g.junk = [];",
+        ),
+    ] {
+        assert_eq!(
+            owner(board, used, main),
+            Ok("a:f64,b:f64".into()),
+            "{board} {used} {main}"
+        );
+    }
+}
+
+#[test]
+fn a_reader_through_the_owner_of_a_record_array_rejects() {
+    // A native's protocol that reads through the owner reaches the record
+    // array; the runtime's readers have no accessor for one before VR-5.
+    for main in [
+        "console.log(g);",
+        "console.log(JSON.stringify(g));",
+        "console.log(structuredClone(g) === g);",
+    ] {
+        let r = owner("", "", main).expect_err(main);
+        assert!(r.starts_with("R5ThroughContainer"), "{main}: {r}");
+    }
+    // A computed read of the owner holds every field's value.
+    let r = owner(
+        "",
+        "",
+        "for (const k in g) console.log((g as any)[k] === undefined);",
+    )
+    .expect_err("for-in");
+    assert!(r.starts_with("R6Join"), "{r}");
+}

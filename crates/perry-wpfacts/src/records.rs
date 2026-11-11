@@ -697,6 +697,10 @@ struct Scan<'a, 'g> {
     typed: FxHashSet<NodeId>,
     /// VR-4b: the for-of bindings (`Model::for_of_relays`, with copies).
     relays: FxHashSet<NodeId>,
+    /// VR-4b: an object's aggregate nodes (its fields under any key,
+    /// `Model::all_fields` and `Model::field_any` of a token that is no
+    /// Array): no value of the program, what reads them is.
+    aggregates: FxHashSet<NodeId>,
     /// VR-4b: the Arr templates a `GetIterator` stands for (`[iterator#n]`):
     /// the boxed program's iterator over a for-of source, which the for-of
     /// intrinsic never makes for a record array.
@@ -788,6 +792,16 @@ impl<'a, 'g> Scan<'a, 'g> {
                 .chain(g.load_sites.iter().map(|&(_, _, _, n)| n)),
         );
         let relays = with_copies(&mut m.for_of_relays.iter().copied());
+        let aggregates: FxHashSet<NodeId> = m
+            .all_fields
+            .iter()
+            .chain(m.field_any.iter())
+            .filter(|(t, _)| {
+                !matches!(m.toks[**t as usize], TokKind::Obj(tm, _)
+                    if matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            })
+            .map(|(_, n)| *n)
+            .collect();
         let relay_tmpls: FxHashSet<TmplId> = m
             .tmpls
             .iter()
@@ -887,6 +901,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             mcall_recv,
             typed,
             relays,
+            aggregates,
             relay_tmpls,
             field_owner,
             arg_of,
@@ -1145,7 +1160,9 @@ impl<'a, 'g> Scan<'a, 'g> {
             grew = false;
             for n in self.nodes_of(linked.keys().copied()) {
                 let node = &m.nodes[n as usize];
-                if node.pts.is_empty() {
+                // An object's fields under any key hold every field's
+                // Arrays: no holder of the program.
+                if node.pts.is_empty() || self.aggregates.contains(&n) {
                     continue;
                 }
                 let toks = node.pts.to_sorted();
@@ -1376,6 +1393,18 @@ impl<'a, 'g> Scan<'a, 'g> {
             // A protocol's own relay (`Model::implicit`): its reads are the
             // protocol's, classified at the `Implicit` on the value.
             if m.labels[n as usize].starts_with("implicit-") {
+                // VR-4b: a native's protocol that reads through an object
+                // reached a record array (§2 `R5ThroughContainer`): the
+                // runtime's readers have no accessor for one before VR-5.
+                for &a in &ars {
+                    arr_rejects.push((
+                        a,
+                        Rejected::new(
+                            R5ThroughContainer(m.labels[n as usize].to_string()),
+                            node_at(m, n),
+                        ),
+                    ));
+                }
                 continue;
             }
             let at = node_at(m, n);
@@ -1497,6 +1526,10 @@ impl<'a, 'g> Scan<'a, 'g> {
                     .copied()
                     .filter(|o| (*o as usize) < m.nodes.len())
                     .unwrap_or(n);
+                // An object's fields under any key: its readers are checked.
+                if self.aggregates.contains(&orig) {
+                    continue;
+                }
                 if RECORD_ARRAY_INTRINSICS.contains(&"iterate")
                     && FOR_OF_GLUE
                         .iter()
