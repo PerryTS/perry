@@ -2644,6 +2644,7 @@ fn lower_module(
                 {
                     let lanes = crate::expr::rest_fields::class_lanes(
                         &opts.program_facts.elision,
+                        &opts.program_layouts,
                         &class_table,
                         &class_ids,
                         class_name,
@@ -2670,6 +2671,7 @@ fn lower_module(
             }
             let lanes = crate::expr::rest_fields::class_lanes(
                 &opts.program_facts.elision,
+                &opts.program_layouts,
                 &class_table,
                 &class_ids,
                 class_name,

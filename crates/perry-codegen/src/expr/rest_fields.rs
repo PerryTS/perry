@@ -58,6 +58,7 @@ const LANE_SLOTS: u32 = 32;
 /// slot must be the class's own field slot.
 pub(crate) fn class_lanes(
     facts: &crate::codegen::ElisionFacts,
+    layouts: &crate::layout_families::ProgramLayouts,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
     class_ids: &std::collections::HashMap<String, u32>,
     name: &str,
@@ -71,6 +72,15 @@ pub(crate) fn class_lanes(
     let Some(fc) = facts.classes.get(cid) else {
         return 0;
     };
+    // A class born with its keys takes its lanes from its birth rep; one
+    // born at its static family layout (`layout_families`, planned before
+    // the facts) is not, so it has none. A class born keyless gets them
+    // after its definitions whatever its birth.
+    if layouts.families.contains_key(cid)
+        && crate::lower_call::new_alloc::keys_defined_at_birth(class)
+    {
+        return 0;
+    }
     let mut mask = 0u32;
     for (slot, f) in class.fields.iter().enumerate() {
         let slot = slot as u32;
@@ -110,7 +120,13 @@ pub(crate) fn lanes_of_rep(rep: u64) -> u32 {
 /// Class `name`'s lanes as the current function sees them (`class_lanes`;
 /// a class stub reads its definer's).
 pub(crate) fn lanes_of(ctx: &FnCtx<'_>, name: &str) -> u32 {
-    class_lanes(&ctx.wpfacts, ctx.classes, ctx.class_ids, name)
+    class_lanes(
+        &ctx.wpfacts,
+        &ctx.program_layouts,
+        ctx.classes,
+        ctx.class_ids,
+        name,
+    )
 }
 
 /// After the field definitions of class `name` (a class born keyless): give
