@@ -357,8 +357,11 @@ fn collecting_call(block: &crate::block::LlBlock, effects: &GcEffects) -> Option
     if matches!(insts.last(), Some(LlInst::Unreachable)) {
         return None;
     }
+    // `js_shadow_slot_set` is a bounds-checked TLS store: the exemption the
+    // call-free clone scans make (`LlInst::is_gc_unsafe_call`).
     let leaf = |callee: &str| {
         callee.starts_with("llvm.")
+            || callee == "js_shadow_slot_set"
             || effects.classify_direct_callee(callee) == GcCallEffect::CannotCollect
     };
     insts.iter().find_map(|inst| match inst {
