@@ -341,12 +341,18 @@ fn a_record_result_is_an_aggregate() {
     assert!(text.contains("alloca [2 x double]"));
     // The boxed entry of a record-returning function has no caller.
     assert!(text.contains("call void @llvm.trap()"));
+    // VR-4c: the lanes are bound, so the boxed program's key-by-key read of
+    // the result is not lowered.
+    let reads = |t: &str| t.matches("call double @js_object_get_field_value(").count();
+    let bound = reads(&text);
     // Negative control: without the signature the result is a boxed object,
     // read key by key.
     let (_, c, _) = rewrite(&m, &base).expect("rewritten");
     assert_eq!((c.returns, c.calls), (0, 0), "{c:?}");
     assert!(c.unpacked >= 1, "{c:?}");
-    assert!(!ir(&m, base).contains("%perry_record_ret"));
+    let boxed = ir(&m, base);
+    assert!(!boxed.contains("%perry_record_ret"));
+    assert!(bound + 4 <= reads(&boxed), "{bound} {}", reads(&boxed));
 }
 
 #[test]
