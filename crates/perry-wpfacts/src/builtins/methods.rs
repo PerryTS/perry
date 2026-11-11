@@ -244,9 +244,14 @@ pub(super) fn undescribed_method(
     why: &str,
 ) {
     match members::own(fam, name) {
+        // A wrapper object (ToObject of a primitive) has the chain of the
+        // primitive it holds: the member is that kind's prototype method,
+        // which reads its operands as on the primitive (thisStringValue,
+        // thisNumberValue, ... read the wrapped value, 22.1.3 / 21.1.3 /
+        // 20.3.3 / 20.4.3 / 21.2.3), so each method's own rule applies.
         Some(Mem::Fn) if fam == Family::Wrapper => {
-            anyfall("wrapper method", &call, &name);
-            prim_method_generic(m, call)
+            let a = m.atom(name);
+            prim_method(m, prim::ALL & !(prim::NULL | prim::UNDEF), Key::Named(a), call)
         }
         Some(Mem::Fn) => unknown_method(m, call, why),
         Some(_) => {}
