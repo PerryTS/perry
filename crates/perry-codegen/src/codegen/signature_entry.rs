@@ -1047,6 +1047,38 @@ pub(crate) fn slot_i32_params(f: &Function, plan: &SpecFnPlan) -> HashSet<u32> {
         .collect()
 }
 
+/// `F$sig`'s parameters with the interval the signature proves (T1): an I32
+/// parameter in its i32 slot (never written: plan selection demoted written
+/// parameters) holds an integer of its interval for the whole body, so the
+/// body's range proofs start from it (`FnCtx::int_range_facts`, under a
+/// scope no loop ends). The interval is witnessed at every typed site and at
+/// the boxed entry (`witness_value`). Empty with
+/// `PERRY_FACTS_LOCAL_RANGES=0`.
+pub(crate) fn param_range_facts(
+    f: &Function,
+    plan: &SpecFnPlan,
+) -> Vec<crate::expr::IntRangeFact> {
+    let Some(sig) = plan.signature.as_ref() else {
+        return Vec::new();
+    };
+    if !crate::expr::facts_local_ranges() {
+        return Vec::new();
+    }
+    f.params
+        .iter()
+        .zip(plan.reps.iter())
+        .zip(sig.ranges.iter())
+        .filter_map(|((p, rep), range)| {
+            let (min, max) = (*range)?;
+            matches!(rep, SpecParamRep::I32).then_some(crate::expr::IntRangeFact {
+                local_id: p.id,
+                scope_id: u32::MAX,
+                range: crate::expr::IntRange { min, max },
+            })
+        })
+        .collect()
+}
+
 /// `F$sig`'s parameters that seed `nonnegative_integer_locals` (T1): an I32
 /// parameter in its i32 slot whose interval has `lo >= 0` (the slot is
 /// never written: plan selection demoted written parameters).
