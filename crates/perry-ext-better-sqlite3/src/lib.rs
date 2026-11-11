@@ -550,7 +550,9 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
             prepared.execute(params.as_slice()).ok()?;
         } else {
             let mut rows = prepared.query(params.as_slice()).ok()?;
-            while matches!(rows.next(), Ok(Some(_))) {}
+            // A step error must not be reported as a completed run: a
+            // `INSERT ... RETURNING` can fail after the row count moved.
+            while rows.next().ok()?.is_some() {}
         }
         Some((
             conn.total_changes().saturating_sub(before),
@@ -578,7 +580,9 @@ fn query_owned_rows(
             .collect::<Vec<_>>();
         let mut rows = prepared.query(param_refs.as_slice()).ok()?;
         let mut result = Vec::new();
-        while let Ok(Some(row)) = rows.next() {
+        // A step error aborts the result instead of returning the rows read so
+        // far as if they were the whole answer.
+        while let Some(row) = rows.next().ok()? {
             result.push(
                 (0..row.as_ref().column_count())
                     .map(|idx| row.get(idx).unwrap_or(SqliteValue::Null))

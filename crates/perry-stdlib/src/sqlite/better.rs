@@ -278,8 +278,22 @@ pub unsafe extern "C" fn js_sqlite_stmt_run(
         let param_refs: Vec<&dyn rusqlite::ToSql> =
             sqlite_params.iter().map(|p| p.as_ref()).collect();
         let mut prepared = lease_statement(conn, &sql).ok()?;
-        let changes = prepared.execute(param_refs.as_slice()).ok()?;
-        Some((changes, conn.last_insert_rowid()))
+        // better-sqlite3 accepts any statement here, including one that returns
+        // rows: step it to completion, discard the rows and report the change
+        // count. `Statement::execute` would step `INSERT ... RETURNING` once,
+        // write the row, then reject the statement — reporting failure for a
+        // committed write. The row branch matches the ext provider.
+        let before = conn.total_changes();
+        if prepared.column_count() == 0 {
+            prepared.execute(param_refs.as_slice()).ok()?;
+        } else {
+            let mut rows = prepared.query(param_refs.as_slice()).ok()?;
+            while rows.next().ok()?.is_some() {}
+        }
+        Some((
+            conn.total_changes().saturating_sub(before),
+            conn.last_insert_rowid(),
+        ))
     })
     .flatten();
     let Some((changes, last_id)) = result else {
@@ -319,7 +333,7 @@ fn query_owned_rows(
             let mut values = Vec::new();
             {
                 let mut rows = prepared.query(param_refs.as_slice()).ok()?;
-                while let Ok(Some(row)) = rows.next() {
+                while let Some(row) = rows.next().ok()? {
                     // SQLite can recompile on step after a schema change.
                     let columns = names.get_or_insert_with(|| {
                         row.as_ref()

@@ -186,16 +186,54 @@ fn sqlite_preparation_run_reuses_dml_and_preserves_execute_semantics() {
         assert_eq!(field(result.get_raw_mut_ptr(), "changes"), 1.0);
         assert_eq!(field(result.get_raw_mut_ptr(), "lastInsertRowid"), 4.0);
         assert_eq!(counter.get(), 1);
+        // better-sqlite3's run() accepts row-returning statements: it steps
+        // them to completion, discards the rows and reports the change count.
         let select = db.prepare("SELECT n FROM t");
-        assert!(js_sqlite_stmt_run(select, std::ptr::null()).is_null());
+        let result = scope.root_raw_mut_ptr(js_sqlite_stmt_run(select, std::ptr::null()));
+        assert!(!result.get_raw_mut_ptr::<ObjectHeader>().is_null());
+        assert_eq!(field(result.get_raw_mut_ptr(), "changes"), 0.0);
+        assert_eq!(field(result.get_raw_mut_ptr(), "lastInsertRowid"), 4.0);
         let returning = db.prepare("INSERT INTO t VALUES (4) RETURNING n");
-        assert!(js_sqlite_stmt_run(returning, std::ptr::null()).is_null());
+        let result = scope.root_raw_mut_ptr(js_sqlite_stmt_run(returning, std::ptr::null()));
+        assert!(!result.get_raw_mut_ptr::<ObjectHeader>().is_null());
+        assert_eq!(field(result.get_raw_mut_ptr(), "changes"), 1.0);
+        assert_eq!(field(result.get_raw_mut_ptr(), "lastInsertRowid"), 5.0);
         let count = db.prepare("SELECT count(*) AS n FROM t");
         js_sqlite_stmt_raw(count);
-        // Statement::execute steps RETURNING once before rejecting its row.
         assert_eq!(
             raw_number(js_sqlite_stmt_get(count, std::ptr::null()), 0),
             5.0
+        );
+    }
+}
+
+#[test]
+fn sqlite_preparation_all_aborts_instead_of_returning_rows_read_before_an_error() {
+    unsafe {
+        let mut db = Database::new();
+        // `abs` over the i64 minimum raises integer overflow on the second
+        // step: the first row is produced, then the step fails.
+        let stmt = db.prepare("SELECT 1 AS a UNION ALL SELECT abs(-9223372036854775808) AS a");
+        let rows = js_sqlite_stmt_all(stmt, std::ptr::null());
+        assert_eq!(perry_runtime::js_array_length(rows), 0);
+    }
+}
+
+#[test]
+fn sqlite_preparation_run_reports_step_errors_of_row_returning_statements() {
+    unsafe {
+        let mut db = Database::new();
+        db.exec("CREATE TABLE u (id INTEGER PRIMARY KEY)");
+        db.exec("INSERT INTO u VALUES (1)");
+        let duplicate = db.prepare("INSERT INTO u VALUES (1) RETURNING id");
+        // The step fails on the constraint: run() must report it, not a
+        // completed statement, and must leave the stored rows unchanged.
+        assert!(js_sqlite_stmt_run(duplicate, std::ptr::null()).is_null());
+        let count = db.prepare("SELECT count(*) AS n FROM u");
+        js_sqlite_stmt_raw(count);
+        assert_eq!(
+            raw_number(js_sqlite_stmt_get(count, std::ptr::null()), 0),
+            1.0
         );
     }
 }
