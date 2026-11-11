@@ -106,6 +106,8 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod snap_argv_site;
+pub(crate) mod snap_compare_site;
 pub(crate) mod rest_elems;
 pub(crate) mod rest_fields;
 pub(crate) mod snap_env_site;
@@ -535,6 +537,11 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// SNAP census frame: the two innermost expressions `lower_expr` is
+    /// lowering, saved and restored by each lowering. A `process.env` /
+    /// `process.argv` read takes its census kind from its own parent
+    /// (`snap_env_site`, `snap_argv_site`).
+    pub snap_lowering: snap_env_site::Lowering,
     /// A chunked literal birth's own arguments are being lowered
     /// (`literal_chunks`): a chunked argument is the birth's `undefined`
     /// fill, and anywhere else it is an invariant violation.

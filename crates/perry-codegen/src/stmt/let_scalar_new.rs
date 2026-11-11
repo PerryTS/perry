@@ -28,9 +28,11 @@ pub(super) fn try_lower_scalar_replaced_new(
     // no fields populated. The call must go through the standard
     // heap-allocation path so `lower_new` emits the cross-module
     // `<prefix>__<class>_constructor` call.
-    if let Some(perry_hir::Expr::New {
-        class_name, args, ..
-    }) = init
+    if let Some(
+        literal @ perry_hir::Expr::New {
+            class_name, args, ..
+        },
+    ) = init
     {
         let is_imported = ctx.imported_class_ctors.contains_key(class_name);
         if ctx.non_escaping_news.contains_key(&id) && !is_imported {
@@ -103,10 +105,18 @@ pub(super) fn try_lower_scalar_replaced_new(
                                 .and_then(|fields| fields.get(fname))
                                 .cloned()
                         });
-                        if slot.is_none() && lower_unused_expr(ctx, arg)? {
+                        // SNAP census: the argument's parent is the literal.
+                        let unused = slot.is_none()
+                            && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_unused_expr(ctx, arg)
+                            })?;
+                        if unused {
                             continue;
                         }
-                        let arg_val = lower_expr(ctx, arg)?;
+                        let arg_val =
+                            crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                                lower_expr(ctx, arg)
+                            })?;
                         if let Some(slot) = slot {
                             ctx.block().store(DOUBLE, &arg_val, &slot);
                             // #6968: anonymous-shape scalar replacement stores

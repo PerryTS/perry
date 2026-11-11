@@ -242,7 +242,7 @@ mod cycle;
 /// `malloc_trim` maintenance, split out of `cycle.rs` for the 2000-line cap.
 mod cycle_malloc_trim;
 use cycle::*;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub(crate) use cycle_malloc_trim::purge_allocator_on_region_growth;
 #[cfg(test)]
 pub(crate) use cycle_malloc_trim::{
@@ -261,6 +261,7 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) mod image_cells;
 mod remembered;
 use remembered::*;
+mod restore_walk;
 mod rewrite;
 pub use rewrite::*;
 mod verify;
@@ -431,6 +432,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     escalation: FullEscalation,
     copying: CopyingFastPath,
 ) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
     // consumer of the scan decision (root scan, copying eligibility,
     // evacuation pinning, verifier) sees the same healed answer.
@@ -901,6 +903,7 @@ pub(crate) fn test_collect_synchronous_full_trace() {
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here
     // allocation is still legal — the root scan itself must stay
@@ -1764,6 +1767,8 @@ pub extern "C" fn js_gc_stats(
     out_freed: *mut u64,
     out_pause_us: *mut u64,
 ) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.gc_stats", 0);
     GC_STATS.with(|stats| {
         let stats = stats.borrow();
         unsafe {

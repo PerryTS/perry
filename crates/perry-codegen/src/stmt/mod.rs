@@ -675,14 +675,15 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             {
                 ctx.typed_element_locals.insert(*id);
             }
-            crate::expr::snap_env_site::note_let(ctx, *id, init.as_ref());
             // A binding a later loop pushes into births its `[]` with the
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
             ctx.pushed_array_birth = ctx.loop_pushed_arrays.reserve.contains(id)
                 && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
+            let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
+            ctx.snap_lowering = snap_frame;
             ctx.pushed_array_birth = false;
             lowered?;
             // Object model step 1: a family prototype's birth.
