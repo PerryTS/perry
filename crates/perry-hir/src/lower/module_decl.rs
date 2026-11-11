@@ -90,6 +90,7 @@ pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
     decl: &ast::ModuleDecl,
+    deferred_namespace_locals: &std::collections::HashSet<String>,
 ) -> Result<()> {
     match decl {
         ast::ModuleDecl::Import(import_decl) => {
@@ -1618,8 +1619,7 @@ pub(crate) fn lower_module_decl(
                         // not a bare `perry_fn_<mod>__z` function symbol. This is
                         // exactly how zod re-exports `z`, so without this every
                         // `z.object` / `z.coerce` in consumer code is undefined.
-                        let deferred_namespace = module.imports.iter().any(|import| import.is_deferred
-                            && import.specifiers.iter().any(|s| matches!(s, ImportSpecifier::Namespace { local: name } if name == &local)));
+                        let deferred_namespace = deferred_namespace_locals.contains(&local);
                         if let Some(ns_source) = ctx
                             .namespace_import_sources
                             .get(&local)
