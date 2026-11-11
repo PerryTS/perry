@@ -4981,6 +4981,7 @@ dependencies = [
  "console 0.16.6",
  "dialoguer 0.12.0",
  "dirs",
+ "dotenvy",
  "ed25519-dalek",
  "flate2",
  "fslock",
@@ -4988,10 +4989,10 @@ dependencies = [
  "log",
  "notify",
  "object 0.37.3",
+ "p256",
  "perry-abi",
  "perry-api-manifest",
  "perry-base64",
- "perry-cli-support",
  "perry-codegen",
  "perry-codegen-arkts",
  "perry-codegen-glance",
@@ -5061,20 +5062,6 @@ name = "perry-base64"
 version = "0.5.1663"
 dependencies = [
  "base64 0.23.1",
-]
-
-[[package]]
-name = "perry-cli-support"
-version = "0.5.1663"
-dependencies = [
- "anyhow",
- "console 0.16.6",
- "dotenvy",
- "log",
- "p256",
- "perry-base64",
- "perry-perex",
- "serde_json",
 ]
 
 [[package]]

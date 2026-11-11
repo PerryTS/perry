@@ -384,6 +384,69 @@ fn key_sign_switch_is_a_cache_input() {
     );
 }
 
+/// Literal strings: the switch changes the exported facts and every store
+/// and alias that drops its string demote, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn literal_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_LITERAL_STRINGS"),
+        "PERRY_FACTS_LITERAL_STRINGS must key the compile caches"
+    );
+}
+
+/// Wide keys: the switch changes the exported facts and every element site
+/// that converts a wide key without the normalizer, so `=0` must never reuse
+/// an `=1` object.
+#[test]
+fn wide_keys_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_WIDE_KEYS"),
+        "PERRY_FACTS_WIDE_KEYS must key the compile caches"
+    );
+}
+
+/// The number-over-number store arm: the switch changes every guarded element
+/// store of a Number, so `=0` must never reuse an `=1` object.
+#[test]
+fn number_store_arm_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_NUMBER_STORE_ARM"),
+        "PERRY_NUMBER_STORE_ARM must key the compile caches"
+    );
+}
+
+/// The rep-keyed element store: the switch changes every runtime-key store
+/// into an Array the facts give Number elements, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn array_store_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_ARRAY_STORE"),
+        "PERRY_FACTS_ARRAY_STORE must key the compile caches"
+    );
+}
+
+/// Plain `slice` births: the switch changes the exported array reps, so `=0`
+/// must never reuse an `=1` object.
+#[test]
+fn slice_births_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_SLICE_BIRTHS"),
+        "PERRY_FACTS_SLICE_BIRTHS must key the compile caches"
+    );
+}
+
+/// `a[k] ?? <literal>` over an Array of Numbers: the switch changes the
+/// read's lowering, so `=0` must never reuse an `=1` object.
+#[test]
+fn rep_default_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_REP_DEFAULT"),
+        "PERRY_REP_DEFAULT must key the compile caches"
+    );
+}
+
 /// Typed `set`: the signed-index switch decides which methods get a typed
 /// body in place of their index clones, so `=0` must never reuse an `=1`
 /// object.
@@ -421,6 +484,16 @@ fn int32_operand_switches_are_cache_inputs() {
             "{name} must key the compile caches"
         );
     }
+}
+
+/// The direct Number call switch decides whether a consumer of `f(a)` takes
+/// the proven-Number lowering, so `=0` must never reuse an `=1` object.
+#[test]
+fn direct_number_calls_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_DIRECT_NUMBER_CALLS"),
+        "PERRY_FACTS_DIRECT_NUMBER_CALLS must key the compile caches"
+    );
 }
 
 /// The at-rest default read's switch decides how `a[k] ?? <int32>` is
@@ -471,5 +544,27 @@ fn inline_pure_args_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_INLINE_PURE_ARGS"),
         "PERRY_INLINE_PURE_ARGS must key the compile caches"
+    );
+}
+
+/// The small-string switch decides how a string `+`, a one-digit
+/// `String(n)` and a `charAt` operand are lowered, so `=0` must never reuse
+/// an `=1` object.
+#[test]
+fn small_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_SMALL_STRINGS"),
+        "PERRY_SMALL_STRINGS must key the compile caches"
+    );
+}
+
+/// The call-kinds switch decides whether the facts export a call's result
+/// kinds, and so how a `+` of two calls is lowered: `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn call_kinds_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CALL_KINDS"),
+        "PERRY_FACTS_CALL_KINDS must key the compile caches"
     );
 }

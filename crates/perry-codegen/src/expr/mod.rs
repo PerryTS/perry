@@ -101,6 +101,7 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod facts_string;
 pub(crate) mod fill_birth;
 #[cfg(test)]
 mod fill_birth_tests;
@@ -3380,6 +3381,7 @@ pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]
@@ -3420,6 +3422,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
+mod index_set_rep;
 mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
@@ -3450,6 +3453,7 @@ mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
+pub(crate) mod short_string;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) use named_accessor::contained_number_get;

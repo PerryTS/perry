@@ -162,6 +162,13 @@ pub struct Gen<'a> {
     /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
     /// `rest_fields`' use record admits (I32 at rest, PR C).
     pub(crate) field_reads: Vec<NodeId>,
+    /// VR-4b: each named read with a source offset, `(module, offset, key,
+    /// result node)`. A member chain's reads share their offset, so the key
+    /// tells them apart.
+    pub(crate) load_sites: Vec<(u32, u32, Atom, NodeId)>,
+    /// VR-4b: the holder of the array literal about to be walked
+    /// (`Model::arr_birth_holder`); the literal's arm takes it.
+    pub(crate) direct_arr: Option<crate::records::ArrBirth>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -289,9 +296,12 @@ pub struct Gen<'a> {
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
-    /// `(module, byte offset, result node)` of each method call site
-    /// (`bindings::ModuleBindings::number_calls`).
+    /// `(module, byte offset, result node)` of each call site with a source
+    /// offset (`bindings::ModuleBindings::number_calls`).
     pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// `(module, byte offset, byte end, result node)` of every call with a
+    /// source offset, whatever its callee (`call_kinds`).
+    pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
     /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
     /// identity (the callee expression's address), whether it spreads, and
     /// for a direct call its callee node (`signatures::typed_calls`).
@@ -641,6 +651,8 @@ impl<'a> Gen<'a> {
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),
+            load_sites: Vec::new(),
+            direct_arr: None,
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -690,6 +702,7 @@ impl<'a> Gen<'a> {
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
+            call_kinds_at: Vec::new(),
             call_sites_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),

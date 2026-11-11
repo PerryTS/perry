@@ -123,6 +123,11 @@ pub struct FieldFacts {
     /// I32 at rest, PR C (`rest_fields::admit`): the field is an I32 lane of
     /// its class, stored as an I32 word in every instance for its life.
     pub rest: bool,
+    /// The field may hold a String, and every String any store of any unit
+    /// puts there is the value of a program string literal
+    /// (`literal_strings`, over every token of the template): never with an
+    /// escaped template or a ⊤ kind.
+    pub literal_strings: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -276,6 +281,7 @@ impl FieldFacts {
         self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
+        self.literal_strings &= o.literal_strings;
         self.ta_stable &= o.ta_stable;
         // The join, not the meet: the row must hold for either class.
         self.rep = crate::bindings::Rep::join(self.rep, o.rep);
@@ -953,10 +959,18 @@ fn template_facts(
         } else {
             rep
         };
+        let literal_strings = !kind.top && !is_accessor && {
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            crate::literal_strings::holds(m, &nodes)
+        };
         fields.push(FieldFacts {
             rep,
             zero_tol,
             rest: false,
+            literal_strings,
             fns,
             ta_stable,
             ta_kind,

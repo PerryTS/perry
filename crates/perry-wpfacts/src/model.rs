@@ -497,7 +497,8 @@ pub struct Template {
     /// Birth keys reserved for a constructor store
     /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
     /// can observe the instance before the constructor stores them (a method
-    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// call on `this`, ...), or a run skips the store (a branch, a loop body,
+    /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
@@ -1316,7 +1317,7 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
     /// takes a key that reaches the length's lower bound as below it.
     pub elem_undef_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
@@ -1385,6 +1386,15 @@ pub struct Model {
     /// The admitted value-record templates (`TemplateFacts::record` is
     /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
     pub records: crate::pts::FxHashSet<TmplId>,
+    /// The admitted record arrays (VR-4b): Arr template -> the record
+    /// template of its elements. Set with `records`; such an Array is no
+    /// plain program Array (`bindings::arr_rep`), it is a
+    /// `GC_TYPE_RECORD_ARRAY` only the record-array intrinsics touch.
+    pub record_arrays: FxHashMap<TmplId, TmplId>,
+    /// S0 negative control `vrarrjoin` (DESIGN-p4l4 §10.3): a holder of a
+    /// record array and of other Arrays is typed a record array (R6's join
+    /// ignored), a wrong claim the receiver witness must catch.
+    pub record_array_join_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
@@ -1418,6 +1428,28 @@ pub struct Model {
     /// is claimed non-negative, a wrong claim the witness at the element
     /// site must catch.
     pub key_sign_sabotage: bool,
+    /// A `slice` of an Array bears a plain Array (`builtins::
+    /// site_slice_arr`; `PERRY_FACTS_SLICE_BIRTHS=0` turns it off).
+    pub slice_births: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=slicebirth`): a `slice`
+    /// birth is claimed a plain Array whatever its species constructor (an
+    /// `Object` species makes a Number object), a wrong claim the array rep
+    /// witness must catch.
+    pub slice_birth_sabotage: bool,
+    /// The wide keys (`element_keys::collect_wide`;
+    /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
+    pub wide_keys: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=widekey`): a key past int32
+    /// that may be negative is claimed non-negative, a wrong claim the
+    /// witness at the element site must catch.
+    pub wide_key_sabotage: bool,
+    /// Literal strings (`literal_strings`;
+    /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
+    pub literal_strings: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=litstr`): every binding and
+    /// field that may hold a String is claimed to hold only literals'
+    /// values, a wrong claim the witness at the store or alias must catch.
+    pub literal_strings_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.
@@ -1435,6 +1467,18 @@ pub struct Model {
     pub arr_used: crate::pts::FxHashSet<Tok>,
     /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
     pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// DESIGN-p4l4 VR-4b: an array literal that is the whole value of a
+    /// `let`, of a local assignment, of a named store or of a class field
+    /// initializer: the holder codegen births it for
+    /// (`records::ArrBirth`).
+    pub(crate) arr_birth_holder: FxHashMap<TmplId, crate::records::ArrBirth>,
+    /// VR-4b: the bindings of a for-of's source and of its iterator arm's
+    /// temporaries (`perry_hir::lower::for_of_guard`), whose iteration
+    /// protocol uses are the for-of intrinsic's.
+    pub(crate) for_of_relays: crate::pts::FxHashSet<NodeId>,
+    /// VR-4b: the receivers of a generic in-place permutation
+    /// (`Gen::permuted_len`), whose `Cons::LenIndex` is not a `pop`'s.
+    pub(crate) arr_permuted: crate::pts::FxHashSet<NodeId>,
     /// The receiver relays `array_method` makes for a fused fill's call.
     pub rest_fill_relays: Vec<NodeId>,
     /// Push-filled births (`push_fills`; `PERRY_REST_PUSH_FILL=0` turns them

@@ -409,6 +409,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("perry_array_iteration_init", crate::types::VOID, &[I32]);
     module.declare_function("js_array_record_stack_enter", I32, &[PTR, I32, I32]);
     module.declare_function("js_array_record_literal", DOUBLE, &[PTR, I32]);
+    // DESIGN-p4l4 VR-4b: record arrays (`codegen::record_array`). The array
+    // is its JSValue; `PTR` is words of the caller's frame.
+    module.declare_function("js_record_array_new", DOUBLE, &[I32, I32]);
+    module.declare_function("js_record_array_push", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function("js_record_array_pop", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function("js_record_array_get", DOUBLE, &[DOUBLE, DOUBLE, PTR]);
+    module.declare_function("js_record_array_length", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_record_enter", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_array_record_enter_counted", I32, &[DOUBLE, PTR, I32]);
     module.declare_function("js_array_record_needs_iterator", I32, &[DOUBLE]);

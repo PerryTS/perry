@@ -116,6 +116,9 @@ def main():
         ("array-fwd-negative", "arrfwd", "proven element read"),
         ("array-dense-negative", "arrdense", "array rep"),
         ("array-elem-negative", "arrelem", "array rep"),
+        ("array-store-negative", "arrelem", "array rep"),
+        ("rep-default-negative", "arrelem", "array rep"),
+        ("slice-birth-negative", "slicebirth", "array rep"),
         ("array-lazy-negative", "arrlazy", "array rep"),
         ("array-front-negative", "arrfront", "array rep"),
         ("const-array-negative", "arrconst", "constant array"),
@@ -128,7 +131,10 @@ def main():
         ("fn-base-admit-negative", "fnbaseadm", "array rep"),
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
         ("key-sign-negative", "keysign", "key sign"),
+        ("wide-key-negative", "widekey", "wide key"),
+        ("literal-string-negative", "litstr", "literal string"),
         ("number-call-negative", "numbercall", "numeric result"),
+        ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
         ("const-number-negative", "constnum", "constant number"),
@@ -154,6 +160,7 @@ def main():
         ("zero-sign-negative", "zerosign", "zero sign"),
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
         ("birth-image-negative", "birthimage", "birth image"),
+        ("string-call-negative", "stringcall", "call kinds"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the
@@ -194,6 +201,10 @@ def main():
         # no typed call would hand a copy to the callee's boxed entry, which
         # reports "value record boxed entry".
         ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
+        # VR-4b: a record array is touched only by its intrinsics, whose
+        # receiver holds nothing else; a body that also serves another
+        # Array reports "value record array" at the intrinsic.
+        ("vr-arrjoin-negative", "vrarrjoin", "value record array"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:

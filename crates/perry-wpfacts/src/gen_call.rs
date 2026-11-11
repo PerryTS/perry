@@ -125,7 +125,9 @@ impl<'a> Gen<'a> {
             }
         }
         let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
-        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+        // Every call with a source offset: a method call, a direct call of
+        // a function, a call of any other callee value.
+        if byte_offset != 0 {
             self.call_results_at.push((fx.module, byte_offset, result));
         }
         result

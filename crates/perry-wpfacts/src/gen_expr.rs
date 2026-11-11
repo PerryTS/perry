@@ -733,7 +733,11 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF)
             }
             Expr::LocalSet(id, v) => {
+                if matches!(v.as_ref(), Expr::Array(x, _) if x.is_empty()) {
+                    self.direct_arr = Some(crate::records::ArrBirth::Local(mi, *id));
+                }
                 let vn = self.expr_zs(fx, v);
+                self.direct_arr = None;
                 let l = self.local_write(mi, *id);
                 match fx.guard {
                     Some((t, test)) => self.m.cons(
@@ -1158,6 +1162,9 @@ impl<'a> Gen<'a> {
                 }
                 let dst = self.load(o, Key::Named(a));
                 self.field_reads.push(dst);
+                if *byte_offset != 0 {
+                    self.load_sites.push((mi, *byte_offset, a, dst));
+                }
                 dst
             }
             Expr::PropertySet {
@@ -1200,7 +1207,15 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                if let (Expr::Array(v, _), Expr::String(_), Expr::PutValueSet { element_offset, .. }) =
+                    (value.as_ref(), key.as_ref(), e)
+                {
+                    if *element_offset != 0 && v.is_empty() {
+                        self.direct_arr = Some(crate::records::ArrBirth::Store(mi, *element_offset));
+                    }
+                }
                 let v = self.expr_zs(fx, value);
+                self.direct_arr = None;
                 let rv = self.expr(fx, receiver);
                 let owner = self.phase_owner(fx, e, target);
                 if let Some(kp) = self.for_in_key_of(fx.module, key) {
@@ -1628,6 +1643,9 @@ impl<'a> Gen<'a> {
             }
             Expr::Array(elems, _) => {
                 let tm = self.new_arr_birth(mi, "lit", true, true);
+                if let Some(h) = self.direct_arr.take() {
+                    self.m.arr_birth_holder.insert(tm, h);
+                }
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
@@ -1675,7 +1693,14 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 byte_end,
                 ..
-            } => self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end),
+            } => {
+                let result = self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end);
+                if *byte_offset != 0 {
+                    self.call_kinds_at
+                        .push((fx.module, *byte_offset, *byte_end, result));
+                }
+                result
+            }
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);

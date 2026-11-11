@@ -123,6 +123,10 @@ pub(crate) struct FieldProof {
     /// observes (`ElisionFacts::zero_tolerant_fields`); the field-rep
     /// witness admits it.
     pub num_zero_ok: bool,
+    /// Every class's field holds, as Strings, only program string
+    /// literals' values (`ElisionFacts::literal_string_fields`): what an
+    /// unguarded store writes there is one (`expr::literal_strings`).
+    pub literal_strings: bool,
 }
 
 impl FieldProof {
@@ -697,6 +701,13 @@ pub(crate) fn prove(
                 .zero_tolerant_fields
                 .contains(&(c, property.to_string()))
         }),
+        literal_strings: !guarded
+            && !maybe_absent
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .literal_string_fields
+                    .contains(&(c, property.to_string()))
+            }),
     };
     crate::verify_facts::field_consumed(&proof, property);
     Some(proof)

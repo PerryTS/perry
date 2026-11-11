@@ -898,8 +898,16 @@ impl<'a> Gen<'a> {
                             .get(&(e as *const Expr as usize))
                             .copied();
                     }
+                    if matches!(e, Expr::Array(x, _) if x.is_empty())
+                        && f.key_expr.is_none()
+                        && !f.is_private
+                    {
+                        self.direct_arr =
+                            Some(crate::records::ArrBirth::Field(mi, c.id, f.name.clone()));
+                    }
                     let v = self.expr(&ffx, e);
                     self.push_fill_new = None;
+                    self.direct_arr = None;
                     v
                 }
                 // `x: T;` defines `undefined` first; when the constructor
@@ -1196,9 +1204,19 @@ impl<'a> Gen<'a> {
                 init,
                 ty,
                 mutable,
+                name,
                 ..
             } => {
                 let n = self.local(fx.module, *id);
+                if ["__forof_lit_src_", "__forof_lit_arr_", "__iterator_record_", "__arr_"]
+                    .iter()
+                    .any(|p| name.starts_with(p))
+                {
+                    self.m.for_of_relays.insert(n);
+                }
+                if matches!(init, Some(perry_hir::Expr::Array(x, _)) if x.is_empty()) {
+                    self.direct_arr = Some(crate::records::ArrBirth::Local(fx.module, *id));
+                }
                 if !*mutable && init.is_some() {
                     self.initialized_consts.insert((fx.module, *id));
                 }
@@ -1216,6 +1234,7 @@ impl<'a> Gen<'a> {
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
+                self.direct_arr = None;
                 if let Some(perry_hir::Expr::ForInKeys(o)) = init {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
                         self.for_in_keys_of.insert((fx.module, *id), *obj);
