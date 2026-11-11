@@ -887,16 +887,25 @@ pub enum Protocol {
     /// [[OwnPropertyKeys]] and for-in enumeration: no lookup on an ordinary
     /// object (a Proxy is ⊤).
     OwnKeys,
-    /// The runtime's value formatter (`console.*`, perry-runtime
-    /// builtins/formatting.rs and formatting/util_format.rs): the
-    /// `[util.inspect.custom]` hook (a class's under
-    /// `INSPECT_CUSTOM_METHOD`; an object's symbol-keyed one is a computed
-    /// store, which every named key sees), ToPrimitive for `%s`/`%d`/`%i`/
-    /// `%f`, labels and an Error's `name`/`message`, `toJSON` for `%j`.
-    /// Every value it shows (own properties, elements, entries, what a hook
-    /// or `toJSON` returns) is formatted in turn. Getters run only under
+    /// The runtime's value formatter on an argument a format specifier may
+    /// consume (`console.*`, perry-runtime builtins/formatting.rs and
+    /// formatting/util_format.rs): the `[util.inspect.custom]` hook (a
+    /// class's under `INSPECT_CUSTOM_METHOD`; an object's symbol-keyed one
+    /// is a computed store, which every named key sees), ToPrimitive for
+    /// `%s`/`%d`/`%i`/`%f`, `toJSON` for `%j`. Every value it shows (own
+    /// properties, elements, entries) is formatted as `InspectShown`, and
+    /// serialized by `%j`'s JSON.stringify (`Json`); what a hook or
+    /// `toJSON` returns is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
     Inspect,
+    /// The runtime's value formatter on a value it shows (`format_jsvalue`,
+    /// perry-runtime builtins/formatting.rs; Node lib/internal/util/
+    /// inspect.js `formatValue`): the `[util.inspect.custom]` hook only;
+    /// no ToPrimitive, `toString` or `toJSON` runs on a shown value (the
+    /// coercions belong to the format specifiers, which consume only
+    /// arguments). Every value it shows and what a hook returns is
+    /// formatted the same way.
+    InspectShown,
     /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
     /// error's message runs on an object without a named constructor
     /// (lib/internal/errors.js `determineSpecificType`; node 26
@@ -938,7 +947,7 @@ impl Protocol {
                 "toString",
                 "toJSON",
             ],
-            Protocol::ShallowInspect => &[INSPECT_CUSTOM_METHOD],
+            Protocol::ShallowInspect | Protocol::InspectShown => &[INSPECT_CUSTOM_METHOD],
             Protocol::IterResult
             | Protocol::AsyncIterResult
             | Protocol::OwnKeys
@@ -983,7 +992,8 @@ impl Protocol {
     pub fn read_touches(self) -> &'static [Protocol] {
         match self {
             Protocol::Json => &[Protocol::Json],
-            Protocol::Inspect => &[Protocol::Inspect],
+            Protocol::Inspect => &[Protocol::InspectShown, Protocol::Json],
+            Protocol::InspectShown => &[Protocol::InspectShown],
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -997,7 +1007,11 @@ impl Protocol {
     pub fn reads_all(self) -> bool {
         matches!(
             self,
-            Protocol::Json | Protocol::Inspect | Protocol::Clone | Protocol::BufferFrom
+            Protocol::Json
+                | Protocol::Inspect
+                | Protocol::InspectShown
+                | Protocol::Clone
+                | Protocol::BufferFrom
         )
     }
 
@@ -1011,6 +1025,7 @@ impl Protocol {
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
             Protocol::Json
             | Protocol::Inspect
+            | Protocol::InspectShown
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
@@ -1046,6 +1061,7 @@ impl Protocol {
             Protocol::BufferFrom => Some(Protocol::BufferFrom),
             Protocol::Json => Some(Protocol::Json),
             Protocol::Inspect => Some(Protocol::Inspect),
+            Protocol::InspectShown => Some(Protocol::InspectShown),
             Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
@@ -1077,6 +1093,7 @@ impl Protocol {
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
             Protocol::Inspect => "inspect",
+            Protocol::InspectShown => "inspectshown",
             Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",

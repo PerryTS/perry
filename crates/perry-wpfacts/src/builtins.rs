@@ -2024,26 +2024,31 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     ret_prim(m, call, prim::BOOL);
 }
 
-/// A console method formats its arguments (`Protocol::Inspect`); a spread
-/// hands it the elements, which the call site iterated.
+/// A console method formats its arguments (perry-runtime
+/// formatting/util_format.rs; Node util.formatWithOptions): the first is the
+/// format string or a value it shows (`Protocol::InspectShown`); a later one
+/// a format specifier may consume (`Protocol::Inspect`). A spread hands it
+/// the elements, which the call site iterated, at any position.
 fn console_args(m: &mut Model, call: CallId) {
     let c = m.calls[call as usize].clone();
     let r = m.reason("console argument (formatted by the runtime)");
     let ek = m.elem_key();
-    let mut shown = c.args.clone();
+    let mut shown: Vec<(NodeId, Protocol)> = c
+        .args
+        .iter()
+        .enumerate()
+        .map(|(i, &a)| {
+            let first = i == 0 && c.spread.is_empty();
+            (a, if first { Protocol::InspectShown } else { Protocol::Inspect })
+        })
+        .collect();
     for &s in &c.spread {
         let dst = m.node_l("console-spread-elems");
         m.cons(s, Cons::Load { key: ek, dst });
-        shown.push(dst);
+        shown.push((dst, Protocol::Inspect));
     }
-    for a in shown {
-        m.cons(
-            a,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Inspect,
-            },
-        );
+    for (a, proto) in shown {
+        m.cons(a, Cons::Implicit { reason: r, proto });
     }
     ret_prim(m, call, prim::UNDEF);
 }
