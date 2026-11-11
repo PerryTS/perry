@@ -268,6 +268,21 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             ret_prim(m, call, prim::STR);
             return true;
         }
+        // Annex B.2.2.2-.14 CreateHTML(string, tag, attribute, value): with
+        // an attribute (`anchor` name, `fontcolor` color, `fontsize` size,
+        // `link` url) the value is ToString'd; the other HTML methods pass
+        // no attribute and read no operand. A String either way.
+        "anchor" | "fontcolor" | "fontsize" | "link" => {
+            if let Some(v) = arg0 {
+                to_prim(m, v, "CreateHTML attribute value ToString");
+            }
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
+        "big" | "blink" | "bold" | "fixed" | "italics" | "small" | "strike" | "sub" | "sup" => {
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
         "isWellFormed" => {
             ret_prim(m, call, prim::BOOL);
             return true;
