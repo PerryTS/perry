@@ -303,6 +303,9 @@ fn lower_array_index_set_via_runtime_key(
     // #9394: the assignment's own `Throw` flag, carried to the runtime helper
     // so a rejected element write is a TypeError only in strict code.
     assignment_strict: bool,
+    // Key signs: what the facts prove of this store's key (`index_key::
+    // store_key_fact`).
+    key: Option<super::index_key::KeyFact>,
 ) -> Result<String> {
     let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
     let value_is_numeric = is_numeric_expr(ctx, value);
@@ -348,7 +351,12 @@ fn lower_array_index_set_via_runtime_key(
             // N10: every arm of that store is behind `idx <u capacity`, and
             // every decline takes this one helper with the original key, so
             // a widened native index needs no sign test in front of it.
-            let guard_idx_i32 = super::index_key::normalize_unsigned(ctx, &idx_double, Some(index));
+            // Key signs: a key the facts prove an int32 is that `i32` with
+            // no normalizer; a negative one declines as above.
+            let guard_idx_i32 = match key {
+                Some(fact) => super::index_key::exact_i32(ctx, &idx_double, fact),
+                None => super::index_key::normalize_unsigned(ctx, &idx_double, Some(index)),
+            };
             super::index_set_guarded::emit_guarded_inbounds_array_store(
                 ctx,
                 &arr_box,
@@ -1059,6 +1067,7 @@ pub(crate) fn lower(
                     value.as_ref(),
                     "array[dynamic_numeric_index]",
                     assignment_strict,
+                    super::index_key::store_key_fact(ctx, expr),
                 );
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
@@ -1181,6 +1190,7 @@ pub(crate) fn lower(
                                 value.as_ref(),
                                 "array[dynamic_numeric_index]",
                                 assignment_strict,
+                                super::index_key::store_key_fact(ctx, expr),
                             );
                         };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);

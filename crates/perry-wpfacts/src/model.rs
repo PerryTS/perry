@@ -1405,6 +1405,13 @@ pub struct Model {
     pub rest_capacity: bool,
     /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
     pub rest_fields: bool,
+    /// The key signs (`element_keys::collect_signs`;
+    /// `PERRY_FACTS_KEY_SIGN=0` turns them off).
+    pub key_sign: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=keysign`): every int32 key
+    /// is claimed non-negative, a wrong claim the witness at the element
+    /// site must catch.
+    pub key_sign_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

@@ -404,6 +404,11 @@ pub struct ElisionFacts {
     /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
     /// PR-C2; `expr::index_get::proven_array`).
     pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// Element sites (reads and stores, by `element_offset`) whose key is an
+    /// integer Number inside the int32 range at every copy, with its
+    /// interval (wpfacts `ModuleBindings::key_signs`;
+    /// `expr::index_key::key_fact`).
+    pub key_signs: std::collections::BTreeMap<u32, (i64, i64)>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest
