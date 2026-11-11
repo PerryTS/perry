@@ -213,6 +213,7 @@ executable so it runs with no external files on disk (#5731).
 | Flag | Description |
 |------|-------------|
 | `--embed <pattern>` | Embed a file, directory, or `*`/`**` glob (relative to the project root). Repeatable. Merged with `perry.embed` (package.json) and `[compile] embed` (perry.toml). |
+| `--sea` | Opt into Perry's Node SEA asset profile. Enables the supported `node:sea` asset APIs for files added with `--embed`; ordinary embedded assets alone do not make `isSea()` true. CLI only; package and TOML profile settings are not supported. |
 | `--bunfs-root <dir>` | Map an extracted Bun standalone root to `/$bunfs/root/`; mapped module paths resolve natively and literal file paths remain readable from the relocated executable. |
 | `--asset-module <specifier=dir>` | Generate a virtual module whose default export maps every file below `dir` to a stable `$perryfs` handle. Repeatable; source maps are excluded. |
 
@@ -221,6 +222,25 @@ vite build
 perry compile server.ts --embed "./dist/**" -o myapp
 ./myapp   # serves dist/ from memory — no dist/ folder needed
 ```
+
+To expose the same registered files through `node:sea`, opt in explicitly:
+
+```bash
+perry compile server.ts --sea --embed "./dist/**" -o myapp
+```
+
+In this profile, `isSea()` is true, `getAssetKeys()` lists the embedded file
+names, and `getAsset(key)` returns an `ArrayBuffer`; passing a
+`TextDecoder`-supported encoding returns a string. `getAssetAsBlob()` returns a
+`Blob` and accepts an optional `type`. `getRawAsset()` currently reports
+unsupported because Perry cannot safely expose the executable's read-only
+bytes as a mutable JavaScript ArrayBuffer.
+Assets still live in the executable's read-only data; no Node executable or
+temporary extraction is used. The profile is selected only with the `--sea`
+CLI flag. Existing `perry.embed` and `[compile] embed` patterns remain ordinary
+Perry assets unless `--sea` is also passed. This provides the `node:sea` asset
+APIs only; it does not implement Node SEA's `useVfs` behavior for virtual-path
+`node:fs` reads, directory reads, or module resolution.
 
 Embedded files are reachable at runtime three ways:
 
