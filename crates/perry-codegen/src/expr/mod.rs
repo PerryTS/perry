@@ -3370,6 +3370,7 @@ pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 mod index_get_claim_tests;
 pub(crate) mod index_key;
 pub(crate) mod int32_key;
+pub(crate) mod int32_operand;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]

@@ -406,6 +406,19 @@ fn local_ranges_switch_is_a_cache_input() {
     );
 }
 
+/// The int32-operand switches decide whether a bitwise operator over an
+/// I32 lane or an int32 element read is lowered in i32, so `=0` must never
+/// reuse an `=1` object.
+#[test]
+fn int32_operand_switches_are_cache_inputs() {
+    for name in ["PERRY_FACTS_INT32_READS", "PERRY_INT32_OPERANDS"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]

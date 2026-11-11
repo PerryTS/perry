@@ -585,6 +585,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.number_calls.extend(mb.number_calls.iter().copied());
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
+        out.int32_element_reads
+            .extend(mb.int32_element_reads.iter().copied());
         out.element_floors.extend(mb.element_floors.iter().copied());
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
