@@ -441,7 +441,8 @@ fn int32_default(e: &Expr) -> Option<i32> {
 /// `left ?? right` where `left` is an at-rest element read with an int32
 /// key and `right` an int32 literal, as the **i32** of its value; `None`
 /// for any other expression (and for a read the rep-keyed tier proves in
-/// its floor, which is never `undefined`, or one a loop's held base serves).
+/// its floor, which is never `undefined`). A field read call a loop's held
+/// base serves is taken by `lower_call::field_read_call` before this.
 ///
 /// Every Array the read can reach is at rest: a plain program Array with no
 /// named property, whose every slot is an I32 word or a hole. So the read
@@ -484,7 +485,7 @@ pub(crate) fn try_lower_default_i32(
     let in_floor = counter_in_floor(ctx, object, index)
         || super::index_get::proven_array::rep_read(ctx, object, *element_offset)
             .is_some_and(|r| r.rep.at_rest && r.in_floor && !foreign);
-    if in_floor || super::index_get::field_base::servable(ctx, left).is_some() {
+    if in_floor {
         return Ok(None);
     }
     probe(ctx, "read", "default", *element_offset);
