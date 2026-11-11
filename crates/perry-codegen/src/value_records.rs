@@ -34,14 +34,32 @@
 //! materializer or the key-by-key read, both sound for an immutable,
 //! identity-free template (R2, R4).
 //!
-//! Records do not cross program calls yet (wpfacts `RECORD_SIGNATURES`,
-//! VR-3b), and records in arrays are VR-4b.
+//! VR-3b, a record across a typed call (§5.2): the signature slot the facts
+//! give `Record` (`FactsSignature::record_params`, `record_ret`) carries the
+//! record as its lanes, one per layout word plus a presence lane. The rewrite
+//! writes each side in a form that is also the boxed program, so a callee
+//! codegen gives no `$sig` still runs:
+//!
+//! - a record parameter is a binding declared at the body's entry, its
+//!   fields read from the parameter key by key (the prologue, which
+//!   `record_sig::sig_body` replaces by the lane parameters of `F$sig`);
+//! - `return e` of a record-returning body writes `e` into the body's result
+//!   lanes and returns their copy (`record_sig::lower_return` returns the
+//!   lanes);
+//! - an argument in a record slot is the copy of a binding's lanes
+//!   (`record_sig::copy_lanes` reads them back: no object is born);
+//! - a call that returns a record is bound to an aggregate temporary
+//!   (`record_aggs`): the typed call writes the result lanes into the
+//!   destination's field locals and leaves `true` (or `undefined`) in the
+//!   temporary; a boxed result is read key by key.
+//!
+//! Records in arrays are VR-4b.
 use std::collections::{HashMap, HashSet};
 
 use perry_hir::types::{LocalId, Type};
 use perry_hir::{CompareOp, Expr, Function, LogicalOp, Module, Stmt, UnaryOp};
 
-use crate::codegen::{ElisionFacts, FactsRecRep};
+use crate::codegen::{ElisionFacts, FactsRecRep, FactsRecordFn, FactsRecordLanes, FactsSignature};
 
 /// How a template's literal is born, and so how a copy is materialized.
 #[derive(Clone, Debug)]
@@ -57,6 +75,8 @@ struct Shape {
     birth: Birth,
     /// The layout keys, in birth order.
     keys: Vec<String>,
+    /// Per key: a Number lane (its filler is `0`, else `undefined`).
+    numeric: Vec<bool>,
 }
 
 /// A rewritten binding: its field locals (layout order) and the presence
@@ -73,6 +93,18 @@ struct Rec {
     /// reads the binding (every value is evaluated before a field is
     /// written).
     next: Vec<LocalId>,
+    /// The aggregate temporary a record-returning typed call is bound to
+    /// (VR-3b).
+    agg: LocalId,
+}
+
+/// What the rewrite tells the lowering of the record signature ABI
+/// (`ElisionFacts::record_fns`, `record_aggs`, `record_births`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Abi {
+    pub fns: std::collections::BTreeMap<u32, FactsRecordFn>,
+    pub aggs: std::collections::BTreeMap<u32, FactsRecordLanes>,
+    pub births: std::collections::BTreeMap<u32, crate::codegen::FactsRecordBirth>,
 }
 
 /// Per-module counts, for `PERRY_VALUE_RECORDS_TRACE=1` and the probes.
@@ -89,12 +121,20 @@ pub(crate) struct Census {
     pub materialized: usize,
     /// Boxed values read key by key into a binding's fields.
     pub unpacked: usize,
+    /// VR-3b: record parameters bound at a body's entry, bodies that return
+    /// a record through their result lanes, arguments passed in a record
+    /// slot, and record-returning typed calls bound to lanes.
+    pub params: usize,
+    pub returns: usize,
+    pub passed: usize,
+    pub calls: usize,
 }
 
 /// The module with every eligible record binding rewritten, or `None`
 /// when there is none (the module lowers as it is).
-pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Census)> {
-    if facts.record_locals.is_empty() {
+pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Census, Abi)> {
+    let record_sigs = facts.signatures.values().any(has_record);
+    if facts.record_locals.is_empty() && !record_sigs {
         return None;
     }
     let shapes = shapes(hir, facts);
@@ -104,29 +144,57 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
         .filter(|(_, r)| shapes.contains_key(&r.tmpl))
         .map(|(id, r)| (*id, *r))
         .collect();
-    if cands.is_empty() {
+    if cands.is_empty() && !record_sigs {
         return None;
     }
-    let census = Refs::of(hir, &cands);
+    // VR-3b: a parameter in a `Record` signature slot is a binding the
+    // body's entry declares.
+    let mut params: HashSet<LocalId> = HashSet::new();
+    for f in all_functions(hir) {
+        let Some(sig) = facts.signatures.get(&f.id) else {
+            continue;
+        };
+        for (p, r) in f.params.iter().zip(&sig.record_params) {
+            if r.is_some_and(|r| cands.get(&p.id).is_some_and(|c| c.tmpl == r.tmpl))
+                && p.default.is_none()
+                && !p.is_rest
+                && p.arguments_object.is_none()
+            {
+                params.insert(p.id);
+            }
+        }
+    }
+    let census = Refs::of(hir, &cands, &params);
     let mut eligible: HashSet<LocalId> = cands
         .keys()
         .copied()
-        .filter(|id| !census.bad.contains(id) && census.lets.get(id) == Some(&1))
+        .filter(|id| {
+            !census.bad.contains(id)
+                && if params.contains(id) {
+                    !census.lets.contains_key(id)
+                } else {
+                    census.lets.get(id) == Some(&1)
+                }
+        })
         .collect();
     let next = perry_transform::generator::compute_max_local_id(hir).saturating_add(1);
     // A binding whose references the rewrite did not all reach stays a
     // heap object; the others are rewritten again without it.
-    while !eligible.is_empty() {
+    while !eligible.is_empty() || record_sigs {
         let mut out = hir.clone();
         let mut rw = Rewriter {
             shapes: &shapes,
             cands: &cands,
             eligible: &eligible,
+            facts,
             recs: HashMap::new(),
             next,
             reached: HashMap::new(),
             failed: HashSet::new(),
             census: Census::default(),
+            ret: None,
+            pending: Vec::new(),
+            abi: Abi::default(),
         };
         rw.module(&mut out);
         let dropped: HashSet<LocalId> = eligible
@@ -143,8 +211,18 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
             let mut c = rw.census;
             c.locals = eligible.len();
             c.kept = cands.len() - eligible.len();
+            if c == (Census {
+                kept: c.kept,
+                ..Census::default()
+            }) {
+                break;
+            }
             trace(hir, &c);
-            return Some((out, c));
+            let mut abi = rw.abi;
+            for (&tmpl, shape) in &shapes {
+                abi.births.insert(tmpl, shape.birth_fact());
+            }
+            return Some((out, c, abi));
         }
         eligible.retain(|id| !dropped.contains(id));
     }
@@ -161,8 +239,18 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
 fn trace(hir: &Module, c: &Census) {
     if std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
         eprintln!(
-            "perry: value records: module {}: locals {} kept {} field reads {} presence {} materialized {} unpacked {}",
-            hir.name, c.locals, c.kept, c.field_reads, c.presence, c.materialized, c.unpacked
+            "perry: value records: module {}: locals {} kept {} field reads {} presence {} materialized {} unpacked {} params {} returns {} passed {} calls {}",
+            hir.name,
+            c.locals,
+            c.kept,
+            c.field_reads,
+            c.presence,
+            c.materialized,
+            c.unpacked,
+            c.params,
+            c.returns,
+            c.passed,
+            c.calls
         );
     }
 }
@@ -201,6 +289,7 @@ fn shapes(hir: &Module, facts: &ElisionFacts) -> HashMap<u32, Shape> {
             Shape {
                 birth,
                 keys: layout.keys.clone(),
+                numeric: layout.numeric.clone(),
             },
         );
     }
@@ -221,7 +310,11 @@ struct Refs {
 }
 
 impl Refs {
-    fn of(hir: &Module, cands: &HashMap<LocalId, FactsRecRep>) -> Refs {
+    fn of(
+        hir: &Module,
+        cands: &HashMap<LocalId, FactsRecRep>,
+        params: &HashSet<LocalId>,
+    ) -> Refs {
         let mut r = Refs {
             refs: HashMap::new(),
             lets: HashMap::new(),
@@ -315,7 +408,7 @@ impl Refs {
         });
         for f in all_functions(hir) {
             for p in &f.params {
-                if cands.contains_key(&p.id) {
+                if cands.contains_key(&p.id) && !params.contains(&p.id) {
                     r.bad.insert(p.id);
                 }
             }
@@ -362,6 +455,12 @@ struct Rewriter<'a> {
     shapes: &'a HashMap<u32, Shape>,
     cands: &'a HashMap<LocalId, FactsRecRep>,
     eligible: &'a HashSet<LocalId>,
+    facts: &'a ElisionFacts,
+    /// The result lanes of the record-returning body being rewritten.
+    ret: Option<LocalId>,
+    /// Declarations of temporaries, placed before the statement in progress.
+    pending: Vec<Stmt>,
+    abi: Abi,
     /// The bindings declared so far, in traversal order.
     recs: HashMap<LocalId, Rec>,
     next: LocalId,
@@ -443,11 +542,355 @@ impl Rewriter<'_> {
     }
 
     fn function(&mut self, f: &mut Function) {
+        let facts: &ElisionFacts = self.facts;
+        let sig = facts.signatures.get(&f.id).filter(|s| has_record(s));
+        // The default prologues HIR lowering prepends stay first
+        // (`signature_entry::sig_function` reads them there); the record
+        // prologue follows, so no default may read a record parameter.
+        let defaults: Vec<LocalId> = f
+            .params
+            .iter()
+            .filter(|p| p.default.is_some())
+            .map(|p| p.id)
+            .collect();
+        let at = defaults.len();
+        let plain_prologue = defaults.iter().enumerate().all(|(i, id)| {
+            f.body.get(i).is_some_and(|s| {
+                crate::codegen::signature_entry::is_default_prologue(s, *id)
+                    && !stmt_refers_to_any(s, &|x| self.eligible.contains(&x))
+            })
+        });
+        let mut lanes: Vec<Option<FactsRecordLanes>> = vec![None; f.params.len()];
+        let mut prologue: Vec<Stmt> = Vec::new();
+        if let (Some(sig), true) = (sig, plain_prologue) {
+            for (i, p) in f.params.iter().enumerate() {
+                let Some(Some(r)) = sig.record_params.get(i) else {
+                    continue;
+                };
+                if !self.eligible.contains(&p.id) || self.recs.contains_key(&p.id) {
+                    continue;
+                }
+                let rec = self.new_rec(r.tmpl, r.opt);
+                self.unpack_param(&rec, p.id, &p.name, &mut prologue);
+                lanes[i] = Some(lanes_of(&rec));
+                self.recs.insert(p.id, rec);
+                self.census.params += 1;
+            }
+        }
+        let saved_ret = self.ret.take();
+        if let Some(r) = sig
+            .filter(|_| plain_prologue)
+            .and_then(|s| s.record_ret)
+            .filter(|r| self.shapes.contains_key(&r.tmpl))
+        {
+            // The result lanes always track presence: `return;` and a
+            // completion without `return` are the absent record.
+            let rec = self.new_rec(r.tmpl, true);
+            prologue.extend(self.decl_stmts(&rec, "return"));
+            let id = self.fresh();
+            self.recs.insert(id, rec);
+            self.ret = Some(id);
+            self.census.returns += 1;
+        }
         self.stmts(&mut f.body);
+        let ret = self.ret.is_some();
+        self.ret = saved_ret;
+        if lanes.iter().any(Option::is_some) || ret {
+            let len = prologue.len();
+            f.body.splice(at..at, prologue);
+            self.abi.fns.insert(
+                f.id,
+                FactsRecordFn {
+                    prologue_at: at,
+                    prologue_len: len,
+                    params: lanes,
+                    ret,
+                },
+            );
+        }
+    }
+
+    /// A record of `tmpl` with fresh locals.
+    fn new_rec(&mut self, tmpl: u32, track: bool) -> Rec {
+        let n = self.shapes[&tmpl].keys.len();
+        Rec {
+            tmpl,
+            track,
+            present: self.fresh(),
+            fields: (0..n).map(|_| self.fresh()).collect(),
+            tmp: self.fresh(),
+            next: (0..n).map(|_| self.fresh()).collect(),
+            agg: self.fresh(),
+        }
+    }
+
+    /// A lane's value while the record is absent: a Number lane holds a
+    /// Number at all times.
+    fn filler(&self, tmpl: u32, i: usize) -> Expr {
+        if self.shapes[&tmpl].numeric.get(i) == Some(&true) {
+            Expr::Number(0.0)
+        } else {
+            undefined()
+        }
+    }
+
+    /// The scratch locals an assignment to `rec` uses.
+    fn scratch_stmts(&self, rec: &Rec, name: &str) -> Vec<Stmt> {
+        let keys = &self.shapes[&rec.tmpl].keys;
+        let mut out = vec![
+            let_stmt(
+                rec.tmp,
+                format!("{name}$boxed"),
+                Type::Any,
+                true,
+                undefined(),
+            ),
+            let_stmt(rec.agg, format!("{name}$agg"), Type::Any, true, undefined()),
+        ];
+        for (i, k) in keys.iter().enumerate() {
+            out.push(let_stmt(
+                rec.next[i],
+                format!("{name}${k}$next"),
+                Type::Any,
+                true,
+                undefined(),
+            ));
+        }
+        out
+    }
+
+    /// The declarations of an absent `rec`: presence, fields, scratch.
+    fn decl_stmts(&self, rec: &Rec, name: &str) -> Vec<Stmt> {
+        let keys = &self.shapes[&rec.tmpl].keys;
+        let mut out = Vec::new();
+        if rec.track {
+            out.push(let_stmt(
+                rec.present,
+                format!("{name}$present"),
+                Type::Any,
+                true,
+                Expr::Bool(false),
+            ));
+        }
+        for (i, k) in keys.iter().enumerate() {
+            out.push(let_stmt(
+                rec.fields[i],
+                format!("{name}${k}"),
+                Type::Any,
+                true,
+                self.filler(rec.tmpl, i),
+            ));
+        }
+        out.extend(self.scratch_stmts(rec, name));
+        out
+    }
+
+    /// The entry prologue of record parameter `p`: its lanes read from the
+    /// parameter key by key (`F$sig` receives them as parameters instead).
+    fn unpack_param(&self, rec: &Rec, p: LocalId, name: &str, out: &mut Vec<Stmt>) {
+        let keys = &self.shapes[&rec.tmpl].keys;
+        if rec.track {
+            out.push(let_stmt(
+                rec.present,
+                format!("{name}$present"),
+                Type::Any,
+                true,
+                Expr::Compare {
+                    op: CompareOp::Ne,
+                    left: Box::new(Expr::LocalGet(p)),
+                    right: Box::new(undefined()),
+                },
+            ));
+        }
+        for (i, k) in keys.iter().enumerate() {
+            let read = Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(p)),
+                property: k.clone(),
+                byte_offset: 0,
+                byte_end: 0,
+            };
+            let v = if rec.track {
+                Expr::Conditional {
+                    condition: Box::new(Expr::LocalGet(rec.present)),
+                    then_expr: Box::new(read),
+                    else_expr: Box::new(self.filler(rec.tmpl, i)),
+                }
+            } else {
+                read
+            };
+            out.push(let_stmt(
+                rec.fields[i],
+                format!("{name}${k}"),
+                Type::Any,
+                true,
+                v,
+            ));
+        }
+        out.extend(self.scratch_stmts(rec, name));
+    }
+
+    /// A temporary record of `tmpl`, declared before the statement in
+    /// progress.
+    fn temp(&mut self, tmpl: u32) -> LocalId {
+        let rec = self.new_rec(tmpl, true);
+        let id = self.fresh();
+        let decls = self.decl_stmts(&rec, &format!("rec${id}"));
+        self.pending.extend(decls);
+        self.recs.insert(id, rec);
+        id
+    }
+
+    /// The signature of the typed call `e` when a slot of it is a record
+    /// (`typed_calls` names the call's offset; a direct call names its
+    /// callee).
+    fn record_call(&self, e: &Expr) -> Option<&'_ FactsSignature> {
+        let Expr::Call {
+            callee,
+            byte_offset,
+            ..
+        } = e
+        else {
+            return None;
+        };
+        let (offset, direct) = match callee.as_ref() {
+            Expr::FuncRef(fid) => (*byte_offset, Some(*fid)),
+            Expr::PropertyGet {
+                byte_offset: member,
+                ..
+            } => (if *member != 0 { *member } else { *byte_offset }, None),
+            _ => return None,
+        };
+        if offset == 0 {
+            return None;
+        }
+        let facts: &ElisionFacts = self.facts;
+        let fid = *facts.typed_calls.get(&offset)?;
+        if direct.is_some_and(|d| d != fid) {
+            return None;
+        }
+        facts.signatures.get(&fid).filter(|s| has_record(s))
+    }
+
+    /// The record a typed call `e` returns.
+    fn record_ret_call(&self, e: &Expr) -> Option<FactsRecRep> {
+        self.record_call(e)?
+            .record_ret
+            .filter(|r| self.shapes.contains_key(&r.tmpl))
+    }
+
+    /// Typed call `e` with a record slot: each argument in a record slot is
+    /// the copy of a binding's lanes (a value that is no binding is first
+    /// written into a temporary's), the other operands are rewritten as
+    /// usual.
+    fn call_operands(&mut self, e: &mut Expr) {
+        let slots: Vec<Option<FactsRecRep>> = self
+            .record_call(e)
+            .map(|s| s.record_params.clone())
+            .unwrap_or_default();
+        let Expr::Call { callee, args, .. } = e else {
+            return;
+        };
+        self.expr(callee);
+        for (i, a) in args.iter_mut().enumerate() {
+            let slot = slots
+                .get(i)
+                .copied()
+                .flatten()
+                .filter(|r| self.shapes.contains_key(&r.tmpl));
+            let Some(r) = slot else {
+                self.expr(a);
+                continue;
+            };
+            if is_undefined(a) {
+                continue;
+            }
+            self.census.passed += 1;
+            if let Some(u) = self.rec_of(a).filter(|u| self.recs[u].tmpl == r.tmpl) {
+                self.reach(u);
+                *a = self.copy(u);
+                continue;
+            }
+            let t = self.temp(r.tmpl);
+            let v = std::mem::replace(a, undefined());
+            let list = self.assign(t, v);
+            *a = seq(list, self.copy(t));
+        }
+    }
+
+    /// Bind the record result of typed call `call` to `u`'s lanes: the
+    /// call's value goes to `u`'s aggregate temporary, which the typed call
+    /// leaves `true` (present, the lanes written) or `undefined`; a boxed
+    /// result is an object, read key by key.
+    fn call_into(&mut self, u: LocalId, mut call: Expr) -> Vec<Expr> {
+        self.call_operands(&mut call);
+        self.census.calls += 1;
+        let rec = self.recs[&u].clone();
+        let opt = self.record_ret_call(&call).is_none_or(|r| r.opt);
+        if opt && !rec.track {
+            self.failed.insert(u);
+        }
+        self.abi.aggs.insert(rec.agg, lanes_of(&rec));
+        let keys = self.shapes[&rec.tmpl].keys.clone();
+        let agg = || Box::new(Expr::LocalGet(rec.agg));
+        let mut list = vec![Expr::LocalSet(rec.agg, Box::new(call))];
+        if rec.track {
+            list.push(Expr::LocalSet(
+                rec.present,
+                Box::new(Expr::Compare {
+                    op: CompareOp::Ne,
+                    left: agg(),
+                    right: Box::new(undefined()),
+                }),
+            ));
+        }
+        let mut reads = Vec::new();
+        for (i, k) in keys.iter().enumerate() {
+            let read = Expr::PropertyGet {
+                object: agg(),
+                property: k.clone(),
+                byte_offset: 0,
+                byte_end: 0,
+            };
+            let v = if rec.track {
+                Expr::Conditional {
+                    condition: Box::new(Expr::LocalGet(rec.present)),
+                    then_expr: Box::new(read),
+                    else_expr: Box::new(self.filler(rec.tmpl, i)),
+                }
+            } else {
+                read
+            };
+            reads.push(Expr::LocalSet(rec.fields[i], Box::new(v)));
+        }
+        list.push(Expr::Conditional {
+            condition: Box::new(Expr::Compare {
+                op: CompareOp::Eq,
+                left: agg(),
+                right: Box::new(Expr::Bool(true)),
+            }),
+            then_expr: Box::new(undefined()),
+            else_expr: Box::new(seq(reads, undefined())),
+        });
+        list.push(Expr::LocalSet(rec.agg, Box::new(undefined())));
+        list
+    }
+
+    /// The copy of `u`'s lanes in a record slot or a record return: the
+    /// materializer's expression, which `record_sig::copy_lanes` reads back.
+    fn copy(&mut self, u: LocalId) -> Expr {
+        let e = self.materialize(u);
+        self.census.materialized -= 1;
+        e
     }
 
     fn stmts(&mut self, list: &mut Vec<Stmt>) {
         let old = std::mem::take(list);
+        let outer = std::mem::take(&mut self.pending);
+        self.stmts_inner(old, list);
+        self.pending = outer;
+    }
+
+    fn stmts_inner(&mut self, old: Vec<Stmt>, list: &mut Vec<Stmt>) {
         for mut s in old {
             if let Stmt::Let {
                 id,
@@ -462,12 +905,16 @@ impl Rewriter<'_> {
                         self.failed.insert(*id);
                     } else {
                         let (id, name, mutable, init) = (*id, name.clone(), *mutable, init.take());
-                        self.declare(id, &name, mutable, init, list);
+                        let mut out = Vec::new();
+                        self.declare(id, &name, mutable, init, &mut out);
+                        list.append(&mut self.pending);
+                        list.append(&mut out);
                         continue;
                     }
                 }
             }
             self.stmt(&mut s);
+            list.append(&mut self.pending);
             list.push(s);
         }
     }
@@ -480,6 +927,14 @@ impl Rewriter<'_> {
                 }
             }
             Stmt::Expr(e) => self.discarded(e),
+            // VR-3b: a record-returning body writes the value into its
+            // result lanes and returns their copy.
+            Stmt::Return(Some(e)) if self.ret.is_some() => {
+                let ret = self.ret.expect("result lanes");
+                let v = std::mem::replace(e, undefined());
+                let list = self.assign(ret, v);
+                *e = seq(list, self.copy(ret));
+            }
             Stmt::Return(Some(e)) | Stmt::Throw(e) => self.expr(e),
             Stmt::Return(None) => {}
             Stmt::If {
@@ -598,33 +1053,7 @@ impl Rewriter<'_> {
     ) {
         let r = self.cands[&id];
         let keys = self.shapes[&r.tmpl].keys.clone();
-        let rec = Rec {
-            tmpl: r.tmpl,
-            track: r.opt || init.is_none(),
-            present: self.fresh(),
-            fields: keys.iter().map(|_| self.fresh()).collect(),
-            tmp: self.fresh(),
-            next: keys.iter().map(|_| self.fresh()).collect(),
-        };
-        // The scratch locals an assignment uses (a `const` has none).
-        let scratch = |rec: &Rec, out: &mut Vec<Stmt>| {
-            out.push(let_stmt(
-                rec.tmp,
-                format!("{name}$boxed"),
-                Type::Any,
-                true,
-                undefined(),
-            ));
-            for (i, k) in keys.iter().enumerate() {
-                out.push(let_stmt(
-                    rec.next[i],
-                    format!("{name}${k}$next"),
-                    Type::Any,
-                    true,
-                    undefined(),
-                ));
-            }
-        };
+        let rec = self.new_rec(r.tmpl, r.opt || init.is_none());
         let field_name = |k: &str| format!("{name}${k}");
         let direct = init.as_ref().and_then(|e| self.birth_values(r.tmpl, e));
         match direct {
@@ -637,7 +1066,7 @@ impl Rewriter<'_> {
                     out.push(let_stmt(
                         rec.present,
                         format!("{name}$present"),
-                        Type::Boolean,
+                        Type::Any,
                         true,
                         Expr::Bool(true),
                     ));
@@ -652,30 +1081,12 @@ impl Rewriter<'_> {
                     ));
                 }
                 if mutable {
-                    scratch(&rec, out);
+                    out.extend(self.scratch_stmts(&rec, name));
                 }
                 self.recs.insert(id, rec);
             }
             None => {
-                if rec.track {
-                    out.push(let_stmt(
-                        rec.present,
-                        format!("{name}$present"),
-                        Type::Boolean,
-                        true,
-                        Expr::Bool(false),
-                    ));
-                }
-                for (i, k) in keys.iter().enumerate() {
-                    out.push(let_stmt(
-                        rec.fields[i],
-                        field_name(k),
-                        Type::Any,
-                        true,
-                        undefined(),
-                    ));
-                }
-                scratch(&rec, out);
+                out.extend(self.decl_stmts(&rec, name));
                 self.recs.insert(id, rec);
                 if let Some(e) = init {
                     let list = self.assign(id, e);
@@ -688,6 +1099,13 @@ impl Rewriter<'_> {
     /// The expressions that evaluate record value `e` into `u`'s locals.
     fn assign(&mut self, u: LocalId, mut e: Expr) -> Vec<Expr> {
         let rec = self.recs[&u].clone();
+        // VR-3b: a typed call that returns this record.
+        if self
+            .record_ret_call(&e)
+            .is_some_and(|r| r.tmpl == rec.tmpl)
+        {
+            return self.call_into(u, e);
+        }
         // A literal birth: its values in their evaluation order. When one
         // reads `u`, every value is taken before the first field is written.
         if let Some(values) = self.birth_values(rec.tmpl, &e) {
@@ -785,7 +1203,7 @@ impl Rewriter<'_> {
                 Expr::Conditional {
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
-                    else_expr: Box::new(undefined()),
+                    else_expr: Box::new(self.filler(rec.tmpl, i)),
                 }
             } else {
                 read
@@ -869,6 +1287,13 @@ impl Rewriter<'_> {
                     self.discarded(x);
                 }
             }
+            Expr::Call { .. } if self.record_ret_call(e).is_some() => {
+                let r = self.record_ret_call(e).expect("a record result");
+                let t = self.temp(r.tmpl);
+                let call = std::mem::replace(e, undefined());
+                let list = self.call_into(t, call);
+                *e = seq(list, undefined());
+            }
             _ => self.expr(e),
         }
     }
@@ -879,6 +1304,19 @@ impl Rewriter<'_> {
             *e = self.materialize(u);
             return;
         }
+        // VR-3b: a typed call that returns a record, in a value position:
+        // its lanes go to a temporary, whose copy is the value.
+        if let Some(r) = self.record_ret_call(e) {
+            let t = self.temp(r.tmpl);
+            let call = std::mem::replace(e, undefined());
+            let list = self.call_into(t, call);
+            *e = seq(list, self.materialize(t));
+            return;
+        }
+        if self.record_call(e).is_some() {
+            self.call_operands(e);
+            return;
+        }
         match e {
             Expr::LocalSet(u, v) if self.recs.contains_key(u) => {
                 let u = *u;
@@ -887,6 +1325,22 @@ impl Rewriter<'_> {
                 let list = self.assign(u, v);
                 let value = self.materialize(u);
                 *e = seq(list, value);
+            }
+            // A field of a typed call's record result: no copy.
+            Expr::PropertyGet {
+                object, property, ..
+            } if self.record_ret_call(object).is_some_and(|r| {
+                self.shapes[&r.tmpl].keys.iter().any(|k| k == property)
+            }) =>
+            {
+                let r = self.record_ret_call(object).expect("a record result");
+                let t = self.temp(r.tmpl);
+                let call = std::mem::replace(object.as_mut(), Expr::LocalGet(t));
+                let list = self.call_into(t, call);
+                // `t.k`, the field read of the temporary.
+                let mut read = std::mem::replace(e, undefined());
+                self.expr(&mut read);
+                *e = seq(list, read);
             }
             Expr::PropertyGet {
                 object,
@@ -1028,7 +1482,10 @@ impl Rewriter<'_> {
                         self.expr(d);
                     }
                 }
+                // A closure's `return` is its own.
+                let ret = self.ret.take();
                 self.stmts(body);
+                self.ret = ret;
             }
             _ => perry_hir::walker::walk_expr_children_mut(e, &mut |c| self.expr(c)),
         }
@@ -1038,6 +1495,63 @@ impl Rewriter<'_> {
     /// a value position.
     fn cond_value(&mut self, e: &mut Expr) {
         self.expr(e);
+    }
+}
+
+/// A parameter or the result of `sig` is a value record.
+pub(crate) fn has_record(sig: &FactsSignature) -> bool {
+    sig.record_ret.is_some() || sig.record_params.iter().any(Option::is_some)
+}
+
+fn lanes_of(rec: &Rec) -> FactsRecordLanes {
+    FactsRecordLanes {
+        tmpl: rec.tmpl,
+        present: rec.track.then_some(rec.present),
+        fields: rec.fields.clone(),
+    }
+}
+
+/// A statement of a default prologue names a local `pred` holds for.
+fn stmt_refers_to_any(s: &Stmt, pred: &dyn Fn(LocalId) -> bool) -> bool {
+    let mut found = false;
+    let mut on = |x: &Expr| {
+        if matches!(x, Expr::LocalGet(id) | Expr::LocalSet(id, _) if pred(*id)) {
+            found = true;
+        }
+    };
+    if let Stmt::If {
+        condition,
+        then_branch,
+        ..
+    } = s
+    {
+        perry_hir::tdz_check::for_each_expr_in(condition, &mut on);
+        for t in then_branch {
+            if let Stmt::Expr(e) = t {
+                perry_hir::tdz_check::for_each_expr_in(e, &mut on);
+            }
+        }
+    }
+    found
+}
+
+impl Shape {
+    /// How codegen reads a copy of this template back
+    /// (`record_sig::copy_lanes`).
+    fn birth_fact(&self) -> crate::codegen::FactsRecordBirth {
+        match &self.birth {
+            Birth::Class { name, fields } => crate::codegen::FactsRecordBirth {
+                class: Some(name.clone()),
+                order: fields
+                    .iter()
+                    .map(|f| self.keys.iter().position(|k| k == f).expect("a layout key"))
+                    .collect(),
+            },
+            Birth::Object => crate::codegen::FactsRecordBirth {
+                class: None,
+                order: (0..self.keys.len()).collect(),
+            },
+        }
     }
 }
 

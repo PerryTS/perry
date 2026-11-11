@@ -54,6 +54,7 @@ fn facts(m: &Module, names: &[(&str, bool)]) -> ElisionFacts {
         FactsRecordLayout {
             class_id: Some(class.id),
             keys: class.fields.iter().map(|x| x.name.clone()).collect(),
+            numeric: class.fields.iter().map(|_| false).collect(),
         },
     );
     for (name, opt) in names {
@@ -77,7 +78,7 @@ fn counts(m: &Module, id: Option<u32>) -> (usize, usize) {
 fn rewritten(src: &str, names: &[(&str, bool)]) -> (Module, Module, Census, u32) {
     let m = lower(src);
     let id = let_id(&m, names[0].0);
-    let (out, census) = rewrite(&m, &facts(&m, names)).expect("rewritten");
+    let (out, census, _) = rewrite(&m, &facts(&m, names)).expect("rewritten");
     (m, out, census, id)
 }
 
@@ -174,4 +175,182 @@ fn the_rewritten_module_compiles() {
         let off = compile(ElisionFacts::default());
         assert_ne!(on, off);
     }
+}
+
+// ---- VR-3b: record signature slots (`codegen::record_sig`) ----
+
+use crate::codegen::{FactsRep, FactsSignature};
+
+/// The id of the function named `name`, and its parameter ids.
+fn function(m: &Module, name: &str) -> (u32, Vec<u32>) {
+    let f = m
+        .functions
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("no function {name}"));
+    (f.id, f.params.iter().map(|p| p.id).collect())
+}
+
+/// The byte offsets of the direct calls of function `fid`.
+fn calls_of(m: &Module, fid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    perry_hir::tdz_check::for_each_module_expr(m, &mut |e| {
+        if let Expr::Call {
+            callee,
+            byte_offset,
+            ..
+        } = e
+        {
+            if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == fid) {
+                out.push(*byte_offset);
+            }
+        }
+    });
+    out
+}
+
+/// `facts` plus a typed signature for function `name`: its record
+/// parameters (`params`: per parameter, a record of template 0 and whether
+/// it may be absent) and result, every call of it a typed call.
+fn with_signature(
+    m: &Module,
+    mut f: ElisionFacts,
+    name: &str,
+    params: &[Option<bool>],
+    ret: Option<bool>,
+) -> ElisionFacts {
+    let (fid, ids) = function(m, name);
+    assert_eq!(ids.len(), params.len());
+    let rec = |opt: bool| FactsRecRep { tmpl: 0, opt };
+    for (id, p) in ids.iter().zip(params) {
+        if let Some(opt) = p {
+            f.record_locals.insert(*id, rec(*opt));
+        }
+    }
+    f.signatures.insert(
+        fid,
+        FactsSignature {
+            params: params
+                .iter()
+                .map(|p| if p.is_some() { FactsRep::Boxed } else { FactsRep::F64 })
+                .collect(),
+            ranges: vec![None; params.len()],
+            ret: if ret.is_some() { FactsRep::Boxed } else { FactsRep::F64 },
+            this_class: None,
+            zero_ok: false,
+            record_params: params.iter().map(|p| p.map(rec)).collect(),
+            record_ret: ret.map(rec),
+        },
+    );
+    for offset in calls_of(m, fid) {
+        assert_ne!(offset, 0, "a call offset");
+        f.typed_calls.insert(offset, fid);
+    }
+    for l in f.record_layouts.values_mut() {
+        l.numeric = vec![true; l.keys.len()];
+    }
+    f
+}
+
+fn ir(m: &Module, elision: ElisionFacts) -> String {
+    let opts = CompileOptions {
+        emit_ir_only: true,
+        program_layouts: Arc::new(crate::layout_families::compute(
+            [("vr.ts", m)],
+            true,
+            &Default::default(),
+        )),
+        program_facts: ProgramFactsView {
+            elision: Arc::new(elision),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    String::from_utf8(compile_module(m, opts).expect("compiles")).expect("UTF-8 IR")
+}
+
+/// The `define` line of the `$sig` whose symbol contains `name`.
+fn sig_define<'a>(ir: &'a str, name: &str) -> Option<&'a str> {
+    ir.lines()
+        .find(|l| l.starts_with("define") && l.contains(name) && l.contains("$sig("))
+}
+
+const PARAM: &str = "function use(r: { a: number; b: number }, k: number): number { let s = 0; for (let i = 0; i < k; i++) s += r.a + r.b; return s; }\nfunction f(n: number): number { const u = { a: n, b: 2 }; return use(u, n) + use(u, 3); }\nconsole.log(f(1), f(2));\n";
+
+#[test]
+fn a_record_parameter_is_its_lanes() {
+    let m = lower(PARAM);
+    let base = facts(&m, &[("u", false)]);
+    let on = with_signature(&m, base.clone(), "use", &[Some(false), None], None);
+    let (out, c, abi) = rewrite(&m, &on).expect("rewritten");
+    assert_eq!((c.params, c.passed, c.materialized), (1, 2, 0), "{c:?}");
+    let (fid, ids) = function(&m, "use");
+    let f = &abi.fns[&fid];
+    // Two lane lets at the body's start, no presence lane.
+    assert_eq!((f.prologue_at, f.prologue_len, f.ret), (0, 2, false));
+    let lanes = f.params[0].as_ref().expect("the record parameter's lanes");
+    assert_eq!((lanes.present, lanes.fields.len()), (None, 2));
+    assert!(f.params[1].is_none());
+    // The parameter is read only by the prologue.
+    assert_eq!(counts(&out, Some(ids[0])).1, 2);
+    let text = ir(&m, on);
+    let define = sig_define(&text, "use").expect("use$sig");
+    // Two Number lanes and `k`.
+    assert_eq!(define.matches("double %arg").count(), 3, "{define}");
+    // Negative control: without the signature the record crosses boxed (a
+    // copy at each call), and there is no `$sig` with lanes.
+    let (_, c, abi) = rewrite(&m, &base).expect("rewritten");
+    assert_eq!((c.params, c.passed, c.materialized), (0, 0, 2), "{c:?}");
+    assert!(abi.fns.is_empty());
+    assert!(sig_define(&ir(&m, base), "use").is_none());
+}
+
+const RESULT: &str = "function mk(n: number) { if (n > 5) return { a: n, b: 0 }; return { a: n, b: n + 1 }; }\nfunction f(n: number): number { const v = mk(n); return v.a + v.b + mk(n + 1).a; }\nconsole.log(f(1), f(7));\n";
+
+#[test]
+fn a_record_result_is_an_aggregate() {
+    let m = lower(RESULT);
+    let base = facts(&m, &[("v", false)]);
+    let on = with_signature(&m, base.clone(), "mk", &[None], Some(false));
+    let (_, c, abi) = rewrite(&m, &on).expect("rewritten");
+    assert_eq!((c.returns, c.calls, c.materialized), (1, 2, 0), "{c:?}");
+    assert_eq!(abi.aggs.len(), 2);
+    let text = ir(&m, on);
+    let define = sig_define(&text, "mk").expect("mk$sig");
+    assert!(define.contains("[3 x double]"), "{define}");
+    assert!(text.contains("insertvalue [3 x double]"));
+    assert!(text.contains("extractvalue [3 x double]"));
+    // The boxed entry of a record-returning function has no caller.
+    assert!(text.contains("call void @llvm.trap()"));
+    // Negative control: without the signature the result is a boxed object,
+    // read key by key.
+    let (_, c, _) = rewrite(&m, &base).expect("rewritten");
+    assert_eq!((c.returns, c.calls), (0, 0), "{c:?}");
+    assert!(c.unpacked >= 1, "{c:?}");
+    assert!(!ir(&m, base).contains("[3 x double]"));
+}
+
+#[test]
+fn an_optional_record_parameter_has_a_presence_lane() {
+    let src = "function use(r: { a: number; b: number } | undefined): number { return r === undefined ? 0 : r.a + r.b; }\nfunction f(n: number): number { const u = n > 1 ? { a: n, b: 2 } : undefined; return use(u) + use(undefined); }\nconsole.log(f(1), f(2));\n";
+    let m = lower(src);
+    let on = with_signature(
+        &m,
+        facts(&m, &[("u", true)]),
+        "use",
+        &[Some(true)],
+        None,
+    );
+    let (_, c, abi) = rewrite(&m, &on).expect("rewritten");
+    assert_eq!((c.params, c.passed, c.materialized), (1, 1, 0), "{c:?}");
+    let (fid, _) = function(&m, "use");
+    assert!(abi.fns[&fid].params[0]
+        .as_ref()
+        .is_some_and(|l| l.present.is_some()));
+    let text = ir(&m, on);
+    let define = sig_define(&text, "use").expect("use$sig");
+    assert_eq!(define.matches("double %arg").count(), 3, "{define}");
+    // The boxed entry admits `undefined` only.
+    assert!(text.contains("signature.record_absent"));
+    assert!(text.contains("call void @llvm.trap()"));
 }

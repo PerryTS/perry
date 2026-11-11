@@ -796,9 +796,17 @@ pub(super) fn compile_function(
     let sig_return = spec_entry
         .and_then(|plan| plan.signature.as_ref())
         .map(|sig| sig.ret);
+    // DESIGN-p4l4 VR-3b: a record result is its lanes.
+    let sig_record_return = spec_entry
+        .and_then(|plan| plan.record.as_ref())
+        .and_then(|r| r.ret);
     let lf = llmod.define_function(
         &llvm_name,
-        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
+        sig_record_return
+            .and_then(|r| super::record_sig::agg_ty(&cross_module.wpfacts, r))
+            .unwrap_or_else(|| {
+                super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed))
+            }),
         params,
     );
     let entry_outline_chunk = super::entry_outline::is_entry_chunk(f);
@@ -1602,6 +1610,7 @@ pub(super) fn compile_function(
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
         sig_return: None,
+        sig_record_return: None,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
@@ -1708,6 +1717,7 @@ pub(super) fn compile_function(
 
     if let Some(plan) = spec_entry.filter(|plan| plan.signature.is_some()) {
         ctx.sig_return = sig_return;
+        ctx.sig_record_return = sig_record_return;
         ctx.nonnegative_integer_locals
             .extend(super::signature_entry::nonnegative_params(f, plan));
     }
@@ -1920,6 +1930,12 @@ pub(super) fn compile_function(
     // does `f() === undefined` / `f() !== undefined` observes the
     // correct value. For async functions, wrap undefined in a
     // resolved promise so callers can await the result.
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
     if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
         // P2: the facts prove an I32 entry never completes normally.
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

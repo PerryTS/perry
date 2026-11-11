@@ -149,7 +149,8 @@ fn an_array_slot_is_encoded_boxed() {
         let want = match r {
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
-            Rep::Boxed | Rep::Arr(_) | Rep::Record(_) => Enc::Boxed,
+            Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
         };
         assert_eq!(r.encoding(), want);
     }

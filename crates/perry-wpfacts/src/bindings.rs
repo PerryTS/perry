@@ -193,6 +193,9 @@ pub enum Enc {
     Boxed,
     F64,
     I32,
+    /// A value record: its fields by value (DESIGN-p4l4 §1.3), one lane
+    /// per layout word (and a presence lane when it may be `undefined`).
+    Record,
 }
 
 impl ElemRep {
@@ -258,9 +261,7 @@ impl Rep {
     pub fn encoding(self) -> Enc {
         match self {
             Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
-            // VR-3 gives a record its own encoding; until then the slot is
-            // the Boxed word, so no signature or binding changes with it.
-            Rep::Record(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
         }

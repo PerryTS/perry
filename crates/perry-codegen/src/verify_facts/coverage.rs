@@ -46,6 +46,8 @@ pub(crate) enum Fact {
     ConstArray,
     RecordIdentity,
     RecordMutation,
+    /// DESIGN-p4l4 VR-3b: a value record reached a boxed entry (B3).
+    RecordEntry,
     FieldRep,
     UnsignedBound,
     ZeroSign,
@@ -94,6 +96,7 @@ impl Fact {
             Self::ConstArray => "constant array",
             Self::RecordIdentity => "value record identity",
             Self::RecordMutation => "value record mutation",
+            Self::RecordEntry => "value record boxed entry",
             Self::FieldRep => "field rep",
             Self::UnsignedBound => "unsigned bound",
             Self::ZeroSign => "zero sign",
