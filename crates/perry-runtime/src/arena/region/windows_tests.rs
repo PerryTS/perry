@@ -95,19 +95,27 @@ fn a_released_region_can_be_unmapped_without_reuse() {
 }
 
 #[test]
-fn sub_page_extents_own_whole_pages() {
+fn extents_round_up_to_whole_os_pages() {
     assert_eq!(windows::extent(0), None);
     assert_eq!(windows::extent(1), Some(4096));
     assert_eq!(windows::extent(4096), Some(4096));
     assert_eq!(windows::extent(4097), Some(8192));
     assert_eq!(windows::extent(usize::MAX), None);
+}
+
+/// The smallest block a caller may map is one metadata page (`map` asserts
+/// whole `GENERATION_PAGE_SIZE` pages); its whole extent is released, reused
+/// and unmapped.
+#[test]
+fn a_one_page_block_releases_and_reuses_its_whole_extent() {
+    let len = super::super::GENERATION_PAGE_SIZE;
     unsafe {
-        let data = map(Kind::NurseryBlock, 100);
+        let data = map(Kind::NurseryBlock, len);
         assert!(!data.is_null());
-        assert_eq!(backing_len(100), 4096);
-        assert!(contains(data as usize, 4096));
-        assert_eq!(release(data, 100), 4096);
-        reuse(data, 100);
-        unmap(data, 100);
+        assert_eq!(backing_len(len), len);
+        assert!(contains(data as usize, len));
+        assert_eq!(release(data, len), len);
+        reuse(data, len);
+        unmap(data, len);
     }
 }
