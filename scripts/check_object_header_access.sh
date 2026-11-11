@@ -10,7 +10,8 @@
 #   (c) direct `.meta` field accesses outside object/header.rs and object/meta_accessors.rs
 #   (d) A1_UNPROVEN markers: funnel sites whose owner is not proven meta-form (kind-A/B question)
 #   (e) bare GC_TYPE_ARRAY compares, match arms, `Some(..)`, asserts and kind-helper arguments
-#       (`*_of_type(..)`, `*_gc_type(..)`, codegen `icmp_*`) outside perry-abi/src/array_type.rs
+#       (`*_of_type(..)`, `*_gc_type(..)`, codegen `icmp_*`) outside perry-abi/src/array_type.rs and
+#       codegen's target_layout.rs (the emitted-compare twin)
 #       (value records VR-4a: every array-type test goes through `gc_type_is_array!`,
 #       `gc_type_is_not_array!` or `gc_array_type_pat!`, and codegen's
 #       `target_layout::emit_gc_type_is_{,not_}array`). Births (allocation arguments, header
@@ -48,7 +49,7 @@ find_rs "\.meta\b(?!\()" | grep -E "^crates/(perry-runtime|perry-stdlib|perry-co
 find_rs "A1_UNPROVEN" > "$tmp/d"
 Q='(\w+::)*GC_TYPE_ARRAY\b(?!_)'
 find_rs "(==|!=)\s*$Q|\bGC_TYPE_ARRAY\b(?!_)\s*(=>|\||==|!=)|\|\s*$Q|matches!\([^)]*\bGC_TYPE_ARRAY\b(?!_)|Some\(\s*$Q|assert(_eq|_ne)?!\([^;]*\bGC_TYPE_ARRAY\b(?!_)|(_of_type|_gc_type|gc_type_child|icmp_eq|icmp_ne)\([^)]*\bGC_TYPE_ARRAY\b(?!_)" \
-  | grep -vE "^crates/perry-abi/src/array_type\.rs:" | grep -vP "^\S+:\d+:\s*//|^\S+:\d+:const _: \(\) = assert!\(GC_TYPE_ARRAY == perry_abi::GC_TYPE_ARRAY\);" > "$tmp/e"
+  | grep -vE "^crates/perry-abi/src/array_type\.rs:|^crates/perry-codegen/src/target_layout\.rs:" | grep -vP "^\S+:\d+:\s*//|^\S+:\d+:const _: \(\) = assert!\(GC_TYPE_ARRAY == perry_abi::GC_TYPE_ARRAY\);" > "$tmp/e"
 key() { awk -F: '{n=split($1,p,"/"); if (p[1]=="crates" && p[3]=="src" && n>4) print p[1]"/"p[2]"/src/"p[4]; else if (p[1]=="crates" && n>=3) print p[1]"/"p[2]"/src (top)"; else print $1}'; }
 for k in a b c d e; do key < "$tmp/$k" | sort | uniq -c | awk -v k=$k '{c=$1; $1=""; sub(/^ /,""); print $0"\t"k"\t"c}'; done > "$tmp/counts"
 printf "%-52s %8s %8s %8s %8s %8s %8s\n" directory "(a)type" "(b)base" "(c)meta" "(d)unprv" "(e)array" total
