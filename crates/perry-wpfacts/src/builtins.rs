@@ -1109,6 +1109,12 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
     if fam == Family::Array && what.is_none() {
         return matches!(m.toks[r as usize], TokKind::Obj(..));
     }
+    // `Error.prototype.toString` is generic over an object `this`
+    // (ECMA-262 20.5.3.4: steps 1-2 only require an Object; `name` and
+    // `message` through [[Get]]): it runs on any object (`error_to_string`).
+    if fam == Family::Error && what.is_none() {
+        return r != TOP;
+    }
     match &m.toks[r as usize] {
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => fam == Family::Array && what.is_none(),
@@ -1166,9 +1172,34 @@ pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Ato
             let name = m.atoms[key as usize].clone();
             array_method_on(m, r, &name, call);
         }
+        Family::Error if m.atoms[key as usize] == "toString" => error_to_string(m, r, call),
         _ => own_method_inner(m, r, Key::Named(key), call),
     }
     m.cur_this = prev;
+}
+
+/// ECMA-262 20.5.3.4 `Error.prototype.toString` on object `r`:
+/// `Get(O, "name")` and `Get(O, "message")` (a getter there runs with
+/// `this` = `r`), each ToString'd unless undefined (ToPrimitive, hint
+/// string: the value's own `@@toPrimitive`/`toString`/`valueOf` run); the
+/// result is a string. Nothing else is called, nothing is kept.
+pub(crate) fn error_to_string(m: &mut Model, r: Tok, call: CallId) {
+    let reason = m.reason("ToString of an Error.prototype.toString operand");
+    let recv = m.node_l("error-tostring-recv");
+    for k in ["name", "message"] {
+        let key = Key::Named(m.atom(k));
+        let dst = m.node_l("error-tostring-read");
+        m.cons(recv, Cons::Load { key, dst });
+        m.cons(
+            dst,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    m.add_tok(recv, r);
+    ret_prim(m, call, prim::STR);
 }
 
 /// The primitive kinds whose chain is family `fam`'s (`prim_families`).

@@ -1444,7 +1444,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             }
             ret_tok(m, call, out);
         }
-        ("Error", Some("toString")) => ret_prim(m, call, prim::STR),
+        ("Error", Some("toString")) => super::error_to_string(m, t, call),
         // ECMA-262 21.4.4: getters inspect [[DateValue]], never the
         // operands. The known Date token and intrinsic_miss in own_method
         // guard this rule; a written method also takes the opaque path.
