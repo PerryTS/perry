@@ -59,6 +59,7 @@ pub(crate) enum Fact {
     WideKey,
     /// A call's result kinds (wpfacts `call_kinds`): a string operand.
     CallKinds,
+    LiteralString,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -113,6 +114,7 @@ impl Fact {
             Self::KeySign => "key sign",
             Self::WideKey => "wide key",
             Self::CallKinds => "call kinds",
+            Self::LiteralString => "literal string",
         }
     }
 }

@@ -1443,6 +1443,13 @@ pub struct Model {
     /// that may be negative is claimed non-negative, a wrong claim the
     /// witness at the element site must catch.
     pub wide_key_sabotage: bool,
+    /// Literal strings (`literal_strings`;
+    /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
+    pub literal_strings: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=litstr`): every binding and
+    /// field that may hold a String is claimed to hold only literals'
+    /// values, a wrong claim the witness at the store or alias must catch.
+    pub literal_strings_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

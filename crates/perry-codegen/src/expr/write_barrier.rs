@@ -1023,7 +1023,12 @@ pub(crate) fn emit_jsvalue_slot_store_pointer_tested_known(
     // `br` under `PERRY_WRITE_BARRIERS=0`. That knob exists to A/B the barrier's
     // cost; leaving dead IR in one arm of the A/B is exactly the kind of thing
     // that makes such a comparison lie.
-    let write_barrier_emitted = write_barrier_needed && crate::codegen::write_barriers_enabled();
+    // The same holds for a static child (`with_static_child`): its barrier
+    // is emitted as nothing, so the pointer test and the parent's
+    // remembering check would guard an empty arm.
+    let write_barrier_emitted = write_barrier_needed
+        && crate::codegen::write_barriers_enabled()
+        && !(static_child() && super::literal_strings::enabled());
     if !string_addref_needed && !write_barrier_emitted {
         return None;
     }
