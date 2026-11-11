@@ -234,7 +234,23 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
     // the same rule over the spread's elements.
     match name {
         // 22.1.3.28 / .30 / .10 / .31: no operand is read.
-        "toLowerCase" | "toUpperCase" | "toWellFormed" => {
+        // 22.1.3.32 / .33 / .34 TrimString(this, where) reads no operand;
+        // B.2.2.15 / .16: `trimLeft` / `trimRight` are `trimStart` /
+        // `trimEnd`. B.2.2.3-.14 CreateHTML without an attribute (`big`,
+        // `blink`, ... `sup`) reads no operand either.
+        "toLowerCase" | "toUpperCase" | "toWellFormed" | "trim" | "trimStart" | "trimEnd"
+        | "trimLeft" | "trimRight" | "big" | "blink" | "bold" | "fixed" | "italics" | "small"
+        | "strike" | "sub" | "sup" => {
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
+        // B.2.2.2 CreateHTML with an attribute (`anchor` name, `fontcolor`
+        // color, `fontsize` size, `link` url): only the first argument is
+        // read, ToString'd.
+        "anchor" | "fontcolor" | "fontsize" | "link" => {
+            if let Some(&v) = positions(m, &c).first() {
+                to_prim(m, v, "CreateHTML attribute value ToString");
+            }
             ret_prim(m, call, prim::STR);
             return true;
         }
@@ -242,13 +258,10 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             ret_prim(m, call, prim::BOOL);
             return true;
         }
-        // Every operand is ToString'd or ToIntegerOrInfinity'd (B.2.2.2
-        // CreateHTML: ToString of the attribute value).
+        // Every operand is ToString'd or ToIntegerOrInfinity'd.
         "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
-        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "trim" | "trimStart"
-        | "trimEnd" | "trimLeft" | "trimRight" | "indexOf" | "lastIndexOf" | "toFixed"
-        | "toPrecision" | "toExponential" | "anchor" | "big" | "blink" | "bold" | "fixed"
-        | "fontcolor" | "fontsize" | "italics" | "link" | "small" | "strike" | "sub" | "sup" => {
+        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf"
+        | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
             coerce_operands(m, call, "string method operand");
             let r = match name {
                 "at" => prim::STR | prim::UNDEF,
