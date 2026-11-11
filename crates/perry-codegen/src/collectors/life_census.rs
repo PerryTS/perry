@@ -95,8 +95,9 @@ pub fn enabled() -> bool {
 
 /// The fate questions answered from the whole-program facts: a read is
 /// code-free when `wpfacts_access::facts_read` says the bare load needs no
-/// guard; a guarded one is a bet on its site; call bodies are direct
-/// function references only (slice 1).
+/// guard; a guarded one is a bet on its site; a store `this.k = v` is
+/// code-free when `wpfacts_access::facts_store` admits it; call bodies are
+/// direct function references only (slice 1).
 pub(crate) struct CodegenProof<'a> {
     pub facts: &'a ElisionFacts,
 }
@@ -114,8 +115,13 @@ impl FateProof for CodegenProof<'_> {
             Err(_) => None,
         }
     }
-    fn store(&self, _: FuncId, _: &str) -> Option<Proof> {
-        None
+    /// `this.property = v` in `func`: `facts_store` on `func`'s `this`
+    /// fact, the predicate `prove` gates the store on. Never a bet.
+    fn store(&self, func: FuncId, property: &str) -> Option<Proof> {
+        let recv = self.facts.this_of.get(&func)?;
+        crate::expr::wpfacts_access::facts_store(self.facts, recv, property)
+            .ok()
+            .map(|()| Proof::Proven)
     }
     fn targets(&self, callee: &Expr) -> Option<(Vec<FuncId>, Proof)> {
         direct_target(callee)
