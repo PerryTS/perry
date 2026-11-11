@@ -221,6 +221,49 @@ fn the_reject_list_prints_every_reason() {
     assert_eq!(RecordReject::Cascade(7).to_string(), "Cascade(7)");
 }
 
+/// VR-2 (§1.1): a binding of only an admitted record's instances is
+/// `Rep::Record`; with `undefined` beside them it is `opt`.
+#[test]
+fn an_admitted_record_binding_is_a_record_rep() {
+    use crate::bindings::{Enc, Rep};
+    let src = format!("{MK}const r = mk(1);\nconst q: {{ a: number; b: boolean }} | undefined = Math.random() > 2 ? undefined : mk(2);\nconsole.log(use(r), q === undefined ? 0 : use(q));\n");
+    let reps = super::array_reps::reps_with(&src, on());
+    let r = reps["r"];
+    assert!(matches!(r, Rep::Record(x) if !x.opt), "{r:?}");
+    assert!(
+        matches!(reps["q"], Rep::Record(x) if x.opt),
+        "{:?}",
+        reps["q"]
+    );
+    // Until VR-3 a record's slot is the Boxed word: no signature changes.
+    assert_eq!(r.encoding(), Enc::Boxed);
+    assert!(r.name().starts_with("rec<"));
+    // Negative controls: the switch off, and a rejected template.
+    let off = super::array_reps::reps_with(&src, FactsConfig::default());
+    assert_eq!(off["r"], Rep::Boxed);
+    let src = format!("{MK}const r = mk(1);\nconst s = mk(2);\nconsole.log(r === s, use(r));\n");
+    assert_eq!(super::array_reps::reps_with(&src, on())["r"], Rep::Boxed);
+}
+
+#[test]
+fn a_record_join_is_its_template_only() {
+    use crate::bindings::{RecRep, Rep};
+    let a = Rep::Record(RecRep {
+        tmpl: 3,
+        opt: false,
+    });
+    let ao = Rep::Record(RecRep { tmpl: 3, opt: true });
+    let b = Rep::Record(RecRep {
+        tmpl: 4,
+        opt: false,
+    });
+    assert_eq!(Rep::join(a, ao), ao);
+    assert_eq!(Rep::join(a, a), a);
+    assert_eq!(Rep::join(a, b), Rep::Boxed);
+    assert_eq!(Rep::join(a, Rep::F64), Rep::Boxed);
+    assert_eq!(Rep::join(Rep::Boxed, a), Rep::Boxed);
+}
+
 #[test]
 fn a_captured_record_rejects() {
     // Closure capture by value is VR-7: a captured local is a heap cell.

@@ -318,6 +318,12 @@ pub struct ElisionFacts {
     /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
     /// yields a value yields an Array nothing writes after its birth.
     pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Class ids of the literal-shape classes whose template the facts admit
+    /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
+    /// check mode claims their instances at birth and witnesses every
+    /// compiled identity comparison (`expr/record_witness.rs`). Empty with
+    /// the switch off.
+    pub record_classes: std::collections::BTreeSet<u32>,
     /// Local id → the constant contents of every value it holds: such a
     /// local whose Arrays are all born from literals of these constant
     /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).

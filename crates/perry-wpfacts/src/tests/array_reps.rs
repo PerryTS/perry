@@ -9,7 +9,7 @@ use crate::{ElementOp, FactsConfig};
 use std::collections::HashMap;
 
 /// `name -> rep` of every `let`/`const` of `t.ts` under `cfg`.
-fn reps_with(src: &str, cfg: FactsConfig) -> HashMap<String, Rep> {
+pub(super) fn reps_with(src: &str, cfg: FactsConfig) -> HashMap<String, Rep> {
     let pf = facts_with(src, cfg);
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
@@ -149,7 +149,7 @@ fn an_array_slot_is_encoded_boxed() {
         let want = match r {
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
-            Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            Rep::Boxed | Rep::Arr(_) | Rep::Record(_) => Enc::Boxed,
         };
         assert_eq!(r.encoding(), want);
     }

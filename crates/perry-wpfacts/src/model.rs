@@ -1378,6 +1378,9 @@ pub struct Model {
     /// observations are recorded (`Cons::Identity`). Off, the model is the
     /// one without the lever.
     pub value_records: bool,
+    /// The admitted value-record templates (`TemplateFacts::record` is
+    /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
+    pub records: crate::pts::FxHashSet<TmplId>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
