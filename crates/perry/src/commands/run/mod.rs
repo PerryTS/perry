@@ -212,6 +212,7 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         output_type: "executable".to_string(),
         bundle_extensions: None,
         embed: Vec::new(),
+        sea: false,
         bunfs_root: None,
         asset_module: Vec::new(),
         module_alias: Vec::new(),

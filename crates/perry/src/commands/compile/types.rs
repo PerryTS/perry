@@ -201,6 +201,11 @@ pub struct CompileArgs {
     #[arg(long)]
     pub embed: Vec<String>,
 
+    /// Package explicitly embedded files as Node SEA assets. Ordinary
+    /// `--embed` builds do not activate the `node:sea` API.
+    #[arg(long)]
+    pub sea: bool,
+
     /// Map Bun standalone-executable virtual paths below `/$bunfs/root/` to
     /// an extracted filesystem tree. Static module edges resolve through the
     /// mapping, while referenced files are embedded under their original Bun
