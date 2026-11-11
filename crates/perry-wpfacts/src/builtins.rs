@@ -1467,7 +1467,7 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
     m.chain_any_nodes.insert((fam, what, key), n);
     let mut object_method = false;
     for name in members::chain_names(fam).into_iter().flatten() {
-        if name == "__proto__" || !m.key_may_name_str(key, name) {
+        if Model::proto_link(name) || !m.key_may_name_str(key, name) {
             continue;
         }
         if members::own(fam, name).is_none()

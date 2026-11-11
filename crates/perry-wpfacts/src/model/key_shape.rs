@@ -246,6 +246,16 @@ impl Model {
         }
     }
 
+    /// DECISIONS 217 (owner 10-27 for `__proto__`, 11-05 for `prototype`):
+    /// a computed key of unknown string never reads a prototype link, the
+    /// `__proto__` accessor or a constructor's `prototype`. A computed read
+    /// skips the member under that name; the named forms (`o.__proto__`,
+    /// `C.prototype`, `C["prototype"]`, `Reflect.get(C, "prototype")`) read
+    /// it.
+    pub fn proto_link(name: &str) -> bool {
+        matches!(name, "__proto__" | "prototype")
+    }
+
     pub fn key_may_name(&self, key: Key, a: Atom) -> bool {
         match key {
             Key::Named(b) => a == b,

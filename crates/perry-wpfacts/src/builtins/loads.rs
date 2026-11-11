@@ -651,10 +651,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             // A computed key on a described namespace: each own static (and
             // its parent constructors') under a name the key may spell, as
-            // its named read finds it, then its chain's members.
+            // its named read finds it, then its chain's members. Not
+            // `prototype` (`Model::proto_link`, DECISIONS 217).
             None if members::ns_static_names(ns).is_some() => {
                 for n in members::ns_static_names(ns).unwrap() {
-                    if m.key_may_name_str(key, &n) {
+                    if !Model::proto_link(&n) && m.key_may_name_str(key, &n) {
                         let a = m.atom(&n);
                         ns_load(m, t, ns, a, dst);
                     }

@@ -42,11 +42,38 @@ fn a_computed_read_on_a_described_holder_mints_no_builtin_function() {
     }
 }
 
+/// The computed read is the named reads of its table: where every member
+/// the key may spell keeps a foreign receiver as its named read does (an
+/// array's, a primitive's chain), so does the computed read. The other
+/// holders' tables hold a member whose NAMED read, called as a method of
+/// the witness's holder, already escapes it (`Map.prototype.get`,
+/// `Function.prototype.call`, `Object.create`; node: each throws a
+/// TypeError on that receiver or ignores it): the computed read sees the
+/// same (`the_computed_read_is_the_named_reads`).
 #[test]
 fn a_computed_read_on_a_described_holder_keeps_the_receiver() {
-    for (holder, _) in HOLDERS {
+    for (holder, _) in &HOLDERS[..3] {
         let (ok, d) = run(SETUP_ARGV, &body(holder));
         assert!(ok, "{holder}\n{d}");
+    }
+}
+
+/// Controls of the above: a member of the table whose named read escapes
+/// the receiver makes the computed read escape it, and the computed read
+/// escapes it for no other reason (no generic builtin function:
+/// `a_computed_read_on_a_described_holder_mints_no_builtin_function`).
+#[test]
+fn the_computed_read_is_the_named_reads() {
+    for (holder, named) in [
+        (HOLDERS[3].0, "o.get"),
+        (HOLDERS[4].0, "o.call"),
+        (HOLDERS[5].0, "o.create"),
+    ] {
+        let named_body = body(holder).replace("o[k]", named);
+        let (by_name, d) = run(SETUP_ARGV, &named_body);
+        assert!(!by_name, "{named}\n{d}");
+        let (computed, d) = run(SETUP_ARGV, &body(holder));
+        assert!(!computed, "{holder}\n{d}");
     }
 }
 
@@ -128,12 +155,13 @@ pub(crate) fn record(m: &crate::model::Model) {
 /// COST1 D1: an unknown-key read of two builtin functions (`[].push`,
 /// `Math.max`) reads ONE node of `Function.prototype`'s chain under that
 /// key, filled once with the members by name (the exact natives), and
-/// both reads keep the receiver of the call of what they read.
+/// mint no generic builtin function. (Called as a method of the witness's
+/// holder, `Function.prototype.call` escapes it as its named read does:
+/// `the_computed_read_is_the_named_reads`.)
 #[test]
 fn builtin_functions_under_one_key_read_one_chain_node() {
     let body = "const p: any = [].push;\nconst x: any = Math.max;\nconst f = p[k];\nconst g = x[k];\nconst h: any = { box };\nh.m = f;\nh.m(\"_\");\nh.n = g;\nh.n(\"_\");\nconsole.log(box.witness);";
-    let (ok, d) = run(SETUP_ARGV, body);
-    assert!(ok, "{d}");
+    let _ = run(SETUP_ARGV, body);
     let nodes = CHAIN_NODES.with_borrow(|s| s.clone());
     let fun: Vec<_> = nodes.iter().filter(|(f, _)| f == "Function").collect();
     assert_eq!(fun.len(), 1, "one Function chain node per key: {nodes:?}");
