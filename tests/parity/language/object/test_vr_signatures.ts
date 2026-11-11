@@ -54,3 +54,13 @@ for (let i = 0; i < 200; i++) {
   check = (check * 31 + g.step((i * 37) & 4095)) | 0;
 }
 console.log(check, g.board[5], g.board[40]);
+// A record returned by an object literal's method that is reached as
+// `o.m()`: that call has no lane form, so the method keeps a boxed result.
+const holder: any = {
+  made(n: number) {
+    return { ka: n, kb: n + 1 };
+  },
+};
+let held = 0;
+for (let i = 0; i < 3; i++) held += holder.made(i).kb;
+console.log(JSON.stringify(holder.made(3)), held);

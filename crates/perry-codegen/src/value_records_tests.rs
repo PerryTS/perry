@@ -437,3 +437,48 @@ console.log(f(1), f(3), f(5));\n";
     let off = ir(&m, facts(&m, &[("v", true), ("w", false)]));
     assert!(!births(&off).is_empty());
 }
+
+/// A function that some typed call reaches in a form with no lane lowering
+/// (here an object literal's method, called as `o.m(…)`) keeps boxed slots:
+/// that call enters its boxed entry, which could not take a record.
+#[test]
+fn a_function_with_a_member_form_typed_call_keeps_boxed_slots() {
+    let src = "function mk(n: number, d: number): { a: number; b: number } { if (d > 0) return mk(n + 1, d - 1); return { a: n, b: 2 }; }\nconst o = { m: mk };\nfunction f(n: number): number { const u = mk(n, 1); const v = o.m(n, 0); return u.a + v.b; }\nconsole.log(f(1));\n";
+    let m = lower(src);
+    let base = facts(&m, &[("u", false), ("v", false)]);
+    let direct = with_signature(&m, base.clone(), "mk", &[None, None], Some(false));
+    let (fid, _) = function(&m, "mk");
+    // Every typed call of `mk` is direct: lanes.
+    let (_, c, abi) = rewrite(&m, &direct).expect("rewritten");
+    assert_eq!(c.returns, 1, "{c:?}");
+    assert!(abi.fns.contains_key(&fid));
+    // The facts also name `o.m(n, 0)` a typed call of `mk`: no lanes.
+    let mut member = direct;
+    let mut offsets = Vec::new();
+    perry_hir::tdz_check::for_each_module_expr(&m, &mut |e| {
+        if let Expr::Call {
+            callee,
+            byte_offset,
+            ..
+        } = e
+        {
+            if let Expr::PropertyGet {
+                property,
+                byte_offset: at,
+                ..
+            } = callee.as_ref()
+            {
+                if property == "m" {
+                    offsets.push(if *at != 0 { *at } else { *byte_offset });
+                }
+            }
+        }
+    });
+    assert_eq!(offsets.len(), 1, "the member call");
+    member.typed_calls.insert(offsets[0], fid);
+    let (_, c, abi) = rewrite(&m, &member).expect("rewritten");
+    assert_eq!((c.returns, c.calls), (0, 0), "{c:?}");
+    assert!(abi.fns.is_empty());
+    let text = ir(&m, member);
+    assert!(!text.contains("%perry_record_ret"));
+}

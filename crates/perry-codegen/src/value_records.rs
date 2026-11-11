@@ -133,8 +133,7 @@ pub(crate) struct Census {
 /// The module with every eligible record binding rewritten, or `None`
 /// when there is none (the module lowers as it is).
 pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Census, Abi)> {
-    let record_sigs = facts.signatures.values().any(has_record);
-    if facts.record_locals.is_empty() && !record_sigs {
+    if facts.record_locals.is_empty() && !facts.signatures.values().any(has_record) {
         return None;
     }
     let shapes = shapes(hir, facts);
@@ -144,14 +143,21 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
         .filter(|(_, r)| shapes.contains_key(&r.tmpl))
         .map(|(id, r)| (*id, *r))
         .collect();
-    if cands.is_empty() && !record_sigs {
+    if cands.is_empty() && !facts.signatures.values().any(has_record) {
         return None;
     }
-    // VR-3b: a parameter in a `Record` signature slot is a binding the
+    // VR-3b: the functions whose record slots cross as lanes, and their
+    // parameters in a `Record` signature slot, which are bindings the
     // body's entry declares.
+    let lane_fns = lane_functions(hir, facts);
+    let record_sigs = !lane_fns.is_empty();
     let mut params: HashSet<LocalId> = HashSet::new();
     for f in all_functions(hir) {
-        let Some(sig) = facts.signatures.get(&f.id) else {
+        let Some(sig) = facts
+            .signatures
+            .get(&f.id)
+            .filter(|_| lane_fns.contains(&f.id))
+        else {
             continue;
         };
         for (p, r) in f.params.iter().zip(&sig.record_params) {
@@ -187,6 +193,7 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
             cands: &cands,
             eligible: &eligible,
             facts,
+            lane_fns: &lane_fns,
             recs: HashMap::new(),
             next,
             reached: HashMap::new(),
@@ -467,6 +474,8 @@ struct Rewriter<'a> {
     cands: &'a HashMap<LocalId, FactsRecRep>,
     eligible: &'a HashSet<LocalId>,
     facts: &'a ElisionFacts,
+    /// The functions whose record slots cross as lanes (`lane_functions`).
+    lane_fns: &'a HashSet<u32>,
     /// The result lanes of the record-returning body being rewritten.
     ret: Option<LocalId>,
     /// Declarations of temporaries, placed before the statement in progress.
@@ -554,7 +563,10 @@ impl Rewriter<'_> {
 
     fn function(&mut self, f: &mut Function) {
         let facts: &ElisionFacts = self.facts;
-        let sig = facts.signatures.get(&f.id).filter(|s| has_record(s));
+        let sig = facts
+            .signatures
+            .get(&f.id)
+            .filter(|s| has_record(s) && self.lane_fns.contains(&f.id));
         // The default prologues HIR lowering prepends stay first
         // (`signature_entry::sig_function` reads them there); the record
         // prologue follows, so no default may read a record parameter.
@@ -780,7 +792,7 @@ impl Rewriter<'_> {
         }
         let facts: &ElisionFacts = self.facts;
         let fid = *facts.typed_calls.get(&offset)?;
-        if direct.is_some_and(|d| d != fid) {
+        if direct.is_some_and(|d| d != fid) || !self.lane_fns.contains(&fid) {
             return None;
         }
         facts.signatures.get(&fid).filter(|s| has_record(s))
@@ -1508,6 +1520,70 @@ impl Rewriter<'_> {
     fn cond_value(&mut self, e: &mut Expr) {
         self.expr(e);
     }
+}
+
+/// The functions whose record slots cross as lanes: a signature with a
+/// record slot, and every typed call of the function is one the rewrite
+/// writes in lane form and codegen enters `F$sig` from
+/// (`record_sig::try_lower_call`): a direct call `F(…)` of a plain function,
+/// or a method call `o.m(…)` of a class's instance method. A function with a
+/// typed call of any other form (an object literal's method reached as
+/// `o.m(…)`, a static method, a call node that is no `Expr::Call`) keeps
+/// boxed slots: that call enters its boxed entry, which could not take a
+/// record.
+fn lane_functions(hir: &Module, facts: &ElisionFacts) -> HashSet<u32> {
+    let plain: HashSet<u32> = hir.functions.iter().map(|f| f.id).collect();
+    let methods: HashSet<u32> = hir
+        .classes
+        .iter()
+        .flat_map(|c| c.methods.iter().map(|m| m.id))
+        .collect();
+    // Per typed call offset: the call forms found there.
+    let mut direct: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let mut member: HashSet<u32> = HashSet::new();
+    perry_hir::tdz_check::for_each_module_expr(hir, &mut |e| {
+        if let Expr::Call {
+            callee,
+            byte_offset,
+            ..
+        } = e
+        {
+            match callee.as_ref() {
+                Expr::FuncRef(fid) => {
+                    direct.entry(*byte_offset).or_default().insert(*fid);
+                }
+                Expr::PropertyGet {
+                    byte_offset: at, ..
+                } => {
+                    member.insert(if *at != 0 { *at } else { *byte_offset });
+                }
+                _ => {}
+            }
+        }
+    });
+    let mut out: HashSet<u32> = facts
+        .signatures
+        .iter()
+        .filter(|(id, sig)| has_record(sig) && (plain.contains(id) || methods.contains(id)))
+        .map(|(id, _)| *id)
+        .collect();
+    for (offset, fid) in &facts.typed_calls {
+        if !out.contains(fid) {
+            continue;
+        }
+        let ok = if plain.contains(fid) {
+            !member.contains(offset)
+                && direct
+                    .get(offset)
+                    .is_some_and(|fs| fs.len() == 1 && fs.contains(fid))
+        } else {
+            member.contains(offset) && !direct.contains_key(offset)
+        };
+        if !ok {
+            out.remove(fid);
+        }
+    }
+    out
 }
 
 /// A parameter or the result of `sig` is a value record.
