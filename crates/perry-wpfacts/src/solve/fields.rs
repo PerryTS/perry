@@ -139,6 +139,25 @@ impl Model {
         self.mark_hole(d);
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
+        if opaque && self.explain {
+            let from_why = match (s == TOP, from != NO_NODE) {
+                (true, true) => format!(
+                    "{}; path {}",
+                    self.top_origin(from),
+                    self.top_path(from, 24)
+                ),
+                _ => String::new(),
+            };
+            let from_l = match from != NO_NODE {
+                true => self.labels[from as usize].to_string(),
+                false => "-".to_string(),
+            };
+            eprintln!(
+                "perry: wpfacts explain: spread of an unmodeled object: src {} into {} site {site} from {from_l} {from_why}",
+                self.tok_name(s),
+                self.tok_name(d),
+            );
+        }
         if opaque {
             // Census only: a spread of ⊤ is propagation of the ⊤ its source value holds, so the
             // injection is attributed to that source node, not to the target node whose rule runs.

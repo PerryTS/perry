@@ -614,6 +614,24 @@ impl Model {
         }
     }
 
+    /// Explain only: the node labels `top_origin` walks from `start` to the
+    /// rule that put TOP there (at most `max` hops), joined by " <- ".
+    pub fn top_path(&self, start: NodeId, max: usize) -> String {
+        let mut n = start;
+        let mut out = vec![self.labels[n as usize].to_string()];
+        let mut seen: crate::pts::FxHashSet<NodeId> = Default::default();
+        while out.len() <= max && seen.insert(n) {
+            match self.top_pred.get(&n) {
+                Some(&(src, why)) if why == u32::MAX && src != NO_NODE => {
+                    n = src;
+                    out.push(self.labels[n as usize].to_string());
+                }
+                _ => break,
+            }
+        }
+        out.join(" <- ")
+    }
+
     /// DECISIONS 225: a function's identity across the two analyses of a
     /// program (its module, HIR id, and for a synthetic context its name).
     pub fn act_key(&self, f: FnIdx) -> (u32, u32, String) {

@@ -460,7 +460,11 @@ impl Model {
                     .funcs
                     .get(func as usize)
                     .map_or("(no function)", |f| f.name.as_str());
-                format!("store `{desc}` in {f} (receiver: {})", self.top_origin(n))
+                format!(
+                    "store `{desc}` in {f} (receiver: {}; path {})",
+                    self.top_origin(n),
+                    self.top_path(n, 24)
+                )
             }
             _ => "store".to_string(),
         };
