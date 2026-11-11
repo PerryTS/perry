@@ -325,7 +325,11 @@ pub extern "C" fn js_put_value_set(
         stored
     };
     if !ok && strict != 0 {
-        let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
+        // `ordinary_set_with_receiver` above may have evaluated a deferred
+        // namespace and moved the heap; read the key back through its handle
+        // rather than the pre-set local.
+        let key_name = key_to_rust_string(property_key_handle.get_nanbox_f64())
+            .unwrap_or_else(|| "property".to_string());
         let receiver = receiver_handle.get_nanbox_f64();
         if let Some(class_name) = getter_only_accessor_owner_name(receiver, &key_name) {
             crate::collection_iter::throw_type_error(&format!(
