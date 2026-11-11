@@ -284,6 +284,7 @@ mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub(crate) mod record_sig;
 pub(crate) mod signature_entry;
 pub mod split_regions;
 #[cfg(test)]
@@ -315,7 +316,8 @@ mod program_facts_view;
 pub use program_facts_view::{
     ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc,
     FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction,
-    FactsRecRep, FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
+    FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv,
+    FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -564,8 +566,9 @@ fn lower_module(
     let hir = live_cjs_hir.as_ref();
     // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
     // value (`value_records`); every lowering below sees the rewritten body.
-    let records_hir = crate::value_records::rewrite(hir, &opts.program_facts.elision);
-    let hir = records_hir.as_ref().map_or(hir, |(m, _)| m);
+    let mut opts = opts;
+    let records_hir = crate::value_records::rewrite_module(hir, &mut opts.program_facts.elision);
+    let hir = records_hir.as_ref().unwrap_or(hir);
     // The driver supplies whole-program ownership in opts. Direct callers
     // without callback prefixes also need local launch detection for their
     // string-preparation callback. All decisions remain per compile.
@@ -3975,6 +3978,7 @@ fn lower_module(
                         signature: None,
                         sig_defaults: Vec::new(),
                         sig_public: Default::default(),
+                        record: None,
                     }
                 }
                 None => {
@@ -4000,6 +4004,7 @@ fn lower_module(
                             signature: None,
                             sig_defaults: Vec::new(),
                             sig_public: Default::default(),
+                            record: None,
                         }
                     } else {
                         reject(
@@ -4152,7 +4157,7 @@ fn lower_module(
         let sig_body = plan
             .signature
             .is_some()
-            .then(|| signature_entry::sig_function(f, &plan.sig_defaults))
+            .then(|| record_sig::sig_body(f, &plan.sig_defaults, plan.record.as_ref()))
             .flatten();
         let f = sig_body.as_ref().unwrap_or(f);
         compile_function(

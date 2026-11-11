@@ -1378,6 +1378,10 @@ pub struct Model {
     /// observations are recorded (`Cons::Identity`). Off, the model is the
     /// one without the lever.
     pub value_records: bool,
+    /// A record crosses a program call in a `Record` signature slot
+    /// (DESIGN-p4l4 §5.2, VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
+    /// off: such a call slot then rejects the template, as in VR-3a).
+    pub record_signatures: bool,
     /// The admitted value-record templates (`TemplateFacts::record` is
     /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
     pub records: crate::pts::FxHashSet<TmplId>,

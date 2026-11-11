@@ -193,6 +193,9 @@ pub enum Enc {
     Boxed,
     F64,
     I32,
+    /// A value record: its fields by value (DESIGN-p4l4 §1.3), one lane
+    /// per layout word (and a presence lane when it may be `undefined`).
+    Record,
 }
 
 impl ElemRep {
@@ -258,9 +261,7 @@ impl Rep {
     pub fn encoding(self) -> Enc {
         match self {
             Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
-            // VR-3 gives a record its own encoding; until then the slot is
-            // the Boxed word, so no signature or binding changes with it.
-            Rep::Record(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
         }
@@ -501,6 +502,11 @@ pub struct ModuleBindings {
     /// P2: call byte offset -> the one body `(module, func_id)` a typed
     /// entry serves, sorted (`signatures`, DESIGN-p2 §2).
     pub typed_calls: Vec<(u32, (u32, u32))>,
+    /// DESIGN-p4l4 VR-3b: the functions whose Record signature slots stay
+    /// Boxed because a source call of the body is not one of its typed
+    /// calls in its module (`signatures`), sorted: their callers pass a
+    /// materialized copy.
+    pub record_demoted: Vec<u32>,
     /// Element reads whose value is a plain Number at every copy, by
     /// `element_offset`, sorted; `true` when the value may also be
     /// `undefined` (`canonical_numbers`, P3 B1).

@@ -184,6 +184,10 @@ def main():
         ("vr-switch-negative", "vrswitch", "value record identity"),
         ("vr-inline-negative", "vrinline", "value record identity"),
         ("vr-write-negative", "vrwrite", "value record mutation"),
+        # VR-3b: a record crosses a typed call as its lanes; a call that is
+        # no typed call would hand a copy to the callee's boxed entry, which
+        # reports "value record boxed entry".
+        ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:
