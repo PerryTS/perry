@@ -595,6 +595,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
         out.rest_reserves.extend(mb.rest_reserves.iter().copied());
+        out.rest_pushes.extend(mb.rest_pushes.iter().copied());
         out.fill_births.extend(mb.fill_births.iter().copied());
         out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);

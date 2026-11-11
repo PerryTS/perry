@@ -553,6 +553,10 @@ fn site_tmpl_born(
         if let Some(k) = m.arr_len_at_site.get(&site).and_then(|b| b.len) {
             m.arr_birth_len.insert(tm, k);
         }
+        // A push-filled `new Array()` is born with its final length.
+        if let Some(&fill) = m.push_fill_new_sites.get(&site) {
+            crate::push_fills::born(m, tm, fill);
+        }
     }
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);

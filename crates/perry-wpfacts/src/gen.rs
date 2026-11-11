@@ -368,6 +368,9 @@ pub struct Gen<'a> {
     /// The source site of the last `new Array(...)` of the builtin
     /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
     pub new_array_site: Option<SiteId>,
+    /// The push-filled births and their fill pushes (`push_fills`), by
+    /// expression identity.
+    pub(crate) push_fill: crate::push_fills::Fills,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
@@ -718,6 +721,7 @@ impl<'a> Gen<'a> {
             int_ranges: true,
             arr_lengths: true,
             new_array_site: None,
+            push_fill: Default::default(),
             guard_ranges: true,
             guard_presence: true,
             leaving_writes: true,

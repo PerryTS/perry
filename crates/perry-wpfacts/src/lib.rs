@@ -42,6 +42,7 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+mod push_fills;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -535,6 +536,8 @@ fn generate<'a>(
     g.m.rest_elems = rest_elems::enabled();
     g.m.rest_capacity = rest_elems::capacity_enabled();
     g.m.fill_births = fill_births::enabled();
+    g.m.push_fills = push_fills::enabled();
+    g.m.push_fill_sabotage = cfg.sabotage.as_deref() == Some("restpush");
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
     g.m.key_sign = element_keys::sign_enabled();

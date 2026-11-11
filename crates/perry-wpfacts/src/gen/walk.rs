@@ -46,6 +46,22 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, ph);
             }
         }
+        // The push-filled births (`push_fills`), with the birth lengths.
+        if self.m.push_fills
+            && self.m.rest_elems
+            && self.m.array_reps
+            && self.arr_lengths
+            && !self.m.unit_mode
+            && !self.m.arr_floor_off
+        {
+            for mi in 0..modules.len() {
+                for c in self.classes_of(mi) {
+                    let fills = crate::push_fills::analyze(c, self.m.push_fill_sabotage);
+                    self.push_fill.add(fills);
+                }
+            }
+            self.m.push_fill_lens = self.push_fill.lens.clone();
+        }
         // Parent leaks close the child's phase at `super()`.
         let tms: Vec<TmplId> = self.ctor_phase.keys().copied().collect();
         for tm in tms.iter().copied() {
@@ -869,7 +885,19 @@ impl<'a> Gen<'a> {
         for f in &c.fields {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);
             let v = match &f.init {
-                Some(e) => self.expr(&ffx, e),
+                Some(e) => {
+                    self.new_array_site = None;
+                    let v = self.expr(&ffx, e);
+                    // A push-filled `new Array()`: the builtin's birth at
+                    // this call site is the fill's (`builtins::site_tmpl_born`).
+                    let fill = self.push_fill.births.get(&(e as *const Expr as usize));
+                    if let (Some(&fill), Some(site), Expr::New { .. }) =
+                        (fill, self.new_array_site.take(), e)
+                    {
+                        self.m.push_fill_new_sites.insert(site, fill);
+                    }
+                    v
+                }
                 // `x: T;` defines `undefined` first; when the constructor
                 // assigns it before anyone can observe the instance, that
                 // `undefined` is never seen.
