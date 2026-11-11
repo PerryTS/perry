@@ -1420,25 +1420,9 @@ pub(super) fn family_any(
     dst: NodeId,
 ) {
     match members::chain_names(fam) {
-        Some(names) => {
-            let mut object_method = false;
-            for name in names {
-                if name == "__proto__" || !m.key_may_name_str(key, name) {
-                    continue;
-                }
-                if members::own(fam, name).is_none()
-                    && matches!(members::member(Family::Object, name), Some(Mem::Fn))
-                {
-                    object_method = true;
-                    continue;
-                }
-                let a = m.atom(name);
-                loads::family_member(m, fam, what, a, dst);
-            }
-            if object_method {
-                let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
-                m.add_tok(dst, f);
-            }
+        Some(_) => {
+            let n = chain_any_node(m, fam, what, key);
+            m.edge(n, dst);
         }
         None => {
             family_ctor(m, fam, dst);
@@ -1469,6 +1453,39 @@ pub(super) fn family_any(
 
 /// A computed read of a builtin prototype may find any key a store into ⊤
 /// wrote, now or later in the solve (`native_written` of `STAR_KEY`).
+/// The node of family `fam`'s intrinsic chain (of a value of kind `what`)
+/// under computed key `key`: the member under every name of the chain the
+/// key may spell, as its named read finds it (`loads::family_member`), and
+/// the methods of `Object.prototype` the family does not shadow. It depends
+/// on the chain and the key only, never on the value read: one node, filled
+/// once, every read of every such value an edge from it.
+fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: Key) -> NodeId {
+    if let Some(&n) = m.chain_any_nodes.get(&(fam, what, key)) {
+        return n;
+    }
+    let n = m.node_l("builtin-chain-any");
+    m.chain_any_nodes.insert((fam, what, key), n);
+    let mut object_method = false;
+    for name in members::chain_names(fam).into_iter().flatten() {
+        if name == "__proto__" || !m.key_may_name_str(key, name) {
+            continue;
+        }
+        if members::own(fam, name).is_none()
+            && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+        {
+            object_method = true;
+            continue;
+        }
+        let a = m.atom(name);
+        loads::family_member(m, fam, what, a, n);
+    }
+    if object_method {
+        let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+        m.add_tok(n, f);
+    }
+    n
+}
+
 fn any_written(m: &mut Model, dst: NodeId) {
     let star = m.atom(crate::STAR_KEY);
     if !intrinsic_miss(m, star, NativeMiss::Load(dst)) {

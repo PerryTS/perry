@@ -102,3 +102,45 @@ fn the_members_under_the_key_are_read() {
     let (ok, d) = run(SETUP_ARGV, b);
     assert!(!ok, "{d}");
 }
+
+thread_local! {
+    /// The shared chain nodes of the last solve: (family, member values).
+    static CHAIN_NODES: std::cell::RefCell<Vec<(String, Vec<String>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The chain-any nodes of the last solve (`Model::chain_any_nodes`), with
+/// the values each holds, by name.
+pub(crate) fn record(m: &crate::model::Model) {
+    let mut v: Vec<(String, Vec<String>)> = m
+        .chain_any_nodes
+        .iter()
+        .map(|(&(fam, _, _), &n)| {
+            let mut toks = Vec::new();
+            m.nodes[n as usize].pts.sorted_into(&mut toks);
+            (format!("{fam:?}"), toks.iter().map(|&t| m.tok_name(t)).collect())
+        })
+        .collect();
+    v.sort();
+    CHAIN_NODES.with_borrow_mut(|s| *s = v);
+}
+
+/// COST1 D1: an unknown-key read of two builtin functions (`[].push`,
+/// `Math.max`) reads ONE node of `Function.prototype`'s chain under that
+/// key, filled once with the members by name (the exact natives), and
+/// both reads keep the receiver of the call of what they read.
+#[test]
+fn builtin_functions_under_one_key_read_one_chain_node() {
+    let body = "const p: any = [].push;\nconst x: any = Math.max;\nconst f = p[k];\nconst g = x[k];\nconst h: any = { box };\nh.m = f;\nh.m(\"_\");\nh.n = g;\nh.n(\"_\");\nconsole.log(box.witness);";
+    let (ok, d) = run(SETUP_ARGV, body);
+    assert!(ok, "{d}");
+    let nodes = CHAIN_NODES.with_borrow(|s| s.clone());
+    let fun: Vec<_> = nodes.iter().filter(|(f, _)| f == "Function").collect();
+    assert_eq!(fun.len(), 1, "one Function chain node per key: {nodes:?}");
+    let names = fun[0].1.join(" ");
+    for m in ["call", "apply", "bind"] {
+        assert!(names.contains(m), "member {m} by name: {names}");
+    }
+    let src = format!("{SETUP_ARGV}{body}");
+    assert_eq!(mints(&src, "computed key on a described chain"), 0, "{src}");
+}
