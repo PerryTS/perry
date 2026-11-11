@@ -36,12 +36,13 @@ impl RealmPlan {
                     .map_err(|error| format!("realm {}: {error}", entry.name()))
             })
             .collect::<Result<Vec<RealmDeclaration>, String>>()?;
-        Self::from_declarations(reach, declarations)
+        Self::from_declarations(reach, declarations, &index)
     }
 
     fn from_declarations(
         reach: &RealmReach,
         declarations: Vec<RealmDeclaration>,
+        index: &perry_hir::realm_reach_index::RealmIndex,
     ) -> Result<Self, String> {
         let mut all = BTreeMap::new();
         for declaration in declarations {
@@ -54,34 +55,8 @@ impl RealmPlan {
             .get("%Global%")
             .ok_or("realm has no global cell")?
             .clone();
-        if !reach.is_full() {
-            global.properties.retain(|property| {
-                reach.names.contains(&property.key)
-                    || match &property.value {
-                        Some(RealmValue::Reference(name)) => {
-                            name == "%Global%" || reach.names.contains(name)
-                        }
-                        // Primitive global constants are always observable at
-                        // their fixed values and require no additional cells.
-                        Some(RealmValue::Undefined | RealmValue::NumberBits(_)) => true,
-                        _ => false,
-                    }
-            });
-            let strings: BTreeSet<_> = global
-                .properties
-                .iter()
-                .filter(|p| !p.symbol)
-                .map(|p| p.key.clone())
-                .collect();
-            let symbols: BTreeSet<_> = global
-                .properties
-                .iter()
-                .filter(|p| p.symbol)
-                .map(|p| p.key.clone())
-                .collect();
-            global.own_key_order.retain(|key| strings.contains(key));
-            global.own_symbol_order.retain(|key| symbols.contains(key));
-        }
+        select_properties(&mut global, reach);
+
         let mut result = Self {
             cells: BTreeMap::from([("%Global%".into(), global)]),
             providers: BTreeMap::new(),
@@ -107,7 +82,14 @@ impl RealmPlan {
                     .native_namespaces
                     .insert(name.clone(), declaration.clone());
             } else if declaration.header.is_some() {
-                result.cells.insert(name.clone(), declaration.clone());
+                let mut selected = declaration.clone();
+                if !index
+                    .last(name)
+                    .is_some_and(|row| row.runtime_layout_holder())
+                {
+                    select_properties(&mut selected, reach);
+                }
+                result.cells.insert(name.clone(), selected);
             }
         }
         for declaration in result
@@ -218,6 +200,51 @@ impl RealmPlan {
         }
         Ok(result)
     }
+}
+
+/// Every ordinary cell, including the global, uses the logical member rule.
+/// Fixed runtime layouts and native namespaces keep their physical slot order.
+fn select_properties(declaration: &mut RealmDeclaration, reach: &RealmReach) {
+    if reach.is_full() {
+        return;
+    }
+    declaration.properties.retain_mut(|property| {
+        let enumerable = property.attributes & 2 != 0;
+        property.get = property
+            .get
+            .take()
+            .filter(|name| reach.keeps_member(name, enumerable));
+        property.set = property
+            .set
+            .take()
+            .filter(|name| reach.keeps_member(name, enumerable));
+        let value = match &property.value {
+            Some(RealmValue::Reference(name) | RealmValue::RawReference(name)) => {
+                name == "%Global%" || reach.keeps_member(name, enumerable)
+            }
+            Some(_) => true,
+            None => false,
+        };
+        value || property.get.is_some() || property.set.is_some()
+    });
+    let strings: BTreeSet<_> = declaration
+        .properties
+        .iter()
+        .filter(|p| !p.symbol)
+        .map(|p| p.key.clone())
+        .collect();
+    let symbols: BTreeSet<_> = declaration
+        .properties
+        .iter()
+        .filter(|p| p.symbol)
+        .map(|p| p.key.clone())
+        .collect();
+    declaration
+        .own_key_order
+        .retain(|key| strings.contains(key));
+    declaration
+        .own_symbol_order
+        .retain(|key| symbols.contains(key));
 }
 
 fn collect_value(value: &RealmValue, atoms: &mut BTreeSet<String>, symbols: &mut BTreeSet<String>) {
@@ -691,3 +718,7 @@ mod tests {
             .contains_key("%Layout:RECORD_Q436_0%"));
     }
 }
+
+#[cfg(test)]
+#[path = "realm_plan_selection_tests.rs"]
+mod selection_tests;
