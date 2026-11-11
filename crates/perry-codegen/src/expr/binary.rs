@@ -1061,6 +1061,13 @@ fn lower_numeric_logical_for_number_context(
             crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
             return Ok(l);
         }
+        // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
+        // is on the read's miss arm only (`index_get::rep_default`).
+        if let Some(v) =
+            crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)?
+        {
+            return Ok(v);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();

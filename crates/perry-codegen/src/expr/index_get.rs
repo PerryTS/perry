@@ -48,6 +48,7 @@ pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
+pub(crate) mod rep_default;
 #[cfg(test)]
 mod proven_array_tests;
 pub(crate) use foreign_counter::{
