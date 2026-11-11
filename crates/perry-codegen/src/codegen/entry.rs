@@ -1081,6 +1081,7 @@ pub(super) fn compile_module_entry(
             numeric_accumulator_f64_slots: HashMap::new(),
             receiver_descriptors: Default::default(),
             fn_base: Default::default(),
+            held_lens: Vec::new(),
             loop_polls: Default::default(),
             poll_stride_counter_slot: None,
             deferred_integer_update_accumulators: HashSet::new(),

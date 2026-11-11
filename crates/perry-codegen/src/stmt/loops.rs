@@ -7851,6 +7851,24 @@ fn lower_for_after_init_impl(
     // the counter's i32 slot are independent proofs consumed inside clones.
     let raw_hoist_classification: Option<LengthHoist> =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    // The facts hold the length where the walker stops (`held_len`).
+    let held_by_facts = if raw_hoist_classification.is_none()
+        && precomputed_i32_bound.is_none()
+        && ctx.element_shape_loop_facts.is_empty()
+        && ctx.stable_packed_loop_facts.is_empty()
+    {
+        condition.and_then(|cond| super::held_len::classify(ctx, cond, update, body))
+    } else {
+        None
+    };
+    let raw_hoist_classification =
+        raw_hoist_classification.or(held_by_facts.map(|h| LengthHoist {
+            arr_id: h.arr,
+            counter_id: h.counter,
+            op: perry_hir::CompareOp::Lt,
+            lhs_addend: 0,
+            buffer_bounds_width_units: None,
+        }));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
     } else {
@@ -7869,17 +7887,23 @@ fn lower_for_after_init_impl(
                 .get(&hoist.arr_id)
                 .is_some_and(|n| n.starts_with("__arr_"))
         });
+    let held_by_facts = held_by_facts.filter(|_| hoist_classification.is_some());
+    if let Some(held) = held_by_facts {
+        ctx.held_lens.push(held);
+    }
     if let Some(hoist) = hoist_classification {
         record_loop_array_length_effect(ctx, hoist.arr_id, LoopArrayLengthEffect::Preserves, true);
     } else if let Some(rejection) = hoist_rejection {
         record_loop_array_length_effect(ctx, rejection.arr_id, rejection.effect, false);
     }
     let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|hoist| hoist.arr_id);
-    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|hoist| {
-        matches!(hoist.op, perry_hir::CompareOp::Lt)
-            && hoist.lhs_addend == 0
-            && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
-    });
+    // A facts-held loop's bounded read is `held_len`'s own.
+    let hoisted_index_bounds_are_safe = held_by_facts.is_none()
+        && hoist_classification.is_some_and(|hoist| {
+            matches!(hoist.op, perry_hir::CompareOp::Lt)
+                && hoist.lhs_addend == 0
+                && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        });
     let hoisted_buffer_bounds_width = hoist_classification.and_then(|hoist| {
         hoist.buffer_bounds_width_units.filter(|_| {
             ctx.receiver_descriptors.contains_buffer_view(hoist.arr_id)
@@ -7994,6 +8018,12 @@ fn lower_for_after_init_impl(
             hoisted_length_slot.as_ref(),
         ) {
             let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
+            // A length past int32 has no `i32` (`held_len`): the counter's
+            // `i32` never passes `i32::MAX`, so that is its bound.
+            let len_dbl = match held_by_facts {
+                Some(_) => super::held_len::int32_bound(ctx, &len_dbl),
+                None => len_dbl,
+            };
             let len_i32 = ctx.block().fptosi(DOUBLE, &len_dbl, I32);
             let slot = ctx.func.alloca_entry(I32);
             ctx.block().store(I32, &len_i32, &slot);
@@ -8009,14 +8039,17 @@ fn lower_for_after_init_impl(
     // concrete, validate a numeric receiver once for the dynamic extent of
     // this ordinary loop. Specialized clones keep precedence and own their
     // existing descriptors; this path is for the generic counted-loop tier.
-    let ordinary_receiver_descriptor_installed =
-        if !in_call_free_clone && hoisted_length_slot.is_some() && i32_length_slot.is_some() {
-            hoist_classification.is_some_and(|hoist| {
-                materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
-            })
-        } else {
-            false
-        };
+    let ordinary_receiver_descriptor_installed = if !in_call_free_clone
+        && held_by_facts.is_none()
+        && hoisted_length_slot.is_some()
+        && i32_length_slot.is_some()
+    {
+        hoist_classification.is_some_and(|hoist| {
+            materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
+        })
+    } else {
+        false
+    };
     // b2: cold-arm descriptors for the loop's other array reads.
     let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
     let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
@@ -8459,6 +8492,9 @@ fn lower_for_after_init_impl(
         let arr_id = hoisted_length_arr_id.expect("a cached length has a receiver");
         let removed = ctx.receiver_descriptors.dematerialize_cached_length(arr_id);
         debug_assert!(removed, "loop must retire its cached-length descriptor");
+    }
+    if held_by_facts.is_some() {
+        ctx.held_lens.pop();
     }
     let _ = hoisted_length_slot;
     // Pop the i32 counter slot we inserted for the `i < n` number-bound

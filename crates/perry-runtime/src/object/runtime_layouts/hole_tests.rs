@@ -365,6 +365,7 @@ fn layout_holes_are_absent_for_every_reader() {
                 crate::object::spread::js_object_spread_fresh_leading(
                     f64::from_bits(crate::value::TAG_UNDEFINED),
                     crate::js_nanbox_pointer(obj as i64),
+                    0,
                 )
             });
             let spread = scope.root_nanbox_f64(spread);

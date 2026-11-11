@@ -2738,6 +2738,7 @@ js_object_array_keytable_write_guard	i32s	f64,f64,i32u,i32u,ptr
 js_object_array_numeric_write2_guard	i64	f64,f64,f64,i32u
 js_object_array_numeric_write_guard	i64	f64,f64,f64,f64,f64,i32u,i32u
 js_object_array_numeric_write_range_guard	i64	f64,f64,f64,f64,f64,i32u,i32u,i32u
+js_object_assign_fresh	f64	f64
 js_object_assign_one	f64	f64,f64
 js_object_assign_validate_target	f64	f64
 js_object_clone_with_extra	ptr	f64,i32u,ptr,i32u
@@ -2842,8 +2843,8 @@ js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u,i64
 js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u,i64
 js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u,i64
 js_object_shape_id_for_keys	i32u	i64,i32u
-js_object_spread_fresh	f64	f64,f64
-js_object_spread_fresh_leading	f64	f64,f64
+js_object_spread_fresh	f64	f64,f64,i32u
+js_object_spread_fresh_leading	f64	f64,f64,i32u
 js_object_super_call	f64	f64,f64,f64,ptr,usize
 js_object_super_get	f64	f64,f64,f64
 js_object_super_put_value_set	f64	f64,f64,f64,f64,i32s

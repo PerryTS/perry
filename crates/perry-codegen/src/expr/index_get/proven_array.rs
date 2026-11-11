@@ -97,6 +97,11 @@ pub(crate) struct RepRead {
     pub(crate) number: bool,
     /// The receiver, for the check-mode report.
     pub(crate) receiver: Receiver,
+    /// The key is the bounded counter of a loop that holds the receiver's
+    /// length (`expr::held_len`): an integer in `[0, length)`, so the read
+    /// has no bound. `Some(true)`: the length is defined, so the elements
+    /// start behind the header whatever `rep.floor` is.
+    pub(crate) bounded: Option<bool>,
 }
 
 /// The receiver expression of a rep-keyed read.
@@ -174,6 +179,7 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
         below_length: false,
         number,
         receiver,
+        bounded: None,
     })
 }
 
@@ -240,6 +246,7 @@ pub(crate) fn lower_in_floor(
         below_length: false,
         number: rep.elem != crate::codegen::FactsElemRep::Boxed,
         receiver: Receiver::Field,
+        bounded: None,
     };
     lower_rep(ctx, arr_box, idx_i32, read, false, None)
 }
@@ -262,6 +269,7 @@ pub(super) fn lower_below_length(
         below_length: true,
         number: true,
         receiver: Receiver::Local(id),
+        bounded: None,
     };
     debug_assert!(read.total(true) && !rep.at_rest);
     lower_rep(ctx, arr_box, idx_i32, read, false, None)
@@ -367,6 +375,19 @@ pub(super) fn lower_bounded(
     }
 }
 
+/// The rep-keyed read at the bounded counter of a loop that holds the
+/// receiver's length (`expr::held_len`): `read.bounded` is set.
+pub(crate) fn lower_held(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    read: RepRead,
+    numeric: bool,
+) -> String {
+    debug_assert!(read.bounded.is_some() && !read.rep.at_rest);
+    lower_rep(ctx, arr_box, idx_i32, read, numeric, None)
+}
+
 /// The rep-keyed read of an at-rest Array (`expr::rest_elems`, B2): `read`
 /// is `rep_read`'s for that receiver, `read.rep.at_rest`.
 pub(crate) fn lower_rest(
@@ -432,18 +453,23 @@ fn lower_rep(
         step(ctx, &inside, "arep.inside");
     }
     // In the floor `capacity >= floor > idx`: the slot exists. So does one
-    // below a fixed length (`capacity >= length`).
-    if !read.in_extent() && !rest_bound {
+    // below a fixed length (`capacity >= length`), and one at a held
+    // loop's bounded counter (`idx < length <= capacity`).
+    let front = r.floor > 0 || read.bounded == Some(true);
+    let unbounded = read.in_extent() || read.bounded.is_some();
+    if !rest_bound && !(unbounded && front) {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
         let cap = ctx.block().load(I32, &cap_ptr);
-        let inside = ctx.block().icmp_ult(I32, idx_i32, &cap);
-        step(ctx, &inside, "arep.inside");
+        if !unbounded {
+            let inside = ctx.block().icmp_ult(I32, idx_i32, &cap);
+            step(ctx, &inside, "arep.inside");
+        }
         capacity = Some(cap);
     }
-    let blk = ctx.block();
-    let addr = if r.floor > 0 {
+    let addr = if front {
         // A defined length: the elements start behind the header.
+        let blk = ctx.block();
         let idx = blk.zext(I32, idx_i32, I64);
         let offset = blk.shl(I64, &idx, "3");
         let base = blk.add(
@@ -451,11 +477,17 @@ fn lower_rep(
             &handle,
             &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
         );
-        blk.add(I64, &base, &offset)
+        let addr = blk.add(I64, &base, &offset);
+        if r.floor == 0 {
+            crate::expr::held_len::witness_front(ctx, arr_box, &handle, idx_i32, &addr);
+        }
+        addr
     } else {
         let cap = capacity.expect("no key is below a floor of 0");
-        blk.array_element_addr_with_capacity(&handle, &cap, idx_i32)
+        ctx.block()
+            .array_element_addr_with_capacity(&handle, &cap, idx_i32)
     };
+    let blk = ctx.block();
     let slot = blk.inttoptr(I64, &addr);
     let raw = blk.load(I64, &slot);
     let value = if r.at_rest {

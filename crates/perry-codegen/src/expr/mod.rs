@@ -1347,6 +1347,9 @@ pub(crate) struct FnCtx<'a> {
     /// N2: the planned function-level element bases of the method body
     /// (`stmt::fn_base`).
     pub fn_base: crate::stmt::fn_base::Pending,
+    /// The loops that hold an Array local's length by the facts
+    /// (`expr::held_len`), innermost last.
+    pub held_lens: Vec<held_len::HeldLen>,
     /// The loops being lowered and the polls each may take back
     /// (`stmt::loops::bounded_poll`).
     pub loop_polls: crate::stmt::bounded_poll::Scopes,
@@ -3386,6 +3389,7 @@ pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
+pub(crate) mod held_len;
 pub(crate) mod int_product;
 pub(crate) mod literal_strings;
 #[cfg(test)]
