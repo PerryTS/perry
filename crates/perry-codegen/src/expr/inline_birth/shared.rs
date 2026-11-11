@@ -9,6 +9,9 @@ const CLASS: &str = "perry_birth_class";
 const EMPTY: &str = "perry_birth_empty_array";
 /// The empty birth with the pushed-binding reserve (`INLINE_PUSHED_ARRAY_SLOTS`).
 pub(crate) const PUSHED: &str = "perry_birth_empty_array_16";
+/// The empty birth whose slot count is its third operand: a list birth with
+/// a capacity from the facts (`ElisionFacts::list_capacities`).
+pub(crate) const SIZED: &str = "perry_birth_empty_array_n";
 
 fn publish(ctx: &mut FnCtx<'_>, name: &str, params: Vec<(&'static str, String)>, body: String) {
     if ctx.pending_helpers.iter().any(|f| f.name == name) {
@@ -127,10 +130,81 @@ done:
 pub(crate) fn empty_array(ctx: &mut FnCtx<'_>) -> String {
     // `lower_let` sets the flag for a binding a later loop pushes into
     // (`collectors::loop_pushed_arrays`); the flag is taken by this birth.
-    if std::mem::take(&mut ctx.pushed_array_birth) {
-        return empty_array_with(ctx, PUSHED, crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS);
+    match std::mem::take(&mut ctx.pushed_array_birth) {
+        0 => empty_array_with(ctx, EMPTY, crate::target_layout::INLINE_EMPTY_ARRAY_SLOTS),
+        crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS => {
+            empty_array_with(ctx, PUSHED, crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS)
+        }
+        // The sized helper stores its holes in pairs.
+        slots => empty_array_with(ctx, SIZED, (slots + 1) & !1),
     }
-    empty_array_with(ctx, EMPTY, crate::target_layout::INLINE_EMPTY_ARRAY_SLOTS)
+}
+
+/// The body of [`SIZED`]: [`EMPTY`]'s, with the size, the capacity word and
+/// the hole stores computed from `%slots` (an even number).
+fn sized_body(arena: &crate::target_layout::InlineArenaLayout) -> String {
+    use crate::target_layout::{ARRAY_HEADER_SIZE_BYTES, GC_HEADER_SIZE_BYTES};
+    const SLOT0: u64 = GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES;
+    format!(
+        r#"
+  %slot_bytes = shl i64 %slots, 3
+  %total = add i64 %slot_bytes, {slot0}
+  %missing = icmp eq ptr %raw, null
+  br i1 %missing, label %slow, label %init
+slow:
+  %allocated = call ptr @js_inline_arena_slow_alloc(ptr %state, i64 %total, i64 8)
+  br label %init
+init:
+  %base = phi ptr [ %raw, %entry ], [ %allocated, %slow ]
+  %flag_field = getelementptr i8, ptr %state, i64 {flags_at}
+  %flag_address = load ptr, ptr %flag_field
+  %flags = load volatile i8, ptr %flag_address
+  %wide_flags = zext i8 %flags to i64
+  %color = shl i64 %wide_flags, 8
+  %size_word = shl i64 %total, 32
+  %sized = or i64 %size_word, {born_low}
+  %born = or i64 %sized, %color
+  ; GC_STORE_AUDIT(INIT): header, length/capacity and every hole slot.
+  store i64 %born, ptr %base
+  %array = getelementptr i8, ptr %base, i64 8
+  %capacity_word = shl i64 %slots, 32
+  store i64 %capacity_word, ptr %array
+  %named = getelementptr i8, ptr %base, i64 16
+  store ptr null, ptr %named
+  %ek = getelementptr i8, ptr %base, i64 {ek}
+  store i64 0, ptr %ek
+  %first = getelementptr i8, ptr %base, i64 {slot0}
+  br label %fill
+fill:
+  %i = phi i64 [ 0, %init ], [ %next, %fill ]
+  %pair = getelementptr i64, ptr %first, i64 %i
+  ; GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
+  store i64 {hole}, ptr %pair
+  %odd = getelementptr i8, ptr %pair, i64 8
+  store i64 {hole}, ptr %odd
+  %next = add i64 %i, 2
+  %more = icmp ult i64 %next, %slots
+  br i1 %more, label %fill, label %filled
+filled:
+  %active = icmp ne i8 %flags, 0
+  br i1 %active, label %seed, label %done
+seed:
+  %seed_field = getelementptr i8, ptr %state, i64 {seeds_at}
+  %seeds = load ptr, ptr %seed_field
+  call void @js_gc_note_black_birth(ptr %base, ptr %seeds)
+  br label %done
+done:
+  %handle = ptrtoint ptr %array to i64
+  ret i64 %handle
+"#,
+        slot0 = SLOT0,
+        ek = SLOT0 - 8,
+        // The header word of a birth with no slots: its size is added.
+        born_low = crate::target_layout::inline_array_birth_gc_packed(0) & 0xffff_ffff,
+        hole = crate::nanbox::TAG_HOLE,
+        flags_at = arena.flags,
+        seeds_at = arena.seeds,
+    )
 }
 
 fn empty_array_with(ctx: &mut FnCtx<'_>, helper: &str, slots: u64) -> String {
@@ -170,10 +244,15 @@ fn empty_array_with(ctx: &mut FnCtx<'_>, helper: &str, slots: u64) -> String {
             )
         })
         .collect();
-    publish(
-        ctx,
-        helper,
-        vec![(PTR, "%raw".into()), (PTR, "%state".into())],
+    let sized = helper == SIZED;
+    let slots_arg = slots.to_string();
+    let mut params = vec![(PTR, "%raw".into()), (PTR, "%state".into())];
+    if sized {
+        params.push((I64, "%slots".into()));
+    }
+    let body = if sized {
+        sized_body(&arena)
+    } else {
         format!(
             r#"
   %missing = icmp eq ptr %raw, null
@@ -213,17 +292,20 @@ done:
             capacity_word = slots << 32,
             flags_at = arena.flags,
             seeds_at = arena.seeds,
-        ),
-    );
-    let fast_handle = ctx
-        .block()
-        .call_gc_leaf(I64, helper, &[(PTR, &raw), (PTR, &state)]);
+        )
+    };
+    publish(ctx, helper, params, body);
+    let mut fast_args = vec![(PTR, raw.as_str()), (PTR, state.as_str())];
+    let mut slow_args = vec![(PTR, "null"), (PTR, state.as_str())];
+    if sized {
+        fast_args.push((I64, slots_arg.as_str()));
+        slow_args.push((I64, slots_arg.as_str()));
+    }
+    let fast_handle = ctx.block().call_gc_leaf(I64, helper, &fast_args);
     let fast_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = slow;
-    let slow_handle = ctx
-        .block()
-        .call(I64, helper, &[(PTR, "null"), (PTR, &state)]);
+    let slow_handle = ctx.block().call(I64, helper, &slow_args);
     let slow_pred = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = merge;

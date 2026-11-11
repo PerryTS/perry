@@ -40,6 +40,7 @@ mod gen_const;
 mod gen_expr;
 mod gen_rest;
 mod ledger;
+pub mod list_caps;
 mod literal_strings;
 pub mod model;
 pub mod native_effects;
@@ -1068,6 +1069,11 @@ fn compute_act<'a>(
             cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
+    list_caps::collect(
+        &g,
+        &mut bindings,
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }

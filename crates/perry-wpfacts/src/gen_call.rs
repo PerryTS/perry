@@ -565,6 +565,7 @@ impl<'a> Gen<'a> {
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self.m.packet_body(f);
         #[cfg(test)]
@@ -592,6 +593,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
         let _: &Vec<Stmt> = body;
     }
 

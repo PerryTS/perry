@@ -153,3 +153,54 @@ fn an_array_another_body_mentions_is_not_owned() {
     got.sort_unstable();
     assert_eq!(got, vec![2]);
 }
+
+/// IR of `m` with the facts' list capacities `caps` (local id, slots).
+fn ir_with_list_capacities(m: &Module, caps: &[(u32, u32)]) -> String {
+    let mut elision = crate::codegen::ElisionFacts::default();
+    elision.list_capacities.extend(caps.iter().copied());
+    let mut opts = crate::expr::class_field_barrier_tests::ir_opts();
+    opts.program_facts = crate::codegen::ProgramFactsView {
+        elision: std::sync::Arc::new(elision),
+        ..Default::default()
+    };
+    String::from_utf8(crate::compile_module(m, opts).unwrap()).unwrap()
+}
+
+/// A capacity from the facts (wpfacts `list_caps`) is the sized birth with
+/// that many slots (an odd count rounded up: the holes are stored in
+/// pairs); it replaces the collector's sixteen, and a local the facts do
+/// not name keeps what the collector gives it.
+#[test]
+fn a_list_capacity_from_the_facts_is_the_sized_birth() {
+    let m = module(vec![
+        empty(1),
+        looped(vec![push(1)]),
+        empty(2),
+        push(2),
+        empty(3),
+        looped(vec![push(3)]),
+    ]);
+    let ir = ir_with_list_capacities(&m, &[(1, 40), (2, 7)]);
+    assert!(
+        ir.contains("define linkonce_odr preserve_mostcc i64 @perry_birth_empty_array_n("),
+        "{ir}"
+    );
+    assert!(
+        ir.contains("i64 @perry_birth_empty_array_n(ptr null, ptr %"),
+        "the collecting arm passes no raw cell:\n{ir}"
+    );
+    for slots in [40, 8] {
+        assert!(
+            ir.contains(&format!(", i64 {slots})")),
+            "a {slots}-slot birth:\n{ir}"
+        );
+    }
+    // Local 3: no fact, the collector's birth.
+    assert!(
+        ir.contains("define linkonce_odr preserve_mostcc i64 @perry_birth_empty_array_16("),
+        "{ir}"
+    );
+    // Without facts nothing is sized.
+    let plain = ir_with_list_capacities(&m, &[]);
+    assert!(!plain.contains("@perry_birth_empty_array_n("), "{plain}");
+}
