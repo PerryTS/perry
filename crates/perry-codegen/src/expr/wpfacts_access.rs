@@ -1035,7 +1035,15 @@ pub(crate) fn try_lower_get(
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
         let val = ctx.block().load(DOUBLE, &field_ptr);
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
-        if let Some(r) = p.array.filter(|_| crate::verify_facts::enabled()) {
+        // The receiver of a fill push reads the Array while it is being born
+        // (wpfacts `push_fills`): its claim holds once the fill is over.
+        let filling = matches!(object, Expr::This)
+            && byte_offset != 0
+            && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
+        if let Some(r) = p
+            .array
+            .filter(|_| crate::verify_facts::enabled() && !filling)
+        {
             // Check mode: the field's `Arr` claim, on the word just read.
             super::index_get::array_rep::witness_value(
                 ctx,

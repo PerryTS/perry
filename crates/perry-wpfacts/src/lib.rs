@@ -1011,6 +1011,7 @@ fn compute_act<'a>(
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);
     fill_births::export(&g.m, &mut bindings);
+    push_fills::export(&g.m, &mut bindings);
     // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
     let rest_lanes = if g.m.aborted {
         Vec::new()

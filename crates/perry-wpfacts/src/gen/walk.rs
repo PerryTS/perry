@@ -53,6 +53,8 @@ impl<'a> Gen<'a> {
             && self.arr_lengths
             && !self.m.unit_mode
             && !self.m.arr_floor_off
+            // A direct eval in the constructor reaches `this` without naming it.
+            && !self.m.interp_linked
         {
             for mi in 0..modules.len() {
                 for c in self.classes_of(mi) {

@@ -548,6 +548,10 @@ pub struct ModuleBindings {
     /// byte offset of a push's receiver `this.k`, with the Array's final
     /// length. Sorted.
     pub rest_pushes: Vec<(u32, u32)>,
+    /// Every fill push (`push_fills`), at rest or not: the byte offset of
+    /// its receiver `this.k`, a read of the Array while it is being born.
+    /// Sorted.
+    pub fill_push_recvs: Vec<u32>,
     /// The fill births (`fill_births`): the `fill` call offset of a fused
     /// fill `new Array(k).fill(v)` codegen may bear as one birth, with `k`.
     /// Sorted.

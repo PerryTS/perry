@@ -43,6 +43,14 @@
 //! `js_array_rest_push`, whose first append gives the Array its `N` slots
 //! and the I32 layout (the literal has no key codegen and the facts share).
 //!
+//! The receiver of every fill push, at rest or not, is exported too
+//! (`fill_push_recvs`): it reads the Array while it is being born, so check
+//! mode does not test the field's `Arr` claim on it.
+//!
+//! No fill is recognized when the interpreter is linked (a direct eval in the
+//! constructor reaches `this` without naming it), per unit, or with the
+//! length floor off.
+//!
 //! `PERRY_REST_PUSH_FILL=0` (also `off`, `false`) recognizes no fill: main's
 //! facts. Negative control `PERRY_FACTS_SABOTAGE=restpush`: a push under an
 //! `if` in a counted loop counts as unconditional.
@@ -572,6 +580,19 @@ pub fn analyze(c: &Class, sabotage: bool) -> Vec<Fill> {
             pushes: c.pushes,
         })
         .collect()
+}
+
+/// Fill `ModuleBindings::fill_push_recvs` (module docs).
+pub(crate) fn export(m: &Model, bindings: &mut [crate::bindings::ModuleBindings]) {
+    for p in &m.push_fill_pushes {
+        if let (true, Some(mb)) = (p.offset != 0, bindings.get_mut(p.module as usize)) {
+            mb.fill_push_recvs.push(p.offset);
+        }
+    }
+    for mb in bindings.iter_mut() {
+        mb.fill_push_recvs.sort_unstable();
+        mb.fill_push_recvs.dedup();
+    }
 }
 
 /// The fills of a program, as the generator and the solver hold them.
