@@ -699,6 +699,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Restricts external build-script permissions; successful script output is unchanged.",
     ),
     (
+        "PERRY_SIG_DIAG",
+        "Prints the typed-signature selector's verdict per method on stderr without changing emitted objects.",
+    ),
+    (
         "PERRY_SAVE_LL",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
