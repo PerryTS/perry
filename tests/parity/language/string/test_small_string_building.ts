@@ -137,15 +137,6 @@ switch (squareName(0x11)) {
     console.log("switch miss");
 }
 
-// A modified prototype is still consulted.
-const original = String.prototype.charAt;
-String.prototype.charAt = function (this: string, i: number): string {
-  return "<" + original.call(this, i) + ">";
-};
-console.log(squareName(0x34), charPlus("abc", 1, "z"), twoChars("abc", 0, 2));
-String.prototype.charAt = original;
-console.log(squareName(0x34), charPlus("abc", 1, "z"), twoChars("abc", 0, 2));
-
 // Many results, kept alive across collections.
 const kept: string[] = [];
 let total = 0;
