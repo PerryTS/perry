@@ -1463,10 +1463,6 @@ pub struct Model {
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
     /// with no store) -> a store site that names its function.
     pub len_index_sites: FxHashMap<NodeId, SiteId>,
-    /// A source call (`Gen::new_call`) -> the function whose body holds it
-    /// (`NO_FN`: module scope). A call the solve makes has no entry; a
-    /// summary instance's copy keeps its template's `CallSite::site`.
-    pub call_fn: FxHashMap<CallId, FnIdx>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

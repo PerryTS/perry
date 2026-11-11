@@ -121,10 +121,12 @@ fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {
 
 /// The function a call is in: its program site's (`Model::origin_of`: a
 /// source call itself, the template of a summary instance's copy, the site
-/// a builtin's callback call was made for). `None` for a call the solve
-/// made for no site (an accessor's, a bound function's).
+/// a builtin's callback call was made for), which is the owner of that
+/// call's result node (`Gen::new_call`; `NO_FN`: module scope). `None` for
+/// a call the solve made for no site (an accessor's, a bound function's).
 fn call_fn(m: &Model, call: u32) -> Option<FnIdx> {
-    m.call_fn.get(&m.origin_of(call)?).copied()
+    let ret = m.calls.get(m.origin_of(call)? as usize)?.ret;
+    (*m.labels.get(ret as usize)? == "callret").then(|| m.node_fn[ret as usize])
 }
 
 /// The HIR functions that are plain (rule 1), by `(module, func id)`.

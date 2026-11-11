@@ -54,9 +54,6 @@ impl<'a> Gen<'a> {
             site: id,
             region: self.region(),
         });
-        if self.m.held_lengths {
-            self.m.call_fn.insert(id, self.m.cur_fn);
-        }
         (id, ret)
     }
 
