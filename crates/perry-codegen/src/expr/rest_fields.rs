@@ -338,6 +338,29 @@ fn store(ctx: &mut FnCtx<'_>, p: &FieldProof, recv: &str, property: &str, val: &
     ctx.block().store(I64, &word, &ptr);
 }
 
+/// [`encode`] of a value an object-literal birth stores into lane `slot`
+/// of `class`, after check mode's witness that it is an int32 Number.
+pub(crate) fn encode_birth(ctx: &mut FnCtx<'_>, val: &str, class: &str, slot: usize) -> String {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::FieldRep,
+        || serde_json::json!({ "rest": "birth", "class": class, "slot": slot }),
+    );
+    crate::facts_consumed::used();
+    if crate::verify_facts::enabled() {
+        let key = ctx
+            .classes
+            .get(class)
+            .and_then(|c| c.fields.get(slot))
+            .map(|f| f.name.clone());
+        let zero_ok = match (ctx.class_ids.get(class), key) {
+            (Some(&cid), Some(key)) => ctx.wpfacts.zero_tolerant_fields.contains(&(cid, key)),
+            _ => false,
+        };
+        witness_value(ctx, val, zero_ok, &format!("{class}[{slot}]"));
+    }
+    encode(ctx, val)
+}
+
 /// The I32 word of the Number `val` (an int32 by the facts; `-0` is 0).
 pub(crate) fn encode(ctx: &mut FnCtx<'_>, val: &str) -> String {
     if sabotaged("restlaneraw") {

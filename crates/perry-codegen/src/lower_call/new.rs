@@ -448,7 +448,7 @@ fn lower_new_impl_inner<'a>(
                 Some(word) => word,
                 None => {
                     let v = lower_constructor_arg(ctx, a)?;
-                    crate::expr::rest_fields::encode(ctx, &v)
+                    crate::expr::rest_fields::encode_birth(ctx, &v, class_name, i)
                 }
             };
             ctx.block().bitcast_i64_to_double(&word)
