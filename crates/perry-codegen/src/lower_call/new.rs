@@ -128,6 +128,19 @@ fn lower_new_impl(
     cap_args_appended: usize,
     heritage_checked: bool,
 ) -> Result<String> {
+    let born = lower_new_birth(ctx, class_name, args, cap_args_appended, heritage_checked)?;
+    // Value records' check mode (DESIGN-p4l4 B7): claim an admitted record.
+    crate::expr::record_witness::claim(ctx, class_name, &born);
+    Ok(born)
+}
+
+fn lower_new_birth(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    cap_args_appended: usize,
+    heritage_checked: bool,
+) -> Result<String> {
     if let Some(class) = ctx.classes.get(class_name).copied() {
         if class.is_declared_keys_record() {
             return Ok(lower_declared_keys_birth(

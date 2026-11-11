@@ -54,7 +54,7 @@ mod units;
 mod zero_sign;
 
 pub use bindings::{
-    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep,
+    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use signatures::Signature;
@@ -970,6 +970,11 @@ fn compute_act<'a>(
         interp_guard.as_deref(),
         cfg.sabotage.as_deref(),
     );
+    g.m.records = templates
+        .iter()
+        .filter(|t| t.record.is_ok())
+        .map(|t| t.id)
+        .collect();
     if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
         for l in records::ledger_lines(&templates, &record_arrays) {
             eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));

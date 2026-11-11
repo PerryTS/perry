@@ -7,7 +7,7 @@
 //! offset, so the binding (not the site) is the key.
 
 use crate::gen::Gen;
-use crate::model::{Model, NodeId, TmplKind, Tok, TokKind, TOP};
+use crate::model::{Model, NodeId, TmplId, TmplKind, Tok, TokKind, TOP};
 
 /// A compiled body a binding or a field may hold (FVA): what codegen needs
 /// to call it without the runtime's dispatch.
@@ -132,6 +132,18 @@ pub enum Rep {
     I32,
     /// Only plain program Arrays (DESIGN-p4l1 §2.1-2.2, `arr_rep`).
     Arr(ArrRep),
+    /// Only instances of one admitted value-record template, or (`opt`)
+    /// `undefined` (DESIGN-p4l4 §1.1, `rep_of`). Its fields by value; until
+    /// codegen lowers records (VR-3) its slot encoding is the Boxed word.
+    Record(RecRep),
+}
+
+/// A value record's representation: the template, and whether `undefined`
+/// is among the values (`opt`, the "absent" lane).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RecRep {
+    pub tmpl: crate::model::TmplId,
+    pub opt: bool,
 }
 
 /// The representation of an `Arr` value's elements: `rep_of` of the join
@@ -227,6 +239,18 @@ impl Rep {
             (Rep::I32, Rep::I32) => Rep::I32,
             (Rep::F64 | Rep::I32, Rep::Arr(_)) | (Rep::Arr(_), Rep::F64 | Rep::I32) => Rep::Boxed,
             (Rep::Arr(x), Rep::Arr(y)) => Rep::Arr(ArrRep::join(x, y)),
+            // DESIGN-p4l4 §1.1: one template joins with itself (`opt` OR'd).
+            (Rep::Record(x), Rep::Record(y)) if x.tmpl == y.tmpl => Rep::Record(RecRep {
+                tmpl: x.tmpl,
+                opt: x.opt || y.opt,
+            }),
+            // Any other join is the record derive's reject (`R5Join`), so
+            // after its fixpoint no node holds a record beside anything
+            // else; over several nodes (a signature slot's copies) the
+            // join is Boxed, a slot the typed signature does not carry.
+            (Rep::Record(_), Rep::Record(_))
+            | (Rep::Record(_), Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_))
+            | (Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_), Rep::Record(_)) => Rep::Boxed,
         }
     }
 
@@ -234,6 +258,9 @@ impl Rep {
     pub fn encoding(self) -> Enc {
         match self {
             Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            // VR-3 gives a record its own encoding; until then the slot is
+            // the Boxed word, so no signature or binding changes with it.
+            Rep::Record(_) => Enc::Boxed,
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
         }
@@ -254,6 +281,7 @@ impl Rep {
                 if r.im { ",im" } else { "" },
                 if r.at_rest { ",rest" } else { "" }
             ),
+            Rep::Record(r) => format!("rec<{}{}>", r.tmpl, if r.opt { ",opt" } else { "" }),
         }
     }
 }
@@ -641,9 +669,40 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.zero_tol = node.zs_tol;
     out.rep = match arr_rep(m, &[n]) {
         Some(r) => Rep::Arr(r),
-        None => rep_of(&out),
+        None => match record_rep(m, n) {
+            Some(r) => Rep::Record(r),
+            None => rep_of(&out),
+        },
     };
     out
+}
+
+/// DESIGN-p4l4 §1.1: `Record` when every token of the node is an instance
+/// of one admitted value-record template (`Model::records`), its primitives
+/// are within `undefined` (which sets `opt`), and it holds no ⊤ or marker.
+fn record_rep(m: &Model, n: NodeId) -> Option<RecRep> {
+    if m.records.is_empty() {
+        return None;
+    }
+    let node = &m.nodes[n as usize];
+    if node.pts.is_empty() || node.prim & !crate::model::prim::UNDEF != 0 {
+        return None;
+    }
+    let mut one: Option<TmplId> = None;
+    for t in node.pts.to_sorted() {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if t == TOP || m.is_marker(t) || !m.records.contains(&tm) || one.is_some_and(|o| o != tm)
+        {
+            return None;
+        }
+        one = Some(tm);
+    }
+    one.map(|tmpl| RecRep {
+        tmpl,
+        opt: node.prim & crate::model::prim::UNDEF != 0,
+    })
 }
 
 /// `Rep::Arr` of what `nodes` hold together (DESIGN-p4l1 §2.2): every value
