@@ -241,6 +241,26 @@ const html = readFileSync("$perryfs/dist/index.html", "utf8");
 that array methods dispatch on its result. `readEmbedded(path)` and `node:fs`
 accept either the `$perryfs/<path>` virtual path or the embed-relative key.
 
+C addons can read the same registry through `perry_vfs_read_file_v1`, declared
+in `crates/perry-runtime/include/perry_vfs.h`:
+
+```c
+const uint8_t path[] = "$perryfs/message.txt";
+const uint8_t *data = NULL;
+size_t size = 0;
+perry_vfs_status status =
+    perry_vfs_read_file_v1(path, sizeof(path) - 1, &data, &size);
+```
+
+Compile the host with `--embed message.txt`. On `PERRY_VFS_OK`, `data` points to
+immutable bytes that remain valid until process exit, including after the
+executable moves. Do not free or modify them. Raw assets are not copied;
+compressed assets may be decoded once on first access. Missing paths return
+`PERRY_VFS_NOT_FOUND`; invalid arguments or UTF-8 return their corresponding
+status and clear the non-null outputs. The API does not extract files or
+intercept ordinary OS file reads, and is separate from Node-API. Perry exports
+it whenever the host links an approved native addon.
+
 Bun-compatible file-loader imports embed the referenced binary automatically
 and bind the default import to its `$perryfs` path:
 

@@ -26,6 +26,7 @@ mod compressed;
 pub use compressed::{js_register_embedded_zstd_asset, js_register_embedded_zstd_asset_lazy};
 
 use std::collections::BTreeMap;
+use std::str;
 use std::sync::{Mutex, OnceLock};
 
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
@@ -210,6 +211,67 @@ pub fn lookup(path: &str) -> Option<&'static [u8]> {
     reg.iter_mut()
         .find(|a| a.name == key)
         .map(EmbeddedAsset::bytes)
+}
+
+/// Status returned by [`perry_vfs_read_file_v1`]. This is a Perry C ABI, not
+/// part of Node-API.
+pub type PerryVfsStatus = i32;
+pub const PERRY_VFS_OK: PerryVfsStatus = 0;
+pub const PERRY_VFS_NOT_FOUND: PerryVfsStatus = 1;
+pub const PERRY_VFS_INVALID_ARGUMENT: PerryVfsStatus = 2;
+pub const PERRY_VFS_INVALID_UTF8: PerryVfsStatus = 3;
+
+/// Return an immutable view of a file in Perry's embedded VFS.
+///
+/// On success, `*data` and `*data_len` describe the asset's bytes. The pointer
+/// remains valid until process exit, is never copied for raw embedded assets,
+/// and must not be modified or freed. Compressed assets may be decoded once
+/// into process-lifetime memory on first access. No file is extracted.
+///
+/// Both output pointers are required. On every error, each non-null output is
+/// reset to null/zero. A null path is accepted only when its length is zero;
+/// lengths greater than `isize::MAX` are invalid, and paths must be valid
+/// UTF-8. The lookup uses the same path normalization as `fs` reads: it accepts
+/// `$perryfs/name`, `name`, a leading `./`, and Windows path separators.
+/// Missing files return `PERRY_VFS_NOT_FOUND`.
+///
+/// # Safety
+/// A non-null `path` must point to `path_len` readable bytes. Output pointers,
+/// if non-null, must each point to writable storage for one pointer/length.
+#[no_mangle]
+pub unsafe extern "C" fn perry_vfs_read_file_v1(
+    path: *const u8,
+    path_len: usize,
+    data: *mut *const u8,
+    data_len: *mut usize,
+) -> PerryVfsStatus {
+    if !data.is_null() {
+        *data = std::ptr::null();
+    }
+    if !data_len.is_null() {
+        *data_len = 0;
+    }
+    if data.is_null()
+        || data_len.is_null()
+        || (path.is_null() && path_len != 0)
+        || path_len > isize::MAX as usize
+    {
+        return PERRY_VFS_INVALID_ARGUMENT;
+    }
+    let path_bytes = if path_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(path, path_len)
+    };
+    let Ok(path) = str::from_utf8(path_bytes) else {
+        return PERRY_VFS_INVALID_UTF8;
+    };
+    let Some(bytes) = lookup(path) else {
+        return PERRY_VFS_NOT_FOUND;
+    };
+    *data = bytes.as_ptr();
+    *data_len = bytes.len();
+    PERRY_VFS_OK
 }
 
 /// Data modules supported by `require` must opt in via their original loader.
@@ -480,6 +542,8 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
 // (see the note in `typed_feedback/trace.rs`). `js_register_embedded_asset` is
 // called only from the generated C constructor, and `js_perry_read_embedded`
 // only from codegen-emitted callsites — both are invisible to Rust's reachability.
+// `perry_vfs_read_file_v1` is called from linked C objects and is likewise
+// invisible to Rust's reachability.
 #[rustfmt::skip]
 #[cfg(feature = "keepalive-anchors")]
 mod keep_embedded {
@@ -492,6 +556,8 @@ mod keep_embedded {
 #[used(compiler)] static K2: extern "C" fn() -> *mut crate::array::ArrayHeader = js_perry_embedded_files;
     #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)] static K3: unsafe extern "C" fn(*const u8, usize, *const u8, usize) = js_register_embedded_text_asset;
+    #[cfg(feature = "keepalive-anchors")]
+#[used(compiler)] static K4: unsafe extern "C" fn(*const u8, usize, *mut *const u8, *mut usize) -> PerryVfsStatus = perry_vfs_read_file_v1;
 }
 
 #[cfg(test)]
@@ -577,6 +643,127 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["asset.txt", "nested", "nested/two.bin"]
         );
+    }
+
+    #[test]
+    fn c_vfs_view_reads_mounted_paths_and_distinguishes_empty_from_missing() {
+        static BINARY: &[u8] = &[0, 0xff, b'x', 0];
+        static EMPTY: &[u8] = &[];
+        for (key, bytes) in [
+            (&b"message.txt"[..], BINARY),
+            (&b"empty.txt"[..], EMPTY),
+            ("unicode/雪.txt".as_bytes(), b"unicode" as &[u8]),
+        ] {
+            unsafe {
+                js_register_embedded_asset(key.as_ptr(), key.len(), bytes.as_ptr(), bytes.len());
+            }
+        }
+
+        unsafe {
+            let mut data = std::ptr::null();
+            let mut len = usize::MAX;
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    b"$perryfs/message.txt".as_ptr(),
+                    b"$perryfs/message.txt".len(),
+                    &mut data,
+                    &mut len
+                ),
+                PERRY_VFS_OK
+            );
+            assert_eq!(std::slice::from_raw_parts(data, len), BINARY);
+
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    b"./message.txt".as_ptr(),
+                    b"./message.txt".len(),
+                    &mut data,
+                    &mut len
+                ),
+                PERRY_VFS_OK
+            );
+            assert_eq!(std::slice::from_raw_parts(data, len), BINARY);
+
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    b"$perryfs\\message.txt".as_ptr(),
+                    b"$perryfs\\message.txt".len(),
+                    &mut data,
+                    &mut len
+                ),
+                PERRY_VFS_OK
+            );
+
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    "$perryfs/unicode/雪.txt".as_ptr(),
+                    "$perryfs/unicode/雪.txt".len(),
+                    &mut data,
+                    &mut len
+                ),
+                PERRY_VFS_OK
+            );
+            assert_eq!(std::slice::from_raw_parts(data, len), b"unicode");
+
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    b"$perryfs/empty.txt".as_ptr(),
+                    b"$perryfs/empty.txt".len(),
+                    &mut data,
+                    &mut len
+                ),
+                PERRY_VFS_OK
+            );
+            assert_eq!(len, 0);
+            assert!(!data.is_null());
+
+            for missing in [b"$perryfs/missing".as_slice(), b"missing".as_slice()] {
+                data = std::ptr::dangling();
+                len = usize::MAX;
+                assert_eq!(
+                    perry_vfs_read_file_v1(missing.as_ptr(), missing.len(), &mut data, &mut len),
+                    PERRY_VFS_NOT_FOUND
+                );
+                assert!(data.is_null());
+                assert_eq!(len, 0);
+            }
+
+            data = std::ptr::dangling();
+            len = usize::MAX;
+            assert_eq!(
+                perry_vfs_read_file_v1([0xff].as_ptr(), 1, &mut data, &mut len),
+                PERRY_VFS_INVALID_UTF8
+            );
+            assert!(data.is_null());
+            assert_eq!(len, 0);
+
+            len = usize::MAX;
+            assert_eq!(
+                perry_vfs_read_file_v1(std::ptr::null(), 1, &mut data, &mut len),
+                PERRY_VFS_INVALID_ARGUMENT
+            );
+            assert!(data.is_null());
+            assert_eq!(len, 0);
+            assert_eq!(
+                perry_vfs_read_file_v1(
+                    b"message.txt".as_ptr(),
+                    b"message.txt".len(),
+                    std::ptr::null_mut(),
+                    &mut len
+                ),
+                PERRY_VFS_INVALID_ARGUMENT
+            );
+            assert_eq!(len, 0);
+
+            data = std::ptr::dangling();
+            len = usize::MAX;
+            assert_eq!(
+                perry_vfs_read_file_v1(b"".as_ptr(), isize::MAX as usize + 1, &mut data, &mut len),
+                PERRY_VFS_INVALID_ARGUMENT
+            );
+            assert!(data.is_null());
+            assert_eq!(len, 0);
+        }
     }
 
     #[test]
