@@ -1506,9 +1506,12 @@ pub unsafe extern "C" fn js_json_stringify_full(
         //
         // The root is a property too (key ""): its `toJSON` runs first, and a
         // result that has no JSON text makes `JSON.stringify` return undefined.
+        // The result is rooted: `toJSON` can hand back a fresh object and the
+        // walk below allocates.
         reset_to_json_key();
-        let value_after_to_json = apply_to_json(value);
-        if !property_list::serializable_member(value_after_to_json) {
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let value_after_to_json = root_scope.root_nanbox_f64(apply_to_json(value));
+        if !property_list::serializable_member(value_after_to_json.get_nanbox_f64()) {
             STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
             restore_stringify_buf(buf);
             match saved_cache {
@@ -1519,7 +1522,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
             return TAG_UNDEFINED as i64;
         }
         stringify_value_with_array_replacer(
-            value_after_to_json,
+            value_after_to_json.get_nanbox_f64(),
             allowed_keys,
             &mut buf,
             &indent_str,
