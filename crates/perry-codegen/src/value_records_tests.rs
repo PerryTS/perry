@@ -482,3 +482,86 @@ fn a_function_with_a_member_form_typed_call_keeps_boxed_slots() {
     let text = ir(&m, member);
     assert!(!text.contains("%perry_record_ret"));
 }
+
+const ARRAY: &str = "function mk(n: number): { a: number; b: number } { return { a: n, b: 2 }; }\nfunction un(u: { a: number; b: number }): number { return u.a + u.b; }\nfunction f(n: number): number {\n  const undos: { a: number; b: number }[] = [];\n  for (let i = 0; i < n; i++) { undos.push(mk(i)); }\n  let s = undos.length;\n  for (let i = undos.length - 1; i >= 0; i--) { const u = undos[i]; s += un(u); }\n  const last = undos.pop();\n  if (last !== undefined) s += last.a;\n  for (const v of undos) s += v.b;\n  return s;\n}\nconsole.log(f(3));\n";
+
+/// The ids of every `let` whose name starts with `prefix`.
+fn let_ids(m: &Module, prefix: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    perry_hir::tdz_check::for_each_module_stmt_list(m, &mut |list| {
+        for s in list {
+            if let Stmt::Let { id, name, .. } = s {
+                if name.starts_with(prefix) {
+                    ids.push(*id);
+                }
+            }
+        }
+    });
+    ids
+}
+
+/// VR-4b: `ARRAY`'s facts: `undos` and the for-of's source bindings hold a
+/// record array of template 0, born at `undos`' `let`.
+fn array_facts(m: &Module) -> ElisionFacts {
+    let mut f = facts(m, &[("u", true), ("last", true)]);
+    for id in let_ids(m, "v") {
+        f.record_locals
+            .insert(id, FactsRecRep { tmpl: 0, opt: false });
+    }
+    let f = with_signature(m, f, "mk", &[None], Some(false));
+    let mut f = with_signature(m, f, "un", &[Some(false)], None);
+    let undos = let_id(m, "undos");
+    f.record_array_locals.insert(undos, 0);
+    f.record_array_birth_locals.insert(undos, 0);
+    for p in ["__forof_lit_src_", "__forof_lit_arr_"] {
+        for id in let_ids(m, p) {
+            f.record_array_locals.insert(id, 0);
+        }
+    }
+    f
+}
+
+#[test]
+fn a_record_array_is_touched_only_by_its_intrinsics() {
+    let m = lower(ARRAY);
+    let on = array_facts(&m);
+    let (out, c, _) = rewrite(&m, &on).expect("rewritten");
+    if let Ok(dir) = std::env::var("PERRY_TEST_IR_OUT") {
+        let f = out.functions.iter().find(|f| f.name == "f").expect("f");
+        std::fs::write(format!("{dir}/vr4b-f.txt"), format!("{:#?}", f.body)).expect("writes");
+    }
+    // One birth; push, two lengths, the index read, pop, the for-of's guard,
+    // length and index read.
+    assert_eq!((c.arrays, c.array_ops), (1, 8), "{c:?}");
+    // No copy is born: the pushed call result and the read elements are lanes.
+    assert_eq!(c.materialized, 0, "{c:?}");
+    let undos = let_id(&m, "undos");
+    let mut left = Vec::new();
+    perry_hir::tdz_check::for_each_module_expr(&out, &mut |e| match e {
+        Expr::Array(..) | Expr::ArrayPop(_) | Expr::GetIterator(_) => left.push(format!("{e:?}")),
+        Expr::ArrayPush { array_id, .. } if *array_id == undos => left.push(format!("{e:?}")),
+        Expr::IndexGet { object, .. } | Expr::PropertyGet { object, .. }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if *id == undos) =>
+        {
+            left.push(format!("{e:?}"))
+        }
+        _ => {}
+    });
+    assert!(left.is_empty(), "{left:#?}");
+    let text = ir(&m, on);
+    for name in ["new", "push", "pop", "get", "length"] {
+        assert!(
+            text.contains(&format!("call double @js_record_array_{name}(")),
+            "js_record_array_{name}"
+        );
+    }
+    // Negative control: without the array facts the Array is an ordinary
+    // one and each pushed record is a copy.
+    let mut off = array_facts(&m);
+    off.record_array_locals.clear();
+    off.record_array_birth_locals.clear();
+    let (_, c, _) = rewrite(&m, &off).expect("rewritten");
+    assert_eq!((c.arrays, c.array_ops), (0, 0), "{c:?}");
+    assert!(c.materialized > 0, "{c:?}");
+    assert!(!ir(&m, off).contains("call double @js_record_array_"));
+}

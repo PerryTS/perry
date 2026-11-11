@@ -234,18 +234,86 @@ fn a_retaining_native_rejects() {
     );
 }
 
+const XS: &str = "const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\n";
+
 #[test]
-fn a_record_array_waits_for_the_intrinsics() {
-    let r = rejected(
-        "const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconsole.log(xs.length);\n",
+fn a_record_array_is_admitted_for_its_intrinsics() {
+    // VR-4b: push, pop, length, an index read and for-of are the
+    // intrinsics; the array and its record are admitted together.
+    admitted(&format!("{XS}console.log(xs.length);\n"));
+    admitted(&format!(
+        "{XS}const last = xs.pop();\nconsole.log(last === undefined ? 0 : last.a);\n"
+    ));
+    admitted(&format!(
+        "{XS}const x = xs[0];\nconsole.log(x === undefined ? 0 : x.a);\n"
+    ));
+    admitted(&format!(
+        "{XS}let s = 0;\nfor (const x of xs) s += x.a;\nconsole.log(s);\n"
+    ));
+    let pf = facts_with(&format!("{U}{XS}console.log(xs.length);\n"), on());
+    let text = pf.dump_text();
+    assert!(text.contains("# record-array "), "{text}");
+    assert!(text.contains(" ADMITTED"), "{text}");
+    // The binding and its birth are what codegen lowers as a record array.
+    assert!(text.contains("# record_array module=0 local="), "{text}");
+    assert!(text.contains("# record_array module=0 birth-local="), "{text}");
+    // Off: nothing is exported.
+    let pf = facts_with(
+        &format!("{U}{XS}console.log(xs.length);\n"),
+        FactsConfig::default(),
     );
-    assert_eq!(r, "R6Op(push)");
-    let pf = facts_with(&format!("{U}const xs: {{ a: number; b: boolean }}[] = [];\nxs.push(u);\nconsole.log(xs.length);\n"), on());
-    assert!(
-        pf.dump_text().contains("# record-array "),
-        "{}",
-        pf.dump_text()
-    );
+    assert!(!pf.dump_text().contains("# record_array "));
+}
+
+#[test]
+fn a_record_array_operation_without_an_intrinsic_rejects() {
+    // Each is an operation codegen has no record-array form for.
+    let r = |src: &str| rejected(&format!("{XS}{src}"));
+    for (src, why) in [
+        ("xs[3] = u;\nconsole.log(xs.length);\n", "R6Store"),
+        ("xs.length = 0;\nconsole.log(xs.length);\n", "R6Store"),
+        ("console.log(xs.slice().length);\n", "R6"),
+        ("console.log(xs.map((x) => x.a).length);\n", "R"),
+        ("console.log([...xs].length);\n", "R6"),
+        ("xs.reverse();\nconsole.log(xs.length);\n", "R6"),
+        ("console.log(xs);\n", "R6ArrayHolder"),
+    ] {
+        let got = r(src);
+        assert!(got.starts_with(why), "{src}: {got}");
+    }
+}
+
+#[test]
+fn a_record_array_is_born_empty_at_its_holder() {
+    // A literal with elements, and a literal that is not the whole value
+    // of its holder, have no record-array birth.
+    let r = rejected("const xs: { a: number; b: boolean }[] = [u];\nconsole.log(xs.length);\n");
+    assert!(r.starts_with("R6ArrayHolder(birth"), "{r}");
+    let r = rejected("function mk(): { a: number; b: boolean }[] { return []; }\nconst xs = mk();\nxs.push(u);\nconsole.log(xs.length);\n");
+    assert!(r.starts_with("R6ArrayHolder(birth"), "{r}");
+}
+
+#[test]
+fn a_record_array_receiver_is_a_binding_or_a_named_read() {
+    // An operation on a temporary: codegen types no receiver there.
+    let r = rejected(&format!(
+        "{XS}const ys: {{ a: number; b: boolean }}[] = [];\nys.push(u);\nconsole.log((Math.random() > 2 ? xs : ys).length);\n"
+    ));
+    assert!(r.starts_with("R6ArrayHolder(temporary"), "{r}");
+    // A named read is typed.
+    admitted("class C { xs: { a: number; b: boolean }[] = []; }\nconst o = new C();\no.xs = [];\no.xs.push(u);\nconsole.log(o.xs.length);\n");
+    // An object literal's property is no birth holder.
+    let r = rejected("const o = { xs: [] as { a: number; b: boolean }[] };\no.xs.push(u);\nconsole.log(o.xs.length);\n");
+    assert!(r.starts_with("R6ArrayHolder(birth"), "{r}");
+}
+
+#[test]
+fn a_binding_of_record_arrays_and_other_arrays_rejects() {
+    // One body serves both representations: the join rejects (B1).
+    let r = rejected(&format!(
+        "{XS}function len(a: unknown[]): number {{ return a.length; }}\nconsole.log(len(xs), len([1, 2]));\n"
+    ));
+    assert!(r.starts_with("R6Join"), "{r}");
 }
 
 #[test]
@@ -363,13 +431,6 @@ fn a_captured_record_rejects() {
 }
 
 #[test]
-fn a_record_popped_from_its_array_is_the_array_s_operation() {
-    // `xs.pop()` returns the record from a record array: R6 decides it.
-    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconst last = xs.pop();\nconsole.log(last === undefined ? 0 : last.a);\n");
-    assert!(r.starts_with("R6"), "{r}");
-}
-
-#[test]
 fn a_mixed_argument_of_a_logging_helper_is_admitted() {
     // Owner ruling 2026-11-10: `show(c ? 5 : u)` materializes at the call.
     admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nshow(c ? 5 : u);\nshow(u);\nconsole.log(u.a);\n");
@@ -379,4 +440,30 @@ fn a_mixed_argument_of_a_logging_helper_is_admitted() {
 fn a_retaining_helper_is_named_before_what_it_causes() {
     let r = rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(u);\nkeep(5);\nconsole.log(saved.length, saved[0], saved[1]);\n");
     assert_eq!(r, "R5RetainingHelper(keep, retain)");
+}
+
+const CHESS: &str = "interface U { a: number; b: number }\nclass G {\n  private played: U[] = [];\n  reset(): void { this.played = []; }\n  mk(n: number): U { return { a: n, b: 2 }; }\n  un(u: U): number { return u.a; }\n  play(n: number): void { this.played.push(this.mk(n)); }\n  undo(): boolean { const last = this.played.pop(); if (last === undefined) return false; this.un(last); return true; }\n  hist(): number[] { const r: number[] = []; for (const u of this.played) r.push(u.a); return r; }\n  pv(n: number): number { const undos: U[] = []; for (let i = 0; i < n; i++) { undos.push(this.mk(i)); } let s = 0; for (let i = undos.length - 1; i >= 0; i--) { const u = undos[i]; s += this.un(u); } return s; }\n}\nconst g = new G(); g.reset(); g.play(1); console.log(g.undo(), g.hist().length, g.pv(3));\n";
+
+#[test]
+fn a_chess_like_undo_stack_is_a_record_array() {
+    // A field's stack (birth by its initializer and by a store, push of a
+    // call's result, pop, for-of) and a local one (push, length, index).
+    let pf = facts_with(CHESS, on());
+    let text = pf.dump_text();
+    let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("# record")).collect();
+    let has = |needle: &str| lines.iter().any(|l| l.contains(needle));
+    assert!(has("ADMITTED fields=a:f64,b:f64"), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l.starts_with("# record-array") && l.contains("REJECTED")), "{lines:#?}");
+    for needle in [
+        "birth-field=",
+        "birth-store=",
+        "birth-local=",
+        ".played of=",
+        " local=",
+    ] {
+        assert!(
+            lines.iter().any(|l| l.starts_with("# record_array") && l.contains(needle)),
+            "{needle}: {lines:#?}"
+        );
+    }
 }

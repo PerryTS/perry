@@ -542,6 +542,18 @@ pub struct ModuleBindings {
     /// the read's key, with the lane's slot when every receiver value is such
     /// an instance at that slot or nullish (`u32::MAX` otherwise). Sorted.
     pub rest_lane_reads: Vec<(u32, u32)>,
+    /// Value records VR-4b (`records::export`): what codegen types as a
+    /// record array of the named record template. `record_array_locals`: a
+    /// binding (local id); `record_array_reads`: a named read (byte offset
+    /// and key: the reads of a member chain share their offset);
+    /// the births: an array literal that is the whole value of a `let` or a
+    /// local assignment (local id), of a named store (its element offset),
+    /// of a class field initializer (class id, field). Sorted.
+    pub record_array_locals: Vec<(u32, u32)>,
+    pub record_array_reads: Vec<(u32, String, u32)>,
+    pub record_array_birth_locals: Vec<(u32, u32)>,
+    pub record_array_birth_stores: Vec<(u32, u32)>,
+    pub record_array_birth_fields: Vec<(u32, String, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -750,6 +762,10 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
             let TokKind::Obj(tm, _) = m.toks[t as usize] else {
                 return None;
             };
+            // A record array is its own representation (DESIGN-p4l4 B1).
+            if m.record_arrays.contains_key(&tm) {
+                return None;
+            }
             let TmplKind::Arr {
                 hole_free,
                 plain: true,

@@ -983,6 +983,12 @@ fn compute_act<'a>(
         .filter(|t| t.record.is_ok())
         .map(|t| t.id)
         .collect();
+    g.m.record_arrays = record_arrays
+        .iter()
+        .filter(|a| a.verdict.is_ok() && g.m.records.contains(&a.elems_of))
+        .map(|a| (a.tmpl, a.elems_of))
+        .collect();
+    records::mark_fields(&g.m, &mut templates);
     if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
         for l in records::ledger_lines(&templates, &record_arrays) {
             eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));
@@ -1005,6 +1011,7 @@ fn compute_act<'a>(
     }
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);
+    records::export(&g, &mut bindings);
     // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
     let rest_lanes = if g.m.aborted {
         Vec::new()

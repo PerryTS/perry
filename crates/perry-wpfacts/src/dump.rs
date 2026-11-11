@@ -208,6 +208,22 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 "# record-signature module={mi} func={func} DEMOTED a source call is not a typed call of its module\n"
             ));
         }
+        // Value records VR-4b: what codegen lowers as a record array.
+        for (id, r) in &bindings.record_array_locals {
+            out.push_str(&format!("# record_array module={mi} local={id} of={r}\n"));
+        }
+        for (at, k, r) in &bindings.record_array_reads {
+            out.push_str(&format!("# record_array module={mi} read={at}.{k} of={r}\n"));
+        }
+        for (id, r) in &bindings.record_array_birth_locals {
+            out.push_str(&format!("# record_array module={mi} birth-local={id} of={r}\n"));
+        }
+        for (at, r) in &bindings.record_array_birth_stores {
+            out.push_str(&format!("# record_array module={mi} birth-store={at} of={r}\n"));
+        }
+        for (c, k, r) in &bindings.record_array_birth_fields {
+            out.push_str(&format!("# record_array module={mi} birth-field={c}.{k} of={r}\n"));
+        }
     }
     // N6: each module binding the facts give one Number.
     for (mi, bindings) in pf.bindings.iter().enumerate() {

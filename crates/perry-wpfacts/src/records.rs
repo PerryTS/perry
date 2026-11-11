@@ -36,9 +36,28 @@ use std::fmt;
 /// facts digest.
 pub const RECORD_MAX_WORDS: u16 = 16;
 
-/// The record-array operations codegen lowers as intrinsics (§5.3). Empty
-/// until VR-4b: every operation on a record array is `R6Op` before then.
-pub const RECORD_ARRAY_INTRINSICS: &[&str] = &[];
+/// The record-array operations codegen lowers as intrinsics (§5.3), by the
+/// name `array_use` gives a constraint (`#elem` is the element `pop` reads,
+/// `iterate` the for-of). VR-4b lowers these; any other operation on a
+/// record array is `R6Op`.
+pub const RECORD_ARRAY_INTRINSICS: &[&str] =
+    &["push", "pop", "#elem", "length", "[index]", "iterate"];
+
+
+/// VR-4b: where an array literal is born, when it is the whole value of its
+/// holder (`Model::arr_birth_holder`). Codegen births a record array at
+/// exactly these, for an empty literal: `let x = []` / `x = []` (the local),
+/// `o.k = []` (the store's offset), `k = []` (a class field initializer).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ArrBirth {
+    Local(u32, u32),
+    Store(u32, u32),
+    Field(u32, u32, String),
+}
+
+/// The nodes the boxed program's for-of makes beside its bindings
+/// (`Gen::runtime_glue`, the iterator's close), by label.
+const FOR_OF_GLUE: &[&str] = &["glue-pass", "close-iterator", "for-value", "iterated"];
 
 /// A record lane's representation in SSA (§1.2); in memory every lane is one
 /// valid JSValue word.
@@ -197,6 +216,8 @@ enum Use {
     /// Allowed when call `CallId` is a typed program call (`R5UntypedCall`).
     TypedCall(CallId),
     Reject(RecordReject),
+    /// A record-array intrinsic (`RECORD_ARRAY_INTRINSICS`).
+    Op,
 }
 
 /// R4/R5: the exhaustive classification of a constraint on a node that
@@ -350,7 +371,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
     };
     let op = |name: String| {
         if RECORD_ARRAY_INTRINSICS.contains(&name.as_str()) {
-            Use::Allowed
+            Use::Op
         } else {
             Use::Reject(R6Op(name))
         }
@@ -368,8 +389,17 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::MCall { key, .. } | Cons::Load { key, .. } => op(named(key)),
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
         Cons::IndexHole => Use::Reject(R6Store("hole".into())),
+        // `push`'s own store of its argument (`Gen::elem_store`).
+        Cons::Store { site, .. }
+            if m.stores.get(*site as usize).is_some_and(|s| s.desc == "push") =>
+        {
+            op("push".into())
+        }
         Cons::Store { key, .. } => Use::Reject(R6Store(named(key))),
-        Cons::LenIndex { .. } | Cons::LenPermuted { .. } => Use::Reject(R6Store("[index]".into())),
+        // `pop`'s move of the length; a permutation's is rejected at its
+        // receiver (`Model::arr_permuted`).
+        Cons::LenIndex { .. } => op("pop".into()),
+        Cons::LenPermuted { .. } => Use::Reject(R6Store("[index]".into())),
         Cons::TopSink { .. } | Cons::TopIfAny { .. } | Cons::Hard { .. } => {
             Use::Reject(R6ArrayHolder(c.kind_name().into()))
         }
@@ -659,6 +689,17 @@ struct Scan<'a, 'g> {
     tmpl_module: FxHashMap<TmplId, Option<u32>>,
     /// A method call's receiver node.
     mcall_recv: FxHashMap<CallId, NodeId>,
+    /// VR-4b: the nodes whose value codegen types as a record array at a
+    /// use: a local's binding and a named read with a source offset (and
+    /// their instance copies). An operation on any other holder is one
+    /// codegen would lower as an ordinary Array's.
+    typed: FxHashSet<NodeId>,
+    /// VR-4b: the for-of bindings (`Model::for_of_relays`, with copies).
+    relays: FxHashSet<NodeId>,
+    /// VR-4b: the Arr templates a `GetIterator` stands for (`[iterator#n]`):
+    /// the boxed program's iterator over a for-of source, which the for-of
+    /// intrinsic never makes for a record array.
+    relay_tmpls: FxHashSet<TmplId>,
     /// The `new` calls: their result is the object they birth.
     new_calls: FxHashSet<CallId>,
     /// The `new` calls of literal-shape classes (an object literal's birth):
@@ -730,6 +771,31 @@ impl<'a, 'g> Scan<'a, 'g> {
                 orig_of.insert(copy, orig);
             });
         }
+        let with_copies = |ns: &mut dyn Iterator<Item = NodeId>| -> FxHashSet<NodeId> {
+            let mut out = FxHashSet::default();
+            for n in ns {
+                out.insert(n);
+                out.extend(copies.get(&n).into_iter().flatten().copied());
+            }
+            out
+        };
+        let typed = with_copies(
+            &mut g
+                .mods
+                .iter()
+                .flat_map(|mo| mo.locals.values().copied())
+                .chain(g.load_sites.iter().map(|&(_, _, _, n)| n)),
+        );
+        let relays = with_copies(&mut m.for_of_relays.iter().copied());
+        let relay_tmpls: FxHashSet<TmplId> = m
+            .tmpls
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                matches!(t.kind, TmplKind::Arr { .. }) && t.display.contains("[iterator#")
+            })
+            .map(|(i, _)| i as TmplId)
+            .collect();
         let mut holders: FxHashMap<TmplId, Vec<NodeId>> = FxHashMap::default();
         for (n, node) in m.nodes.iter().enumerate() {
             if node.pts.is_empty() {
@@ -818,6 +884,9 @@ impl<'a, 'g> Scan<'a, 'g> {
             new_calls,
             literal_births,
             mcall_recv,
+            typed,
+            relays,
+            relay_tmpls,
             field_owner,
             arg_of,
             ret_of,
@@ -1009,6 +1078,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                         ars.push(tm)
                     }
                 }
+                // The boxed program's iterator over a for-of source.
+                TokKind::Obj(tm, _) if self.relay_tmpls.contains(&tm) => {}
                 _ => other = true,
             }
         }
@@ -1031,6 +1102,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             if !matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
                 || linked.contains_key(&tm)
                 || wrappers.contains(&tm)
+                || self.relay_tmpls.contains(&tm)
             {
                 continue;
             }
@@ -1087,6 +1159,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                     };
                     if linked.contains_key(&a)
                         || wrappers.contains(&a)
+                        || self.relay_tmpls.contains(&a)
                         || !matches!(m.tmpls[a as usize].kind, TmplKind::Arr { .. })
                     {
                         continue;
@@ -1321,15 +1394,20 @@ impl<'a, 'g> Scan<'a, 'g> {
                         // own arrays (`for (const u of played)`): the for-of
                         // intrinsic of §5.3, R6's to decide.
                         let iterates_own = owner.flatten().is_some_and(|o| {
-                            matches!(m.tmpls[o as usize].kind, TmplKind::BObj { what, .. } if what.contains("Iterator"))
+                            self.relay_tmpls.contains(&o)
+                                || matches!(m.tmpls[o as usize].kind, TmplKind::BObj { what, .. } if what.contains("Iter"))
                         }) && recs
                             .iter()
                             .any(|tm| linked.values().any(|r| r == tm));
-                        why = Some(if iterates_own {
-                            R6Op("iterate".into())
-                        } else {
-                            R5StoreHeap(o)
-                        });
+                        // The for-of intrinsic (§5.3) copies each element
+                        // out; the iterator's slot is the boxed program's.
+                        if !(iterates_own && RECORD_ARRAY_INTRINSICS.contains(&"iterate")) {
+                            why = Some(if iterates_own {
+                                R6Op("iterate".into())
+                            } else {
+                                R5StoreHeap(o)
+                            });
+                        }
                     } else if self.regions.contains(&n) {
                         why = Some(R5Throw);
                     } else if self.captured.contains(&n) {
@@ -1381,6 +1459,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                         }
                                     }
                                     Use::Reject(e) => why = Some(e),
+                                    Use::Op => {}
                                 }
                                 if why.is_some() {
                                     break;
@@ -1399,7 +1478,30 @@ impl<'a, 'g> Scan<'a, 'g> {
             if !ars.is_empty() {
                 let tms: FxHashSet<TmplId> = ars.iter().map(|a| arrs[a]).collect();
                 let mut why: Option<RecordReject> = None;
-                if other || !recs.is_empty() || tms.len() > 1 || node.prim != 0 {
+                // A for-of binding of the iterator arm also holds the
+                // `undefined` its glue passes through (`arrayRecordPayload`).
+                // The boxed program's for-of plumbing: nothing codegen
+                // lowers for a record array (the intrinsic replaces the arm).
+                let orig = self
+                    .orig_of
+                    .get(&n)
+                    .copied()
+                    .filter(|o| (*o as usize) < m.nodes.len())
+                    .unwrap_or(n);
+                if RECORD_ARRAY_INTRINSICS.contains(&"iterate")
+                    && FOR_OF_GLUE
+                        .iter()
+                        .any(|l| m.labels[orig as usize].starts_with(l))
+                {
+                    continue;
+                }
+                let relay = self.relays.contains(&n);
+                let glue = if relay {
+                    prim::UNDEF
+                } else {
+                    0
+                };
+                if other || !recs.is_empty() || tms.len() > 1 || node.prim & !glue != 0 {
                     why = Some(R6Join(at.clone()));
                 } else if self.regions.contains(&n) || region.contains_key(&n) {
                     why = Some(R6ArrayHolder(at.clone()));
@@ -1438,6 +1540,45 @@ impl<'a, 'g> Scan<'a, 'g> {
                         }
                     }
                 }
+                // VR-4b: codegen births a record array for its holder, types
+                // an operation's receiver by its binding or named read, and
+                // lowers the record's layout in the record's own module.
+                if why.is_none() && m.arr_permuted.contains(&orig) {
+                    why = Some(R6Op("permute".into()));
+                }
+                if why.is_none() {
+                    if let Some(a) = ars.iter().find(|a| !m.arr_birth_holder.contains_key(a)) {
+                        why = Some(R6ArrayHolder(format!(
+                            "birth {}",
+                            m.tmpls[*a as usize].display
+                        )));
+                    }
+                }
+                if why.is_none() {
+                    let f = m.node_fn[n as usize];
+                    let here = (f != NO_FN).then(|| m.funcs[f as usize].module);
+                    let home = tms.iter().next().and_then(|tm| self.tmpl_module[tm]);
+                    if here.is_some() && home.is_some() && here != home {
+                        why = Some(R6ArrayHolder(format!("another module {at}")));
+                    }
+                }
+                if why.is_none() {
+                    // One body, every instance copy: the same representation.
+                    let sibs = std::iter::once(orig)
+                        .chain(self.copies.get(&orig).into_iter().flatten().copied());
+                    for s in sibs {
+                        let sn = &m.nodes[s as usize];
+                        if s == n || (sn.pts.is_empty() && sn.prim == 0) {
+                            continue;
+                        }
+                        let (r2, a2, o2) = self.held(s, admitted, arrs);
+                        let t2: FxHashSet<TmplId> = a2.iter().map(|a| arrs[a]).collect();
+                        if o2 || !r2.is_empty() || sn.prim & !glue != 0 || t2 != tms {
+                            why = Some(R6Join(format!("copies of {at}")));
+                            break;
+                        }
+                    }
+                }
                 if why.is_none() {
                     for c in &node.cons {
                         match array_use(c, m) {
@@ -1447,7 +1588,17 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     why = Some(e);
                                 }
                             }
+                            // An operation on a for-of's own bindings is
+                            // the boxed program's iteration protocol (the
+                            // program names none of them): the arm the
+                            // for-of intrinsic replaces.
+                            Use::Reject(R6Op(_))
+                                if relay && RECORD_ARRAY_INTRINSICS.contains(&"iterate") => {}
                             Use::Reject(e) => why = Some(e),
+                            Use::Op if !self.typed.contains(&n) => {
+                                why = Some(R6ArrayHolder(format!("temporary {at}")));
+                            }
+                            Use::Op => {}
                         }
                         if why.is_some() {
                             break;
@@ -1770,4 +1921,122 @@ pub fn ledger_lines(templates: &[TemplateFacts], arrays: &[RecordArray]) -> Vec<
         ));
     }
     out
+}
+
+/// VR-4b: a field whose every Array is a record array holds no plain
+/// program Array, so its rep is the Boxed word (`derive` gave it `Arr`
+/// before the record derive ran).
+pub(crate) fn mark_fields(m: &Model, templates: &mut [TemplateFacts]) {
+    if m.record_arrays.is_empty() {
+        return;
+    }
+    for tf in templates.iter_mut() {
+        let ts = m.tmpl_toks(tf.id);
+        for f in tf.fields.iter_mut() {
+            if !matches!(f.rep, crate::bindings::Rep::Arr(_)) {
+                continue;
+            }
+            let atoms = if f.private {
+                &m.private_atoms
+            } else {
+                &m.atom_index
+            };
+            let Some(&a) = atoms.get(&f.key) else {
+                continue;
+            };
+            let holds = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)))
+                .flat_map(|n| m.nodes[*n as usize].pts.to_sorted())
+                .any(|t| matches!(m.toks[t as usize], TokKind::Obj(tm, _) if m.record_arrays.contains_key(&tm)));
+            if holds {
+                f.rep = crate::bindings::Rep::Boxed;
+            }
+        }
+    }
+}
+
+/// The record template of the record arrays `nodes` hold, when they hold
+/// nothing else (an empty node holds nothing; one must hold one).
+fn record_array_of(m: &Model, nodes: &[NodeId]) -> Option<TmplId> {
+    let mut of: Option<TmplId> = None;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if node.prim != 0 {
+            return None;
+        }
+        for t in node.pts.to_sorted() {
+            let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+                return None;
+            };
+            let r = *m.record_arrays.get(&tm)?;
+            if of.is_some_and(|o| o != r) {
+                return None;
+            }
+            of = Some(r);
+        }
+    }
+    of
+}
+
+/// Fill `ModuleBindings::record_array_*` (VR-4b): the bindings, named reads
+/// and births codegen lowers as a record array.
+pub(crate) fn export(g: &Gen<'_>, bindings: &mut [crate::bindings::ModuleBindings]) {
+    let m = &g.m;
+    if m.record_arrays.is_empty() {
+        return;
+    }
+    let copies = crate::rest_elems::node_copies(m);
+    let all = |n: NodeId| -> Vec<NodeId> {
+        let mut v = vec![n];
+        v.extend(copies.get(&n).into_iter().flatten().copied());
+        v
+    };
+    for (mi, mo) in g.mods.iter().enumerate() {
+        let Some(mb) = bindings.get_mut(mi) else {
+            continue;
+        };
+        for (&id, &n) in mo.locals.iter() {
+            if let Some(r) = record_array_of(m, &all(n)) {
+                mb.record_array_locals.push((id, r));
+            }
+        }
+    }
+    let mut reads: FxHashMap<(u32, u32, Atom), Vec<NodeId>> = FxHashMap::default();
+    for &(mi, offset, key, n) in &g.load_sites {
+        reads.entry((mi, offset, key)).or_default().extend(all(n));
+    }
+    for ((mi, offset, key), nodes) in reads {
+        if let (Some(r), Some(mb)) = (record_array_of(m, &nodes), bindings.get_mut(mi as usize)) {
+            mb.record_array_reads
+                .push((offset, m.atoms[key as usize].clone(), r));
+        }
+    }
+    for (a, &r) in m.record_arrays.iter() {
+        let Some(h) = m.arr_birth_holder.get(a) else {
+            continue;
+        };
+        let (mi, put): (u32, Box<dyn FnOnce(&mut crate::bindings::ModuleBindings)>) = match h.clone() {
+            ArrBirth::Local(mi, id) => (mi, Box::new(move |mb| mb.record_array_birth_locals.push((id, r)))),
+            ArrBirth::Store(mi, at) => (mi, Box::new(move |mb| mb.record_array_birth_stores.push((at, r)))),
+            ArrBirth::Field(mi, c, k) => {
+                (mi, Box::new(move |mb| mb.record_array_birth_fields.push((c, k, r))))
+            }
+        };
+        if let Some(mb) = bindings.get_mut(mi as usize) {
+            put(mb);
+        }
+    }
+    for mb in bindings.iter_mut() {
+        mb.record_array_locals.sort_unstable();
+        mb.record_array_locals.dedup();
+        mb.record_array_reads.sort();
+        mb.record_array_reads.dedup();
+        mb.record_array_birth_locals.sort_unstable();
+        mb.record_array_birth_locals.dedup();
+        mb.record_array_birth_stores.sort_unstable();
+        mb.record_array_birth_stores.dedup();
+        mb.record_array_birth_fields.sort();
+        mb.record_array_birth_fields.dedup();
+    }
 }

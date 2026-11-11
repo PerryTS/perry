@@ -284,6 +284,7 @@ mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub(crate) mod record_array;
 pub(crate) mod record_sig;
 pub(crate) mod signature_entry;
 pub mod split_regions;

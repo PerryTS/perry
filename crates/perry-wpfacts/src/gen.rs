@@ -162,6 +162,13 @@ pub struct Gen<'a> {
     /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
     /// `rest_fields`' use record admits (I32 at rest, PR C).
     pub(crate) field_reads: Vec<NodeId>,
+    /// VR-4b: each named read with a source offset, `(module, offset, key,
+    /// result node)`. A member chain's reads share their offset, so the key
+    /// tells them apart.
+    pub(crate) load_sites: Vec<(u32, u32, Atom, NodeId)>,
+    /// VR-4b: the holder of the array literal about to be walked
+    /// (`Model::arr_birth_holder`); the literal's arm takes it.
+    pub(crate) direct_arr: Option<crate::records::ArrBirth>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -636,6 +643,8 @@ impl<'a> Gen<'a> {
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),
+            load_sites: Vec::new(),
+            direct_arr: None,
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),

@@ -255,6 +255,7 @@ pub mod promise;
 pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
+pub mod record_array;
 pub mod regex;
 pub mod registry_latch;
 #[cfg(test)]
