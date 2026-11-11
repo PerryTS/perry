@@ -7,10 +7,9 @@
 //! default, an I32 lane was then given its word of 0, and the prologue stores
 //! overwrote every slot with its value. Here the nursery arm writes the
 //! header image and the final word of every slot, once, with no call. The
-//! shared helper stays the only other birth, at one call site: the
-//! allocating arm takes it and then stores the same words (re-read from
-//! their roots) through the same stores, and a construction whose values
-//! fail the number test takes it and runs the constructor as before.
+//! shared helper stays the only other birth: the allocating arm and a
+//! construction whose values fail the number test take it (one call site),
+//! and then run the constructor as before.
 //!
 //! ## Whose fact this is
 //!
@@ -26,16 +25,14 @@
 //! ## Why no slot can be seen before it is written
 //!
 //! * Every argument is lowered and rooted before the allocation (`new.rs`,
-//!   #6969) and re-read from its root just before the bump (#12462). From
-//!   the bump to the last slot store the image's two blocks (header, slots)
-//!   hold address arithmetic and stores only: no call, so no safepoint,
-//!   allocation or throw. A chunked literal (`Expr::LiteralChunks`) writes
-//!   slots after its birth and is refused whole.
+//!   #6969) and re-read from its root just before the bump (#12462). The
+//!   window from the bump to the last slot store holds address arithmetic
+//!   and stores only: no call, so no safepoint, allocation or throw. A
+//!   chunked literal (`Expr::LiteralChunks`) writes slots after its birth
+//!   and is refused whole.
 //! * The nursery arm is taken only when the bump fits, and the bump bound is
 //!   zero whenever the live birth color is not: the image needs no color bit
 //!   and no black-birth seed (the proof `inline_birth::fixed_class` uses).
-//!   The allocating arm's object comes from the shared helper with its
-//!   header, color and fill; only its slots are stored again.
 //! * The handle is the merge phi after the stores.
 //!
 //! `PERRY_BIRTH_IMAGE=0` (also `off`, `false`) turns the image off (IR as
@@ -74,26 +71,14 @@ fn sabotaged(arm: &str) -> bool {
     std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok(arm)
 }
 
-/// One plan store as the image needs it again in the allocating arm.
-struct Spec {
-    slot: u32,
-    arg_index: usize,
-    addend: Option<f64>,
-    /// An I32 lane of a class that is no object literal: the value is encoded.
-    encode: bool,
-}
-
 /// The words the image writes, computed before the bump.
-pub(in crate::lower_call) struct ImageValues<'g, 'a> {
-    /// The I64 word of every plan store, in plan order.
-    words: Vec<String>,
-    specs: Vec<Spec>,
+pub(in crate::lower_call) struct ImageValues {
+    /// `(slot, i64 word)` for every plan store, in plan order.
+    pub(in crate::lower_call) values: Vec<(u32, String)>,
     /// The conjunction of the plain-finite-number tests the plan needs
     /// (`PrologueStore::requires_number_check`); `None` when none does.
     pub(in crate::lower_call) admit: Option<String>,
-    class_id: u32,
-    /// The arguments' roots: the allocating arm re-reads them after its call.
-    group: &'g RootedGroup<'a>,
+    pub(in crate::lower_call) class_id: u32,
 }
 
 /// The one predicate: `Ok(plan)` when this `new` is born as an image, else
@@ -209,84 +194,60 @@ pub(super) fn plan(
     }
 }
 
-/// The plan's words from `args` (the arguments as re-read from their roots).
-fn words(ctx: &mut FnCtx<'_>, specs: &[Spec], args: &[String]) -> Vec<String> {
-    specs
-        .iter()
-        .map(|spec| {
-            let arg = &args[spec.arg_index];
-            let value = spec.addend.map_or_else(
-                || arg.clone(),
-                |addend| {
-                    ctx.block()
-                        .fadd(arg, &crate::nanbox::double_literal(addend))
-                },
-            );
-            if spec.encode {
-                crate::expr::rest_fields::encode(ctx, &value)
-            } else {
-                ctx.block().bitcast_double_to_i64(&value)
-            }
-        })
-        .collect()
-}
-
 /// The image's words from the arguments re-read from their roots (always:
 /// an earlier argument's lowering may have collected), and the number test
 /// they need. Pure: no call between here and the bump.
-pub(super) fn values<'g, 'a>(
+pub(super) fn values(
     ctx: &mut FnCtx<'_>,
-    group: &'g RootedGroup<'a>,
+    group: &RootedGroup<'_>,
     class_name: &str,
     class: &perry_hir::Class,
     plan: &[PrologueStore],
     args: &[Expr],
     class_id: u32,
-) -> Result<ImageValues<'g, 'a>> {
+) -> Result<ImageValues> {
     let checked: Vec<bool> = plan
         .iter()
         .map(|store| store.requires_number_check(ctx, args))
         .collect();
-    // I32 at rest (PR C): an I32 lane holds the value's I32 word. An
-    // object-literal class's lane argument is its word already (`new.rs`);
-    // any other class's value is encoded.
     let lanes = crate::expr::rest_fields::lanes_of(ctx, class_name);
-    let specs: Vec<Spec> = plan
-        .iter()
-        .map(|store| Spec {
-            slot: store.slot,
-            arg_index: store.arg_index,
-            addend: store.numeric_addend,
-            encode: store.slot < 32 && lanes & (1 << store.slot) != 0 && !class.is_literal_shape(),
-        })
-        .collect();
     let reread = super::refresh_rooted_args(ctx, group)?;
     let mut admit: Option<String> = None;
-    for (spec, _) in specs.iter().zip(&checked).filter(|(_, &check)| check) {
-        let arg = &reread[spec.arg_index];
-        let value = spec.addend.map_or_else(
+    let mut values = Vec::with_capacity(plan.len());
+    for (store, &check) in plan.iter().zip(&checked) {
+        let arg = &reread[store.arg_index];
+        let value = store.numeric_addend.map_or_else(
             || arg.clone(),
             |addend| {
                 ctx.block()
                     .fadd(arg, &crate::nanbox::double_literal(addend))
             },
         );
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(&value);
-        let finite =
-            crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &bits);
-        admit = Some(match admit {
-            Some(acc) => blk.and(I1, &acc, &finite),
-            None => finite,
-        });
+        if check {
+            let blk = ctx.block();
+            let bits = blk.bitcast_double_to_i64(&value);
+            let finite =
+                crate::expr::class_field_inline_guard::emit_plain_finite_number_check(blk, &bits);
+            admit = Some(match admit {
+                Some(acc) => blk.and(I1, &acc, &finite),
+                None => finite,
+            });
+        }
+        // I32 at rest (PR C): an I32 lane holds the value's I32 word. An
+        // object-literal class's lane argument is its word already
+        // (`new.rs`); any other class's value is encoded.
+        let lane = store.slot < 32 && lanes & (1 << store.slot) != 0;
+        let word = if lane && !class.is_literal_shape() {
+            crate::expr::rest_fields::encode(ctx, &value)
+        } else {
+            ctx.block().bitcast_double_to_i64(&value)
+        };
+        values.push((store.slot, word));
     }
-    let words = words(ctx, &specs, &reread);
     Ok(ImageValues {
-        words,
-        specs,
+        values,
         admit,
         class_id,
-        group,
     })
 }
 
@@ -302,33 +263,41 @@ fn default_word(rep: u64, slot: u32) -> String {
     }
 }
 
-// The shared helper's own constants: header 16 bytes, meta at +16, slots
-// from +24 (`inline_birth::shared`); `decide` refuses any other target.
-const BASE: u64 = 24;
-
-/// The image's header, begun in the nursery arm; [`emit_slots`] finishes it.
-pub(in crate::lower_call) struct Header {
-    block: usize,
-    start: usize,
-    label: String,
-    slots: usize,
-}
-
-/// Emit the image's header at `raw` in the current block (the nursery arm:
-/// bump committed, color zero) and branch to the image's slots block.
-pub(in crate::lower_call) fn emit_header(
+/// Emit the image at `raw` in the current block (bump committed, color
+/// zero). Returns the handle; the caller branches to its merge.
+pub(in crate::lower_call) fn emit(
     ctx: &mut FnCtx<'_>,
+    image: &ImageValues,
     raw: &str,
     header_image: &str,
+    rep: u64,
     total_size: u64,
-) -> Header {
+) -> String {
+    // The shared helper's own constants: header 16 bytes, meta at +16, slots
+    // from +24 (`inline_birth::shared`); `decide` refuses any other target.
+    const BASE: u64 = 24;
     let capacity = (total_size.saturating_sub(BASE) / 8) as u32;
-    let block = ctx.current_block;
-    let start = ctx.block().insts().len();
+    let verify = crate::verify_facts::enabled();
+    let mut slot_words: Vec<Option<String>> = vec![None; capacity as usize];
+    let dropped = (verify && sabotaged("birthimage"))
+        .then(|| image.values.last().map(|(slot, _)| *slot))
+        .flatten();
+    for (slot, word) in &image.values {
+        assert!(
+            *slot < capacity,
+            "birth image: slot {slot} beyond capacity {capacity}"
+        );
+        slot_words[*slot as usize] = Some(word.clone());
+    }
+    let window_block = ctx.current_block;
+    let window_start = ctx.block().insts().len();
     let blk = ctx.block();
-    if crate::verify_facts::enabled() {
+    let slot_ptr = |blk: &mut crate::block::LlBlock, slot: u32| {
+        blk.gep(I8, raw, &[(I64, &(BASE + u64::from(slot) * 8).to_string())])
+    };
+    if verify {
         for slot in 0..capacity {
-            let p = blk.gep(I8, raw, &[(I64, &(BASE + u64::from(slot) * 8).to_string())]);
+            let p = slot_ptr(blk, slot);
             // GC_STORE_AUDIT(INIT): check-mode "unwritten" mark in an unpublished idle-color birth.
             blk.store(I64, &UNWRITTEN.to_string(), &p);
         }
@@ -340,77 +309,6 @@ pub(in crate::lower_call) fn emit_header(
     let meta = blk.gep(I8, raw, &[(I64, "16")]);
     // GC_STORE_AUDIT(INIT): fresh object metadata of an image birth.
     blk.store(I64, "0", &meta);
-    let label = blk.label.clone();
-    let slots = ctx.new_block("birth_image.slots");
-    let slots_label = ctx.block_label(slots);
-    ctx.block().br(&slots_label);
-    Header {
-        block,
-        start,
-        label,
-        slots,
-    }
-}
-
-/// In the allocating arm, after the shared birth produced `shared` (a
-/// filled object with its header and color): re-read the arguments and join
-/// the image's slots block, which stores every slot's final word for both
-/// arms. A construction that failed the number test (`admit`) leaves for
-/// `merge` with its fill, for the constructor. Returns each arm into `merge`
-/// as `(handle, predecessor, written)`.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::lower_call) fn emit_slots(
-    ctx: &mut FnCtx<'_>,
-    image: &ImageValues<'_, '_>,
-    header: Header,
-    raw: &str,
-    shared: &str,
-    rep: u64,
-    total_size: u64,
-    merge: &str,
-) -> Result<Vec<(String, String, bool)>> {
-    let capacity = (total_size.saturating_sub(BASE) / 8) as u32;
-    let slots_label = ctx.block_label(header.slots);
-    let mut arms = Vec::new();
-    if let Some(admit) = &image.admit {
-        let again = ctx.new_block("birth_image.again");
-        let again_label = ctx.block_label(again);
-        let pred = ctx.block().label.clone();
-        ctx.block().cond_br(admit, &again_label, merge);
-        arms.push((shared.to_string(), pred, false));
-        ctx.current_block = again;
-    }
-    // The shared birth may have collected: the words are the re-read
-    // arguments' (#6969).
-    let reread = super::refresh_rooted_args(ctx, image.group)?;
-    let again_words = words(ctx, &image.specs, &reread);
-    let blk = ctx.block();
-    let user = blk.inttoptr(I64, shared);
-    let again_raw = blk.gep(I8, &user, &[(I64, "-8")]);
-    let again_label = blk.label.clone();
-    blk.br(&slots_label);
-
-    ctx.current_block = header.slots;
-    let verify = crate::verify_facts::enabled();
-    let blk = ctx.block();
-    let base = blk.phi(
-        crate::types::PTR,
-        &[(raw, &header.label), (&again_raw, &again_label)],
-    );
-    let mut slot_words: Vec<Option<String>> = vec![None; capacity as usize];
-    for ((spec, first), second) in image.specs.iter().zip(&image.words).zip(&again_words) {
-        assert!(
-            spec.slot < capacity,
-            "birth image: slot {} beyond capacity {capacity}",
-            spec.slot
-        );
-        let word = blk.phi(I64, &[(first, &header.label), (second, &again_label)]);
-        slot_words[spec.slot as usize] = Some(word);
-    }
-    let dropped = (verify && sabotaged("birthimage"))
-        .then(|| image.specs.last().map(|spec| spec.slot))
-        .flatten();
-    let start = blk.insts().len();
     for slot in 0..capacity {
         if Some(slot) == dropped {
             continue;
@@ -421,34 +319,26 @@ pub(in crate::lower_call) fn emit_slots(
         let word = slot_words[slot as usize]
             .clone()
             .unwrap_or_else(|| default_word(rep, slot));
-        let p = blk.gep(
-            I8,
-            &base,
-            &[(I64, &(BASE + u64::from(slot) * 8).to_string())],
-        );
-        // GC_STORE_AUDIT(INIT): final slot word of an unpublished image birth (idle-color nursery arm, or the shared birth's fresh object before any statepoint); no barrier or collection can be needed.
+        let p = slot_ptr(blk, slot);
+        // GC_STORE_AUDIT(INIT): final slot word of an unpublished idle-color image birth; no barrier or collection can be needed.
         blk.store(I64, &word, &p);
     }
-    let end = blk.insts().len();
+    let window_end = blk.insts().len();
     let handle = {
-        let user = blk.gep(I8, &base, &[(I64, "8")]);
+        let user = blk.gep(I8, raw, &[(I64, "8")]);
         blk.ptrtoint(&user, I64)
     };
-    let header_end = ctx.func.blocks()[header.block].insts().len();
-    assert_window_has_no_call(ctx, header.block, header.start, header_end);
-    assert_window_has_no_call(ctx, header.slots, start, end);
+    assert_window_has_no_call(ctx, window_block, window_start, window_end);
     if verify {
-        witness(ctx, image.class_id, &base, capacity);
+        witness(ctx, image, raw, BASE, capacity);
     }
-    let pred = ctx.block().label.clone();
-    ctx.block().br(merge);
-    arms.push((handle, pred, true));
-    Ok(arms)
+    handle
 }
 
 /// Check mode: no slot still holds the "unwritten" mark; a slot that does
 /// reports the site and exits 86.
-fn witness(ctx: &mut FnCtx<'_>, cid: u32, raw: &str, capacity: u32) {
+fn witness(ctx: &mut FnCtx<'_>, image: &ImageValues, raw: &str, base: u64, capacity: u32) {
+    let cid = image.class_id;
     crate::verify_facts::covered(
         crate::verify_facts::Fact::BirthImage,
         || serde_json::json!({ "class": cid, "slots": capacity }),
@@ -457,7 +347,7 @@ fn witness(ctx: &mut FnCtx<'_>, cid: u32, raw: &str, capacity: u32) {
     let blk = ctx.block();
     let mut any = "false".to_string();
     for slot in 0..capacity {
-        let p = blk.gep(I8, raw, &[(I64, &(BASE + u64::from(slot) * 8).to_string())]);
+        let p = blk.gep(I8, raw, &[(I64, &(base + u64::from(slot) * 8).to_string())]);
         let v = blk.load(I64, &p);
         let unwritten = blk.icmp_eq(I64, &v, &UNWRITTEN.to_string());
         any = blk.or(I1, &any, &unwritten);
@@ -483,9 +373,9 @@ fn witness(ctx: &mut FnCtx<'_>, cid: u32, raw: &str, capacity: u32) {
     ctx.current_block = ok_idx;
 }
 
-/// The static half of the witness, in every build: the image's header (from
-/// the bump) and its slots (to the last store) hold no call, so no
-/// safepoint, allocation or throw.
+/// The static half of the witness, in every build: from the bump to the last
+/// slot store the image's block holds no call (so no safepoint, allocation
+/// or throw).
 fn assert_window_has_no_call(ctx: &FnCtx<'_>, block: usize, start: usize, end: usize) {
     let insts = ctx.func.blocks()[block].insts();
     let mut line = String::new();

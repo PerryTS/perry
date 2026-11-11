@@ -597,9 +597,6 @@ fn lower_new_impl_inner<'a>(
     }
     let alloc =
         super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
-    if let Some(error) = alloc.image_error {
-        return Err(error);
-    }
     let fresh_prologue = super::new_alloc::prove_fresh_prologue(&alloc);
     let fields_written = alloc.fields_written;
     let obj_handle = alloc.handle;
