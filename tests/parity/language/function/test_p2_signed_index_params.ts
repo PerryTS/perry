@@ -226,3 +226,36 @@ const w = new Written();
 let ws = 0;
 for (let i = 0; i < 24 * RUN; i++) ws += w.set(i - 8, i);
 console.log("written", ws, w.cells.join(","));
+
+// 9. The same helper over an Array stored at rest (I32 words; only element
+// reads and stores touch it): the typed body's board read and store, with
+// keys below 0 (a property), inside the birth length, and past it (the
+// reserved capacity).
+class RestBoard {
+  cells: number[] = new Array<number>(64).fill(0);
+  za: number[] = [];
+  ha = 0;
+  constructor() {
+    let seed = 99;
+    for (let i = 0; i < 16 * 128; i++) {
+      seed = (seed * 1103515245 + 12345) | 0;
+      this.za.push(seed);
+    }
+  }
+  at(square: number): number {
+    return this.cells[square] ?? 0;
+  }
+  set(square: number, piece: number): void {
+    const old = this.at(square);
+    if (old !== 0) this.ha ^= this.za[(old + 6) * 128 + square] ?? 0;
+    this.cells[square] = piece;
+    if (piece !== 0) this.ha ^= this.za[(piece + 6) * 128 + square] ?? 0;
+  }
+}
+const rb = new RestBoard();
+for (let i = 0; i < 64 * RUN; i++) rb.set(i, (i % 13) - 6);
+for (let i = 0; i < 80 * RUN; i += 3) rb.set(i - 8, i & 1 ? -5 : 5);
+for (let i = 0; i < 64 * RUN; i += 7) rb.set(i, 0);
+let sum9 = 0;
+for (let i = -8; i < 80 * RUN; i++) sum9 = (sum9 + rb.at(i) * (i + 9)) | 0;
+console.log("at rest", sum9, rb.ha, rb.at(-8), rb.at(-5), rb.at(70), rb.at(71), rb.at(0));
