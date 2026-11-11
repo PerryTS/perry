@@ -146,7 +146,7 @@ pub(super) fn lower_selection(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<St
 }
 
 /// The i32 chain of `e` computes its JavaScript value exactly (module docs).
-fn exact(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+pub(crate) fn exact(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(n) => i32::try_from(*n).is_ok(),
         Expr::LocalGet(id)
