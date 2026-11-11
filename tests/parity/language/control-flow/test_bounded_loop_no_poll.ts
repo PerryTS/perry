@@ -84,8 +84,8 @@ class Grid {
   }
   withCall(): number {
     let s = 0;
-    for (let f = 0; f < 8; f++) {
-      if (this.at(f) !== 0) s += this.note(f);
+    for (let f = 0; f < 64; f++) {
+      if (this.at(f & 7) !== 0) s += this.note(f);
     }
     return s;
   }
@@ -93,8 +93,8 @@ class Grid {
   // Control: an allocation in the body.
   withAlloc(): number {
     let s = 0;
-    for (let f = 0; f < 8; f++) {
-      const pair = [this.at(f), f];
+    for (let f = 0; f < 64; f++) {
+      const pair = [this.at(f & 7), f];
       s += (pair[0] ?? 0) + (pair[1] ?? 0);
     }
     return s;
@@ -140,12 +140,12 @@ class Grid {
     return s;
   }
 
-  // Control: each loop is bounded, the nest is past the budget: the outer
-  // loop keeps its poll.
+  // Control: each loop is bounded and call-free, the nest is past the
+  // budget: the outer loop keeps its poll.
   wide(): number {
     let s = 0;
     for (let i = 0; i < 1000; i++) {
-      for (let j = 0; j < 1000; j++) s += this.at((i + j) & 0x77);
+      for (let j = 0; j < 1000; j++) s += this.at(((i + j) & 7) * 16 + (j & 7));
     }
     return s;
   }
