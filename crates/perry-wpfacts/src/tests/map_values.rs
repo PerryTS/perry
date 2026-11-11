@@ -7,8 +7,13 @@ fn dump_with(src: &str, cfg: &crate::FactsConfig) -> String {
     crate::compute(&[("t.ts".to_string(), &hir)], cfg).dump_text()
 }
 
+/// The probe lines are diagnostics.
 fn dump(src: &str) -> String {
-    dump_with(src, &crate::FactsConfig::default())
+    let cfg = crate::FactsConfig {
+        diagnostics: true,
+        ..Default::default()
+    };
+    dump_with(src, &cfg)
 }
 
 /// `sink` (the module's first function) takes the `move` field of an entry
@@ -55,7 +60,8 @@ fn a_get_of_a_closed_map_is_no_key() {
 #[test]
 fn an_opened_map_returns_its_contents() {
     for (name, extra) in [
-        ("an escape", "(globalThis as any).leak = table;"),
+        // Interpreted code is unknown code: what it is called with escapes.
+        ("an escape", "new Function(\"m\", \"return m\")(table);"),
         (
             "spread arguments",
             "const kv: [string, Entry] = [\"z\", { key: \"z\", move: 1 }]; table.set(...kv);",
