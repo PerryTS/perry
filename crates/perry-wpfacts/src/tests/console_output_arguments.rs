@@ -17,7 +17,10 @@ fn facts_of(body: &str) -> ProgramFacts {
         function g(a: any) {{ return a.size; }}
         function h(a: any) {{ return a.ping(); }}
         // A store into ⊤ under any key, as three.js `toArray` called back.
-        (globalThis as any).hostTake(function (arr: any, k: any) {{ arr[k] = 1; }});
+        // (`unknown` is a value, not a method of the global object: a call
+        // `globalThis.hostTake(f)` hands it the global object as `this`.)
+        const unknown: any = (globalThis as any)[process.argv[2]];
+        unknown.take(function (arr: any, k: any) {{ arr[k] = 1; }});
         {body}
         "#
     ))
@@ -57,7 +60,7 @@ fn console_output_methods_keep_their_arguments_past_a_top_store() {
 fn global_object_given_to_unknown_code_writes_console() {
     let pf = facts_of(
         r#"
-        (globalThis as any).hostTake(globalThis);
+        unknown.take2(globalThis);
         const s = new Svc();
         console.warn(s);
         console.log(g(s));
@@ -71,7 +74,7 @@ fn global_object_given_to_unknown_code_writes_console() {
 fn console_given_to_unknown_code_is_written() {
     let pf = facts_of(
         r#"
-        (globalThis as any).hostTake(console);
+        unknown.take2(console);
         const s = new Svc();
         console.warn(s);
         console.log(g(s));
@@ -85,7 +88,7 @@ fn console_given_to_unknown_code_is_written() {
 fn a_program_console_warn_runs() {
     let pf = facts_of(
         r#"
-        console.warn = function (a: any) { a.size = "x"; (globalThis as any).hostKeep(a); };
+        console.warn = function (a: any) { a.size = "x"; unknown.keep(a); };
         const s = new Svc();
         console.warn(s);
         console.log(g(s));
@@ -100,7 +103,7 @@ fn a_program_console_warn_runs() {
 fn a_to_string_under_percent_s_runs_past_a_top_store() {
     let pf = facts_of(
         r#"
-        class Leak extends Svc { toString() { (globalThis as any).hostKeep(this); return "L"; } }
+        class Leak extends Svc { toString() { unknown.keep(this); return "L"; } }
         const s = new Leak();
         console.warn("%s", s);
         console.log(g(s));
@@ -114,7 +117,7 @@ fn a_to_string_under_percent_s_runs_past_a_top_store() {
 fn an_inspect_hook_runs_past_a_top_store() {
     let pf = facts_of(
         r#"
-        class Leak extends Svc { [inspect.custom]() { (globalThis as any).hostKeep(this); return "L"; } }
+        class Leak extends Svc { [inspect.custom]() { unknown.keep(this); return "L"; } }
         const s = new Leak();
         console.warn(s);
         console.log(g(s));

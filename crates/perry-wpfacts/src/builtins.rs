@@ -47,8 +47,8 @@ use members::Mem;
 pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
     native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_written, native_written_by, note_global_in_top, note_native_write, require_parts,
-    settle_native_given,
+    native_written, native_written_by, note_global_in_top, note_handed_to_unknown, note_native_write,
+    require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -192,9 +192,9 @@ pub fn set_dyn_eval(m: &mut Model, why: &str) {
         if m.explain {
             eprintln!("perry: wpfacts explain: dynamic code reachable: {why}");
         }
-        // Not the global object's concern: code runs only with a linked
-        // interpreter, whose global reads and writes `compute` records up
-        // front; without one the Function constructor throws.
+        // The global object: `interpreted_code_runs` (code runs only with
+        // a linked interpreter; without one the Function constructor
+        // throws).
     }
 }
 
@@ -236,6 +236,10 @@ pub fn interpreted_code_runs(m: &mut Model) {
         return;
     }
     m.interp_runs = true;
+    // It holds the global object (`Function('return this')()`, `this` of
+    // indirect eval) and gives it to compiled code as ⊤: a store into ⊤ may
+    // write any global and any built-in object (`global_in_top`).
+    note_global_in_top(m);
     // It reads any built-in object's program fields by name (rule R1).
     m.builtin_fields_interp();
     let gt = m.tok(crate::model::TokKind::Builtin(BuiltinNs::GlobalThis));

@@ -1900,6 +1900,7 @@ mod collection_entries;
 mod concat_elements;
 mod console_protocol;
 mod console_output_arguments;
+mod top_store_handed_builtins;
 mod constructor_values;
 mod date_methods;
 mod declared_constructor;
