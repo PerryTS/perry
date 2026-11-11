@@ -500,11 +500,6 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
-        // A `push` site, for the list births it may reach (`list_caps`).
-        if matches!(key, Key::Named(a) if self.m.atoms[a as usize] == "push") {
-            let count = spread.is_empty().then_some(args.len() as u32);
-            self.list_push(recv, count);
-        }
         let (call, ret) = self.new_call(ThisArg::Node(recv), args, spread);
         self.m.cons(recv, Cons::MCall { key, call });
         ret
@@ -1650,7 +1645,6 @@ impl<'a> Gen<'a> {
                 let tm = self.new_arr_birth(mi, "lit", true, true);
                 if let Some(h) = self.direct_arr.take() {
                     self.m.arr_birth_holder.insert(tm, h);
-                    self.list_pending = Some(tm);
                 }
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);

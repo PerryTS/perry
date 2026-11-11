@@ -56,7 +56,10 @@ impl<'a> Gen<'a> {
             perry_hir::folded_call::Receiver::Expr(x) => self.expr(fx, x),
             perry_hir::folded_call::Receiver::Local(id) => self.local(fx.module, id),
         };
-        let args = call.args.iter().map(|x| self.expr(fx, x)).collect();
+        let args: Vec<NodeId> = call.args.iter().map(|x| self.expr(fx, x)).collect();
+        if call.method == "push" {
+            self.list_push(recv, Some(args.len() as u32));
+        }
         let a = self.m.atom(call.method);
         self.mcall(recv, Key::Named(a), args, vec![])
     }

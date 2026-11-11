@@ -1204,7 +1204,7 @@ impl<'a> Gen<'a> {
                 {
                     self.class_homes.insert((fx.module, *id), tm);
                 }
-                self.list_pending = None;
+                let list_tmpl = self.m.tmpls.len() as TmplId;
                 match init {
                     Some(e) => {
                         let v = self.expr_zs(fx, e);
@@ -1212,11 +1212,12 @@ impl<'a> Gen<'a> {
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
-                // `let id = []`: a list birth (`list_caps`).
-                if let Some(tm) = self.list_pending.take() {
-                    if matches!(init, Some(perry_hir::Expr::Array(x, _)) if x.is_empty()) {
-                        self.list_birth(fx.module, *id, tm);
-                    }
+                // `let id = []`: a list birth (`list_caps`). The empty literal
+                // bore one template, the first made since the statement began.
+                if matches!(init, Some(perry_hir::Expr::Array(x, _)) if x.is_empty())
+                    && self.m.tmpls.len() as TmplId > list_tmpl
+                {
+                    self.list_birth(fx.module, *id, list_tmpl);
                 }
                 self.direct_arr = None;
                 if let Some(perry_hir::Expr::ForInKeys(o)) = init {

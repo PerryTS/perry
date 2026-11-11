@@ -199,6 +199,10 @@ impl<'a> Gen<'a> {
                     }
                 }
                 self.own_test_recv = Some(o);
+                if property == "push" {
+                    // A `push` site, for the list births it may reach.
+                    self.list_push(o, spread.is_empty().then_some(args.len() as u32));
+                }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let (off, end) = if *pb != 0 {

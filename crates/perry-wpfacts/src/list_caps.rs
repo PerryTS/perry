@@ -8,8 +8,9 @@
 //! that can reach the Array.
 //!
 //! **What the facts hold.** Every `push` of the program (the folded
-//! `Expr::ArrayPush` / `ArrayPushSpread`, and any `x.push(..)` method call)
-//! is recorded where it is generated with its receiver node, the body it
+//! `Expr::ArrayPush` / `ArrayPushSpread` of `Gen::folded_call`, and any
+//! `x.push(..)` method call of `Gen::call_with`) is recorded where it is
+//! generated with its receiver node, the body it
 //! stands in and its loop depth in that body (`Gen::list_pushes`); every
 //! list birth with its template, body and loop depth (`Gen::list_births`).
 //! After the solve a push site *reaches* a birth when its receiver (any copy
