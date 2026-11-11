@@ -165,6 +165,9 @@ pub(crate) unsafe fn generalize_i32_lane(obj: *mut ObjectHeader, slot: u32) {
 /// mode reports at the next proven read). Returns the receiver.
 pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
     let id = object_shape_stamp(obj);
+    if install_i32_lanes_learned(obj, id, mask) {
+        return;
+    }
     let Some(d) = shape_descriptor_of_receiver(id.0) else {
         return;
     };
@@ -214,6 +217,13 @@ pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
     if target == LayoutWord(0) || target == id {
         return;
     }
+    // The step is a learned edge of the record (as a field definition's is,
+    // `field_define_target`): the next instance of the class follows it
+    // without a mint. Its key count equals its source's, which no definition
+    // edge has, so the two readings never take each other's edge.
+    if let Some(record) = shape_record_of_receiver(id.0) {
+        record.note_field_define_target(target);
+    }
     receiver.with_mut_ptr(|obj| {
         // No safepoint from here to the stamp: the words change under the
         // old lanes (`Any`/`F64`), which the collector reads as non-pointers.
@@ -232,6 +242,61 @@ pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
         }
         stamp_object_shape_id_with_carrier_note(obj, target);
     });
+}
+
+/// [`install_i32_lanes`] along the record's learned lanes step: the target
+/// is the same layout (keys, counts, prototype, kind, attributes, ConstFn
+/// lanes) whose rep is the source's with an I32 lane at every slot of
+/// `mask`. Noncollecting; `false` when there is no such edge or a slot does
+/// not hold an int32 Number.
+unsafe fn install_i32_lanes_learned(obj: *mut ObjectHeader, id: LayoutWord, mask: u32) -> bool {
+    let Some(from) = shape_record_of_receiver(id.0) else {
+        return false;
+    };
+    let target = from.field_define_target();
+    let Some(to) = shape_record_of_receiver(target.0) else {
+        return false;
+    };
+    let mut rep = from.rep();
+    let mut rest = mask;
+    while rest != 0 {
+        let slot = rest.trailing_zeros();
+        rest &= rest - 1;
+        rep = field_rep::with_slot_rep(rep, slot, field_rep::REP_SPECIAL);
+    }
+    if target == id
+        || to.rep() != rep
+        || to.keys() != from.keys()
+        || to.logical_key_count() != from.logical_key_count()
+        || to.live_inline_slot_count() != from.live_inline_slot_count()
+        || to.proto_id() != from.proto_id()
+        || to.object_kind() != from.object_kind()
+        || to.summary() != from.summary()
+        || to.special_constfn_mask() != from.special_constfn_mask()
+        || super::overflow::has_overflow(obj)
+    {
+        return false;
+    }
+    let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+    let mut rest = mask;
+    while rest != 0 {
+        let slot = rest.trailing_zeros() as usize;
+        rest &= rest - 1;
+        if crate::layout_slot::encode_lane(*fields.add(slot)).is_none() {
+            return false;
+        }
+    }
+    let mut rest = mask;
+    while rest != 0 {
+        let slot = rest.trailing_zeros() as usize;
+        rest &= rest - 1;
+        if let Some(word) = crate::layout_slot::encode_lane(*fields.add(slot)) {
+            // GC_STORE_AUDIT(POINTER_FREE): an I32 word (0x7FFE band).
+            *fields.add(slot) = word;
+        }
+    }
+    stamp_object_shape_id_with_carrier_note(obj, target);
+    true
 }
 
 /// A closure that can preserve an existing ConstFn body claim. Its address
