@@ -127,6 +127,7 @@ def main():
         ("array-base-admit-negative", "arrbaseadm", "array rep"),
         ("fn-base-admit-negative", "fnbaseadm", "array rep"),
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
+        ("key-sign-negative", "keysign", "key sign"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),

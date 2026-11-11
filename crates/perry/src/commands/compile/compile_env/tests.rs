@@ -374,6 +374,16 @@ fn unsigned_bound_switch_is_a_cache_input() {
     );
 }
 
+/// Key signs: the switch changes the exported facts and every element site
+/// that consumes its key's interval, so `=0` must never reuse an `=1` object.
+#[test]
+fn key_sign_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_KEY_SIGN"),
+        "PERRY_FACTS_KEY_SIGN must key the compile caches"
+    );
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]

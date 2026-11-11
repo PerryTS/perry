@@ -530,6 +530,8 @@ fn generate<'a>(
     g.m.rest_capacity = rest_elems::capacity_enabled();
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
+    g.m.key_sign = element_keys::sign_enabled();
+    g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
@@ -1036,6 +1038,7 @@ fn compute_act<'a>(
     }
     const_arrays::collect(&g, &mut bindings);
     element_keys::collect(&g, &mut bindings);
+    element_keys::collect_signs(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
