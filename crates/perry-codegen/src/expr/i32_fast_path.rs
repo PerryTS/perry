@@ -42,19 +42,6 @@ pub(crate) fn is_known_i32_range(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     super::range_facts::int_range_expr(ctx, e)
         .is_some_and(|range| range.min >= i64::from(i32::MIN) && range.max <= i64::from(i32::MAX))
         || is_int32_bitwise_result(ctx, e)
-        || is_at_rest_int32(ctx, e)
-}
-
-/// A value the facts store at rest as an I32 word is an int32 Number where
-/// it is read: an I32 field lane every receiver has (`rest_fields::
-/// is_int32_read`), and an at-rest element the facts prove present
-/// (`rest_elems::number_read`). `this.hash ^= x` then takes the lane's word
-/// with one conversion in place of the guarded ToInt32.
-/// `PERRY_FACTS_LOCAL_RANGES=0` turns it off.
-fn is_at_rest_int32(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    super::facts_local_ranges()
-        && !ctx.wpfacts_off
-        && (super::rest_fields::is_int32_read(ctx, e) || super::rest_elems::number_read(ctx, e))
 }
 
 /// `&`, `|`, `^`, `<<` and `>>` compute a BigInt only when BOTH operands are
