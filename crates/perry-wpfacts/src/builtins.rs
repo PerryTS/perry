@@ -1122,8 +1122,14 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
     if fam == Family::Object {
         return r != TOP;
     }
+    // Every `Array.prototype` method is intentionally generic (ECMA-262
+    // 23.1.3: `ToObject(this)`, then LengthOfArrayLike and Get/HasProperty of
+    // its indices; the result of `map`/`filter`/`slice`/... of a non-Array is
+    // ArraySpeciesCreate's ArrayCreate): a function, a bound or class
+    // object, a builtin object or prototype, a module namespace object run it
+    // as an array-like (`array_method_on`), as an object literal does.
     if fam == Family::Array && what.is_none() {
-        return matches!(m.toks[r as usize], TokKind::Obj(..));
+        return r != TOP;
     }
     // `Error.prototype.toString` is generic over an object `this`
     // (ECMA-262 20.5.3.4: steps 1-2 only require an Object; `name` and
