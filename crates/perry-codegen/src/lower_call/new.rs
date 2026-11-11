@@ -640,8 +640,13 @@ fn lower_new_impl_inner<'a>(
     };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
-    // the constructor consumes them.
-    lowered_args = refresh_rooted_args(ctx, group)?;
+    // the constructor consumes them. An image birth's arguments are consumed
+    // by its constructor arm alone, which re-reads them there: a re-read here
+    // would keep every argument live through the image's path.
+    let image_written = fields_written.is_some() && image_plan.is_some();
+    if !image_written {
+        lowered_args = refresh_rooted_args(ctx, group)?;
+    }
 
     // Constructor bodies may contain terminating recursive construction
     // shapes such as `if (typeof opts === "function") return new C(...)`.
@@ -689,6 +694,10 @@ fn lower_new_impl_inner<'a>(
             .extends_name
             .as_deref()
             .is_some_and(crate::expr::is_other_builtin_constructor_name);
+    assert!(
+        !image_written || force_ctor_call,
+        "an image birth runs its constructor through the local symbol"
+    );
     if ctx.class_stack.iter().any(|active| active == class_name)
         || ctor_alias_collision
         || force_ctor_call
@@ -752,7 +761,6 @@ fn lower_new_impl_inner<'a>(
         // arm branching into a block nothing terminates.
         // An image birth wrote its plan's stores: that plan, not a second
         // derivation, drives the diamond below.
-        let image_written = fields_written.is_some() && image_plan.is_some();
         let prologue_plan = if image_written {
             image_plan.take()
         } else if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
@@ -809,6 +817,9 @@ fn lower_new_impl_inner<'a>(
             ctx.block().br(&merge_label);
             prologue_merge = Some((merge_idx, fast_label));
             ctx.current_block = slow_idx;
+            if image_written {
+                lowered_args = refresh_rooted_args(ctx, group)?;
+            }
         } else if let Some(plan) = prologue_plan.as_ref() {
             // Pure derived values are safe to compute before the diamond. A
             // non-finite result selects the ordinary constructor below, which
