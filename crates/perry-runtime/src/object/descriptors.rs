@@ -691,9 +691,13 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
                     }
                     // A generator function declares `prototype`: an
                     // unmaterialized slot is born with its bag (allocates).
-                    // So does an unborn lazy builtin family's constructor:
-                    // its family's birth gives it the bag.
-                    if name == "prototype" && crate::closure::props::bag_of(ptr).is_null() {
+                    // So does an unborn lazy builtin family's constructor when
+                    // the key is `prototype` or a declared static (the value
+                    // is read): its family's birth gives it the bag.
+                    if crate::closure::props::bag_of(ptr).is_null()
+                        && (name == "prototype"
+                            || crate::closure::props::is_declared_static(ptr, name.as_bytes()))
+                    {
                         ptr_handle.across_mut::<u8, _>(|| {
                             crate::object::birth_unborn_family_of(ptr);
                         });
@@ -901,7 +905,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Accessors and attributes follow array growth, just like reads.
                 let arr = super::array_object_ops::array_header(obj);
                 let obj = arr as *mut ObjectHeader;
@@ -1169,7 +1173,7 @@ fn real_array_receiver(value: f64) -> bool {
     }
     let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
     unsafe { crate::value::addr_class::try_read_gc_header(raw) }
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {

@@ -278,7 +278,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
 
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_array!((*gc_header).obj_type) {
                     // A reassigned `Array.prototype.toString` must run instead
                     // of the hardcoded join (test262 S15.5.1.1_A1_T8).
                     match array_prototype_to_string_override(value) {

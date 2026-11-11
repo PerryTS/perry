@@ -61,7 +61,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
         return None;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
+        crate::gc_array_type_pat!() => array_get_to_json(ptr as *const crate::ArrayHeader),
         crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
@@ -88,6 +88,9 @@ pub(super) fn refresh_environment_receiver(ptr: *const u8) -> *const u8 {
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // I32 at rest (PR C): no object with an I32 lane reaches a generic
+    // reader (check mode).
+    crate::layout_slot::generic_object_reader(ptr as *const crate::object::ObjectHeader);
     // Taken unconditionally so a verdict for this object can never reach a
     // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
     // means this object IS a `toJSON` result, which also settles the question

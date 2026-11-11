@@ -128,6 +128,19 @@ fn lower_new_impl(
     cap_args_appended: usize,
     heritage_checked: bool,
 ) -> Result<String> {
+    let born = lower_new_birth(ctx, class_name, args, cap_args_appended, heritage_checked)?;
+    // Value records' check mode (DESIGN-p4l4 B7): claim an admitted record.
+    crate::expr::record_witness::claim(ctx, class_name, &born);
+    Ok(born)
+}
+
+fn lower_new_birth(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    cap_args_appended: usize,
+    heritage_checked: bool,
+) -> Result<String> {
     if let Some(class) = ctx.classes.get(class_name).copied() {
         if class.is_declared_keys_record() {
             return Ok(lower_declared_keys_birth(
@@ -429,12 +442,32 @@ fn lower_new_impl_inner<'a>(
     // forwards `undefined` instead of throwing the ReferenceError.
     let first_cap_arg = args.len().saturating_sub(cap_args_appended);
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    // I32 at rest (PR C): an object-literal class's argument for an I32 lane
+    // is lowered as the lane's word (a NaN-box of the INT32 band, which no
+    // collector takes for a pointer and the store funnel keeps as it is): a
+    // proven lane read copies its word, any other value is encoded once.
+    let lane_args = if class.is_literal_shape() {
+        crate::expr::rest_fields::lanes_of(ctx, class_name)
+    } else {
+        0
+    };
     for (i, a) in args.iter().enumerate() {
         let is_cap_forward = i >= first_cap_arg;
         if is_cap_forward {
             ctx.block().call_void("js_tdz_suppress_begin", &[]);
         }
-        let value = lower_constructor_arg(ctx, a)?;
+        let value = if i < 32 && lane_args & (1 << i) != 0 && !is_cap_forward {
+            let word = match crate::expr::rest_fields::try_lower_word(ctx, a)? {
+                Some(word) => word,
+                None => {
+                    let v = lower_constructor_arg(ctx, a)?;
+                    crate::expr::rest_fields::encode_birth(ctx, &v, class_name, i)
+                }
+            };
+            ctx.block().bitcast_i64_to_double(&word)
+        } else {
+            lower_constructor_arg(ctx, a)?
+        };
         if is_cap_forward {
             ctx.block().call_void("js_tdz_suppress_end", &[]);
         }
@@ -795,6 +828,8 @@ fn lower_new_impl_inner<'a>(
                 blk.gep(crate::types::I8, &obj_ptr, &[(I64, &header_skip)])
             };
             let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            // I32 at rest (PR C): an I32 lane stores the value's I32 word.
+            let i32_lanes = crate::expr::rest_fields::lanes_of(ctx, class_name);
             for (store_index, store) in plan.iter().enumerate() {
                 if crate::expr::literal_chunks::is_fill(args.get(store.arg_index)) {
                     continue;
@@ -806,6 +841,21 @@ fn lower_new_impl_inner<'a>(
                         key,
                         store.slot,
                     );
+                }
+                if store.slot < 32 && i32_lanes & (1 << store.slot) != 0 {
+                    // An object-literal class's lane argument is its word
+                    // already (above); any other class's value is encoded.
+                    let word = if class.is_literal_shape() {
+                        ctx.block().bitcast_double_to_i64(&prologue_values[store_index])
+                    } else {
+                        crate::expr::rest_fields::encode(ctx, &prologue_values[store_index])
+                    };
+                    let blk = ctx.block();
+                    let field_ptr =
+                        blk.gep(DOUBLE, &fields_base, &[(I64, &store.slot.to_string())]);
+                    // GC_STORE_AUDIT(INIT): an I32 word (0x7FFE band) into a fresh, unpublished object's I32 lane; never a pointer, so no barrier.
+                    blk.store(I64, &word, &field_ptr);
+                    continue;
                 }
                 let (field_addr, child_bits) = {
                     let blk = ctx.block();

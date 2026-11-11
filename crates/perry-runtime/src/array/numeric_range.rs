@@ -29,7 +29,7 @@ fn array_numeric_range_add_impl(receiver: f64, start: f64, end: Option<f64>, del
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw) }) else {
         return -1;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return -1;
     }
     let arr = clean_arr_ptr_mut(raw as *mut ArrayHeader);
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn js_array_fill_range_strided_tagged(
     let Some(header) = crate::value::addr_class::try_read_gc_header(raw) else {
         return -1;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return -1;
     }
     let arr = clean_arr_ptr_mut(raw as *mut ArrayHeader);

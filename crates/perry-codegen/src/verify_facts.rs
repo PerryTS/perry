@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
+pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
 #[cfg(feature = "llvm-inprocess")]
@@ -422,6 +423,7 @@ pub(crate) fn check(
             "perry_wpfacts_check_call" => "perry_verify_facts_call",
             "perry_wpfacts_check_call_miss" => "perry_verify_facts_call_miss",
             "perry_wpfacts_check_miss" => "perry_verify_facts_miss",
+            "perry_wpfacts_check_record_identity" => "perry_verify_facts_record_identity",
             _ => unreachable!("verification ABI"),
         }
     } else {

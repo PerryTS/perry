@@ -102,6 +102,16 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// A computed-key read with a source offset: its value node, for the
+    /// element facts (`Gen::element_values`).
+    pub(crate) fn note_element_value(&mut self, fx: &Fx, e: &perry_hir::Expr, n: NodeId) {
+        if let perry_hir::Expr::IndexGet { element_offset, .. } = e {
+            if *element_offset != 0 {
+                self.element_values.push((fx.module, *element_offset, n));
+            }
+        }
+    }
+
     /// The node of a numeric literal: a shared node per integer value,
     /// carrying its point interval (`model::range`), or the Number node.
     pub fn num_literal(&mut self, v: f64) -> NodeId {
@@ -121,6 +131,27 @@ impl<'a> Gen<'a> {
         self.m.add_prim(n, prim::NUM);
         self.num_lits.insert(iv.lo, n);
         n
+    }
+
+    /// N1 (`demand::compare_demand`): a strict equality test of node `l`
+    /// (`left`) and node `r` (`right`) against an int32 constant is an int
+    /// consumer of the other operand.
+    pub(crate) fn equality_demand(
+        &mut self,
+        left: &perry_hir::Expr,
+        right: &perry_hir::Expr,
+        l: NodeId,
+        r: NodeId,
+    ) {
+        if !self.int_ranges || !crate::demand::compare_demand() {
+            return;
+        }
+        if crate::demand::int32_constant(right) {
+            self.m.nodes[l as usize].int_use = true;
+        }
+        if crate::demand::int32_constant(left) {
+            self.m.nodes[r as usize].int_use = true;
+        }
     }
 
     /// Register the interval rule of a numeric operator: `dst` takes its
@@ -177,7 +208,13 @@ impl<'a> Gen<'a> {
         let r = self.m.reason("ToNumber of a Math operand");
         let mut nodes = Vec::with_capacity(operands.len());
         for o in operands {
-            let v = self.expr(fx, o);
+            // `Math.abs` of `-0` is `0`; `sign`, `min` and `max` observe the
+            // sign (`zero_sign`): their operands keep the default.
+            let v = if op == crate::model::RangeOp::Abs {
+                self.expr_zs(fx, o)
+            } else {
+                self.expr(fx, o)
+            };
             self.m.cons(
                 v,
                 Cons::Implicit {

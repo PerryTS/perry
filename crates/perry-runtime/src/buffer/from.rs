@@ -662,7 +662,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
         }
         // The raw helper requires an actual ArrayHeader layout.
         if unsafe { crate::value::addr_class::try_read_gc_header(raw) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             return js_uint8array_from_array(raw as *const ArrayHeader);
         }

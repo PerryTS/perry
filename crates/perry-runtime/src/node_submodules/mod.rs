@@ -1365,34 +1365,3 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 #[cfg(test)]
 mod tests;
 
-/// Install the provider's ReadableStream.from on the actual constructor
-/// shapes, with no property-read dispatch or provider side table.
-/// # Safety
-/// `info` must have static lifetime and describe a one-argument JS method.
-#[no_mangle]
-pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunctionInfo) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let method = scope.root_raw_mut_ptr(js_closure_alloc(&*info, 0));
-    method.with_mut_ptr(|p| crate::object::set_bound_native_closure_name(p, "from"));
-    method.with_mut_ptr(|p: *mut ClosureHeader| {
-        crate::object::set_builtin_closure_length(p as usize, 1);
-        crate::object::set_builtin_closure_non_constructable(p as usize);
-    });
-    // The module export aliases the global constructor. Decorate that one
-    // shape without arming an unimported submodule or allocating a namespace.
-    let ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-        b"ReadableStream".as_ptr(),
-        14,
-    ));
-    let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
-    crate::closure::closure_set_dynamic_prop(
-        addr,
-        "from",
-        method.with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64)),
-    );
-    crate::object::set_builtin_property_attrs(
-        addr,
-        "from".to_string(),
-        crate::object::PropertyAttrs::new(true, true, true),
-    );
-}

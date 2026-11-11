@@ -28,6 +28,9 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+mod const_array_walk;
+#[cfg(test)]
+mod const_array_walk_tests;
 #[cfg(test)]
 mod contents_stable_ir_tests;
 mod counter_range;
@@ -37,6 +40,12 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod element_shape_native;
+pub(crate) mod field_base;
+#[cfg(test)]
+mod field_base_tests;
+pub(crate) mod fn_base;
+#[cfg(test)]
+mod fn_base_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
@@ -218,6 +227,9 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    // N2: a function-level base installed in this lowering of the list ends
+    // with it.
+    fn_base::end_list(ctx, stmts);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
     crate::expr::map_entry_fusion::close_list(ctx, stmts);
@@ -238,6 +250,8 @@ fn lower_stmts_list(
     // table (`closure_births::try_lower_let_run`).
     let mut born_until = 0;
     while i < stmts.len() {
+        // N2: the held suffix of a method body starts here.
+        fn_base::at_stmt(ctx, stmts, i)?;
         ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
         // and no run lowered as one unit may reach past the next statement
@@ -311,7 +325,9 @@ fn lower_stmts_list(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) = (!born)
+        // I32 at rest: the region's fast copy reads element words raw.
+        let rest = crate::expr::rest_elems::in_loop(ctx, &[], &stmts[i..limit]);
+        if let Some(region) = (!born && !rest)
             .then(|| masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit]))
             .flatten()
         {

@@ -445,6 +445,49 @@ const COLD_HELPERS: &[&str] = &[
     "js_stack_overflow",
 ];
 
+/// Helpers that exist only as the slow arm of an inline fast path: the loop
+/// poll's call behind the arming word, the outlined element read behind the
+/// plain-array guards, the F64-kind store's note behind its kind test (it
+/// clears the kind, so it runs once per array). Declared `cold` like the
+/// list above, under `PERRY_COLD_PATHS`.
+///
+/// These, and only these, are also marked at their call sites
+/// (`inprocess/cold_paths.rs`). The statepoint rewrite keeps a call site's
+/// attributes and drops the callee's, so `COLD_HELPERS`' `cold` reaches LLVM
+/// only where the call is not a statepoint. Marking those sites as well was
+/// measured and left out: TypeScript compiled from source grew by 725 KB of
+/// code (1.1%) for 0.04% fewer instructions.
+const COLD_ARM_HELPERS: &[&str] = &[
+    "js_array_note_numeric_write_value",
+    "js_gc_loop_safepoint",
+    "perry_array_read_cold_shared",
+];
+
+/// `PERRY_COLD_PATHS` (default on): cold arms are stated to LLVM where the
+/// statement survives the statepoint rewrite (`inprocess/cold_paths.rs`).
+/// `=0`/`off`/`false` restores the previous module exactly.
+pub(crate) fn cold_paths_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        cold_paths_enabled_from_env(std::env::var("PERRY_COLD_PATHS").ok().as_deref())
+    })
+}
+
+pub(crate) fn cold_paths_enabled_from_env(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false"))
+}
+
+/// Whether calls of `name` are marked cold at the call site.
+pub(crate) fn is_cold_arm_helper(name: &str) -> bool {
+    COLD_ARM_HELPERS.contains(&name)
+}
+
+/// Whether `name` is declared `cold`; `cold_arms` is [`cold_paths_enabled`].
+pub(crate) fn is_cold_helper(name: &str, cold_arms: bool) -> bool {
+    COLD_HELPERS.contains(&name) || (cold_arms && COLD_ARM_HELPERS.contains(&name))
+}
+
 // The two memory-contract lists below are audited facts about what a
 // helper's body reads and writes, which no table carries. Whether a call can
 // unwind is not part of them: `nounwind` comes only from the table of the
@@ -543,7 +586,7 @@ const READONLY_HELPERS: &[&str] = &[
 /// `js_value_length_f64` (Buffer/TypedArray registry lookups take locks —
 /// a lock acquisition writes memory).
 fn helper_decl_contract(name: &str) -> HelperDeclContract {
-    if COLD_HELPERS.contains(&name) {
+    if is_cold_helper(name, cold_paths_enabled()) {
         HelperDeclContract::Cold
     } else if PURE_HELPERS.contains(&name) {
         HelperDeclContract::Pure

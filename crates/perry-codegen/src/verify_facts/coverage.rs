@@ -40,7 +40,15 @@ pub(crate) enum Fact {
     FieldReadCall,
     CanonicalNumber,
     ElementFloor,
+    ConstNumber,
     Signature,
+    ArrayRep,
+    ConstArray,
+    RecordIdentity,
+    RecordMutation,
+    FieldRep,
+    UnsignedBound,
+    ZeroSign,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -80,7 +88,15 @@ impl Fact {
             Self::FieldReadCall => "field read call",
             Self::CanonicalNumber => "canonical number",
             Self::ElementFloor => "element floor",
+            Self::ConstNumber => "constant number",
             Self::Signature => "signature",
+            Self::ArrayRep => "array rep",
+            Self::ConstArray => "constant array",
+            Self::RecordIdentity => "value record identity",
+            Self::RecordMutation => "value record mutation",
+            Self::FieldRep => "field rep",
+            Self::UnsignedBound => "unsigned bound",
+            Self::ZeroSign => "zero sign",
         }
     }
 }

@@ -208,7 +208,7 @@ unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     let arg = scope.root_nanbox_f64(arg);
     let next = scope.root_nanbox_f64(next);
     let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ITERATOR_HELPER_CLASS_ID, FIELD_COUNT));
-    let obj = js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    let obj = obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64));
     set_field(obj, F_ITERATED, iterated.get_nanbox_f64());
     set_field(obj, F_OP, op as f64);
     set_field(obj, F_ARG, arg.get_nanbox_f64());
@@ -221,12 +221,14 @@ unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     set_field(obj, F_COUNTER, 0.0);
     set_field(obj, F_GEN_STATE, GEN_START);
     if op == OP_WRAP {
-        crate::object::attach_wrap_for_valid_iterator_prototype(obj_h.get_raw_mut_ptr());
+        obj_h.with_mut_ptr(crate::object::attach_wrap_for_valid_iterator_prototype);
     } else {
         // `%IteratorHelperPrototype%`, whose parent is `%Iterator.prototype%`.
-        crate::object::attach_iterator_prototype(obj_h.get_raw_mut_ptr(), ITERATOR_HELPER_CLASS_ID);
+        obj_h.with_mut_ptr(|obj| {
+            crate::object::attach_iterator_prototype(obj, ITERATOR_HELPER_CLASS_ID)
+        });
     }
-    js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 /// A new helper of `op` over `iterated` (a record or helper).
@@ -518,7 +520,8 @@ pub(crate) unsafe fn drain_to_array(iterated: f64) -> f64 {
     let iterated = scope.root_nanbox_f64(iterated);
     let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     while let Some(v) = helper_step(iterated.get_nanbox_f64()) {
-        arr.set_raw_mut_ptr(crate::array::js_array_push_f64(arr.get_raw_mut_ptr(), v));
+        let updated = arr.with_mut_ptr(|array| crate::array::js_array_push_f64(array, v));
+        arr.set_raw_mut_ptr(updated);
     }
-    js_nanbox_pointer(arr.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    arr.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| js_nanbox_pointer(array as i64))
 }

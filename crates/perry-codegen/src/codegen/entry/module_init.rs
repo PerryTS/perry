@@ -46,6 +46,9 @@ pub(super) fn compile_module_init(
     // re-running the body, leaving the namespace populator's work
     // partially observable. The wrapper sets `done = 1` BEFORE
     // calling the body so the re-entry path returns immediately.
+    if cross_module.program_has_tla {
+        super::async_module::emit_record(llmod, hir, module_prefix, cross_module);
+    } else {
     let done_global = format!("__perry_init_done_{}", module_prefix);
     // #10399: with a Worker in the program this guard MUST be per-thread.
     // A process-wide flag means a worker reaching `<mod>__init` finds the
@@ -154,14 +157,22 @@ pub(super) fn compile_module_init(
         }
         llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
     }
+    }
     // The body retains every existing semantic of `<prefix>__init`
     // (strings init, globals/GC registration, top-level statements,
     // namespace populator at the tail). Calls normally go through the
     // wrapper above, both within this module and across modules.
-    let init_name = init_body_name;
+    let init_name = format!("{}__init_body", module_prefix);
+    module_frame::record(
+        llmod,
+        hir,
+        &init_name,
+        cross_module.app_metadata.module_source_path.as_deref(),
+    );
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
-    let init_fn = llmod.define_function(&init_name, VOID, vec![]);
+    let body_return = if cross_module.program_has_tla { DOUBLE } else { VOID };
+    let init_fn = llmod.define_function(&init_name, body_return, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.
     init_fn.linkage = "external".to_string();
@@ -281,6 +292,7 @@ pub(super) fn compile_module_init(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: init_fn,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -324,6 +336,8 @@ pub(super) fn compile_module_init(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -462,6 +476,7 @@ pub(super) fn compile_module_init(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -633,7 +648,7 @@ pub(super) fn compile_module_init(
         // Script" is the right answer there for a wrapped entry too — and
         // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
         // which runs before the wrap flag is knowable here.
-        if super::entry_evaluates_as_esm(hir, cross_module) {
+        if !cross_module.program_has_tla && super::entry_evaluates_as_esm(hir, cross_module) {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // #5579: GlobalDeclarationInstantiation for a Script. A non-ESM entry
@@ -679,7 +694,9 @@ pub(super) fn compile_module_init(
     }
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
-    init_static_fields_late(&mut ctx, hir)?;
+    if hir.async_init_function.is_none() {
+        init_static_fields_late(&mut ctx, hir)?;
+    }
 
     // Issue #100: populate `@__perry_ns_<module_prefix>` from the
     // namespace_entries list at the tail of the non-entry __init.
@@ -709,7 +726,17 @@ pub(super) fn compile_module_init(
     }
 
     if !ctx.block().is_terminated() {
-        ctx.block().ret_void();
+        if cross_module.program_has_tla {
+            let value = if let Some(id) = hir.async_init_function {
+                let name = &func_names[&id];
+                ctx.block().call(DOUBLE, name, &[])
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            ctx.block().ret(DOUBLE, &value);
+        } else {
+            ctx.block().ret_void();
+        }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);

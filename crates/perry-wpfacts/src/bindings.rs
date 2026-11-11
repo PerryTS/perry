@@ -7,7 +7,7 @@
 //! offset, so the binding (not the site) is the key.
 
 use crate::gen::Gen;
-use crate::model::{Model, NodeId, TmplKind, TokKind, TOP};
+use crate::model::{Model, NodeId, TmplId, TmplKind, Tok, TokKind, TOP};
 
 /// A compiled body a binding or a field may hold (FVA): what codegen needs
 /// to call it without the runtime's dispatch.
@@ -116,7 +116,12 @@ fn bodies_with_contracts(g: &Gen, n: NodeId) -> Vec<BodyRef> {
 
 /// The one representation of a value (representation RFC §10.3): what the
 /// whole-program facts give the binding, which codegen obeys.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// It has no order: the derived one would not be the lattice (REVIEW-p4l1
+/// finding 7). `Rep::join` is the only join, and every encoding decision
+/// goes through `Rep::encoding` (an `Arr` value is the NaN-boxed pointer
+/// word every Boxed value is).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Rep {
     /// Any value, NaN-boxed (⊤).
     #[default]
@@ -125,14 +130,158 @@ pub enum Rep {
     F64,
     /// Only int32 Numbers (never `-0`) with int demand (`demand`).
     I32,
+    /// Only plain program Arrays (DESIGN-p4l1 §2.1-2.2, `arr_rep`).
+    Arr(ArrRep),
+    /// Only instances of one admitted value-record template, or (`opt`)
+    /// `undefined` (DESIGN-p4l4 §1.1, `rep_of`). Its fields by value; until
+    /// codegen lowers records (VR-3) its slot encoding is the Boxed word.
+    Record(RecRep),
+}
+
+/// A value record's representation: the template, and whether `undefined`
+/// is among the values (`opt`, the "absent" lane).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RecRep {
+    pub tmpl: crate::model::TmplId,
+    pub opt: bool,
+}
+
+/// The representation of an `Arr` value's elements: `rep_of` of the join
+/// of every token's element node (an `undefined` stored there makes it
+/// Boxed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ElemRep {
+    #[default]
+    Boxed,
+    F64,
+    I32,
+}
+
+/// What every Array an `Arr` value may hold has, for its whole life
+/// (DESIGN-p4l1 §2.1, Invariants L, C, D and F of `solve::arr_len`). Each
+/// field says less as it moves: `elem` up `I32 ⊑ F64 ⊑ Boxed`, `floor`
+/// down, `dense` and `fixed` from true to false.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ArrRep {
+    pub elem: ElemRep,
+    /// `length >= floor` and `capacity >= floor` (L, C).
+    pub floor: u32,
+    /// No index below `floor` is ever a hole (D); implies `floor > 0`.
+    pub dense: bool,
+    /// Every token's length interval is one value `lo == hi`: its storage
+    /// never grows, so it is never reallocated or forwarded (F;
+    /// REVIEW-p4l1 R3). Carried here so a join (a field over its class set,
+    /// a signature slot over its copies) keeps or drops it with the rest,
+    /// and no consumer asks a second fact (`const_length`) for it.
+    pub fixed: bool,
+    /// Every token is immutable (`const_arrays`): nothing writes it after
+    /// its birth, so each index holds its birth value for the whole
+    /// program. Implies `fixed`. It is about the Arrays, not about a
+    /// binding that may be read before it holds one: consumers ask
+    /// `BindingFacts::immutable_array`.
+    pub im: bool,
+    /// Every token's template is at rest (I32 at rest, PR B;
+    /// `rest_elems`): each element slot holds an I32 word
+    /// `INT32_TAG | (u32)v` for the Array's whole life.
+    pub at_rest: bool,
+}
+
+/// The encoding of a value's slot: how its word is stored and passed.
+/// `Rep::Arr` is knowledge about a Boxed word, never another encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Enc {
+    Boxed,
+    F64,
+    I32,
+}
+
+impl ElemRep {
+    fn join(a: ElemRep, b: ElemRep) -> ElemRep {
+        match (a, b) {
+            (ElemRep::Boxed, _) | (_, ElemRep::Boxed) => ElemRep::Boxed,
+            (ElemRep::F64, _) | (_, ElemRep::F64) => ElemRep::F64,
+            (ElemRep::I32, ElemRep::I32) => ElemRep::I32,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ElemRep::Boxed => "boxed",
+            ElemRep::F64 => "f64",
+            ElemRep::I32 => "i32",
+        }
+    }
+}
+
+impl ArrRep {
+    /// The join (says less) of two array reps.
+    pub fn join(a: ArrRep, b: ArrRep) -> ArrRep {
+        ArrRep {
+            elem: ElemRep::join(a.elem, b.elem),
+            floor: a.floor.min(b.floor),
+            dense: a.dense && b.dense,
+            fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
+            at_rest: a.at_rest && b.at_rest,
+        }
+    }
 }
 
 impl Rep {
-    pub fn name(self) -> &'static str {
+    /// The join of two representations (DESIGN-p4l1 §2.4): a full table,
+    /// with no `_` arm, so a new variant is a compile error here. A Number
+    /// and an Array have no common representation but Boxed.
+    pub fn join(a: Rep, b: Rep) -> Rep {
+        match (a, b) {
+            (Rep::Boxed, Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_)) => Rep::Boxed,
+            (Rep::F64 | Rep::I32 | Rep::Arr(_), Rep::Boxed) => Rep::Boxed,
+            (Rep::F64, Rep::F64 | Rep::I32) | (Rep::I32, Rep::F64) => Rep::F64,
+            (Rep::I32, Rep::I32) => Rep::I32,
+            (Rep::F64 | Rep::I32, Rep::Arr(_)) | (Rep::Arr(_), Rep::F64 | Rep::I32) => Rep::Boxed,
+            (Rep::Arr(x), Rep::Arr(y)) => Rep::Arr(ArrRep::join(x, y)),
+            // DESIGN-p4l4 §1.1: one template joins with itself (`opt` OR'd).
+            (Rep::Record(x), Rep::Record(y)) if x.tmpl == y.tmpl => Rep::Record(RecRep {
+                tmpl: x.tmpl,
+                opt: x.opt || y.opt,
+            }),
+            // Any other join is the record derive's reject (`R5Join`), so
+            // after its fixpoint no node holds a record beside anything
+            // else; over several nodes (a signature slot's copies) the
+            // join is Boxed, a slot the typed signature does not carry.
+            (Rep::Record(_), Rep::Record(_))
+            | (Rep::Record(_), Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_))
+            | (Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_), Rep::Record(_)) => Rep::Boxed,
+        }
+    }
+
+    /// The slot encoding (`Enc`): an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> Enc {
         match self {
-            Rep::Boxed => "boxed",
-            Rep::F64 => "f64",
-            Rep::I32 => "i32",
+            Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            // VR-3 gives a record its own encoding; until then the slot is
+            // the Boxed word, so no signature or binding changes with it.
+            Rep::Record(_) => Enc::Boxed,
+            Rep::F64 => Enc::F64,
+            Rep::I32 => Enc::I32,
+        }
+    }
+
+    /// `boxed`, `f64`, `i32`, or `arr<elem,floor[,dense][,fixed]>`.
+    pub fn name(self) -> String {
+        match self {
+            Rep::Boxed => "boxed".into(),
+            Rep::F64 => "f64".into(),
+            Rep::I32 => "i32".into(),
+            Rep::Arr(r) => format!(
+                "arr<{},{}{}{}{}{}>",
+                r.elem.name(),
+                r.floor,
+                if r.dense { ",dense" } else { "" },
+                if r.fixed { ",fixed" } else { "" },
+                if r.im { ",im" } else { "" },
+                if r.at_rest { ",rest" } else { "" }
+            ),
+            Rep::Record(r) => format!("rec<{}{}>", r.tmpl, if r.opt { ",opt" } else { "" }),
         }
     }
 }
@@ -142,6 +291,9 @@ impl Rep {
 pub struct BindingFacts {
     /// Its representation (`Rep`).
     pub rep: Rep,
+    /// −0 tolerance (PR D): its interval holds a `-0` no use observes
+    /// (`zero_sign`): an I32 slot may then receive `-0` as `0`.
+    pub zero_tol: bool,
     /// One of its values can reach an int consumer (`demand`).
     pub int_demand: bool,
     /// Diagnostic-only TOP provenance; never consumed by emitted-code decisions.
@@ -172,6 +324,14 @@ pub struct BindingFacts {
     /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
     /// that constant.
     pub const_length: Option<i64>,
+    /// It is a rooted `const` (`const_arrays`) that holds only immutable
+    /// Arrays (`ArrRep::im`): every read of it that yields a value yields
+    /// an Array nothing writes after its birth.
+    pub immutable_array: bool,
+    /// Such a binding whose Arrays are all born from literals of constant
+    /// Numbers with the same elements (`const_arrays::collect`): index `i`
+    /// reads the Number with bits `const_elems[i]`, for the whole program.
+    pub const_elems: Option<Vec<u64>>,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -350,6 +510,27 @@ pub struct ModuleBindings {
     /// PR-C1), with the least length lower bound of their receivers; sorted
     /// (`element_floors`).
     pub element_floors: Vec<(u32, u32)>,
+    /// Module-scope bindings (by local id) whose every value is this one
+    /// integer Number, sorted (`const_numbers`, N6).
+    pub const_numbers: Vec<(u32, i64)>,
+    /// PR-C2: element reads by `element_offset` whose key is an integer
+    /// Number at every copy, with the hull of its interval; sorted
+    /// (`element_keys`).
+    pub element_keys: Vec<(u32, (i64, i64))>,
+    /// I32 at rest, PR B (`rest_elems`): element reads and element stores
+    /// by `element_offset` whose every receiver holds only Arrays of at-rest
+    /// templates, with the least floor of those Arrays; the `fill` call
+    /// offsets of the at-rest births, and of those that reserve a capacity
+    /// with it (`rest_elems::reserve`). Sorted.
+    pub rest_reads: Vec<(u32, u32)>,
+    pub rest_writes: Vec<(u32, u32)>,
+    pub rest_births: Vec<u32>,
+    pub rest_reserves: Vec<(u32, u32)>,
+    /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
+    /// byte offset) whose receiver may hold an instance with an I32 lane at
+    /// the read's key, with the lane's slot when every receiver value is such
+    /// an instance at that slot or nullish (`u32::MAX` otherwise). Sorted.
+    pub rest_lane_reads: Vec<(u32, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -404,7 +585,7 @@ fn element_read(m: &Model, site: &crate::gen::ElementSite) -> Option<ElementRead
 
 /// Node `n` holds only Numbers, each an integer in this interval. An empty
 /// node proves nothing (it may be one the solve left unpopulated).
-fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
+pub(crate) fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     let node = &m.nodes[n as usize];
     if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
         return None;
@@ -487,8 +668,200 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
     out.bodies = bodies_with_contracts(g, n);
     out.class_object = class_object_of(m, n);
     out.int_demand = node.int_demand;
-    out.rep = rep_of(&out);
+    out.zero_tol = node.zs_tol;
+    out.rep = match arr_rep(m, &[n]) {
+        Some(r) => Rep::Arr(r),
+        None => match record_rep(m, n) {
+            Some(r) => Rep::Record(r),
+            None => rep_of(&out),
+        },
+    };
     out
+}
+
+/// DESIGN-p4l4 §1.1: `Record` when every token of the node is an instance
+/// of one admitted value-record template (`Model::records`), its primitives
+/// are within `undefined` (which sets `opt`), and it holds no ⊤ or marker.
+fn record_rep(m: &Model, n: NodeId) -> Option<RecRep> {
+    if m.records.is_empty() {
+        return None;
+    }
+    let node = &m.nodes[n as usize];
+    if node.pts.is_empty() || node.prim & !crate::model::prim::UNDEF != 0 {
+        return None;
+    }
+    let mut one: Option<TmplId> = None;
+    for t in node.pts.to_sorted() {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if t == TOP || m.is_marker(t) || !m.records.contains(&tm) || one.is_some_and(|o| o != tm)
+        {
+            return None;
+        }
+        one = Some(tm);
+    }
+    one.map(|tmpl| RecRep {
+        tmpl,
+        opt: node.prim & crate::model::prim::UNDEF != 0,
+    })
+}
+
+/// `Rep::Arr` of what `nodes` hold together (DESIGN-p4l1 §2.2): every value
+/// is a token of a plain program Array template (`TmplKind::Arr::plain`)
+/// that is not foreign, escaped or hard (each tested here: `const_length`
+/// leans on `mark_hard` making the length ⊤), and whose template no named
+/// or metadata write touched (`owner_metadata_written`, as `ElementRead`
+/// requires). No primitive, no ⊤, no marker of any kind; a node with no
+/// value proves nothing. The rep is the join over the tokens of each one's
+/// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
+pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
+    arr_rep_beside(m, nodes, 0)
+}
+
+/// `arr_rep` of `nodes` with the primitives `ignored` left out of account:
+/// 0 everywhere but under the negative control `arrfield`
+/// (`Model::arr_field_sabotage`).
+pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Option<ArrRep> {
+    if !m.array_reps {
+        return None;
+    }
+    let mut out: Option<ArrRep> = None;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if node.prim & !ignored != 0 {
+            return None;
+        }
+        for t in node.pts.to_sorted() {
+            if t == TOP || m.is_marker(t) || m.bare_marker(t) || m.beside_values(t) {
+                return None;
+            }
+            let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+                return None;
+            };
+            let TmplKind::Arr {
+                hole_free,
+                plain: true,
+                ..
+            } = m.tmpls[tm as usize].kind
+            else {
+                return None;
+            };
+            if m.foreign.contains_key(&tm)
+                || m.is_escaped(t)
+                || m.hard.contains_key(&t)
+                || owner_metadata_written(m, tm)
+            {
+                return None;
+            }
+            let r = tok_arr_rep(m, t, tm, hole_free);
+            out = Some(out.map_or(r, |o| ArrRep::join(o, r)));
+        }
+    }
+    out
+}
+
+/// One plain Array token's `ArrRep`:
+/// - `floor`: the low end of its length interval (`solve::arr_len`), 0 when
+///   the length is ⊤. A token no length rule touched has its birth length
+///   (`Model::arr_len` is born from it), or none;
+/// - `fixed`: that interval is one value;
+/// - `dense`: born hole-free with `floor > 0` (Invariant D);
+/// - `elem`: `rep_of` of its element node (`all_fields`), I32 for int32
+///   Numbers with int demand, F64 for Numbers, else Boxed.
+pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
+    let (lo, fixed) = match m.arr_len.get(&t) {
+        Some(&ln) => {
+            let r = m.nodes[ln as usize].range;
+            if r.is_top() || r.is_empty() {
+                (0, false)
+            } else {
+                (r.lo, r.lo == r.hi)
+            }
+        }
+        None => match m.arr_birth_len.get(&tm) {
+            Some(&k) => (k, true),
+            None => (0, false),
+        },
+    };
+    let floor = u32::try_from(lo.max(0)).unwrap_or(u32::MAX);
+    let elem = match m.all_fields.get(&t) {
+        Some(&e) => {
+            let node = &m.nodes[e as usize];
+            let int32 = !node.range.is_top()
+                && !node.range.is_empty()
+                && node.range.lo >= i64::from(i32::MIN)
+                && node.range.hi <= i64::from(i32::MAX);
+            let numbers = node.prim == crate::model::prim::NUM && node.pts.is_empty();
+            if m.arr_elem_sabotage && node.prim & crate::model::prim::NUM != 0 {
+                ElemRep::F64
+            } else if !numbers {
+                ElemRep::Boxed
+            } else if int32 && elem_demand(m, t, node) {
+                ElemRep::I32
+            } else {
+                ElemRep::F64
+            }
+        }
+        None => ElemRep::Boxed,
+    };
+    ArrRep {
+        elem,
+        floor,
+        dense: hole_free && floor > 0,
+        fixed,
+        im: fixed && m.arr_immutable(t),
+        at_rest: m.rest_tmpls.contains(&tm),
+    }
+}
+
+/// Int demand on token `t`'s elements (`node`, its element node). A read
+/// `a[k]` takes its value from the fields a number key names
+/// (`Model::num_fields`), which feed the element node, so its demand lands
+/// there; with I32 at rest on (PR B, `rest_elems`) that demand counts too.
+pub(crate) fn elem_demand(m: &Model, t: Tok, node: &crate::model::Node) -> bool {
+    node.int_demand
+        || m.rest_elems
+            && m
+                .num_fields
+                .get(&t)
+                .is_some_and(|&n| m.nodes[n as usize].int_demand)
+}
+
+/// The Number representation of what `nodes` hold together (a field over
+/// its template's tokens; I32 at rest, RFC §10.7): F64 when every value is
+/// a Number, I32 when also every one is an int32 (the joined interval) and
+/// one reaches an int consumer (demand); Boxed for anything else, and for
+/// no node or no value. The negative control `restfield` claims I32 for
+/// any Number field.
+pub(crate) fn number_rep_of_nodes(m: &Model, nodes: &[NodeId]) -> Rep {
+    let mut range = crate::model::Iv::EMPTY;
+    let mut demand = false;
+    let mut values = false;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if !node.pts.is_empty() || node.prim & !crate::model::prim::NUM != 0 {
+            return Rep::Boxed;
+        }
+        values |= node.prim != 0;
+        range = range.join(node.range);
+        demand |= node.int_demand;
+    }
+    if !values {
+        return Rep::Boxed;
+    }
+    if m.rest_field_sabotage {
+        return Rep::I32;
+    }
+    let int32 = !range.is_top()
+        && !range.is_empty()
+        && range.lo >= i64::from(i32::MIN)
+        && range.hi <= i64::from(i32::MAX);
+    if int32 && demand {
+        Rep::I32
+    } else {
+        Rep::F64
+    }
 }
 
 /// The representation the facts give: F64 for a binding of only Numbers,
@@ -505,6 +878,117 @@ fn rep_of(b: &BindingFacts) -> Rep {
     } else {
         Rep::F64
     }
+}
+
+/// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
+/// `# rep` line per Number local (F64, I32, an interval or an int use)
+/// with what decides its representation (RFC §10.3): the prims, the
+/// interval, int demand and whether the binding is itself an int
+/// consumer's operand. A local is named by its node, readable with
+/// `PERRY_FACTS_RELATIONS=1`; otherwise by its id (`local=`), the HIR
+/// local id codegen reports.
+pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
+    let m = &g.m;
+    let mut out = Vec::new();
+    for (mi, info) in g.mods.iter().enumerate() {
+        let mut ls: Vec<(u32, NodeId)> = info.locals.iter().map(|(&i, &n)| (i, n)).collect();
+        ls.sort_unstable();
+        for (id, n) in ls {
+            let node = &m.nodes[n as usize];
+            let b = facts_of(g, n);
+            if !(matches!(b.rep, Rep::F64 | Rep::I32) || b.int_range.is_some() || node.int_use) {
+                continue;
+            }
+            let range = b
+                .int_range
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let name = m.node_names.get(n as usize).map_or("?", |s| s.as_str());
+            out.push(format!(
+                "# rep module={mi} local={id} name={} rep={} prims={:#x} other={} range={range} demand={} use={}",
+                name.replace(' ', "_"),
+                b.rep.name(),
+                b.prims,
+                (b.other || !b.class_ids.is_empty()) as u8,
+                b.int_demand as u8,
+                node.int_use as u8,
+            ));
+        }
+    }
+    out.extend(rest_probe(m));
+    out.extend(crate::rest_elems::probe(m));
+    out
+}
+
+/// The at-rest probe (I32 at rest, RFC §10.7; `PERRY_FACTS_DUMP` only): one
+/// `# rest field` line per class or literal field whose nodes hold Numbers
+/// and one `# rest elem` line per plain Array template whose element nodes
+/// do, each with the join over the template's tokens of what decides the
+/// slot's representation (RFC §10.3): the prims, the tokens, the interval
+/// and int demand.
+fn rest_probe(m: &Model) -> Vec<String> {
+    let mut out = Vec::new();
+    for (tm, tpl) in m.tmpls.iter().enumerate() {
+        let tm = tm as u32;
+        let toks = m.tmpl_toks(tm);
+        if toks.is_empty() {
+            continue;
+        }
+        let line = |what: &str, nodes: &[NodeId]| -> Option<String> {
+            let mut prims = 0u16;
+            let mut other = false;
+            let mut range = crate::model::Iv::EMPTY;
+            let mut demand = false;
+            let mut zsign = false;
+            for &n in nodes {
+                let node = &m.nodes[n as usize];
+                prims |= node.prim;
+                other |= !node.pts.is_empty();
+                range = range.join(node.range);
+                demand |= node.int_demand;
+                zsign |= node.zsign;
+            }
+            if prims & crate::model::prim::NUM == 0 {
+                return None;
+            }
+            let range = if range.is_top() || range.is_empty() {
+                "top".to_string()
+            } else {
+                format!("[{},{}]", range.lo, range.hi)
+            };
+            Some(format!(
+                "# rest {what} prims={prims:#x} other={} range={range} demand={} zsign={}",
+                other as u8, demand as u8, zsign as u8
+            ))
+        };
+        if let TmplKind::Arr { plain: true, .. } = tpl.kind {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.all_fields.get(t).copied())
+                .collect();
+            if let Some(l) = line(&format!("elem {}", tpl.display.replace(' ', "_")), &nodes) {
+                out.push(l);
+            }
+            continue;
+        }
+        if !matches!(tpl.kind, TmplKind::Class { .. } | TmplKind::Lit { .. }) {
+            continue;
+        }
+        for &a in &tpl.birth_keys {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            let what = format!(
+                "field {}.{}",
+                tpl.display.replace(' ', "_"),
+                crate::model::esc_key(&m.atoms[a as usize])
+            );
+            if let Some(l) = line(&what, &nodes) {
+                out.push(l);
+            }
+        }
+    }
+    out
 }
 
 /// The class id of the one class object node `n` holds when it holds

@@ -318,7 +318,15 @@ unsafe fn key_word_hash(bits: u64) -> Option<u64> {
 #[cold]
 #[inline(never)]
 unsafe fn derive(r: *mut ShapeRecord) -> u64 {
-    let mut word = derive_word(&*r);
+    // I32 at rest (PR C): the probe returns slot words as JS values and its
+    // site memos keep shape/slot pairs, so it declines every key of a record
+    // with an I32 lane; the complete read decodes through the layout
+    // accessor (`layout_slot::slot_get`).
+    let mut word = if (*r).i32_lanes() != 0 {
+        PROBE_READY | PROBE_DECLINE
+    } else {
+        derive_word(&*r)
+    };
     // Verify mode sends every probe of the record through the cold path,
     // where its answer is held for the slow entry's check.
     if verify::on() {
@@ -426,7 +434,7 @@ pub(crate) unsafe fn mint_colour_masks(rec: &mut ShapeRecord) {
         && !keys.is_null()
         && !crate::object::overflow::is_table(keys)
         && crate::value::addr_class::try_read_gc_header(keys as usize)
-            .is_some_and(|gc| gc.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|gc| crate::gc_type_is_array!(gc.obj_type))
     {
         colour_masks(rec)
     } else {
@@ -493,6 +501,12 @@ unsafe fn colour_masks(rec: &ShapeRecord) -> ([u64; 2], [u64; 2]) {
             & (crate::object::key_attrs::ENTRY_ACCESSOR_MASK
                 | crate::object::key_attrs::ENTRY_PRIVATE)
             != 0
+        {
+            continue;
+        }
+        // An I32 lane's word is no JS value: a 2c arm never reads it.
+        if (rec.lane(storage) == crate::object::field_rep::REP_SPECIAL)
+            && !rec.lane_is_constfn(storage)
         {
             continue;
         }
@@ -1169,7 +1183,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
         return hole();
     }
     let (named, proto, function) = match (*header).obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             // Array length is an intrinsic own property, stored in the array
             // header rather than its named bag. Never prove it absent by
             // walking the bag and prototypes (including for computed keys

@@ -104,7 +104,7 @@ unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
         GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
     };
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert!(crate::gc_type_is_array!((*header).obj_type));
     debug_assert_eq!(
         (*header)._reserved
             & (GC_LAYOUT_STATE_MASK

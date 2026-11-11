@@ -25,19 +25,18 @@ impl Model {
             .or_default()
             .insert((origin, key, act))
         {
-            // ⊤ (all kinds) is the rule's own result (`reason`): no flow
-            // from TOPVAL beside it (`from` = `dst`), so the census sees
-            // the any-key node that fired it as its source.
+            // The walk names every accessor it can see (`accessor_functions`
+            // returns those under computed keys through their STAR_KEY
+            // records); it is unknown exactly when unknown code may have
+            // installed one on the holder: its any-key node holds ⊤ (the
+            // holder escaped, or an accessor was defined under a computed
+            // key). A data value under an unknown key is no accessor (an
+            // ordinary [[Set]] makes a data property), so it leaves the walk
+            // known. ⊤ is the rule's own result (`reason`), so the census
+            // sees the any-key node that fired it as its source.
             let any = self.any_key_node(holder);
             let reason = self.reason("accessor descriptor of a changed holder");
-            self.cons(
-                any,
-                Cons::TopIfAny {
-                    dst,
-                    from: dst,
-                    reason: Some(reason),
-                },
-            );
+            self.cons(any, Cons::TopIfTop { dst, reason });
             self.with_b(|m| builtins::lookup_native_descriptor(m, origin, holder, key, dst));
         }
         if let Some(a) = self.shadow_key(holder, key) {

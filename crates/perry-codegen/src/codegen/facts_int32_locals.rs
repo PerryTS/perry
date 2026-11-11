@@ -9,8 +9,7 @@
 //! converts with `fptosi` instead of ToInt32 (`store_from_double`).
 //!
 //! Check mode (`PERRY_VERIFY_FACTS=1`) witnesses every store: the stored value
-//! must pass the exact-i32 test (`emit_typed_i32_plain_guard_and_raw`; an INT32
-//! box fails it, P3 `facts_rep::canonical_numbers`). Stores the
+//! must pass the exact-i32 test (`emit_typed_i32_plain_guard_and_raw`). Stores the
 //! ordinary lowering would compute natively in i32 take the double path
 //! there, so no store escapes the witness (`checked`).
 //!
@@ -20,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::Stmt;
 
-use crate::types::{DOUBLE, I32, I64};
+use crate::types::{DOUBLE, I1, I32, I64};
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -87,14 +86,16 @@ pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u
     if !crate::verify_facts::enabled() {
         return;
     }
-    // A proven Number is a canonical double (P3, `facts_rep`): the witness
-    // admits an exact int32 double only, never an INT32 box.
-    let exact = if super::facts_rep::canonical_numbers() {
-        let bits = ctx.block().bitcast_double_to_i64(value);
-        super::typed_abi::emit_typed_i32_plain_guard_and_raw(ctx.block(), value, &bits).0
-    } else {
-        super::typed_abi::emit_typed_i32_guard_and_raw(ctx.block(), value).0
-    };
+    // A Number is a plain double: the witness admits an exact int32 double.
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let mut exact =
+        super::typed_abi::emit_typed_i32_plain_guard_and_raw(ctx.block(), value, &bits).0;
+    // −0 tolerance (wpfacts PR D): the local may receive a `-0` no use
+    // observes; it enters the slot as `0`.
+    if ctx.wpfacts.zero_tolerant_locals.contains(&id) {
+        let nz = ctx.block().icmp_eq(I64, &bits, "-9223372036854775808");
+        exact = ctx.block().or(I1, &exact, &nz);
+    }
     crate::verify_facts::tick(ctx);
     let miss = ctx.new_block("int32.input.verify_miss");
     let next = ctx.new_block("int32.input.admitted");
@@ -121,11 +122,9 @@ pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u
 }
 
 /// The i32 of a double stored into proven local `id`, if it is one: an exact
-/// int32, so `fptosi`. The value is a proven Number, a canonical double (P3,
-/// `facts_rep::canonical_numbers`); with `PERRY_WP_REP_P3=0` an INT32 box
-/// converts through its payload. The HIR's release of a temp (`x =
-/// undefined` after its last read, which wpfacts skips) keeps the ordinary
-/// NaN-safe conversion.
+/// int32, so `fptosi`. The value is a proven Number, a plain double. The
+/// HIR's release of a temp (`x = undefined` after its last read, which
+/// wpfacts skips) keeps the ordinary NaN-safe conversion.
 pub(crate) fn store_from_double(
     ctx: &mut crate::expr::FnCtx<'_>,
     value: &str,
@@ -136,16 +135,7 @@ pub(crate) fn store_from_double(
         return None;
     }
     witness(ctx, value, id);
-    if super::facts_rep::canonical_numbers() {
-        return Some(ctx.block().fptosi(DOUBLE, value, I32));
-    }
-    let blk = ctx.block();
-    let bits = blk.bitcast_double_to_i64(value);
-    let is_int = super::emit_int32_box_test(blk, value);
-    let low = blk.trunc(I64, &bits, I32);
-    let safe = blk.select(crate::types::I1, &is_int, DOUBLE, "0.0", value);
-    let plain = blk.fptosi(DOUBLE, &safe, I32);
-    Some(blk.select(crate::types::I1, &is_int, I32, &low, &plain))
+    Some(ctx.block().fptosi(DOUBLE, value, I32))
 }
 
 #[cfg(test)]

@@ -29,10 +29,7 @@ use super::typed_abi::{
     typed_i1_function_name, typed_i32_function_name, typed_param_reps_for_params,
     typed_string_function_name, TypedFunctionTrampolineKind, TypedParamRep,
 };
-use super::typed_entry::{
-    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
-    EntryArgGuard,
-};
+use super::typed_entry::{emit_tiered_entry_dispatch, typed_entry_arg_guard, EntryArgGuard};
 
 /// Internal body name for a self-recursive allocator whose arena-state pointer
 /// is threaded through recursive calls (#8591).
@@ -236,7 +233,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -249,7 +246,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -263,7 +260,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -278,7 +275,7 @@ fn emit_typed_public_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let typed_args: Vec<(LlvmType, &str)> = raw_args
                 .iter()
@@ -665,6 +662,7 @@ pub(super) fn compile_function(
     cross_module: &CrossModuleCtx,
     typed_public_trampoline: Option<TypedFunctionTrampolineKind>,
     spec_entry: Option<&SpecFnPlan>,
+    finish_module: Option<&perry_hir::Module>,
 ) -> Result<()> {
     let public_llvm_name = func_names
         .get(&f.id)
@@ -962,15 +960,6 @@ pub(super) fn compile_function(
                 }
                 _ => {}
             }
-            // A split region's Number parameter (its only caller proved a
-            // Number) and a facts-proven one may arrive as an int32 box; the
-            // body's Number proof means a plain double, so convert once here.
-            let arg_name =
-                if region_number_params.contains(&p.id) || facts_number_params.contains(&p.id) {
-                    super::facts_number_locals::emit_entry_number(blk, &arg_name)
-                } else {
-                    arg_name
-                };
             let slot = super::arguments::store_param_slot(blk, p, &boxed_vars, &arg_name);
             param_roots.push((p.id, slot.clone()));
             map.insert(p.id, slot);
@@ -1394,6 +1383,7 @@ pub(super) fn compile_function(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1439,6 +1429,8 @@ pub(super) fn compile_function(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -1584,6 +1576,7 @@ pub(super) fn compile_function(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
@@ -1911,6 +1904,9 @@ pub(super) fn compile_function(
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
     super::facts_rep::bind_params(&mut ctx, &facts_number_params);
+    if let Some(module) = finish_module {
+        super::static_fields::init_static_fields_late(&mut ctx, module)?;
+    }
     if f.is_async {
         stmt::lower_async_rejecting_top_level_stmts(&mut ctx, &f.body)
             .with_context(|| format!("lowering async body of '{}'", f.name))?;

@@ -247,6 +247,23 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
 
 /// Map a user-supplied encoding label to (enum, canonical-name).
 /// Returns `None` for unsupported labels (caller throws `RangeError`).
+/// Decode immutable bytes with a TextDecoder label, for APIs that expose the
+/// same encoding semantics without creating a user-visible decoder object.
+/// Returns the allocated StringHeader pointer, or `None` for an unsupported
+/// label so the caller can raise its API-specific error.
+pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i64> {
+    let (encoding, label) = resolve_decoder_label(raw_label)?;
+    // TextDecoder's default ignoreBOM=false consumes one leading Unicode BOM.
+    // Only Unicode encodings have BOM signatures; single-byte labels preserve
+    // these bytes as ordinary content.
+    let bytes = match encoding {
+        DecoderEncoding::Utf8 => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes),
+        DecoderEncoding::Utf16Le => bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes),
+        DecoderEncoding::SingleByte(_) => bytes,
+    };
+    Some(decode_bytes(bytes, encoding, false, label))
+}
+
 fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
     // WHATWG label matching: trim ASCII whitespace, case-insensitive.
     let l = raw

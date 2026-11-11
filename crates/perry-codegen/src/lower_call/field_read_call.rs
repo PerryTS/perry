@@ -9,9 +9,20 @@
 //! are inert and reach no ender, so evaluating the index argument inside the
 //! read (and dropping the others) is the call's evaluation exactly.
 //!
+//! **In the floor (DESIGN-p4l1 §2.8, §4.2; PR-C3).** The body's read joins
+//! every caller's key, so its own facts keep the bound, the hole test and
+//! the `??`. A call whose own index the facts prove inside the floor of
+//! every Array the field can hold (`FactsFieldReadCall::in_floor`) reads a
+//! present own element: when the field read is a value of representation
+//! `Arr` (`proven_array::in_floor_rep`), the call is the field load and the
+//! slot load of the rep-keyed tier, and with Number elements the value is
+//! never nullish, so `?? L` is the value.
+//!
 //! Check mode (`PERRY_VERIFY_FACTS=1`): the real call runs beside the read,
 //! and the two values must be the same bits. A miss reports the false
-//! proof and exits 86.
+//! proof and exits 86. An in-floor read is also tested where it loads
+//! (`array_rep::witness_read`: the key is below the call's floor, the slot
+//! is no hole and holds an element of the proven kind).
 
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
@@ -104,11 +115,89 @@ pub(crate) fn try_lower(
         || serde_json::json!({ "call": site }),
     );
     crate::facts_consumed::used();
-    let value = crate::expr::lower_expr(ctx, &read)?;
+    // I32 at rest: the body's read is at rest or not wherever the call is
+    // (`expr::rest_elems`); at rest, the held and C3 loads decode its word
+    // (B2), and any other form is that read.
+    let fact = &ctx.wpfacts.field_read_calls[&site];
+    let rest = (fact.element_offset, fact.rest);
+    let saved = ctx.rest_b1.replace(rest);
+    let value = lower_read(ctx, site, &read, rest.1.is_some());
+    ctx.rest_b1 = saved;
+    let (value, served) = value?;
     if crate::verify_facts::enabled() {
         witness(ctx, callee, args, &value, site)?;
+        if served {
+            // The real call may collect: the held bases are re-derived.
+            crate::expr::index_get::field_base::rederive_all(ctx)?;
+        }
     }
     Ok(Some(value))
+}
+
+/// The read `read` of the call at `site`, and whether a held base served
+/// it. `rest`: the body's read is at rest. A held base or C3's in-floor
+/// load serves an at-rest read when the field's representation agrees
+/// (`FactsArrRep::at_rest`): they address the slot as for a double Array,
+/// and the load decodes the I32 word (`rest_elems::decode`).
+fn lower_read(ctx: &mut FnCtx<'_>, site: u32, read: &Expr, rest: bool) -> Result<(String, bool)> {
+    let agrees = |rep: crate::codegen::FactsArrRep| rep.at_rest == rest;
+    let tiers = !rest || crate::expr::rest_elems::tiers_enabled();
+    let held = tiers
+        && crate::expr::index_get::field_base::servable(ctx, read).is_some_and(|s| agrees(s.rep));
+    // PR-D: a loop that holds the field's element base serves the read.
+    if held {
+        if let Some(value) = crate::expr::index_get::field_base::try_lower_read(ctx, site, read)? {
+            if rest {
+                crate::expr::rest_elems::probe(ctx, "call", "held", site);
+            }
+            return Ok((value, true));
+        }
+    }
+    let floor = in_floor(ctx, site, read).filter(|f| tiers && agrees(f.2));
+    let value = match floor {
+        Some((object, index, rep, floor)) => {
+            if rest {
+                crate::expr::rest_elems::probe(ctx, "call", "c3", site);
+            }
+            // The index is inert and reaches no ender (the accessor), so
+            // no collection runs between it and the field load.
+            let idx = crate::expr::lower_expr_as_i32(ctx, index)?;
+            let arr = crate::expr::lower_expr(ctx, object)?;
+            crate::expr::index_get::proven_array::lower_in_floor(ctx, &arr, &idx, rep, floor)
+        }
+        None => crate::expr::lower_expr(ctx, read)?,
+    };
+    Ok((value, false))
+}
+
+/// The in-floor form of the proven read `read` of the call at `site`
+/// (module docs): its field read, its index, the field read's
+/// representation and the floor the call's index is below. `None` keeps the
+/// read as written: the call is not in the floor, the field read is not
+/// `Arr`, or a `?? L` is over elements that are not all Numbers (a stored
+/// `null` or `undefined` is a present element).
+fn in_floor<'e>(
+    ctx: &FnCtx<'_>,
+    site: u32,
+    read: &'e Expr,
+) -> Option<(&'e Expr, &'e Expr, crate::codegen::FactsArrRep, u32)> {
+    let floor = ctx.wpfacts.field_read_calls.get(&site)?.in_floor?;
+    let (element, coalesced) = match read {
+        Expr::Logical {
+            op: LogicalOp::Coalesce,
+            left,
+            ..
+        } => (left.as_ref(), true),
+        e => (e, false),
+    };
+    let Expr::IndexGet { object, index, .. } = element else {
+        return None;
+    };
+    let rep = crate::expr::index_get::proven_array::in_floor_rep(ctx, object)?;
+    if coalesced && rep.elem == crate::codegen::FactsElemRep::Boxed {
+        return None;
+    }
+    Some((object, index, rep, floor))
 }
 
 /// Check mode: the real call's value equals the read's.

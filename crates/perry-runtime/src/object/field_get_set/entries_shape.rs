@@ -57,7 +57,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {

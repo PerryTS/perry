@@ -265,7 +265,7 @@ pub(crate) fn owned_prototype_receiver_type(kind: u8) -> bool {
     crate::gc::is_byte_family_type(kind)
         || matches!(
             kind,
-            crate::gc::GC_TYPE_ARRAY
+            crate::gc_array_type_pat!()
                 | crate::gc_object_type_pat!()
                 | crate::gc::GC_TYPE_CLOSURE
                 | crate::gc::GC_TYPE_PROMISE
@@ -425,7 +425,7 @@ fn object_set_static_prototype_impl_with(
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             // #10593: a retargeted ordinary array is a PER-ARRAY fact. The
             // owner sets `GC_ARRAY_CUSTOM_PROTO` on its own header, and
             // every inline element guard tests that

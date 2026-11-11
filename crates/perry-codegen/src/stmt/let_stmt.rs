@@ -1628,7 +1628,9 @@ pub(crate) fn lower_let(
                     // for a local source. A declared numeric/object type can
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
-                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                        && !const_array_walk::holds_no_string(ctx, id, &v)
+                    {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
                     let v = crate::codegen::facts_number_locals::accept_let_value(
@@ -1654,7 +1656,9 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                    && !const_array_walk::holds_no_string(ctx, id, &v)
+                {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
                 let v =

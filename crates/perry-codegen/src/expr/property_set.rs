@@ -433,7 +433,13 @@ pub(crate) fn emit_nullish_write_guard(
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    // I32 at rest (PR C): a store of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower_set(ctx, expr, assignment_strict)? {
+        return Ok(value);
+    }
     if let Expr::PropertySet { object, value, .. } = expr {
+        // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+        super::record_witness::store_into_copy(ctx, object)?;
         return super::write_barrier::with_static_child(ctx, object, value, |ctx| {
             lower_store(ctx, expr, assignment_strict)
         });

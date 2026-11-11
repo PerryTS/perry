@@ -54,7 +54,7 @@ pub extern "C" fn js_array_set_string_key(
     // memory (the old one-page floor dereferenced both); a rejected word goes
     // to the by-name setter, which routes handles to their property setter.
     let is_array = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type));
     if !is_array {
         crate::object::js_object_set_field_by_name(
             arr as *mut crate::object::ObjectHeader,
@@ -145,7 +145,7 @@ fn negative_integer_key_is_absent(arr: *const ArrayHeader) -> bool {
     else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return false;
     }
     // Resolve growth/GC forwarding before reading the live array's layout.

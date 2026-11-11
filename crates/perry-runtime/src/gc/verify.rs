@@ -93,7 +93,7 @@ impl<'a> EvacuationVerifier<'a> {
             return false;
         }
         let header = unsafe { header_from_user_ptr(addr as *const u8) };
-        (unsafe { (*header).obj_type == GC_TYPE_ARRAY })
+        (unsafe { crate::gc_type_is_array!((*header).obj_type) })
             && matches!(
                 crate::arena::classify_heap_space(addr),
                 crate::arena::HeapSpace::Old
@@ -507,7 +507,7 @@ pub(super) unsafe fn verify_array_pointer_slots_enumerated_for(
     stats: &mut ArraySlotEnumerationStats,
     header: *mut GcHeader,
 ) {
-    if header.is_null() || (*header).obj_type != GC_TYPE_ARRAY {
+    if header.is_null() || crate::gc_type_is_not_array!((*header).obj_type) {
         return;
     }
     let flags = (*header).gc_flags;
@@ -602,7 +602,7 @@ pub(crate) fn verify_array_hole_tails() -> Option<ArrayHoleTailViolation> {
     let mut check = |header: *mut GcHeader| unsafe {
         if first.is_some()
             || header.is_null()
-            || (*header).obj_type != GC_TYPE_ARRAY
+            || crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & GC_FLAG_FORWARDED != 0
         {
             return;

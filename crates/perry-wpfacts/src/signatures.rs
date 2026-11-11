@@ -26,7 +26,7 @@
 //! signature (`admits`). Calls of different spans under one key are distinct
 //! calls and refuse.
 
-use crate::bindings::{ModuleBindings, Rep};
+use crate::bindings::{Enc, ModuleBindings, Rep};
 use crate::derive::{SiteFacts, Verdict};
 use crate::gen::Gen;
 use crate::model::{NodeId, TokKind, TOP};
@@ -44,6 +44,8 @@ pub(crate) struct CallSiteRec {
     pub spread: bool,
     /// A direct call's callee node; `None` for a method call.
     pub callee: Option<NodeId>,
+    /// The solver's call (`Model::calls`) this copy made.
+    pub call: crate::model::CallId,
 }
 
 /// A function's typed signature (module docs).
@@ -58,11 +60,13 @@ pub struct Signature {
 }
 
 impl Signature {
-    /// A signature that changes nothing (every slot Boxed, no layout).
+    /// A signature that changes nothing: every slot's encoding is Boxed
+    /// (an `Arr` slot holds the Boxed word, DESIGN-p4l1 §4.4) and there is
+    /// no layout.
     pub fn is_boxed(&self) -> bool {
-        self.ret == Rep::Boxed
+        self.ret.encoding() == Enc::Boxed
             && self.this_class.is_none()
-            && self.params.iter().all(|r| *r == Rep::Boxed)
+            && self.params.iter().all(|r| r.encoding() == Enc::Boxed)
     }
 }
 
@@ -72,15 +76,6 @@ pub fn enabled() -> bool {
         std::env::var("PERRY_FACTS_TYPED_SIGNATURES").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
-}
-
-/// The join of two representations: I32 ⊑ F64 ⊑ Boxed.
-fn join(a: Rep, b: Rep) -> Rep {
-    match (a, b) {
-        (Rep::Boxed, _) | (_, Rep::Boxed) => Rep::Boxed,
-        (Rep::F64, _) | (_, Rep::F64) => Rep::F64,
-        (Rep::I32, Rep::I32) => Rep::I32,
-    }
 }
 
 fn is_literal(e: &perry_hir::Expr) -> bool {
@@ -163,7 +158,7 @@ pub(crate) fn collect(
         all(n)
             .into_iter()
             .map(rep1)
-            .reduce(join)
+            .reduce(Rep::join)
             .unwrap_or(Rep::Boxed)
     };
     // The function token's body index of every function.
@@ -210,7 +205,7 @@ pub(crate) fn collect(
         let mut this_nodes = vec![f.this];
         for it in &m.sum.insts {
             if it.f as usize == fx {
-                ret = join(ret, rep1(it.ret));
+                ret = Rep::join(ret, rep1(it.ret));
                 this_nodes.push(it.this);
             }
         }
@@ -227,64 +222,12 @@ pub(crate) fn collect(
         }
     }
     // Typed call sites (§2, E3).
-    let mut by_key: std::collections::BTreeMap<(u32, u32), Vec<&CallSiteRec>> = Default::default();
-    for r in &g.call_sites_at {
-        by_key.entry((r.module, r.offset)).or_default().push(r);
-    }
-    let method_target: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = {
-        let mut out: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = Default::default();
-        for s in sites.iter().filter(|s| s.is_call) {
-            let one = (matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)
-                && s.target_fns.len() == 1)
-                .then(|| s.target_fns[0]);
-            let e = out.entry((s.module, s.byte_offset)).or_insert(one);
-            if *e != one {
-                *e = None;
-            }
-        }
-        out
-    };
     let mut typed: Vec<((u32, u32), (u32, u32))> = Vec::new();
-    for (&(mi, offset), recs) in &by_key {
-        if offset == 0 || recs.iter().any(|r| r.spread) {
-            continue;
-        }
-        // E3: the key names one source call; its copies share its span.
-        let end = recs[0].end;
-        if recs.iter().any(|r| r.end != end) {
-            continue;
-        }
-        // Every copy is a call of the same kind.
-        let direct = recs[0].callee.is_some();
-        if recs.iter().any(|r| r.callee.is_some() != direct) {
-            continue;
-        }
-        let target = if direct {
-            // Every copy (and every instance copy of its callee node)
-            // holds exactly one body, the same one; a missing node refuses.
-            let mut one: Option<(u32, u32)> = None;
-            let mut ok = true;
-            for r in recs {
-                for c in all(r.callee.expect("a direct call")) {
-                    match live(c).then(|| single_body(g, c)).flatten() {
-                        Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
-                        _ => ok = false,
-                    }
-                }
-            }
-            if ok {
-                one
-            } else {
-                None
-            }
-        } else {
-            method_target.get(&(mi, offset)).copied().flatten()
-        };
-        let Some(t) = target else { continue };
+    for (key, (t, recs)) in call_targets(g, sites) {
         let Some(sig) = sigs.get(&t) else { continue };
         let lits = &defaults[&t];
         if recs.iter().all(|r| admits(g, &all, sig, lits, &r.args)) {
-            typed.push(((mi, offset), t));
+            typed.push((key, t));
         }
     }
     if matches!(sabotage, Some("signature") | Some("signature-escape")) {
@@ -324,6 +267,96 @@ pub(crate) fn collect(
     for mb in bindings.iter_mut() {
         mb.signatures.sort_by_key(|(id, _)| *id);
         mb.typed_calls.sort_by_key(|(o, _)| *o);
+    }
+}
+
+/// The call sites a typed entry can serve before any signature is known
+/// (§2, E3): per source call `(module, offset)`, the one body every copy
+/// resolves to, with the copies. A call at offset 0, a spread call, copies of
+/// different spans or kinds, or a callee holding anything else is absent.
+pub(crate) fn call_targets<'g>(
+    g: &'g Gen<'_>,
+    sites: &[SiteFacts],
+) -> std::collections::BTreeMap<(u32, u32), ((u32, u32), Vec<&'g CallSiteRec>)> {
+    let m = &g.m;
+    let mut copies: std::collections::HashMap<NodeId, Vec<NodeId>> = Default::default();
+    for inst in 0..m.sum.insts.len() as u32 {
+        m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
+    }
+    let all = |n: NodeId| -> Vec<NodeId> {
+        std::iter::once(n)
+            .chain(copies.get(&n).into_iter().flatten().copied())
+            .collect()
+    };
+    let live = |n: NodeId| (n as usize) < m.nodes.len();
+    let mut by_key: std::collections::BTreeMap<(u32, u32), Vec<&CallSiteRec>> = Default::default();
+    for r in &g.call_sites_at {
+        by_key.entry((r.module, r.offset)).or_default().push(r);
+    }
+    let method_target: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = {
+        let mut out: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = Default::default();
+        for s in sites.iter().filter(|s| s.is_call) {
+            let one = (matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)
+                && s.target_fns.len() == 1)
+                .then(|| s.target_fns[0]);
+            let e = out.entry((s.module, s.byte_offset)).or_insert(one);
+            if *e != one {
+                *e = None;
+            }
+        }
+        out
+    };
+    let mut out = std::collections::BTreeMap::new();
+    for (&(mi, offset), recs) in &by_key {
+        if offset == 0 || recs.iter().any(|r| r.spread) {
+            continue;
+        }
+        // E3: the key names one source call; its copies share its span.
+        let end = recs[0].end;
+        if recs.iter().any(|r| r.end != end) {
+            continue;
+        }
+        // Every copy is a call of the same kind.
+        let direct = recs[0].callee.is_some();
+        if recs.iter().any(|r| r.callee.is_some() != direct) {
+            continue;
+        }
+        let target = if direct {
+            // Every copy (and every instance copy of its callee node)
+            // holds exactly one body, the same one; a missing node refuses.
+            let mut one: Option<(u32, u32)> = None;
+            let mut ok = true;
+            for r in recs {
+                for c in all(r.callee.expect("a direct call")) {
+                    match live(c).then(|| single_body(g, c)).flatten() {
+                        Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
+                        _ => ok = false,
+                    }
+                }
+            }
+            if ok {
+                one
+            } else {
+                None
+            }
+        } else {
+            method_target.get(&(mi, offset)).copied().flatten()
+        };
+        if let Some(t) = target {
+            out.insert((mi, offset), (t, recs.clone()));
+        }
+    }
+    out
+}
+
+/// Whether `(module, func_id)` may have a typed signature at all (§1): not a
+/// generator or async function, no rest parameter, no `arguments`.
+pub(crate) fn may_type(g: &Gen<'_>, f: &crate::model::FuncInfo) -> bool {
+    match hir_fn(g, f.module, f.func_id) {
+        Some(hir) => !excluded(hir) && !f.has_arguments,
+        None => false,
     }
 }
 
@@ -372,7 +405,7 @@ fn admits(
         (v.fract() == 0.0 && !(v == 0.0 && v.is_sign_negative())).then_some((v as i64, v as i64))
     };
     sig.params.iter().enumerate().all(|(i, &rep)| {
-        if rep == Rep::Boxed {
+        if rep.encoding() == Enc::Boxed {
             return true;
         }
         let lit = lits.get(i).copied().flatten();

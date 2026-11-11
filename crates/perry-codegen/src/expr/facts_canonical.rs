@@ -56,17 +56,9 @@ pub(crate) fn of(ctx: &FnCtx<'_>, e: &Expr) -> Option<Num> {
         return None;
     }
     match e {
-        Expr::IndexGet { element_offset, .. } if *element_offset != 0 => ctx
-            .wpfacts
-            .number_element_reads
-            .get(element_offset)
-            .map(|&undef| {
-                if undef {
-                    Num::NumberOrUndefined
-                } else {
-                    Num::Number
-                }
-            }),
+        // I32 at rest B2: a present at-rest slot holds an int32 Number.
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => Some(Num::Number),
+        Expr::IndexGet { element_offset, .. } => element(ctx, *element_offset),
         // `x ?? d`: `d` replaces exactly the `undefined` (and `null`, which a
         // Number-or-undefined value never is).
         Expr::Logical {
@@ -81,6 +73,23 @@ pub(crate) fn of(ctx: &FnCtx<'_>, e: &Expr) -> Option<Num> {
         }
         _ => None,
     }
+}
+
+/// The facts' answer for the element read at `element_offset`.
+pub(crate) fn element(ctx: &FnCtx<'_>, element_offset: u32) -> Option<Num> {
+    if !enabled() || ctx.wpfacts_off || ctx.wpfacts.interp_guard || element_offset == 0 {
+        return None;
+    }
+    ctx.wpfacts
+        .number_element_reads
+        .get(&element_offset)
+        .map(|&undef| {
+            if undef {
+                Num::NumberOrUndefined
+            } else {
+                Num::Number
+            }
+        })
 }
 
 /// Check mode: the trusted `value` (the lowering of an operand `of` proved

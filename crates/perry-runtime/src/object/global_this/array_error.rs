@@ -879,7 +879,7 @@ pub(crate) extern "C" fn array_prototype_pop_thunk(
     if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 let array = addr as *mut crate::array::ArrayHeader;
@@ -959,7 +959,7 @@ pub(crate) extern "C" fn array_prototype_push_thunk(
     if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!(header.obj_type) {
                 let array = addr as *mut crate::array::ArrayHeader;
                 // The ordinary dispatcher renders the rejected NEW index
                 // before its spec helper's non-writable length check.

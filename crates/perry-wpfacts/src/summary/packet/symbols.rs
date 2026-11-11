@@ -40,6 +40,7 @@ impl Model {
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
+            Cons::Identity { route } => format!("Identity route={}", route.name()),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
@@ -128,6 +129,11 @@ impl Model {
                 dst,
                 from,
                 reason.and_then(|r| self.reasons.get(r as usize))
+            ),
+            Cons::TopIfTop { dst, reason } => format!(
+                "TopIfTop dst={:?} reason={:?}",
+                dst,
+                self.reasons.get(reason as usize)
             ),
             Cons::Guard { test, from, dst } => {
                 format!("Guard test={:?} from={:?} dst={:?}", test, from, dst)

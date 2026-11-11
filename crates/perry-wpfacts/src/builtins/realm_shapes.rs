@@ -16,6 +16,11 @@ pub(crate) struct Property {
     /// The realm declares the key's value another node module object
     /// (`node:inspector` `default`: `node:inspector.default`): its name.
     pub object: Option<&'static str>,
+    /// The realm declares the key an accessor (`accessor` row): its getter
+    /// and setter. A getter and no setter: a [[Set]] of the key runs no
+    /// setter and writes nothing (`builtins::getter_only`).
+    pub get: Option<&'static str>,
+    pub set: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -56,22 +61,32 @@ pub(crate) struct Declarations {
     named: usize,
 }
 
+/// The namespace model a canonical call of `owner.key` runs under. A global
+/// host object (`Intl`, `performance`, `Atomics`) has no namespace model
+/// (`ns_method_inner`): a function it holds is called as its declaration
+/// says (`declared_static`, `declared_proto_method`), else as an unknown
+/// function, as before it was a token.
+fn call_namespace(owner: &'static str, key: &'static str) -> Option<(BuiltinNs, &'static str)> {
+    (!owner.ends_with(".prototype"))
+        .then(|| ns_by_name(owner))
+        .flatten()
+        .filter(|ns| !matches!(ns, BuiltinNs::Module(n) if !n.starts_with("node:")))
+        .map(|ns| {
+            (
+                if ns == BuiltinNs::GlobalThis {
+                    BuiltinNs::Other
+                } else {
+                    ns
+                },
+                key,
+            )
+        })
+}
+
 fn coordinates(owner: &'static str, key: &'static str) -> Coordinates {
     Coordinates {
         prototype: super::prototype_model(owner, key),
-        namespace: (!owner.ends_with(".prototype"))
-            .then(|| ns_by_name(owner))
-            .flatten()
-            .map(|ns| {
-                (
-                    if ns == BuiltinNs::GlobalThis {
-                        BuiltinNs::Other
-                    } else {
-                        ns
-                    },
-                    key,
-                )
-            }),
+        namespace: call_namespace(owner, key),
         constructible: false,
     }
 }
@@ -93,6 +108,7 @@ impl Default for Declarations {
                 continue;
             };
             let value = row.next();
+            let accessor = (kind == "accessor").then(|| (value.filter(|&g| g != "-"), row.next()));
             let property = holders
                 .entry(owner)
                 .or_default()
@@ -127,6 +143,7 @@ impl Default for Declarations {
                 "ns" => property.own_namespace = true,
                 "strings" => property.strings = value,
                 "object" => property.object = value,
+                "accessor" => (property.get, property.set) = accessor.unwrap(),
                 _ => {}
             }
             if let Some(ns) = ns_by_name(owner) {
@@ -150,6 +167,9 @@ impl Default for Declarations {
                 }
                 if kind == "object" {
                     p.object = value;
+                }
+                if let Some((get, set)) = accessor {
+                    (p.get, p.set) = (get, set);
                 }
             }
         }
@@ -361,20 +381,12 @@ mod tests {
                         "{}",
                         shape.name
                     );
-                    let ns = (!owner.ends_with(".prototype"))
-                        .then(|| ns_by_name(owner))
-                        .flatten()
-                        .map(|ns| {
-                            (
-                                if ns == BuiltinNs::GlobalThis {
-                                    BuiltinNs::Other
-                                } else {
-                                    ns
-                                },
-                                key,
-                            )
-                        });
-                    assert_eq!(native.namespace, ns, "{}", shape.name);
+                    assert_eq!(
+                        native.namespace,
+                        call_namespace(owner, key),
+                        "{}",
+                        shape.name
+                    );
                 }
             } else {
                 assert!(

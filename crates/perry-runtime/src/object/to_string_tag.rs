@@ -7,12 +7,38 @@ use super::*;
 mod fetch_handle_tests;
 
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
-    let id = stream_handle_id(value)?;
+    web_stream_interface_name(stream_handle_id(value)?)
+}
+
+/// The prototype of the Web Streams handle `id` (registry id): its
+/// interface's, born on first observation for the lazy stream families;
+/// `undefined` when `id` is no stream. Called by the streams provider's
+/// handle prototype hook, so a program without streams links none of it.
+pub fn web_stream_prototype_value(id: usize) -> f64 {
+    match web_stream_interface_name(id) {
+        Some(name) => crate::object::builtin_prototype_value(name),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// The Web Streams interface stream registry id `id` is an instance of: the
+/// one map behind its tag and its prototype. Kind 3 is a default reader,
+/// 9 a BYOB reader, 10 a BYOB request; 6/7/8 are the controller families.
+/// Inlined into its callers (the tag and prototype readers), as the per-site
+/// tag matches it replaced were: no function of its own in a program.
+#[inline(always)]
+pub(crate) fn web_stream_interface_name(id: usize) -> Option<&'static str> {
     let kind_probe = stream_handle_kind_probe()?;
     match unsafe { kind_probe(id) } {
         1 => Some("ReadableStream"),
         2 => Some("WritableStream"),
+        3 => Some("ReadableStreamDefaultReader"),
         5 => Some("TransformStream"),
+        6 => Some("ReadableStreamDefaultController"),
+        7 => Some("TransformStreamDefaultController"),
+        8 => Some("ReadableByteStreamController"),
+        9 => Some("ReadableStreamBYOBReader"),
+        10 => Some("ReadableStreamBYOBRequest"),
         _ => None,
     }
 }
@@ -446,7 +472,7 @@ pub unsafe fn object_prototype_to_string(value: f64) -> f64 {
         }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if crate::gc_type_is_array!(gc_type) || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // #3553: a function's `arguments` object is represented as an array
             // carrying the GC_ARRAY_ARGUMENTS_OBJECT flag. Node tags it
             // `[object Arguments]`, not `[object Array]`.

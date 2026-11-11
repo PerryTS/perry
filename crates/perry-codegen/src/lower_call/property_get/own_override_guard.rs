@@ -231,7 +231,7 @@ pub(crate) fn emit_own_override_branch(
             // The annotation does not prove ArrayHeader layout. In
             // particular a Proxy's empty prefix proves no method identity.
             let kind = blk.and(I32, &hdr, "255");
-            let not_array = blk.icmp_ne(I32, &kind, "1"); // GC_TYPE_ARRAY
+            let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I32, &kind);
             let requires_get = blk.or(I1, &maybe_owns, &not_array);
             blk.cond_br(&requires_get, &ask_label, builtin_label);
         } else {

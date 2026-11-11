@@ -698,17 +698,6 @@ pub(super) fn compile_closure(
                 private_resume_frame,
                 private_async_resume_frame,
             );
-            // A closure region's Number parameter: an int32 box becomes the
-            // equal plain double once, here (`split_regions`).
-            let arg_name = if region_number_params.contains(&p.id) {
-                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
-                let bits = blk.bitcast_double_to_i64(&arg_name);
-                let low = blk.trunc(I64, &bits, I32);
-                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
-            } else {
-                arg_name
-            };
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map
                 .get(&p.id)
@@ -1125,6 +1114,7 @@ pub(super) fn compile_closure(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1168,6 +1158,8 @@ pub(super) fn compile_closure(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -1351,6 +1343,7 @@ pub(super) fn compile_closure(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),

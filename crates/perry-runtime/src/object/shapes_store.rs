@@ -620,6 +620,12 @@ impl ShapeRecord {
         }
     }
 
+    /// The I32 lanes (I32 at rest, PR C; `field_rep::i32_lane_slots`).
+    #[inline]
+    pub(crate) fn i32_lanes(&self) -> u32 {
+        crate::object::field_rep::i32_lane_slots(self.rep, self.special_constfn_mask)
+    }
+
     /// Is `slot` a ConstFn lane? Slots 0..32 are the `rep` word's SPECIAL lanes
     /// gated by the mask; a slot past it has the lane exactly when the
     /// record's own body list names it (the list is identity).

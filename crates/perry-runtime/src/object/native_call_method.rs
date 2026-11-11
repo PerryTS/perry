@@ -557,7 +557,7 @@ fn receiver_is_plain_array(object: f64) -> bool {
     v.is_pointer()
         // SAFETY: `try_read_gc_header` validates the address before reading.
         && unsafe { crate::value::addr_class::try_read_gc_header(v.as_pointer::<u8>() as usize) }
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 /// The body of [`js_native_call_method_value`].

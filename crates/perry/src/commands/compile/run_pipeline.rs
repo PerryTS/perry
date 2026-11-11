@@ -3900,7 +3900,9 @@ pub fn run_with_parse_cache(
         // module's re-export chain. For Eager modules the calls
         // short-circuit on the idempotent guard's first-write
         // check (one load + cmp + cond_br each).
-        let module_init_deps: Vec<String> = if is_entry && !program_has_worker {
+        let program_has_tla = ctx.native_modules.values().any(|m| m.has_top_level_await);
+        let module_graph_has_tla = super::init_order::graph_has_tla(&ctx, path);
+        let module_init_deps: Vec<String> = if is_entry && !program_has_worker && !program_has_tla {
             Vec::new()
         } else {
             let mut deps: Vec<String> = Vec::new();
@@ -3912,7 +3914,7 @@ pub fn run_with_parse_cache(
             let push_dep = |deps: &mut Vec<String>,
                             seen: &mut std::collections::HashSet<String>,
                             prefix: String| {
-                if Some(&prefix) == entry_prefix.as_ref() {
+                if !program_has_tla && Some(&prefix) == entry_prefix.as_ref() {
                     return;
                 }
                 if seen.insert(prefix.clone()) {
@@ -3997,11 +3999,28 @@ pub fn run_with_parse_cache(
             // Eager ordering #6463 fixed: a module statically imported by an
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
+            if !program_has_tla {
             if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
                 deps.retain(|dep| {
                     deferred_module_prefixes.contains(dep)
                         || init_pos.get(dep).map_or(true, |&p| p < self_pos)
                 });
+            }
+            }
+            if program_has_tla {
+                let mut ordered = super::init_order::static_requested_paths(&ctx, path);
+                // The open CommonJS cache exists before any user module runs.
+                // This is the same support edge the synchronous eager driver seeds.
+                if is_entry && !ctx.cjs_closed {
+                    if let Some(support) = &ctx.cjs_support_path {
+                        if ctx.native_modules.contains_key(support) {
+                            ordered.retain(|p| p != support);
+                            ordered.insert(0, support.clone());
+                        }
+                    }
+                }
+                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name)).collect();
             }
             deps
         };
@@ -6243,24 +6262,13 @@ pub fn run_with_parse_cache(
             i18n_table: i18n_snapshot.clone(),
             fast_math: ctx.fast_math,
             fp_contract_mode: ctx.fp_contract_mode,
-            app_metadata: perry_codegen::AppMetadata {
-                entry_source_path: if is_entry && args.output_type == "executable" {
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    None
-                },
-                entry_declared_esm: if is_entry {
-                    super::cjs_wrap::declared_module_format_is_esm(path)
-                } else {
-                    None
-                },
-                native_provider_installs: if is_entry {
-                    native_provider_installs.clone()
-                } else {
-                    Vec::new()
-                },
-                ..ctx.app_metadata.clone()
-            },
+            app_metadata: super::app_metadata::for_module(
+                &ctx.app_metadata,
+                path,
+                is_entry,
+                &args.output_type,
+                &native_provider_installs,
+            ),
             // Issue #100: namespace_entries empty unless this
             // module is a dynamic-import target; the consumer-side
             // dispatch map is empty unless this module performs
@@ -6277,6 +6285,8 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
+            program_has_tla,
+            module_graph_has_tla,
             // Issue #842: signal side-effect-only dynamic-import
             // targets to codegen so it still emits
             // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`
@@ -6412,6 +6422,40 @@ pub fn run_with_parse_cache(
             ),
         }
     };
+    // I32 at rest (PR C): the facts run before the births pre-pass, whose
+    // class birth contents carry the I32 field lanes the facts admit
+    // (`perry_codegen` `expr::rest_fields`), so a module's mint and the
+    // program's static ids name the same contents.
+    // wpfacts (whole-program invariance facts, slice 1): one more
+    // whole-program pre-pass over the final HIR. It removes no check yet:
+    // each module's codegen gets only the digest of the facts it can observe
+    // (object-cache key) and, in a contract build, the claims section the
+    // runtime checks. See `program_facts.rs` for the knobs.
+    let facts_started = Instant::now();
+    program_step("whole-program facts", None);
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+    );
+    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
@@ -6430,6 +6474,7 @@ pub fn run_with_parse_cache(
                         &mut opts,
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                    opts.program_facts = super::program_facts::view_for(&program_facts, path);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6549,36 +6594,6 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
-    // wpfacts (whole-program invariance facts, slice 1): one more
-    // whole-program pre-pass over the final HIR. It removes no check yet:
-    // each module's codegen gets only the digest of the facts it can observe
-    // (object-cache key) and, in a contract build, the claims section the
-    // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         PathBuf,
@@ -8048,12 +8063,14 @@ pub fn run_with_parse_cache(
     // config are package/project-root-relative, so use the same walked-up root
     // as package.json, perry.toml, and the on-disk caches. Otherwise an entry
     // at `src/main.ts` makes `--embed ./dist/**` silently search `src/dist`.
-    if !embedded_assets.is_empty() {
+    if !embedded_assets.is_empty() || args.sea || args.output_type == "staticlib" {
         if let Some(obj) = embed::generate_embedded_asset_object(
             &embedded_assets,
             &object_output_dir,
             &bunfs_text_modules,
             ctx.bun_platform,
+            args.sea,
+            target.as_deref(),
         )? {
             obj_cleanup_paths.push(obj.clone());
             obj_paths.push(obj);
@@ -8063,12 +8080,14 @@ pub fn run_with_parse_cache(
             .iter()
             .filter_map(|(_, p)| fs::metadata(p).ok().map(|m| m.len()))
             .sum();
-        if let OutputFormat::Text = format {
-            println!(
-                "Embedding {} asset(s) ({} bytes) into the executable",
-                embedded_assets.len(),
-                total
-            );
+        if !embedded_assets.is_empty() {
+            if let OutputFormat::Text = format {
+                println!(
+                    "Embedding {} asset(s) ({} bytes) into the executable",
+                    embedded_assets.len(),
+                    total
+                );
+            }
         }
     }
 

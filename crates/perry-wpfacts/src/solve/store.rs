@@ -404,6 +404,22 @@ impl Model {
                 return;
             }
         }
+        // A [[Set]] that meets the realm's accessor without a setter
+        // (`navigator` on the global object) writes nothing; in strict code
+        // it throws the runtime's TypeError (`Model::thrown`). Until a
+        // native write may have replaced the accessor: then the store runs
+        // again on the ordinary path (`NativeMiss::Store`).
+        if let Key::Named(a) = key {
+            if !elem
+                && !theirs
+                && !self.unit_mode
+                && builtins::getter_only(self, t, &self.atoms[a as usize])
+                && !builtins::native_written(self, t, a)
+            {
+                self.native_missing.push((t, a, NativeMiss::Store(src, site)));
+                return;
+            }
+        }
         // Native function values use ordinary fields below. Constructors
         // and namespaces retain the realm-declared boundary: the runtime
         // itself consumes some declared statics (Error.prepareStackTrace),
@@ -681,6 +697,7 @@ impl Model {
         }
         if self.is_arr(t) {
             self.arr_len_store(t, key, elem, site);
+            self.arr_written(t);
         }
         // An index past the end, a computed key or a `length` store may
         // leave a hole; an append (`elem`) never does (`hole`).

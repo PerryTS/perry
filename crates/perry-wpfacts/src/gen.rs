@@ -7,6 +7,7 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod compare;
 mod define_keys;
 mod export;
 pub(crate) use export::UNDESCRIBED;
@@ -24,6 +25,7 @@ mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;
+pub(crate) mod zero_sign;
 pub(crate) use walk::variant_name;
 
 /// A read site the precision report can match against the dynamic census:
@@ -156,6 +158,10 @@ pub struct Gen<'a> {
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
     pub(crate) element_values: Vec<(u32, u32, NodeId)>,
+    /// The result node of every named property read codegen lowers as a
+    /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
+    /// `rest_fields`' use record admits (I32 at rest, PR C).
+    pub(crate) field_reads: Vec<NodeId>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -359,12 +365,34 @@ pub struct Gen<'a> {
     /// Array literals record their birth length (`solve::arr_len`;
     /// `FactsConfig::no_array_lengths`).
     pub arr_lengths: bool,
+    /// The source site of the last `new Array(...)` of the builtin
+    /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
+    pub new_array_site: Option<SiteId>,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves past
+    /// the narrowing's code does not end its narrowed reads after the branch
+    /// (`gen::narrow`, "Writes on a leaving path";
+    /// `FactsConfig::no_leaving_writes`).
+    pub leaving_writes: bool,
+    /// −0 tolerance (`zero_sign`): the expression `expr` evaluates next is
+    /// an operand whose parent classifies its use (a compare, an integer
+    /// rule, a copy, a store, a call argument); any other is a
+    /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
+    pub zs_ok: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
+    /// branch's writes are dropped from the reads after it, also a branch
+    /// that falls through to them.
+    pub leaving_write_sabotage: bool,
+    /// The loops and `switch`es (`jumps`) and `try` statements (`tries`)
+    /// the walk is inside: where an unlabeled `break`/`continue` lands, and
+    /// whether a `throw` or a `finally` stays inside a narrowing's code.
+    pub jumps: u32,
+    pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -607,6 +635,7 @@ impl<'a> Gen<'a> {
             read_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
+            field_reads: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -688,8 +717,14 @@ impl<'a> Gen<'a> {
             dynimport_sabotage: false,
             int_ranges: true,
             arr_lengths: true,
+            new_array_site: None,
             guard_ranges: true,
             guard_presence: true,
+            leaving_writes: true,
+            zs_ok: false,
+            leaving_write_sabotage: false,
+            jumps: 0,
+            tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -1750,7 +1785,15 @@ impl<'a> Gen<'a> {
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
-            self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.to_string()));
+            // The binding's module when HIR resolved it to an import of a
+            // node module (`import { EventEmitter } from "events"`), else
+            // the global object's built-in.
+            let module = c
+                .native_extends
+                .as_ref()
+                .filter(|(_, name)| name == n)
+                .map_or("builtin", |(m, _)| m.as_str());
+            self.m.tmpls[tm as usize].native_parent = Some((module.into(), n.to_string()));
         } else if c.extends_name.as_deref() == Some("Object") && c.extends_expr.is_none() {
             // `extends Object`: the ordinary chain.
         } else if c.extends_expr.is_some()
@@ -2139,17 +2182,25 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
-        self.new_arr_birth(mi, what, false)
+        self.new_arr_birth(mi, what, false, false)
     }
 
     /// An array born with every index below its length (`TmplKind::Arr`
-    /// `hole_free`) or not.
-    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
+    /// `hole_free`) or not. `plain`: a program literal or spread literal
+    /// (`TmplKind::Arr::plain`), set only with `Model::array_reps` on.
+    pub(crate) fn new_arr_birth(
+        &mut self,
+        mi: u32,
+        what: &str,
+        hole_free: bool,
+        plain: bool,
+    ) -> TmplId {
         let site = self.next_site(mi);
         let kind = TmplKind::Arr {
             module: mi,
             site,
             hole_free,
+            plain: plain && self.m.array_reps,
         };
         self.new_indexed_template(mi, kind, what, site)
     }

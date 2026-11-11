@@ -239,7 +239,7 @@ pub(crate) unsafe fn packed_apply_values<const N: usize>(
     }
     let array = crate::array::clean_arr_ptr(value.as_pointer::<crate::array::ArrayHeader>());
     if array.is_null()
-        || crate::array::array_receiver_gc_tag(array).0 != crate::gc::GC_TYPE_ARRAY
+        || crate::gc_type_is_not_array!(crate::array::array_receiver_gc_tag(array).0)
         || !crate::array::array_has_plain_shape_resolved(array)
     {
         return None;

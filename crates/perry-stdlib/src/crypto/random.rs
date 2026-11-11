@@ -282,7 +282,7 @@ unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+    if perry_runtime::gc_type_is_array!(header.obj_type) {
         let message = format!(
             "The \"options\" argument must be of type object. Received {}",
             perry_runtime::fs::validate::describe_received(options_bits)

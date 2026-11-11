@@ -33,7 +33,7 @@ pub(crate) use helpers::{
     peel_new_callee,
 };
 pub(crate) use member::lower_new_member_native;
-pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_params};
+pub(crate) use non_ident::lower_new_non_ident;
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
@@ -338,7 +338,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // `new ReadableStream({...})` / `new TransformStream({...})` as a native
     // instance so `controller.enqueue(...)` etc. dispatch through the streams
     // arms in lower_call.rs.
-    register_stream_controller_params(ctx, new_expr);
 
     // Try to extract class name from callee
     match callee_expr {

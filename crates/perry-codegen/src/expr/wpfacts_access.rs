@@ -108,6 +108,21 @@ pub(crate) struct FieldProof {
     /// once stored, so the load is followed by the hole compare, whose miss
     /// is the site's complete generic operation.
     pub maybe_absent: bool,
+    /// The read is a value of representation `Arr` (DESIGN-p4l1 §3.2): the
+    /// join, over the class set, of what the field holds
+    /// (`FactsField::rep`). `None` when some class's field may hold
+    /// anything but plain program Arrays, and for a guarded or possibly
+    /// absent read, whose value may come from elsewhere.
+    pub array: Option<crate::codegen::FactsArrRep>,
+    /// The field's Number representation over the class set (I32 at rest,
+    /// PR A: wpfacts `FieldFacts::rep` F64 or I32, joined): `None` when
+    /// some class's field may hold anything but Numbers, and for a guarded
+    /// or possibly absent read. PR A consumes it only in check mode.
+    pub num_rep: Option<crate::codegen::FactsRep>,
+    /// −0 tolerance (PR D): some class's field may hold a `-0` no use
+    /// observes (`ElisionFacts::zero_tolerant_fields`); the field-rep
+    /// witness admits it.
+    pub num_zero_ok: bool,
 }
 
 impl FieldProof {
@@ -225,6 +240,71 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
         }
         _ => None,
     }
+}
+
+/// The join of the field `property`'s representation over the classes
+/// `class_ids`, when it is `Arr` in each (`FieldProof::array`).
+fn class_set_array(
+    ctx: &FnCtx<'_>,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<crate::codegen::FactsArrRep> {
+    use crate::codegen::{FactsArrRep, FactsRep};
+    let mut out: Option<FactsArrRep> = None;
+    for &cid in class_ids {
+        let f = ctx.wpfacts.field(cid, property)?;
+        let FactsRep::Arr(r) = f.rep else {
+            return None;
+        };
+        if f.declared || f.reserved {
+            return None;
+        }
+        out = Some(out.map_or(r, |o| FactsArrRep::join(o, r)));
+    }
+    out
+}
+
+/// The join of the field `property`'s Number representation (F64 or I32)
+/// over the classes `class_ids`, when it is one in each (I32 at rest).
+fn class_set_number(
+    ctx: &FnCtx<'_>,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<crate::codegen::FactsRep> {
+    use crate::codegen::FactsRep;
+    let mut out: Option<FactsRep> = None;
+    for &cid in class_ids {
+        let f = ctx.wpfacts.field(cid, property)?;
+        if f.declared || f.reserved || !matches!(f.rep, FactsRep::F64 | FactsRep::I32) {
+            return None;
+        }
+        out = Some(match (out, f.rep) {
+            (Some(FactsRep::I32), FactsRep::I32) | (None, FactsRep::I32) => FactsRep::I32,
+            _ => FactsRep::F64,
+        });
+    }
+    out
+}
+
+/// The representation of the value `object.property` reads, when the facts
+/// give it `Arr` (DESIGN-p4l1 §3.2, §4.2): `object` is an unchecked proven
+/// receiver, no interpreted code can run, and in every class it may be the
+/// field holds only plain program Arrays for the object's whole life. It
+/// is `FieldProof::array` without the proof's slot: the field's value is
+/// the same whichever way the read is lowered.
+pub(crate) fn field_array(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Option<crate::codegen::FactsArrRep> {
+    if property.starts_with('#') || ctx.wpfacts.interp_guard {
+        return None;
+    }
+    let (r, _) = receiver(ctx, object)?;
+    if r.checked {
+        return None;
+    }
+    class_set_array(ctx, &r.class_ids, property)
 }
 
 /// FVA: the class ids the facts prove a call's receiver to be one of (an
@@ -571,6 +651,21 @@ pub(crate) fn prove(
         checked,
         interp_guard,
         maybe_absent,
+        array: if guarded || maybe_absent {
+            None
+        } else {
+            class_set_array(ctx, &recv.class_ids, property)
+        },
+        num_rep: if guarded || maybe_absent {
+            None
+        } else {
+            class_set_number(ctx, &recv.class_ids, property)
+        },
+        num_zero_ok: recv.class_ids.iter().any(|&c| {
+            ctx.wpfacts
+                .zero_tolerant_fields
+                .contains(&(c, property.to_string()))
+        }),
     };
     crate::verify_facts::field_consumed(&proof, property);
     Some(proof)
@@ -909,6 +1004,25 @@ pub(crate) fn try_lower_get(
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
         let val = ctx.block().load(DOUBLE, &field_ptr);
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
+        if let Some(r) = p.array.filter(|_| crate::verify_facts::enabled()) {
+            // Check mode: the field's `Arr` claim, on the word just read.
+            super::index_get::array_rep::witness_value(
+                ctx,
+                &val,
+                r,
+                &format!("field {property} of {}", p.binding),
+            );
+        }
+        if let Some(r) = p.num_rep {
+            // Check mode (I32 at rest): the field's Number rep.
+            crate::codegen::signature_entry::witness_field_rep(
+                ctx,
+                r,
+                &val,
+                &format!("{property} of {}", p.binding),
+                p.num_zero_ok,
+            );
+        }
         // A Number has one encoding in every JS value (the raw double), so
         // a read the facts prove is a Number is the loaded word: no tag
         // test, no select, no branch.

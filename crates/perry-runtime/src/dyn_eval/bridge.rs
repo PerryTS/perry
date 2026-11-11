@@ -484,7 +484,7 @@ pub(crate) fn is_array_value(v: f64) -> bool {
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(h) => {
-            h.obj_type == crate::gc::GC_TYPE_ARRAY || h.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_type_is_array!(h.obj_type) || h.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         }
         None => false,
     }

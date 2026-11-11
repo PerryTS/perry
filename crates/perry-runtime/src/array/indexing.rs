@@ -10,6 +10,7 @@ mod keyed;
 mod proto_chain;
 #[path = "indexing_read_cold.rs"]
 mod read_cold;
+pub(crate) use read_cold::perry_array_read_cold_shared;
 pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,
@@ -527,7 +528,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // path below would otherwise re-derive three times.
     if let Some(header) = crate::value::addr_class::pointer_value_header(arr as u64) {
         let raw = ((arr as u64) & crate::value::POINTER_MASK) as *const ArrayHeader;
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && unsafe { (*raw).length <= (*raw).capacity }
         {
@@ -1080,7 +1081,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let mut raw = raw;
     let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return None;
     }
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
@@ -1099,7 +1100,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
             return None;
         }
         let target_header = (target - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*target_header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*target_header).obj_type)
             || (*target_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -1208,7 +1209,7 @@ pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     }
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -1399,7 +1400,7 @@ pub(crate) fn try_strict_dense_index_set(
     if number.is_some() {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
         {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && header._reserved & crate::gc::OBJ_FLAG_FROZEN == 0
                 && !unsafe { array_has_element_descriptors_resolved(arr) }

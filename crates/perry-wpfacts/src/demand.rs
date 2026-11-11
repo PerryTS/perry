@@ -3,8 +3,10 @@
 //!
 //! An int consumer is an operand the language converts to an integer: an
 //! element key (`Expr::IndexGet` / `IndexSet` / `IndexUpdate` and the
-//! buffer forms) and the operands of the bitwise operators and `Math.imul`.
-//! The generator marks those operand nodes (`Node::int_use`). After the solve
+//! buffer forms), the operands of the bitwise operators and `Math.imul`, and
+//! (N1, `compare_demand`) the operand a strict equality or a `switch` case
+//! tests against an int32 constant. The generator marks those operand nodes
+//! (`Node::int_use`). After the solve
 //! the demand flows backwards: from a node to every node with a copy edge
 //! into it (`Node::succ`), and from an integer rule's result to its operands
 //! (`Cons::Range` for the operators whose integer result is computed from the
@@ -57,6 +59,53 @@ pub(crate) fn int_operands(op: RangeOp) -> bool {
     )
 }
 
+/// N1: an equality test against an int32 constant (`x === 5`, `x != -17`,
+/// a `switch` case) is an int consumer of the other operand: on an I32
+/// operand it is one integer compare, on a double it is `ucomisd` plus the
+/// NaN branch. Relational tests (`i < n`) are not: a counter that only meets
+/// a loop bound and feeds double arithmetic keeps F64 (#7128).
+/// `PERRY_FACTS_COMPARE_DEMAND=0` seeds nothing here.
+pub(crate) fn compare_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_COMPARE_DEMAND").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `e` is an int32 Number constant: an integer literal, or the negation of
+/// one, inside `[-2^31, 2^31)`, never `-0`.
+pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
+    use perry_hir::{Expr, UnaryOp};
+    let v = match e {
+        Expr::Integer(n) => *n as f64,
+        Expr::Number(n) => *n,
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => match operand.as_ref() {
+            Expr::Integer(n) if *n != 0 => -(*n as f64),
+            Expr::Number(n) if *n != 0.0 => -*n,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    v.is_finite()
+        && v.trunc() == v
+        && !(v == 0.0 && v.is_sign_negative())
+        && v >= f64::from(i32::MIN)
+        && v <= f64::from(i32::MAX)
+}
+
+/// I32 at rest (RFC §10.7, PR A): the at-rest facts are on. Demand is then
+/// solved before the derive, so a field's representation can read it
+/// (`lib.rs`). `PERRY_FACTS_AT_REST=0` restores main's facts.
+pub(crate) fn at_rest_demand() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_AT_REST").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 pub(crate) fn enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_INT_DEMAND").as_deref(),
@@ -70,6 +119,7 @@ pub(crate) fn solve(m: &mut Model) {
     // The reverse graph, in compressed rows: `preds[start[d]..start[d + 1]]`
     // are the nodes demand on `d` reaches.
     let mut start = vec![0u32; n + 1];
+    let filters = m.zero_sign && crate::zero_sign::filter_demand();
     let each_edge = |m: &Model, f: &mut dyn FnMut(NodeId, NodeId)| {
         for (src, node) in m.nodes.iter().enumerate() {
             let src = src as NodeId;
@@ -77,10 +127,32 @@ pub(crate) fn solve(m: &mut Model) {
                 f(src, d);
             }
             for c in &node.cons {
-                if let Cons::Range { op, dst, .. } = c {
-                    if carries(*op) {
-                        f(src, *dst);
+                match c {
+                    Cons::Range { op, dst, .. } if carries(*op) => f(src, *dst),
+                    // PR D (`filters`): a filter delivers some of its host's
+                    // values unchanged (`l ?? r`, `l && r`, a presence
+                    // narrowing), and a guard delivers its `from` operand's
+                    // (`r` of `l ?? r`, `l || r`, `l && r`): a copy of
+                    // values, so demand on the result is demand on the
+                    // operand.
+                    Cons::NotNullish { dst }
+                    | Cons::Defined { dst }
+                    | Cons::NotUndefined { dst }
+                    | Cons::Falsy { dst }
+                        if filters =>
+                    {
+                        f(src, *dst)
                     }
+                    Cons::Guard { from, dst, .. } if filters => f(*from, *dst),
+                    // A summarized run's result delivers its Numbers to the
+                    // call's result unchanged (`Model::ret_into`).
+                    Cons::RetInto { call, .. } if filters => {
+                        let ret = m.calls[*call as usize].ret;
+                        if ret != NO_NODE {
+                            f(src, ret)
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -112,6 +184,12 @@ pub(crate) fn solve(m: &mut Model) {
                     f(orig, copy)
                 }
             });
+        }
+        // PR D (`filters`): an index read reads `num_fields`, the element
+        // facts read the aggregate `all_fields` (`bindings::tok_arr_rep`):
+        // views of the same slots, so demand on one is demand on each.
+        if filters {
+            crate::zero_sign::slot_views(m, f);
         }
     };
     each_edge(m, &mut |_, d| start[d as usize + 1] += 1);

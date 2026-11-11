@@ -270,6 +270,7 @@ impl Model {
         if self.nodes[n as usize].obs {
             let dst = match *c {
                 Cons::TopIfAny { dst, .. }
+                | Cons::TopIfTop { dst, .. }
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
@@ -790,6 +791,9 @@ impl Model {
             }
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
+            }
+            if let Some(&l) = self.str_index_len.get(t) {
+                self.str_index_len.insert(id, l);
             }
             kmap.push(id);
         }
@@ -1366,7 +1370,7 @@ impl Model {
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => {
-                    self.with_b(|m| crate::builtins::native_method_at(m, r, key, call))
+                    self.with_native(call, |m| crate::builtins::native_method_at(m, r, key, call))
                 }
             }
         }

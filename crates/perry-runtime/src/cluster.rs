@@ -1624,7 +1624,9 @@ fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(raw as *mut ArrayHeader),
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            Some(raw as *mut ArrayHeader)
+        }
         _ => None,
     }
 }

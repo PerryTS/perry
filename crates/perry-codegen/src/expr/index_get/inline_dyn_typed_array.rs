@@ -200,7 +200,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let gc_type_addr = ctx.block().sub(I64, &object_raw, "8");
     let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
     let gc_type = ctx.block().load(I8, &gc_type_ptr);
-    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
+    let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
     let gc_flags_addr = ctx.block().sub(I64, &object_raw, "7");
     let gc_flags_ptr = ctx.block().inttoptr(I64, &gc_flags_addr);
     let gc_flags = ctx.block().load(I8, &gc_flags_ptr);
@@ -252,7 +252,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
         let type_addr = blk.sub(I64, &fwd_target, "8");
         let type_ptr = blk.inttoptr(I64, &type_addr);
         let live_type = blk.load(I8, &type_ptr);
-        let live_is_array = blk.icmp_eq(I8, &live_type, "1");
+        let live_is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &live_type);
         let flags_addr = blk.sub(I64, &fwd_target, "7");
         let flags_ptr = blk.inttoptr(I64, &flags_addr);
         let live_flags = blk.load(I8, &flags_ptr);
@@ -287,7 +287,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
             ("1", fwd_header_label_s.as_str()),
         ],
     );
-    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
+    let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
     ctx.block()
         .cond_br(&is_array, &object_array_guard_label, &ta_brand_label);
 
@@ -695,7 +695,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let elem_type_addr = ctx.block().sub(I64, &elem_store_i64, "8");
     let elem_type_ptr = ctx.block().inttoptr(I64, &elem_type_addr);
     let elem_type = ctx.block().load(I8, &elem_type_ptr);
-    let elem_is_array = ctx.block().icmp_eq(I8, &elem_type, "1");
+    let elem_is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &elem_type);
     let elem_flags_addr = ctx.block().sub(I64, &elem_store_i64, "7");
     let elem_flags_ptr = ctx.block().inttoptr(I64, &elem_flags_addr);
     let elem_flags = ctx.block().load(I8, &elem_flags_ptr);

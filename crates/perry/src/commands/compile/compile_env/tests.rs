@@ -323,8 +323,14 @@ fn codegen_env_vars_are_build_cache_inputs() {
 #[test]
 fn array_fact_switches_are_cache_inputs() {
     for name in [
+        "PERRY_FACTS_ARRAY_BASE",
+        "PERRY_FACTS_FN_BASES",
+        "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
+        "PERRY_FACTS_ARRAY_REPS",
+        "PERRY_FACTS_ARRAY_TIER",
+        "PERRY_FACTS_CONST_ARRAYS",
         "PERRY_FACTS_SABOTAGE",
     ] {
         assert!(
@@ -332,4 +338,58 @@ fn array_fact_switches_are_cache_inputs() {
             "{name} must key the compile caches"
         );
     }
+}
+
+/// N6: the module-const switch changes the facts' intervals and the reads
+/// codegen emits, so `=0` must never reuse an `=1` object.
+#[test]
+fn const_number_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CONST_NUMBERS"),
+        "PERRY_FACTS_CONST_NUMBERS must key the compile caches"
+    );
+}
+
+/// R1: the range-tightening switches change the facts' intervals (and with
+/// them in-floor reads and int32 locals), so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn range_tightening_switches_are_cache_inputs() {
+    for name in ["PERRY_FACTS_EXACT_RULES", "PERRY_FACTS_LEAVING_WRITES"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
+/// N10: the unsigned-bound switch changes the element reads' and stores'
+/// key admission (the sign test in front of the bound), so `=0` must never
+/// reuse an `=1` object.
+#[test]
+fn unsigned_bound_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_UNSIGNED_BOUND"),
+        "PERRY_UNSIGNED_BOUND must key the compile caches"
+    );
+}
+
+/// N4: the cold-path switch changes helper declarations, call-site
+/// attributes and branch weights, so `=0` must never reuse an `=1` object.
+#[test]
+fn cold_path_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_COLD_PATHS"),
+        "PERRY_COLD_PATHS must key the compile caches"
+    );
+}
+
+/// Value records (DESIGN-p4l4 §7): the switch changes the facts (and, from
+/// VR-3, emitted code), so `=1` must never reuse an object built without it.
+#[test]
+fn value_records_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_VALUE_RECORDS"),
+        "PERRY_FACTS_VALUE_RECORDS must key the compile caches"
+    );
 }

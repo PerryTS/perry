@@ -40,11 +40,14 @@ use super::{
     TypedFeedbackContract, TypedFeedbackKind,
 };
 
+pub(crate) mod array_rep;
+mod const_array;
+pub(crate) mod field_base;
 mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
 pub(super) mod guarded_array;
-mod proven_array;
+pub(crate) mod proven_array;
 #[cfg(test)]
 mod proven_array_tests;
 pub(crate) use foreign_counter::{
@@ -412,6 +415,14 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     else {
         return Ok(None);
     };
+    if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+        let number = super::rest_elems::Want::Number;
+        return super::rest_elems::lower_read(ctx, expr, floor, number).map(Some);
+    }
+    if let Some(v) = const_array::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
@@ -558,7 +569,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
 
     let repair_slot = receiver_repair_slot(ctx, object);
     if !numeric_index_has_integer_array_index_proof(ctx, index) {
-        let proven = proven_array::fact(ctx, *element_offset);
+        let proven = proven_array::fact(ctx, object, *element_offset);
         return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
             lower_array_index_get_via_canonical_i32_split(
                 ctx,
@@ -580,7 +591,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         &[index],
         |ctx| lower_expr_as_i32(ctx, index),
         |ctx, vals, idx_i32| {
-            if let Some(fact) = proven_array::fact(ctx, *element_offset) {
+            if let Some(fact) = proven_array::fact(ctx, object, *element_offset) {
                 return Ok(proven_array::lower(ctx, &vals[0], &idx_i32, fact, true));
             }
             lower_guarded_array_index_get(
@@ -624,6 +635,10 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::IndexGet { object, index, .. } = expr else {
         return Ok(None);
     };
+    if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+        let number = super::rest_elems::Want::Number;
+        return super::rest_elems::lower_read(ctx, expr, floor, number).map(Some);
+    }
     // Receiver must be a plain local of erased static type. Restricting to
     // `LocalGet` (not arbitrary expressions) guarantees none of `lower`'s
     // earlier `IndexGet` branches (Server/globalThis/width-tracked-TA/Uint8Array/
@@ -632,6 +647,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
     // inline-TA probe — the fact's entry guard already proved storage + the
@@ -771,7 +787,7 @@ fn lower_bounded_array_index_get_checked(
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+    let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -845,6 +861,14 @@ fn with_confined_read<'a, T>(
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+        let value = super::rest_elems::Want::Value;
+        return super::rest_elems::lower_read(ctx, expr, floor, value);
+    }
+    if let Some(v) = const_array::try_lower(ctx, expr)? {
+        return Ok(v);
+    }
+    array_rep::witness(ctx, expr)?;
     elem_floor::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {
@@ -1424,7 +1448,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // string, symbol, object and rejected number key.
                     let repair_slot = receiver_repair_slot(ctx, object);
                     let confined = confined_receiver(ctx, object);
-                    let proven = proven_array::fact(ctx, *element_offset);
+                    let proven = proven_array::fact(ctx, object, *element_offset);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         with_confined_read(ctx, confined, |ctx| {
                             lower_array_index_get_via_canonical_i32_split(
@@ -1450,7 +1474,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // canonical signed-i32 keys (notably branded number IDs).
                     let repair_slot = receiver_repair_slot(ctx, object);
                     let confined = confined_receiver(ctx, object);
-                    let proven = proven_array::fact(ctx, *element_offset);
+                    let proven = proven_array::fact(ctx, object, *element_offset);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         with_confined_read(ctx, confined, |ctx| {
                             lower_array_index_get_via_canonical_i32_split(
@@ -1566,7 +1590,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[index],
                     |ctx| lower_expr_as_i32(ctx, index),
                     |ctx, vals, idx_i32| {
-                        if let Some(fact) = proven_array::fact(ctx, *element_offset) {
+                        if let Some(fact) = proven_array::fact(ctx, object, *element_offset) {
                             return Ok(proven_array::lower(ctx, &vals[0], &idx_i32, fact, false));
                         }
                         with_confined_read(ctx, confined, |ctx| {

@@ -58,6 +58,16 @@ pub(crate) use helpers::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if super::rest_elems::is_birth(ctx, expr) {
+        // I32 at rest: the fill births the Array, which is then encoded.
+        let reserve = super::rest_elems::birth_reserve(ctx, expr);
+        let born = lower_call_expr(ctx, expr)?;
+        return Ok(super::rest_elems::encode_birth(ctx, &born, reserve));
+    }
+    lower_call_expr(ctx, expr)
+}
+
+fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::NativeMethodCall {
             module,

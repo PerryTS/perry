@@ -61,7 +61,7 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
             match crate::value::addr_class::try_read_tracked_gc_header(addr) {
                 Some(gc) => {
                     let ty = (*gc.as_ptr()).obj_type;
-                    ty == crate::gc::GC_TYPE_ARRAY || ty == crate::gc::GC_TYPE_LAZY_ARRAY
+                    crate::gc_type_is_array!(ty) || ty == crate::gc::GC_TYPE_LAZY_ARRAY
                 }
                 None => false,
             }

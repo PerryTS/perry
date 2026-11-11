@@ -753,6 +753,11 @@ fn diag_decline(pc: u64, why: &str) -> Option<StepRow> {
     None
 }
 
+type DecodedFde = gimli::FrameDescriptionEntry<gimli::EndianSlice<'static, NativeEndian>>;
+
+#[cfg(test)]
+static SITE_FDE_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 struct WalkerImage {
     image: EhFrameImage,
     eh_frame: EhFrame<gimli::EndianSlice<'static, NativeEndian>>,
@@ -934,10 +939,7 @@ impl Walker {
                 .iter()
                 .find(|image| site >= image.image.text_addr && site < image.image.text_end)
             {
-                Some(image) => Site {
-                    row: image.decode_row(site),
-                    handler: image.handler_for(site),
-                },
+                Some(image) => image.decode_site(site),
                 None => Site {
                     row: diag_decline(site, "no image covers pc"),
                     handler: Handler::None,
@@ -948,6 +950,41 @@ impl Walker {
 }
 
 impl WalkerImage {
+    fn header_fde(&self, pc: u64) -> Result<DecodedFde, &'static str> {
+        #[cfg(test)]
+        SITE_FDE_READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let table = self
+            .image
+            .hdr
+            .as_ref()
+            .and_then(|hdr| hdr.table())
+            .ok_or("no .eh_frame_hdr table")?;
+        table
+            .fde_for_address(&self.eh_frame, &self.bases, pc, EhFrame::cie_from_offset)
+            .map_err(|_| "no FDE covers pc")
+    }
+
+    fn decode_site(&self, pc: u64) -> Site {
+        // Row and handler describe the same call site. Keep their common
+        // FDE local; only the existing decoded Site survives this call.
+        if self.image.compact_index.is_empty() && self.image.hdr.is_some() {
+            return match self.header_fde(pc) {
+                Ok(fde) => Site {
+                    row: self.decode_fde_row(pc, &fde),
+                    handler: Self::handler_for_lsda(pc, Self::fde_lsda(&fde)),
+                },
+                Err(why) => Site {
+                    row: diag_decline(pc, why),
+                    handler: Handler::None,
+                },
+            };
+        }
+        Site {
+            row: self.decode_row(pc),
+            handler: self.handler_for(pc),
+        }
+    }
+
     fn decode_row(&self, pc: u64) -> Option<StepRow> {
         // Compact unwind is authoritative on macOS: FRAME/FRAMELESS
         // functions have no .eh_frame FDE at all, and DWARF-mode entries
@@ -1024,16 +1061,11 @@ impl WalkerImage {
                 _ => diag_decline(pc, "compact mode 0 (no unwind info)"),
             };
         }
-        if let Some(hdr) = self.image.hdr.as_ref() {
-            let Some(table) = hdr.table() else {
-                return diag_decline(pc, "no .eh_frame_hdr table");
+        if self.image.hdr.is_some() {
+            return match self.header_fde(pc) {
+                Ok(fde) => self.decode_fde_row(pc, &fde),
+                Err(why) => diag_decline(pc, why),
             };
-            let Ok(fde) =
-                table.fde_for_address(&self.eh_frame, &self.bases, pc, EhFrame::cie_from_offset)
-            else {
-                return diag_decline(pc, "no FDE covers pc");
-            };
-            return self.decode_fde_row(pc, &fde);
         }
         // No __unwind_info and no .eh_frame_hdr: linear FDE index.
         let idx = &self.image.fde_index;
@@ -1184,6 +1216,24 @@ pub(crate) fn walk_pcs_from_here(max: usize) -> Option<Vec<u64>> {
 pub(crate) fn function_start_for(pc: u64) -> Option<u64> {
     let walker = locked_walker()?;
     let image = walker.image_for(pc)?;
+    image_function_start(image, pc)
+}
+
+fn image_function_start(image: &WalkerImage, pc: u64) -> Option<u64> {
+    #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+    if let Some(start) = trace::direct_function_start(&image.image, pc) {
+        return start;
+    }
+    gimli_function_start(image, pc)
+}
+
+#[cfg(test)]
+static FUNCTION_START_GIMLI_FALLBACKS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn gimli_function_start(image: &WalkerImage, pc: u64) -> Option<u64> {
+    #[cfg(test)]
+    FUNCTION_START_GIMLI_FALLBACKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let hdr = image.image.hdr.as_ref()?;
     let table = hdr.table()?;
     let fde = table
@@ -1260,7 +1310,11 @@ impl WalkerImage {
     /// minus 1): the landing pad the frame's LSDA maps it to, if the frame
     /// carries Perry's personality.
     fn handler_for(&self, site: u64) -> Handler {
-        let Some((lsda, func_start)) = self.lsda_for(site) else {
+        Self::handler_for_lsda(site, self.lsda_for(site))
+    }
+
+    fn handler_for_lsda(site: u64, lsda: Option<(u64, u64)>) -> Handler {
+        let Some((lsda, func_start)) = lsda else {
             return Handler::None;
         };
         match unsafe {
@@ -1323,10 +1377,7 @@ impl WalkerImage {
             return Some((lsda, fstart));
         }
         let fde = match self.image.hdr.as_ref() {
-            Some(hdr) => hdr
-                .table()?
-                .fde_for_address(&self.eh_frame, &self.bases, pc, EhFrame::cie_from_offset)
-                .ok()?,
+            Some(_) => self.header_fde(pc).ok()?,
             None => {
                 let idx = &self.image.fde_index;
                 let pos = idx.partition_point(|e| e.0 <= pc);
@@ -1342,6 +1393,10 @@ impl WalkerImage {
                     .ok()?
             }
         };
+        Self::fde_lsda(&fde)
+    }
+
+    fn fde_lsda(fde: &DecodedFde) -> Option<(u64, u64)> {
         let start = fde.initial_address();
         let personality = match fde.personality()? {
             gimli::Pointer::Direct(address) => address as usize,
@@ -1930,3 +1985,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "eh_walker_site_tests.rs"]
+mod site_tests;

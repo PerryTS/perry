@@ -492,12 +492,7 @@ pub(super) fn compile_method(
                 format!("%arg{}", p.id)
             };
             let number = facts_number_params.contains(&p.id);
-            let value = if number {
-                super::facts_number_locals::emit_entry_number(blk, &arg_name)
-            } else {
-                arg_name.clone()
-            };
-            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &value);
+            let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
             if number {
                 shadow_slot_map.remove(&p.id);
             } else if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
@@ -509,11 +504,9 @@ pub(super) fn compile_method(
             map.insert(p.id, slot);
             if index_param_ids.contains(&p.id) {
                 // Every route proved the signed-i32 value class before this
-                // body. A raw parameter is that value; otherwise a statically
-                // proven route normally passes a plain double and the guarded
-                // stable public entry may also pass Perry's canonical INT32
-                // NaN-box, so use the shared already-guarded conversion rather
-                // than `fptosi` (which cannot consume a tagged INT32 value).
+                // body. A raw parameter is that value; otherwise every route
+                // passes an exact int32 double, which the shared
+                // already-guarded conversion reads with one `fptosi`.
                 let raw_i32 = if raw_index {
                     super::index_entry::raw_param_name(p.id)
                 } else {
@@ -683,6 +676,7 @@ pub(super) fn compile_method(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -732,6 +726,8 @@ pub(super) fn compile_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -870,6 +866,7 @@ pub(super) fn compile_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -1757,9 +1754,14 @@ pub(super) fn compile_method(
             )
         })?;
     } else {
+        // N2: the held suffix of a plain method body (`stmt::fn_base`).
+        if !is_constructor_method && !method.is_generator {
+            stmt::fn_base::plan(&mut ctx, method_body);
+        }
         stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
             format!("lowering body of method '{}::{}'", class.name, method.name)
         })?;
+        stmt::fn_base::finish(&mut ctx);
     }
 
     // #8648: pre-#8630 this symbol ended in `ret undefined`, and every caller

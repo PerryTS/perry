@@ -227,7 +227,7 @@ impl Model {
             }
             ChainAct::Call(call) => {
                 if own_members {
-                    self.with_b(|m| builtins::own_method(m, t, key, call));
+                    self.with_native(call, |m| builtins::own_method(m, t, key, call));
                 }
                 // Methods on the chain (shared) and builtin prototype
                 // methods.
@@ -675,6 +675,13 @@ impl Model {
                 .or_default()
                 .push((origin, act));
             self.accessor_hit(origin, t, Key::any(), act);
+            // An ordinary object a builtin made finds `Object.prototype`'s
+            // members in `tok_load`; a prototype the program gave it
+            // (`Object.setPrototypeOf`) is on its chain: its values.
+            if crate::builtins::ordinary_box(self, t) {
+                let cv = self.cv_of(t, key, false);
+                self.edge(cv, dst);
+            }
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -1312,7 +1319,9 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
-                self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
+                self.with_native(call, |m| {
+                    builtins::proto_method(m, start, origin, key, call)
+                });
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);
                     self.bind_via(up, call, origin);

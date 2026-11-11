@@ -26,6 +26,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression boundary refreshes them.
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    crate::verify_facts::zero_sign::witness(ctx, expr);
     // What the expression does to the receiver run in flight.
     let run = crate::expr::layout_read::run_transparency(expr);
     crate::expr::layout_read::run_enter(ctx, &run);
@@ -65,6 +66,11 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(value) =
         crate::rooting::materialized_receiver_reread(ctx, expr as *const Expr as usize)
     {
+        return Ok(value);
+    }
+    // I32 at rest (PR C): a site of a key some class stores in an I32 lane is
+    // decided before every other tier (`rest_fields`).
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
         return Ok(value);
     }
     // #10943: HIR folds a builtin method call on a proven receiver into a

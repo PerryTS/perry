@@ -795,8 +795,13 @@ fn emit_instance_alloc_inner(
                 crate::expr::HeaderImageSource::EntryValue(value) => value,
             };
             let complete_birth = constructor_birth.filter(|_| !deferred_keys);
-            let compact_slots =
-                complete_birth.and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
+            // I32 at rest (PR C): a compact birth stores its constructor's
+            // values as words of their own; a class with I32 lanes takes the
+            // shared birth and its constructor stores encode (`rest_fields`).
+            let i32_lanes = crate::expr::rest_fields::lanes_of_rep(birth_rep);
+            let compact_slots = complete_birth
+                .filter(|_| i32_lanes == 0)
+                .and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
             // The canonical bound also excludes births requiring color/seed work.
             let fast_idx = ctx.new_block("alloc.fast");
             let slow_idx = ctx.new_block("alloc.slow");
@@ -850,10 +855,13 @@ fn emit_instance_alloc_inner(
                     &[("true", &fast_pred), ("false", &slow_pred)],
                 ));
             }
-            ctx.block().phi(
+            let handle = ctx.block().phi(
                 I64,
                 &[(&fast_handle, &fast_pred), (&slow_handle, &slow_pred)],
-            )
+            );
+            // I32 at rest (PR C): each I32 lane starts as the word of 0.
+            crate::expr::rest_fields::emit_birth_fill(ctx, class_name, &handle, i32_lanes);
+            handle
         }
     } else {
         // Fallback: build the packed-keys string at this site and

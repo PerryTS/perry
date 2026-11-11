@@ -89,7 +89,8 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Call arguments: the callee classifies them (`zero_sign`).
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
         if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_args_at.push((fx.module, byte_offset, a.clone()));
         }
@@ -119,6 +120,7 @@ impl<'a> Gen<'a> {
                         _ => None,
                     })
                     .collect();
+                self.zs_observe(&a);
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
@@ -156,10 +158,44 @@ impl<'a> Gen<'a> {
                 byte_end: pe,
                 ..
             } => {
+                let fused_fill = self.m.array_reps
+                    && property == "fill"
+                    && args.len() == 1
+                    && spread.is_empty()
+                    && fused_fill_receiver(object);
+                self.new_array_site = None;
                 let o = match self.ns_member(fx.module, object, property, true) {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
+                if fused_fill {
+                    // DESIGN-p4l1 §2.6: `new Array(k).fill(v)` is born
+                    // hole-free. The receiver is the fresh array, with no
+                    // binding and no own `fill`, whose prototype is
+                    // `%Array.prototype%`; the intrinsic lock refuses any
+                    // Replace, Delete or Redefine of its image key `fill`
+                    // and any index add on it (`perry-abi/src/lock.rs`), so
+                    // the call is the native `fill`, and with one argument
+                    // it writes every index below the length. The array
+                    // the program sees is `fill`'s return value, the same
+                    // object. `new_array_site` is the outer `new Array`'s:
+                    // its arguments were generated before its own call.
+                    if let Some(site) = self.new_array_site.take() {
+                        self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                        // I32 at rest (PR B): a birth an at-rest template
+                        // may have, keyed as codegen keys the call.
+                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let (module, recv) = (fx.module, o);
+                        let fill = crate::rest_elems::RestFill {
+                            module,
+                            offset,
+                            recv,
+                            site,
+                            fill_site: u32::MAX,
+                        };
+                        self.m.rest_fills.push(fill);
+                    }
+                }
                 self.own_test_recv = Some(o);
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
@@ -168,6 +204,7 @@ impl<'a> Gen<'a> {
                 } else {
                     (byte_offset, byte_end)
                 };
+                let rec = (off != 0).then(|| self.call_sites_at.len());
                 if off != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -176,6 +213,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: None,
+                        call: crate::model::NO_CTX,
                     });
                 }
                 if off != 0 {
@@ -190,9 +228,21 @@ impl<'a> Gen<'a> {
                     });
                 }
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(f) = self
+                    .m
+                    .rest_fills
+                    .last_mut()
+                    .filter(|f| fused_fill && f.recv == o)
+                {
+                    f.fill_site = self.m.calls[call as usize].site;
+                }
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
+                self.str_index_bound(object, property, call);
                 match private {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
@@ -266,11 +316,13 @@ impl<'a> Gen<'a> {
                 self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
+                let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
                 if byte_offset != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -279,6 +331,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: Some(c),
+                        call: crate::model::NO_CTX,
                     });
                 }
                 // A call through a value is a site: the bodies the callee
@@ -305,6 +358,9 @@ impl<'a> Gen<'a> {
                 // a callee node that already holds the callee (the program's
                 // `require` from `createRequire`) runs the call at `cons`.
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
@@ -447,6 +503,21 @@ impl<'a> Gen<'a> {
         if self.walked.contains(&cfx.f) {
             return;
         }
+        let plain_async = matches!(
+            e,
+            Expr::Closure {
+                is_async: true,
+                is_generator: false,
+                ..
+            }
+        );
+        if plain_async {
+            let (afx, rejected) = self.async_body(cfx);
+            let region = std::mem::replace(&mut self.m.gen_region, Some(rejected));
+            self.walk_closure_body_region(&afx, e);
+            self.m.gen_region = region;
+            return;
+        }
         let r = self.m.raise_of(cfx.f);
         let region = std::mem::replace(&mut self.m.gen_region, Some(r));
         self.walk_closure_body_region(cfx, e);
@@ -472,7 +543,9 @@ impl<'a> Gen<'a> {
         else {
             return;
         };
-        let ret = self.m.funcs[f as usize].ret;
+        // The body's completion: the call result, or for an async function
+        // the value its promise settles with (`async_body`).
+        let ret = cfx.ret;
         // A sloppy function expression's body reads its `this` through the
         // view (`sloppy_this`); an arrow's `this` is its creator's.
         let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
@@ -497,7 +570,7 @@ impl<'a> Gen<'a> {
         #[cfg(test)]
         self.m.packet_declarations(body);
         self.params(cfx, params);
-        if *is_async || *is_generator {
+        if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }
@@ -609,9 +682,13 @@ impl<'a> Gen<'a> {
             _ => None,
         };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
-        if let Some(k) = birth_len {
+        if name == "Array" {
             let site = self.m.calls[call as usize].site;
-            self.m.arr_len_at_site.insert(site, k);
+            if let Some(k) = birth_len {
+                self.m.arr_len_at_site.entry(site).or_default().len = Some(k);
+            }
+            // The fused fill (`call_with`) marks this birth after it.
+            self.new_array_site = Some(site);
         }
         let h = self.m.node_l("new-named");
         let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
@@ -1156,6 +1233,25 @@ impl<'a> Gen<'a> {
                 let key = Key::Named(self.m.atom(&k));
                 self.load(recv, key)
             }
+            // A named ESM import of a node module read as a value
+            // (`import { performance } from "perf_hooks"`, or a destructured
+            // `require` HIR binds the same way): node's builtin ESM export
+            // cell holds `module.exports[k]` at load and changes only by
+            // `syncBuiltinESMExports()`, which copies `module.exports[k]`. So
+            // it holds what key `k` of the module object reads: the realm's
+            // declaration, or what the program stored there.
+            "js_native_module_named_esm_export_value" if !self.m.unit_mode => {
+                let (Some(module), Some(k)) = (lit(0), lit(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let Some(ns) = crate::builtins::node_module_ns(&module) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
+            }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
                 self.extern_fail(name, &args, &spread)
@@ -1237,4 +1333,13 @@ fn expr_reads_this(e: &Expr) -> bool {
             found
         }
     }
+}
+
+/// `new Array(<one argument>)` of the builtin `Array`, the receiver shape of
+/// the fused fill (`Gen::call_with`; a spread `new` is `NewDynamicSpread`). A program class or binding named
+/// `Array` is no builtin: `new_named` resolves it first and records no
+/// `new_array_site`.
+fn fused_fill_receiver(object: &Expr) -> bool {
+    matches!(object, Expr::New { class_name, args, .. }
+        if class_name == "Array" && args.len() == 1)
 }

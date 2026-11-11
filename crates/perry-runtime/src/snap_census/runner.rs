@@ -3383,7 +3383,11 @@ fn write_report(st: &mut State) {
             match g.obj_type {
                 crate::gc::GC_TYPE_STRING => 1,
                 crate::gc::GC_TYPE_REGEX_PROGRAM => 2,
-                crate::gc::GC_TYPE_ARRAY if g.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 => 3,
+                crate::gc_array_type_pat!()
+                    if g.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 =>
+                {
+                    3
+                }
                 crate::gc::GC_TYPE_REGEX_CACHE => 4,
                 _ => 0,
             }

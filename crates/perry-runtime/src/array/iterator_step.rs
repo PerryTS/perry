@@ -328,7 +328,7 @@ unsafe fn array_record_enter(
         return array_record_refused(value, record, None);
     };
     let array = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let raw = raw as *const crate::array::ArrayHeader;
             // Admission above already proved this header belongs to the receiver.
             // Reuse it for arena arrays without repeating the raw-pointer ownership

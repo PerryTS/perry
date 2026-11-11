@@ -81,6 +81,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod record_witness;
 pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
@@ -107,6 +108,8 @@ pub(crate) mod literal_chunks;
 mod literal_descriptor;
 pub(crate) mod snap_argv_site;
 pub(crate) mod snap_compare_site;
+pub(crate) mod rest_elems;
+pub(crate) mod rest_fields;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -182,6 +185,7 @@ pub(crate) use helpers::{
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
+pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
@@ -419,7 +423,15 @@ pub(crate) struct FnCtx<'a> {
     /// Set while lowering the generic arm of a guarded proof (decision 150):
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
+    /// While a b1 call lowers its body's read here: that read's offset (the
+    /// body module's) and its at-rest floor (`expr::rest_elems`).
+    pub rest_b1: Option<(u32, Option<u32>)>,
+    /// I32 at rest B2: (counter, at-rest local, scope) pairs a counter
+    /// entry check proved in the floor in the loop copy being lowered
+    /// (`stmt::loops::lower_counter_versions`, `expr::rest_elems`).
+    pub rest_counter: Vec<(u32, u32, u32)>,
     pub program_has_worker: bool,
+    pub program_has_tla: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
@@ -1324,6 +1336,9 @@ pub(crate) struct FnCtx<'a> {
     /// buffer views. Lookup, nested-scope teardown and boundary validation
     /// live in that table instead of independent `FnCtx` maps.
     pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
+    /// N2: the planned function-level element bases of the method body
+    /// (`stmt::fn_base`).
+    pub fn_base: crate::stmt::fn_base::Pending,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once

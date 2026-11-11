@@ -774,6 +774,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_verify_facts_call", PTR, &[DOUBLE, I64, I64, I64]);
         module.declare_function("perry_verify_facts_call_miss", I32, &[PTR, I64, I64]);
         module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
+        // Value records (DESIGN-p4l4 B7): the birth claim and the identity
+        // witness of a compiled comparison.
+        module.declare_function("perry_verify_facts_record_claim", crate::types::VOID, &[DOUBLE]);
+        module.declare_function(
+            "perry_verify_facts_record_identity",
+            I32,
+            &[DOUBLE, DOUBLE, I64, I64],
+        );
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
     }
     // #8655: guarded packed-array / dense Array-subclass read before the

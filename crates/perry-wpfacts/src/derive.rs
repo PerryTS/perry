@@ -108,6 +108,21 @@ pub struct FieldFacts {
     /// (`bindings::bodies_of` over every token of the layout); empty when
     /// it may hold anything else.
     pub fns: Vec<crate::bindings::BodyRef>,
+    /// The field's representation (DESIGN-p4l1 §3.1, finding 8): `Arr` of
+    /// what the field holds over every token of the template
+    /// (`bindings::arr_rep`) when it is definite, a data field, and the
+    /// template is neither escaped nor hard (a `delete` or a
+    /// `setPrototypeOf` on an instance can make the read `undefined`
+    /// without the field node holding it); Boxed otherwise, and with
+    /// `PERRY_FACTS_ARRAY_FIELDS=0`. A read of the field is a value of this
+    /// representation (PR-C3: codegen's `FieldProof::array`).
+    pub rep: crate::bindings::Rep,
+    /// −0 tolerance (PR D): one of the field's nodes keeps its int32 interval
+    /// although it may hold `-0`, which no use observes (`Node::zs_tol`).
+    pub zero_tol: bool,
+    /// I32 at rest, PR C (`rest_fields::admit`): the field is an I32 lane of
+    /// its class, stored as an I32 word in every instance for its life.
+    pub rest: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -131,6 +146,15 @@ pub struct TemplateFacts {
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
+    /// Value records (DESIGN-p4l4 §2, `records`): the template's instances
+    /// are their fields by value, or the reason they are heap objects.
+    /// `Off` unless `PERRY_FACTS_VALUE_RECORDS=1`.
+    pub record: Result<crate::records::RecordLayout, crate::records::Rejected>,
+    /// The Arr templates born as record arrays of this template (§1.4, R6):
+    /// every holder of their tokens holds them as `Arr{Record}`. The
+    /// design's `record_elems` per Arr template, kept on the element
+    /// template because an Arr template has no `TemplateFacts`.
+    pub record_elems: Vec<TmplId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -253,6 +277,8 @@ impl FieldFacts {
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
         self.ta_stable &= o.ta_stable;
+        // The join, not the meet: the row must hold for either class.
+        self.rep = crate::bindings::Rep::join(self.rep, o.rep);
         if self.ta_kind != o.ta_kind {
             self.ta_kind = None;
         }
@@ -889,7 +915,48 @@ fn template_facts(
         } else {
             Vec::new()
         };
+        let whole_life =
+            m.array_fields && definite && !is_accessor && escape.is_none() && hard.is_none();
+        let rep = if whole_life {
+            // The field nodes of the tokens that have one, as `field_kind`
+            // reads them.
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            let ignored = if m.arr_field_sabotage {
+                prim::NULL | prim::UNDEF
+            } else {
+                0
+            };
+            crate::bindings::arr_rep_beside(m, &nodes, ignored)
+                .map_or(crate::bindings::Rep::Boxed, crate::bindings::Rep::Arr)
+        } else {
+            crate::bindings::Rep::Boxed
+        };
+        // I32 at rest (RFC §10.7, PR A): a whole-life field that holds only
+        // Numbers has the Number representation of its joined nodes.
+        let mut zero_tol = false;
+        let rep = if rep == crate::bindings::Rep::Boxed
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && crate::demand::at_rest_demand()
+        {
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            zero_tol = nodes.iter().any(|&n| m.nodes[n as usize].zs_tol);
+            crate::bindings::number_rep_of_nodes(m, &nodes)
+        } else {
+            rep
+        };
         fields.push(FieldFacts {
+            rep,
+            zero_tol,
+            rest: false,
             fns,
             ta_stable,
             ta_kind,
@@ -941,6 +1008,8 @@ fn template_facts(
         fields,
         statics: constant_statics(m, tm),
         sabotaged: false,
+        record: Err(crate::records::Rejected::off()),
+        record_elems: Vec::new(),
         ancestors: {
             let mut v = Vec::new();
             let mut cur = tpl.parent;

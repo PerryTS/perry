@@ -20,7 +20,9 @@ pub(in crate::array) unsafe fn install_array_growth_forwarding_with(
         return false;
     };
     let header = header.as_ptr();
-    if (*header).obj_type != gc::GC_TYPE_ARRAY || (*header).gc_flags & gc::GC_FLAG_ARENA == 0 {
+    if crate::gc_type_is_not_array!((*header).obj_type)
+        || (*header).gc_flags & gc::GC_FLAG_ARENA == 0
+    {
         return false;
     }
     gc::set_forwarding_address(header, new_user_addr);

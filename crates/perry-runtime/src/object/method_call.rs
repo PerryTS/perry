@@ -201,7 +201,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
     let (header, addr) = match header {
         Some(h)
             if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-                && h.obj_type == crate::gc::GC_TYPE_ARRAY =>
+                && crate::gc_type_is_array!(h.obj_type) =>
         {
             let live =
                 crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader) as usize;
@@ -243,7 +243,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
             // An array owns properties beyond its elements only in its named
             // layout (`ArrayHeader.named`, carried by growth; a pre-growth
             // alias was resolved to the live head above).
-            let own = if kind == Some(crate::gc::GC_TYPE_ARRAY)
+            let own = if kind == Some(crate::gc_array_type_pat!())
                 && !crate::array::array_has_named_properties_resolved(
                     addr as *const crate::array::ArrayHeader,
                 ) {
@@ -304,7 +304,7 @@ unsafe fn cell_chain_has_accessor(recv: f64, kind: Option<u8>, name: &[u8]) -> b
     if object == 0 {
         return lookup_is_observable(recv, name);
     }
-    if kind == Some(crate::gc::GC_TYPE_ARRAY) {
+    if kind == Some(crate::gc_array_type_pat!()) {
         // An array whose [[Prototype]] was replaced sets the process latch.
         let array = crate::array::array_prototype_addr();
         if super::prototype_chain::array_static_proto_recorded() {
@@ -355,7 +355,7 @@ unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8
             linked.then(|| super::key_attrs::object_key_is_accessor(p, name))
         }
         Some(h)
-            if h.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(h.obj_type)
                 && !super::prototype_chain::array_static_proto_recorded() =>
         {
             Some(super::descriptor_state::owner_key_is_accessor(proto, name))
@@ -724,7 +724,7 @@ pub unsafe extern "C-unwind" fn js_array_slice_method(
     {
         let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
         if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|h| (*h).obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|h| crate::gc_type_is_array!((*h).obj_type))
         {
             let array = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
             if !array.is_null() && crate::array::array_has_plain_shape_resolved(array) {

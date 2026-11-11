@@ -1834,7 +1834,7 @@ fn canonical_address_is_recycled(addr: usize) -> bool {
         match crate::value::addr_class::try_read_tracked_gc_header(addr) {
             Some(gc) => {
                 let ty = (*gc.as_ptr()).obj_type;
-                ty != crate::gc::GC_TYPE_ARRAY && ty != crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_type_is_not_array!(ty) && ty != crate::gc::GC_TYPE_LAZY_ARRAY
             }
             None => true,
         }

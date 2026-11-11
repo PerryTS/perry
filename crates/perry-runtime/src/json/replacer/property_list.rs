@@ -194,7 +194,7 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             && crate::builtins::boxed_primitive_json_value(val).is_none()
         {
             match gc_obj_type(ptr) {
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     stringify_array_with_array_replacer(
                         ptr,
                         allowed_keys,

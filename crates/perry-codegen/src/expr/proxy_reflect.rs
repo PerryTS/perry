@@ -939,6 +939,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             strict,
             ..
         } => {
+            // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+            super::record_witness::store_into_copy(ctx, target)?;
+            // I32 at rest: the store of an at-rest element (`rest_elems`);
+            // `receiver` is `target` cloned (one evaluation of the base).
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, target, key, value, floor);
+            }
             if matches!(receiver.as_ref(), Expr::This) {
                 if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                     ctx, target, key, value, *strict,

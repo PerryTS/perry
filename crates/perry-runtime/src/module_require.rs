@@ -658,7 +658,7 @@ fn link_parent(cache: f64, record: f64, parent_filename: &str) {
     let mut children_ptr = if children.is_pointer() {
         let ptr = children.as_pointer::<u8>();
         if unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             ptr as *mut crate::array::ArrayHeader
         } else {

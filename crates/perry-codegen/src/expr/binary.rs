@@ -377,6 +377,13 @@ fn lower_guarded_numeric_arith(
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // The helper is the arm for a BigInt or a value that needs ToNumeric.
+        let all_num = if crate::module::cold_paths_enabled() {
+            ctx.block()
+                .call(I1, "llvm.expect.i1", &[(I1, &all_num), (I1, "true")])
+        } else {
+            all_num
+        };
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
@@ -864,6 +871,11 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         }
     }
     if let Expr::IndexGet { object, index, .. } = expr {
+        if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+            let number = super::rest_elems::Want::Number;
+            let value = super::rest_elems::lower_read(ctx, expr, floor, number)?;
+            return Ok((value, true));
+        }
         if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
             return Ok((value, true));
         }
@@ -934,6 +946,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // no boxed fallback at all (the residual per-element check proves the slot
     // is a raw double before the load), so claiming one here would be a lie
     // that other consumers of that predicate would read.
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
         if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
     if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
@@ -1032,6 +1048,14 @@ fn lower_numeric_logical_for_number_context(
             )
         {
             return lower_expr(ctx, left);
+        }
+        // An element read below a dense floor that is a proven Number
+        // (`proven_array`, PR-C2): never nullish, and its number-context
+        // lowering is the double.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_operand_as_number(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
         }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {

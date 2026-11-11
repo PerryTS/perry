@@ -488,7 +488,7 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value_f64: f64) {
             // `append_stringify_value` above.
             let gc_hdr = (addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                 as *const perry_runtime::gc::GcHeader;
-            if (*gc_hdr).obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+            if perry_runtime::gc_type_is_array!((*gc_hdr).obj_type) {
                 let arr = addr as *mut ArrayHeader;
                 js_array_push_f64(arr, value_f64);
                 return;
@@ -594,7 +594,7 @@ unsafe fn append_stringify_value(
             // back to "treat as object → toString" if not an array.
             let gc_hdr = (addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                 as *const perry_runtime::gc::GcHeader;
-            let is_array = (*gc_hdr).obj_type == perry_runtime::gc::GC_TYPE_ARRAY;
+            let is_array = perry_runtime::gc_type_is_array!((*gc_hdr).obj_type);
             if is_array {
                 let arr = addr as *mut ArrayHeader;
                 let n = js_array_length(arr);

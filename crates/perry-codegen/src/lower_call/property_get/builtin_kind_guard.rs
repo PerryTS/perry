@@ -558,16 +558,14 @@ fn emit_receiver_kind_branch(
             None
         }
         // A number is any IEEE double outside Perry's positive tag band
-        // 0x7FF9..=0x7FFF (`JSValue::is_number`), or an INT32-tagged value.
+        // 0x7FF9..=0x7FFF (`JSValue::is_number`).
         ReceiverKind::Number => {
             let blk = ctx.block();
             let bits = blk.bitcast_double_to_i64(recv);
             let tag = blk.lshr(I64, &bits, "48");
             let band_offset = blk.sub(I64, &tag, crate::nanbox::SHORT_STRING_TAG_TOP16_I64);
             let in_tag_band = blk.icmp_ult(I64, &band_offset, "7");
-            let is_double = blk.xor(I1, &in_tag_band, "true");
-            let is_int32 = crate::codegen::emit_int32_bits_test(blk, &bits);
-            let is_number = blk.or(I1, &is_double, &is_int32);
+            let is_number = blk.xor(I1, &in_tag_band, "true");
             let is_number = blk.and(I1, &is_number, pristine);
             blk.cond_br(&is_number, builtin_label, generic_label);
             None
@@ -583,7 +581,6 @@ fn emit_receiver_kind_branch(
             const POINTER_TAG_TOP16: &str = "32765"; // 0x7FFD
             const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
             const HEAP_LIMIT: &str = "140737488355328"; // 2^47
-            const GC_TYPE_ARRAY_I8: &str = "1";
             const GC_FLAG_FORWARDED_I8: &str = "-128"; // 0x80 as i8
             let header_idx = ctx.new_block("kindguard.array_header");
             let header_label = ctx.block_label(header_idx);
@@ -603,7 +600,7 @@ fn emit_receiver_kind_branch(
             let type_addr = blk.sub(I64, &handle, "8");
             let type_ptr = blk.inttoptr(I64, &type_addr);
             let gc_type = blk.load(I8, &type_ptr);
-            let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY_I8);
+            let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
             let flags_addr = blk.sub(I64, &handle, "7");
             let flags_ptr = blk.inttoptr(I64, &flags_addr);
             let flags = blk.load(I8, &flags_ptr);

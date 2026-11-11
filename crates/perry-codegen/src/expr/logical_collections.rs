@@ -276,7 +276,7 @@ fn lower_captureless_some_inline(
             let type_addr = blk.sub(I64, &raw, "8");
             let type_ptr = blk.inttoptr(I64, &type_addr);
             let obj_type = blk.load(I8, &type_ptr);
-            let is_array = blk.icmp_eq(I8, &obj_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &obj_type);
             let flags_addr = blk.sub(I64, &raw, "7");
             let flags_ptr = blk.inttoptr(I64, &flags_addr);
             let gc_flags = blk.load(I8, &flags_ptr);
