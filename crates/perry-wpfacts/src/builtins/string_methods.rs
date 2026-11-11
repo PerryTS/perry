@@ -108,28 +108,45 @@ fn replace_value(m: &mut Model, by: CallId, rv: NodeId) {
     to_prim(m, r, "replace callback result ToString");
 }
 
-/// What `RegExp.prototype[@@x]` does with the match record `exec` returned:
-/// reads `index`, `groups`, `length` and the captures, and the properties
-/// of the groups object, each ToString'd or ToNumber'd.
+/// What `RegExp.prototype[@@x]` does with the match record `exec` returned
+/// (22.2.6.11 / 22.2.6.8, GetSubstitution 22.1.3.19.1): it reads the
+/// record's `length`, its captures (index keys), `index` and `groups`, and
+/// the properties of the groups object under the template's group names,
+/// each ToString'd or ToNumber'd. No other key of the record and no
+/// property of a capture or of `index` is read.
 fn read_match(m: &mut Model, rec: NodeId) {
-    let v = m.node_l("match-field");
+    read_prim(m, rec, "length", "match record length ToLength");
+    read_prim(m, rec, "index", "match record index ToIntegerOrInfinity");
+    let cap = m.node_l("match-capture");
+    let i = m.node_l("match-capture-index");
+    m.add_prim(i, prim::NUM);
+    m.cons(
+        rec,
+        Cons::IdxLoad {
+            idx: i,
+            dst: cap,
+            shape: 0,
+        },
+    );
+    to_prim(m, cap, "match record capture ToString");
+    let ga = m.atom("groups");
+    let groups = m.node_l("match-groups");
     m.cons(
         rec,
         Cons::Load {
-            key: Key::any(),
-            dst: v,
+            key: Key::Named(ga),
+            dst: groups,
         },
     );
-    to_prim(m, v, "match record field");
     let g = m.node_l("match-group");
     m.cons(
-        v,
+        groups,
         Cons::Load {
             key: Key::any(),
             dst: g,
         },
     );
-    to_prim(m, g, "match record group");
+    to_prim(m, g, "match record group ToString");
 }
 
 /// A string method of a primitive receiver, by its algorithm. `false`: no
