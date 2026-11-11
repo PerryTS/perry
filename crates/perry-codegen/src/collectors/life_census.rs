@@ -4,7 +4,11 @@
 //! compiles uncached, as with `PERRY_NO_CACHE=1`), every body's escape
 //! analyses (`hir_facts`: news, array and object literals) also classify
 //! each heap birth of the body, and append one TSV row per birth to
-//! `<path>`: `module, function, class, offset, slots, verdict, detail, kind`.
+//! `<path>`: `module, function, class, offset, slots, verdict, detail, kind,
+//! receiving, outer`. The last two (LIFE C1) say what receives a birth that
+//! is not bound to a local and the verdict of the birth holding it; their
+//! vocabulary is in `life_census_sides`. Rows are written when the module's
+//! codegen ends: a returned birth's side reads every caller body.
 //!
 //! `kind`: `new`, `object` (an object literal: HIR's `new __AnonShape_<hash>`
 //! keeps that class name and the news rule; a remaining `{...}` literal or
@@ -56,7 +60,7 @@
 //! `perry_transform::effects` (`Fates`), with [`CodegenProof`] answering its
 //! read question from the same predicate `wpfacts_access::prove` gates on.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -122,10 +126,31 @@ struct ModuleCensus {
     name: String,
     facts: Arc<ElisionFacts>,
     fates: Fates,
-    /// Body address -> (label, async or generator).
-    bodies: HashMap<usize, (String, bool)>,
+    /// Body address -> the body.
+    bodies: HashMap<usize, Body>,
     classes: HashMap<String, bool>,
+    /// Class id -> its static methods (`life_census_sides::resolve`).
+    statics: sides::Statics,
+    /// (class, static method) -> its body, for HIR's `StaticMethodCall`.
+    static_by_name: HashMap<(String, String), FuncId>,
+    callers: sides::Callers,
+    /// Function -> call site -> what the caller does with the result.
+    uses: Mutex<HashMap<FuncId, BTreeMap<(u32, u32), String>>>,
+    /// Rows of the module, written when its codegen ends.
+    pending: Mutex<Vec<(String, Row)>>,
     seen: Mutex<HashSet<(String, String, String)>>,
+}
+
+/// One body the census can name.
+#[derive(Clone)]
+pub(crate) struct Body {
+    label: String,
+    /// Async or generator.
+    suspends: bool,
+    func: FuncId,
+    /// A module function (its callers are visible), not a method,
+    /// constructor or closure.
+    direct: bool,
 }
 
 fn registry() -> &'static Mutex<Vec<Arc<ModuleCensus>>> {
@@ -142,6 +167,7 @@ pub(crate) struct Registered(Arc<ModuleCensus>);
 
 impl Drop for Registered {
     fn drop(&mut self) {
+        self.0.flush();
         registry()
             .lock()
             .expect("census registry")
@@ -161,24 +187,39 @@ pub(crate) fn register(hir: &perry_hir::Module, facts: &Arc<ElisionFacts>) -> Op
 
 impl ModuleCensus {
     fn new(hir: &perry_hir::Module, facts: &Arc<ElisionFacts>) -> Self {
-        let fates = Fates::of_module(hir, &CodegenProof { facts });
+        let callers = sides::Callers::of(hir);
+        let mut functions: Vec<&perry_hir::Function> = hir.functions.iter().collect();
+        functions.extend(callers.closures.iter());
+        let classes_ref: Vec<&perry_hir::Class> = hir.classes.iter().collect();
+        let fates = Fates::compute(&functions, &classes_ref, &CodegenProof { facts });
         let mut bodies = HashMap::new();
-        let mut note = |f: &perry_hir::Function, label: String| {
+        let mut note = |f: &perry_hir::Function, label: String, direct: bool| {
             bodies.insert(
                 f.body.as_ptr() as usize,
-                (label, f.is_async || f.is_generator),
+                Body {
+                    label,
+                    suspends: f.is_async || f.is_generator,
+                    func: f.id,
+                    direct,
+                },
             );
         };
         for f in &hir.functions {
-            note(f, f.name.clone());
+            note(f, f.name.clone(), true);
         }
         let mut classes = HashMap::new();
+        let mut statics: sides::Statics = HashMap::new();
+        let mut static_by_name = HashMap::new();
         for c in &hir.classes {
             if let Some(k) = &c.constructor {
-                note(k, format!("{}.constructor", c.name));
+                note(k, format!("{}.constructor", c.name), false);
             }
             for m in c.methods.iter().chain(&c.static_methods) {
-                note(m, format!("{}.{}", c.name, m.name));
+                note(m, format!("{}.{}", c.name, m.name), false);
+            }
+            for m in &c.static_methods {
+                statics.entry(c.id).or_default().insert(m.name.clone(), m.id);
+                static_by_name.insert((c.name.clone(), m.name.clone()), m.id);
             }
             let plain = c.extends.is_none()
                 && c.extends_name.is_none()
@@ -190,13 +231,76 @@ impl ModuleCensus {
                 && c.setters.is_empty();
             classes.insert(c.name.clone(), plain);
         }
+        for &(at, func, suspends) in &callers.closure_bodies {
+            bodies.insert(
+                at,
+                Body {
+                    label: format!("closure#{func}"),
+                    suspends,
+                    func,
+                    direct: false,
+                },
+            );
+        }
         ModuleCensus {
             name: hir.name.clone(),
             facts: facts.clone(),
             fates,
             bodies,
             classes,
+            statics,
+            static_by_name,
+            callers,
+            uses: Mutex::new(HashMap::new()),
+            pending: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
+        }
+    }
+
+    /// Column 9 of the returned births, once every caller body is walked.
+    fn finish(&self, rows: Vec<Row>) -> Vec<Row> {
+        let uses = self.uses.lock().expect("census uses");
+        rows.into_iter()
+            .map(|mut r| {
+                if let Some(f) = r.6.strip_prefix("return:@").and_then(|f| f.parse().ok()) {
+                    r.6 = sides::return_side(&self.callers, &uses, f);
+                }
+                r
+            })
+            .collect()
+    }
+
+    /// Writes the module's rows (`Registered`'s drop: codegen has ended).
+    fn flush(&self) {
+        let Some(out) = path() else { return };
+        let pending = std::mem::take(&mut *self.pending.lock().expect("census rows"));
+        let (labels, rows): (Vec<String>, Vec<Row>) = pending.into_iter().unzip();
+        let mut text = String::new();
+        for (label, (kind, class, offset, slots, verdict, detail, side, outer)) in
+            labels.into_iter().zip(self.finish(rows))
+        {
+            let offset = match kind {
+                Kind::New => offset.to_string(),
+                _ => format!("#{offset}"),
+            };
+            let slots = slots.map_or("-".to_string(), |s| s.to_string());
+            text.push_str(&format!(
+                "{}\t{label}\t{class}\t{offset}\t{slots}\t{verdict}\t{detail}\t{}\t{side}\t{outer}\n",
+                self.name,
+                kind.word()
+            ));
+        }
+        if text.is_empty() {
+            return;
+        }
+        static WRITE: Mutex<()> = Mutex::new(());
+        let _w = WRITE.lock().expect("census write");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(out)
+        {
+            let _ = f.write_all(text.as_bytes());
         }
     }
 }
@@ -216,56 +320,34 @@ pub(crate) fn observe(
     module_globals: &HashMap<u32, String>,
     scalar: &Scalar<'_>,
 ) {
-    let Some(out) = path() else { return };
+    if path().is_none() {
+        return;
+    }
     let key = stmts.as_ptr() as usize;
     let found = registry()
         .lock()
         .expect("census registry")
         .iter()
         .find_map(|m| m.bodies.get(&key).map(|b| (m.clone(), b.clone())));
-    let (module, (label, suspends)) = match found {
-        Some(f) => f,
+    let (module, body) = match found {
+        Some((m, b)) => (m, Some(b)),
         None => match CURRENT.with(|c| c.borrow().clone()) {
-            Some(m) => (m, ("<init>".to_string(), false)),
+            Some(m) => (m, None),
             None => return,
         },
     };
-    let rows = classify(&module, stmts, boxed_vars, module_globals, scalar, suspends);
+    let label = body.as_ref().map_or("<init>".to_string(), |b| b.label.clone());
+    let rows = classify(&module, stmts, boxed_vars, module_globals, scalar, body.as_ref());
     let mut seen = module.seen.lock().expect("census seen");
-    let mut text = String::new();
-    for (kind, class, offset, slots, verdict, detail) in rows {
-        let offset = match kind {
-            Kind::New => offset.to_string(),
-            _ => format!("#{offset}"),
+    let mut pending = module.pending.lock().expect("census rows");
+    for row in rows {
+        let offset = match row.0 {
+            Kind::New => row.2.to_string(),
+            _ => format!("#{}", row.2),
         };
-        if !seen.insert((label.clone(), offset.clone(), class.clone())) {
-            continue;
+        if seen.insert((label.clone(), offset, row.1.clone())) {
+            pending.push((label.clone(), row));
         }
-        let slots = slots.map_or("-".to_string(), |s| s.to_string());
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-            module.name,
-            label,
-            class,
-            offset,
-            slots,
-            verdict,
-            detail,
-            kind.word()
-        ));
-    }
-    drop(seen);
-    if text.is_empty() {
-        return;
-    }
-    static WRITE: Mutex<()> = Mutex::new(());
-    let _w = WRITE.lock().expect("census write");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(out)
-    {
-        let _ = f.write_all(text.as_bytes());
     }
 }
 
@@ -332,8 +414,8 @@ fn position(parent: Option<&Expr>) -> String {
 }
 
 /// kind, class, offset (a `new`'s byte offset, else its ordinal in the
-/// body walk), slots, verdict, detail.
-type Row = (Kind, String, u32, Option<usize>, String, String);
+/// body walk), slots, verdict, detail, receiving side, outer verdict.
+type Row = (Kind, String, u32, Option<usize>, String, String, String, String);
 
 /// A birth bound to a plain local.
 struct Cand {
@@ -346,6 +428,9 @@ struct Cand {
     /// A `new` (of a class or of an object literal's shape class): the
     /// news rule (facts, class) applies.
     new: bool,
+    /// `let x = f(...)` of a module function `f`: not a birth here; its
+    /// uses say what that caller does with `f`'s result (the return side).
+    result_of: Option<(FuncId, (u32, u32))>,
 }
 
 /// The census rows of one body: every candidate's verdict, and every birth
@@ -356,8 +441,9 @@ fn classify(
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     scalar: &Scalar<'_>,
-    suspends: bool,
+    body: Option<&Body>,
 ) -> Vec<Row> {
+    let suspends = body.is_some_and(|b| b.suspends);
     let mut news = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut news);
     let mut objects = HashMap::new();
@@ -378,6 +464,7 @@ fn classify(
                 slots: None,
                 keys: Vec::new(),
                 new: true,
+                result_of: None,
             };
             (*id, cand)
         })
@@ -391,12 +478,24 @@ fn classify(
         rows: Vec::new(),
         defs: HashMap::new(),
         ordinal: 0,
+        body,
+        outer: None,
+        pending_use: None,
     };
     for s in stmts {
         c.stmt(s);
     }
     let mut rows = std::mem::take(&mut c.rows);
+    let mut cand_verdicts = HashMap::new();
     for (id, cand) in &c.candidates {
+        if let Some((f, site)) = cand.result_of {
+            let used = c
+                .first
+                .get(id)
+                .map_or("drop".to_string(), |r| format!("kept:local:heap:{r}"));
+            module.record_use(f, site, used);
+            continue;
+        }
         let offset = c.defs.get(id).copied().unwrap_or(0);
         let blocked = c.first.get(id).map(|r| format!("heap:{r}"));
         let (slots, verdict) = match cand.kind {
@@ -434,6 +533,7 @@ fn classify(
                 },
             ),
         };
+        cand_verdicts.insert(format!("@cand:{id}"), verdict.clone());
         rows.push((
             cand.kind,
             cand.class.clone(),
@@ -441,9 +541,32 @@ fn classify(
             slots,
             verdict,
             String::new(),
+            "-".to_string(),
+            "-".to_string(),
         ));
     }
+    let row_verdicts: Vec<String> = rows.iter().map(|r| r.4.clone()).collect();
+    for r in &mut rows {
+        if let Some(i) = r.7.strip_prefix("@row:").and_then(|i| i.parse::<usize>().ok()) {
+            r.7 = row_verdicts[i].clone();
+        } else if let Some(v) = cand_verdicts.get(&r.7) {
+            r.7 = v.clone();
+        }
+    }
     rows
+}
+
+impl ModuleCensus {
+    /// A caller's use of a module function's result at one call site.
+    fn record_use(&self, f: FuncId, site: (u32, u32), used: String) {
+        self.uses
+            .lock()
+            .expect("census uses")
+            .entry(f)
+            .or_default()
+            .entry(site)
+            .or_insert(used);
+    }
 }
 
 struct Census<'a> {
@@ -458,6 +581,12 @@ struct Census<'a> {
     defs: HashMap<u32, u32>,
     /// Next ordinal of a literal or closure birth in this body.
     ordinal: u32,
+    body: Option<&'a Body>,
+    /// While a birth's parts are walked: its row (`@row:<index>`) or
+    /// candidate (`@cand:<id>`), the outer column of a part that is a birth.
+    outer: Option<String>,
+    /// The statement's use of the result of the call it consists of.
+    pending_use: Option<&'static str>,
 }
 
 fn kind(e: &Expr) -> String {
@@ -578,17 +707,45 @@ impl Census<'_> {
                         _ => self.next_ordinal(),
                     };
                     self.defs.insert(*id, at);
+                    let saved = self.outer.replace(format!("@cand:{id}"));
                     for a in args {
                         self.expr(a, Some(init));
                     }
+                    self.outer = saved;
                 }
                 e if birth(e).is_some() => {
                     let pos = self.let_position(*id, e);
                     if matches!(e, Expr::New { .. }) || pos != "let-other" {
-                        self.birth_site(e, pos, String::new());
+                        self.birth_site(e, pos, String::new(), "-".to_string(), None);
                     } else {
                         self.literal_let(*id, e);
                     }
+                }
+                Expr::Call {
+                    callee,
+                    byte_offset,
+                    byte_end,
+                    ..
+                } if matches!(callee.as_ref(), Expr::FuncRef(_))
+                    && !self.boxed.contains(id)
+                    && !self.globals.contains_key(id)
+                    && !self.candidates.contains_key(id) =>
+                {
+                    let Expr::FuncRef(f) = callee.as_ref() else {
+                        unreachable!("matched above")
+                    };
+                    self.candidates.insert(
+                        *id,
+                        Cand {
+                            kind: Kind::New,
+                            class: String::new(),
+                            slots: None,
+                            keys: Vec::new(),
+                            new: true,
+                            result_of: Some((*f, (*byte_offset, *byte_end))),
+                        },
+                    );
+                    self.statement_call(init, "result");
                 }
                 e => match self.cand(e) {
                     Some(c) => self.block(c, "aliased-to-local"),
@@ -598,18 +755,27 @@ impl Census<'_> {
             Stmt::Let { init: None, .. } => {}
             Stmt::Return(Some(e)) => match self.cand(e) {
                 Some(c) => self.block(c, "returned"),
-                None if birth(e).is_some() => self.birth_site(e, "return", String::new()),
-                None => self.expr(e, None),
+                None if birth(e).is_some() => {
+                    let side = match self.body {
+                        Some(b) if b.direct => format!("return:@{}", b.func),
+                        Some(_) => "return:not-a-direct-function".to_string(),
+                        None => "return:unidentified-body".to_string(),
+                    };
+                    self.birth_site(e, "return", String::new(), side, None)
+                }
+                None => self.statement_call(e, "kept:returned"),
             },
             Stmt::Throw(e) => match self.cand(e) {
                 Some(c) => self.block(c, "thrown"),
-                None if birth(e).is_some() => self.birth_site(e, "thrown", String::new()),
+                None if birth(e).is_some() => {
+                    self.birth_site(e, "thrown", String::new(), "-".to_string(), None)
+                }
                 None => self.expr(e, None),
             },
             Stmt::Expr(e) if birth(e).is_some() => {
-                self.birth_site(e, "expression-statement", String::new())
+                self.birth_site(e, "expression-statement", String::new(), "-".to_string(), None)
             }
-            Stmt::Expr(e) => self.expr(e, None),
+            Stmt::Expr(e) => self.statement_call(e, "drop"),
             Stmt::If {
                 condition,
                 then_branch,
@@ -679,6 +845,14 @@ impl Census<'_> {
         }
     }
 
+    /// A statement's own expression, which uses the result of the call it
+    /// is (if it is one) as `used`.
+    fn statement_call(&mut self, e: &Expr, used: &'static str) {
+        self.pending_use = Some(used);
+        self.expr(e, None);
+        self.pending_use = None;
+    }
+
     fn next_ordinal(&mut self) -> u32 {
         self.ordinal += 1;
         self.ordinal
@@ -708,9 +882,12 @@ impl Census<'_> {
                 slots,
                 keys,
                 new: false,
+                result_of: None,
             },
         );
+        let saved = self.outer.replace(format!("@cand:{id}"));
         self.children(e);
+        self.outer = saved;
     }
 
     /// The parts of a birth: its arguments, fields or elements (a nested
@@ -733,14 +910,26 @@ impl Census<'_> {
         }
     }
 
-    /// A birth that is not a candidate, at `position`.
-    fn birth_site(&mut self, e: &Expr, position: &str, detail: String) {
+    /// A birth that is not a candidate, at `position`, received by `side`;
+    /// `parent`: the expression holding it, when that is a birth.
+    fn birth_site(
+        &mut self,
+        e: &Expr,
+        position: &str,
+        detail: String,
+        side: String,
+        parent: Option<&Expr>,
+    ) {
         let Some((kind, class)) = birth(e) else {
             return;
         };
         let offset = match e {
             Expr::New { byte_offset, .. } if kind == Kind::New => *byte_offset,
             _ => self.next_ordinal(),
+        };
+        let outer = match parent {
+            Some(p) if birth(p).is_some() => self.outer.clone().unwrap_or_else(|| "-".into()),
+            _ => "-".to_string(),
         };
         self.rows.push((
             kind,
@@ -749,12 +938,16 @@ impl Census<'_> {
             None,
             format!("none:{position}"),
             detail,
+            side,
+            outer,
         ));
+        let saved = self.outer.replace(format!("@row:{}", self.rows.len() - 1));
         self.children(e);
+        self.outer = saved;
     }
 
     /// A candidate or a birth as argument `i` whose fate is `fate`.
-    fn argument(&mut self, a: &Expr, fate: Option<ParamFate>, callee: &str) {
+    fn argument(&mut self, a: &Expr, fate: Option<ParamFate>, callee: &str, side: String) {
         if let Some(c) = self.cand(a) {
             match fate {
                 Some(f) if f.proven_dropped() => {}
@@ -766,7 +959,7 @@ impl Census<'_> {
             }
         } else if birth(a).is_some() {
             let detail = fate.map_or(callee.to_string(), |f| format!("{callee}:{}", fate_word(f)));
-            self.birth_site(a, "argument", detail);
+            self.birth_site(a, "argument", detail, side, None);
         } else {
             self.expr(a, None);
         }
@@ -798,9 +991,33 @@ impl Census<'_> {
             }
             _ if birth(e).is_some() => match parent.map(kind) {
                 Some(k) if k.contains("Call") || k.starts_with("Native") => {
-                    self.birth_site(e, "argument", format!("runtime/builtin:{k}"))
+                    let side = sides::node_side(self.m, parent.expect("parent"), e);
+                    self.birth_site(e, "argument", format!("runtime/builtin:{k}"), side, parent)
                 }
-                _ => self.birth_site(e, &position(parent), String::new()),
+                _ => {
+                    let side = match parent {
+                        Some(Expr::New {
+                            class_name, args, ..
+                        }) => {
+                            let i = args.iter().position(|a| std::ptr::eq(a, e)).unwrap_or(0);
+                            sides::construct_side(self.m, class_name, i)
+                        }
+                        Some(Expr::Object(_) | Expr::ObjectSpread { .. }) => {
+                            "literal-field".to_string()
+                        }
+                        Some(
+                            Expr::Array(..)
+                            | Expr::ArraySpread(_)
+                            | Expr::PropertySet { .. }
+                            | Expr::IndexSet { .. }
+                            | Expr::PropertyGet { .. }
+                            | Expr::IndexGet { .. },
+                        )
+                        | None => "-".to_string(),
+                        Some(p) => sides::node_side(self.m, p, e),
+                    };
+                    self.birth_site(e, &position(parent), String::new(), side, parent)
+                }
             },
             Expr::PropertyGet {
                 object, property, ..
@@ -844,9 +1061,13 @@ impl Census<'_> {
                     Expr::PropertyGet { object, .. } => {
                         match self.cand(object) {
                             Some(c) => self.block(c, "call-kept:method-receiver"),
-                            None if birth(object).is_some() => {
-                                self.birth_site(object, "method-receiver", String::new())
-                            }
+                            None if birth(object).is_some() => self.birth_site(
+                                object,
+                                "method-receiver",
+                                String::new(),
+                                "-".to_string(),
+                                None,
+                            ),
                             None => self.expr(object, Some(callee)),
                         }
                         (None, "method")
@@ -856,9 +1077,31 @@ impl Census<'_> {
                         (None, "unknown target")
                     }
                 };
+                if let Expr::FuncRef(f) = callee.as_ref() {
+                    let used = match self.pending_use.take().filter(|_| parent.is_none()) {
+                        Some("result") => None,
+                        Some(u) => Some(u.to_string()),
+                        None => Some(match parent {
+                            None => "kept:statement-other".to_string(),
+                            Some(p) if kind(p).contains("Call") => "kept:argument".to_string(),
+                            Some(_) => format!("kept:{}", position(parent)),
+                        }),
+                    };
+                    if let (Some(u), Expr::Call {
+                        byte_offset,
+                        byte_end,
+                        ..
+                    }) = (used, e)
+                    {
+                        self.m.record_use(*f, (*byte_offset, *byte_end), u);
+                    }
+                }
+                self.pending_use = None;
+                let this_fn = self.body.map(|b| b.func);
                 for (i, a) in args.iter().enumerate() {
                     let fate = fn_id.map(|f| self.m.fates.call_arg(&[f], i));
-                    self.argument(a, fate, what);
+                    let side = sides::call_side(self.m, this_fn, callee, i);
+                    self.argument(a, fate, what, side);
                 }
             }
             Expr::Compare { op, left, right } => {
@@ -921,6 +1164,9 @@ impl Census<'_> {
         }
     }
 }
+
+#[path = "life_census_sides.rs"]
+mod sides;
 
 #[cfg(test)]
 #[path = "life_census_tests.rs"]

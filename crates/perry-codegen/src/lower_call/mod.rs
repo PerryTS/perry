@@ -75,7 +75,7 @@ mod func_ref;
 pub(crate) mod index_split;
 #[cfg(test)]
 mod pipeline_call_tests;
-mod proven_call;
+pub(crate) mod proven_call;
 #[cfg(test)]
 mod proven_call_tests;
 /// #8770: an under-applied same-module direct call must pad the missing
