@@ -885,10 +885,24 @@ impl WasmModuleEmitter {
             }
         }
 
+        // Promote module-level Let bindings to WASM globals so cross-function
+        // references work and so different modules' identical LocalIds don't collide.
+        // This also precedes the async JS generation, whose bodies reach a module-level
+        // `let` through the exported global this map names.
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            collect_module_let_ids(
+                &module.init,
+                mod_idx,
+                &mut self.module_let_globals,
+                &mut self.num_globals,
+            );
+        }
+
         // Async function JS generation (Phase 2): now that per-module func_maps are complete,
         // generate the JS code for async functions with correct FuncRef resolution.
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
             self.func_map = self.module_func_maps[mod_idx].clone();
+            self.current_mod_idx = mod_idx;
             for func in &module.functions {
                 if func.is_async {
                     let js_code = self.emit_js_async_function(func);
@@ -902,17 +916,6 @@ impl WasmModuleEmitter {
         // reads the counter.
         let start_idx = user_func_idx;
         let start_type = t_void;
-
-        // Promote module-level Let bindings to WASM globals so cross-function
-        // references work and so different modules' identical LocalIds don't collide.
-        for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            collect_module_let_ids(
-                &module.init,
-                mod_idx,
-                &mut self.module_let_globals,
-                &mut self.num_globals,
-            );
-        }
 
         // Issue #1071: build cross-module imported-variable → WASM global map.
         // The HIR lowers `import { FOO } from './m'` value reads (where FOO is

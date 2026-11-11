@@ -1,2 +1,3 @@
 sync done
-awaited 42
+awaited 42, counter 2
+later, counter 2
