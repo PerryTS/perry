@@ -32,7 +32,7 @@ fn a_read_and_a_store_export_their_int32_key_interval() {
     // A store has a key sign too (`element_keys` covers reads only).
     let src = "const xs: number[] = [0, 0, 0, 0];\n\
                export function put(i: number, v: number): void { xs[i & 3] = v; }\n\
-               put(1, 2); console.log(xs[1]);";
+               put(1, 2); put(6, 3); console.log(xs[1]);";
     assert_eq!(
         sign_at(src, "xs[i & 3]", FactsConfig::default()),
         Some((0, 3))
@@ -79,10 +79,10 @@ fn a_key_that_is_no_int32_has_no_sign() {
          console.log(f(3));"
     );
     assert_eq!(sign_at(&src, "K[i >>> 0]", FactsConfig::default()), None);
-    // An unknown Number.
+    // A Number with no interval inside int32.
     let src = format!(
         "{TABLE}export function f(i: number): number {{ return K[i] ?? 0; }}\n\
-         console.log(f(3));"
+         console.log(f(Number(process.argv[2])));"
     );
     assert_eq!(sign_at(&src, "K[i]", FactsConfig::default()), None);
 }
@@ -91,7 +91,7 @@ fn a_key_that_is_no_int32_has_no_sign() {
 fn a_compound_store_has_one_hull_with_its_read() {
     let src = "const xs: number[] = [0, 0, 0, 0];\n\
                export function bump(i: number): void { xs[i & 3] += 1; }\n\
-               bump(1); console.log(xs[1]);";
+               bump(1); bump(6); console.log(xs[1]);";
     assert_eq!(
         sign_at(src, "xs[i & 3]", FactsConfig::default()),
         Some((0, 3))
