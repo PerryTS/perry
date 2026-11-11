@@ -142,57 +142,81 @@ class Frac {
 const f = new Frac();
 f.v = (h.count & 3) + 0.5;
 console.log("frac", f.v);
+// Each control's field is int32 with int demand (`bump`, `^ 1`), so only the
+// reason the probe prints keeps it off the lane.
 class Escaped {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const es = new Escaped();
-es.v = 7;
+es.bump(7);
 (globalThis as any).heldInstance = es;
-console.log("global", (globalThis as any).heldInstance.v, String(es));
+console.log("global", (globalThis as any).heldInstance.v ^ 1, String(es));
 class Keyed {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const kd = new Keyed();
+kd.bump(2);
 const key = process.argv.length > 100 ? "w" : "v";
 (kd as any)[key] = 9;
-console.log("dynkey", kd.v);
+console.log("dynkey", kd.v ^ 1);
 class Listed {
   v = 0;
   u = 1;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const ls = new Listed();
-ls.v = 5;
-console.log("keys", Object.keys(ls).join(","), ls.v);
+ls.bump(5);
+console.log("keys", Object.keys(ls).join(","), ls.v ^ 1);
 class Printed {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const pr = new Printed();
-pr.v = 6;
-console.log("json", JSON.stringify(pr), pr.v);
+pr.bump(6);
+console.log("json", JSON.stringify(pr), pr.v ^ 1);
 class Spread {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const sp = new Spread();
-sp.v = 8;
+sp.bump(8);
 const copy = { ...sp };
-console.log("spread", copy.v, sp.v);
+console.log("spread", copy.v, sp.v ^ 1);
 class Proto {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 const pt = new Proto();
-pt.v = 3;
+pt.bump(3);
 const child = Object.create(pt);
-console.log("proto", child.v, pt.v);
+console.log("proto", child.v, pt.v ^ 1);
 class Base {
   v = 0;
+  bump(k: number): void {
+    this.v = (this.v + k) & 1023;
+  }
 }
 class Derived extends Base {
   u = 2;
 }
 const bd = new Derived();
-bd.v = 4;
+bd.bump(4);
 const bb = new Base();
-bb.v = 5;
-console.log("heritage", bd.v, bd.u, bb.v);
+bb.bump(5);
+console.log("heritage", bd.v ^ 1, bd.u, bb.v ^ 1);
 churn(1000);
 console.log("after", h.a, h.b, last.a, last.b, ed.lo);
