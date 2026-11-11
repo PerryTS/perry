@@ -211,6 +211,10 @@ pub struct FactsArrRep {
     pub dense: bool,
     pub fixed: bool,
     pub im: bool,
+    /// wpfacts `ArrRep::at_rest` (I32 at rest, PR B): every Array the value
+    /// may hold stores its elements as I32 words (`expr::rest_elems`), so a
+    /// rep-keyed load decodes the word through that accessor (B2).
+    pub at_rest: bool,
 }
 
 /// wpfacts `ElemRep`.
@@ -243,6 +247,7 @@ impl FactsArrRep {
             dense: a.dense && b.dense,
             fixed: a.fixed && b.fixed,
             im: a.im && b.im,
+            at_rest: a.at_rest && b.at_rest,
         }
     }
 }

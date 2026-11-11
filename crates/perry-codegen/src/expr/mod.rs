@@ -422,6 +422,10 @@ pub(crate) struct FnCtx<'a> {
     /// While a b1 call lowers its body's read here: that read's offset (the
     /// body module's) and its at-rest floor (`expr::rest_elems`).
     pub rest_b1: Option<(u32, Option<u32>)>,
+    /// I32 at rest B2: (counter, at-rest local, scope) pairs a counter
+    /// entry check proved in the floor in the loop copy being lowered
+    /// (`stmt::loops::lower_counter_versions`, `expr::rest_elems`).
+    pub rest_counter: Vec<(u32, u32, u32)>,
     pub program_has_worker: bool,
     pub program_has_tla: bool,
     pub program_has_thread_agents: bool,

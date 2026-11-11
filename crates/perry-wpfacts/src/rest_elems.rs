@@ -428,6 +428,53 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
 
 /// Fill `ModuleBindings::rest_reads`, `rest_writes` and `rest_births`
 /// (module docs).
+/// I32 at rest B2: `derive` gives each field its representation before the
+/// at-rest admission runs (the admission reads element reps the demand
+/// settles), so an `Arr` field rep learns its storage kind here. It is at
+/// rest iff every Array token the field's nodes hold is of an at-rest
+/// template, as `tok_arr_rep` joins it for a binding (co-occurrence makes a
+/// node all-or-none). Codegen reads it as `FactsArrRep::at_rest`: the
+/// rep-keyed loads and the held bases of a field decode the I32 word.
+pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFacts]) {
+    // `PERRY_REST_TIERS=0` (codegen `expr::rest_elems::tiers_enabled`) keeps
+    // PR B's field reps.
+    let off = matches!(
+        std::env::var("PERRY_REST_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    );
+    if m.rest_tmpls.is_empty() || off {
+        return;
+    }
+    for tf in templates.iter_mut() {
+        let ts = m.tmpl_toks(tf.id);
+        for f in tf.fields.iter_mut() {
+            let crate::bindings::Rep::Arr(r) = &mut f.rep else {
+                continue;
+            };
+            let atoms = if f.private {
+                &m.private_atoms
+            } else {
+                &m.atom_index
+            };
+            let Some(&a) = atoms.get(&f.key) else {
+                continue;
+            };
+            let (mut any, mut all) = (false, true);
+            for n in ts.iter().filter_map(|t| m.fields.get(&(*t, a))) {
+                for t in m.nodes[*n as usize].pts.to_sorted() {
+                    match m.toks[t as usize] {
+                        crate::model::TokKind::Obj(tm, _) if m.rest_tmpls.contains(&tm) => {
+                            any = true
+                        }
+                        _ => all = false,
+                    }
+                }
+            }
+            r.at_rest = any && all;
+        }
+    }
+}
+
 pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     let m = &g.m;
     if m.rest_tmpls.is_empty() {
