@@ -384,6 +384,17 @@ fn key_sign_switch_is_a_cache_input() {
     );
 }
 
+/// Wide keys: the switch changes the exported facts and every element site
+/// that converts a wide key without the normalizer, so `=0` must never reuse
+/// an `=1` object.
+#[test]
+fn wide_keys_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_WIDE_KEYS"),
+        "PERRY_FACTS_WIDE_KEYS must key the compile caches"
+    );
+}
+
 /// Typed `set`: the signed-index switch decides which methods get a typed
 /// body in place of their index clones, so `=0` must never reuse an `=1`
 /// object.

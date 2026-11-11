@@ -458,6 +458,11 @@ pub struct ElisionFacts {
     /// interval (wpfacts `ModuleBindings::key_signs`;
     /// `expr::index_key::key_fact`).
     pub key_signs: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// Element sites (reads and stores, by `element_offset`) whose key is a
+    /// non-negative integer Number at every copy and may lie past the int32
+    /// range, with its interval (wpfacts `ModuleBindings::wide_keys`;
+    /// `expr::index_key::split_key_fact`).
+    pub wide_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest

@@ -533,6 +533,10 @@ pub struct ModuleBindings {
     /// range at every copy, with the hull of its interval; sorted
     /// (`element_keys::collect_signs`).
     pub key_signs: Vec<(u32, (i64, i64))>,
+    /// Element sites by `element_offset` whose key is a non-negative
+    /// integer Number at every copy and may lie past the int32 range, with
+    /// the hull of its interval; sorted (`element_keys::collect_wide`).
+    pub wide_keys: Vec<(u32, (i64, i64))>,
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call

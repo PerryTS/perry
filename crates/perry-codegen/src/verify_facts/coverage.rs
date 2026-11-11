@@ -53,6 +53,7 @@ pub(crate) enum Fact {
     ZeroSign,
     BirthImage,
     KeySign,
+    WideKey,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -104,6 +105,7 @@ impl Fact {
             Self::ZeroSign => "zero sign",
             Self::BirthImage => "birth image",
             Self::KeySign => "key sign",
+            Self::WideKey => "wide key",
         }
     }
 }

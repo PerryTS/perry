@@ -581,7 +581,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                 false,
                 repair_slot.as_deref(),
                 proven,
-                super::index_key::key_fact(ctx, *element_offset),
+                super::index_key::split_key_fact(ctx, *element_offset),
             )
             .map(Some)
         });
@@ -1462,7 +1462,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 true,
                                 repair_slot.as_deref(),
                                 proven,
-                                super::index_key::key_fact(ctx, *element_offset),
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
@@ -1520,7 +1520,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 repair_slot.as_deref(),
                                 proven,
-                                super::index_key::key_fact(ctx, *element_offset),
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
