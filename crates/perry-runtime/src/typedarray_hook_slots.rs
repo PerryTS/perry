@@ -546,8 +546,20 @@ pub(crate) fn buffer_prototype_members(proto: *mut crate::object::ObjectHeader) 
         install(proto);
     }
 }
+/// The `[[Get]]` of a `Buffer.prototype` member on a Buffer once the program
+/// wrote that prototype (`buffer_dispatch::buffer_written_member`): only a
+/// program that builds `Buffer.prototype` can write it, and that program
+/// installs this group.
+static BUFFER_WRITTEN_MEMBER: Hook<fn(usize, &str) -> Option<crate::value::JSValue>> =
+    Hook::empty();
+pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<crate::value::JSValue> {
+    BUFFER_WRITTEN_MEMBER
+        .get()
+        .and_then(|lookup| lookup(addr, name))
+}
 pub(crate) fn install() {
     crate::perry_install_once!({
+        BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_dispatch::buffer_written_member_lookup);
         BUFFER_PROTOTYPE_MEMBERS
             .set(crate::object::native_module::callable_exports::install_buffer_prototype_members);
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);

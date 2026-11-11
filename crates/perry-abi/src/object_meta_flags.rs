@@ -46,8 +46,8 @@ pub const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 /// family.
 pub const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
 /// Shift of the sealed intrinsic's family (6 bits): a `BuiltinProto`
-/// (0..16), a builtin namespace (16..31, `builtin_namespace`), the realm
-/// global (31), or a runtime prototype (32, `builtin_proto::RUNTIME_FAMILY`).
+/// (0..17), a builtin namespace (17..32, `builtin_namespace`), the realm
+/// global (32), or a runtime prototype (33, `builtin_proto::RUNTIME_FAMILY`).
 pub const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 /// Mask of the sealed intrinsic's family after the shift.
 pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;

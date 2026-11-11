@@ -84,6 +84,16 @@ pub(crate) fn buffer_constructor_value() -> f64 {
             proto.with_mut_ptr(|proto: *mut ObjectHeader| {
                 crate::typedarray_hook_slots::buffer_prototype_members(proto)
             });
+            // Complete: seal it as family `Buffer` and publish it, so the
+            // program's first write of it sets its shadow bit, which the name
+            // dispatch and the named Get on a Buffer read
+            // (`buffer_dispatch::buffer_written_member`).
+            proto.with_mut_ptr(|proto: *mut ObjectHeader| {
+                crate::object::builtin_proto::seal_built_intrinsic(
+                    crate::object::builtin_proto::BuiltinProto::Buffer,
+                    proto,
+                )
+            });
             let proto_value = proto.with_mut_ptr(|proto: *mut ObjectHeader| {
                 crate::value::js_nanbox_pointer(proto as i64)
             });

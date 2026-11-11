@@ -219,7 +219,7 @@ pub const AGENT_PTR_SLOTS: usize = 4 + INTRINSIC_FAMILIES;
 /// sealed every slot names `PERRY_PRISTINE_PROTO`, whose word is 0.
 pub const AGENT_PTR_INTRINSIC_PROTO: usize = 4;
 /// Number of builtin prototype families.
-pub const BUILTIN_PROTO_FAMILIES: usize = 16;
+pub const BUILTIN_PROTO_FAMILIES: usize = 17;
 /// The builtin namespace objects whose direct member calls lowering binds to
 /// intrinsics (`Math.max(..)`, `Object.keys(..)`, `console.log(..)`). Namespace
 /// `i` is intrinsic family `BUILTIN_PROTO_FAMILIES + i`: its agent slot

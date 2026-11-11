@@ -20,6 +20,7 @@ fn shared_intrinsic_families_keep_their_abi_slots() {
         (BuiltinProto::Error, 13),
         (BuiltinProto::WeakMap, 14),
         (BuiltinProto::WeakSet, 15),
+        (BuiltinProto::Buffer, 16),
     ];
     for (family, byte) in expected {
         assert_eq!(family as u8, byte);
@@ -202,8 +203,13 @@ fn the_lock_set_is_the_builtin_prototype_families() {
         assert!(locked_family(family), "{family}");
         assert!(!add_locked(family), "{family}");
     }
+    // DEC 250 locks the ECMA intrinsics; Buffer.prototype stays patchable.
     for (family, _) in BuiltinProto::ALL {
-        assert!(locked_family(family as usize), "{family:?}");
+        assert_eq!(
+            locked_family(family as usize),
+            family.realm_intrinsic(),
+            "{family:?}"
+        );
     }
     for name in ["Math", "JSON", "Date", "Object", "Array", "Reflect"] {
         let family = perry_abi::builtin_namespace_family(name).unwrap();

@@ -291,7 +291,9 @@ const _: () = assert!(
 pub(crate) fn realm_seals_constructor_prototype(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) -> bool {
-    BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
+    BuiltinProto::ALL
+        .iter()
+        .any(|(family, ctor)| family.realm_intrinsic() && *ctor == declaration.name)
 }
 
 /// Seal the built-in iterator prototypes the moment `iterator_prototypes`
@@ -355,7 +357,9 @@ pub(crate) fn add_locked(family: usize) -> bool {
 #[inline(always)]
 pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
     if family < super::builtin_namespace::FIRST {
-        BuiltinProto::from_index(family).map(LockHolder::Proto)
+        BuiltinProto::from_index(family)
+            .filter(|f| f.realm_intrinsic())
+            .map(LockHolder::Proto)
     } else if family == ITERATOR_FAMILY {
         Some(LockHolder::Iterator)
     } else if family == ARRAY_ITERATOR_FAMILY {
@@ -469,7 +473,9 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
-        for (family, name) in BuiltinProto::ALL {
+        // A host family (`Buffer`) is sealed when its prototype is built
+        // (`seal_built_intrinsic`); reading it here would build it.
+        for (family, name) in BuiltinProto::REALM {
             let proto = intrinsic_prototype_addr(family, global, name);
             if proto == 0 {
                 continue;
