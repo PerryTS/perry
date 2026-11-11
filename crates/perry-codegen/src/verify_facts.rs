@@ -423,6 +423,7 @@ pub(crate) fn check(
             "perry_wpfacts_check_call" => "perry_verify_facts_call",
             "perry_wpfacts_check_call_miss" => "perry_verify_facts_call_miss",
             "perry_wpfacts_check_miss" => "perry_verify_facts_miss",
+            "perry_wpfacts_check_record_identity" => "perry_verify_facts_record_identity",
             _ => unreachable!("verification ABI"),
         }
     } else {

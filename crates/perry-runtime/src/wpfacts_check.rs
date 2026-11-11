@@ -573,6 +573,7 @@ pub extern "C" fn perry_verify_facts_tick() {
 }
 
 mod report;
+pub(crate) mod records;
 use report::Witness;
 
 fn key_matches(bits: u64, expected: &[u8]) -> bool {

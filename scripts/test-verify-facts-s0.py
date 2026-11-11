@@ -164,6 +164,27 @@ def main():
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
 
+    # Value records (DESIGN-p4l4 §10.3, VR-2): check mode keeps records on and
+    # claims every instance of an admitted template at birth; the facts say
+    # its identity is never compared, so a compiled identity compare that
+    # sees a claimed operand reports "value record identity".
+    for name, wrong_claim in [
+        ("vr-ident-negative", "vrident"),
+        ("vr-switch-negative", "vrswitch"),
+        ("vr-inline-negative", "vrinline"),
+    ]:
+        source = fixtures / (name + ".ts")
+        for claim in ["", wrong_claim]:
+            arm = name + ("-false" if claim else "-correct")
+            exe, e = compile_(source, arm, PERRY_FACTS_SABOTAGE=claim, PERRY_FACTS_VALUE_RECORDS="1")
+            observed = observe(exe, e)
+            if claim:
+                value = report(observed)
+                assert value["predicate"] == "value record identity", value
+            else:
+                assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+            save(arm, status=observed.returncode)
+
     # P3 B1 (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): this arm sabotages the
     # RUNTIME, not the facts. `js_math_round` built with
     # PERRY_FACTS_SABOTAGE=canonnum returns an INT32-boxed word, and the

@@ -1382,6 +1382,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                 let l = operand_value(ctx, &left_literal);
                 let r = operand_value(ctx, &right_literal);
+                // Value records' check mode (DESIGN-p4l4 L4).
+                crate::expr::record_witness::compare(ctx, op, left, right, &l, &r);
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints
                 // always returns false. Route through js_bigint_cmp which
