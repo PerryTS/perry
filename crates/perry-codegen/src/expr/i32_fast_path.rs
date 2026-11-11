@@ -1372,6 +1372,10 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         let value = super::rest_elems::lower_read(ctx, e, floor, want)?;
         return Ok(i32_lowered(value));
     }
+    // I32 at rest (PR C): an I32 lane's read is the i32 in the slot.
+    if let Some(value) = super::rest_fields::try_lower_i32(ctx, e)? {
+        return Ok(i32_lowered(value));
+    }
     if let Some(lowered) = lower_packed_i32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
@@ -1786,6 +1790,10 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             vec!["slot_kind=raw_f64_or_coerced_jsvalue".to_string()],
         );
         return Ok(lowered);
+    }
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, e)? {
+        return Ok(f64_lowered(value));
     }
     if let Some(value) =
         crate::expr::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, e)?

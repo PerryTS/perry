@@ -20,7 +20,7 @@ pub(crate) mod effects_for_tests {
     }
 }
 pub use constructors::{construct_named, new_builtin_ns};
-mod members;
+pub(crate) mod members;
 pub(crate) use members::realm_parent_constructor;
 mod native_protocol;
 mod realm_declared;

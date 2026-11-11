@@ -26,9 +26,11 @@ pub(crate) enum Method {
     Some,
     Every,
     Find,
+    Join,
+    Includes,
 }
 
-const METHODS: [Method; 11] = [
+const METHODS: [Method; 13] = [
     Method::Map,
     Method::Filter,
     Method::Take,
@@ -40,6 +42,8 @@ const METHODS: [Method; 11] = [
     Method::Some,
     Method::Every,
     Method::Find,
+    Method::Join,
+    Method::Includes,
 ];
 
 macro_rules! method_thunks {
@@ -56,7 +60,7 @@ macro_rules! method_thunks {
                 } else {
                     std::slice::from_raw_parts(args, len)
                 };
-                run(Method::$method, this.as_f64(), args)
+                run_iterator_method(Method::$method, this.as_f64(), args)
             }
         )*
 
@@ -90,6 +94,8 @@ method_thunks!(
     Some => some_thunk,
     Every => every_thunk,
     Find => find_thunk,
+    Join => join_thunk,
+    Includes => includes_thunk,
 );
 
 impl Method {
@@ -110,6 +116,8 @@ impl Method {
             Method::Some => "some",
             Method::Every => "every",
             Method::Find => "find",
+            Method::Join => "join",
+            Method::Includes => "includes",
         }
     }
 
@@ -162,7 +170,7 @@ extern "C" fn helper_return_thunk(_closure: *const ClosureHeader, this: JsThis) 
 }
 
 /// `Iterator.prototype.<m>` called with `this` and `args`.
-unsafe fn run(m: Method, this: f64, args: &[f64]) -> f64 {
+unsafe fn run_iterator_method(m: Method, this: f64, args: &[f64]) -> f64 {
     if !is_object(this) {
         type_error(&format!(
             "Iterator.prototype.{} called on non-object",
@@ -175,6 +183,11 @@ unsafe fn run(m: Method, this: f64, args: &[f64]) -> f64 {
     let initial = args.get(1).map(|v| scope.root_nanbox_f64(*v));
     match m {
         Method::ToArray => drain_to_array(get_iterator_direct(this.get_nanbox_f64())),
+        Method::Join => join(this.get_nanbox_f64(), arg0.get_nanbox_f64()),
+        Method::Includes => {
+            let skipped = args.get(1).copied().unwrap_or_else(undefined);
+            includes(this.get_nanbox_f64(), arg0.get_nanbox_f64(), skipped)
+        }
         Method::Take | Method::Drop => {
             let limit = to_limit(this.get_nanbox_f64(), arg0.get_nanbox_f64());
             let op = if m == Method::Take { OP_TAKE } else { OP_DROP };
@@ -195,6 +208,136 @@ unsafe fn run(m: Method, this: f64, args: &[f64]) -> f64 {
             let iterated = scope.root_nanbox_f64(get_iterator_direct(this.get_nanbox_f64()));
             let initial = initial.map(|v| v.get_nanbox_f64());
             terminal(m, &iterated, arg0.get_nanbox_f64(), initial)
+        }
+    }
+}
+
+/// `Iterator.prototype.join`: stringify each yielded value, omitting nullish
+/// values while retaining their separators, and close the iterator on throws.
+unsafe fn join(this: f64, separator: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let separator = scope.root_nanbox_f64(separator);
+    let separator = if JSValue::from_bits(separator.get_nanbox_f64().to_bits()).is_undefined() {
+        crate::js_nanbox_string(crate::string::js_string_from_bytes(b",".as_ptr(), 1) as i64)
+    } else {
+        match crate::exception::catch_thrown(|| {
+            let ptr = crate::value::js_jsvalue_to_string_coerce(separator.get_nanbox_f64());
+            crate::js_nanbox_string(ptr as i64)
+        }) {
+            Ok(value) => value,
+            Err(error) => {
+                let error = error.root(&scope);
+                close_this_quietly(this.get_nanbox_f64());
+                crate::exception::rethrow_caught(error.caught());
+            }
+        }
+    };
+    let separator = scope.root_nanbox_f64(separator);
+    let iterated = scope.root_nanbox_f64(get_iterator_direct(this.get_nanbox_f64()));
+    let mut result = Vec::new();
+    let mut separator_bytes = Vec::new();
+    crate::string::with_string_value_bytes(separator.get_nanbox_f64(), |bytes| {
+        separator_bytes.extend_from_slice(bytes)
+    });
+    let first = Cell::new(true);
+    let close = Cell::new(false);
+    let completion = crate::exception::catch_thrown(|| loop {
+        close.set(false);
+        let Some(value) = helper_step(iterated.get_nanbox_f64()) else {
+            return crate::js_nanbox_string(crate::string::js_string_from_bytes(
+                result.as_ptr(),
+                result.len() as u32,
+            ) as i64);
+        };
+        close.set(true);
+        let step_scope = RuntimeHandleScope::new();
+        let value = step_scope.root_nanbox_f64(value);
+        if !first.replace(false) {
+            result.extend_from_slice(&separator_bytes);
+        }
+        let jsval = JSValue::from_bits(value.get_nanbox_f64().to_bits());
+        if !jsval.is_null() && !jsval.is_undefined() {
+            let string = crate::value::js_jsvalue_to_string_coerce(value.get_nanbox_f64());
+            let string = step_scope.root_nanbox_f64(crate::js_nanbox_string(string as i64));
+            crate::string::with_string_value_bytes(string.get_nanbox_f64(), |bytes| {
+                result.extend_from_slice(bytes)
+            });
+        }
+    });
+    match completion {
+        Ok(value) => value,
+        Err(error) => {
+            let error = error.root(&scope);
+            if close.get() {
+                close_quietly(iterated.get_nanbox_f64());
+            }
+            crate::exception::rethrow_caught(error.caught())
+        }
+    }
+}
+
+/// `Iterator.prototype.includes` uses SameValueZero and consumes the iterator
+/// even when a positive skip count exceeds its length.
+unsafe fn includes(this: f64, search: f64, skipped_elements: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let search = scope.root_nanbox_f64(search);
+    let skipped_elements = scope.root_nanbox_f64(skipped_elements);
+    let raw = skipped_elements.get_nanbox_f64();
+    let number = JSValue::from_bits(raw.to_bits());
+    let to_skip = if number.is_undefined() {
+        0.0
+    } else if number.is_number() || number.is_int32() {
+        let value = if number.is_int32() {
+            f64::from(number.as_int32())
+        } else {
+            raw
+        };
+        if !(value.is_infinite() || (value.is_finite() && value.trunc() == value)) {
+            close_this_quietly(this.get_nanbox_f64());
+            type_error("skippedElements must be an integer or infinity");
+        }
+        if value < 0.0 || value.is_finite() && value > 9_007_199_254_740_991.0 {
+            close_this_quietly(this.get_nanbox_f64());
+            range_error("skippedElements is out of range");
+        }
+        value
+    } else {
+        close_this_quietly(this.get_nanbox_f64());
+        type_error("skippedElements must be an integer or infinity");
+    };
+    let iterated = scope.root_nanbox_f64(get_iterator_direct(this.get_nanbox_f64()));
+    let mut skipped = 0.0;
+    let close = Cell::new(false);
+    let completion = crate::exception::catch_thrown(|| loop {
+        close.set(false);
+        let Some(value) = helper_step(iterated.get_nanbox_f64()) else {
+            return f64::from_bits(TAG_FALSE);
+        };
+        close.set(true);
+        let step_scope = RuntimeHandleScope::new();
+        let value = step_scope.root_nanbox_f64(value);
+        if skipped < to_skip {
+            skipped += 1.0;
+            continue;
+        }
+        if crate::value::js_jsvalue_same_value_zero(value.get_nanbox_f64(), search.get_nanbox_f64())
+            != 0
+        {
+            close.set(false);
+            close_normal(iterated.get_nanbox_f64());
+            return f64::from_bits(TAG_TRUE);
+        }
+    });
+    match completion {
+        Ok(value) => value,
+        Err(error) => {
+            let error = error.root(&scope);
+            if close.get() {
+                close_quietly(iterated.get_nanbox_f64());
+            }
+            crate::exception::rethrow_caught(error.caught())
         }
     }
 }
@@ -345,7 +488,7 @@ unsafe fn call_resolved(
     let method = scope.root_nanbox_f64(get(receiver.get_nanbox_f64(), name));
     let args = RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
     if m.is_builtin(method.get_nanbox_f64()) {
-        return Some(run(m, receiver.get_nanbox_f64(), &args));
+        return Some(run_iterator_method(m, receiver.get_nanbox_f64(), &args));
     }
     if claim_overrides && crate::object::value_is_callable(method.get_nanbox_f64()) {
         return Some(call(

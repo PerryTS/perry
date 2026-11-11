@@ -216,7 +216,7 @@ pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
 pub mod method_site;
-mod slot_store;
+pub(crate) mod slot_store;
 pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
 mod namespace_create;
 pub(crate) mod native_call_method;
