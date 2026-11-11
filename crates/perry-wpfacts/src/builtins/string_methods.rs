@@ -303,44 +303,62 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             ret_prim(m, call, prim::BOOL);
             return true;
         }
-        // 22.1.3.12: `that` is ToString'd; locales and options are read by
-        // Intl (any key): they keep the generic protocol.
-        "localeCompare" | "toLocaleLowerCase" | "toLocaleUpperCase" => {
-            let skip = if name == "localeCompare" {
-                if let Some(t) = arg0 {
-                    to_prim(m, t, "localeCompare operand");
-                }
-                1
-            } else {
-                0
-            };
-            let r = m.reason(&format!(
-                "argument of a primitive method: {name} locales/options"
-            ));
-            for &a in c.args.iter().skip(skip) {
-                m.cons(
-                    a,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Any,
-                    },
-                );
+        // ECMA-402 19.1.1 localeCompare(that, locales, options): ToString
+        // of `that`, then the Collator's CanonicalizeLocaleList(locales)
+        // and its options (10.1.2); 19.1.2 / .3 toLocaleLowerCase /
+        // toLocaleUpperCase(locales): TransformCase reads the locale list
+        // only.
+        "localeCompare" => {
+            if let Some(t) = arg0 {
+                to_prim(m, t, "localeCompare that ToString");
             }
-            ret_prim(
-                m,
-                call,
-                if name == "localeCompare" {
-                    prim::NUM
-                } else {
-                    prim::STR
-                },
-            );
+            if let Some(&l) = c.args.get(1) {
+                locale_list(m, l);
+            }
+            if let Some(&o) = c.args.get(2).or(c.args.get(1).filter(|_| !c.spread.is_empty())) {
+                collator_options(m, o);
+            }
+            ret_prim(m, call, prim::NUM);
+            return true;
+        }
+        "toLocaleLowerCase" | "toLocaleUpperCase" => {
+            if let Some(l) = arg0 {
+                locale_list(m, l);
+            }
+            ret_prim(m, call, prim::STR);
             return true;
         }
         _ => return false,
     }
     generic_result(m, call);
     true
+}
+
+/// ECMA-402 9.2.1 CanonicalizeLocaleList(locales): a String (or an
+/// Intl.Locale) is the one tag; any other object is read as an array-like:
+/// `length` (ToLength), each element Get, and an element that is no
+/// Intl.Locale is ToString'd.
+fn locale_list(m: &mut Model, l: NodeId) {
+    read_prim(m, l, "length", "CanonicalizeLocaleList length ToLength");
+    let e = m.node_l("locale-list-element");
+    let key = m.elem_key();
+    m.cons(l, Cons::Load { key, dst: e });
+    to_prim(m, e, "CanonicalizeLocaleList element ToString");
+}
+
+/// ECMA-402 10.1.2 InitializeCollator: CoerceOptionsToObject(options),
+/// then GetOption of `usage`, `localeMatcher`, `collation`, `numeric`,
+/// `caseFirst`, `sensitivity`, `ignorePunctuation` in that order: a
+/// string option is ToString'd, a boolean one ToBoolean'd (no code runs
+/// but a getter).
+fn collator_options(m: &mut Model, o: NodeId) {
+    for key in ["usage", "localeMatcher", "collation", "numeric", "caseFirst", "sensitivity", "ignorePunctuation"] {
+        if matches!(key, "numeric" | "ignorePunctuation") {
+            read_only(m, o, key);
+        } else {
+            read_prim(m, o, key, "Collator option ToString");
+        }
+    }
 }
 
 /// The methods of a RegExp object this module describes.
