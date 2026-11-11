@@ -106,12 +106,16 @@ fn header_word(slots: u64, rest: bool) -> String {
     format!("i64 {word}")
 }
 
+/// The calls of `name` in `ir` (its declaration is none).
 fn calls(ir: &str, name: &str) -> usize {
-    ir.matches(&format!("@{name}(")).count()
-        - ir.matches(&format!("declare ptr @{name}(")).count()
-        - ir.matches(&format!("declare i64 @{name}(")).count()
-        - ir.matches(&format!("declare double @{name}(")).count()
+    let needle = format!("@{name}(");
+    ir.lines()
+        .filter(|l| l.contains(&needle) && !l.trim_start().starts_with("declare"))
+        .count()
 }
+
+/// A fill value no other store of the fixtures writes.
+const SEVENS: &str = "export function make(): number[] { return new Array<number>(8).fill(7); }\n";
 
 #[test]
 fn a_small_number_birth_is_inline_with_one_store_per_slot() {
@@ -138,14 +142,27 @@ fn a_small_number_birth_is_inline_with_one_store_per_slot() {
         )),
         "{with}"
     );
-    assert_eq!(
-        with.matches("store double 0.0,").count(),
-        8,
-        "one store per slot\n{with}"
-    );
     assert!(
         !with.contains(&format!("store i64 {},", crate::nanbox::TAG_HOLE)),
         "no slack, no hole store\n{with}"
+    );
+    let with = ir(
+        SEVENS,
+        Fact {
+            len: Some(8),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        with.matches("store double 7.0,").count(),
+        8,
+        "one store per slot\n{with}"
+    );
+    let without = ir(SEVENS, Fact::default());
+    assert_eq!(
+        without.matches("store double 7.0,").count(),
+        0,
+        "the two-step birth stores nothing inline\n{without}"
     );
 }
 
@@ -209,9 +226,15 @@ fn an_at_rest_birth_stores_i32_words_and_reserves_the_facts_capacity() {
         )),
         "{with}"
     );
-    // The I32 word of 0 is INT32_TAG.
+    // The I32 word is `INT32_TAG | zext(i32)`, stored once per slot.
+    let word = with
+        .lines()
+        .find(|l| l.contains("or i64") && l.trim_end().ends_with(", 9222809086901354496"))
+        .and_then(|l| l.split('=').next())
+        .map(|r| r.trim().to_string())
+        .unwrap_or_else(|| panic!("no I32 word\n{with}"));
     assert_eq!(
-        with.matches("store i64 9222809086901354496,").count(),
+        with.matches(&format!("store i64 {word},")).count(),
         8,
         "{with}"
     );
