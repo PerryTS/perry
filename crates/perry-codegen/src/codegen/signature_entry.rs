@@ -314,6 +314,13 @@ pub(crate) fn signed_index_params() -> bool {
     })
 }
 
+/// A signature slot (`rep`, with its interval `range`) is at least as
+/// precise as an index clone's parameter: an I32 whose interval is
+/// non-negative, or, with `signed` (`signed_index_params`), any I32.
+fn index_param_covered(rep: FactsRep, range: Option<(i64, i64)>, signed: bool) -> bool {
+    rep == FactsRep::I32 && (signed || range.is_some_and(|(lo, _)| lo >= 0))
+}
+
 /// The probe `PERRY_SIG_DIAG=1`: one line per method a `typed_calls` site
 /// reaches and the facts give a signature, with the selector's verdict
 /// (`typed=1`, or the tier or shape that refuses it).
@@ -451,9 +458,7 @@ pub(crate) fn select_methods(
                     .iter()
                     .zip(sig.params.iter().zip(sig.ranges.iter()))
                     .all(|(p, (rep, range))| {
-                        !ids.contains(&p.id)
-                            || *rep == FactsRep::I32
-                                && (signed_index || range.is_some_and(|(lo, _)| lo >= 0))
+                        !ids.contains(&p.id) || index_param_covered(*rep, *range, signed_index)
                     })
             });
             let less_precise = if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
@@ -1058,4 +1063,35 @@ pub(crate) fn nonnegative_params(f: &Function, plan: &SpecFnPlan) -> HashSet<u32
         })
         .map(|((p, _), _)| p.id)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An index clone proves its parameters non-negative int32s. A signature
+    /// covers one with an I32 slot: of any sign when the unsigned bound
+    /// absorbs the sign test, else only with a non-negative interval. A
+    /// double or Boxed slot never covers it.
+    #[test]
+    fn a_signed_i32_slot_covers_an_index_clone_parameter() {
+        assert!(index_param_covered(FactsRep::I32, Some((-128, 255)), true));
+        assert!(index_param_covered(FactsRep::I32, Some((-8, 7)), true));
+        assert!(index_param_covered(FactsRep::I32, None, true));
+        assert!(index_param_covered(FactsRep::I32, Some((0, 127)), true));
+        for signed in [true, false] {
+            assert!(!index_param_covered(FactsRep::F64, None, signed));
+            assert!(!index_param_covered(FactsRep::Boxed, None, signed));
+            assert!(index_param_covered(FactsRep::I32, Some((0, 127)), signed));
+        }
+    }
+
+    /// With the rule off (`PERRY_SIG_SIGNED_INDEX=0`, or no unsigned bound)
+    /// the clone stays unless the interval is non-negative: main's rule.
+    #[test]
+    fn without_the_rule_a_negative_interval_keeps_the_index_clone() {
+        assert!(!index_param_covered(FactsRep::I32, Some((-128, 255)), false));
+        assert!(!index_param_covered(FactsRep::I32, Some((-1, 7)), false));
+        assert!(!index_param_covered(FactsRep::I32, None, false));
+    }
 }
