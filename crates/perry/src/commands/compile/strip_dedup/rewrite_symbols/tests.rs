@@ -10,14 +10,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 struct Fixture {
     dir: PathBuf,
     tools: PathBuf,
+    objcopy: PathBuf,
 }
 
 impl Fixture {
     fn new() -> Option<Self> {
         let declared = std::env::var_os("LLVM_TEST_TOOL_DIR").map(PathBuf::from);
         let tools = declared.clone().unwrap_or_default();
-        for tool in ["clang", "llvm-nm", "llvm-readobj", "llvm-objcopy"] {
-            if !Command::new(tools.join(tool))
+        // Drive the same objcopy the compiler resolves, so a green run cannot
+        // come from a different toolchain than the one that links programs.
+        // An explicit LLVM_TEST_TOOL_DIR still wins for pinned-lane runs.
+        let objcopy = declared
+            .as_ref()
+            .map(|dir| dir.join("llvm-objcopy"))
+            .or_else(|| super::super::find_nightly_llvm_tool("llvm-objcopy"))
+            .unwrap_or_else(|| tools.join("llvm-objcopy"));
+        let probes = [
+            ("clang", tools.join("clang")),
+            ("llvm-nm", tools.join("llvm-nm")),
+            ("llvm-readobj", tools.join("llvm-readobj")),
+            ("llvm-objcopy", objcopy.clone()),
+        ];
+        for (tool, path) in probes {
+            if !Command::new(&path)
                 .arg("--version")
                 .output()
                 .is_ok_and(|out| out.status.success())
@@ -40,7 +55,11 @@ impl Fixture {
         ));
         std::fs::create_dir(&dir).unwrap();
         eprintln!("rewrite fixture: {}", dir.display());
-        Some(Self { dir, tools })
+        Some(Self {
+            dir,
+            tools,
+            objcopy,
+        })
     }
 
     fn run(&self, tool: &str, args: &[&std::ffi::OsStr]) -> String {
@@ -84,7 +103,7 @@ impl Fixture {
                 "#!/bin/sh\nprintf 'RUN\\n' >> {}\nprintf '%s\\n' \"$@\" >> {}\nexec {} \"$@\"\n",
                 quote(&self.dir.join("calls")),
                 quote(&self.dir.join("argv")),
-                quote(&self.tools.join("llvm-objcopy"))
+                quote(&self.objcopy)
             ),
         )
         .unwrap();
