@@ -222,6 +222,7 @@ pub(crate) use range_facts::{
     record_int_facts_for_update, record_local_value_alias_for_write, while_condition_range_fact,
     IntRange, IntRangeFact,
 };
+pub(crate) use range_facts::{facts_local_range, facts_local_ranges};
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
     emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
@@ -3368,6 +3369,7 @@ pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
 pub(crate) mod index_key;
+pub(crate) mod int32_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]

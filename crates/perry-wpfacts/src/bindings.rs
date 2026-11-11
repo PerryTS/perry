@@ -523,6 +523,11 @@ pub struct ModuleBindings {
     /// Number at every copy, with the hull of its interval; sorted
     /// (`element_keys`).
     pub element_keys: Vec<(u32, (i64, i64))>,
+    /// Element sites (reads, stores and called elements) by
+    /// `element_offset` whose key is an integer Number inside the int32
+    /// range at every copy, with the hull of its interval; sorted
+    /// (`element_keys::collect_signs`).
+    pub key_signs: Vec<(u32, (i64, i64))>,
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call
@@ -922,6 +927,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     }
     out.extend(rest_probe(m));
     out.extend(crate::rest_elems::probe(m));
+    out.extend(crate::element_keys::probe(g));
     out
 }
 

@@ -1722,6 +1722,8 @@ pub(super) fn compile_function(
         ctx.sig_record_return = sig_record_return;
         ctx.nonnegative_integer_locals
             .extend(super::signature_entry::nonnegative_params(f, plan));
+        ctx.int_range_facts
+            .extend(super::signature_entry::param_range_facts(f, plan));
     }
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(

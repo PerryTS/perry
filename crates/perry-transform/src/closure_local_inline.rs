@@ -55,17 +55,14 @@ use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{CompareOp, Expr, Function, Module, Stmt};
 
 use crate::inline::substitute_locals;
-use crate::local_occurrences::count_module;
-
-/// Module-wide write counts (`LocalSet` / `Update` targets) from the shared
-/// census. A local absent from it is never written. The rewrite keeps that
-/// true: it copies bodies that write only locals already counted, and it
-/// never reduces an arrow whose parameter is written.
-type Writes = HashMap<LocalId, usize>;
+use crate::local_occurrences::WriteCensus;
 
 pub fn run(module: &mut Module) {
     let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
-    let writes = count_module(module, true);
+    // The shared write census. The rewrite keeps it true: it copies bodies
+    // that write only locals already counted, and it never reduces an arrow
+    // whose parameter is written.
+    let writes = WriteCensus::of(module);
     for f in &mut module.functions {
         run_function(f, &writes, &mut next_local_id);
     }
@@ -88,7 +85,7 @@ pub fn run(module: &mut Module) {
     }
 }
 
-fn run_function(f: &mut Function, writes: &Writes, next_local_id: &mut LocalId) {
+fn run_function(f: &mut Function, writes: &WriteCensus, next_local_id: &mut LocalId) {
     // The async/generator transforms rewrite these bodies into state machines
     // whose locals are boxed cells; keep the shapes they expect.
     if f.is_async || f.is_generator {
@@ -97,7 +94,7 @@ fn run_function(f: &mut Function, writes: &Writes, next_local_id: &mut LocalId) 
     process_stmts(&mut f.body, writes, next_local_id);
 }
 
-fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut LocalId) {
+fn process_stmts(stmts: &mut Vec<Stmt>, writes: &WriteCensus, next_local_id: &mut LocalId) {
     // Inner lists and closure bodies first, so a nested helper is reduced in
     // its own scope before the enclosing list is examined.
     for s in stmts.iter_mut() {
@@ -160,7 +157,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut Loc
     }
 }
 
-fn process_closure_bodies(expr: &mut Expr, writes: &Writes, next_local_id: &mut LocalId) {
+fn process_closure_bodies(expr: &mut Expr, writes: &WriteCensus, next_local_id: &mut LocalId) {
     if let Expr::Closure { body, .. } = expr {
         process_stmts(body, writes, next_local_id);
     }
@@ -174,7 +171,7 @@ fn process_closure_bodies(expr: &mut Expr, writes: &Writes, next_local_id: &mut 
 fn arrow_candidate(
     id: LocalId,
     init: &Expr,
-    writes: &Writes,
+    writes: &WriteCensus,
 ) -> Option<(LocalId, Vec<LocalId>, Expr)> {
     let Expr::Closure {
         params,
@@ -201,7 +198,7 @@ fn arrow_candidate(
             .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
         // Parameter ids are the arrow's own, so a census write is a write
         // in this body.
-        || params.iter().any(|p| writes.contains_key(&p.id))
+        || params.iter().any(|p| writes.may_be_written(p.id))
     {
         return None;
     }
@@ -236,22 +233,6 @@ fn arrow_candidate(
         return None;
     }
     Some((id, params.iter().map(|p| p.id).collect(), expr.clone()))
-}
-
-/// An argument whose value is the same wherever the substituted body reads
-/// it and whose evaluation has no effect, so substitution may move, copy or
-/// drop it: a literal, or a read of a local nothing in the module writes.
-fn is_stable_arg(expr: &Expr, writes: &Writes) -> bool {
-    match expr {
-        Expr::Integer(_)
-        | Expr::Number(_)
-        | Expr::Bool(_)
-        | Expr::String(_)
-        | Expr::Null
-        | Expr::Undefined => true,
-        Expr::LocalGet(x) => !writes.contains_key(x),
-        _ => false,
-    }
 }
 
 /// `id` plus every local that is a plain copy of it (`let y = id;`,
@@ -317,11 +298,11 @@ struct Uses<'a> {
     calls: usize,
     bad_arity: bool,
     other: bool,
-    writes: &'a Writes,
+    writes: &'a WriteCensus,
 }
 
 impl<'a> Uses<'a> {
-    fn new(arity: usize, writes: &'a Writes) -> Self {
+    fn new(arity: usize, writes: &'a WriteCensus) -> Self {
         Uses {
             arity,
             calls: 0,
@@ -357,7 +338,7 @@ fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
         Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
-            if args.len() != uses.arity || !args.iter().all(|a| is_stable_arg(a, uses.writes)) {
+            if args.len() != uses.arity || !args.iter().all(|a| uses.writes.is_stable_arg(a)) {
                 uses.bad_arity = true;
             }
             for a in args {
@@ -741,7 +722,7 @@ mod tests {
     fn reduce(stmts: &mut Vec<Stmt>, next: &mut LocalId) {
         let mut module = Module::new("test");
         module.init = stmts.clone();
-        let writes = count_module(&module, true);
+        let writes = WriteCensus::of(&module);
         process_stmts(stmts, &writes, next);
     }
 

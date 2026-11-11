@@ -6877,7 +6877,7 @@ pub fn run_with_parse_cache(
             object_output_dir.join(format!("{}.{}", obj_name, ext))
         };
 
-        if let Some((key, cached_path, ffi_symbols, seed_lines)) = cache_key.and_then(|k| {
+        if let Some((key, cached_path, ffi_symbols, seeds)) = cache_key.and_then(|k| {
             object_cache
                 .lookup_path_with_ffi(k)
                 .map(|(p, s, seeds)| (k, p, s, seeds))
@@ -6891,15 +6891,9 @@ pub fn run_with_parse_cache(
             )?;
             // Design step 4: a hit replays the module's static shape
             // seeds exactly as the skipped codegen reported them, so the
-            // seed unit is the same cold and warm. A malformed line makes
-            // the entry unusable rather than silently dropping a seed.
-            let seeds = seed_lines
-                .iter()
-                .map(|line| perry_codegen::decode_static_seed(line))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| {
-                    format!("corrupt static shape seed sidecar for cache key {key:016x}")
-                })?;
+            // seed unit is the same cold and warm. A sidecar that does not
+            // decode was already a miss in the lookup, so a hit never drops
+            // a seed.
             program_static_seeds
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -7043,15 +7037,13 @@ pub fn run_with_parse_cache(
             // as a miss to a concurrent build (correct, just a wasted
             // recompile), whereas the reverse ordering can never mislead.
             object_cache.store_ffi_manifest(k, &emitted_ffi_symbols);
-            let seed_lines: Vec<String> = module_static_seeds
-                .iter()
-                .map(|(id, shape)| perry_codegen::encode_static_seed(*id, shape))
-                .collect();
-            object_cache.store_static_seeds(
-                k,
-                &seed_lines.iter().map(String::as_str).collect::<Vec<_>>(),
-            );
-            object_cache.store_and_get_path(k, &object_code)
+            // Seeds the sidecar cannot replay exactly leave no entry: the
+            // next build recompiles this module instead of linking another
+            // seed set.
+            object_cache
+                .store_static_seeds(k, &module_static_seeds)
+                .then(|| object_cache.store_and_get_path(k, &object_code))
+                .flatten()
         }) {
             // #7167: handing back the cache path saves a copy for a
             // compile that is going to *link* — the linker is the only
@@ -7164,17 +7156,21 @@ pub fn run_with_parse_cache(
     // messages print after all writes complete.
     let mut failed_modules: Vec<String> = Vec::new();
     let mut artifacts: Vec<NativeObjectArtifact> = Vec::new();
-    for result in compile_results {
+    // `run_module_jobs` returns one result per job in job order, so the
+    // module of a failed job is `codegen_modules[index]`, whatever its error
+    // says: a failure whose message names no module still fails that module
+    // (an entry that failed this way used to link without its object).
+    for (index, result) in compile_results.into_iter().enumerate() {
         match result {
             Ok(artifact) => artifacts.push(artifact),
             Err(msg) => {
                 eprintln!("{}", msg);
-                // Extract module name from error message for
-                // failed_modules. Error format is
-                // `Error compiling module '<name>' (<path>) ...`.
-                if let Some(name) = msg.split('\'').nth(1) {
-                    failed_modules.push(name.to_string());
-                }
+                let name = ctx
+                    .native_modules
+                    .get(&codegen_modules[index])
+                    .map(|module| module.name.clone())
+                    .unwrap_or_else(|| codegen_modules[index].display().to_string());
+                failed_modules.push(name);
             }
         }
     }
