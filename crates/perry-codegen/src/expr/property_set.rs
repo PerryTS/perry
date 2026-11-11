@@ -1234,9 +1234,18 @@ fn emit_proven_class_field_store(
             // records), and every atom is born `refcount = 0`, already shared:
             // the addref would find nothing to demote. The write barrier
             // stays: an atom minted earlier at runtime can be young.
+            // Nor would it for a value the facts prove is, as a String,
+            // only ever a literal's value (`literal_strings`): the field's
+            // every writer, or the local the value reads.
             let string_addref_needed = class_field_store_needs_string_addref(ctx, value)
                 && wpf.is_none_or(|w| w.proof.may_hold_string())
-                && !super::helpers::expr_is_pool_atom_literal(value);
+                && !super::helpers::expr_is_pool_atom_literal(value)
+                && !super::literal_strings::store(
+                    ctx,
+                    wpf.map(|w| (&w.proof, property)),
+                    value,
+                    &val_double,
+                );
             let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
             // #7511: whatever these three flags could not
             // be proved away statically is decided by ONE

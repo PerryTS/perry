@@ -132,6 +132,7 @@ def main():
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
         ("key-sign-negative", "keysign", "key sign"),
         ("wide-key-negative", "widekey", "wide key"),
+        ("literal-string-negative", "litstr", "literal string"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),

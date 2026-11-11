@@ -384,6 +384,17 @@ fn key_sign_switch_is_a_cache_input() {
     );
 }
 
+/// Literal strings: the switch changes the exported facts and every store
+/// and alias that drops its string demote, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn literal_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_LITERAL_STRINGS"),
+        "PERRY_FACTS_LITERAL_STRINGS must key the compile caches"
+    );
+}
+
 /// Wide keys: the switch changes the exported facts and every element site
 /// that converts a wide key without the normalizer, so `=0` must never reuse
 /// an `=1` object.

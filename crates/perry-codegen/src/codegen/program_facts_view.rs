@@ -389,6 +389,15 @@ pub struct ElisionFacts {
     /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
     /// yields a value yields an Array nothing writes after its birth.
     pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Locals that may hold a String and whose every String is a program
+    /// string literal's value (wpfacts `BindingFacts::literal_strings`):
+    /// born shared, never appended to in place, so a copy of one needs no
+    /// string demote (`expr::literal_strings`).
+    pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// (class id, key) of the fields every store of any unit writes only
+    /// such Strings into (wpfacts `FieldFacts::literal_strings`,
+    /// `FieldProof::literal_strings`).
+    pub literal_string_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -559,6 +568,7 @@ impl ElisionFacts {
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
+            && self.literal_string_locals.is_empty()
             && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
