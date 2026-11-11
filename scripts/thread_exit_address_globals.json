@@ -3877,6 +3877,14 @@
    "why": "Slots of extern \"C\" fn() installers registered by static constructors of linked images: code addresses only, no heap or arena address."
   },
   {
+   "file": "crates/perry-runtime/src/node_sea.rs",
+   "names": [
+    "SEA_BLOB_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores only the stdlib Blob factory function address installed through js_sea_install_blob_factory; the AtomicUsize is loaded and transmuted back to that code pointer."
+  },
+  {
    "file": "crates/perry-runtime/src/object/layout_desc/literal_birth.rs",
    "names": [
     "START",
