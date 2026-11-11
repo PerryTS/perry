@@ -33,7 +33,7 @@ mod mock;
 mod phases;
 mod store;
 #[cfg(perry_gc_instruments)]
-pub(crate) use store::{snap_pending_timers, SnapPendingTimer};
+pub(crate) use store::snap_pending_timers;
 
 use crate::promise::{js_promise_new, Promise};
 use async_lifecycle::enqueue_destroy_ids;
