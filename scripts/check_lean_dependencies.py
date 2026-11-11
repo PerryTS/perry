@@ -38,27 +38,22 @@ def main():
     parser.add_argument('--offline', action='store_true')
     args = parser.parse_args()
     cases = [
-        ('perry-uuid', None, False, ['getrandom'], []),
-        ('perry-uuid', 'v4', False, [], ['getrandom']),
-        ('perry-uuid', 'v7', False, [], ['getrandom']),
         ('perry', 'dev-cli', False, ['p256', 'jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], []),
         ('perry', None, True, ['jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], ['p256']),
         ('perry', 'extended-zip', True, [], ['bzip2', 'ppmd-rust', 'deflate64']),
-        ('perry-stdlib', None, False, ['perry-uuid', 'uuid', 'chrono'], []),
-        ('perry-stdlib', 'crypto', False, ['uuid', 'chrono'], ['perry-uuid', 'perry-hex', 'perry-base64']),
-        ('perry-runtime', None, False, ['perry-uuid', 'resolv-conf', 'lazy_static'], []),
+        ('perry-stdlib', None, False, ['uuid', 'chrono'], []),
+        ('perry-stdlib', 'crypto', False, ['uuid', 'chrono'], ['getrandom', 'perry-hex', 'perry-base64']),
+        ('perry-runtime', None, False, ['resolv-conf', 'lazy_static'], []),
     ]
     for package, features, defaults, absent, present in cases:
         names = graph(package, features, defaults, args.offline)
         verify(names, absent=absent, present=present)
-        if package == 'perry-uuid' and features is None:
-            assert names == {package}, f'{package}: empty features must have no dependencies'
         print(f'OK {package} features={features or "-"} defaults={defaults}: {len(names)} package names')
     for package in ['perry-hex', 'perry-base64']:
         assert graph(package, offline=args.offline) == {package}, f'{package}: codec must stay dependency-free'
     # A planted violation must be rejected (the checker cannot silently pass).
     try:
-        verify({'perry-uuid', 'getrandom'}, absent=['getrandom'])
+        verify({'perry-stdlib', 'getrandom'}, absent=['getrandom'])
     except AssertionError:
         pass
     else:

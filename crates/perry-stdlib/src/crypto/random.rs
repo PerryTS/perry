@@ -182,7 +182,7 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
 /// Generate a random UUID v4 using crypto-secure random
 /// crypto.randomUUID([options]) -> string
 ///
-/// #10523: served from perry-uuid's per-thread entropy cache (one
+/// #10523: served from the crypto uuid module's per-thread entropy cache (one
 /// `getrandom` per 128 UUIDs, like Node) unless the caller passes
 /// `{ disableEntropyCache: true }`, which draws fresh OS entropy.
 #[no_mangle]
@@ -194,9 +194,9 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
             || {
                 perry_runtime::effect!(host_read, random);
                 let uuid = if validate_random_uuid_options(options_bits) {
-                    perry_uuid::v4_uncached()
+                    super::uuid::v4_uncached()
                 } else {
-                    perry_uuid::v4()
+                    super::uuid::v4()
                 };
                 // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
                 // UTF-8 on every UUID only for the string constructor to copy them.
@@ -213,9 +213,9 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 
     perry_runtime::effect!(host_read, random);
     let uuid = if validate_random_uuid_options(options_bits) {
-        perry_uuid::v4_uncached()
+        super::uuid::v4_uncached()
     } else {
-        perry_uuid::v4()
+        super::uuid::v4()
     };
     // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
     // UTF-8 on every UUID only for the string constructor to copy them.
@@ -239,7 +239,7 @@ pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
             &format!("{:?}", ()),
             || {
                 perry_runtime::effect!(host_read, random);
-                let uuid = perry_uuid::v7();
+                let uuid = super::uuid::v7();
                 let uuid_bytes = uuid.as_bytes();
                 perry_runtime::census_inputs! {
                 perry_runtime::snap_census::record_input_value(
@@ -252,7 +252,7 @@ pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
     }
 
     perry_runtime::effect!(host_read, random);
-    let uuid = perry_uuid::v7();
+    let uuid = super::uuid::v7();
     let uuid_bytes = uuid.as_bytes();
     perry_runtime::census_inputs! {
     perry_runtime::snap_census::record_input_value("crypto.random.uuid", &uuid_bytes.to_vec()); }
