@@ -335,12 +335,32 @@ impl<T> std::ops::IndexMut<usize> for CatchStack<T> {
 }
 
 macro_rules! catch_stacks {
-    ($($(#[$attr:meta])* $name:ident: unwind: $unwind:path, check: $check:path;)*) => {
+    ($($(#[$attr:meta])* $name:ident: $(record: $field:ident,)? unwind: $unwind:path, check: $check:path;)*) => {
+        /// Whether some stack of the per-thread record ([`CatchStacks`], the
+        /// entries that name their `record` field) holds an entry marked below
+        /// `sp`. A stack's restore pops nothing exactly when its top mark is at
+        /// or above `sp` (`CatchStack::unwound_len` keeps everything up to the
+        /// newest entry marked at or above it), so the top of each stack
+        /// decides. A stack borrowed elsewhere counts as holding one: its own
+        /// restore then meets the borrow as it always did.
+        fn record_holds_entry_below(stacks: &CatchStacks, sp: usize) -> bool {
+            fn below<T>(stack: &RefCell<CatchStack<T>>, sp: usize) -> bool {
+                stack
+                    .try_borrow()
+                    .map_or(true, |s| s.entries.last().is_some_and(|&(mark, _)| mark < sp))
+            }
+            $($( if below(&stacks.$field, sp) { return true; } )?)*
+            false
+        }
+
         /// Pop, on every managed stack, the entries pushed by frames below
         /// `sp` (module docs), and truncate the runtime-handle stack to
         /// `handle_height` (module docs: handles carry no mark). Runs no JS
-        /// and allocates nothing.
+        /// and allocates nothing. The stacks of the per-thread record are
+        /// read in one access first: when none holds an entry below `sp`,
+        /// their restores would pop nothing and are not run.
         pub(crate) fn unwind_managed_stacks(sp: usize, handle_height: usize) {
+            let record_below = CATCH_STACKS.with(|stacks| record_holds_entry_below(stacks, sp));
             #[cfg(test)]
             if !crate::native_payload::callback_sabotage("unwind_runtime_handles") {
                 crate::gc::runtime_handle_stack_restore_to(handle_height);
@@ -350,14 +370,17 @@ macro_rules! catch_stacks {
             $(
                 $(#[$attr])*
                 {
-                    #[cfg(test)]
-                    if crate::native_payload::callback_sabotage(concat!("unwind_", stringify!($name))) {
-                        // Sabotage hook (design §5 test 10): skip this stack.
-                    } else {
+                    let in_record = false $( || { let _ = stringify!($field); true } )?;
+                    if record_below || !in_record {
+                        #[cfg(test)]
+                        if crate::native_payload::callback_sabotage(concat!("unwind_", stringify!($name))) {
+                            // Sabotage hook (design §5 test 10): skip this stack.
+                        } else {
+                            $unwind(sp);
+                        }
+                        #[cfg(not(test))]
                         $unwind(sp);
                     }
-                    #[cfg(not(test))]
-                    $unwind(sp);
                 }
             )*
             if eh_check_enabled() {
@@ -394,36 +417,36 @@ catch_stacks! {
     // `runInAsyncScope`) whose normal restore code the throw skipped. Pure
     // thread-local swaps: no JS runs and nothing allocates. First, so a
     // restored snapshot is in place before any other subsystem is touched.
-    async_context: unwind: crate::async_context::unwind_context_guards,
+    async_context: record: context_guards, unwind: crate::async_context::unwind_context_guards,
     check: crate::async_context::check_context_guard_marks;
     // #1830, #6951: expression temp roots (compiled FFI-fallback brackets and
     // runtime pushes).
     temp_roots: unwind: crate::gc::temp_roots_unwind_to,
     check: crate::gc::temp_roots_check_marks;
     // #5591: skipped method guards must not wedge the recursion counter.
-    call_method: unwind: crate::object::call_method_depth_unwind_to,
+    call_method: record: call_method, unwind: crate::object::call_method_depth_unwind_to,
     check: crate::object::call_method_depth_check_marks;
     // Includes removal of the process-wide outer-pump contribution.
-    pump: unwind: crate::stdlib_pump::pump_depth_unwind_to,
+    pump: record: pump, unwind: crate::stdlib_pump::pump_depth_unwind_to,
     check: crate::stdlib_pump::pump_depth_check_marks;
     // #9082: abandoned walks must no longer inhibit compaction.
-    set_foreach: unwind: crate::set::set_foreach_unwind_to,
+    set_foreach: record: set_foreach, unwind: crate::set::set_foreach_unwind_to,
     check: crate::set::set_foreach_check_marks;
-    map_foreach: unwind: crate::map::map_foreach_unwind_to,
+    map_foreach: record: map_foreach, unwind: crate::map::map_foreach_unwind_to,
     check: crate::map::map_foreach_check_marks;
-    prototype_resolution: unwind: crate::object::prototype_chain::resolution_stack_unwind_to,
+    prototype_resolution: record: prototype_resolution, unwind: crate::object::prototype_chain::resolution_stack_unwind_to,
     check: crate::object::prototype_chain::resolution_stack_check_marks;
-    static_private_owner: unwind: crate::object::static_private_owner_unwind_to,
+    static_private_owner: record: static_private_owner, unwind: crate::object::static_private_owner_unwind_to,
     check: crate::object::static_private_owner_check_marks;
-    private_lexical_brand: unwind: crate::object::private_lexical_brand_unwind_to,
+    private_lexical_brand: record: private_lexical_brand, unwind: crate::object::private_lexical_brand_unwind_to,
     check: crate::object::private_lexical_brand_check_marks;
-    derived_super_binding: unwind: crate::object::derived_super_binding_unwind_to,
+    derived_super_binding: record: derived_super_binding, unwind: crate::object::derived_super_binding_unwind_to,
     check: crate::object::derived_super_binding_check_marks;
-    private_member_access_hints: unwind: crate::object::private_member_access_hints_unwind_to,
+    private_member_access_hints: record: private_member_access_hints, unwind: crate::object::private_member_access_hints_unwind_to,
     check: crate::object::private_member_access_hints_check_marks;
     // #10848: a throwing native-namespace override must not leave its pair
     // marked running.
-    namespace_override: unwind: crate::object::namespace_override_unwind_to,
+    namespace_override: record: namespace_override, unwind: crate::object::namespace_override_unwind_to,
     check: crate::object::namespace_override_check_marks;
 }
 
