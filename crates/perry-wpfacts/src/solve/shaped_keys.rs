@@ -9,7 +9,11 @@
 //! `JSON.parse` object, a descriptor, an `Object.fromEntries` result, all
 //! `OrdinaryObjectCreate`, ECMA-262 25.5.1, 10.1.13). It has no element
 //! storage and no symbol-keyed property of its own, so a String-keyed
-//! [[Set]] (10.1.9) creates or updates a String-keyed property only. A
+//! [[Set]] (10.1.9) creates or updates a String-keyed property only.
+//! An Array of the program or of `JSON.parse` (`TmplKind::Arr`) is split
+//! too: its String-keyed [[DefineOwnProperty]] (10.4.2.1) writes an
+//! element (the key may be an index: `numeric_field`, its elements),
+//! `length`, or another String-keyed property, never a symbol-keyed one. A
 //! marker's fields are its reach markers, an array-like's elements and
 //! named keys have their own nodes, and other values keep `all_fields`. Per unit
 //! (`unit_mode`) nothing is split: a literal leaving its unit key by key
@@ -27,7 +31,9 @@ impl Model {
                     && (matches!(self.toks[t as usize], TokKind::Obj(..))
                         || builtins::builtin_function(self, t))
                     && !self.is_marker(t)
-                    && (!self.is_array_like(t) || builtins::ordinary_box(self, t)) =>
+                    && (!self.is_array_like(t)
+                        || builtins::ordinary_box(self, t)
+                        || self.is_arr(t)) =>
             {
                 Some(s)
             }
