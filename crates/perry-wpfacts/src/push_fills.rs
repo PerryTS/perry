@@ -609,6 +609,19 @@ pub(crate) fn born(m: &mut Model, tm: TmplId, fill: u32) {
     m.arr_birth_len.insert(tm, i64::from(len));
 }
 
+/// The literal `e`, whose template is `tm`, is a fill's birth: [`born`].
+pub(crate) fn born_at(g: &mut crate::gen::Gen<'_>, e: &Expr, tm: TmplId) -> bool {
+    let fill = g
+        .push_fill
+        .births
+        .get(&(e as *const Expr as usize))
+        .copied();
+    if let Some(fill) = fill {
+        born(&mut g.m, tm, fill);
+    }
+    fill.is_some()
+}
+
 /// The fill whose Arrays node `n` holds, when it holds nothing else and
 /// every one is of a template in `cand`.
 pub(crate) fn only_fill(m: &Model, n: NodeId, cand: &FxHashSet<TmplId>, fill: u32) -> bool {

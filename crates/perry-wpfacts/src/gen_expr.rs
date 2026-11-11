@@ -1632,15 +1632,8 @@ impl<'a> Gen<'a> {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
                 // A push-filled birth is born with its final length.
-                let fill = self
-                    .push_fill
-                    .births
-                    .get(&(e as *const Expr as usize))
-                    .copied();
-                if let Some(fill) = fill {
-                    crate::push_fills::born(&mut self.m, tm, fill);
-                }
-                if self.m.const_arrays && fill.is_none() {
+                let filled = crate::push_fills::born_at(self, e, tm);
+                if self.m.const_arrays && !filled {
                     if let Some(c) = crate::const_arrays::literal_elems(mi, elems) {
                         self.m.arr_const.insert(tm, c);
                     }
