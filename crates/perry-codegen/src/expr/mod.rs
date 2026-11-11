@@ -1348,6 +1348,9 @@ pub(crate) struct FnCtx<'a> {
     /// The loops that hold an Array local's length by the facts
     /// (`expr::held_len`), innermost last.
     pub held_lens: Vec<held_len::HeldLen>,
+    /// The loops being lowered and the polls each may take back
+    /// (`stmt::loops::bounded_poll`).
+    pub loop_polls: crate::stmt::bounded_poll::Scopes,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once

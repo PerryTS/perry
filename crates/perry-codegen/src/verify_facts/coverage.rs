@@ -63,6 +63,9 @@ pub(crate) enum Fact {
     /// A loop holds a local Array's length across its calls (wpfacts
     /// `held_lengths`).
     HeldLength,
+    /// A loop's trip bound from its counter's interval
+    /// (`stmt::loops::bounded_poll`).
+    LoopTrip,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -119,6 +122,7 @@ impl Fact {
             Self::CallKinds => "call kinds",
             Self::LiteralString => "literal string",
             Self::HeldLength => "held length",
+            Self::LoopTrip => "loop trip bound",
         }
     }
 }
