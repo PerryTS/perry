@@ -283,6 +283,7 @@ pub struct CompileOptions {
     pub namespace_imports: Vec<String>,
     /// Namespace local -> owning compiled module prefix, before following re-exports.
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -497,6 +498,8 @@ pub struct CompileOptions {
     /// module globals. For Eager modules the redundant calls
     /// short-circuit on the guard's first-write check.
     pub module_init_deps: Vec<String>,
+    pub module_deferred_init_deps: Vec<String>,
+    pub module_deferred_readiness: Vec<String>,
     /// Selects async module evaluation only for a program containing TLA.
     pub program_has_tla: bool,
     /// A synchronous require cannot evaluate this module's async graph.
@@ -614,6 +617,8 @@ pub enum NamespaceEntryKind {
     /// nested value IS the target module's `@__perry_ns_<source_prefix>`
     /// global, populated by the target's own `__init`.
     NestedNamespace { source_prefix: String },
+    /// A namespace value exported from an import-defer binding.
+    DeferredNamespace { source_prefix: String },
     /// `export * as Name from "node:..."` (or another Perry-native module).
     /// Native modules have no compiled `@__perry_ns_*` global, so codegen asks
     /// the runtime to materialize their namespace directly.
@@ -907,6 +912,7 @@ pub(crate) struct CrossModuleCtx<'a> {
     pub namespace_self_import: bool,
     pub namespace_imports: std::collections::HashSet<String>,
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -1395,6 +1401,8 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// fires before the body — transitively pulls in any Deferred dep
     /// chain reached only through this module's re-exports.
     pub module_init_deps: Vec<String>,
+    pub module_deferred_init_deps: Vec<String>,
+    pub module_deferred_readiness: Vec<String>,
     /// Selects async module evaluation only for a program containing TLA.
     pub program_has_tla: bool,
     /// A synchronous require cannot evaluate this module's async graph.

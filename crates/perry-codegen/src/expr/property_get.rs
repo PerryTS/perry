@@ -70,6 +70,16 @@ use super::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+            if ctx.deferred_namespace_imports.contains(name) {
+                return lower_runtime_property_get_by_name(ctx, object, property);
+            }
+        }
+    }
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     // I32 at rest (PR C): a read of a key some class keeps in an I32 lane.

@@ -115,7 +115,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
     // Fixed: never forwarded. Otherwise a forwarded header ends the test.
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
     let live = ctx.block().icmp_eq(I32, &fwd_bit, "0");
-    if r.fixed {
+    if r.unmoved() {
         branch(ctx, &live, "arr_rep.extent", &miss_l);
     } else {
         branch(ctx, &live, "arr_rep.extent", &next_l);
@@ -199,7 +199,7 @@ pub(super) fn witness_read(
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
     let live = ctx.block().icmp_eq(I32, &fwd_bit, "0");
     // The read tests forwarding itself unless the storage is fixed.
-    let moved_l = if r.fixed { &miss_l } else { &next_l };
+    let moved_l = if r.unmoved() { &miss_l } else { &next_l };
     branch(ctx, &live, "arep.verify_descriptors", moved_l);
     let described =
         crate::expr::array_proto_guard::emit_array_element_descriptors(ctx.block(), &handle);

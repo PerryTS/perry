@@ -111,6 +111,7 @@ fn empty_opts() -> CompileOptions {
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 

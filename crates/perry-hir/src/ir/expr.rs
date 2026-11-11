@@ -2969,6 +2969,8 @@ pub enum Expr {
         /// compile-time path resolution (`collect_modules`) is identical for
         /// both — only the dispatch shape differs. `false` for ESM `import()`.
         synchronous: bool,
+        /// `import.defer()` resolves a deferred namespace, without evaluation.
+        deferred: bool,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same

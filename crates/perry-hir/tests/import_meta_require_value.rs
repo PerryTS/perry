@@ -59,6 +59,7 @@ fn direct_import_meta_require_retains_static_graph_dispatch() {
         stmt,
         Stmt::Expr(Expr::DynamicImport {
             synchronous: true,
+            deferred: false,
             ..
         })
     )));

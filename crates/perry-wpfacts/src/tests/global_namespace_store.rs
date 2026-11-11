@@ -40,6 +40,7 @@ fn program(main: &str, interp: bool) -> Vec<(String, perry_hir::Module)> {
             });
             if sites > 0 {
                 h.imports.push(perry_hir::Import {
+                    is_deferred: false,
                     source: "./fmtlib.js".to_string(),
                     specifiers: Vec::new(),
                     is_native: false,

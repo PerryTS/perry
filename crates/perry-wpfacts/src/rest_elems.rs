@@ -15,9 +15,10 @@
 //!   native fill returns (`codegen expr::rest_elems`);
 //! - every token is a plain program Array (`bindings::arr_rep`'s refusals:
 //!   no marker, not foreign, escaped or hard, no metadata write, not in a
-//!   unit's cell), with an I32 element rep, a fixed length, dense below a
-//!   floor > 0 (its storage never grows or moves and has no hole), and not
-//!   immutable (an immutable Array is N3's, read as constants);
+//!   unit's cell), with an I32 element rep, a fixed length or a reserved
+//!   capacity (below), dense below a floor > 0 (its storage never grows or
+//!   moves and has no hole below the floor), and not immutable (an immutable
+//!   Array is N3's, read as constants);
 //! - no generic reader touches a token (**the use record**, `uses`): every
 //!   constraint on a node that holds one, and every constraint naming such a
 //!   node as the object it stores into, is one codegen lowers with the
@@ -49,6 +50,23 @@
 //! floor; the `fill` call offsets of at-rest births. A field read call (b1)
 //! carries its body read's own verdict (`site_floor`).
 //!
+//! **The capacity reservation** (`reserve`; owner decision 2026-11-11). A
+//! length that moves is still admitted when its hull over the template's
+//! Arrays is finite and small: `0 < lo`, `hi <= 2 * lo` and `hi <=
+//! REST_CAP`. The birth then reserves `hi` slots (`rest_reserves`, the
+//! runtime's `js_array_rest_reserve`), so every index store the facts allow
+//! (its key is below `hi`, `solve::arr_len`) lands below the capacity and
+//! the runtime lengthens the Array where it stands: the storage never grows,
+//! so it is never reallocated or forwarded, and a slot below the floor `lo`
+//! keeps its address. Slots in `[lo, hi)` may be holes (`[length, capacity)`
+//! is hole-filled, and a store past the length leaves a gap), so only the
+//! floor is dense, as for any Array. The two bounds: the slack is at most the
+//! dense part (one runtime growth step doubles as well), and the reserved
+//! cell stays a small young cell (at most 8 KiB of slots), never a large
+//! object. `ArrRep::fixed` is unchanged; codegen reads "never moves" as
+//! `fixed || at_rest`. `PERRY_REST_CAPACITY=0` (also `off`, `false`) admits
+//! no moving length: main's facts.
+//!
 //! `PERRY_REST_ELEMS=0` (also `off`, `false`) admits nothing: main's facts.
 //! Negative control `PERRY_FACTS_SABOTAGE=restelem`: a builtin method and the
 //! stores it makes are no use (`builtins::collections::array_method`,
@@ -66,6 +84,54 @@ pub(crate) fn enabled() -> bool {
         std::env::var("PERRY_REST_ELEMS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// `PERRY_REST_CAPACITY=0` turns the capacity reservation off.
+pub(crate) fn capacity_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REST_CAPACITY").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The most slots an at-rest birth reserves (module docs).
+pub(crate) const REST_CAP: i64 = 1024;
+
+/// The capacity the births of template `tm` reserve (module docs):
+/// `Ok(None)` when every Array of it keeps its length (nothing to reserve),
+/// `Ok(Some(hi))` when the length hull allows the reservation, else the
+/// refusal.
+pub(crate) fn reserve(m: &Model, tm: TmplId) -> Result<Option<u32>, &'static str> {
+    let mut hull = crate::model::Iv::EMPTY;
+    let mut fixed = true;
+    for t in m.tmpl_toks(tm) {
+        if !m.all_fields.contains_key(&t) {
+            continue;
+        }
+        let len = match m.arr_len.get(&t) {
+            Some(&n) => m.nodes[n as usize].range,
+            None => match m.arr_birth_len.get(&tm) {
+                Some(&k) => crate::model::Iv::int(k, k),
+                None => crate::model::Iv::TOP,
+            },
+        };
+        if len.is_top() || len.is_empty() {
+            return Err("length moves");
+        }
+        fixed &= len.lo == len.hi;
+        hull = hull.join(len);
+    }
+    if fixed {
+        return Ok(None);
+    }
+    if !m.rest_capacity || hull.is_top() || hull.is_empty() {
+        return Err("length moves");
+    }
+    if hull.lo > 0 && hull.hi <= hull.lo.saturating_mul(2) && hull.hi <= REST_CAP {
+        Ok(Some(hull.hi as u32))
+    } else {
+        Err("length over cap")
+    }
 }
 
 /// A fused fill birth `new Array(k).fill(v)` (`Gen::call_with`): the
@@ -142,7 +208,10 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
         });
     }
     if !r.fixed {
-        return Some("length moves");
+        // A moving length needs the capacity reservation (module docs).
+        if let Err(why) = reserve(m, tm) {
+            return Some(why);
+        }
     }
     if !r.dense || r.floor == 0 {
         return Some("not dense");
@@ -428,8 +497,6 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
     floor
 }
 
-/// Fill `ModuleBindings::rest_reads`, `rest_writes` and `rest_births`
-/// (module docs).
 /// I32 at rest B2: `derive` gives each field its representation before the
 /// at-rest admission runs (the admission reads element reps the demand
 /// settles), so an `Arr` field rep learns its storage kind here. It is at
@@ -477,6 +544,8 @@ pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFac
     }
 }
 
+/// Fill `ModuleBindings::rest_reads`, `rest_writes`, `rest_births` and
+/// `rest_reserves` (module docs).
 pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     let m = &g.m;
     if m.rest_tmpls.is_empty() {
@@ -504,6 +573,16 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         if site_floor(m, &recvs).is_some() {
             if let Some(mb) = bindings.get_mut(f.module as usize) {
                 mb.rest_births.push(f.offset);
+                // The capacity this birth reserves: its own template's.
+                let cap = m
+                    .site_tmpls
+                    .get(&(f.site, "Array", true))
+                    .and_then(|&t| m.tmpl_of(t))
+                    .filter(|tm| m.rest_tmpls.contains(tm))
+                    .and_then(|tm| reserve(m, tm).ok().flatten());
+                if let Some(cap) = cap {
+                    mb.rest_reserves.push((f.offset, cap));
+                }
             }
         }
     }
@@ -514,18 +593,24 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         mb.rest_writes.dedup();
         mb.rest_births.sort_unstable();
         mb.rest_births.dedup();
+        mb.rest_reserves.sort_unstable();
+        mb.rest_reserves.dedup();
     }
 }
 
 /// The probe (`PERRY_FACTS_DUMP`): one `# rest arr` line per fused fill
-/// template, at rest or with the reason it is not.
+/// template, at rest (with the capacity its births reserve, if any) or with
+/// the reason it is not.
 pub(crate) fn probe(m: &Model) -> Vec<String> {
     let mut out = Vec::new();
     for (tm, tpl) in m.tmpls.iter().enumerate() {
         let tm = tm as TmplId;
         let what = tpl.display.replace(' ', "_");
         if m.rest_tmpls.contains(&tm) {
-            out.push(format!("# rest arr {what} at_rest=1"));
+            match reserve(m, tm) {
+                Ok(Some(cap)) => out.push(format!("# rest arr {what} at_rest=1 cap={cap}")),
+                _ => out.push(format!("# rest arr {what} at_rest=1")),
+            }
         } else if let Some(refusal) = m.rest_refused.get(&tm) {
             // The length interval over the template's tokens (`solve::arr_len`).
             let mut len = crate::model::Iv::EMPTY;

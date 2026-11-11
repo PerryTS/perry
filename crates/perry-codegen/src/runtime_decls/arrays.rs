@@ -103,6 +103,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // cold arms of an at-rest element site (`perry-runtime` `layout_slot`).
     module.declare_function("js_array_rest_encode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    // The birth of an at-rest Array that reserves a capacity (may collect).
+    module.declare_function("js_array_rest_reserve", DOUBLE, &[DOUBLE, I32]);
     module.declare_function("js_array_rest_set", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     // I32 at rest, PR C: the complete field read/store through the layout
     // accessor, and the lanes of a class born keyless (`expr::rest_fields`).
