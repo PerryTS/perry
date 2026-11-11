@@ -200,10 +200,11 @@ fn negative_control_an_unbarriered_edge_is_found_only_by_the_whole_owner_walk() 
 /// The witness is live: under `verify` the same unbarriered edge aborts the
 /// restore instead of being skipped silently.
 #[test]
+#[should_panic(expected = "skipped the write barrier")]
 fn the_witness_reports_an_unbarriered_edge() {
     let _guard = GcTestIsolationGuard::new();
     reset_remembered_set();
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+    unsafe {
         let (snapshot, _) = unbarriered_edge_fixture();
         let _walk = RestoreWalkTestGuard::pin(RestoreWalk::Verify);
         remembered_set_clear();
@@ -212,17 +213,7 @@ fn the_witness_reports_an_unbarriered_edge() {
             &Default::default(),
             "restore_walk_test",
         );
-    }));
-    remembered_set_clear();
-    let message = failed
-        .expect_err("the witness must fail")
-        .downcast::<String>()
-        .map(|s| *s)
-        .unwrap_or_default();
-    assert!(
-        message.contains("skipped the write barrier"),
-        "unexpected panic: {message}"
-    );
+    }
 }
 
 /// A malloc parent keeps the whole-owner walk: its entries are owner
