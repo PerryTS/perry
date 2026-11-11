@@ -1,3 +1,4 @@
+use super::restore_walk::{visit_old_parent_owed_slots, RestoreWalk};
 use super::*;
 
 // Evacuation copies land in OLD_ARENA after the remembered-set scan
@@ -239,7 +240,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         if DIAGNOSTICS {
             parents_visited += 1;
         }
-        let mut remember = |slot: GcMutableSlot| {
+        let remember = |slot: GcMutableSlot| {
             if DIAGNOSTICS {
                 // Count all enumerated slots, including unproductive weak
                 // targets and primitive values. This measures traversal work.
@@ -260,13 +261,10 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         };
         // `arena_parent` here is an OLD arena parent (checked above). A malloc
         // parent's entries are all owner qualified: it keeps the whole walk.
-        if arena_parent && walk != super::restore_walk::RestoreWalk::WholeOwner {
-            clean_slots_skipped += super::restore_walk::visit_old_parent_owed_slots::<DIAGNOSTICS>(
-                header,
-                &snapshot.dirty_pages,
-                &mut remember,
-            );
-            if walk == super::restore_walk::RestoreWalk::Verify {
+        if arena_parent && walk != RestoreWalk::WholeOwner {
+            clean_slots_skipped +=
+                visit_old_parent_owed_slots::<DIAGNOSTICS>(header, &snapshot.dirty_pages, remember);
+            if walk == RestoreWalk::Verify {
                 visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| {
                     if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
                         && (*header).obj_type != GC_TYPE_WEAK_STORAGE
@@ -319,7 +317,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         }
     }
     let added = sticky.restore_counted();
-    if walk == super::restore_walk::RestoreWalk::Verify {
+    if walk == RestoreWalk::Verify {
         let missing = witness.count_not_yet_dirty();
         if missing != 0 {
             super::restore_walk::bounded_restore_witness_failed(cycle_label, missing);

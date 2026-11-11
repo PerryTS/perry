@@ -22,8 +22,11 @@
 //!
 //! The bounded walk therefore visits, of an **old arena parent**:
 //!
-//! * every in-body slot whose page the snapshot names (one probe per page for
-//!   a range, through the same `dirty_slot_ranges_for` the dirty scan uses);
+//! * of an in-body slot range, the slots whose page the snapshot names (one
+//!   probe per page, through the same `dirty_slot_ranges_for` the dirty scan
+//!   uses);
+//! * every single-slot descriptor, as before (an owner described slot by
+//!   slot is small, and the page probe costs what the visit costs);
 //! * every slot outside the parent's body, as before: those are owner
 //!   qualified, and an owner entry does not say which of its pages are dirty.
 //!
@@ -114,14 +117,20 @@ pub(super) fn restore_walk() -> RestoreWalk {
 
 /// Visit the slots of the old arena parent `header` that can owe the
 /// remembered set an entry, given the pre-clear dirty pages. Returns the
-/// number of in-body slots it did not visit because their page is clean.
+/// number of in-body range slots it did not visit because their page is
+/// clean.
+///
+/// Only ranges are bounded. A single-slot descriptor is visited as before:
+/// asking the page set about it costs what visiting it costs, and an owner
+/// described slot by slot is small.
 ///
 /// # Safety
 /// `header` is a live old-generation arena object.
+#[inline]
 pub(super) unsafe fn visit_old_parent_owed_slots<const DIAGNOSTICS: bool>(
     header: *mut GcHeader,
     dirty_pages: &crate::fast_hash::PtrHashSet<usize>,
-    visit: &mut dyn FnMut(GcMutableSlot),
+    mut visit: impl FnMut(GcMutableSlot),
 ) -> usize {
     let body_start = header as usize;
     let body_end = body_start.saturating_add((*header).size as usize);
@@ -130,32 +139,34 @@ pub(super) unsafe fn visit_old_parent_owed_slots<const DIAGNOSTICS: bool>(
         addr >= body_start && addr < body_end
     };
     let mut clean_slots = 0usize;
-    // `dirty_slot_ranges_for` reports through the dirty scan's statistics;
-    // the restore keeps its own counts.
-    let mut scratch = RememberedSetTraceStats::default();
     visit_gc_rewrite_slot_descriptors_shared::<DIAGNOSTICS>(header, &mut |descriptor| unsafe {
         match descriptor {
-            GcMutableSlotDescriptor::Slot(slot) => {
-                if in_body(slot.slot)
-                    && !super::barrier::dirty_pages_contains_addr(dirty_pages, slot.slot as usize)
-                {
-                    clean_slots += 1;
-                    return;
-                }
-                visit(slot);
-            }
+            GcMutableSlotDescriptor::Slot(slot) => visit(slot),
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
                 let count = range.slot_count();
                 if count == 0 {
                     return;
                 }
-                if !(in_body(range.slot(0)) && in_body(range.slot(count - 1))) {
-                    // Owner-qualified custody: the whole range, as before.
+                let (first, last) = (range.slot(0), range.slot(count - 1));
+                let first_page = crate::arena::generation_page_for_addr(first as usize);
+                let one_page = first_page == crate::arena::generation_page_for_addr(last as usize);
+                // Out of the body: owner-qualified custody, the whole range as
+                // before. On one dirty page: the whole range is owed.
+                if !(in_body(first) && in_body(last))
+                    || (one_page && dirty_pages.contains(&first_page))
+                {
                     for i in 0..count {
                         visit(GcMutableSlot::new(range.slot(i), layout_kind));
                     }
                     return;
                 }
+                if one_page {
+                    clean_slots += count;
+                    return;
+                }
+                // `dirty_slot_ranges_for` reports through the dirty scan's
+                // statistics; the restore keeps its own counts.
+                let mut scratch = RememberedSetTraceStats::default();
                 let mut visited = 0usize;
                 for (start, end) in dirty_slot_ranges_for(range, dirty_pages, &mut scratch) {
                     visited += end - start;
