@@ -383,10 +383,11 @@ console.log(r.n); // LOOKUP_N
     );
 }
 
-/// Control: a write through ⊤ may have put a program accessor on any
-/// builtin prototype; the any-key lookup keeps an unknown value.
+/// A plain store through ⊤ is [[Set]] (ECMA-262 10.1.9.2): it makes a data
+/// property on whatever ⊤ is and never installs an accessor, so the any-key
+/// lookup finds only the program accessors and the realm's own.
 #[test]
-fn accessor_lookup_unknown_key_after_a_write_through_unknown_stays_unproven() {
+fn accessor_lookup_unknown_key_after_a_store_through_unknown_is_proven() {
     lookup_site(
         r#"
 declare function unknown(): any;
@@ -398,7 +399,7 @@ const found: any = receiver.__lookupGetter__(process.argv[0]);
 if (found) found.held = payload;
 console.log(payload.n); // LOOKUP_N
 "#,
-        false,
+        true,
     )
     .unwrap();
 }
