@@ -181,6 +181,13 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             ));
         }
     }
+    // Each call whose result the facts prove a Number (a canonical double
+    // for its consumers), by the call's source offset.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for offset in &bindings.number_calls {
+            out.push_str(&format!("# number_call module={mi} call={offset}\n"));
+        }
+    }
     // N1: what decides each Number local's representation.
     for l in &pf.rep_probe {
         out.push_str(l);
