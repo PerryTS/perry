@@ -179,8 +179,8 @@ function zeros(): string {
 }
 out.push("zeros " + zeros());
 
-// `Math.abs` of a bounded int: the integer absolute value, for a test and
-// for an int32 consumer (an I32 local, a bitwise operand, an index).
+// `Math.abs` of a bounded int next to the products: under a test and into
+// an int32 consumer (an I32 local, a bitwise operand, an index).
 const NAMES = ["none", "pawn", "knight", "bishop", "rook", "queen", "king"];
 function absolutes(): string {
   let kings = 0, sum = 0, odd = 0, far = 0;
@@ -218,8 +218,8 @@ function consumers(seed: number): string {
 }
 out.push("consumers " + consumers(777));
 
-// The initializer of an int32 local that is a bounded tree: stored as its
-// integer (`Math.abs` of a small int, a small product).
+// Bounded trees as the initializer of an int32 local (`Math.abs` of a small
+// int, a small product), then tested.
 function initializers(side: string): string {
   const c = sign(side);
   let text = "";
