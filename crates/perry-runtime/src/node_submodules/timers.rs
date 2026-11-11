@@ -63,7 +63,7 @@ fn is_plain_object(value: f64) -> bool {
         return false;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_not_array!(gc_header.obj_type)
 }
 
 fn options_ref(options: f64) -> Result<bool, f64> {

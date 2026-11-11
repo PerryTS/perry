@@ -171,7 +171,7 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
     }
     let pair = (value & POINTER_MASK) as *const ArrayHeader;
     let header = crate::value::addr_class::pointer_value_header(value)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+    if crate::gc_type_is_not_array!(header.obj_type) || (*pair).length as usize != PAIR_LEN {
         return None;
     }
     let w = crate::array::array_elements_ptr(pair);
@@ -197,7 +197,7 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
 pub(crate) unsafe fn pair_getter_words(value: u64) -> Option<(u64, u64)> {
     let header = crate::value::addr_class::pointer_value_header(value)?;
     let pair = (value & POINTER_MASK) as *const ArrayHeader;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+    if crate::gc_type_is_not_array!(header.obj_type) || (*pair).length as usize != PAIR_LEN {
         return None;
     }
     let w = crate::array::array_elements_ptr(pair);

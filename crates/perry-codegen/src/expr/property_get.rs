@@ -549,7 +549,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let gc_type_addr = ctx.block().sub(I64, &recv_handle, "8");
             let gc_type_ptr = ctx.block().inttoptr(I64, &gc_type_addr);
             let gc_type = ctx.block().load(I8, &gc_type_ptr);
-            let is_array = ctx.block().icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
             let is_string = ctx.block().icmp_eq(I8, &gc_type, "3"); // GC_TYPE_STRING
             let has_length = ctx.block().or(I1, &is_array, &is_string);
             // Issue #233: a FORWARDED array's first 4 bytes are no

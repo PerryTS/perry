@@ -68,7 +68,7 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
     } else if crate::buffer::header::is_owned_byte_cell(owner) {
         crate::buffer::store::bag(owner)
     } else if crate::value::addr_class::try_read_gc_header(owner)
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
     {
         // Array queries already arrive at a GC array holder. Preserve their
         // header-only route; allocator admission belongs to the otherwise
@@ -79,7 +79,7 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
             .map(|h| (*h.as_ptr()).obj_type)
         {
             Some(crate::gc::GC_TYPE_OBJECT) => resolve_object_holder(owner) as *mut ObjectHeader,
-            Some(crate::gc::GC_TYPE_ARRAY) => return array_route(owner as *const ArrayHeader),
+            Some(crate::gc_array_type_pat!()) => return array_route(owner as *const ArrayHeader),
             // Still lazy: no own properties (a write materializes it into
             // the ordinary array first).
             Some(crate::gc::GC_TYPE_LAZY_ARRAY) => std::ptr::null_mut(),

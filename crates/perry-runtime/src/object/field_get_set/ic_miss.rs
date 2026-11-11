@@ -282,7 +282,8 @@ pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::String
                 }
             }
         } else {
-            if gc_kind == Some(crate::gc::GC_TYPE_ARRAY) && unsafe { key_bytes_are(key, b"length") }
+            if gc_kind == Some(crate::gc_array_type_pat!())
+                && unsafe { key_bytes_are(key, b"length") }
             {
                 let arr = obj as *const crate::array::ArrayHeader;
                 return crate::array::js_array_length(arr) as f64;

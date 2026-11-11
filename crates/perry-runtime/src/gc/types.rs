@@ -356,7 +356,7 @@ pub fn json_wide_birth_permits(total_size: usize, obj_type: u8) -> bool {
     }
     let mask = JSON_WIDE_BIRTH_MASK.with(|c| c.get());
     (mask == json_wide_birth::OBJECTS && obj_type == GC_TYPE_OBJECT)
-        || (mask == json_wide_birth::KEYS_ARRAY && obj_type == GC_TYPE_ARRAY)
+        || (mask == json_wide_birth::KEYS_ARRAY && crate::gc_type_is_array!(obj_type))
 }
 
 #[inline]
@@ -1296,7 +1296,7 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return Some(&GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize]);
@@ -1318,7 +1318,7 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
 #[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;

@@ -416,7 +416,7 @@ fn heap_ptr_object(value: f64) -> Option<*const u8> {
 }
 
 fn array_ptr(value: f64) -> Option<*const ArrayHeader> {
-    heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY).map(|ptr| ptr as *const ArrayHeader)
+    heap_ptr_with_gc_type(value, crate::gc_array_type_pat!()).map(|ptr| ptr as *const ArrayHeader)
 }
 
 fn object_ptr(value: f64) -> Option<*const ObjectHeader> {

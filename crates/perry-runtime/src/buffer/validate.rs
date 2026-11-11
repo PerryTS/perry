@@ -55,7 +55,7 @@ fn is_array(value: f64) -> bool {
         return false;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(gc_header.obj_type)
 }
 
 /// `Buffer.alloc(size)` / `allocUnsafe(size)` / `allocUnsafeSlow(size)` — Node

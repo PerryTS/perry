@@ -6,6 +6,7 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+mod array_type;
 pub mod function_metadata;
 mod object_type;
 pub use function_metadata::*;

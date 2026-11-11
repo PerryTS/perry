@@ -281,7 +281,8 @@ fn emit_array_admission(
     let source_gc_type_addr = ctx.block().sub(I64, &array_handle, "8");
     let source_gc_type_ptr = ctx.block().inttoptr(I64, &source_gc_type_addr);
     let source_gc_type = ctx.block().load(I8, &source_gc_type_ptr);
-    let source_is_array = ctx.block().icmp_eq(I8, &source_gc_type, "1");
+    let source_is_array =
+        crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &source_gc_type);
     let source_flags_addr = ctx.block().sub(I64, &array_handle, "7");
     let source_flags_ptr = ctx.block().inttoptr(I64, &source_flags_addr);
     let source_flags = ctx.block().load(I8, &source_flags_ptr);
@@ -310,7 +311,7 @@ fn emit_array_admission(
     let gc_header = ctx.block().trunc(I128, &fingerprint, I64);
     let array_header = ctx.block().lshr(I128, &fingerprint, "64");
     let gc_type = ctx.block().trunc(I64, &gc_header, I8);
-    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
+    let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
     let flags_shifted = ctx.block().lshr(I64, &gc_header, "8");
     let flags = ctx.block().trunc(I64, &flags_shifted, I8);
     let forwarded = ctx.block().and(I8, &flags, "128");

@@ -77,7 +77,7 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     // Re-read the type off the POST-forwarding header: the stale one is the
     // address the caller named, the live one is the array we would copy.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize)? };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     if crate::array::array_iteration_is_exotic(arr) {
@@ -236,7 +236,7 @@ pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
         matches!(
             crate::value::addr_class::try_read_gc_header(addr),
             Some(header)
-                if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                if crate::gc_type_is_array!(header.obj_type)
                     || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         )
     };
@@ -250,7 +250,7 @@ pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
     }
     unsafe {
         match crate::value::addr_class::try_read_gc_header(array as usize) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => array,
+            Some(header) if crate::gc_type_is_array!(header.obj_type) => array,
             _ => ptr::null(),
         }
     }

@@ -195,7 +195,7 @@ pub(crate) fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::Arra
     }
     unsafe {
         let gc = crate::value::addr_class::try_read_gc_header(raw)?;
-        if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!((*gc).obj_type)
             || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         {
             Some(raw as *mut crate::array::ArrayHeader)
@@ -381,7 +381,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                     && (*meta).overflow == 0)
                     .then_some(addr)
             }
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(header) if crate::gc_type_is_array!(header.obj_type) => {
                 let bag = crate::object::shape_store::named_bag(
                     addr as *const crate::ObjectHeader,
                     key.to_bits(),

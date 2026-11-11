@@ -264,7 +264,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             // An array is none of the kinds below (Buffer, typed array, class
             // value, function, exotic cell, %Function.prototype%, native
             // module): it answers from its elements and own keys.
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {
                 let present = super::super::has_own_helpers::array_own_key_present(
                     obj_js.as_pointer::<u8>() as *const crate::array::ArrayHeader,
                     key_str,
@@ -322,7 +322,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let present = super::super::has_own_helpers::array_own_key_present(
                     obj as *const crate::array::ArrayHeader,
                     key_str,

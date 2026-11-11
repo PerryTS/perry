@@ -1143,7 +1143,7 @@ unsafe fn keys_array_is_shape_shared(keys: *const super::ArrayHeader) -> bool {
         // descriptor.
         return true;
     };
-    gc.obj_type != crate::gc::GC_TYPE_ARRAY || gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+    crate::gc_type_is_not_array!(gc.obj_type) || gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
 }
 
 /// Install a process-global id into this agent's local descriptor table.

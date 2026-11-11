@@ -241,7 +241,7 @@ fn module_cjs_array_strings(value: f64) -> Option<Vec<String>> {
         return None;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(gc_header.obj_type) {
         return None;
     }
     let arr = ptr as *const crate::array::ArrayHeader;
@@ -1694,7 +1694,7 @@ fn module_invalid_option_received(value: f64) -> String {
         if !ptr.is_null() && (ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-            return if gc_header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            return if crate::gc_type_is_array!(gc_header.obj_type) {
                 "[]".to_string()
             } else {
                 "{}".to_string()

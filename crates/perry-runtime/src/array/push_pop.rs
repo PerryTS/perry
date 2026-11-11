@@ -34,7 +34,7 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
 #[inline]
 unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
     let gc_header = super::header::array_gc_header(arr)?;
-    ((*gc_header).obj_type == gc::GC_TYPE_ARRAY).then(|| (*gc_header)._reserved)
+    (crate::gc_type_is_array!((*gc_header).obj_type)).then(|| (*gc_header)._reserved)
 }
 
 /// Guard called from the static `push_single`/`push` codegen path so that
@@ -91,7 +91,7 @@ pub extern "C" fn js_array_grow_for_push(arr: *mut ArrayHeader) -> *mut ArrayHea
     let Some(header) = (unsafe { value::addr_class::try_read_gc_header(arr as usize) }) else {
         return ptr::null_mut();
     };
-    if header.obj_type != gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & (gc::GC_FLAG_FORWARDED | gc::GC_FLAG_TENURED) != 0
         || header._reserved & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN)
             != 0
@@ -231,7 +231,7 @@ pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
             || !matches!(source_generation, crate::arena::HeapGeneration::Nursery);
         if !MAY_COLLECT
             && (source_requires_old_target
-                || (*old_header).obj_type != gc::GC_TYPE_ARRAY
+                || crate::gc_type_is_not_array!((*old_header).obj_type)
                 || (*old_header).gc_flags & gc::GC_FLAG_ARENA == 0)
         {
             return ptr::null_mut();
@@ -298,7 +298,7 @@ pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
         (*new_header)._reserved = (*old_header)._reserved;
         // Header-carried layout facts were copied above. Only these two
         // authoritative bits can owe an address-keyed array record a move.
-        if (*old_header).obj_type != gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*old_header).obj_type)
             || (*old_header)._reserved & (gc::GC_ARRAY_CUSTOM_PROTO | gc::GC_ARRAY_ELEMENT_SHAPE)
                 != 0
         {
@@ -991,7 +991,7 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
 fn direct_plain_push_receiver(arr: *mut ArrayHeader) -> Option<*mut ArrayHeader> {
     unsafe { value::addr_class::try_read_gc_header(arr as usize) }
         .filter(|header| {
-            header.obj_type == gc::GC_TYPE_ARRAY
+            crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & gc::GC_FLAG_FORWARDED == 0
                 && unsafe { (*arr).named.is_null() }
                 && !super::array_index_fast_path_invalid_for(header._reserved)
@@ -1351,7 +1351,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     // publishing the larger length.
     if let Some(header) = unsafe { value::addr_class::try_read_gc_header(arr as usize) } {
         let guarded_flags = gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND;
-        if header.obj_type == gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & gc::GC_FLAG_FORWARDED == 0
             && !unsafe { array_has_element_descriptors_resolved(arr) }
             && header._reserved & guarded_flags == 0
@@ -1530,7 +1530,7 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
         return false;
     };
     let guarded_flags = gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND;
-    if header.obj_type != gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & gc::GC_FLAG_FORWARDED != 0
         || unsafe { array_has_element_descriptors_resolved(arr) }
         || header._reserved & guarded_flags != 0

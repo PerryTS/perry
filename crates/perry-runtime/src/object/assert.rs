@@ -527,7 +527,7 @@ fn throw_assertion(
 fn if_error_value_message(value: f64) -> Option<String> {
     match gc_type_of(value) {
         Some(
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR,
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!() | crate::gc::GC_TYPE_ERROR,
         ) => {}
         _ => return None,
     }
@@ -835,7 +835,7 @@ fn partial_deep_equal_bool(actual: f64, expected: f64) -> bool {
         return false;
     }
     match expected_type {
-        crate::gc::GC_TYPE_ARRAY => partial_array_equal(
+        crate::gc_array_type_pat!() => partial_array_equal(
             actual_ptr as *const crate::array::ArrayHeader,
             expected_ptr as *const crate::array::ArrayHeader,
         ),

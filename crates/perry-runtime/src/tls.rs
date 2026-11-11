@@ -264,7 +264,7 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
 fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     unsafe {
         let header = gc_header(value)?;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header).obj_type) {
             return None;
         }
         Some(JSValue::from_bits(value.to_bits()).as_pointer::<ArrayHeader>() as *mut ArrayHeader)

@@ -197,7 +197,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     else {
         return stable_miss("invalid_keys_header");
     };
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || descriptor.logical_key_count != 1
     {
