@@ -1572,7 +1572,7 @@ pub fn build_inline_arg_bindings(
             // evaluated here, in argument order, before the body runs, as JS
             // evaluates it: substituting `m` into `bump() * 0 + a` would read
             // `m` after `bump()` wrote it.
-            let stable = census.substitutes_arg(args, index, param.id, body);
+            let stable = census.substitutes_arg(params, args, index, body);
             let literal_in_closure =
                 stable && !matches!(arg, Expr::LocalGet(_)) && closure_captures.contains(&param.id);
             // A param the body WRITES must get its own copy: substituting

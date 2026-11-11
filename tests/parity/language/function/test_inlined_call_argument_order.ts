@@ -108,6 +108,9 @@ console.log("const", g(k), m);
 // that could run code: the inlined body may read the local itself, also
 // where a binding has no place (a loop condition).
 function onBoard(sq: number): boolean {
+  return sq >= 0 && sq < 128 && (sq & 0x88) === 0;
+}
+function firstRead(sq: number): boolean {
   return (sq & 0x88) === 0;
 }
 function ray(from: number, delta: number): number {
@@ -119,7 +122,17 @@ function ray(from: number, delta: number): number {
   }
   return steps;
 }
-console.log("loop condition", ray(0, 1), ray(0x33, 0x11), ray(0x70, -0x10), ray(0x77, 1));
+console.log("loop condition", ray(0, 1), ray(0x33, 0x11), ray(0x70, -0x10), ray(0x77, 1), ray(3, -1));
+function rayAny(from: any, delta: number): number {
+  let source = from;
+  let steps = 0;
+  while (firstRead(source) && steps < 20) {
+    source += delta;
+    steps++;
+  }
+  return steps;
+}
+console.log("loop condition, first read", rayAny(0, 1), rayAny(0x33, 0x11), rayAny("7", 1));
 function square(a: number): number {
   return a * a;
 }
@@ -158,6 +171,19 @@ function twice(a: number): number {
   return (a & 1) + a;
 }
 console.log("conversion", twice(boxed as number), boxed);
+// The same with a local that starts as a number and is stored an object.
+function lateObject(): string {
+  let v: any = 1;
+  const before = twice(v as number);
+  v = {
+    valueOf(): number {
+      v = 5;
+      return 1;
+    },
+  };
+  return before + "," + twice(v as number) + "," + v + "," + onBoard(v as number);
+}
+console.log("late object", lateObject());
 
 // A getter runs between two reads of the parameter.
 let holder: any = {

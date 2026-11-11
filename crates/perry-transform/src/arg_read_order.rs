@@ -10,7 +10,11 @@
 //! anything that could run code, or a store to `m`, has completed. A read of
 //! the parameter after that point is late. An operator's own conversion runs
 //! after its operands are evaluated, so `(a & 0x88) === 0` and `a * a` read
-//! `a` in time, and `bump() + a` or `a.x + a` do not.
+//! `a` in time, and `bump() + a` or `a.x + a` do not. An operator whose
+//! operands are all primitive converts nothing that could run code: with `a`
+//! bound to a local that only ever holds primitives
+//! (`WriteCensus::primitive_arg`), `a >= 0 && a < 128 && (a & 0x88) === 0`
+//! reads `a` in time three times.
 //!
 //! Only a short list of nodes is known to be inert or to evaluate left to
 //! right; every other node is taken to run code both before and after its
@@ -21,10 +25,11 @@
 //! `PERRY_INLINE_PURE_ARGS=0` (`off`, `false`) turns the rule off; such an
 //! argument is then bound to a `let` before the body, or the call is left
 //! alone where a `let` has no place (a loop condition).
-use crate::local_occurrences::count_list_occurrences;
+use crate::local_occurrences::{count_list_occurrences, primitive_valued};
 use perry_hir::types::LocalId;
 use perry_hir::walker::walk_expr_children;
 use perry_hir::{CompareOp, Expr, Stmt, UnaryOp};
+use std::collections::HashSet;
 
 pub(crate) fn enabled() -> bool {
     !matches!(
@@ -35,15 +40,21 @@ pub(crate) fn enabled() -> bool {
 
 /// Evaluating `expr` can run code, or stores to `local`.
 pub(crate) fn may_run_code(expr: &Expr, local: LocalId) -> bool {
-    let mut scan = Scan::new(LocalId::MAX, local);
+    let mut scan = Scan::new(LocalId::MAX, local, HashSet::new());
     scan.expr(expr);
     scan.ran
 }
 
 /// Every read of `param` in `body` happens before anything in `body` that
 /// could run code or store to `local`, the caller local passed for it.
-pub(crate) fn reads_precede_effects(body: &[Stmt], param: LocalId, local: LocalId) -> bool {
-    let mut scan = Scan::new(param, local);
+/// `primitive`: the parameters whose arguments are primitive values.
+pub(crate) fn reads_precede_effects(
+    body: &[Stmt],
+    param: LocalId,
+    local: LocalId,
+    primitive: HashSet<LocalId>,
+) -> bool {
+    let mut scan = Scan::new(param, local, primitive);
     scan.stmts(body);
     // A reference to the parameter that is not a plain read (an intrinsic
     // that names its local, a capture list) is one the scan did not place.
@@ -58,6 +69,9 @@ pub(crate) fn reads_precede_effects(body: &[Stmt], param: LocalId, local: LocalI
 struct Scan {
     param: LocalId,
     local: LocalId,
+    /// Locals of the body that hold a primitive: parameters bound to one,
+    /// and its `const`s initialized with one.
+    primitive: HashSet<LocalId>,
     /// Something that could run code, or a store to `local`, has completed.
     ran: bool,
     /// A read of `param` came after that.
@@ -66,10 +80,11 @@ struct Scan {
 }
 
 impl Scan {
-    fn new(param: LocalId, local: LocalId) -> Self {
+    fn new(param: LocalId, local: LocalId, primitive: HashSet<LocalId>) -> Self {
         Scan {
             param,
             local,
+            primitive,
             ran: false,
             late: false,
             reads: 0,
@@ -84,9 +99,14 @@ impl Scan {
 
     fn stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { init, .. } => {
+            Stmt::Let {
+                id, init, mutable, ..
+            } => {
                 if let Some(e) = init {
                     self.expr(e);
+                    if !*mutable && self.is_primitive(e) {
+                        self.primitive.insert(*id);
+                    }
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
@@ -146,6 +166,23 @@ impl Scan {
         }
     }
 
+    /// The value of `expr` is a primitive: a literal, a primitive local, or
+    /// an operator that always yields one.
+    fn is_primitive(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::LocalGet(id) => self.primitive.contains(id),
+            Expr::Logical { left, right, .. } => {
+                self.is_primitive(left) && self.is_primitive(right)
+            }
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => self.is_primitive(then_expr) && self.is_primitive(else_expr),
+            other => primitive_valued(other),
+        }
+    }
+
     fn expr(&mut self, expr: &Expr) {
         match expr {
             Expr::Integer(_)
@@ -193,15 +230,16 @@ impl Scan {
                 self.expr(left);
                 self.expr(right);
             }
-            // Left, right, then the operator's conversions (`valueOf`).
+            // Left, right, then the operator's conversions (`valueOf`) of
+            // an operand that may be an object.
             Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
-                self.ran = true;
+                self.ran |= !(self.is_primitive(left) && self.is_primitive(right));
             }
             Expr::Unary { operand, .. } => {
                 self.expr(operand);
-                self.ran = true;
+                self.ran |= !self.is_primitive(operand);
             }
             Expr::Sequence(items) => {
                 for item in items {
@@ -221,7 +259,7 @@ impl Scan {
             // code once its operands are evaluated.
             other => {
                 if !self.ran {
-                    let mut probe = Scan::new(self.param, self.local);
+                    let mut probe = Scan::new(self.param, self.local, self.primitive.clone());
                     walk_expr_children(other, &mut |child| probe.expr(child));
                     self.ran = probe.ran;
                 }
