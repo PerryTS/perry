@@ -1563,7 +1563,7 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             for (method, func) in [
                 (
                     "connect",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connect", constructible = true)] export crate::node_inspector::session_connect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_connect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "connectToMainThread",

@@ -251,3 +251,31 @@ fn new_of_undeclared_realm_constructor_stays_top() {
     ));
     assert!(site(&pf, "q").top, "{}", pf.dump_text());
 }
+
+/// `session.connect()` (Node inspector.Session: connects the session to the
+/// inspector back-end; no arguments, returns undefined) hands nothing of the
+/// program to other code: the session it is called on stays known.
+#[test]
+fn session_connect_keeps_the_session() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        function enable() {{
+            const inspector: typeof import("inspector") = require("inspector");
+            const session = new inspector.Session();
+            session.connect();
+            return h(session);
+        }}
+        console.log(enable());
+        export const keep = 1;
+    "#
+    ));
+    let q = site(&pf, "q");
+    assert!(
+        !q.top
+            && !q.receivers.is_empty()
+            && q.receivers
+                .iter()
+                .all(|r| r.contains("node:inspector.Session.prototype")),
+        "{q:?}"
+    );
+}
