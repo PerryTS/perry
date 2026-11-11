@@ -132,11 +132,7 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
 /// canonical index literal counts as its index (`copy_key`); otherwise only
 /// the key node's own interval does, so a key that is the string `"3"` at
 /// run time has none.
-fn hulls(
-    g: &Gen<'_>,
-    admit: impl Fn(crate::derive::ElementOp) -> bool,
-    named: bool,
-) -> Hulls {
+fn hulls(g: &Gen<'_>, admit: impl Fn(crate::derive::ElementOp) -> bool, named: bool) -> Hulls {
     // A summarized body's key node has one copy per instance (`Inst::fresh`).
     let mut copies: std::collections::HashMap<NodeId, Vec<NodeId>> = Default::default();
     for inst in 0..g.m.sum.insts.len() as u32 {

@@ -70,7 +70,10 @@ fn a_proven_index_takes_no_normalizer_and_no_sign_test() {
         !with.contains("ubound.cold"),
         "no negative exit on the miss arm\n{with}"
     );
-    assert!(with.contains("fptosi double"), "one exact conversion\n{with}");
+    assert!(
+        with.contains("fptosi double"),
+        "one exact conversion\n{with}"
+    );
     // The bound stays: the key is not proven inside the Array.
     assert!(with.contains("icmp ult i32"), "{with}");
 }
