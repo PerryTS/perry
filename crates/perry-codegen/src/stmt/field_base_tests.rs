@@ -121,6 +121,7 @@ const GROWABLE: FactsArrRep = FactsArrRep {
     dense: true,
     fixed: false,
     im: false,
+    at_rest: false,
 };
 
 /// IR of `IR_SRC` with `this` a `B`, `board` of rep `rep`, every

@@ -3,6 +3,7 @@
 mod accumulator_scope;
 mod i32_counter;
 mod iterator_record;
+mod rest_counter;
 pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
 use accumulator_scope::{emit_packed_numeric_accumulator_admission, PackedAccumulatorScope};
 
@@ -7002,7 +7003,7 @@ fn lower_static_counter_versioned(
     // gets no entry check, not even a dead one.
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
-    if views.is_empty() {
+    if views.is_empty() && rest_counter::collect(ctx, body, counter_id).is_empty() {
         return lower_copy(ctx);
     }
     let Some(entry) = counter_entry_check(ctx, counter_id, None, condition, Some(update), body)?
@@ -7031,6 +7032,9 @@ fn lower_counter_versions(
 
     ctx.current_block = fast_idx;
     let scope_id = ctx.next_loop_proof_scope_id();
+    for &(local, _) in &entry.rest {
+        ctx.rest_counter.push((counter_id, local, scope_id));
+    }
     for buffer_local_id in &entry.views {
         ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
             index_local_id: counter_id,
@@ -7042,7 +7046,9 @@ fn lower_counter_versions(
             },
         });
     }
-    lower_copy(ctx, true)?;
+    let lowered = lower_copy(ctx, true);
+    ctx.rest_counter.retain(|&(_, _, scope)| scope != scope_id);
+    lowered?;
     ctx.bounded_buffer_index_pairs
         .retain(|fact| fact.scope_id != scope_id);
     if !ctx.block().is_terminated() {
@@ -7416,6 +7422,9 @@ struct CounterEntryCheck {
     passed: String,
     /// Buffer views the body indexes by the counter itself.
     views: Vec<u32>,
+    /// At-rest locals the body indexes by the counter, with their floor
+    /// (I32 at rest B2, `rest_counter::collect`).
+    rest: Vec<(u32, u32)>,
 }
 
 /// Build the entry check that licenses the fast copy of an overflow-exit
@@ -7428,7 +7437,10 @@ struct CounterEntryCheck {
 ///   the step runs only after `counter <= B` held this iteration, so it
 ///   cannot overflow;
 /// * `B + 1 <= length` (`B <= length` under `<`) for every fixed-length view
-///   indexed by the counter: every index the guard admits is in bounds.
+///   indexed by the counter: every index the guard admits is in bounds;
+/// * `B + 1 <= floor` (`B <= floor` under `<`) for every at-rest local the
+///   body indexes by the counter (I32 at rest B2): every index the guard
+///   admits is a present slot.
 ///
 /// `B` and the step must be loop-invariant int32 slots or literals and the
 /// body must not write the counter (the overflow-exit rule already requires
@@ -7476,6 +7488,7 @@ fn counter_entry_check(
     };
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
+    let rest = rest_counter::collect(ctx, body, counter_id);
 
     let bound_i32 = load_i32(ctx, &bound);
     let step_i32 = match step {
@@ -7505,6 +7518,7 @@ fn counter_entry_check(
         };
         lengths.push(len);
     }
+    lengths.extend(rest.iter().map(|&(_, floor)| floor.to_string()));
     let blk = ctx.block();
     let mut passed = blk.xor(I1, &overflowed, "true");
     let counter_nonneg = blk.icmp_sge(I32, &counter, "0");
@@ -7527,7 +7541,11 @@ fn counter_entry_check(
         let in_bounds = blk.icmp_sle(I64, &end, len);
         passed = blk.and(I1, &passed, &in_bounds);
     }
-    Ok(Some(CounterEntryCheck { passed, views }))
+    Ok(Some(CounterEntryCheck {
+        passed,
+        views,
+        rest,
+    }))
 }
 
 /// The views a body indexes by exactly `counter` (or `counter | 0`): element

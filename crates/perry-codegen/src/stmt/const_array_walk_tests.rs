@@ -55,6 +55,7 @@ fn ir(im: bool, floor: u32, consts: Option<Vec<f64>>) -> String {
             dense: true,
             fixed: true,
             im,
+            at_rest: false,
         }),
     );
     if im {

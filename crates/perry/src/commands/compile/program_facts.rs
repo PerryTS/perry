@@ -1105,6 +1105,11 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
             dense: a.dense,
             fixed: a.fixed,
             im: a.im,
+            // Negative control `restrep` (I32 at rest B2): every int Array
+            // is claimed at rest, so a rep-keyed load decodes a double word.
+            at_rest: a.at_rest
+                || (a.elem == ElemRep::I32
+                    && std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("restrep")),
         }),
         // DESIGN-p4l4 VR-2: codegen lowers records from VR-3; until then a
         // record is the Boxed word it is today.

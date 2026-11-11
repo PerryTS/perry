@@ -38,7 +38,8 @@
 //!
 //! `PERRY_FACTS_ARRAY_BASE=0` turns the installer off (C3's build).
 //! Negative controls: `PERRY_FACTS_SABOTAGE=arrbase` installs the stub's
-//! handle without resolving forwarding; `arrbaseadm` admits a loop whatever
+//! handle without resolving forwarding; `restheld` reads an at-rest Array's
+//! I32 word as a double (I32 at rest B2); `arrbaseadm` admits a loop whatever
 //! else ends its region (`stmt::field_base`); `arrbasepoll` skips the
 //! poll's refresh (exposed only by a moving collection at the poll:
 //! `PERRY_GC_SCHEDULE_SEED` with the instrumented runtime).
@@ -249,7 +250,8 @@ pub(crate) fn try_lower_read(
     ))
 }
 
-/// `load [base + 24 + 8 * idx]`.
+/// `load [base + 24 + 8 * idx]`; an at-rest Array's I32 word is decoded
+/// (`rest_elems::decode`, B2).
 fn load(ctx: &mut FnCtx<'_>, base: &FieldBase, idx: &str) -> String {
     let blk = ctx.block();
     let head = blk.load(I64, &base.base_slot);
@@ -263,6 +265,10 @@ fn load(ctx: &mut FnCtx<'_>, base: &FieldBase, idx: &str) -> String {
     let addr = blk.add(I64, &elements, &offset);
     let slot = blk.inttoptr(I64, &addr);
     let raw = blk.load(I64, &slot);
+    // Negative control `restheld`: the word is taken as a double.
+    if base.rep.at_rest && !sabotaged("restheld") {
+        return crate::expr::rest_elems::decode(ctx, &raw, crate::expr::rest_elems::Want::Value);
+    }
     blk.bitcast_i64_to_double(&raw)
 }
 
