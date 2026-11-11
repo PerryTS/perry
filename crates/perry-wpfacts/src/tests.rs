@@ -122,6 +122,7 @@ mod json_protocol;
 mod response_body;
 mod error_to_string;
 mod regexp_chain_methods;
+mod json_object_proto_members;
 mod memo_context;
 mod named_accessors;
 mod named_method_on_class_value;
