@@ -51,6 +51,7 @@ pub(crate) enum Fact {
     FieldRep,
     UnsignedBound,
     ZeroSign,
+    BirthImage,
     KeySign,
 }
 impl Fact {
@@ -101,6 +102,7 @@ impl Fact {
             Self::FieldRep => "field rep",
             Self::UnsignedBound => "unsigned bound",
             Self::ZeroSign => "zero sign",
+            Self::BirthImage => "birth image",
             Self::KeySign => "key sign",
         }
     }
