@@ -134,6 +134,7 @@ def main():
         ("signature-negative", "signature", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
+        ("signed-index-negative", "signature-range", "signature"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),
