@@ -237,8 +237,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         }
         // Every operand is ToString'd or ToIntegerOrInfinity'd.
         "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
-        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "trim" | "trimStart"
-        | "trimEnd" | "indexOf" | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
+        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf" | "lastIndexOf"
+        | "toFixed" | "toPrecision" | "toExponential" => {
             for &a in &c.args {
                 to_prim(m, a, "string method operand");
             }
@@ -264,7 +264,11 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             return true;
         }
         // 22.1.3.28 / .30 / .10 / .31: no operand is read.
-        "toLowerCase" | "toUpperCase" | "toWellFormed" => {
+        // 22.1.3.32 / .33 / .34 TrimString(this, where) reads no operand;
+        // Annex B.2.2.15 / .16: `trimLeft` / `trimRight` are the same
+        // function objects as `trimStart` / `trimEnd`.
+        "toLowerCase" | "toUpperCase" | "toWellFormed" | "trim" | "trimStart" | "trimEnd"
+        | "trimLeft" | "trimRight" => {
             ret_prim(m, call, prim::STR);
             return true;
         }
