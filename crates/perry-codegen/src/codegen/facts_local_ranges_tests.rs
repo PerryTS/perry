@@ -10,8 +10,10 @@ use crate::codegen::{ElisionFacts, FactsRep, ProgramFactsView};
 use crate::{compile_module, CompileOptions};
 use perry_hir::Module;
 
-const SRC: &str = "export function f(t: number[], i: number): number {\n\
-                   const k = (i & 15) - 3;\n\
+/// `k` has no local range proof (an element of an ordinary Array): only
+/// the facts' interval bounds it.
+const SRC: &str = "export function f(t: number[], u: number[], i: number): number {\n\
+                   const k = u[i];\n\
                    return t[k * 2 + 1] ?? -1;\n\
                    }\n";
 
