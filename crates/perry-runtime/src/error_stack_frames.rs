@@ -283,7 +283,7 @@ mod walk {
     extern "C" fn js_text_anchor() {}
 
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-    fn js_text_bounds() -> (usize, usize) {
+    pub(super) fn js_text_bounds() -> (usize, usize) {
         unsafe extern "C" {
             static __start_perry_js_text: u8;
             static __stop_perry_js_text: u8;
@@ -448,6 +448,29 @@ fn capture_encoded(
     origin: walk::Origin,
     want: usize,
 ) -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("stack.capture", &format!("{:?}", (want,)), || {
+            let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
+            let n = walk::capture_js(origin, &mut pcs, want);
+            crate::snap_census::pc_check(&pcs[..n], walk::js_text_bounds());
+            if diag_enabled() {
+                eprintln!(
+                    "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",
+                    walk::diag_stack_top(),
+                    walk::diag_frame_pointer(),
+                    &pcs[..n]
+                );
+            }
+            let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+            if n == 0 {
+                return (blob, 0);
+            }
+            let len = encode_pcs(&pcs[..n], &mut blob);
+            (blob, len)
+        });
+    }
+
     let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
     let n = walk::capture_js(origin, &mut pcs, want);
     if diag_enabled() {
@@ -901,6 +924,14 @@ fn stack_trace_limit() -> usize {
 /// it (see [`walk::origin`]).
 #[inline(always)]
 pub(crate) fn capture_frames_payload() -> Vec<u8> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("stack.payload", &format!("{:?}", ()), || {
+            let origin = walk::origin();
+            capture_frames_payload_from(origin)
+        });
+    }
+
     let origin = walk::origin();
     capture_frames_payload_from(origin)
 }
@@ -946,6 +977,38 @@ pub(crate) fn join_stack(head: &str, lines: &str) -> String {
 /// ran under (an [`ALPHABET`] index); the frame lines stop there. An empty
 /// payload is a capture that found nothing.
 pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call(
+            "stack.rendered",
+            &format!("{:?}", (payload,)),
+            || {
+                let (limit, payload) = match payload.split_first() {
+                    Some((c, rest)) => match decode_char(*c) {
+                        Some(limit) => (limit as usize, rest),
+                        None => (RENDER_LIMIT, payload),
+                    },
+                    None => (RENDER_LIMIT, payload),
+                };
+                if limit == 0 {
+                    return String::new();
+                }
+                let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
+                    Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
+                    None => (payload, None),
+                };
+                // The recorded #5247 line is the innermost frame and counts toward it.
+                let resolved = render_frames(blob, limit - usize::from(recorded.is_some()));
+                match (recorded, resolved) {
+                    (Some(line), Some(frames)) => format!("{line}\n{frames}"),
+                    (Some(line), None) => line.to_string(),
+                    (None, Some(frames)) => frames,
+                    (None, None) => "    at <anonymous>".to_string(),
+                }
+            },
+        );
+    }
+
     let (limit, payload) = match payload.split_first() {
         Some((c, rest)) => match decode_char(*c) {
             Some(limit) => (limit as usize, rest),

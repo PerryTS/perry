@@ -98,6 +98,20 @@ with the live set, and each has a cheaper exact form:
 <!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
 
+**The post-minor coverage restore is bounded by the dirty pages.** After a
+minor clears the remembered set it re-derives it from the pre-clear dirty
+snapshot. An owner the dirty scan visited completely is skipped; any other old
+parent is walked, and of its in-body slots only those on a page the snapshot
+names: an old parent's in-body slot is described by its page, so one on a
+clean page owes nothing. A Map store, Set store or array that spans many pages
+therefore costs a minor its dirty pages, not its size. Slots outside the
+parent's body and malloc parents are owner qualified and keep the whole-owner
+walk. `PERRY_GC_RESTORE_DIRTY_PAGES=0` selects the whole-owner walk for every
+parent, and `=verify` runs both and aborts if the whole-owner walk finds an
+entry the bounded one did not restore (test and debug builds always do).
+<!-- gc-symbol: the_bounded_restore_rebuilds_the_pages_the_whole_owner_restore_rebuilds in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+<!-- gc-symbol: the_witness_reports_an_unbarriered_edge in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+
 **Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its
 growth baseline, so old-gen garbage that a minor promoted and that died after
 it is invisible to it. A document parse loop is that shape: each result's
@@ -421,6 +435,7 @@ These are the operational controls most useful outside collector development:
 | `PERRY_WRITE_BARRIERS=0` | compile/runtime barrier bisection; also forces full mark-sweep |
 | `PERRY_GC_SCAVENGE=0` | disable direct nursery scavenging for pacing comparison |
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
+| `PERRY_GC_RESTORE_DIRTY_PAGES=0` | walk whole owners in the post-minor coverage restore (`verify`: both walks, compared) |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
