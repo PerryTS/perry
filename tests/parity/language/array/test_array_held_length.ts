@@ -16,6 +16,15 @@ function gen(n: number): number[] {
   return out;
 }
 
+// The same births for the negative controls: an Array token is its birth
+// site, so a control that puts `gen`'s Array into a field would end the
+// fact for every P case too.
+function mk(n: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(i * 3 + 1);
+  return out;
+}
+
 // Pushes through a parameter.
 function fill(out: number[], n: number): void {
   for (let i = 0; i < n; i++) out.push(out.length * 2);
@@ -62,7 +71,7 @@ function p3(n: number): number {
 // P4: a parameter is walked; a different Array is handed down and grows.
 function p4(xs: number[]): number {
   let s = 0;
-  const other = gen(3);
+  const other: number[] = [5, 6, 7];
   for (const v of xs) {
     s += v + other.length;
     fill(other, 1);
@@ -86,7 +95,7 @@ function p5(rounds: number): number {
 
 // N1: the callee pushes onto the walked Array, handed down as an argument.
 function n1(): string {
-  const xs = gen(3);
+  const xs = mk(3);
   const seen: number[] = [];
   for (const v of xs) {
     seen.push(v);
@@ -100,7 +109,7 @@ function popOne(a: number[]): void {
   a.pop();
 }
 function n2(): string {
-  const xs = gen(6);
+  const xs = mk(6);
   const seen: number[] = [];
   for (const v of xs) {
     seen.push(v);
@@ -114,7 +123,7 @@ function cut(a: number[], n: number): void {
   a.length = n;
 }
 function n3(): string {
-  const xs = gen(8);
+  const xs = mk(8);
   const seen: number[] = [];
   for (let i = 0; i < xs.length; i++) {
     seen.push(xs[i] ?? -1);
@@ -126,7 +135,7 @@ function n3(): string {
 // N4: the Array is a field's; a method grows it through the field.
 // N5: a method assigns the field; the loop keeps walking the old Array.
 class Holder {
-  items: number[] = gen(3);
+  items: number[] = mk(3);
   grow(): void {
     if (this.items.length < 8) this.items.push(100 + this.items.length);
   }
@@ -156,7 +165,7 @@ class Holder {
 
 // N6: a closure captures the Array and pushes; it is called in the loop.
 function n6(): string {
-  const xs = gen(3);
+  const xs = mk(3);
   const grow = () => {
     if (xs.length < 6) xs.push(9);
   };
@@ -180,7 +189,7 @@ const ops: Array<() => void> = [
   () => {},
 ];
 function n7(k: number): string {
-  shared = gen(4);
+  shared = mk(4);
   const xs = shared;
   const seen: number[] = [];
   let i = 0;
@@ -196,7 +205,7 @@ function n7(k: number): string {
 
 // N8: the loop's own body pushes.
 function n8(): string {
-  const xs = gen(3);
+  const xs = mk(3);
   const seen: number[] = [];
   for (const v of xs) {
     seen.push(v);
@@ -211,7 +220,7 @@ function growBox(box: number[][]): void {
   if (a !== undefined && a.length < 6) a.push(7);
 }
 function n9(): string {
-  const xs = gen(3);
+  const xs = mk(3);
   const box = [xs];
   const seen: number[] = [];
   for (const v of xs) {
@@ -229,7 +238,7 @@ function* feeder(a: number[]): Generator<number> {
   }
 }
 function n10(): string {
-  const xs = gen(2);
+  const xs = mk(2);
   const it = feeder(xs);
   const seen: number[] = [];
   for (const v of xs) {
@@ -245,7 +254,7 @@ function rotate(a: number[]): void {
   if (first !== undefined && a.length < 5) a.unshift(first + 1, first + 2);
 }
 function n11(): string {
-  const xs = gen(4);
+  const xs = mk(4);
   const seen: number[] = [];
   let guard = 0;
   for (const v of xs) {

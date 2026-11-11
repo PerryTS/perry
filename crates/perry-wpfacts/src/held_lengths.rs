@@ -15,7 +15,8 @@
 //!    temporary, a result; or a summary instance's slot) that no other
 //!    function references (`Model::captures`), and that function is plain:
 //!    no generator, no async function, no generator step closure, whose
-//!    frame would outlive its call. So no field, element, module binding,
+//!    frame would outlive its call; or it is a node of a module body
+//!    without a top-level `await`. So no field, element, imported binding,
 //!    closure cell, `arguments` object or thrown value ever holds an
 //!    instance of `T`: an instance is reachable only from the frames it
 //!    was passed down to or returned up to.
@@ -184,6 +185,20 @@ fn frame_of(m: &Model, n: usize) -> Option<FnIdx> {
     }
 }
 
+/// The module bodies (`<init>`) that run once from start to end: no
+/// top-level `await`.
+fn module_bodies(g: &Gen<'_>) -> FxHashSet<FnIdx> {
+    g.init_fn_of
+        .iter()
+        .filter(|(mi, _)| {
+            g.modules
+                .get(**mi as usize)
+                .is_some_and(|(_, module)| !module.has_top_level_await)
+        })
+        .map(|(_, f)| *f)
+        .collect()
+}
+
 /// Fill `BindingFacts::stable_length` and `stable_front` (module docs).
 pub(crate) fn collect(
     g: &Gen<'_>,
@@ -258,7 +273,7 @@ pub(crate) fn collect(
         return;
     }
     if !info.is_empty() && !sabotage {
-        rule_holders(m, &bodies, &mut info);
+        rule_holders(m, &bodies, &module_bodies(g), &mut info);
         rule_events(m, &mut info);
         rule_calls(m, &mut info);
     }
@@ -323,7 +338,12 @@ fn defined(m: &Model, t: Tok) -> bool {
 
 /// Rule 1: every holder of a candidate token is a frame node of a plain
 /// function that no other function references.
-fn rule_holders(m: &Model, bodies: &FxHashSet<(u32, u32)>, info: &mut FxHashMap<Tok, TokInfo>) {
+fn rule_holders(
+    m: &Model,
+    bodies: &FxHashSet<(u32, u32)>,
+    inits: &FxHashSet<FnIdx>,
+    info: &mut FxHashMap<Tok, TokInfo>,
+) {
     let captured: FxHashSet<NodeId> = m.captures.iter().map(|&(n, _)| n).collect();
     let mut plain_fn: FxHashMap<FnIdx, bool> = FxHashMap::default();
     // A shared set is judged once per verdict of its holder.
@@ -339,6 +359,11 @@ fn rule_holders(m: &Model, bodies: &FxHashSet<(u32, u32)>, info: &mut FxHashMap<
             match frame_of(m, n) {
                 None if RELAYS.contains(&m.labels[n]) => None,
                 None => Some("heap".to_string()),
+                // A module body runs once from start to end: its nodes
+                // are frame nodes (a binding another function reads is
+                // `captured`, one another module reads is in its import
+                // node, a heap node).
+                Some(f) if inits.contains(&f) => None,
                 Some(f) => (!*plain_fn.entry(f).or_insert_with(|| plain(m, bodies, f)))
                     .then(|| format!("suspending({})", m.funcs[f as usize].name.replace(' ', "_"))),
             }
