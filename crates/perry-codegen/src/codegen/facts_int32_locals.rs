@@ -107,8 +107,16 @@ pub(crate) fn witness_exact(ctx: &mut crate::expr::FnCtx<'_>, value: &str, id: u
     // tolerated `-0` compares as 0.
     if let Some(range) = crate::expr::facts_local_range(ctx, id) {
         let blk = ctx.block();
-        let ge = blk.fcmp("oge", value, &crate::nanbox::double_literal(range.min as f64));
-        let le = blk.fcmp("ole", value, &crate::nanbox::double_literal(range.max as f64));
+        let ge = blk.fcmp(
+            "oge",
+            value,
+            &crate::nanbox::double_literal(range.min as f64),
+        );
+        let le = blk.fcmp(
+            "ole",
+            value,
+            &crate::nanbox::double_literal(range.max as f64),
+        );
         let inside = blk.and(I1, &ge, &le);
         exact = blk.and(I1, &exact, &inside);
     }

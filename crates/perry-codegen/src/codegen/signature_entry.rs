@@ -1057,10 +1057,7 @@ pub(crate) fn slot_i32_params(f: &Function, plan: &SpecFnPlan) -> HashSet<u32> {
 /// scope no loop ends). The interval is witnessed at every typed site and at
 /// the boxed entry (`witness_value`). Empty with
 /// `PERRY_FACTS_LOCAL_RANGES=0`.
-pub(crate) fn param_range_facts(
-    f: &Function,
-    plan: &SpecFnPlan,
-) -> Vec<crate::expr::IntRangeFact> {
+pub(crate) fn param_range_facts(f: &Function, plan: &SpecFnPlan) -> Vec<crate::expr::IntRangeFact> {
     let Some(sig) = plan.signature.as_ref() else {
         return Vec::new();
     };
