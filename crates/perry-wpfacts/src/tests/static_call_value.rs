@@ -185,3 +185,70 @@ console.log(k.pa + 1);
     );
     assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
 }
+
+// Fix 4 (tssrc: `SymbolLinks`, the `constructor` an unknown-key read of
+// its instances yields, given to an undescribed primitive method; the
+// method's any-key touch calls `bind` on it, and the bound function is
+// handed back to the runtime): a bound function the runtime may call with
+// anything calls its target (10.4.1.1); a class constructor called throws
+// a TypeError before its body runs (10.2.1 step 2): no argument, no bound
+// `this` or bound argument reaches anything.
+#[test]
+fn a_class_given_to_a_computed_primitive_method_keeps_it() {
+    let pf = whole(
+        r#"
+class K { pa = 1; }
+const k = new K();
+try { ("abc" as any)[process.argv[2]](K); } catch (e) {}
+console.log(k.pa + 1);
+"#,
+    );
+    assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_bound_class_given_to_a_computed_primitive_method_keeps_its_bound_arguments() {
+    let pf = whole(
+        r#"
+class K { pa = 1; constructor(o?: any) { if (o) o.pc = 3; } }
+const k = new K();
+const p = { pb: 2 };
+try { ("abc" as any)[process.argv[2]](K.bind(null, p)); } catch (e) {}
+console.log(k.pa + 1, p.pb + 1);
+"#,
+    );
+    assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
+    assert_eq!(escape_with_field(&pf, "pb"), None, "{}", pf.dump_text());
+}
+
+// Control: a bound plain function in the same position is called with
+// anything: its bound argument is handed on.
+#[test]
+fn a_bound_function_given_to_a_computed_primitive_method_hands_its_arguments() {
+    let pf = whole(
+        r#"
+function f(o: any) { return o; }
+const p = { pb: 2 };
+try { ("abc" as any)[process.argv[2]](f.bind(null, p)); } catch (e) {}
+console.log(p.pb + 1);
+"#,
+    );
+    assert!(escape_with_field(&pf, "pb").is_some(), "{}", pf.dump_text());
+}
+
+// Control: a class given to real unknown code escapes (it may be
+// constructed there).
+#[test]
+fn a_class_given_to_unknown_code_escapes() {
+    let pf = whole(
+        r#"
+class K { pa = 1; }
+const k = new K();
+const u: any = new Function(process.argv[3]);
+u(K.bind(null));
+console.log(k.pa + 1);
+"#,
+    );
+    assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
+}
+

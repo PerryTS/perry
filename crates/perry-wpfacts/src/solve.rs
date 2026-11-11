@@ -1796,6 +1796,7 @@ impl Model {
                 reason,
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
+            Cons::BoundCall { reason, bound } => format!("boundcall {n} {reason} {bound}"),
             Cons::Arith { dst } => format!("arith {n} {dst}"),
             Cons::Range {
                 op,

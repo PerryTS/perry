@@ -238,6 +238,12 @@ pub enum Cons {
     /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
     /// left-hand side value (`Call(instOfHandler, C, « V »)`).
     HasInstance { reason: u32, arg: NodeId },
+    /// The node is the target of `bound`, a bound function the runtime may
+    /// call with anything (`Protocol::Any`): the call is the target's
+    /// [[Call]] (10.4.1.1). A class constructor throws a TypeError before
+    /// its body runs (10.2.1 step 2); a bound target forwards the call;
+    /// any other target is called with anything: `bound` escapes.
+    BoundCall { reason: u32, bound: Tok },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
@@ -667,6 +673,7 @@ impl Cons {
             Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
             Cons::HasInstance { .. } => "hasinstance",
+            Cons::BoundCall { .. } => "boundcall",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::EnumChain { .. } => "enumchain",

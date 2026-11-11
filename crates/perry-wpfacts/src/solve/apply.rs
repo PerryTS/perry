@@ -643,14 +643,36 @@ impl Model {
                     match self.toks[t as usize] {
                         // A function handed to a reflecting runtime helper:
                         // it may be called back with anything.
-                        TokKind::Func(_, _) | TokKind::Bound(_) if proto == Protocol::Any => {
-                            self.escape(t, reason)
+                        TokKind::Func(_, _) if proto == Protocol::Any => self.escape(t, reason),
+                        // A bound function: the call runs its target's
+                        // [[Call]] (`Cons::BoundCall` on the target node);
+                        // its other keys are the touch of the bound value.
+                        TokKind::Bound(b) if proto == Protocol::Any => {
+                            let target = self.bound[b as usize].0;
+                            self.bound_call(target, t, reason);
+                            self.implicit(t, reason, proto);
                         }
                         // `instanceof` a bound function runs its target's.
                         TokKind::Bound(_) if proto == Protocol::HasInstance => {
                             self.escape(t, reason)
                         }
                         _ => self.implicit(t, reason, proto),
+                    }
+                }
+            }
+            Cons::BoundCall { reason, bound } => {
+                for &t in toks {
+                    match self.toks[t as usize] {
+                        // 10.2.1 step 2: a class constructor called
+                        // without `new` throws before its body runs.
+                        TokKind::ClassObj(tm)
+                            if matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. }) => {}
+                        // 10.4.1.1: a bound target forwards the call.
+                        TokKind::Bound(b) => {
+                            let target = self.bound[b as usize].0;
+                            self.bound_call(target, bound, reason);
+                        }
+                        _ => self.escape(bound, reason),
                     }
                 }
             }
@@ -1840,6 +1862,20 @@ impl Model {
             let instance = self.tok(TokKind::Obj(tm, NO_CTX));
             let reason = self.reason("E6 live superclass may change constructor birth fields");
             self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
+        }
+    }
+}
+
+impl Model {
+    /// `bound` may be called with anything by the runtime: its target node
+    /// decides (`Cons::BoundCall`), once per bound value.
+    pub(crate) fn bound_call(&mut self, target: NodeId, bound: Tok, reason: u32) {
+        let seen = self.nodes[target as usize]
+            .cons
+            .iter()
+            .any(|c| matches!(c, Cons::BoundCall { bound: b, .. } if *b == bound));
+        if !seen {
+            self.cons(target, Cons::BoundCall { reason, bound });
         }
     }
 }
