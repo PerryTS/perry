@@ -1,4 +1,4 @@
-// `A` is a literal of Numbers that `walk` shortens while its for-of runs,
+// `A` is a literal of Numbers that `walk` pops while its for-of runs,
 // so it is neither immutable nor of a fixed length: the loop reads the
 // length at every step and stops after the third element.
 // Under PERRY_FACTS_SABOTAGE=walkfixed any Array of Numbers counts as an
@@ -10,7 +10,11 @@ function walk(cut: number): number {
   let s = 0;
   for (const v of A) {
     s += v;
-    if (v === cut) A.length = 3;
+    if (v === cut) {
+      A.pop();
+      A.pop();
+      A.pop();
+    }
   }
   return s;
 }
