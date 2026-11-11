@@ -1403,6 +1403,8 @@ pub struct Model {
     /// The at-rest capacity reservation (`rest_elems::reserve`;
     /// `PERRY_REST_CAPACITY=0` turns it off).
     pub rest_capacity: bool,
+    /// Fill births (`fill_births`; `PERRY_ARRAY_FILL_BIRTH=0` turns them off).
+    pub fill_births: bool,
     /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
     pub rest_fields: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose

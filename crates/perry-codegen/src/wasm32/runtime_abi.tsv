@@ -124,6 +124,7 @@ js_array_entries	ptr	ptr
 js_array_entries_iter_obj	i64	ptr
 js_array_every	f64	ptr,ptr
 js_array_fill	ptr	ptr,f64
+js_array_fill_birth	ptr	i32u,i32u,f64,i32u
 js_array_fill_f64_const_extend	ptr	ptr,i32u,f64
 js_array_fill_f64_const_len_extend	ptr	ptr,f64
 js_array_fill_f64_iota_extend	ptr	ptr,i32u

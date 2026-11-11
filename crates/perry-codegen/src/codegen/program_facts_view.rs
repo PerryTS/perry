@@ -409,6 +409,10 @@ pub struct ElisionFacts {
     pub rest_writes: std::collections::BTreeMap<u32, u32>,
     pub rest_births: std::collections::BTreeSet<u32>,
     pub rest_reserves: std::collections::BTreeMap<u32, u32>,
+    /// The fill births (wpfacts `ModuleBindings::fill_births`;
+    /// `expr::fill_birth`): the `fill` call offset of a fused fill `new
+    /// Array(k).fill(v)` that is one birth, with its length `k`.
+    pub fill_births: std::collections::BTreeMap<u32, u32>,
     /// I32 at rest, PR C: every key some class stores in an I32 lane
     /// (`FactsField::rest`): each site of such a key is lowered by
     /// `expr::rest_fields`, before every other tier.

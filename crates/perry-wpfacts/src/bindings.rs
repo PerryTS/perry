@@ -526,6 +526,10 @@ pub struct ModuleBindings {
     pub rest_writes: Vec<(u32, u32)>,
     pub rest_births: Vec<u32>,
     pub rest_reserves: Vec<(u32, u32)>,
+    /// The fill births (`fill_births`): the `fill` call offset of a fused
+    /// fill `new Array(k).fill(v)` codegen may bear as one birth, with `k`.
+    /// Sorted.
+    pub fill_births: Vec<(u32, u32)>,
     /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
     /// byte offset) whose receiver may hold an instance with an I32 lane at
     /// the read's key, with the lane's slot when every receiver value is such
@@ -916,6 +920,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     }
     out.extend(rest_probe(m));
     out.extend(crate::rest_elems::probe(m));
+    out.extend(crate::fill_births::probe(m));
     out
 }
 

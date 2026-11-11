@@ -101,6 +101,9 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod fill_birth;
+#[cfg(test)]
+mod fill_birth_tests;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
