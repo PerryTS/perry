@@ -75,6 +75,15 @@ impl Model {
         n
     }
 
+    /// Something may change Array `t`'s length or move its elements
+    /// (`held_lengths`): a store at `at`, or with `call` the builtin method
+    /// call `at`; `u32::MAX` when the solve cannot place it.
+    pub(crate) fn len_event(&mut self, t: Tok, at: u32, call: bool) {
+        if self.held_lengths && t != TOP && self.is_arr(t) {
+            self.len_events.insert((t, at, call));
+        }
+    }
+
     /// Token `t`'s length may be any Number from now on.
     pub(crate) fn arr_len_top(&mut self, t: Tok) {
         if t == TOP || !self.is_arr(t) || self.arr_floor_sabotage {
@@ -120,6 +129,10 @@ impl Model {
             }
             Key::Any(_) => !elem || !self.indexed_store_sites.contains(&site),
         };
+        // An index store may grow the Array too (`held_lengths`).
+        if moves || matches!(key, Key::Any(_)) {
+            self.len_event(t, site, false);
+        }
         if !moves {
             return;
         }

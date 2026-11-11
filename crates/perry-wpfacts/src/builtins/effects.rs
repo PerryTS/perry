@@ -1141,6 +1141,7 @@ fn run(
                 // A store into the receiver's elements writes the Array.
                 if let (RealmSlotRoot::This, Some(t)) = (dst.root, run.t) {
                     m.arr_written(t);
+                    m.len_event(t, run.call, true);
                 }
                 let v = run.slot(m, src);
                 if let Some(d) = run.node(m, dst) {
