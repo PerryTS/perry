@@ -1648,7 +1648,9 @@ fn any_written(m: &mut Model, dst: NodeId) {
 
 mod accessor_lookup;
 mod methods;
-pub(crate) use accessor_lookup::{annexb_lookup, lookup_native_descriptor};
+pub(crate) use accessor_lookup::{
+    annexb_lookup, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
+};
 pub use methods::*;
 pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// Whether the generated global object declares a callable under this key.

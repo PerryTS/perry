@@ -50,6 +50,26 @@ impl Model {
             return true;
         }
 
+        // The realm's own accessors run per receiver token
+        // (`builtins::realm_accessor_call`).
+        if builtins::is_realm_accessor(identity) {
+            let r = match (this_tok, &self.calls[call as usize].this) {
+                (Some(r), _) | (None, &ThisArg::Tok(r)) => Some(r),
+                (None, &ThisArg::Node(n)) => {
+                    if self.bind_done.insert((call, t, u32::MAX - 5)) {
+                        self.cons(n, Cons::NativeThis { call, f: t });
+                    }
+                    return true;
+                }
+                (None, ThisArg::Undef) => None,
+            };
+            if self.bind_done.insert((call, t, r.unwrap_or(u32::MAX - 8))) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::realm_accessor_call(m, r, call));
+            }
+            return true;
+        }
+
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
             return false;
         };

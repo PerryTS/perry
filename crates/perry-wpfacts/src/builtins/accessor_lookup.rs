@@ -4,8 +4,93 @@ use super::*;
 /// The getters and setters of the realm's own accessor properties, one
 /// value: each is an ordinary built-in function object that is no
 /// constructor and has no realm declaration, so it is no other builtin.
-/// Its fields are its own; a call of it is an opaque builtin call.
+/// Its fields are its own; a call of it runs `realm_accessor_call`.
 const REALM_ACCESSOR: &str = "%RealmAccessor%";
+
+/// `identity` names the realm's own accessor functions (`REALM_ACCESSOR`).
+pub(crate) fn is_realm_accessor(identity: &str) -> bool {
+    identity == REALM_ACCESSOR
+}
+
+/// A call of a realm accessor with receiver `r` (`None`: `this` is
+/// `undefined`). Each one is a built-in function whose steps the realm
+/// fixes: a getter reads internal slots of `this` (`Map`/`Set` size,
+/// 24.1.3.10 / 24.2.3.9; `ArrayBuffer` byteLength 25.1.6.2; the TypedArray
+/// and DataView views 23.2.3 / 25.3.4; the RegExp flag getters 22.2.6;
+/// `Symbol.prototype.description` 20.4.3.2), does `this.[[GetPrototypeOf]]()`
+/// (`__proto__` 20.1.3.8.1), [[Get]]s the flag keys of `this`
+/// (`RegExp.prototype.flags` 22.2.6.4) or returns `this` (the @@species
+/// getters, 24.1.2.2); a setter takes its one argument: `__proto__` does
+/// `this.[[SetPrototypeOf]](proto)` (20.1.3.8.2), the host's lazy globals
+/// define it as a data property of `this`, the legacy RegExp statics do
+/// ToString of it (Annex B). A receiver of the wrong brand throws a
+/// TypeError (an Error the realm makes). No step hands `this` or an argument
+/// to code the realm does not name, so neither escapes: `this` is read by
+/// [[Get]] under any key (whose program getters run on it), its prototype is
+/// read and, with an argument, replaced (the `Object.setPrototypeOf`
+/// predicate: E6 and the prototype edge), and the argument may become a data
+/// property of it. The result is a value of those reads, `this`, its
+/// prototype, a primitive, or a host value no receiver decides (the lazy
+/// global getters return a host module object): ⊤.
+pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    m.add_prim(c.ret, prim::ALL);
+    m.add_top(c.ret, |_| "result of a realm accessor: a host value".into());
+    let has_arg = !c.args.is_empty() || !c.spread.is_empty();
+    let v = m.node_l("realm-accessor-arg");
+    if let Some(&a) = c.args.first() {
+        m.edge(a, v);
+    }
+    for &s in &c.spread {
+        let key = m.elem_key();
+        m.cons(s, Cons::Load { key, dst: v });
+    }
+    if has_arg {
+        let reason = m.reason("ToString of a realm setter argument");
+        m.cons(
+            v,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    let Some(r) = r else {
+        return;
+    };
+    let n = m.node_l("realm-accessor-this");
+    m.add_tok(n, r);
+    m.add_tok(c.ret, r);
+    m.cons(
+        n,
+        Cons::Load {
+            key: Key::any(),
+            dst: c.ret,
+        },
+    );
+    m.cons(n, Cons::ProtoOf { dst: c.ret });
+    m.add_prim(c.ret, prim::NULL);
+    if has_arg {
+        let reason = m.reason("E6 __proto__ setter");
+        m.cons(
+            n,
+            Cons::Hard {
+                kind: Hard::E6SetPrototypeOf,
+                reason,
+            },
+        );
+        m.cons(n, Cons::ProtoFrom { src: v });
+        let site = m.anon_post_site("realm accessor setter (data property)");
+        m.cons(
+            n,
+            Cons::Store {
+                key: Key::any(),
+                src: v,
+                site,
+            },
+        );
+    }
+}
 
 /// The same transfer serves intrinsic dispatch and the direct runtime lowering.
 /// `None` is a primitive wrapper: its native descriptors are not represented by
