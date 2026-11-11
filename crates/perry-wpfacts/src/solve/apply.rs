@@ -1189,6 +1189,23 @@ impl Model {
                     match self.toks[t as usize].clone() {
                         TokKind::Top => self.add_tok(dst, TOP),
                         TokKind::Func(_, _) | TokKind::Bound(_) => self.add_tok(dst, t),
+                        // A realm value is not its own iterator here: GetIterator
+                        // (ECMA-262 7.4.3) makes the record's [[Iterator]] the
+                        // result of `Call(v[@@iterator], v)`, and its `next` is
+                        // read off that result, which the method calls of
+                        // `@@iterator` and of `next` on its result step (a realm
+                        // `@@iterator` that returns `this`, a written one).
+                        // Absent (Object.prototype, a function), GetIterator
+                        // throws TypeError before any `next` is read (7.4.3,
+                        // 7.3.14 Call step 2); Array.prototype's is `values`, a
+                        // fresh ArrayIterator (23.1.3.40). Read off `v` itself,
+                        // `next` would be the realm's, called on a receiver with
+                        // no iterator slots (it throws, 23.1.5.2.1, 27.5.3.3),
+                        // yet stepped as an opaque call that escapes `v`.
+                        TokKind::ObjectProto
+                        | TokKind::NativeProto(_)
+                        | TokKind::Builtin(_)
+                        | TokKind::BuiltinFn(_) => {}
                         TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                             _ if self.is_array_like(t) => {}
                             _ => {

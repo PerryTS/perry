@@ -65,6 +65,7 @@ mod declared_effects;
 mod default_params;
 mod define_through_unknown;
 mod realm_accessor_call;
+mod iter_realm_value;
 pub(crate) mod delivery_boundaries;
 pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;
