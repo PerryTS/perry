@@ -82,9 +82,36 @@ fn at_rest_or_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
 }
 
-/// `e` is an int32 Number at every evaluation.
+/// `e` is an operand this module takes as an i32: an int32 Number at every
+/// evaluation, a local whose ToInt32 has a shadow (`int32_shadow`), or a
+/// bitwise operator this module lowers itself.
 fn proven(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    int32_literal(e) || at_rest_or_read(ctx, e) || super::is_known_i32_range(ctx, e)
+    int32_literal(e)
+        || at_rest_or_read(ctx, e)
+        || super::int32_shadow::is_shadowed(ctx, e)
+        || matches!(e, Expr::Binary { op, left, right } if admitted(ctx, *op, left, right))
+        || super::is_known_i32_range(ctx, e)
+}
+
+/// `e` is a word the facts hold, or a shadow: a kind this module adds.
+fn word(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    at_rest_or_read(ctx, e)
+        || super::int32_shadow::is_shadowed(ctx, e)
+        || matches!(e, Expr::Binary { op, left, right } if admitted(ctx, *op, left, right))
+}
+
+/// `left <op> right` is lowered here: a bitwise `op`, both operands
+/// [`proven`], one of them a [`word`].
+fn admitted(ctx: &FnCtx<'_>, op: BinaryOp, left: &Expr, right: &Expr) -> bool {
+    matches!(
+        op,
+        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+    ) && enabled()
+        && !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && (word(ctx, left) || word(ctx, right))
+        && proven(ctx, left)
+        && proven(ctx, right)
 }
 
 /// Check mode: the double `value` of a proven operand is an exact int32
@@ -130,35 +157,21 @@ fn lower(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
             return Ok(word);
         }
     }
+    if let Some(word) = super::int32_shadow::load(ctx, e) {
+        return Ok(word);
+    }
+    if let Expr::Binary { op, left, right } = e {
+        if admitted(ctx, *op, left, right) {
+            return lower_bitwise(ctx, *op, left, right);
+        }
+    }
     let value = super::lower_expr(ctx, e)?;
     witness(ctx, &value);
     Ok(ctx.block().toint32_fast(&value))
 }
 
-/// `left <op> right` for a bitwise `op` whose operands are both proven
-/// int32 Numbers, one of them a kind this module adds: the double of the
-/// i32 result. `None` for every other expression.
-pub(crate) fn try_lower_bitwise(
-    ctx: &mut FnCtx<'_>,
-    op: BinaryOp,
-    left: &Expr,
-    right: &Expr,
-) -> Result<Option<String>> {
-    if !matches!(
-        op,
-        BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
-    ) || !enabled()
-        || ctx.wpfacts_off
-        || ctx.wpfacts.interp_guard
-    {
-        return Ok(None);
-    }
-    if !(at_rest_or_read(ctx, left) || at_rest_or_read(ctx, right))
-        || !proven(ctx, left)
-        || !proven(ctx, right)
-    {
-        return Ok(None);
-    }
+/// The i32 of `left <op> right` ([`admitted`]).
+fn lower_bitwise(ctx: &mut FnCtx<'_>, op: BinaryOp, left: &Expr, right: &Expr) -> Result<String> {
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::Int32Input,
         || serde_json::json!({ "operand": "bitwise" }),
@@ -169,7 +182,7 @@ pub(crate) fn try_lower_bitwise(
     let l = lower(ctx, left)?;
     let r = lower(ctx, right)?;
     let blk = ctx.block();
-    let v = match op {
+    Ok(match op {
         BinaryOp::BitAnd => blk.and(I32, &l, &r),
         BinaryOp::BitOr => blk.or(I32, &l, &r),
         BinaryOp::BitXor => blk.xor(I32, &l, &r),
@@ -181,6 +194,21 @@ pub(crate) fn try_lower_bitwise(
             let shift = blk.and(I32, &r, "31");
             blk.ashr(I32, &l, &shift)
         }
-    };
+    })
+}
+
+/// `left <op> right` for a bitwise `op` whose operands are both taken as
+/// i32s, one of them a kind this module adds: the double of the i32
+/// result. `None` for every other expression.
+pub(crate) fn try_lower_bitwise(
+    ctx: &mut FnCtx<'_>,
+    op: BinaryOp,
+    left: &Expr,
+    right: &Expr,
+) -> Result<Option<String>> {
+    if !admitted(ctx, op, left, right) {
+        return Ok(None);
+    }
+    let v = lower_bitwise(ctx, op, left, right)?;
     Ok(Some(ctx.block().sitofp(I32, &v, DOUBLE)))
 }

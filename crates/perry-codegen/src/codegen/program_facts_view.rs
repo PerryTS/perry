@@ -348,6 +348,9 @@ pub struct ElisionFacts {
     pub local_classes: std::collections::BTreeMap<u32, u32>,
     pub indexed_owners: std::collections::BTreeMap<u32, FactsIndexedOwner>,
     pub number_inputs: std::collections::BTreeSet<u32>,
+    /// Locals that hold only Numbers and `undefined` (at least a Number):
+    /// their ToInt32 runs no user code (`expr::int32_shadow`).
+    pub undef_number_inputs: std::collections::BTreeSet<u32>,
     /// Number bindings whose every value is an int32 (the wpfacts interval
     /// proof, `BindingFacts::int_range`), never an observable `-0`.
     pub int32_inputs: std::collections::BTreeSet<u32>,
