@@ -83,18 +83,24 @@ fn normalizer_calls(ir: &str) -> usize {
         .count()
 }
 
-#[test]
-fn a_key_built_from_a_ranged_int32_let_is_an_i32_key() {
-    // `k` in [-3, 12]: `k * 2 + 1` is in [-5, 25], an int32 of either sign.
-    let f = ir_of_f(Some((-3, 12)));
-    assert_eq!(normalizer_calls(&f), 0, "{f}");
-    assert!(!f.contains("fmul double"), "{f}");
+/// The normalizer calls of `f` when `k` has no interval: one for `t[k * 2 +
+/// 1]` (and one for `u[i]`, whose key is a double parameter in every arm).
+fn baseline() -> usize {
+    let n = normalizer_calls(&ir_of_f(None));
+    assert!(
+        n >= 1,
+        "the key of `t[k * 2 + 1]` is normalized without an interval"
+    );
+    n
 }
 
 #[test]
-fn without_the_interval_the_key_is_normalized() {
-    let f = ir_of_f(None);
-    assert_eq!(normalizer_calls(&f), 1, "{f}");
+fn a_key_built_from_a_ranged_int32_let_is_an_i32_key() {
+    // `k` in [-3, 12]: `k * 2 + 1` is in [-5, 25], an int32 of either sign:
+    // its normalizer call is gone, and the key is an i32 chain.
+    let f = ir_of_f(Some((-3, 12)));
+    assert_eq!(normalizer_calls(&f) + 1, baseline(), "{f}");
+    assert!(f.contains("mul i32") || f.contains("shl i32"), "{f}");
 }
 
 #[test]
@@ -102,5 +108,5 @@ fn an_interval_whose_chain_leaves_int32_is_no_i32_key() {
     // `k` up to 2^31 - 1: `k * 2 + 1` may pass int32, so the key keeps its
     // double (a wrapped i32 would name another element).
     let f = ir_of_f(Some((0, i64::from(i32::MAX))));
-    assert_eq!(normalizer_calls(&f), 1, "{f}");
+    assert_eq!(normalizer_calls(&f), baseline(), "{f}");
 }
