@@ -452,3 +452,14 @@ fn value_records_switch_is_a_cache_input() {
         "PERRY_FACTS_VALUE_RECORDS must key the compile caches"
     );
 }
+
+/// The pure-argument switch decides whether the inliner substitutes a
+/// written local for a parameter (and so whether a call in a loop condition
+/// is inlined at all), so `=0` must never reuse an `=1` object.
+#[test]
+fn inline_pure_args_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_INLINE_PURE_ARGS"),
+        "PERRY_INLINE_PURE_ARGS must key the compile caches"
+    );
+}

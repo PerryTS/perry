@@ -1550,6 +1550,7 @@ fn inline_calls_in_ordered_operand(
 
 pub fn build_inline_arg_bindings(
     params: &[Param],
+    body: &[Stmt],
     args: &[Expr],
     closure_captures: &HashSet<LocalId>,
     mutated_params: &HashSet<LocalId>,
@@ -1567,11 +1568,11 @@ pub fn build_inline_arg_bindings(
         if let Some(arg) = args.get(index) {
             // An argument is substituted for the parameter only when nothing
             // the body or a later argument does can change what it reads
-            // (`WriteCensus::is_stable_arg`). Any other argument is evaluated
-            // here, in argument order, before the body runs, as JS evaluates
-            // it: substituting `m` into `bump() * 0 + a` would read `m` after
-            // `bump()` wrote it.
-            let stable = census.is_stable_arg(arg);
+            // (`WriteCensus::substitutes_arg`). Any other argument is
+            // evaluated here, in argument order, before the body runs, as JS
+            // evaluates it: substituting `m` into `bump() * 0 + a` would read
+            // `m` after `bump()` wrote it.
+            let stable = census.substitutes_arg(args, index, param.id, body);
             let literal_in_closure =
                 stable && !matches!(arg, Expr::LocalGet(_)) && closure_captures.contains(&param.id);
             // A param the body WRITES must get its own copy: substituting
@@ -1685,6 +1686,7 @@ pub fn try_inline_simple_call(
                         collect_mutated_local_ids(&func.body, &mut mutated);
                         let (setup_stmts, param_map) = build_inline_arg_bindings(
                             &func.params,
+                            &func.body,
                             args,
                             &closure_capt,
                             &mutated,
@@ -1730,6 +1732,7 @@ pub fn try_inline_simple_call(
                             collect_mutated_local_ids(&func.body, &mut mutated);
                             let (mut setup, mut param_map) = build_inline_arg_bindings(
                                 &func.params,
+                                &func.body,
                                 args,
                                 &closure_capt,
                                 &mutated,
@@ -1845,6 +1848,7 @@ pub fn try_inline_simple_call(
                             collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                             let (setup_stmts, mut param_map) = build_inline_arg_bindings(
                                 &method_candidate.func.params,
+                                &method_candidate.func.body,
                                 args,
                                 &closure_capt,
                                 &mutated,
@@ -1902,6 +1906,7 @@ pub fn try_inline_simple_call(
                         collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                         let (setup_for_params, mut shared_param_map) = build_inline_arg_bindings(
                             &method_candidate.func.params,
+                            &method_candidate.func.body,
                             args,
                             &closure_capt,
                             &mutated,
@@ -2138,6 +2143,7 @@ pub fn try_inline_call(
                 collect_mutated_local_ids(&func.body, &mut mutated);
                 let (mut setup_stmts, mut param_map) = build_inline_arg_bindings(
                     &func.params,
+                    &func.body,
                     args,
                     &closure_capt,
                     &mutated,
@@ -2246,6 +2252,7 @@ pub fn try_inline_call(
                     collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                     let (arg_setup, arg_map) = build_inline_arg_bindings(
                         &method_candidate.func.params,
+                        &method_candidate.func.body,
                         args,
                         &closure_capt,
                         &mutated,
