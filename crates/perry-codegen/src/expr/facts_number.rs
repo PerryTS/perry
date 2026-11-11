@@ -160,23 +160,31 @@ pub(crate) fn try_lower_add(
 // Closed calls
 // ---------------------------------------------------------------------------
 
-/// The call `receiver.m(...)` is a Number by the facts: see the module doc.
+/// The call `e` is a Number by the facts. Any call whose result the
+/// whole-program facts prove a Number (`facts_rep::number_call`: a method
+/// call, a direct call of a function, a call of any other callee value), or
+/// the closed method call `receiver.m(...)` of the module doc.
 pub(crate) fn closed_number_call(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let Expr::Call { callee, .. } = e else {
-        return false;
-    };
-    let Expr::PropertyGet {
-        object, property, ..
-    } = callee.as_ref()
+    let Expr::Call {
+        callee,
+        byte_offset: call_offset,
+        ..
+    } = e
     else {
         return false;
     };
     if ctx.wpfacts_off {
         return false;
     }
-    if crate::codegen::facts_rep::number_call(ctx, callee) {
+    if crate::codegen::facts_rep::number_call(ctx, callee, *call_offset) {
         return true;
     }
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return false;
+    };
     let Some((cids, _nullable)) = wpfacts_access::proven_receiver_classes(ctx, object) else {
         return false;
     };

@@ -289,8 +289,8 @@ pub struct Gen<'a> {
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
-    /// `(module, byte offset, result node)` of each method call site
-    /// (`bindings::ModuleBindings::number_calls`).
+    /// `(module, byte offset, result node)` of each call site with a source
+    /// offset (`bindings::ModuleBindings::number_calls`).
     pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
     /// `(module, byte offset, byte end, result node)` of every call with a
     /// source offset, whatever its callee (`call_kinds`).

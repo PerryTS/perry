@@ -489,10 +489,11 @@ pub struct ModuleBindings {
     /// Element reads by `IndexGet::element_offset` whose receiver is proven
     /// (`ElementRead`), joined over every copy of the read the program holds.
     pub element_reads: Vec<(u32, ElementRead)>,
-    /// Method call byte offsets whose result is a Number at every copy of
-    /// the call the program holds: every callee the site reaches returns
+    /// Call byte offsets whose result is a Number at every copy of the call
+    /// the program holds, and at every call that starts at that offset
+    /// (`f(a)(b)`, `o.m(a).n(b)`): every callee the site reaches returns
     /// only Numbers (representation RFC §10.4, the call's return
-    /// representation). Sorted.
+    /// representation). Method calls and calls of any other callee. Sorted.
     pub number_calls: Vec<u32>,
     /// Call spans (`Expr::Call::byte_offset`, `byte_end`) whose result holds
     /// only primitives at every copy, with the union of their kinds (a

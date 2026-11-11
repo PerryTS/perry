@@ -31,6 +31,7 @@ impl ProgressBar {
     pub fn download(length: Option<u64>, color: bool) -> Self {
         Self::create(length, true, color, std::io::stderr().is_terminal())
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn hidden() -> Self {
         Self::create(None, false, false, false)
     }
@@ -68,9 +69,11 @@ impl ProgressBar {
     pub fn inc(&self, amount: u64) {
         self.update(|s| s.position = s.position.saturating_add(amount));
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_length(&self, length: u64) {
         self.update(|s| s.length = Some(length));
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn position(&self) -> u64 {
         self.shared.0.lock().unwrap().position
     }
