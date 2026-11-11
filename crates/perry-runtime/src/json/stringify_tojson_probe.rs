@@ -506,13 +506,16 @@ fn class_chain_to_json_entry(class_id: u32) -> ClassChainToJsonEntry {
 /// The shape proves ordinary record semantics, for an object no class
 /// installed a private field on (#11791): a base constructor that returns a
 /// plain object lets a derived class add one to it, and a raw own-field
-/// emitter would print it.
+/// emitter would print it. `process.env` is no plain record: its own keys are
+/// the environment, which its field mirror holds only once an enumeration
+/// refreshed it, so it takes the general walk that refreshes first.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(super) unsafe fn object_is_plain_record(obj: *const crate::ObjectHeader) -> bool {
     crate::object::shapes::object_is_plain_record(obj)
+        && !crate::process::is_process_env_ptr(obj as usize)
         && crate::object::key_attrs::object_summary(obj)
             & (crate::object::key_attrs::SUMMARY_PRIVATE | crate::object::key_attrs::SUMMARY_HOLES)
             == 0
