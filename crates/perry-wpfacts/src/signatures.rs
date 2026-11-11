@@ -23,7 +23,7 @@
 //! twice (a for…of's counted and IteratorRecord arms), or a callee the
 //! inliner copied into several callers. The site is joined over them: every
 //! copy must resolve to F, and every copy's arguments must hold F's
-//! signature (`admits`). Calls of different spans under one key are distinct
+//! signature (`refusal`). Calls of different spans under one key are distinct
 //! calls and refuse.
 
 use crate::bindings::{Enc, ModuleBindings, Rep};
@@ -460,18 +460,8 @@ fn literal_defaults(f: &perry_hir::Function) -> Vec<Option<f64>> {
 /// interval, joined over the argument node's instance copies; an omitted or
 /// `undefined` argument of a literal-defaulted parameter is that literal.
 /// An omitted argument of any other non-Boxed parameter refuses.
-fn admits(
-    g: &Gen<'_>,
-    all: &dyn Fn(NodeId) -> Vec<NodeId>,
-    sig: &Signature,
-    lits: &[Option<f64>],
-    args: &[NodeId],
-) -> bool {
-    refusal(g, all, sig, lits, args).is_none()
-}
-
-/// The first parameter whose argument does not hold `sig` (`admits`), with
-/// the reason (the `# typed_call` probe's `why`).
+/// The result is the first parameter whose argument does not hold `sig`, with
+/// the reason (the `# typed_call` probe's `why`); `None` when every one does.
 fn refusal(
     g: &Gen<'_>,
     all: &dyn Fn(NodeId) -> Vec<NodeId>,
