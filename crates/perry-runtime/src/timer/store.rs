@@ -411,6 +411,8 @@ impl AgentTimers {
 
     /// Insert a timers-phase entry.
     pub(super) fn insert_timer(&mut self, entry: Entry) -> usize {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        crate::snap_census::clock_input("clock.timer", entry.delay_ms);
         crate::effect!(host_write, timer);
         debug_assert!(entry.class.is_timer());
         let index = self.alloc(entry);

@@ -1,3 +1,4 @@
+use super::restore_walk::{visit_old_parent_owed_slots, RestoreWalk};
 use super::*;
 
 // Evacuation copies land in OLD_ARENA after the remembered-set scan
@@ -202,6 +203,13 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
     let mut parents_visited = 0usize;
     let mut slots_visited = 0usize;
     let mut slots_tracking = 0usize;
+    // An old arena parent's in-body slots are described by their page, so the
+    // walk of one visits them only on the snapshot's dirty pages
+    // (`restore_walk`). `witness` is the whole-owner walk of those parents,
+    // kept only where the bounded walk is being checked against it.
+    let walk = super::restore_walk::restore_walk();
+    let mut clean_slots_skipped = 0usize;
+    let mut witness = StickyRememberedSet::default();
     #[cfg(any(test, debug_assertions))]
     let mut skipped_sticky = StickyRememberedSet::default();
     // Mirror scan_remembered_dirty_slots_copying's scan_header guards: the
@@ -232,7 +240,7 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         if DIAGNOSTICS {
             parents_visited += 1;
         }
-        visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| {
+        let remember = |slot: GcMutableSlot| {
             if DIAGNOSTICS {
                 // Count all enumerated slots, including unproductive weak
                 // targets and primitive values. This measures traversal work.
@@ -250,7 +258,25 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
             if DIAGNOSTICS && tracking {
                 slots_tracking += 1;
             }
-        });
+        };
+        // `arena_parent` here is an OLD arena parent (checked above). A malloc
+        // parent's entries are all owner qualified: it keeps the whole walk.
+        if arena_parent && walk != RestoreWalk::WholeOwner {
+            clean_slots_skipped +=
+                visit_old_parent_owed_slots::<DIAGNOSTICS>(header, &snapshot.dirty_pages, remember);
+            if walk == RestoreWalk::Verify {
+                visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, |slot| {
+                    if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+                        && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+                    {
+                        return;
+                    }
+                    remember_mutable_old_to_young_slot(&mut witness, header, slot);
+                });
+            }
+        } else {
+            visit_gc_rewrite_slots_shared::<DIAGNOSTICS>(header, remember);
+        }
     };
     if !snapshot.dirty_old_pages.is_empty() {
         crate::arena::old_arena_walk_objects_on_pages(&snapshot.dirty_old_pages, |hp| {
@@ -291,6 +317,12 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
         }
     }
     let added = sticky.restore_counted();
+    if walk == RestoreWalk::Verify {
+        let missing = witness.count_not_yet_dirty();
+        if missing != 0 {
+            super::restore_walk::bounded_restore_witness_failed(cycle_label, missing);
+        }
+    }
     #[cfg(any(test, debug_assertions))]
     {
         let would_add = skipped_sticky.count_not_yet_dirty();
@@ -311,7 +343,8 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
             "[gc-restore-coverage] {cycle_label} dirty_old_pages={} external_entries={} \
              covered={} objects_walked={walked} objects_skipped={skipped} \
              parents_visited={parents_visited} slots_visited={slots_visited} \
-             slots_tracking={slots_tracking} pages_added={added}",
+             slots_tracking={slots_tracking} pages_added={added} \
+             clean_slots_skipped={clean_slots_skipped} walk={walk:?}",
             snapshot.dirty_old_pages.len(),
             snapshot.external_dirty_entries.len(),
             covered.len(),

@@ -384,6 +384,17 @@ fn key_sign_switch_is_a_cache_input() {
     );
 }
 
+/// Typed `set`: the signed-index switch decides which methods get a typed
+/// body in place of their index clones, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn signed_index_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_SIG_SIGNED_INDEX"),
+        "PERRY_SIG_SIGNED_INDEX must key the compile caches"
+    );
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]
