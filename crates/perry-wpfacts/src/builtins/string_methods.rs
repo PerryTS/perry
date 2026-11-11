@@ -80,7 +80,7 @@ fn sym_call(m: &mut Model, by: CallId, recv: NodeId, sym: &str, args: Vec<NodeId
     method_call(m, by, recv, &format!("{WK}{sym}"), args)
 }
 
-fn str_node(m: &mut Model) -> NodeId {
+pub(super) fn str_node(m: &mut Model) -> NodeId {
     let n = m.node_l("str");
     m.add_prim(n, prim::STR);
     n

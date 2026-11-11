@@ -156,6 +156,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     }
     let Key::Named(a) = key else {
         // A computed key may name any method of the chain.
+        anyfall("primitive method (computed key)", &(prim, call), &"");
         return prim_method_generic(m, call);
     };
     let name = m.atoms[a as usize].clone();
@@ -192,8 +193,24 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         Some(Mem::Fn) if name == "__lookupGetter__" || name == "__lookupSetter__" => {
             annexb_lookup(m, None, call, name == "__lookupSetter__");
         }
+        // `String.prototype[@@iterator]` (ECMA-262 22.1.3.36):
+        // RequireObjectCoercible(this), ToString(this), then a String
+        // Iterator over its code points (22.1.5.1 CreateIteratorFromClosure);
+        // it reads no argument. No other primitive kind has `@@iterator` on
+        // its chain: the call throws a TypeError there (`x is not a
+        // function`), the arguments evaluated and never read.
+        Some(Mem::Fn) if name == WK_ITERATOR => {
+            if prim & prim::STR != 0 {
+                let s = string_methods::str_node(m);
+                let it = collections::iter_over(m, call, members::ANY_ITERATOR, s);
+                ret_tok(m, call, it);
+            }
+        }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
-        Some(Mem::Fn) => prim_method_generic(m, call),
+        Some(Mem::Fn) => {
+            anyfall("primitive method", &(prim, call), &name);
+            prim_method_generic(m, call)
+        }
         // A data member is no function: TypeError.
         Some(_) => {}
         // Absent: a TypeError, unless written (above).
@@ -227,7 +244,10 @@ pub(super) fn undescribed_method(
     why: &str,
 ) {
     match members::own(fam, name) {
-        Some(Mem::Fn) if fam == Family::Wrapper => prim_method_generic(m, call),
+        Some(Mem::Fn) if fam == Family::Wrapper => {
+            anyfall("wrapper method", &call, &name);
+            prim_method_generic(m, call)
+        }
         Some(Mem::Fn) => unknown_method(m, call, why),
         Some(_) => {}
         None if members::member(Family::Object, name).is_some() => {}
@@ -531,6 +551,7 @@ pub fn object_proto_method_prims(m: &mut Model, prim: u16, call: CallId) {
     }
     for name in OBJECT_PROTO_METHODS {
         if name == "valueOf" {
+            anyfall("Object.prototype method on primitives", &(p, call), &name);
             prim_method_generic(m, call);
         } else {
             let a = m.atom(name);
