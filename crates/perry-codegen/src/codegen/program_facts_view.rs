@@ -508,6 +508,10 @@ pub struct ElisionFacts {
     pub rest_writes: std::collections::BTreeMap<u32, u32>,
     pub rest_births: std::collections::BTreeSet<u32>,
     pub rest_reserves: std::collections::BTreeMap<u32, u32>,
+    /// Local id of a `let x = []` → the slots its birth reserves (wpfacts
+    /// `list_caps`: a list a repeated push reaches, or one with a static
+    /// push bound). Empty with `PERRY_LIST_BIRTH_CAPACITY=0`.
+    pub list_capacities: std::collections::BTreeMap<u32, u32>,
     /// The fill pushes of at-rest push-filled births (wpfacts
     /// `ModuleBindings::rest_pushes`; `expr::rest_elems::push_len`): the
     /// byte offset of a push's receiver `this.k`, with the Array's final

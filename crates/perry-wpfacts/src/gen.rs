@@ -305,6 +305,13 @@ pub struct Gen<'a> {
     /// `(module, byte offset, byte end, result node)` of every call with a
     /// source offset, whatever its callee (`call_kinds`).
     pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
+    /// The list births and the push sites of the bodies walked, the body
+    /// the walk is in (a serial; its loop depth is `loop_depth`) and the
+    /// number of bodies entered so far (`list_caps`).
+    pub(crate) list_births: Vec<crate::list_caps::Birth>,
+    pub(crate) list_pushes: Vec<crate::list_caps::Push>,
+    pub(crate) list_body: u32,
+    pub(crate) list_bodies: u32,
     /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
     /// identity (the callee expression's address), whether it spreads, and
     /// for a direct call its callee node (`signatures::typed_calls`).
@@ -707,6 +714,10 @@ impl<'a> Gen<'a> {
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
             call_kinds_at: Vec::new(),
+            list_births: Vec::new(),
+            list_pushes: Vec::new(),
+            list_body: 0,
+            list_bodies: 0,
             call_sites_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),

@@ -505,6 +505,9 @@ pub struct ModuleBindings {
     /// only primitives at every copy, with the union of their kinds (a
     /// `model::prim` mask, never 0); sorted (`call_kinds`).
     pub call_kinds: Vec<(u32, u32, u16)>,
+    /// Local id of a `let x = []` whose birth reserves a capacity, with its
+    /// slots; sorted (`list_caps`).
+    pub list_capacities: Vec<(u32, u32)>,
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,

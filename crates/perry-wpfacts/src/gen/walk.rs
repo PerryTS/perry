@@ -339,11 +339,13 @@ impl<'a> Gen<'a> {
         }
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (true, 0);
+        let list_saved = self.list_enter_body();
         for s in self.init_of(mi as usize) {
             self.stmt(&fx, s);
             self.name_enum_object(mi, s);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
         // Codegen invokes this owned body when the module evaluates. Follow
         // that explicit FuncId edge only after the owning init is activated.
         if let Some(id) = self.modules[mi as usize].1.async_init_function {
@@ -667,6 +669,7 @@ impl<'a> Gen<'a> {
     ) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self.m.packet_body(fxi);
         #[cfg(test)]
@@ -689,6 +692,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
     }
 
     fn walk_fn_body_inner(
@@ -842,6 +846,7 @@ impl<'a> Gen<'a> {
     fn walk_fields_body_region(&mut self, mi: u32, c: &'a Class) {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self
             .m
@@ -855,6 +860,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
     }
 
     fn walk_fields_body_inner(&mut self, mi: u32, c: &'a Class) {
@@ -1231,6 +1237,7 @@ impl<'a> Gen<'a> {
                 {
                     self.class_homes.insert((fx.module, *id), tm);
                 }
+                let list_tmpl = self.m.tmpls.len() as TmplId;
                 match init {
                     Some(e) => {
                         let v = self.expr_zs(fx, e);
@@ -1239,6 +1246,13 @@ impl<'a> Gen<'a> {
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
                 self.in_bounds_let(fx, *id, init.as_ref());
+                // `let id = []`: a list birth (`list_caps`). The empty literal
+                // bore one template, the first made since the statement began.
+                if matches!(init, Some(perry_hir::Expr::Array(x, _)) if x.is_empty())
+                    && self.m.tmpls.len() as TmplId > list_tmpl
+                {
+                    self.list_birth(fx.module, *id, list_tmpl);
+                }
                 self.direct_arr = None;
                 if let Some(perry_hir::Expr::ForInKeys(o)) = init {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {

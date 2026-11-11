@@ -27,6 +27,7 @@ impl<'a> Gen<'a> {
                 let a = self.local(mi, *array_id);
                 let s = self.expr(fx, source);
                 let it = self.iterate(s);
+                self.list_push(a, None);
                 self.elem_store(fx, a, it, "push...");
                 self.prim_node(prim::NUM)
             }

@@ -396,6 +396,17 @@ fn literal_strings_switch_is_a_cache_input() {
     );
 }
 
+/// The list birth capacity: the switch (and its slot count) changes the
+/// exported facts and every `let x = []` birth that reserves them, so `=0`
+/// must never reuse an object built with a capacity.
+#[test]
+fn list_birth_capacity_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_LIST_BIRTH_CAPACITY"),
+        "PERRY_LIST_BIRTH_CAPACITY must key the compile caches"
+    );
+}
+
 /// Bounded loops: the switch decides which loops keep their back-edge polls,
 /// so `=0` must never reuse an `=1` object; the probe line is keyed with it.
 #[test]

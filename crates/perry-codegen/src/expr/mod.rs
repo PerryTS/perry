@@ -870,8 +870,10 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
     /// append reserve.
     pub loop_pushed_arrays: &'a crate::collectors::PushedArrays,
-    /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
-    pub pushed_array_birth: bool,
+    /// Set by `lower_let` while it lowers such a binding's `[]` initializer:
+    /// the slots the birth reserves (0: the plain empty birth), from the
+    /// facts (`ElisionFacts::list_capacities`) or the collector's sixteen.
+    pub pushed_array_birth: u64,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
