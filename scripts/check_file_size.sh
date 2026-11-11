@@ -46,7 +46,7 @@ crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
-crates/perry-transform/src/inline/call_inliner.rs	2120
+crates/perry-transform/src/inline/call_inliner.rs	2099
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
 crates/perry-stdlib/src/streams.rs	2448
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
