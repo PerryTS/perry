@@ -472,7 +472,7 @@ pub unsafe fn object_prototype_to_string(value: f64) -> f64 {
         }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if crate::gc_type_is_array!(gc_type) || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // #3553: a function's `arguments` object is represented as an array
             // carrying the GC_ARRAY_ARGUMENTS_OBJECT flag. Node tags it
             // `[object Arguments]`, not `[object Array]`.

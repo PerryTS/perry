@@ -518,7 +518,7 @@ unsafe fn annotate_source_tree(node: &mut JsonSourceNode, value: JSValue) {
                 elements,
                 original_bits,
             },
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         ) => {
             *original_bits = value.bits();
             let arr = ptr as *const crate::ArrayHeader;

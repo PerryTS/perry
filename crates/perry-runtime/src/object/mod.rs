@@ -1275,7 +1275,7 @@ fn transition_edge_places_key(
     unsafe {
         let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
             as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*gc_header).obj_type) {
             return false;
         }
         let keys = next_keys as *const ArrayHeader;
@@ -1439,7 +1439,7 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     }
     let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
         as *mut crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*gc_header).obj_type) {
         return false;
     }
     (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;

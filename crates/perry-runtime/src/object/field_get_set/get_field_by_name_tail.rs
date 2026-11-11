@@ -872,7 +872,7 @@ pub(crate) fn get_field_by_name_object_tail(
         // Arrays: dynamic `.length` access on a typed-Any local returned by
         // `JSON.parse("[1,2,3]")` must read the array instead of an object field.
         // The codegen inline fast path only covers statically known array types.
-        if gc_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(gc_type) {
             let Some(obj) = super::array_retargeted_proto::live_array_owner(obj) else {
                 return JSValue::undefined();
             };
@@ -1400,7 +1400,7 @@ pub(crate) fn get_field_by_name_object_tail(
                 (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let keys_gc_type = (*keys_gc).obj_type;
             // keys_array must be GC_TYPE_ARRAY (arena-allocated array)
-            if keys_gc_type != crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_not_array!(keys_gc_type)
                 && keys_gc_type != crate::gc::GC_TYPE_OVERFLOW
             {
                 return JSValue::undefined();

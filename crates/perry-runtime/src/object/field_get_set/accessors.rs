@@ -278,7 +278,7 @@ unsafe fn own_property_slot(
     let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if !matches!(
         (*keys_gc).obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_OVERFLOW
     ) {
         return None;
     }

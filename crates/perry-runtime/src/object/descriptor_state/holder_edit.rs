@@ -28,7 +28,7 @@ impl HolderEdit {
                 }
                 let header = crate::value::addr_class::try_read_tracked_gc_header(owner);
                 match header.map(|h| (*h.as_ptr()).obj_type) {
-                    Some(crate::gc::GC_TYPE_ARRAY) => crate::array::array_property_bag_ensure(
+                    Some(crate::gc_array_type_pat!()) => crate::array::array_property_bag_ensure(
                         owner as *mut crate::array::ArrayHeader,
                     ),
                     Some(crate::gc::GC_TYPE_LAZY_ARRAY) => {

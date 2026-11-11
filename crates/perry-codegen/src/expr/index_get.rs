@@ -787,7 +787,7 @@ fn lower_bounded_array_index_get_checked(
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+    let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);

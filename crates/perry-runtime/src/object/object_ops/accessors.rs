@@ -158,7 +158,7 @@ pub extern "C" fn js_object_get_own_field_or_undef(
             (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if !matches!(
             (*keys_gc).obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_OVERFLOW
         ) || (*keys_gc).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return f64::from_bits(TAG_UNDEF);

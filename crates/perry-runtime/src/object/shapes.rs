@@ -4579,7 +4579,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep_born(
             else {
                 return old_id;
             };
-            if (*gc.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_not_array!((*gc.as_ptr()).obj_type) {
                 return old_id;
             }
             let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
@@ -6036,8 +6036,7 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
 /// copies first. So one index serves every list on it.
 pub(crate) unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
     crate::value::addr_class::try_read_gc_header(keys as usize).is_some_and(|gc| {
-        gc.obj_type == crate::gc::GC_TYPE_ARRAY
-            && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+        crate::gc_type_is_array!(gc.obj_type) && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
     })
 }
 
@@ -6329,7 +6328,7 @@ fn shape_keys_address_is_recycled(addr: usize) -> bool {
     unsafe {
         crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
             let obj_type = (*header.as_ptr()).obj_type;
-            obj_type != crate::gc::GC_TYPE_ARRAY && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_type_is_not_array!(obj_type) && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
         })
     }
 }
@@ -6790,7 +6789,7 @@ fn shape_keys_entry_is_minor_relevant(
         let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
             return false;
         };
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type) {
             return false;
         }
         let (slots, len) = super::keys_array_dense_slots(addr as *const ArrayHeader);

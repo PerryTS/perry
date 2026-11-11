@@ -71,7 +71,7 @@ unsafe fn gc_header(arr: *const ArrayHeader) -> Option<*mut crate::gc::GcHeader>
         return None;
     }
     let h = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    ((*h).obj_type == crate::gc::GC_TYPE_ARRAY).then_some(h)
+    (crate::gc_type_is_array!((*h).obj_type)).then_some(h)
 }
 
 /// The array's header says its slots are I32 words.

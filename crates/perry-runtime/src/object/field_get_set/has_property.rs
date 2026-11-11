@@ -907,7 +907,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         unsafe {
             let gc_header =
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Issue #233: resolve a grow forwarding pointer so `index in arr`
                 // / `arr.hasOwnProperty(i)` stay correct after `arr.length = N`.
                 let arr = crate::array::clean_arr_ptr(obj_ptr as *const crate::array::ArrayHeader);
@@ -1220,7 +1220,7 @@ unsafe fn ordinary_has_property(
                 crate::value::js_nanbox_string(key as i64),
             );
         }
-        let cur_is_array = cur_type == Some(crate::gc::GC_TYPE_ARRAY);
+        let cur_is_array = cur_type == Some(crate::gc_array_type_pat!());
         if cur_is_array {
             if super::super::has_own_helpers::array_own_key_present(
                 cur as *const crate::array::ArrayHeader,

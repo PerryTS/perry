@@ -791,7 +791,7 @@ fn heap_ptr_object(value: f64) -> Option<*const u8> {
 }
 
 fn array_ptr(value: f64) -> Option<*const crate::array::ArrayHeader> {
-    let ptr = heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY)?;
+    let ptr = heap_ptr_with_gc_type(value, crate::gc_array_type_pat!())?;
     Some(ptr as *const crate::array::ArrayHeader)
 }
 

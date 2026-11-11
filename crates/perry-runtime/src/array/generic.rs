@@ -196,7 +196,9 @@ pub(super) fn as_real_array(recv: f64) -> *mut ArrayHeader {
     };
     let raw = (b & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => unsafe { super::clean_headed_arr_ptr(raw, header) as *mut _ },
+        crate::gc_array_type_pat!() => unsafe {
+            super::clean_headed_arr_ptr(raw, header) as *mut _
+        },
         crate::gc::GC_TYPE_LAZY_ARRAY => clean_arr_ptr_mut(raw as *mut ArrayHeader),
         _ => ptr::null_mut(),
     }

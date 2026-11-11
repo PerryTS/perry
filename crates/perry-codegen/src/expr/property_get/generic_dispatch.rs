@@ -83,8 +83,6 @@ fn recv_handle(
 pub(super) const MAP_HEADER_META_OFFSET: &str = "24";
 pub(super) const SET_HEADER_META_OFFSET: &str = "16";
 
-/// `GcHeader.obj_type` of a plain Array (`perry_runtime::gc::GC_TYPE_ARRAY`).
-const GC_TYPE_ARRAY_I8: &str = "1";
 /// `perry_runtime::gc::GC_FLAG_FORWARDED` (0x80), spelled as a signed `i8`.
 const GC_FLAG_FORWARDED_I8: &str = "-128";
 
@@ -104,7 +102,7 @@ fn emit_array_header_test(ctx: &mut FnCtx<'_>, handle: &str) -> (String, String)
     let type_addr = blk.sub(I64, handle, "8");
     let type_ptr = blk.inttoptr(I64, &type_addr);
     let gc_type = blk.load(I8, &type_ptr);
-    let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY_I8);
+    let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
     let flags_addr = blk.sub(I64, handle, "7");
     let flags_ptr = blk.inttoptr(I64, &flags_addr);
     let flags = blk.load(I8, &flags_ptr);

@@ -26,7 +26,7 @@ pub(crate) fn has_materialized_iterator_brand(addr: usize, brand: u64) -> bool {
         let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
             return false;
         };
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type)
             || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;

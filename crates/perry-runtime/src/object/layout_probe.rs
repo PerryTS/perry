@@ -434,7 +434,7 @@ pub(crate) unsafe fn mint_colour_masks(rec: &mut ShapeRecord) {
         && !keys.is_null()
         && !crate::object::overflow::is_table(keys)
         && crate::value::addr_class::try_read_gc_header(keys as usize)
-            .is_some_and(|gc| gc.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|gc| crate::gc_type_is_array!(gc.obj_type))
     {
         colour_masks(rec)
     } else {
@@ -1183,7 +1183,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
         return hole();
     }
     let (named, proto, function) = match (*header).obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             // Array length is an intrinsic own property, stored in the array
             // header rather than its named bag. Never prove it absent by
             // walking the bag and prototypes (including for computed keys

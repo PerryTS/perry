@@ -491,7 +491,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 // now so every later named write reaches a sealed object, and
                 // recognise the array itself by its memoized address
                 // ([`note_array_prototype_write`]).
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     // DEC 250 (i): it never holds an element, so it keeps no
                     // element room: every element it could gain must then
                     // grow it, and `js_array_grow` refuses that. Its length is
@@ -1025,7 +1025,7 @@ pub(crate) fn note_write_addr(addr: usize, mutation: Mutation<'_>, site: &'stati
         crate::gc_object_type_pat!() => unsafe {
             note_write(addr as *const ObjectHeader, mutation, site)
         },
-        crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, mutation, site),
+        crate::gc_array_type_pat!() => note_array_prototype_write(addr, mutation, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(
                 (*(addr as *const crate::closure::ClosureHeader)).props,
@@ -1093,7 +1093,7 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 }
                 sealed_write_refused(addr as *const ObjectHeader, key)
             }
-            crate::gc::GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
                 if live.is_null() {
                     return false;
@@ -1302,7 +1302,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
     if matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
@@ -1315,7 +1315,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     }
     let family = match header.obj_type {
         crate::gc::GC_TYPE_PROXY => return Some(ReceiverFact::Proxy),
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
         crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
         crate::gc::GC_TYPE_SET => BuiltinProto::Set,
         crate::gc::GC_TYPE_DATE_CELL => BuiltinProto::Date,

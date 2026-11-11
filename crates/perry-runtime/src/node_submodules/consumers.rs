@@ -332,7 +332,7 @@ fn append_chunk_bytes_for_consumer(
 
     unsafe {
         match gc_type_for_ptr(raw) {
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunk_bytes(raw, out, mode, depth)
             }
             Some(crate::gc_object_type_pat!()) => {

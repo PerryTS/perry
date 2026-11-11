@@ -336,8 +336,8 @@ fn descriptor_pair_is_exact(entry: ArrayTailTransitionEntry) -> bool {
             let successor_header = (entry.successor_keys as *const u8)
                 .sub(crate::gc::GC_HEADER_SIZE)
                 .cast::<crate::gc::GcHeader>();
-            (*predecessor_header).obj_type == crate::gc::GC_TYPE_ARRAY
-                && (*successor_header).obj_type == crate::gc::GC_TYPE_ARRAY
+            crate::gc_type_is_array!((*predecessor_header).obj_type)
+                && crate::gc_type_is_array!((*successor_header).obj_type)
         }
 }
 
