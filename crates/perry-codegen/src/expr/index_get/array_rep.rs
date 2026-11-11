@@ -318,6 +318,94 @@ fn elem_test(
     }
 }
 
+/// Check mode at an index store `target[key] = v` the facts took to be in
+/// bounds (wpfacts `gen/in_bounds.rs`, `ElisionFacts::inbounds_stores`):
+/// when `target` holds an Array and `key` is an index, the key is at most
+/// the Array's length now, so the store leaves no hole. The facts prove it
+/// only for a local `target` and a key that is a local or a local plus or
+/// minus a literal: both are read again here, which evaluates nothing.
+pub(in crate::expr) fn witness_in_bounds_store(
+    ctx: &mut FnCtx<'_>,
+    target: &Expr,
+    key: &Expr,
+    element_offset: u32,
+) -> Result<()> {
+    if !crate::verify_facts::enabled()
+        || ctx.wpfacts_off
+        || element_offset == 0
+        || !ctx.wpfacts.inbounds_stores.contains(&element_offset)
+    {
+        return Ok(());
+    }
+    let literal = |e: &Expr| matches!(e, Expr::Integer(_) | Expr::Number(_));
+    let pure_key = match key {
+        Expr::LocalGet(_) => true,
+        Expr::Binary { left, right, .. } => {
+            matches!(left.as_ref(), Expr::LocalGet(_)) && literal(right)
+        }
+        _ => false,
+    };
+    if !matches!(target, Expr::LocalGet(_)) || !pure_key {
+        return Ok(());
+    }
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "store": "in bounds", "site": element_offset }),
+    );
+    let recv = crate::expr::lower_expr(ctx, target)?;
+    let key = crate::expr::lower_expr(ctx, key)?;
+    let miss = ctx.new_block("inbounds.verify_miss");
+    let next = ctx.new_block("inbounds.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    crate::verify_facts::tick(ctx);
+    // Anything but a live ordinary Array: nothing is claimed.
+    let bits = ctx.block().bitcast_double_to_i64(&recv);
+    let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+    let heap = ctx
+        .block()
+        .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    branch(ctx, &heap, "inbounds.header", &next_l);
+    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let ty = ctx.block().and(I32, &word, TYPE_MASK_I32);
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
+    branch(ctx, &array, "inbounds.forwarding", &next_l);
+    let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
+    let live = ctx.block().icmp_eq(I32, &fwd_bit, "0");
+    branch(ctx, &live, "inbounds.key", &next_l);
+    // A key past the length that is an index (an integer below 2^32 - 1)
+    // would leave a hole. Any other Number is a named property.
+    let ptr = ctx.block().inttoptr(I64, &handle);
+    let length = ctx.block().load(I32, &ptr);
+    let length_f = ctx.block().uitofp(I32, &length, DOUBLE);
+    let past = ctx.block().fcmp("ogt", &key, &length_f);
+    branch(ctx, &past, "inbounds.index", &next_l);
+    let small = ctx.block().fcmp("olt", &key, "4294967295.0");
+    branch(ctx, &small, "inbounds.integral", &next_l);
+    let idx = ctx.block().fptoui(DOUBLE, &key, I64);
+    let back = ctx.block().uitofp(I64, &idx, DOUBLE);
+    let whole = ctx.block().fcmp("oeq", &back, &key);
+    let fine = ctx.block().xor(I1, &whole, "true");
+    ctx.block().cond_br(&fine, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        "array rep: an index store in bounds (key at most the length)",
+        crate::verify_facts::Fact::ArrayRep,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, &recv)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+    Ok(())
+}
+
 /// `cond` goes on to a new block `name`, else to `other`; the new block is
 /// current.
 fn branch(ctx: &mut FnCtx<'_>, cond: &str, name: &str, other: &str) {

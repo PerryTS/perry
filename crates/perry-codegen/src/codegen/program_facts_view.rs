@@ -493,6 +493,11 @@ pub struct ElisionFacts {
     /// range, with its interval (wpfacts `ModuleBindings::wide_keys`;
     /// `expr::index_key::split_key_fact`).
     pub wide_keys: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// Index stores (by `element_offset`) whose key the facts took to be at
+    /// most the Array's length when the store runs (wpfacts
+    /// `ModuleBindings::inbounds_stores`): no lowering reads it; check mode
+    /// tests the claim (`array_rep::witness_in_bounds_store`).
+    pub inbounds_stores: std::collections::BTreeSet<u32>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest

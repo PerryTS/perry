@@ -1086,6 +1086,7 @@ fn compute_act<'a>(
     element_keys::collect(&g, &mut bindings);
     element_keys::collect_signs(&g, &mut bindings);
     element_keys::collect_wide(&g, &mut bindings);
+    gen::in_bounds::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,

@@ -5,11 +5,12 @@
 fn dump(src: &str) -> String {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    let pf = crate::compute(
-        &[("t.ts".to_string(), &hir)],
-        &crate::FactsConfig::default(),
-    );
-    pf.dump_text()
+    // The probe lines are diagnostics.
+    let cfg = crate::FactsConfig {
+        diagnostics: true,
+        ..Default::default()
+    };
+    crate::compute(&[("t.ts".to_string(), &hir)], &cfg).dump_text()
 }
 
 /// `sink` (the module's first function) takes the for-of element of the

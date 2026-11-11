@@ -942,6 +942,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
             super::record_witness::store_into_copy(ctx, target)?;
+            // Check mode: a store the facts took to be in bounds.
+            super::index_get::array_rep::witness_in_bounds_store(
+                ctx,
+                target,
+                key,
+                *element_offset,
+            )?;
             // I32 at rest: the store of an at-rest element (`rest_elems`);
             // `receiver` is `target` cloned (one evaluation of the base).
             if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {

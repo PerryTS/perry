@@ -469,6 +469,37 @@ impl<'a> Gen<'a> {
     }
 }
 
+/// Fill `ModuleBindings::inbounds_stores`: the store sites whose key the
+/// facts took to be at most the length. Under the negative control
+/// (`Model::inbounds_sabotage`) that is every index store.
+pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [crate::ModuleBindings]) {
+    if g.m.aborted || !g.m.inbounds_store {
+        return;
+    }
+    let mut push = |mi: u32, offset: u32| {
+        if offset != 0 {
+            if let Some(mb) = bindings.get_mut(mi as usize) {
+                mb.inbounds_stores.push(offset);
+            }
+        }
+    };
+    if g.m.inbounds_sabotage {
+        for site in &g.element_sites {
+            if matches!(site.op, crate::derive::ElementOp::Write) {
+                push(site.module, site.byte_offset);
+            }
+        }
+    } else {
+        for &(mi, offset, _) in &g.in_bounds.proven {
+            push(mi, offset);
+        }
+    }
+    for mb in bindings.iter_mut() {
+        mb.inbounds_stores.sort_unstable();
+        mb.inbounds_stores.dedup();
+    }
+}
+
 /// The probe (`PERRY_FACTS_DUMP`): one `# inbounds_store` line per store
 /// site gen proved in bounds, with the solve's verdict over the Arrays its
 /// receiver holds: `kept=1` when each is hole-free as far as this store
