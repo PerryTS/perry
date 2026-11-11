@@ -19,8 +19,15 @@ An included getter's exception stops the walk and propagates to the caller.
 
 The receiver, current key, and returned value remain rooted across allocations
 and user callbacks. Each property read derives the receiver from its handle;
-no field or keys-array pointer survives an earlier getter. Runtime-private
-storage remains hidden, and the whitelist does not filter array indices.
+no field or keys-array pointer survives an earlier getter. The replacer array
+and a nested array receiver are rooted too, and each element is read from the
+current header, so a wrapper's `toString` or a nested serialization that grows
+an array cannot leave a stale elements pointer behind. Runtime-private storage
+remains hidden, and the whitelist does not filter array indices.
+
+Symbol-valued members are omitted like `undefined` and function values. Compact
+output advances nesting depth per member, so the 1000-level limit still throws
+`RangeError` instead of exhausting the native stack.
 
 Acceptance tests live beside the implementation in
 `crates/perry-runtime/src/json/replacer/property_list_tests.rs` and invoke the

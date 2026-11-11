@@ -56,7 +56,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         });
         let field_val = member_scope.root_nanbox_f64(f64::from_bits(field_val.bits()));
         let field_bits = field_val.get_nanbox_f64().to_bits();
-        if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
+        if field_bits == TAG_UNDEFINED
+            || is_closure_value(field_bits)
+            || super::super::stringify::is_symbol_value(field_bits)
+        {
             continue;
         }
         if !first {
@@ -87,7 +90,7 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
                 allowed_keys,
                 buf,
                 indent,
-                depth,
+                depth + 1,
                 false,
             );
         }
@@ -193,9 +196,9 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length;
-    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_raw_const_ptr(ptr as *const crate::ArrayHeader);
+    let len = array.with_const_ptr(|arr: *const crate::ArrayHeader| (*arr).length);
     if len == 0 {
         buf.push_str("[]");
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -213,7 +216,12 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
                 buf.push_str(indent);
             }
         }
-        let elem = *elements.add(i as usize);
+        // A nested value can grow this array, so read each element from the
+        // live header instead of one pointer captured before the first one.
+        let elem = array.with_const_ptr(|arr: *const crate::ArrayHeader| {
+            let arr = crate::array::clean_arr_ptr(arr);
+            *(crate::array::array_elements_ptr(arr) as *const f64).add(i as usize)
+        });
         let elem_bits = elem.to_bits();
         // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
         if elem_bits == TAG_UNDEFINED
@@ -248,18 +256,32 @@ pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
     // #7269: the PropertyList replacer array (`JSON.stringify(v, ['a','b'])`)
     // is exactly as susceptible to the GC_FLAG_FORWARDED array-growth stub as
     // any other array pointer in this file — resolve before the header read.
-    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
-    if ptr.is_null() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_raw_const_ptr(crate::array::clean_arr_ptr(
+        ptr as *const crate::ArrayHeader,
+    ));
+    if array.with_const_ptr(|arr: *const crate::ArrayHeader| arr.is_null()) {
         return Vec::new();
     }
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length;
-    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
+    // The initial length bounds the walk even if user code grows the array.
+    let len = array.with_const_ptr(|arr: *const crate::ArrayHeader| (*arr).length);
     // Coerce in array order before deduplicating: wrapper conversion can run
     // user code even when its resulting name already appears in the list.
-    collect_property_list_keys((0..len).filter_map(|i| {
-        json_property_list_key(*elements.add(i as usize))
-    }))
+    let mut keys = Vec::new();
+    for i in 0..len {
+        // That user code can grow the array into a new allocation, so resolve
+        // the live header and its elements for each element instead of reusing
+        // one pointer captured before the first coercion.
+        let element = array.with_const_ptr(|arr: *const crate::ArrayHeader| {
+            let arr = crate::array::clean_arr_ptr(arr);
+            let elements = crate::array::array_elements_ptr(arr) as *const f64;
+            *elements.add(i as usize)
+        });
+        if let Some(key) = json_property_list_key(element) {
+            keys.push(key);
+        }
+    }
+    collect_property_list_keys(keys.into_iter())
 }
 
 /// Keep the first occurrence of each coerced key without changing read order.

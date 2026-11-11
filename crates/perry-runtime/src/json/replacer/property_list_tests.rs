@@ -388,3 +388,94 @@ fn property_list_coerces_repeated_wrappers_before_unicode_deduplication() {
         KEY_CONVERSIONS.with(|n| assert_eq!(n.get(), 2, "duplicates must still coerce"));
     }
 }
+
+thread_local! {
+    static GROWN_ARRAY: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+extern "C" fn growing_wrapper_key(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let mut array = GROWN_ARRAY.with(|slot| slot.get()) as *mut crate::ArrayHeader;
+    for index in 0..24 {
+        array = crate::array::js_array_push_f64(array, index as f64);
+    }
+    GROWN_ARRAY.with(|slot| slot.set(array as u64));
+    f64::from_bits(JSValue::string_ptr(key("a")).bits())
+}
+
+#[test]
+fn property_list_reads_the_live_array_when_coercion_grows_the_replacer() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = parse(r#"{"a":1,"b":2}"#);
+        let wrapper = crate::builtins::js_boxed_number_new(2.0);
+        let callback = crate::closure::js_closure_alloc(crate::fn_info!(growing_wrapper_key, 0), 0);
+        crate::object::js_object_set_field_by_name(
+            JSValue::from_bits(wrapper.to_bits())
+                .as_pointer::<crate::ObjectHeader>()
+                .cast_mut(),
+            key("toString"),
+            crate::value::js_nanbox_pointer(callback as i64),
+        );
+        let whitelist = parse(r#"["placeholder","b"]"#);
+        let arr = whitelist.as_pointer::<crate::ArrayHeader>();
+        *(crate::array::array_elements_ptr(arr) as *mut f64) = wrapper;
+        GROWN_ARRAY.with(|slot| slot.set(arr as u64));
+        let output = text(crate::json::js_json_stringify_full(
+            f64::from_bits(object.bits()),
+            f64::from_bits(whitelist.bits()),
+            f64::from_bits(TAG_UNDEFINED),
+        ));
+        // The initial length still bounds the walk; the second key is read from
+        // the storage the coercion left behind, not from the pre-growth pointer.
+        assert_eq!(output, r#"{"a":1,"b":2}"#);
+    }
+}
+
+#[test]
+fn property_list_omits_symbol_members() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let object = parse(r#"{"a":1,"s":2}"#);
+        let symbol =
+            crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(key("s")).bits()));
+        crate::object::js_object_set_field_by_name(
+            object.as_pointer::<crate::ObjectHeader>().cast_mut(),
+            key("s"),
+            symbol,
+        );
+        assert_eq!(
+            stringify(object, r#"["a","s"]"#, f64::from_bits(TAG_UNDEFINED)),
+            r#"{"a":1}"#,
+        );
+    }
+}
+
+#[test]
+fn property_list_enforces_the_nesting_limit_in_compact_output() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let mut value = parse(r#"{"a":1}"#);
+        for _ in 0..1200 {
+            let wrapper = parse(r#"{"a":0}"#);
+            crate::object::js_object_set_field_by_name(
+                wrapper.as_pointer::<crate::ObjectHeader>().cast_mut(),
+                key("a"),
+                f64::from_bits(value.bits()),
+            );
+            value = wrapper;
+        }
+        let result = crate::exception::catch_js_throw(|| {
+            crate::json::js_json_stringify_full(
+                f64::from_bits(value.bits()),
+                f64::from_bits(parse(r#"["a"]"#).bits()),
+                f64::from_bits(TAG_UNDEFINED),
+            )
+        });
+        assert!(
+            result.is_err(),
+            "compact output must stop at the nesting limit instead of recursing"
+        );
+    }
+}
