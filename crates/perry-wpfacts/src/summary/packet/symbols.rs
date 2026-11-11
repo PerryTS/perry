@@ -326,7 +326,7 @@ impl Model {
                     self.packet_shape(shape)
                 )
             }
-            Cons::EnumChain { key, dst, of } => format!(
+            Cons::EnumChain { key, dst, of, .. } => format!(
                 "EnumChain key={:?} dst={:?} of={:?}",
                 key,
                 dst,

@@ -268,10 +268,11 @@ pub fn map_cons(
             shape,
             enumerable,
         },
-        EnumChain { key, dst, of } => EnumChain {
+        EnumChain { key, dst, of, from } => EnumChain {
             key,
             dst: n(dst),
             of,
+            from,
         },
         IdxKey { obj, dst, shape } => IdxKey {
             obj,

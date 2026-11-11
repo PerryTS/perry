@@ -129,3 +129,125 @@ fn loop_forms_and_composed_helpers() {
         assert!(none_builtin(&k), "{name}: {k:?}");
     }
 }
+
+const MK: &str = "function mk(): any { const m: any = {}; m[process.argv[2]] = new K(); return m; }\n";
+
+fn has_member(k: &crate::derive::KindFact) -> bool {
+    k.top || k.funcs + k.builtin_objs > 0
+}
+
+/// ENUM2 (f) tsc's `assign` over PROGRAM-object sources (commandLineParser's
+/// options copy), then ToPrimitive of the target: the target keeps its facts,
+/// and the copy holds no built-in member of `Object.prototype` (none of them
+/// is enumerable); ToPrimitive finds `toString` on the target's own chain.
+#[test]
+fn enum2_assign_copy_from_program_objects_adds_no_builtin_member() {
+    let src = format!(
+        "{R}{HAS}{ASSIGN}const out: any = assign({{}}, {{ k: new K() }});\nconsole.log([out].join(\",\"), `${{out}}`);\nconst r = new R(out.k);\nconsole.log(r.v.x);\n"
+    );
+    let k = v(&src);
+    eprintln!("f k {k:?}");
+    assert!(
+        !k.top && k.objs.len() == 1 && k.objs[0].ends_with(":K"),
+        "out.k {k:?}"
+    );
+    let src2 = format!("{R}{HAS}{ASSIGN}const out: any = assign(Object.create(null), {{ k: 1 }}, {{ j: 2 }});\nconst r = new R(out.zz);\nconsole.log(r.v);\n");
+    let z = v(&src2);
+    eprintln!("f zz {z:?}");
+    assert!(none_builtin(&z), "out.zz {z:?}");
+    // The source's keys unknown (commandLineParser's options map): on
+    // 7f97c8a3fe the read walks into Object.prototype and copies its
+    // members, `out` escapes through ToPrimitive (`out.k` = ⊤).
+    let src3 = format!("{R}{HAS}{ASSIGN}{MK}const out: any = assign({{}}, mk());\nconsole.log([out].join(\",\"), `${{out}}`);\nconst r = new R(out.k);\nconsole.log(r.v.x);\n");
+    let c = v(&src3);
+    eprintln!("f computed k {c:?}");
+    assert!(
+        !c.top && c.objs.len() == 1 && c.objs[0].ends_with(":K") && c.builtin_objs == 0,
+        "computed out.k {c:?}"
+    );
+    let src4 = format!("{R}{HAS}{ASSIGN}{MK}const out: any = assign(Object.create(null), mk());\nconst r = new R(out.zz);\nconsole.log(r.v);\n");
+    let c = v(&src4);
+    eprintln!("f computed zz {c:?}");
+    assert!(
+        !c.top && c.funcs == 0 && c.builtin_objs == 0,
+        "computed out.zz {c:?}"
+    );
+}
+
+/// ENUM2 (g) class instance, array and function sources.
+#[test]
+fn enum2_class_array_function_sources_add_no_builtin_member() {
+    let pre = "class P { a: any = new K(); m() { return 1; } }\nfunction src() { return 0; }\n(src as any)[process.argv[2]] = new K();\nconst arr: any[] = [new K()];\narr[Number(process.argv[3])] = new K();\nconst pi: any = new P();\npi[process.argv[4]] = new K();\n";
+    for (name, s, key) in [
+        ("class", "pi", "a"),
+        ("array", "arr", "0"),
+        ("function", "src", "a"),
+    ] {
+        let kk = v(&format!("{R}{pre}{HAS}{ASSIGN}const out: any = assign(Object.create(null), {s});\nconst r = new R(out[\"{key}\"]);\nconsole.log(r.v);\n"));
+        eprintln!("g {name} key {kk:?}");
+        assert!(
+            !kk.top && kk.objs.iter().any(|o| o.ends_with(":K")),
+            "{name} key {kk:?}"
+        );
+        let z = v(&format!("{R}{pre}{HAS}{ASSIGN}const out: any = assign(Object.create(null), {s});\nconst r = new R(out.zz);\nconsole.log(r.v);\n"));
+        eprintln!("g {name} zz {z:?}");
+        // A class prototype is read by its fields: `m` and `constructor`
+        // (the model does not split the declarations of a class, which are
+        // not enumerable, from program writes); no `Object.prototype` member.
+        let (fns, objs) = if name == "class" { (1, 1) } else { (0, 0) };
+        assert!(
+            !z.top && z.funcs <= fns && z.builtin_objs <= objs,
+            "{name} zz {z:?}"
+        );
+    }
+}
+
+/// ENUM2 (h) a key the program wrote onto `Object.prototype` is enumerable:
+/// the copy of a program object yields it.
+#[test]
+fn enum2_program_written_inherited_key_is_copied() {
+    let src = format!("{R}{MK}function f() {{ return 1; }}\n(Object.prototype as any).mine = f;\nfunction copy(): any {{ const t: any = Object.create(null); const s: any = mk(); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().mine);\nconsole.log(r.v);\n");
+    let k = v(&src);
+    eprintln!("h mine {k:?}");
+    assert!(k.top || k.funcs >= 1, "mine {k:?}");
+}
+
+/// ENUM2 (i) a store through ⊤ under an unknown key may have written an
+/// enumerable key onto `Object.prototype` (or onto `Object`): the copy
+/// yields what that store wrote (ENUM1 open question 2).
+#[test]
+fn enum2_top_store_under_unknown_key_is_copied() {
+    let pre = "function h() { return 3; }\nconst u: any = new Function(process.argv[2])();\nu[process.argv[3]] = h;\n";
+    for (name, s) in [("literal", "{ k: 1 }"), ("computed", "mk()"), ("Object", "Object")] {
+        let src = format!("{R}{MK}{pre}function copy(): any {{ const t: any = Object.create(null); const s: any = {s}; for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
+        let k = v(&src);
+        eprintln!("i {name} {k:?}");
+        assert!(k.top || k.funcs >= 1, "{name} {k:?}");
+    }
+}
+
+/// ENUM2 (j) controls on program objects: the full read stays; and links
+/// left out of the rule read in full.
+#[test]
+fn enum2_program_object_controls_keep_the_full_lookup() {
+    let other = format!("{R}function copy(a: any): any {{ const t: any = {{}}; const b: any = {{ x: 1 }}; for (const k in a) {{ t[k] = b[k]; }} return t; }}\nconst r = new R(copy(JSON.parse(process.argv[2])).zz);\nconsole.log(r.v);\n");
+    let unk = format!("{R}const o: any = {{ x: 1 }};\nconst r = new R(o[process.argv[2]]);\nconsole.log(r.v);\n");
+    let key_w = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = {{ x: 1 }}; for (let p in s) {{ p = p + process.argv[2]; t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
+    let obj_w = format!("{R}{MK}function copy(): any {{ const t: any = {{}}; let s: any = mk(); for (const p in s) {{ s = mk(); t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
+    // Left out: a host prototype given as a prototype (process's chain has
+    // EventEmitter.prototype, whose methods are enumerable), a collection.
+    let host = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = Object.create(Object.getPrototypeOf(process)); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
+    let map = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = new Map(); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
+    for (name, src) in [
+        ("other", other),
+        ("unk", unk),
+        ("key_w", key_w),
+        ("obj_w", obj_w),
+        ("host", host),
+        ("map", map),
+    ] {
+        let k = v(&src);
+        eprintln!("j {name} {k:?}");
+        assert!(has_member(&k), "{name}: {k:?}");
+    }
+}

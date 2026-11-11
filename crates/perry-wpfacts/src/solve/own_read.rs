@@ -33,7 +33,7 @@ impl Model {
         shape: KeyShapeId,
         enumerable: bool,
     ) {
-        if enumerable && t != TOP && self.enum_free(t) {
+        if enumerable && t != TOP && (self.enum_free(t) || self.enum_obj(t)) {
             return self.enum_read_tok(idx, t, dst, shape);
         }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
@@ -78,34 +78,53 @@ impl Model {
         }
     }
 
-    /// ENUM1: `o[k]` of `for (k in o)` on built-in object `t`: none of its
-    /// built-in properties is enumerable, so `k` is a key the program wrote
-    /// on `t` or on its chain (`Cons::EnumChain`); a deleted key reads
-    /// `undefined`. No built-in member, no generic member.
+    /// ENUM1/ENUM2: `o[k]` of `for (k in o)` on built-in object `t` none of
+    /// whose built-in properties is enumerable, or on a program object
+    /// (`enum_obj`): `k` is a key the program wrote on `t` or on its chain
+    /// (`Cons::EnumChain`, up to the first prototype with enumerable
+    /// built-in members); a deleted key reads `undefined`. No built-in
+    /// member of a link the rule covers, no generic member.
     pub(super) fn enum_read_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
+        if self.enum_obj(t) {
+            self.mark_use(t, crate::model::MARK_READ);
+        }
         self.add_prim(dst, prim::UNDEF);
         let key = match self.key_nodes.get(&idx) {
             Some(&a) => Key::Named(a),
             None => Key::Any(shape),
         };
-        self.enum_fields(t, key, dst);
+        self.enum_fields(t, t, key, dst);
         if self.idx_done.insert((idx, t, dst, crate::model::IDX_ENUM_READ)) {
             self.accessor_walk(t, t, key, ChainAct::Load(dst));
             let pn = self.proto_node(t);
-            self.cons(pn, Cons::EnumChain { key, dst, of: t });
+            self.cons(
+                pn,
+                Cons::EnumChain {
+                    key,
+                    dst,
+                    of: t,
+                    from: t,
+                },
+            );
         }
     }
 
-    /// What the program wrote under `key` on built-in object `t`: its
-    /// fields, and under a named key what a store into ⊤ wrote there.
-    pub(super) fn enum_fields(&mut self, t: Tok, key: Key, dst: NodeId) {
+    /// What the program wrote under `key` on link `t` of the chain of `of`:
+    /// its fields, and on a built-in object what a store into ⊤ wrote there
+    /// (under a named key that key, under any key every key such a store
+    /// wrote, as for a computed read of the builtin chain, `any_written`).
+    pub(super) fn enum_fields(&mut self, of: Tok, t: Tok, key: Key, dst: NodeId) {
         let f = match key {
             Key::Named(a) => self.field(t, a),
             Key::Any(_) => self.all_fields(t),
         };
         self.edge(f, dst);
-        if let Key::Named(a) = key {
-            self.with_b(|m| builtins::enum_top_written(m, a, dst));
+        if !self.is_builtin_proto(t) {
+            return;
+        }
+        match key {
+            Key::Named(a) => self.with_b(|m| builtins::enum_top_written(m, a, dst)),
+            Key::Any(_) => self.with_b(|m| builtins::enum_top_written_any(m, of, dst)),
         }
     }
 

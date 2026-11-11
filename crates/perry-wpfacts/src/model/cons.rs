@@ -419,11 +419,18 @@ pub enum Cons {
         shape: KeyShapeId,
         enumerable: bool,
     },
-    /// The node is `ProtoNode(of)` of an enumerable-key read (`IdxLoad`
-    /// `enumerable`) of a built-in object: dst ⊇ what the program wrote
-    /// under `key` on each prototype, further up while the prototype is a
-    /// built-in object; any other prototype reads `key` in full.
-    EnumChain { key: Key, dst: NodeId, of: Tok },
+    /// The node is `ProtoNode(from)` on the chain of receiver `of` of an
+    /// enumerable-key read (`IdxLoad` `enumerable`): dst ⊇ what the program
+    /// wrote under `key` on each prototype, further up while the prototype
+    /// has no enumerable built-in member (`Model::enum_link`, which needs
+    /// `from` for the collapsed `ObjectProto`); any other prototype reads
+    /// `key` in full.
+    EnumChain {
+        key: Key,
+        dst: NodeId,
+        of: Tok,
+        from: Tok,
+    },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).

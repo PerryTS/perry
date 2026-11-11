@@ -1165,23 +1165,32 @@ impl Model {
                     self.idx_load_tok(idx, t, dst, shape, enumerable);
                 }
             }
-            Cons::EnumChain { key, dst, of } => {
+            Cons::EnumChain { key, dst, of, from } => {
                 for &q in toks {
                     if q == TOP {
                         self.add_tok(dst, TOP);
                         continue;
                     }
-                    // A program or host prototype: its keys in full.
-                    if !(self.enum_free(q) || matches!(self.toks[q as usize], TokKind::ObjectProto))
-                    {
+                    // A prototype with enumerable built-in members (a host
+                    // one, or one the seed of `from` does not name): its
+                    // keys in full.
+                    if !self.enum_link(from, q) {
                         self.load_from(of, q, key, dst);
                         continue;
                     }
-                    self.enum_fields(q, key, dst);
+                    self.enum_fields(of, q, key, dst);
                     if self.idx_done.insert((n, q, dst, crate::model::IDX_ENUM_CHAIN)) {
                         self.accessor_walk(of, q, key, ChainAct::Load(dst));
                         let up = self.proto_node(q);
-                        self.cons(up, Cons::EnumChain { key, dst, of });
+                        self.cons(
+                            up,
+                            Cons::EnumChain {
+                                key,
+                                dst,
+                                of,
+                                from: q,
+                            },
+                        );
                     }
                 }
             }
