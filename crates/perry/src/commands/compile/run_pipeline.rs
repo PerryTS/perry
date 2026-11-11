@@ -1182,36 +1182,18 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|_| args.input.clone());
 
     classify_eager_modules(&mut ctx, &entry_path);
-    // Only a program with a top-level await can have an asynchronous deferred
-    // dependency to gather, and the transitive walk is a fresh traversal per
-    // module, so a purely synchronous program does not pay for it.
-    let program_has_async_module = ctx
-        .native_modules
-        .values()
-        .any(|m| m.has_top_level_await);
     let deferred_paths: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
-    let mut deferred_async_deps = std::collections::HashMap::new();
     let mut deferred_readiness = std::collections::HashMap::new();
     for path in deferred_paths {
-        let prefixes = |targets: Vec<PathBuf>, ctx: &mut crate::commands::compile::CompilationContext| {
-            targets
-                .into_iter()
-                .filter_map(|p| {
-                    ctx.native_modules
-                        .get(&p)
-                        .map(|m| perry_codegen::symbol_names::module_prefix(&m.name))
-                })
-                .collect::<Vec<_>>()
-        };
-        let requested =
-            super::init_order::direct_requested_module_dependencies(&mut ctx, &path);
-        deferred_readiness.insert(path.clone(), prefixes(requested, &mut ctx));
-        let deps = if program_has_async_module {
-            super::init_order::deferred_async_dependencies(&mut ctx, &path)
-        } else {
-            Vec::new()
-        };
-        deferred_async_deps.insert(path, prefixes(deps, &mut ctx));
+        let requested = super::init_order::direct_requested_module_dependencies(&mut ctx, &path)
+            .into_iter()
+            .filter_map(|p| {
+                ctx.native_modules
+                    .get(&p)
+                    .map(|m| perry_codegen::symbol_names::module_prefix(&m.name))
+            })
+            .collect::<Vec<_>>();
+        deferred_readiness.insert(path.clone(), requested);
     }
 
     let sanitize_name = perry_codegen::symbol_names::module_prefix;
@@ -4053,7 +4035,10 @@ pub fn run_with_parse_cache(
             }
             }
             if program_has_tla {
-                let mut ordered = super::init_order::static_requested_paths(&ctx, path);
+                // A `defer` request is not an evaluation dependency: the
+                // scheduler must not run the provider before this body. The
+                // readiness walk still sees the edge.
+                let mut ordered = super::init_order::static_evaluation_paths(&ctx, path);
                 // The open CommonJS cache exists before any user module runs.
                 // This is the same support edge the synchronous eager driver seeds.
                 if is_entry && !ctx.cjs_closed {
@@ -6352,7 +6337,7 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
-            module_deferred_init_deps: deferred_async_deps.get(path).cloned().unwrap_or_default(),
+            module_deferred_init_deps: Vec::new(),
             module_deferred_readiness: deferred_readiness.get(path).cloned().unwrap_or_default(),
             program_has_tla,
             module_graph_has_tla,

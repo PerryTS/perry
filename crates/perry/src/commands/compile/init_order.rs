@@ -490,10 +490,26 @@ pub(super) fn direct_requested_module_dependencies(
 
 /// Runtime static edges in [[RequestedModules]] order, including SCC back-edges.
 pub(super) fn static_requested_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, true)
+}
+
+/// Evaluation edges only: a `defer` request keeps its target out of this
+/// module's evaluation list, so an asynchronous scheduler never runs a
+/// deferred provider before the importer's body. Readiness still walks it.
+pub(super) fn static_evaluation_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, false)
+}
+
+fn requested_paths(
+    ctx: &CompilationContext,
+    path: &Path,
+    include_deferred: bool,
+) -> Vec<PathBuf> {
     let Some(module) = ctx.native_modules.get(path) else { return Vec::new(); };
     let mut edges = Vec::new();
     for import in &module.imports {
         if import.is_dynamic || import.type_only || import.runtime_erased || import.is_deferred_require { continue; }
+        if import.is_deferred && !include_deferred { continue; }
         if let Some(target) = &import.resolved_path { edges.push((PathBuf::from(target), import.source.as_str())); }
     }
     for export in &module.exports {
