@@ -199,13 +199,16 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
                         .is_some_and(|&g| g != t && hit(g))
                 })
     };
-    // A store into ⊤ writes the global object only once it reached
-    // unmodeled code. It may always write a builtin prototype: unknown code
-    // reaches every one of them without being handed one (the chain of any
-    // object or function it holds, the globals interpreted code reads), and
-    // gives them to compiled code as ⊤.
+    // ⊤ stands for the values unknown code may hold. A built-in object is
+    // one of them once it was handed to unknown code (`SharedWrite::Handed`;
+    // one reached along an escaped value's prototype chain is not handed,
+    // `Model::escape_body`), or once the global object was
+    // (`global_in_top`): unknown code then reaches every built-in by name.
+    // Only then may a store into ⊤ write it. Per unit, unknown code
+    // includes the other units' code, which holds every built-in object.
     (
-        hit(TOP) && (!is_global || m.global_in_top),
+        hit(TOP)
+            && (m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np)))),
         hit(np)
             || other_global(np)
             // A prototype write is a chain contribution, separate from
@@ -216,6 +219,13 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
                     .get(&TokKind::ObjectProto)
                     .is_some_and(|&op| hit(op))),
     )
+}
+
+/// Built-in object `np` was handed to unknown code (not reached along a
+/// prototype chain): `Model::escape_body` notes `SharedWrite::Handed`.
+fn handed_to_unknown(m: &Model, np: Tok) -> bool {
+    m.shared_of(np)
+        .is_some_and(|s| m.shared_out.contains(&crate::model::SharedWrite::Handed(s)))
 }
 
 /// Does a lookup of `key` pass native prototype `np` (a key it does not
@@ -425,6 +435,15 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     let pn = m.proto_node(u);
     let protos: Vec<Tok> = m.nodes[pn as usize].pts.to_sorted();
     protos.into_iter().all(|p| chain_keys(m, p, seen, out))
+}
+
+/// A built-in object was handed to unknown code: the stores into ⊤ made
+/// before now may have written it (`written_by`). Lookups parked past it
+/// run again, as for the global object (`note_global_in_top`).
+pub fn note_handed_to_unknown(m: &mut Model) {
+    if m.native_writes.keys().any(|&(w, _)| w == TOP) {
+        replay_native_missing(m);
+    }
 }
 
 /// The global object may now be ⊤: stores into ⊤ may have written globals.

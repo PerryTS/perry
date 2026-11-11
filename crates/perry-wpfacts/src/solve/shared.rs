@@ -41,7 +41,10 @@ impl Model {
     pub(crate) fn note_shared(&mut self, w: SharedWrite) {
         self.top_write(&w);
         if !self.shared_replay {
-            self.shared_out.insert(w);
+            let handed = matches!(w, SharedWrite::Handed(_));
+            if self.shared_out.insert(w) && handed {
+                builtins::note_handed_to_unknown(self);
+            }
         }
     }
 
