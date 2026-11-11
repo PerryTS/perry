@@ -35,6 +35,10 @@
 //!    site or call; none of `T`'s is in `H`, and none is unplaced.
 //! 4. `H` is plain and has no `arguments` object.
 //!
+//! A program whose solve has a marker (a stand-in for another unit's
+//! argument or a contract function's parameter: its values are not in the
+//! node that holds it) gets no fact at all, as a per-unit solve gets none.
+//!
 //! **Why that is enough.** Let `H`'s activation hold instance `I` in `a`.
 //! `H` is plain, so until it returns only `H`'s own code and the
 //! activations below it on the stack run. `H`'s code changes no length (3).
@@ -86,12 +90,28 @@ pub fn enabled() -> bool {
 #[derive(Default)]
 struct TokInfo {
     /// Rule 1 or an unplaced event or hand-over: no function may hold it.
-    bad: Option<String>,
+    /// The first few distinct reasons (the probe prints them all).
+    bad: Vec<String>,
     /// Functions with an event on it (rule 3; `NO_FN`: module scope).
     events: Vec<FnIdx>,
     /// Functions that hand it down (rule 2).
     passed: Vec<FnIdx>,
 }
+
+impl TokInfo {
+    fn refuse(&mut self, why: String) {
+        if self.bad.len() < 8 && !self.bad.contains(&why) {
+            self.bad.push(why);
+        }
+    }
+}
+
+/// Nodes no body owns that hold a value only while a builtin runs on it:
+/// the receiver relay of a builtin method's run (`builtins::array_method`,
+/// `builtins::effects`). What the method does with the receiver is its
+/// modeled effect (a store, a result, a callback's argument), judged where
+/// it lands.
+const RELAYS: [&str; 1] = ["arr-recv"];
 
 /// The function a store site is in; `None` for a site the solve made.
 fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {
@@ -172,6 +192,15 @@ pub(crate) fn collect(
     if !m.held_lengths || m.aborted || m.unit_mode || interpreted {
         return;
     }
+    // A marker stands for values that are not in the node that holds it
+    // (another unit's argument, a contract function's parameter): rule 1
+    // could not see such a holder. No program with one gets the fact.
+    if !m.param_marker.is_empty() || m.arg_bits.iter().any(|&w| w != 0) {
+        if let Some(p) = probe.as_deref_mut() {
+            p.push("# held_len off=markers".to_string());
+        }
+        return;
+    }
     let bodies = plain_bodies(g);
     // The candidates: an `Arr` local of a plain function.
     struct Cand {
@@ -236,8 +265,8 @@ pub(crate) fn collect(
             }
             c.toks.iter().find_map(|t| {
                 let i = &info[t];
-                if let Some(why) = &i.bad {
-                    Some(format!("{why}:tok{t}"))
+                if !i.bad.is_empty() {
+                    Some(format!("{}:tok{t}", i.bad.join("+")))
                 } else if i.events.contains(&c.f) {
                     Some(format!("event:own:tok{t}"))
                 } else if i.passed.contains(&c.f) {
@@ -301,12 +330,13 @@ fn rule_holders(m: &Model, bodies: &FxHashSet<(u32, u32)>, info: &mut FxHashMap<
             continue;
         }
         let why = if captured.contains(&(n as NodeId)) {
-            Some("captured")
+            Some("captured".to_string())
         } else {
             match frame_of(m, n) {
-                None => Some("heap"),
+                None if RELAYS.contains(&m.labels[n]) => None,
+                None => Some("heap".to_string()),
                 Some(f) => (!*plain_fn.entry(f).or_insert_with(|| plain(m, bodies, f)))
-                    .then_some("suspending"),
+                    .then(|| format!("suspending({})", m.funcs[f as usize].name.replace(' ', "_"))),
             }
         };
         let Some(why) = why else {
@@ -321,9 +351,7 @@ fn rule_holders(m: &Model, bodies: &FxHashSet<(u32, u32)>, info: &mut FxHashMap<
         node.pts.sorted_into(&mut buf);
         for t in &buf {
             if let Some(i) = info.get_mut(t) {
-                if i.bad.is_none() {
-                    i.bad = Some(format!("{why}:{}#{n}", m.labels[n]));
-                }
+                i.refuse(format!("{why}:{}", m.labels[n]));
             }
         }
     }
@@ -346,14 +374,10 @@ fn rule_events(m: &Model, info: &mut FxHashMap<Tok, TokInfo>) {
                     i.events.push(f);
                 }
             }
-            None => {
-                if i.bad.is_none() {
-                    i.bad = Some(format!(
-                        "event:unplaced:{}{at}",
-                        if call { "call" } else { "site" }
-                    ));
-                }
-            }
+            None => i.refuse(format!(
+                "event:unplaced:{}",
+                if call { "call" } else { "site" }
+            )),
         }
     }
 }
@@ -376,11 +400,13 @@ fn rule_calls(m: &Model, info: &mut FxHashMap<Tok, TokInfo>) {
                     i.passed.push(f);
                 }
             }
-            None => {
-                if i.bad.is_none() {
-                    i.bad = Some(format!("passed:unplaced:call{c}"));
-                }
-            }
+            None => i.refuse(format!(
+                "passed:unplaced:{}",
+                m.labels
+                    .get(m.calls[c].ret as usize)
+                    .copied()
+                    .unwrap_or("call")
+            )),
         }
     };
     for (c, cs) in m.calls.iter().enumerate() {
