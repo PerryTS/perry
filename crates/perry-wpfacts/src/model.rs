@@ -1404,6 +1404,9 @@ pub struct Model {
     pub rest_field_sabotage: bool,
     /// I32 at rest, PR B (`rest_elems`; `PERRY_REST_ELEMS=0` turns it off).
     pub rest_elems: bool,
+    /// The at-rest capacity reservation (`rest_elems::reserve`;
+    /// `PERRY_REST_CAPACITY=0` turns it off).
+    pub rest_capacity: bool,
     /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
     pub rest_fields: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose

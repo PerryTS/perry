@@ -289,6 +289,14 @@ pub enum FactsEnc {
 }
 
 impl FactsArrRep {
+    /// The storage never moves: no growth reallocates it, so its header is
+    /// never forwarded. A fixed length, or an at-rest Array, whose length
+    /// is fixed or moves only inside the capacity its birth reserved
+    /// (wpfacts `rest_elems::reserve`).
+    pub fn unmoved(self) -> bool {
+        self.fixed || self.at_rest
+    }
+
     /// The join (says less) of two array reps, wpfacts `ArrRep::join`.
     pub fn join(a: FactsArrRep, b: FactsArrRep) -> FactsArrRep {
         use FactsElemRep::{Boxed, F64, I32};
@@ -437,10 +445,12 @@ pub struct ElisionFacts {
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest
     /// Array, with the least floor of those Arrays, and the `fill` call
-    /// offsets of at-rest births.
+    /// offsets of at-rest births. `rest_reserves`: the births that reserve
+    /// a capacity (wpfacts `rest_elems::reserve`), with it.
     pub rest_reads: std::collections::BTreeMap<u32, u32>,
     pub rest_writes: std::collections::BTreeMap<u32, u32>,
     pub rest_births: std::collections::BTreeSet<u32>,
+    pub rest_reserves: std::collections::BTreeMap<u32, u32>,
     /// I32 at rest, PR C: every key some class stores in an I32 lane
     /// (`FactsField::rest`): each site of such a key is lowered by
     /// `expr::rest_fields`, before every other tier.

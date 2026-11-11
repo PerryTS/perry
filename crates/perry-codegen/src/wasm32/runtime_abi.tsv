@@ -252,6 +252,7 @@ js_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_array_refresh_local_head	f64	f64
 js_array_rest_encode	f64	f64
 js_array_rest_get	f64	f64,f64
+js_array_rest_reserve	f64	f64,i32u
 js_array_rest_set	void	f64,f64,f64
 js_object_rest_get	f64	f64,f64
 js_object_rest_set	f64	f64,f64,f64,i32s

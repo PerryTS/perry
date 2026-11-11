@@ -142,6 +142,33 @@ pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
     arr: *mut ArrayHeader,
     min_capacity: u32,
 ) -> *mut ArrayHeader {
+    grow_backing_to::<MAY_COLLECT>(arr, min_capacity, false)
+}
+
+/// Give the fresh, unpublished array `arr` a capacity of at least
+/// `capacity` slots and return its head: `arr` itself when it already has
+/// them or the open nursery block can lengthen it where it stands, else a
+/// replacement of exactly that capacity (the old head becomes a forwarding
+/// stub nobody holds). The birth of an at-rest Array whose length may move
+/// reserves its proven upper bound this way (`layout_slot::
+/// js_array_rest_reserve`), so no later store reallocates it. May collect.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+pub(crate) unsafe fn reserve_capacity(arr: *mut ArrayHeader, capacity: u32) -> *mut ArrayHeader {
+    grow_backing_to::<true>(arr, capacity, true)
+}
+
+/// [`grow_backing`]; `exact` asks for `min_capacity` slots and no growth
+/// slack ([`reserve_capacity`]).
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+    exact: bool,
+) -> *mut ArrayHeader {
     if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
         if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN) != 0 {
             // The collecting form answers "no room" with the unchanged head;
@@ -185,7 +212,11 @@ pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
         // 800 instructions, against about 55 for an in-capacity push. Sixteen
         // pushes into `[]` paid two of them, 64% of the loop (the chess
         // engine's per-node move lists); now one. Large arrays still double.
-        let wanted = grown_capacity(old_capacity, min_capacity);
+        let wanted = if exact {
+            min_capacity
+        } else {
+            grown_capacity(old_capacity, min_capacity)
+        };
         if !MAY_COLLECT
             && wanted as usize + crate::array::key_attrs_reserve(arr)
                 > super::alloc::ARRAY_MAX_CAPACITY as usize
