@@ -1484,7 +1484,7 @@ pub(crate) fn enum_free_seed(m: &Model, from: Tok) -> bool {
     match &m.toks[from as usize] {
         TokKind::Builtin(_) | TokKind::NativeProto(_) => m.enum_free(from),
         TokKind::Obj(tm, _) if matches!(m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }) => {
-            ordinary_box(m, from)
+            ordinary_box(m, from) || enum_free_instance(m, from)
         }
         TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => false,
         _ => matches!(
@@ -1530,6 +1530,20 @@ pub(crate) fn ordinary_box(m: &Model, t: Tok) -> bool {
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what, .. }
             if members::bobj_family(what) == Family::Box
                 && members::box_chain(what) == members::BoxChain::Object))
+}
+
+/// ENUM1: an instance of a language builtin none of whose properties is
+/// enumerable: a `Map`, `Set`, `WeakMap`, `WeakSet` or `Promise` (ECMA-262
+/// 24.1.1.1, 24.2.2.1, 24.3.1.1, 24.4.1.1, 27.2.3.1: OrdinaryCreateFromConstructor
+/// with internal slots only, no own property; the properties of its
+/// prototype are non-enumerable, clause 18). A for-in over it visits only
+/// keys the program wrote on it or its chain, so `o[k]` of that for-in
+/// reads no builtin member. Not an iterator, an Error (the V8 `stack` own
+/// property), a typed array (its indices are enumerable) or a host object.
+pub(crate) fn enum_free_instance(m: &Model, t: Tok) -> bool {
+    matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+        if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what, .. }
+            if matches!(members::bobj_family(what), Family::Collection | Family::Promise)))
 }
 
 fn is_site_builtin(m: &Model, t: Tok) -> bool {

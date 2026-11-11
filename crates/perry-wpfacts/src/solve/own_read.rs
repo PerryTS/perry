@@ -33,7 +33,10 @@ impl Model {
         shape: KeyShapeId,
         enumerable: bool,
     ) {
-        if enumerable && t != TOP && (self.enum_free(t) || self.enum_obj(t)) {
+        if enumerable
+            && t != TOP
+            && (self.enum_free(t) || self.enum_obj(t) || builtins::enum_free_instance(self, t))
+        {
             return self.enum_read_tok(idx, t, dst, shape);
         }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.

@@ -55,6 +55,39 @@ fn plain_copies_from_builtins_add_no_member() {
     }
 }
 
+/// (b) instances of language builtins (ECMA-262 24.1.1.1, 24.2.2.1,
+/// 24.3.1.1, 24.4.1.1, 27.2.3.1): a Map, Set, WeakMap, WeakSet or Promise
+/// has no own property and only non-enumerable built-in members on its
+/// chain, so a for-in copy of it copies no builtin method (tsc copies a
+/// binder `Set` through such a loop).
+#[test]
+fn copies_from_language_builtin_instances_add_no_member() {
+    for obj in [
+        "new Set([1])",
+        "new Map([[1, 2]])",
+        "new WeakMap()",
+        "new WeakSet()",
+        "new Promise((r: any) => r(1))",
+    ] {
+        let k = v(&copy_of(obj));
+        eprintln!("inst {obj} {k:?}");
+        assert!(none_builtin(&k), "{obj}: {k:?}");
+    }
+    // Controls: an enumerable key the program writes on the prototype is
+    // copied (or the read stays open); a Set handed to unknown code may
+    // carry any key.
+    let w = format!(
+        "{R}(Set.prototype as any).zz = new K();\nfunction copy(): any {{ const t: any = Object.create(null); const s: any = new Set(); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n"
+    );
+    let k = v(&w);
+    assert!(k.top || k.objs.iter().any(|o| o.ends_with(":K")), "written: {k:?}");
+    let u = format!(
+        "{R}function copy(): any {{ const t: any = Object.create(null); const s: any = new Set(); new Function(process.argv[2])(s); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n"
+    );
+    let k = v(&u);
+    assert!(!none_builtin(&k), "unknown code: {k:?}");
+}
+
 /// (b) at module top level (a loop that stays a loop in a unit view).
 #[test]
 fn top_level_copy_from_object_adds_no_member() {
@@ -242,16 +275,17 @@ fn enum2_program_object_controls_keep_the_full_lookup() {
     let key_w = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = {{ x: 1 }}; for (let p in s) {{ p = p + process.argv[2]; t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
     let obj_w = format!("{R}{MK}function copy(): any {{ const t: any = {{}}; let s: any = mk(); for (const p in s) {{ s = mk(); t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
     // Left out: a host prototype given as a prototype (process's chain has
-    // EventEmitter.prototype, whose methods are enumerable), a collection.
+    // EventEmitter.prototype, whose methods are enumerable). A collection
+    // is no longer left out: a Map has no own property and no enumerable
+    // built-in member (ECMA-262 24.1.1.1, clause 18;
+    // `copies_from_language_builtin_instances_add_no_member`).
     let host = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = Object.create(Object.getPrototypeOf(process)); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
-    let map = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = new Map(); for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
     for (name, src) in [
         ("other", other),
         ("unk", unk),
         ("key_w", key_w),
         ("obj_w", obj_w),
         ("host", host),
-        ("map", map),
     ] {
         let k = v(&src);
         eprintln!("j {name} {k:?}");
