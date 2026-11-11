@@ -211,6 +211,12 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// The specifier of `require` call `call` (R-SPEC): each string
+    /// constant that reaches the node resolves as that literal does
+    /// (`builtins::require_by_spec`); a value no constant spells (any
+    /// string, a token, ⊤) resolves as anything. Other primitives resolve
+    /// to nothing: the loader throws on a specifier that is no string.
+    RequireSpec { call: CallId },
     /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
     /// data value or a marker leaves it inert (an instance's ⊤ arrives as
     /// ⊤). The result of a rule that is unknown only when the node is: an
@@ -635,6 +641,7 @@ impl Cons {
         matches!(
             self,
             Cons::StoreIndexed { .. }
+                | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }
@@ -688,6 +695,7 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::RequireSpec { .. } => "requirespec",
             Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",

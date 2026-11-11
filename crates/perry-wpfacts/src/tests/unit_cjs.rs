@@ -137,6 +137,7 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
                     }
                 });
                 if let Some(n) = imp.source.strip_prefix("./") {
+                    let n = n.strip_suffix(".js").unwrap_or(n);
                     imp.resolved_path = Some(format!("{dir}/{n}.js"));
                 } else if imp.source.starts_with(&format!("{dir}/")) {
                     // A static edge's record-binding import names its target
@@ -827,4 +828,123 @@ fn load_runs(mods: &[(&str, &str)]) -> bool {
         eprintln!("{}", w.dump_text());
     }
     !live.is_empty()
+}
+
+/// R-SPEC: `a.js` requires `./b.js` and `process`; `process` makes the
+/// program not closed, so the static edge keeps its arm that reloads
+/// `/spec/b.js` through the support module's `reload(path, parent)`, whose
+/// loader call has a parameter as specifier. Its values are the edges'
+/// path constants: each resolves as that literal does (the record's
+/// exports), never as `node:module`, so `Module._cache` is not sunk and the
+/// classes `b.js` exports stay the program's. The fixture keeps the open
+/// arms (`regenerate_wpfacts_cjs_fixtures`, set `spec`).
+const TS: [(&str, &str); 4] = [
+    ("/spec/m.js", include_str!("fixtures/cjs_spec/m.js")),
+    ("/spec/a.js", include_str!("fixtures/cjs_spec/a.js")),
+    ("/spec/b.js", include_str!("fixtures/cjs_spec/b.js")),
+    (
+        "/spec/perry_cjs.js",
+        include_str!("fixtures/cjs_spec/perry_cjs.js"),
+    ),
+];
+
+const TS_BODY: &str = "module.exports = { Pt: b.Pt, mk: b.mk, argc: () => proc.argv.length };";
+
+/// The whole-program facts of `TS` with `a.js`'s body line `TS_BODY`
+/// preceded by `pre`.
+fn spec_facts(pre: &str) -> ProgramFacts {
+    let a = TS[1].1.replace(TS_BODY, &format!("{pre}\n{TS_BODY}"));
+    assert!(pre.is_empty() || a != TS[1].1, "a.js was rewritten");
+    let mods = [TS[0], (TS[1].0, a.as_str()), TS[2], TS[3]];
+    let hirs = hirs(&mods);
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    crate::compute(&list, &FactsConfig::default())
+}
+
+/// The verdict of the site of `key` at the first `pat` in module `path`.
+fn spec_site<'a>(
+    pf: &'a ProgramFacts,
+    src: &str,
+    path: &str,
+    pat: &str,
+    key: &str,
+) -> &'a crate::SiteFacts {
+    let off = src.find(pat).unwrap_or_else(|| panic!("{pat} in {path}")) as u32;
+    pf.sites
+        .iter()
+        .filter(|s| pf.module_paths[s.module as usize] == path && s.key == key)
+        .min_by_key(|s| s.byte_offset.abs_diff(off))
+        .unwrap_or_else(|| panic!("site {key} in {path}\n{}", pf.dump_text()))
+}
+
+fn proven(s: &crate::SiteFacts) -> bool {
+    !matches!(s.verdict, Verdict::No(_))
+}
+
+const SINK: &str = "node:module namespace hands out Module._cache";
+
+#[test]
+fn a_require_by_a_parameter_resolves_per_path_constant() {
+    let pf = spec_facts("");
+    let (m, b) = (TS[0].1, TS[2].1);
+    // Main-red: `p.sum`, `p.x` read ⊤ ("module loaded by a computed
+    // specifier"), `this.x` in `Pt` escaped with the cache.
+    for (path, src, pat, key) in [
+        ("/spec/m.js", m, "p.sum()", "sum"),
+        ("/spec/m.js", m, "p.x", "x"),
+        ("/spec/b.js", b, "this.x + this.y", "x"),
+        ("/spec/b.js", b, "o.x * o.y", "x"),
+    ] {
+        let s = spec_site(&pf, src, path, pat, key);
+        assert!(
+            proven(s),
+            "{path} {pat}: {:?}\n{}",
+            s.verdict,
+            pf.dump_text()
+        );
+    }
+    let sum = spec_site(&pf, m, "/spec/m.js", "p.sum()", "sum");
+    assert_eq!(sum.targets.len(), 1, "{:?}", sum.targets);
+    assert!(!pf.dump_text().contains(SINK), "{}", pf.dump_text());
+}
+
+/// Controls: what a specifier no constant spells, the constant `module`,
+/// or a store through `require.cache` keeps unproven.
+#[test]
+fn a_require_by_an_unknown_or_module_specifier_keeps_the_cache_sunk() {
+    let m = TS[0].1;
+    // A truly dynamic specifier (a parameter fed from `process.argv`), a
+    // set of one constant and one unknown (the constant resolves, the
+    // unknown part sinks the cache all the same), and `module` reached
+    // through a variable: `Module._cache` hands out every record, so `Pt`
+    // escapes and `p.x` reads ⊤.
+    for pre in [
+        "const extra = (function (s) { return require(s); })(process.argv[2]);",
+        "const extra = require(process.argv.length > 99 ? process.argv[2] : '/spec/b.js');",
+        "const extra = require(process.argv.length > 99 ? 'process' : 'module');",
+    ] {
+        let pf = spec_facts(pre);
+        let dump = pf.dump_text();
+        assert!(dump.contains(SINK), "{pre}: no sink\n{dump}");
+        let x = spec_site(&pf, m, "/spec/m.js", "p.x", "x");
+        assert!(!proven(x), "{pre}: p.x {:?}\n{dump}", x.verdict);
+        // What stays proven: a local object no cache slot holds (`mk`'s
+        // own literal in b.js).
+        let o = spec_site(&pf, TS[2].1, "/spec/b.js", "o.x * o.y", "x");
+        assert!(proven(o), "{pre}: o.x {:?}\n{dump}", o.verdict);
+    }
+    // A program that writes through `require.cache`: the write is a
+    // modeled store, `p.sum()` runs either method, never one.
+    let pf = spec_facts(
+        "require.cache['/spec/b.js'].exports.Pt.prototype.sum = function () { return 7; };",
+    );
+    let sum = spec_site(&pf, m, "/spec/m.js", "p.sum()", "sum");
+    assert!(
+        !matches!(sum.verdict, Verdict::T0Mono) && sum.targets.len() != 1,
+        "{:?} {:?}\n{}",
+        sum.verdict,
+        sum.targets,
+        pf.dump_text()
+    );
 }

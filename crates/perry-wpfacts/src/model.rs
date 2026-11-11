@@ -1588,6 +1588,9 @@ pub struct Model {
     pub inbounds_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
+    /// `(call, specifier value)` a computed `require` already resolved
+    /// (`Cons::RequireSpec`; `None`: a value no constant spells).
+    pub require_spec_done: crate::pts::FxHashSet<(CallId, Option<Atom>)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.
     pub arr_iterated: FxHashMap<Tok, NodeId>,
     /// `builtins::species_from`: the `constructor` ArraySpeciesCreate
