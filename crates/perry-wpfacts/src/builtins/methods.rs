@@ -556,8 +556,11 @@ pub fn object_proto_method_prims(m: &mut Model, prim: u16, call: CallId) {
     }
     for name in OBJECT_PROTO_METHODS {
         if name == "valueOf" {
-            anyfall("Object.prototype method on primitives", &(p, call), &name);
-            prim_method_generic(m, call);
+            // 20.1.3.7 Object.prototype.valueOf: ToObject(this), no
+            // argument is read; the result is the wrapper.
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
         } else {
             let a = m.atom(name);
             prim_method(m, p, Key::Named(a), call);
