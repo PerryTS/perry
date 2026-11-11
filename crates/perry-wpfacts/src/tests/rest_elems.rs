@@ -201,6 +201,7 @@ function put(i: number, v: number) {{ a[{key}] = v & 255; }}
 function get(i: number): number {{ return a[i & 511] | 0; }}
 let s = 0;
 for (let i = 0; i < 100; i++) {{ put(i, i * 3); s = (s + get(i + 1)) | 0; }}
+put(1023, 1);
 console.log(s, a.length);
 "#
         )
