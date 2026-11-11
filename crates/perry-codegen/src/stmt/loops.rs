@@ -7849,6 +7849,24 @@ fn lower_for_after_init_impl(
     // the counter's i32 slot are independent proofs consumed inside clones.
     let raw_hoist_classification: Option<LengthHoist> =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    // The facts hold the length where the walker stops (`held_len`).
+    let held_by_facts = if raw_hoist_classification.is_none()
+        && precomputed_i32_bound.is_none()
+        && ctx.element_shape_loop_facts.is_empty()
+        && ctx.stable_packed_loop_facts.is_empty()
+    {
+        condition.and_then(|cond| super::held_len::classify(ctx, cond, update, body))
+    } else {
+        None
+    };
+    let raw_hoist_classification =
+        raw_hoist_classification.or(held_by_facts.map(|h| LengthHoist {
+            arr_id: h.arr,
+            counter_id: h.counter,
+            op: perry_hir::CompareOp::Lt,
+            lhs_addend: 0,
+            buffer_bounds_width_units: None,
+        }));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
     } else {
@@ -7867,6 +7885,10 @@ fn lower_for_after_init_impl(
                 .get(&hoist.arr_id)
                 .is_some_and(|n| n.starts_with("__arr_"))
         });
+    let held_by_facts = held_by_facts.filter(|_| hoist_classification.is_some());
+    if let Some(held) = held_by_facts {
+        ctx.held_lens.push(held);
+    }
     if let Some(hoist) = hoist_classification {
         record_loop_array_length_effect(ctx, hoist.arr_id, LoopArrayLengthEffect::Preserves, true);
     } else if let Some(rejection) = hoist_rejection {
@@ -8441,6 +8463,9 @@ fn lower_for_after_init_impl(
         let arr_id = hoisted_length_arr_id.expect("a cached length has a receiver");
         let removed = ctx.receiver_descriptors.dematerialize_cached_length(arr_id);
         debug_assert!(removed, "loop must retire its cached-length descriptor");
+    }
+    if held_by_facts.is_some() {
+        ctx.held_lens.pop();
     }
     let _ = hoisted_length_slot;
     // Pop the i32 counter slot we inserted for the `i < n` number-bound
@@ -9190,7 +9215,10 @@ fn classify_for_length_hoist_rejection(
     None
 }
 
-fn array_length_receiver_is_loop_local(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
+pub(super) fn array_length_receiver_is_loop_local(
+    ctx: &crate::expr::FnCtx<'_>,
+    arr_id: u32,
+) -> bool {
     // A typed-array annotation can name a getter-bearing object. Only an
     // owned sealed binding or a proven native view licenses a header length;
     // the generic path must evaluate a possibly observable getter each time.

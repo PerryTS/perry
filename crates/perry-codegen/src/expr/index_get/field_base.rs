@@ -321,6 +321,7 @@ fn witness(
         key_floor: call_floor.unwrap_or(base.rep.floor),
         number: base.rep.elem != FactsElemRep::Boxed,
         receiver: super::proven_array::Receiver::Field,
+        bounded: None,
     };
     super::array_rep::witness_read(ctx, &fresh, idx, read, false);
     Ok(())

@@ -1345,6 +1345,9 @@ pub(crate) struct FnCtx<'a> {
     /// N2: the planned function-level element bases of the method body
     /// (`stmt::fn_base`).
     pub fn_base: crate::stmt::fn_base::Pending,
+    /// The loops that hold an Array local's length by the facts
+    /// (`expr::held_len`), innermost last.
+    pub held_lens: Vec<held_len::HeldLen>,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
@@ -3381,6 +3384,7 @@ pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
+pub(crate) mod held_len;
 pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;

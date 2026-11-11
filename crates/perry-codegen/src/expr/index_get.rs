@@ -429,6 +429,9 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
         return Ok(Some(v));
     }
+    if let Some(v) = super::held_len::lower_read(ctx, object, index, *element_offset, true)? {
+        return Ok(Some(v));
+    }
     // A planned-bare region read lowers through the value path's hook.
 
     // Masked-window fast path first: the dense range guard proved the whole
@@ -885,6 +888,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             element_offset,
             ..
         } => {
+            // A loop that holds the receiver's length by the facts reads at
+            // its bounded counter (`held_len`).
+            if let Some(value) =
+                super::held_len::lower_read(ctx, object, index, *element_offset, false)?
+            {
+                return Ok(value);
+            }
             // The private record cursor starts at zero, advances only after a
             // successful read, and is bounded by the array's u32 length here.
             // Consume that proof in the ordinary guarded indexed backend.

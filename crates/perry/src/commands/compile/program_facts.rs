@@ -779,6 +779,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.literal_strings {
                 out.literal_string_locals.insert(*id);
             }
+            if b.stable_length {
+                out.stable_length_locals.insert(*id, b.stable_front);
+            }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());
             }
