@@ -419,6 +419,11 @@ pub struct ElisionFacts {
     /// Method call byte offsets whose result is a Number at every copy
     /// (wpfacts `ModuleBindings::number_calls`, `facts_rep::number_call`).
     pub number_calls: std::collections::BTreeSet<u32>,
+    /// Call span (`Expr::Call::byte_offset`, `byte_end`) → the primitive
+    /// kinds (a wpfacts `prim` mask) its result holds at every copy, and
+    /// nothing else (wpfacts `ModuleBindings::call_kinds`,
+    /// `expr::facts_string`).
+    pub call_kinds: std::collections::BTreeMap<(u32, u32), u16>,
     /// `IndexGet::element_offset` → the read's receivers are program Arrays
     /// whose storage never moves (wpfacts `ModuleBindings::element_reads`,
     /// `expr::index_get::proven_array`).
@@ -539,6 +544,7 @@ impl ElisionFacts {
             && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
+            && self.call_kinds.is_empty()
             && self.element_reads.is_empty()
             && self.field_read_calls.is_empty()
             && self.signatures.is_empty()
