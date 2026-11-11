@@ -41,24 +41,22 @@ mod ledger;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
-pub mod signatures;
 mod rooted;
+pub mod signatures;
 mod solve;
 mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
 
-pub use bindings::{
-    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep,
-};
-pub use field_read_calls::{FieldReadCall, FieldReadDefault};
-pub use signatures::Signature;
+pub use bindings::{ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 use perry_hir::Module;
+pub use signatures::Signature;
 
 /// Reserved atom for computed-key accessors ("any key").
 pub(crate) const STAR_KEY: &str = "\u{1}*";

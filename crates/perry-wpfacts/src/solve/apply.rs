@@ -475,7 +475,7 @@ impl Model {
                         // included, and no other key.
                         let k = Some(Key::Named(key));
                         self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
-                        builtins::note_native_write(self, TOP, k, "E7 delete");
+                        builtins::note_native_data_write(self, TOP, k, "E7 delete");
                         self.top_reshape(Some(key));
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
@@ -1201,7 +1201,10 @@ impl Model {
                         continue;
                     }
                     self.enum_fields(of, q, key, dst);
-                    if self.idx_done.insert((n, q, dst, crate::model::IDX_ENUM_CHAIN)) {
+                    if self
+                        .idx_done
+                        .insert((n, q, dst, crate::model::IDX_ENUM_CHAIN))
+                    {
                         self.accessor_walk(of, q, key, ChainAct::Load(dst));
                         let up = self.proto_node(q);
                         self.cons(

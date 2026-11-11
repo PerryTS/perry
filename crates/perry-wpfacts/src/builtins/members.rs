@@ -745,7 +745,6 @@ pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
     (parent.kind == RealmKind::Constructor).then_some(parent.name)
 }
 
-
 /// What a method lookup of a named key finds on the [[Prototype]] chain of
 /// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
 /// the own property of the first declaration on `P`'s declared chain that
@@ -782,7 +781,10 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
 /// (`realm_born`): its realm-declared own properties, then those of its
 /// declared [[Prototype]]s, to `null`.
-pub(super) fn realm_chain_find(born: &'static perry_hir::realm_manifest::RealmEntry, name: &str) -> RealmFind {
+pub(super) fn realm_chain_find(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> RealmFind {
     let mut at = born;
     loop {
         if let Some(p) = at.own.iter().find(|p| realm_key_is(p, name)) {
@@ -1106,10 +1108,9 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
         // `Other`, the HIR global sentinel (what a bare global name is read
         // off), is the global object: an ordinary object, not callable.
-        BuiltinNs::GlobalThis
-        | BuiltinNs::Other
-        | BuiltinNs::Process
-        | BuiltinNs::Module(_) => (NsProto::Object, None),
+        BuiltinNs::GlobalThis | BuiltinNs::Other | BuiltinNs::Process | BuiltinNs::Module(_) => {
+            (NsProto::Object, None)
+        }
         BuiltinNs::Require => (NsProto::Unknown(Family::Function), None),
     };
     NsStatics {
@@ -1219,7 +1220,10 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
 /// Is `name` an own static function of namespace `ns` (listed on the
 /// namespace itself, not found on its chain)?
 pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
-    matches!(ns_statics(ns).members.and_then(|own| own.find(name)), Some(Mem::Fn))
+    matches!(
+        ns_statics(ns).members.and_then(|own| own.find(name)),
+        Some(Mem::Fn)
+    )
 }
 
 fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
@@ -1517,18 +1521,29 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
         _ => p.key.to_string(),
     };
     for (what, chain) in [
-        ("Response.prototype", &["Response.prototype", "Object.prototype"][..]),
+        (
+            "Response.prototype",
+            &["Response.prototype", "Object.prototype"][..],
+        ),
         (
             "TypeError.prototype",
             &["TypeError.prototype", "Error.prototype", "Object.prototype"][..],
         ),
         (
             "DOMException.prototype",
-            &["DOMException.prototype", "Error.prototype", "Object.prototype"][..],
+            &[
+                "DOMException.prototype",
+                "Error.prototype",
+                "Object.prototype",
+            ][..],
         ),
         (
             "AbortSignal.prototype",
-            &["AbortSignal.prototype", "EventTarget.prototype", "Object.prototype"][..],
+            &[
+                "AbortSignal.prototype",
+                "EventTarget.prototype",
+                "Object.prototype",
+            ][..],
         ),
     ] {
         let born = realm_born(what).unwrap_or_else(|| panic!("{what} is realm-born"));
@@ -1565,10 +1580,20 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
         found("Response.prototype", "hasOwnProperty"),
         RealmOwnValue::Reference("Object.prototype.hasOwnProperty")
     );
-    assert_eq!(found("Response.prototype", "@@__perry_wk_toStringTag"), RealmOwnValue::String);
+    assert_eq!(
+        found("Response.prototype", "@@__perry_wk_toStringTag"),
+        RealmOwnValue::String
+    );
     // A described family is not realm-born (its own description decides),
     // nor is a kind no declaration names.
-    for what in ["Promise", "Error", "Map", "hostrecord", "Response", "builtin"] {
+    for what in [
+        "Promise",
+        "Error",
+        "Map",
+        "hostrecord",
+        "Response",
+        "builtin",
+    ] {
         assert!(realm_born(what).is_none(), "{what}");
     }
 }

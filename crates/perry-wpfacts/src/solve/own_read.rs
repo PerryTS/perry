@@ -94,7 +94,10 @@ impl Model {
             None => Key::Any(shape),
         };
         self.enum_fields(t, t, key, dst);
-        if self.idx_done.insert((idx, t, dst, crate::model::IDX_ENUM_READ)) {
+        if self
+            .idx_done
+            .insert((idx, t, dst, crate::model::IDX_ENUM_READ))
+        {
             self.accessor_walk(t, t, key, ChainAct::Load(dst));
             let pn = self.proto_node(t);
             self.cons(

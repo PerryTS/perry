@@ -178,7 +178,9 @@ fn g1_reason_getter_reads_the_declared_result() {
     let y = site(&pf, "y");
     assert!(
         y.receivers.iter().any(|r| r.ends_with(":R"))
-            && y.receivers.iter().any(|r| r.contains("DOMException.prototype"))
+            && y.receivers
+                .iter()
+                .any(|r| r.contains("DOMException.prototype"))
             && !y.receivers.iter().any(|r| r.contains("builtin-fn")),
         "{:?}\n{}",
         y.receivers,
@@ -206,7 +208,10 @@ fn g2_write_through_the_reason_getter_reaches_r() {
     );
     show(&pf, &["y"], &["R"]);
     let y = field(tmpl(&pf, "R"), "y");
-    eprintln!("SKINBR R.y readonly={} writers_post={} kind={:?}", y.readonly, y.writers_post, y.kind);
+    eprintln!(
+        "SKINBR R.y readonly={} writers_post={} kind={:?}",
+        y.readonly, y.writers_post, y.kind
+    );
     assert!(!y.readonly && y.writers_post > 0, "{}", pf.dump_text());
     assert!(
         y.kind.prims & crate::model::prim::STR != 0,

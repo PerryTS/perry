@@ -378,7 +378,10 @@ impl Model {
     /// runtime calling a protocol method on a value), not a program site?
     pub(crate) fn protocol_touch(&self, call: CallId) -> bool {
         self.protocol_calls.contains(&call)
-            && matches!(self.calls[call as usize].this, crate::model::ThisArg::Tok(_))
+            && matches!(
+                self.calls[call as usize].this,
+                crate::model::ThisArg::Tok(_)
+            )
     }
 
     /// The birth context of an object `call` makes: its program site (one

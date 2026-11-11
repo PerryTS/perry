@@ -152,7 +152,11 @@ fn a_host_stream_write_returns_a_boolean() {
     let src = format!("{WRITE_RESULT}console.log(a.v); // SITE\n");
     let pf = facts(&src);
     let v = site(&pf, &src, "v");
-    assert!(v.iter().all(|v| !matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| !matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
     assert!(native(&pf, "write"), "{:?}", calls(&pf, "write"));
 }
 
@@ -167,7 +171,11 @@ fn a_host_stream_write_keeps_its_chunk() {
         console.log(c.s); // SITE\n";
     let pf = facts(src);
     let v = site(&pf, src, "s");
-    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: `write` reads other members of its receiver (`_write`,
@@ -195,10 +203,26 @@ fn a_host_stream_write_after_a_store_on_the_stream_stays_open() {
 fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
     for (store, call, opened) in [
         ("void w;", "console.log(\"x\");", false),
-        ("(process.stdout as any).write = w;", "console.info(\"x\");", true),
-        ("(process.stderr as any).write = w;", "console.error(\"x\");", true),
-        ("Object.getPrototypeOf(process.stdout).write = w;", "console.log(\"x\");", true),
-        ("Object.getPrototypeOf(process.stderr).write = w;", "console.warn(\"x\");", true),
+        (
+            "(process.stdout as any).write = w;",
+            "console.info(\"x\");",
+            true,
+        ),
+        (
+            "(process.stderr as any).write = w;",
+            "console.error(\"x\");",
+            true,
+        ),
+        (
+            "Object.getPrototypeOf(process.stdout).write = w;",
+            "console.log(\"x\");",
+            true,
+        ),
+        (
+            "Object.getPrototypeOf(process.stderr).write = w;",
+            "console.warn(\"x\");",
+            true,
+        ),
         (
             "Object.getPrototypeOf(Object.getPrototypeOf(process.stdout)).write = w;",
             "console.debug(\"x\");",
@@ -214,7 +238,11 @@ fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
         let v = site(&pf, &src, "v");
         let open = v.iter().all(|v| matches!(v, Verdict::No(_)));
         let proven = v.iter().all(|v| !matches!(v, Verdict::No(_)));
-        assert!(if opened { open } else { proven }, "{store} {call}: {v:?}\n{}", pf.dump_text());
+        assert!(
+            if opened { open } else { proven },
+            "{store} {call}: {v:?}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -226,5 +254,9 @@ fn a_host_stream_write_after_a_store_on_its_prototype_stays_open() {
     let src = format!("{extra}{WRITE_RESULT}console.log(a.v); // SITE\n");
     let pf = facts(&src);
     let v = site(&pf, &src, "v");
-    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
 }

@@ -153,7 +153,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 match members::chain_names(Family::Function) {
                     Some(names) => {
                         let fns: Vec<&str> = names
-                            .filter(|n| matches!(members::member(Family::Function, n), Some(Mem::Fn)))
+                            .filter(|n| {
+                                matches!(members::member(Family::Function, n), Some(Mem::Fn))
+                            })
                             .collect();
                         for n in fns {
                             function_method(m, t, Some(n), call);

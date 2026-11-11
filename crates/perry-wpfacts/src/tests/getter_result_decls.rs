@@ -25,7 +25,11 @@ fn stored(prelude: &str, read: &str) -> crate::derive::KindFact {
 fn declared(prelude: &str, read: &str, want: u16) {
     let k = stored(prelude, read);
     assert!(!k.top, "{read}: {k:?}");
-    assert_eq!(k.prims & !(prim::NUM | prim::UNDEF), want & !(prim::NUM | prim::UNDEF), "{read}: {k:?}");
+    assert_eq!(
+        k.prims & !(prim::NUM | prim::UNDEF),
+        want & !(prim::NUM | prim::UNDEF),
+        "{read}: {k:?}"
+    );
 }
 
 #[test]
@@ -60,5 +64,10 @@ fn regexp_flags_redefined_on_the_prototype() {
 
 #[test]
 fn url_protocol_redefined_on_the_prototype() {
-    redefined("const u = new URL(\"http://a/\");", "URL.prototype", "protocol", "u.protocol");
+    redefined(
+        "const u = new URL(\"http://a/\");",
+        "URL.prototype",
+        "protocol",
+        "u.protocol",
+    );
 }

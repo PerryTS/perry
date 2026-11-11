@@ -130,7 +130,8 @@ fn loop_forms_and_composed_helpers() {
     }
 }
 
-const MK: &str = "function mk(): any { const m: any = {}; m[process.argv[2]] = new K(); return m; }\n";
+const MK: &str =
+    "function mk(): any { const m: any = {}; m[process.argv[2]] = new K(); return m; }\n";
 
 fn has_member(k: &crate::derive::KindFact) -> bool {
     k.top || k.funcs + k.builtin_objs > 0
@@ -218,7 +219,11 @@ fn enum2_program_written_inherited_key_is_copied() {
 #[test]
 fn enum2_top_store_under_unknown_key_is_copied() {
     let pre = "function h() { return 3; }\nconst u: any = new Function(process.argv[2])();\nu[process.argv[3]] = h;\n";
-    for (name, s) in [("literal", "{ k: 1 }"), ("computed", "mk()"), ("Object", "Object")] {
+    for (name, s) in [
+        ("literal", "{ k: 1 }"),
+        ("computed", "mk()"),
+        ("Object", "Object"),
+    ] {
         let src = format!("{R}{MK}{pre}function copy(): any {{ const t: any = Object.create(null); const s: any = {s}; for (const p in s) {{ t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
         let k = v(&src);
         eprintln!("i {name} {k:?}");
@@ -231,7 +236,9 @@ fn enum2_top_store_under_unknown_key_is_copied() {
 #[test]
 fn enum2_program_object_controls_keep_the_full_lookup() {
     let other = format!("{R}function copy(a: any): any {{ const t: any = {{}}; const b: any = {{ x: 1 }}; for (const k in a) {{ t[k] = b[k]; }} return t; }}\nconst r = new R(copy(JSON.parse(process.argv[2])).zz);\nconsole.log(r.v);\n");
-    let unk = format!("{R}const o: any = {{ x: 1 }};\nconst r = new R(o[process.argv[2]]);\nconsole.log(r.v);\n");
+    let unk = format!(
+        "{R}const o: any = {{ x: 1 }};\nconst r = new R(o[process.argv[2]]);\nconsole.log(r.v);\n"
+    );
     let key_w = format!("{R}function copy(): any {{ const t: any = {{}}; const s: any = {{ x: 1 }}; for (let p in s) {{ p = p + process.argv[2]; t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
     let obj_w = format!("{R}{MK}function copy(): any {{ const t: any = {{}}; let s: any = mk(); for (const p in s) {{ s = mk(); t[p] = s[p]; }} return t; }}\nconst r = new R(copy().zz);\nconsole.log(r.v);\n");
     // Left out: a host prototype given as a prototype (process's chain has

@@ -97,7 +97,8 @@ pub(crate) fn lookup_native_descriptor(
         }
         TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::Builtin(ns) => {
-            if members::ns_member(ns, &name) != Some(None) || native_written(m, holder, a) {
+            if members::ns_member(ns, &name) != Some(None) || native_accessor_written(m, holder, a)
+            {
                 m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Lookup(dst)));
@@ -139,9 +140,12 @@ fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
         _ => return,
     }
     let star = m.atom(crate::STAR_KEY);
-    if native_written(m, holder, star) {
-        m.add_top(dst, |_| "accessor descriptor of a written intrinsic key".into());
+    if native_accessor_written(m, holder, star) {
+        m.add_top(dst, |_| {
+            "accessor descriptor of a written intrinsic key".into()
+        });
         return;
     }
-    m.native_missing.push((holder, star, NativeMiss::Lookup(dst)));
+    m.native_missing
+        .push((holder, star, NativeMiss::Lookup(dst)));
 }

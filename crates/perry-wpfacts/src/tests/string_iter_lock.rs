@@ -148,4 +148,3 @@ fn a_value_the_program_resumes_a_generator_with_reaches_its_body() {
     );
     assert!(!proven(&v), "{r:?} {v:?}");
 }
-

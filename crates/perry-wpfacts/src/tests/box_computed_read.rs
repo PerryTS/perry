@@ -25,7 +25,13 @@ pub(crate) fn record(m: &Model) {
 }
 
 pub(super) fn mints(src: &str, why: &str) -> u32 {
-    let _ = facts_with(src, FactsConfig { explain: true, ..Default::default() });
+    let _ = facts_with(
+        src,
+        FactsConfig {
+            explain: true,
+            ..Default::default()
+        },
+    );
     MINTS.with_borrow(|s| s.iter().filter(|(k, _)| *k == why).map(|(_, n)| n).sum())
 }
 

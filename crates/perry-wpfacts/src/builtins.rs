@@ -34,8 +34,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct, run_function,
-    run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
+    run_function, run_member,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -45,10 +45,11 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, global_value_written, is_builtin_module, native_parent_ctor,
-    native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_written, native_written_by, note_global_in_top, note_handed_to_unknown, note_native_write,
-    require_parts, settle_native_given,
+    global_field, global_user_key, global_value_written, is_builtin_module,
+    native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
+    native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
+    note_handed_to_unknown, note_native_data_write, note_native_write, require_parts,
+    settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -221,7 +222,9 @@ pub fn async_resource(m: &mut Model, n: NodeId, name: &'static str) {
         m.async_resources.push((n, name));
         return;
     };
-    let r = m.reason(&format!("{name} hands its resource to async_hooks init ({why})"));
+    let r = m.reason(&format!(
+        "{name} hands its resource to async_hooks init ({why})"
+    ));
     m.sink_node(n, r);
 }
 
@@ -774,10 +777,14 @@ fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
         let op = m.tok(TokKind::ObjectProto);
         m.census_native_read(op, a, miss.clone());
     }
-    if intrinsic_written(m, a) {
+    let op = m.tok(TokKind::ObjectProto);
+    let written = match miss {
+        NativeMiss::Lookup(_) => native_accessor_written(m, op, a),
+        _ => native_written(m, op, a),
+    };
+    if written {
         return false;
     }
-    let op = m.tok(TokKind::ObjectProto);
     m.native_missing.push((op, a, miss));
     true
 }
@@ -1010,7 +1017,9 @@ fn declared_accessor(
 /// (`realm_accessor`; a declared one: `effects::getter_load`) reads: the
 /// host's result of the getter, unknown.
 fn undeclared_getter_result(m: &mut Model, dst: NodeId) {
-    m.add_top(dst, |_| "result of a getter the realm does not declare".into());
+    m.add_top(dst, |_| {
+        "result of a getter the realm does not declare".into()
+    });
     m.add_prim(dst, prim::ALL);
 }
 
@@ -1022,7 +1031,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named("Buffer.prototype", m)
             .and_then(|h| m.declarations.property(h, name, m))
         {
-            return p.native.map(|identity| Native::Member { identity, holder: None });
+            return p.native.map(|identity| Native::Member {
+                identity,
+                holder: None,
+            });
         }
     }
     // The prototype of an object a declaration made
@@ -1035,7 +1047,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named(w, m)
             .and_then(|h| m.declarations.property(h, name, m))?
             .native?;
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     let holder = realm_holder(m, fam, what)?;
     let identity = m
@@ -1049,7 +1064,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             let object = m.declarations.family(Family::Object, m)?;
             m.declarations.property(object, name, m)?.native
         })?;
-    Some(Native::Member { identity, holder: None })
+    Some(Native::Member {
+        identity,
+        holder: None,
+    })
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -1523,12 +1541,12 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
 /// (`Model::load_from` reads that one on the chain).
 pub(crate) fn array_chain(m: &Model, t: Tok) -> bool {
     matches!(m.toks[t as usize], TokKind::Obj(tm, _)
-        if match &m.tmpls[tm as usize].kind {
-            TmplKind::Arr { .. } => true,
-            TmplKind::BObj { what, .. } => members::bobj_family(what) == Family::Box
-                && members::box_chain(what) == members::BoxChain::Array,
-            _ => false,
-        })
+    if match &m.tmpls[tm as usize].kind {
+        TmplKind::Arr { .. } => true,
+        TmplKind::BObj { what, .. } => members::bobj_family(what) == Family::Box
+            && members::box_chain(what) == members::BoxChain::Array,
+        _ => false,
+    })
 }
 
 /// `dst` ⊇ what computed key `key` reads on family `fam`'s intrinsic chain
@@ -1730,7 +1748,10 @@ pub(crate) fn native_own_load(
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity,
+                        holder: None,
+                    }));
                     m.add_tok(dst, value);
                 } else {
                     opaque_member(m, dst);
@@ -1752,7 +1773,10 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
         .then(|| member_native(m, members::ns_chain(ns), None, name))
@@ -2108,9 +2132,13 @@ fn ns_method_inner(
         }
         // Neither reads the this value (ECMA-262 20.1.2.2, 20.1.2.23,
         // 28.1.13): called as a value on any receiver, it is given to no one.
-        (BuiltinNs::Object, "create") => {
-            unknown_method_at(m, call, "argument of builtin Object.create", Some(0), Recv::Ignored)
-        }
+        (BuiltinNs::Object, "create") => unknown_method_at(
+            m,
+            call,
+            "argument of builtin Object.create",
+            Some(0),
+            Recv::Ignored,
+        ),
         (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_at(
             m,
             call,
@@ -2429,7 +2457,13 @@ fn ns_method_inner(
             } else {
                 Recv::Own
             };
-            unknown_method_at(m, call, &format!("argument of builtin {ns:?}.{n}"), None, recv)
+            unknown_method_at(
+                m,
+                call,
+                &format!("argument of builtin {ns:?}.{n}"),
+                None,
+                recv,
+            )
         }
     }
 }

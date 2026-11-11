@@ -72,7 +72,13 @@ fn check(cfg: Option<fn() -> FactsConfig>, before: &str, after: &str, want: bool
             Some(cfg) => facts_with(&src, cfg()),
             None => facts(&src),
         };
-        assert_eq!(proven(&pf, c.key), want, "{}: {src}\n{}", c.what, pf.dump_text());
+        assert_eq!(
+            proven(&pf, c.key),
+            want,
+            "{}: {src}\n{}",
+            c.what,
+            pf.dump_text()
+        );
     }
 }
 
@@ -148,5 +154,10 @@ fn the_folded_global_object_is_handed_only_when_given() {
 /// global object (`sloppy_this`); handing that on hands the global object.
 #[test]
 fn a_sloppy_this_handed_on_puts_every_builtin_in_reach() {
-    check(None, "unknown.take3(function (this: any) { unknown.take2(this); });", "", false);
+    check(
+        None,
+        "unknown.take3(function (this: any) { unknown.take2(this); });",
+        "",
+        false,
+    );
 }

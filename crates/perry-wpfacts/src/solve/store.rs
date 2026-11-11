@@ -416,7 +416,8 @@ impl Model {
                 && builtins::getter_only(self, t, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
-                self.native_missing.push((t, a, NativeMiss::Store(src, site)));
+                self.native_missing
+                    .push((t, a, NativeMiss::Store(src, site)));
                 return;
             }
         }
@@ -469,7 +470,7 @@ impl Model {
         if !theirs {
             self.census_store_ctx(Some((site, self.store_at)));
             if !builtins::builtin_function(self, t) {
-                builtins::note_native_write(self, t, Some(wkey), &what);
+                builtins::note_native_data_write(self, t, Some(wkey), &what);
             }
             self.census_store_ctx(None);
         }

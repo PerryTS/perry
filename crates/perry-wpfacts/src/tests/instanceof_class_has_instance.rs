@@ -133,9 +133,17 @@ for (const k of xs) {{ if (k instanceof Sub) c++; }}
 console.log(c, new Sub().n({{y: 2}}), new Base().m({{x: 3}}));"#
     ));
     for key in ["m", "n"] {
-        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call).collect();
+        let s: Vec<_> = pf
+            .sites
+            .iter()
+            .filter(|s| s.key == key && s.is_call)
+            .collect();
         assert_eq!(s.len(), 1, "{}", pf.dump_text());
-        assert!(!matches!(s[0].verdict, Verdict::No(_)), "{key}: {}", pf.dump_text());
+        assert!(
+            !matches!(s[0].verdict, Verdict::No(_)),
+            "{key}: {}",
+            pf.dump_text()
+        );
     }
 }
 

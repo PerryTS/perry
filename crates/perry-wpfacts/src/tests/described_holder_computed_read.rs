@@ -145,7 +145,10 @@ pub(crate) fn record(m: &crate::model::Model) {
         .map(|(&(fam, _, _), &n)| {
             let mut toks = Vec::new();
             m.nodes[n as usize].pts.sorted_into(&mut toks);
-            (format!("{fam:?}"), toks.iter().map(|&t| m.tok_name(t)).collect())
+            (
+                format!("{fam:?}"),
+                toks.iter().map(|&t| m.tok_name(t)).collect(),
+            )
         })
         .collect();
     v.sort();

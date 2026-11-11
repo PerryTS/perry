@@ -43,7 +43,10 @@ pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
         ns
     };
     let identity = m.namespace_property(ns, &name)?.native?;
-    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+        identity,
+        holder: None,
+    })))
 }
 
 /// `super(...)` into a native parent.
@@ -130,7 +133,16 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// builtin prototype), `.1` a write onto `np` itself (for the global object
 /// or a global's native prototype, onto `Object.prototype` too).
 pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
-    written_by(m, np, a, false)
+    written_by(m, np, a, false, false)
+}
+
+/// [`native_written`] for an accessor descriptor query (`__lookupGetter__`,
+/// a getter walk): only writes that may install an accessor
+/// ([`crate::model::NativeWrite`]) count; a plain store makes a data
+/// property (ECMA-262 10.1.9.2), which such a query never returns.
+pub fn native_accessor_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, false, true);
+    top || own
 }
 
 /// May the global object's key `a` (`np` the global object or the HIR
@@ -143,11 +155,27 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 /// into ⊤ once the global object reached unmodeled code, a write onto
 /// `Object.prototype`.
 pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
-    let (top, own) = written_by(m, np, a, true);
+    let (top, own) = written_by(m, np, a, true, false);
     top || own
 }
 
-fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool, bool) {
+fn written_by(
+    m: &Model,
+    np: Tok,
+    a: Atom,
+    field_carries_stores: bool,
+    accessor_only: bool,
+) -> (bool, bool) {
+    let has = |t: Tok, k: Option<Atom>| {
+        m.native_writes
+            .get(&(t, k))
+            .is_some_and(|w| w.accessor || !accessor_only)
+    };
+    let any_on = |t: Tok, keyed: &dyn Fn(Option<Atom>) -> bool| {
+        m.native_writes
+            .iter()
+            .any(|(&(w, k), x)| w == t && (x.accessor || !accessor_only) && keyed(k))
+    };
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
     let num = m
@@ -172,13 +200,13 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
     let hit = |t: Tok| {
-        m.native_writes.contains_key(&(t, None))
-            || (m.native_writes.contains_key(&(t, Some(a))) && !stored(t))
-            || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
-            || (any && m.native_writes.keys().any(|&(w, _)| w == t))
+        has(t, None)
+            || (has(t, Some(a)) && !stored(t))
+            || num.is_some_and(|n| has(t, Some(n)))
+            || (any && any_on(t, &|_| true))
             || (num_read
-                && m.native_writes.keys().any(|&(w, k)| {
-                    w == t && k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
+                && any_on(t, &|k| {
+                    k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
                 }))
     };
     // The HIR global sentinel (`Other`, what a bare global name is read
@@ -207,8 +235,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // Only then may a store into ⊤ write it. Per unit, unknown code
     // includes the other units' code, which holds every built-in object.
     (
-        hit(TOP)
-            && (m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np)))),
+        hit(TOP) && (m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np)))),
         hit(np)
             || other_global(np)
             // A prototype write is a chain contribution, separate from
@@ -256,6 +283,26 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
 /// prototype itself; `key` `None` (or computed): every key. Lookups that
 /// passed it under a now-written key run as opaque members.
 pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
+    note_write(m, t, key, what, true)
+}
+
+/// [`note_native_write`] for a plain store ([[Set]], ECMA-262 10.1.9.2) or a
+/// delete: it makes, changes or removes a data property, never an accessor.
+pub fn note_native_data_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
+    note_write(m, t, key, what, false)
+}
+
+/// Does a recorded write already cover a write of `t`'s key `k` (an
+/// accessor-capable one only if `accessor`)?
+fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool) -> bool {
+    [(t, None), (t, k)].iter().any(|w| {
+        m.native_writes
+            .get(w)
+            .is_some_and(|x| x.accessor || !accessor)
+    })
+}
+
+fn note_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str, accessor: bool) {
     if t != TOP
         && !matches!(
             m.toks[t as usize],
@@ -276,9 +323,10 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
     m.census_native_write(t, k);
-    if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+    if write_covered(m, t, k, accessor) {
         return;
     }
+    let fresh = !m.native_writes.contains_key(&(t, k));
     let on = if t == TOP {
         "⊤".to_string()
     } else {
@@ -290,9 +338,17 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
             k.map(|a| m.atoms[a as usize].clone())
         );
     }
-    m.census_opener(t, k, what, None);
+    if fresh {
+        m.census_opener(t, k, what, None);
+    }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
-    m.native_writes.insert((t, k), r);
+    m.native_writes
+        .entry((t, k))
+        .and_modify(|w| w.accessor = true)
+        .or_insert(crate::model::NativeWrite {
+            reason: r,
+            accessor,
+        });
     replay_native_missing(m);
 }
 
@@ -318,7 +374,7 @@ pub fn settle_native_given(m: &mut Model) -> bool {
             false => vec![None],
         };
         for k in ks {
-            if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+            if write_covered(m, t, k, true) {
                 continue;
             }
             more = true;
@@ -468,6 +524,7 @@ pub(super) fn replay_native_missing(m: &mut Model) {
             m.census_native_read(np, a, miss.clone());
             let written = match miss {
                 NativeMiss::Global(..) => global_value_written(m, np, a),
+                NativeMiss::Lookup(_) => native_accessor_written(m, np, a),
                 _ => native_written(m, np, a),
             };
             if !written {
@@ -506,7 +563,7 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                                     "{}/{:?}: {}",
                                     m.tok_name(*w),
                                     k.map(|x| m.atoms[x as usize].clone()),
-                                    m.reasons[*r as usize]
+                                    m.reasons[r.reason as usize]
                                 )
                             })
                             .collect();

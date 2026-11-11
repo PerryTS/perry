@@ -746,6 +746,19 @@ impl Key {
     }
 }
 
+/// A write that may reach a builtin prototype ([`Model::native_writes`]):
+/// why, and whether it may install an ACCESSOR. A plain store (`O[k] = v`,
+/// [[Set]], ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor) creates or
+/// updates a data property or calls an existing setter; it never installs
+/// an accessor, so it answers no accessor descriptor query. Accessors come
+/// from definitions (`Object.defineProperty`, `__defineGetter__`, accessor
+/// syntax), a prototype change, or code the solver cannot see.
+#[derive(Clone, Copy, Debug)]
+pub struct NativeWrite {
+    pub reason: u32,
+    pub accessor: bool,
+}
+
 /// A lookup that passed a native prototype not defining its key.
 #[derive(Clone, Copy, Debug)]
 pub enum NativeMiss {
@@ -1747,7 +1760,7 @@ pub struct Model {
     /// per (target, key): the target is the prototype's own token,
     /// `ObjectProto` (a global native's prototype collapses into it) or ⊤ (a
     /// native module's values, interpreted code); key `None`: every key.
-    pub native_writes: FxHashMap<(Tok, Option<Atom>), u32>,
+    pub native_writes: FxHashMap<(Tok, Option<Atom>), NativeWrite>,
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,

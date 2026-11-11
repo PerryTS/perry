@@ -90,7 +90,8 @@ impl Model {
         let mut close: Option<u32> = None;
         // The first reason by id, so the answer does not depend on hashing.
         let first = |slot: &mut Option<u32>, r: u32| *slot = Some(slot.map_or(r, |s| s.min(r)));
-        for (&(t, k), &r) in &self.native_writes {
+        for (&(t, k), w) in &self.native_writes {
+            let r = w.reason;
             if t != TOP && Some(t) != objproto {
                 continue;
             }

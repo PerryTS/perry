@@ -216,7 +216,13 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             // Handed (above): `Object.prototype` each; the `Object`
             // namespace only as itself (DEC 250: `Function.prototype` on its
             // chain takes no new key) or by name from the global object.
-            let builtin = ["Map", "globalThis", "Map.prototype", "Object", "String.prototype"];
+            let builtin = [
+                "Map",
+                "globalThis",
+                "Map.prototype",
+                "Object",
+                "String.prototype",
+            ];
             let written = match other {
                 "Object" => ["globalThis", "Object"].contains(&hand),
                 _ => builtin.contains(&hand),
@@ -459,18 +465,31 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             .filter(|s| s.key == "b")
             .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
     };
-    let pf = facts(&body("Map", "t.unrelated = function () { return new Q(); };"));
+    let pf = facts(&body(
+        "Map",
+        "t.unrelated = function () { return new Q(); };",
+    ));
     assert!(site_b(&pf), "{}", pf.dump_text());
     let computed = "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };";
     // (hand, write, dynamic code, open)
     let cases = [
-        ("Map", "t.get = function () { return new Q(); };".to_string(), false, false),
+        (
+            "Map",
+            "t.get = function () { return new Q(); };".to_string(),
+            false,
+            false,
+        ),
         ("Map", computed.to_string(), false, false),
         ("Map, globalThis", computed.to_string(), false, true),
         // `Function('return this')()` folds to the global object (HIR,
         // `bare_builtins`): compiled code holds it; unknown code holds it
         // once it is handed over.
-        ("Map", format!("Function('return this')(); {computed}"), false, false),
+        (
+            "Map",
+            format!("Function('return this')(); {computed}"),
+            false,
+            false,
+        ),
         (
             "Map",
             format!("unknown.take(Function('return this')()); {computed}"),
