@@ -4,6 +4,7 @@ pub mod key_dispatch;
 pub mod keys;
 pub mod state;
 pub mod styling_matrix;
+pub mod test_mode;
 pub mod webview_navigation;
 pub mod widget;
 

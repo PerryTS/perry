@@ -5775,7 +5775,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
  "webkit6",
 ]
 
@@ -5793,7 +5792,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5810,7 +5808,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5823,10 +5820,6 @@ version = "0.1.0"
 dependencies = [
  "perry-dispatch",
 ]
-
-[[package]]
-name = "perry-ui-testkit"
-version = "0.5.1663"
 
 [[package]]
 name = "perry-ui-tvos"
@@ -5842,7 +5835,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5859,7 +5851,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5873,7 +5864,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5886,7 +5876,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
  "png",
  "qrcodegen",
  "webview2-com",
