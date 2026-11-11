@@ -1571,11 +1571,11 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                 ),
                 (
                     "disconnect",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.disconnect", constructible = true)] export crate::node_inspector::session_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.disconnect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_disconnect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "post",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.post", constructible = true)] export crate::node_inspector::session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.post", constructible = true, effects = { coerce(arg(1), Json); calls(arg(1), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); calls(arg(2), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); stores(fresh); returns(prim(undefined)) })] export crate::node_inspector::session_post_thunk, 3; with_declared(3)),
                 ),
             ] {
                 set_field(proto, method, fn_value(func, method));

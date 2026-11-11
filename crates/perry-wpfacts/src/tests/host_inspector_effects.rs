@@ -279,3 +279,42 @@ fn session_connect_keeps_the_session() {
         "{q:?}"
     );
 }
+
+/// `session.post(method, params?, callback?)` and `session.disconnect()`
+/// (Node lib/inspector.js): post validates `method` (a string, no
+/// coercion), serialises `{ id, method, params }` with JSON.stringify
+/// (`toJSON` and getters of params run), returns undefined and later calls
+/// `callback(err, result)` with `this` undefined, `err` null or an
+/// ERR_INSPECTOR_COMMAND / ERR_INSPECTOR_CLOSED error, `result` the
+/// JSON-parsed protocol result; a function second argument is the callback.
+/// disconnect returns undefined (pending callbacks get ERR_INSPECTOR_CLOSED).
+/// Neither hands the session or a program value to other code.
+#[test]
+fn session_post_and_disconnect_keep_the_session() {
+    let pf = facts(&format!(
+        r#"{PRELUDE}
+        function enable() {{
+            const inspector: typeof import("inspector") = require("inspector");
+            const session = new inspector.Session();
+            session.connect();
+            session.post("Profiler.enable", () => {{
+                session.post("Profiler.stop", (err: any, r: any) => {{
+                    session.disconnect();
+                }});
+            }});
+            return h(session);
+        }}
+        console.log(enable());
+        export const keep = 1;
+    "#
+    ));
+    let q = site(&pf, "q");
+    assert!(
+        !q.top
+            && !q.receivers.is_empty()
+            && q.receivers
+                .iter()
+                .all(|r| r.contains("node:inspector.Session.prototype")),
+        "{q:?}"
+    );
+}
