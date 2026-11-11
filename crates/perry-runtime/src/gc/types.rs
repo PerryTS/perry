@@ -132,6 +132,16 @@ pub const GC_TYPE_BOOL_BOX: u8 = 24;
 /// A scope context object: N NaN-boxed binding slots shared by the closures of
 /// one lexical scope activation (`box/scope.rs`).
 pub const GC_TYPE_SCOPE: u8 = 25;
+/// A value-record array head (`record_array::RecordArrayHeader`): counts, the
+/// template's shape id and one traced edge, the raw pointer to its element
+/// buffer. Its own kind, so no array or object reader admits it; only the
+/// `js_record_array_*` entries compiled code calls touch one.
+pub const GC_TYPE_RECORD_ARRAY: u8 = 42;
+const _: () = assert!(GC_TYPE_RECORD_ARRAY == perry_abi::GC_TYPE_RECORD_ARRAY);
+/// A record array's element buffer: `capacity * words` JSValue words that are
+/// all immediates (canonical doubles, undefined, null, booleans). A leaf.
+pub const GC_TYPE_RECORD_ELEMS: u8 = 43;
+const _: () = assert!(GC_TYPE_RECORD_ELEMS == perry_abi::GC_TYPE_RECORD_ELEMS);
 
 // Buffer-family flavors (#10694). Every one of these is a `BufferHeader` cell
 // with exactly `GC_TYPE_BUFFER`'s layout, tracing, size and lifetime; the type
@@ -477,6 +487,9 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,
     NativePodView,
+    /// A value-record array head: its one traced edge is the raw pointer to
+    /// its element buffer (`record_array::RecordArrayHeader::elems`).
+    RecordArray,
 }
 
 #[allow(dead_code)]
@@ -1018,6 +1031,36 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::ArenaWhenOverThreshold,
         false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_RECORD_ARRAY,
+        "record_array",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::RecordArray,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_RECORD_ELEMS,
+        "record_elems",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
+        true,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,

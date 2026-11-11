@@ -402,6 +402,19 @@ pub struct ElisionFacts {
     /// Template id → the layout of an admitted value record that some
     /// `record_locals` entry names.
     pub record_layouts: std::collections::BTreeMap<u32, FactsRecordLayout>,
+    /// Value records VR-4b (wpfacts `records::export`): what holds a record
+    /// array, a `GC_TYPE_RECORD_ARRAY` whose elements are records of the
+    /// named template (its layout is in `record_layouts`), inline. A binding
+    /// (local id); a named read (byte offset and key); an empty array
+    /// literal that is the whole value of a `let` or a local assignment
+    /// (local id), of a named store (its element offset), of a class field
+    /// initializer (class id, field): the births. Only the record-array
+    /// intrinsics touch such an array (`value_records`).
+    pub record_array_locals: std::collections::BTreeMap<u32, u32>,
+    pub record_array_reads: std::collections::BTreeMap<(u32, String), u32>,
+    pub record_array_birth_locals: std::collections::BTreeMap<u32, u32>,
+    pub record_array_birth_stores: std::collections::BTreeMap<u32, u32>,
+    pub record_array_birth_fields: std::collections::BTreeMap<(u32, String), u32>,
     /// VR-3b, filled by the `value_records` rewrite of this module (not by
     /// the driver): function id → its record parameters and result; the
     /// aggregate temporary of a record-returning typed call → the lanes its
@@ -558,6 +571,16 @@ impl ElisionFacts {
             && self.class_statics.is_empty()
             && self.native_member_calls.is_empty()
             && self.record_locals.is_empty()
+            && !self.has_record_arrays()
+    }
+
+    /// Some binding, read or birth of this module is a record array.
+    pub fn has_record_arrays(&self) -> bool {
+        !(self.record_array_locals.is_empty()
+            && self.record_array_reads.is_empty()
+            && self.record_array_birth_locals.is_empty()
+            && self.record_array_birth_stores.is_empty()
+            && self.record_array_birth_fields.is_empty())
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

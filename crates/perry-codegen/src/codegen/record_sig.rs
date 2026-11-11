@@ -645,18 +645,24 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     let Some(dest) = ctx.wpfacts.record_aggs.get(id).cloned() else {
         return Ok(None);
     };
-    let Expr::Call {
-        callee,
-        args,
-        byte_offset,
-        ..
-    } = value.as_ref()
-    else {
-        return Ok(None);
+    // VR-4b: a record array's `pop` or `a[i]` returns its record this way.
+    let called = match super::record_array::try_lower_source(ctx, value)? {
+        Some(c) => Some(c),
+        None => {
+            let Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } = value.as_ref()
+            else {
+                return Ok(None);
+            };
+            super::signature_entry::with_direct_call(*byte_offset, || {
+                try_lower_call(ctx, callee, args)
+            })?
+        }
     };
-    let called = super::signature_entry::with_direct_call(*byte_offset, || {
-        try_lower_call(ctx, callee, args)
-    })?;
     let (present, result_words, r) = match called {
         None => return Ok(None),
         Some(Called::Value(v)) => {
