@@ -137,3 +137,51 @@ console.log(o.pa + 1);
     );
     assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
 }
+
+// Fix 3 (tssrc: the class SymbolLinks handed to a runtime helper that may
+// call any of its methods): a computed-key method call on a function value
+// is the call of a member of its chain under that key (`Function.prototype`
+// and `Object.prototype`, each by its name): none of them hands the
+// function to unknown code.
+#[test]
+fn a_computed_method_call_on_a_class_keeps_it() {
+    let pf = whole(
+        r#"
+class K { pa = 1; }
+const k = new K();
+try { (K as any)[process.argv[2]](); } catch (e) {}
+console.log(k.pa + 1);
+"#,
+    );
+    assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
+}
+
+#[test]
+fn a_class_given_to_a_primitive_method_keeps_it() {
+    let pf = whole(
+        r#"
+class K { pa = 1; }
+const k = new K();
+try { console.log("abc".replace("b", K as any)); } catch (e) {}
+console.log(k.pa + 1);
+"#,
+    );
+    assert_eq!(escape_with_field(&pf, "pa"), None, "{}", pf.dump_text());
+}
+
+// Control: `Function.prototype` written under a computed key: the method a
+// computed key finds may be that unknown function: the class escapes.
+#[test]
+fn a_computed_method_call_after_a_function_prototype_write_escapes_it() {
+    let pf = whole(
+        r#"
+class K { pa = 1; }
+const k = new K();
+const g: any = new Function(process.argv[3]);
+(Function.prototype as any)[process.argv[4]] = g;
+try { (K as any)[process.argv[2]](); } catch (e) {}
+console.log(k.pa + 1);
+"#,
+    );
+    assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
+}
