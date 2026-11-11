@@ -236,6 +236,21 @@ pub(crate) fn rewrite(hir: &Module, facts: &ElisionFacts) -> Option<(Module, Cen
     None
 }
 
+/// `rewrite`, with what it tells the record signature lowering
+/// (`codegen::record_sig`) installed in the module's facts.
+pub(crate) fn rewrite_module(
+    hir: &Module,
+    facts: &mut std::sync::Arc<ElisionFacts>,
+) -> Option<Module> {
+    let (module, _, abi) = rewrite(hir, facts)?;
+    let mut elision = (**facts).clone();
+    elision.record_fns = abi.fns;
+    elision.record_aggs = abi.aggs;
+    elision.record_births = abi.births;
+    *facts = std::sync::Arc::new(elision);
+    Some(module)
+}
+
 fn trace(hir: &Module, c: &Census) {
     if std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
         eprintln!(

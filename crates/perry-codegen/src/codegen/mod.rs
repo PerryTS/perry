@@ -565,18 +565,9 @@ fn lower_module(
     let hir = live_cjs_hir.as_ref();
     // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
     // value (`value_records`); every lowering below sees the rewritten body.
-    let records_hir = crate::value_records::rewrite(hir, &opts.program_facts.elision);
     let mut opts = opts;
-    if let Some((_, _, abi)) = &records_hir {
-        // VR-3b: what the rewrite tells the record signature lowering.
-        let mut elision = (*opts.program_facts.elision).clone();
-        elision.record_fns = abi.fns.clone();
-        elision.record_aggs = abi.aggs.clone();
-        elision.record_births = abi.births.clone();
-        opts.program_facts.elision = std::sync::Arc::new(elision);
-    }
-    let opts = opts;
-    let hir = records_hir.as_ref().map_or(hir, |(m, _, _)| m);
+    let records_hir = crate::value_records::rewrite_module(hir, &mut opts.program_facts.elision);
+    let hir = records_hir.as_ref().unwrap_or(hir);
     // The driver supplies whole-program ownership in opts. Direct callers
     // without callback prefixes also need local launch detection for their
     // string-preparation callback. All decisions remain per compile.
