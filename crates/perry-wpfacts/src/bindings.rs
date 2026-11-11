@@ -505,6 +505,11 @@ pub struct ModuleBindings {
     /// `element_offset`, sorted; `true` when the value may also be
     /// `undefined` (`canonical_numbers`, P3 B1).
     pub number_element_reads: Vec<(u32, bool)>,
+    /// The `number_element_reads` whose Numbers are all int32s (the value
+    /// node's interval lies in the int32 range at every copy), by
+    /// `element_offset`, sorted (`canonical_numbers`). A `-0` the interval
+    /// tolerates is one no use observes.
+    pub int32_element_reads: Vec<u32>,
     /// Check mode: element reads by `element_offset` whose past-the-end
     /// `undefined` the solve withheld at every copy (`Cons::ElemUndef`,
     /// PR-C1), with the least length lower bound of their receivers; sorted

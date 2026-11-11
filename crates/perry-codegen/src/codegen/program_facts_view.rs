@@ -391,6 +391,10 @@ pub struct ElisionFacts {
     /// plain Number; `true` when it may also be `undefined` (wpfacts
     /// `canonical_numbers`, P3 B1).
     pub number_element_reads: std::collections::BTreeMap<u32, bool>,
+    /// The `number_element_reads` whose Numbers are all int32s (wpfacts
+    /// `int32_element_reads`): `expr::int32_operand` converts such a value
+    /// with one truncation.
+    pub int32_element_reads: std::collections::BTreeSet<u32>,
     /// Check mode: element reads (by `element_offset`) whose past-the-end
     /// `undefined` the facts withheld, with the least length lower bound of
     /// their receivers (wpfacts `ModuleBindings::element_floors`, PR-C1;
