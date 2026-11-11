@@ -18,6 +18,7 @@
 
 pub mod bindings;
 mod builtins;
+pub mod call_kinds;
 pub mod canonical_numbers;
 mod const_arrays;
 mod const_numbers;
@@ -1041,6 +1042,14 @@ fn compute_act<'a>(
     }
     if canonical_numbers::enabled() {
         canonical_numbers::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
+    }
+    if call_kinds::enabled() {
+        call_kinds::collect(
             &g,
             &mut bindings,
             cfg.sabotage.as_deref(),

@@ -133,6 +133,7 @@ def main():
         ("key-sign-negative", "keysign", "key sign"),
         ("wide-key-negative", "widekey", "wide key"),
         ("number-call-negative", "numbercall", "numeric result"),
+        ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
         ("const-number-negative", "constnum", "constant number"),
@@ -157,6 +158,7 @@ def main():
         ("zero-sign-negative", "zerosign", "zero sign"),
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
         ("birth-image-negative", "birthimage", "birth image"),
+        ("string-call-negative", "stringcall", "call kinds"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

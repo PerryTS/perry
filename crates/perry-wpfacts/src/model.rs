@@ -497,7 +497,8 @@ pub struct Template {
     /// Birth keys reserved for a constructor store
     /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
     /// can observe the instance before the constructor stores them (a method
-    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// call on `this`, ...), or a run skips the store (a branch, a loop body,
+    /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
@@ -1316,7 +1317,7 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
     /// takes a key that reaches the length's lower bound as below it.
     pub elem_undef_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,

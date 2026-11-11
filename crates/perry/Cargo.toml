@@ -21,7 +21,6 @@ path = "src/main.rs"
 
 [dependencies]
 perry-abi.workspace = true
-perry-cli-support = { workspace = true, features = ["logger", "progress", "dotenv", "utc"] }
 perry-parser.workspace = true
 swc_common.workspace = true
 swc_ecma_ast.workspace = true
@@ -111,6 +110,9 @@ sha2 = "0.11"
 perry-gc-effects.workspace = true
 perry-hex.workspace = true
 rand = { version = "0.10", optional = true }
+# Apple API token signing (ES256 via the .p8 key); only reached through the
+# apple-api feature, which publish-cli and mobile-cli enable.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pem"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
@@ -151,7 +153,7 @@ watch-cli = ["dep:notify"]
 # features gate the *commands* (so they leave `--help` in a slim build).
 publish-cli = ["apple-api"]
 mobile-cli = ["apple-api"]
-apple-api = ["perry-cli-support/apple-jwt"]
+apple-api = ["dep:p256"]
 audit-cli = []
 # These commands are fully standalone, so the feature also drops their module
 # (and, for updater, its signing crates).
@@ -193,9 +195,10 @@ tempfile.workspace = true
 # object cache keys on a hash of this binary, so a linked runtime would make
 # every runtime edit miss every cached object.
 perry-runtime.workspace = true
-# The native ESM namespace test reads the runtime's submodule export
-# declarations (the same file perry-codegen links exports through).
 perry-dispatch.workspace = true
+# Parser compatibility oracle for the .env loader tests; dev-only, so it
+# never enters the normal/build graphs.
+dotenvy = "0.15"
 
 [build-dependencies]
 winresource = "0.1.31"

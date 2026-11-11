@@ -42,7 +42,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -95,7 +94,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -139,10 +137,6 @@
     },
     "perry-base64": {
       "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-cli-support": {
-      "category": "tool",
       "decision": "keep"
     },
     "perry-codegen": {

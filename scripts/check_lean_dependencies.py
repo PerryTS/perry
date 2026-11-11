@@ -38,22 +38,20 @@ def main():
     parser.add_argument('--offline', action='store_true')
     args = parser.parse_args()
     cases = [
-        ('perry-cli-support', None, False, ['p256', 'serde_json', 'console', 'log', 'perry-perex', 'perry-base64'], []),
         ('perry-uuid', None, False, ['getrandom'], []),
         ('perry-uuid', 'v4', False, [], ['getrandom']),
         ('perry-uuid', 'v7', False, [], ['getrandom']),
-        ('perry-cli-support', 'apple-jwt', False, ['log', 'perry-perex', 'console'], ['p256', 'perry-base64']),
-        ('perry', 'dev-cli', False, ['p256', 'jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], ['perry-cli-support']),
-        ('perry', None, True, ['jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], ['p256', 'perry-cli-support']),
+        ('perry', 'dev-cli', False, ['p256', 'jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], []),
+        ('perry', None, True, ['jsonwebtoken', 'chrono', 'env_logger', 'indicatif', 'dotenvy', 'regex', 'regex-automata', 'bzip2', 'ppmd-rust', 'deflate64'], ['p256']),
         ('perry', 'extended-zip', True, [], ['bzip2', 'ppmd-rust', 'deflate64']),
-        ('perry-stdlib', None, False, ['perry-uuid', 'uuid', 'chrono', 'perry-cli-support'], []),
-        ('perry-stdlib', 'crypto', False, ['uuid', 'chrono', 'perry-cli-support'], ['perry-uuid', 'perry-hex', 'perry-base64']),
-        ('perry-runtime', None, False, ['perry-uuid', 'perry-cli-support', 'resolv-conf', 'lazy_static'], []),
+        ('perry-stdlib', None, False, ['perry-uuid', 'uuid', 'chrono'], []),
+        ('perry-stdlib', 'crypto', False, ['uuid', 'chrono'], ['perry-uuid', 'perry-hex', 'perry-base64']),
+        ('perry-runtime', None, False, ['perry-uuid', 'resolv-conf', 'lazy_static'], []),
     ]
     for package, features, defaults, absent, present in cases:
         names = graph(package, features, defaults, args.offline)
         verify(names, absent=absent, present=present)
-        if package in ('perry-cli-support', 'perry-uuid') and features is None:
+        if package == 'perry-uuid' and features is None:
             assert names == {package}, f'{package}: empty features must have no dependencies'
         print(f'OK {package} features={features or "-"} defaults={defaults}: {len(names)} package names')
     for package in ['perry-hex', 'perry-base64']:
