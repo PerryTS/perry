@@ -209,6 +209,15 @@ pub fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
     node_api_host_entries().map(|(name, _)| name)
 }
 
+/// Supplemental Perry C APIs that a native C addon may resolve from the
+/// executable. This inventory is separate from Node-API by design.
+pub fn perry_c_host_symbols() -> impl Iterator<Item = &'static str> {
+    include_str!("perry_c_host_symbols.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+}
+
 /// What an addon reaches through one Node-API import, beyond the values the
 /// program hands it: the mark of its line in [`NODE_API_HOST_SYMBOLS`].
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
