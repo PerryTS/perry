@@ -1367,6 +1367,17 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
+    // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+    if let Expr::Logical {
+        op: perry_hir::LogicalOp::Coalesce,
+        left,
+        right,
+    } = e
+    {
+        if let Some(value) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(i32_lowered(value));
+        }
+    }
     if let Some(floor) = super::rest_elems::read_floor(ctx, e) {
         let want = super::rest_elems::Want::I32;
         let value = super::rest_elems::lower_read(ctx, e, floor, want)?;

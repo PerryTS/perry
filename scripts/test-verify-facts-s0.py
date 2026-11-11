@@ -142,6 +142,7 @@ def main():
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),
+        ("rest-default-negative", "restelem", "array rep"),
         ("rest-raw-negative", "restraw", "array rep"),
         ("rest-lane-negative", "restlane", "field rep"),
         ("rest-lane-raw-negative", "restlaneraw", "field rep"),
