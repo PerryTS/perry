@@ -30,6 +30,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -65,6 +66,8 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
         program_has_tla: false,
         module_graph_has_tla: false,
         is_dynamic_import_target: false,
@@ -704,6 +707,31 @@ fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
     assert!(first_pool < first_body && later_pool < first_body && first_body < later_body);
     assert!(!ir.contains("ptr @__perry_prepare_literals_lazy_ts to i64"));
     assert!(!ir.contains("call void @lazy_ts__init()"));
+}
+
+#[test]
+fn deferred_namespace_creation_is_cached_rooted_and_does_not_evaluate() {
+    let mut opts = entry_opts("executable");
+    opts.is_entry_module = false;
+    opts.is_dynamic_import_target = true;
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    let getter = ir
+        .split("define ")
+        .find(|body| body.contains("__deferred_namespace()"))
+        .expect("deferred namespace getter");
+    assert!(getter.contains("call void @js_gc_register_global_root"));
+    assert!(getter.contains("call double @js_create_deferred_namespace"));
+    assert!(
+        !getter.contains("__init()"),
+        "constructing the identity must not evaluate"
+    );
+    let evaluator = ir
+        .split("define ")
+        .find(|body| body.contains("__deferred_evaluate()"))
+        .expect("deferred evaluator");
+    assert!(evaluator.contains("__init()"));
+    assert!(evaluator.contains("@js_deferred_namespace_not_ready"));
+    assert!(evaluator.contains("__deferred_ready"));
 }
 
 #[test]

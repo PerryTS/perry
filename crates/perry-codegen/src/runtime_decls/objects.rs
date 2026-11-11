@@ -508,6 +508,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_run_module_init_guarded", VOID, &[I64, I64]);
+    module.declare_function("js_create_deferred_namespace", DOUBLE, &[I64]);
+    module.declare_function("js_deferred_namespace_not_ready", DOUBLE, &[]);
+    module.declare_function("js_deferred_module_ready", I32, &[I64, I64, I32]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
