@@ -338,7 +338,10 @@ fn probe(class: &str, method: &str, sig: &FactsSignature, refused: Option<&str>)
         })
         .collect();
     match refused {
-        None => eprintln!("[perry sig] {class}.{method} typed=1 params=({})", params.join(",")),
+        None => eprintln!(
+            "[perry sig] {class}.{method} typed=1 params=({})",
+            params.join(",")
+        ),
         Some(why) => eprintln!(
             "[perry sig] {class}.{method} typed=0 why={why} params=({})",
             params.join(",")
@@ -1122,7 +1125,11 @@ mod tests {
     /// the clone stays unless the interval is non-negative: main's rule.
     #[test]
     fn without_the_rule_a_negative_interval_keeps_the_index_clone() {
-        assert!(!index_param_covered(FactsRep::I32, Some((-128, 255)), false));
+        assert!(!index_param_covered(
+            FactsRep::I32,
+            Some((-128, 255)),
+            false
+        ));
         assert!(!index_param_covered(FactsRep::I32, Some((-1, 7)), false));
         assert!(!index_param_covered(FactsRep::I32, None, false));
     }

@@ -447,8 +447,14 @@ console.log(b.h);
 fn a_signed_key_and_value_are_i32_parameters_with_their_intervals() {
     let s = sig(SIGNED_SET, "set").expect("a signature");
     assert_eq!(s.params, vec![I32, I32], "{s:?}");
-    assert!(s.ranges[0].is_some_and(|(lo, hi)| lo <= -8 && hi >= 63), "{s:?}");
-    assert!(s.ranges[1].is_some_and(|(lo, hi)| lo <= -6 && hi >= 6), "{s:?}");
+    assert!(
+        s.ranges[0].is_some_and(|(lo, hi)| lo <= -8 && hi >= 63),
+        "{s:?}"
+    );
+    assert!(
+        s.ranges[1].is_some_and(|(lo, hi)| lo <= -6 && hi >= 6),
+        "{s:?}"
+    );
     let id = id_of(SIGNED_SET, "set");
     assert_eq!(typed_targets(SIGNED_SET), vec![id, id]);
 }
