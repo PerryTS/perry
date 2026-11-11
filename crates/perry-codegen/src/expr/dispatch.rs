@@ -80,6 +80,9 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // passes through.
     // DESIGN-p4l4 VR-3b: a record result of a typed call is bound to its
     // lanes (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_fold_bound_agg(ctx, expr) {
+        return Ok(value);
+    }
     if let Some(value) = crate::codegen::record_sig::try_lower_agg_set(ctx, expr)? {
         return Ok(value);
     }
