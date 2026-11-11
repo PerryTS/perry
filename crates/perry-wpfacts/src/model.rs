@@ -1581,6 +1581,12 @@ pub struct Model {
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
     pub cv_nodes: FxHashMap<(Tok, Key, bool), NodeId>,
+    /// The member node of a builtin prototype chain under a computed key
+    /// (family, kind, key) → node: what the chain holds under every name
+    /// the key may spell, filled once and shared by every read of every
+    /// value with that chain (`builtins::family_any`), as `cv_nodes` are
+    /// for program prototypes.
+    pub chain_any_nodes: FxHashMap<(crate::builtins::Family, Option<&'static str>, Key), NodeId>,
     /// Prototype closure nodes: token → node.
     pub cp_nodes: FxHashMap<Tok, NodeId>,
     /// Shared chain unions that stopped at a declared member: resumed when

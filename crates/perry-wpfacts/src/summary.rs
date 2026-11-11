@@ -374,12 +374,27 @@ impl Model {
         id
     }
 
+    /// Is `call` a protocol touch of a token (`Model::implicit`: the
+    /// runtime calling a protocol method on a value), not a program site?
+    pub(crate) fn protocol_touch(&self, call: CallId) -> bool {
+        self.protocol_calls.contains(&call)
+            && matches!(self.calls[call as usize].this, crate::model::ThisArg::Tok(_))
+    }
+
     /// The birth context of an object `call` makes: its program site (one
     /// token per birth site), as made by the object whose method or
     /// constructor instance made the call (`made_ctx`: the store a
     /// container's method makes is that container's), or `BORN` when no
     /// program site is behind it (a protocol touch).
     pub(crate) fn birth_ctx(&mut self, call: CallId) -> CallId {
+        // A protocol touch the solver runs on a token (`Model::implicit`)
+        // has no program site, before the summaries as after: one call per
+        // touched token, so a birth per call would make the touch of what
+        // it births a new touch, without end (`[a, b].slice()` touched
+        // again on each copy).
+        if self.protocol_touch(call) {
+            return BORN;
+        }
         if (call as usize) < self.sum.n_prog || !self.sum.ready {
             return call;
         }

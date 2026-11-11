@@ -5,8 +5,8 @@
 //! methods (`BuiltinNs::ObjectProtoMethod`), `__proto__` (the prototype)
 //! and what a store into ⊤ wrote there; never "any builtin function".
 //! (three.js GLTF JSON objects read under unknown keys: skin seed 2.)
-//! A `JSON.parse` value may also be an array, whose computed read still
-//! finds `Array.prototype`'s methods ("array computed key").
+//! A `JSON.parse` value may also be an array, whose computed read finds
+//! `Array.prototype`'s methods by name (`described_holder_computed_read`).
 //! Controls: `Object.prototype` written by unknown code, the object handed
 //! to unknown code, and a prototype the program gave the object.
 
@@ -24,7 +24,7 @@ pub(crate) fn record(m: &Model) {
     MINTS.with_borrow_mut(|s| *s = v);
 }
 
-fn mints(src: &str, why: &str) -> u32 {
+pub(super) fn mints(src: &str, why: &str) -> u32 {
     let _ = facts_with(src, FactsConfig { explain: true, ..Default::default() });
     MINTS.with_borrow(|s| s.iter().filter(|(k, _)| *k == why).map(|(_, n)| n).sum())
 }
@@ -48,14 +48,14 @@ declare function ext(a: any): any;
 "#;
 
 /// The same, under a key with no shape (any string).
-const SETUP_ARGV: &str = r#"
+pub(super) const SETUP_ARGV: &str = r#"
 class Box { witness = 1; }
 const box = new Box();
 const k: string = process.argv[2];
 declare function ext(a: any): any;
 "#;
 
-fn run(setup: &str, body: &str) -> (bool, String) {
+pub(super) fn run(setup: &str, body: &str) -> (bool, String) {
     witness_proven(&format!("{setup}{body}"))
 }
 
@@ -69,7 +69,8 @@ fn a_json_object_computed_read_mints_no_builtin_function() {
     for setup in [SETUP, SETUP_ARGV] {
         let src = format!("{setup}{F2E}");
         assert_eq!(mints(&src, "builtin object computed key"), 0, "{src}");
-        assert!(mints(&src, "array computed key") > 0, "{src}");
+        // An array a JSON value may be reads Array.prototype by name too.
+        assert_eq!(mints(&src, "array computed key"), 0, "{src}");
     }
     let src = format!(
         "{SETUP_ARGV}const d: any = Object.getOwnPropertyDescriptor({{ q: 1 }}, \"q\");\nconst e: any = Object.fromEntries([[k, 1]]);\nconsole.log(d[k], e[k]);"

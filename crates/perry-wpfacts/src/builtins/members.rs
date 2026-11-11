@@ -704,7 +704,6 @@ impl Own {
     }
 
     /// Its keys, spelled as atoms are (`@@__perry_wk_species`).
-    #[cfg(test)]
     fn keys(self) -> Vec<String> {
         match self {
             Own::Listed(set) => set.iter().map(|(key, _)| key.to_string()).collect(),
@@ -1241,6 +1240,51 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
 /// (`Object.prototype` included): the kinds of its data members, and
 /// whether its own prototype has a function member (`Object.prototype`'s
 /// methods, its `constructor` and `__proto__` are on every chain).
+/// The own member table of family `fam`'s intrinsic prototype, when the
+/// family is described member by member (`None`: Box, Wrapper, Opaque).
+fn own_table(fam: Family) -> Option<&'static [(&'static str, Mem)]> {
+    Some(match fam {
+        Family::Object => &[],
+        Family::Function => FUNCTION,
+        Family::Array => ARRAY,
+        Family::Str => STRING,
+        Family::Num => NUMBER,
+        Family::Bool => BOOLEAN,
+        Family::Sym => SYMBOL,
+        Family::BigInt => BIGINT,
+        Family::Collection => COLLECTION,
+        Family::Iterator => ITERATOR,
+        Family::Promise => PROMISE,
+        Family::Error => ERROR,
+        Family::Box | Family::Wrapper | Family::Opaque => return None,
+    })
+}
+
+/// The names on family `fam`'s intrinsic chain: its own prototype's, then
+/// the `Object.prototype` ones it does not shadow (`member`'s order).
+/// `None`: the family has no member table.
+pub(super) fn chain_names(fam: Family) -> Option<impl Iterator<Item = &'static str>> {
+    let own = own_table(fam)?;
+    let object = OBJECT.iter().filter(move |(n, _)| find(own, n).is_none());
+    Some(own.iter().chain(object).map(|(n, _)| *n))
+}
+
+/// The own statics of described namespace `ns` and of the constructors
+/// its chain passes (`NsProto::Constructor`), spelled as atoms are; `None`
+/// where the namespace or a constructor on its chain is undescribed.
+pub(super) fn ns_static_names(ns: BuiltinNs) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut d = ns_statics(ns);
+    loop {
+        out.extend(d.members?.keys());
+        match d.prototype {
+            NsProto::Function | NsProto::Object => return Some(out),
+            NsProto::Constructor(parent) => d = ns_statics(parent),
+            NsProto::Unknown(_) => return None,
+        }
+    }
+}
+
 pub(super) fn any_member(fam: Family) -> (bool, u16) {
     let own: &[(&str, Mem)] = match fam {
         Family::Object => &[],
