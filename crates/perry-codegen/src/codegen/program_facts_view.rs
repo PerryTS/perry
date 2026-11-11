@@ -93,6 +93,9 @@ pub struct FactsField {
     /// plain program Arrays for the object's whole life. A read of the
     /// field is a value of this representation (`FieldProof::array`).
     pub rep: FactsRep,
+    /// I32 at rest, PR C (wpfacts `FieldFacts::rest`): the field is an I32
+    /// lane of its class (`expr::rest_fields`), stored as an I32 word.
+    pub rest: bool,
 }
 
 /// A plain compiled body of this module that a binding or a field holds
@@ -396,6 +399,17 @@ pub struct ElisionFacts {
     pub rest_reads: std::collections::BTreeMap<u32, u32>,
     pub rest_writes: std::collections::BTreeMap<u32, u32>,
     pub rest_births: std::collections::BTreeSet<u32>,
+    /// I32 at rest, PR C: every key some class stores in an I32 lane
+    /// (`FactsField::rest`): each site of such a key is lowered by
+    /// `expr::rest_fields`, before every other tier.
+    pub rest_keys: std::collections::BTreeSet<String>,
+    /// The named reads (by byte offset, this module's) whose receiver may
+    /// hold an instance with an I32 lane at the read's key, with the lane's
+    /// slot when every receiver value is such an instance at that slot or
+    /// nullish (`u32::MAX` otherwise; wpfacts `ModuleBindings::
+    /// rest_lane_reads`): every other read of a lane key that has an offset
+    /// sees no lane and keeps its ordinary tiers.
+    pub rest_lane_reads: std::collections::BTreeMap<u32, u32>,
     pub indexed_metadata_pristine: bool,
     pub numeric_functions: std::collections::BTreeMap<u32, FactsNumericFunction>,
     /// Class id → its own statics that hold their definition for the

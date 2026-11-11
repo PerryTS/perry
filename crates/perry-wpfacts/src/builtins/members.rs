@@ -257,6 +257,8 @@ const ITERATOR: &[(&str, Mem)] = &[
     ("find", Mem::Fn),
     ("flatMap", Mem::Fn),
     ("forEach", Mem::Fn),
+    ("includes", Mem::Fn),
+    ("join", Mem::Fn),
     ("map", Mem::Fn),
     ("next", Mem::Fn),
     ("reduce", Mem::Fn),
@@ -326,6 +328,28 @@ pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
 
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
+}
+
+/// `name` is a member of some described builtin family (`length`, `size`,
+/// `name`, `then`, ...): a key every program reads off builtins too (I32 at
+/// rest, PR C: such a key is never a field lane, `rest_fields`).
+pub(crate) fn builtin_member_name(name: &str) -> bool {
+    [
+        Family::Object,
+        Family::Function,
+        Family::Array,
+        Family::Str,
+        Family::Num,
+        Family::Bool,
+        Family::Sym,
+        Family::BigInt,
+        Family::Collection,
+        Family::Iterator,
+        Family::Promise,
+        Family::Error,
+    ]
+    .into_iter()
+    .any(|f| member(f, name).is_some())
 }
 
 /// The families of a primitive mask (`null`/`undefined` have none).
