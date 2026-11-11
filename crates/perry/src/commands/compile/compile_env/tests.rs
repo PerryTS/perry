@@ -479,6 +479,7 @@ fn int32_operand_switches_are_cache_inputs() {
         "PERRY_FACTS_INT32_READS",
         "PERRY_INT32_OPERANDS",
         "PERRY_INT32_SHADOWS",
+        "PERRY_INT_PRODUCTS",
     ] {
         assert!(
             COMPILE_ENV_VARS.contains(&name),
