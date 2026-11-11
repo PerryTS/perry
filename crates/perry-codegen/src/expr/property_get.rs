@@ -441,7 +441,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     .cached_length_slot(*arr_id)
                     .map(str::to_owned)
                 {
-                    return Ok(ctx.block().load(DOUBLE, &slot));
+                    let cached = ctx.block().load(DOUBLE, &slot);
+                    super::held_len::length_read(ctx, *arr_id, &cached)?;
+                    return Ok(cached);
                 }
             }
             if is_array_expr(ctx, object) {

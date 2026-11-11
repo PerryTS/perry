@@ -1450,6 +1450,19 @@ pub struct Model {
     /// field that may hold a String is claimed to hold only literals'
     /// values, a wrong claim the witness at the store or alias must catch.
     pub literal_strings_sabotage: bool,
+    /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
+    /// them off): the solve records who changes an Array's length.
+    pub held_lengths: bool,
+    /// Every event that may change Array token `.0`'s length or move its
+    /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
+    /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
+    /// can place.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool)>,
+    /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
+    pub len_index_stores: crate::pts::FxHashSet<NodeId>,
+    /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
+    /// with no store) -> a store site that names its function.
+    pub len_index_sites: FxHashMap<NodeId, SiteId>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

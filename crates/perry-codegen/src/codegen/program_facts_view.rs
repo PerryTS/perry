@@ -397,6 +397,10 @@ pub struct ElisionFacts {
     /// born shared, never appended to in place, so a copy of one needs no
     /// string demote (`expr::literal_strings`).
     pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose Arrays keep their length while the function that
+    /// declares them runs (wpfacts `BindingFacts::stable_length`), with
+    /// `stable_front` (`expr::held_len`).
+    pub stable_length_locals: std::collections::BTreeMap<u32, bool>,
     /// (class id, key) of the fields every store of any unit writes only
     /// such Strings into (wpfacts `FieldFacts::literal_strings`,
     /// `FieldProof::literal_strings`).
@@ -585,6 +589,7 @@ impl ElisionFacts {
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
+            && self.stable_length_locals.is_empty()
             && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
