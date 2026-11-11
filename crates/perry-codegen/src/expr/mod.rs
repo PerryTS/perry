@@ -106,6 +106,8 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod snap_argv_site;
+pub(crate) mod snap_compare_site;
 pub(crate) mod rest_elems;
 pub(crate) mod rest_fields;
 pub(crate) mod snap_env_site;
@@ -534,6 +536,11 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// SNAP census frame: the two innermost expressions `lower_expr` is
+    /// lowering, saved and restored by each lowering. A `process.env` /
+    /// `process.argv` read takes its census kind from its own parent
+    /// (`snap_env_site`, `snap_argv_site`).
+    pub snap_lowering: snap_env_site::Lowering,
     /// A chunked literal birth's own arguments are being lowered
     /// (`literal_chunks`): a chunked argument is the birth's `undefined`
     /// fill, and anywhere else it is an invariant violation.
@@ -944,6 +951,7 @@ pub(crate) struct FnCtx<'a> {
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
     pub namespace_source_prefixes: &'a std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: &'a std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same
@@ -3359,7 +3367,7 @@ pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
-mod index_key;
+pub(crate) mod index_key;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]

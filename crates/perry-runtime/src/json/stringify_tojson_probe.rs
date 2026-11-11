@@ -54,7 +54,7 @@ pub(crate) fn invalidate_object_proto_tojson_state() {
 /// Request/Response` handles, and native-module namespace objects. Returns
 /// `true` (= caller must take the full slow-path resolution) on any match or
 /// whenever the array doesn't look like a well-formed keys array.
-unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> bool {
+pub(super) unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> bool {
     let keys = keys_view.arr();
     let keys_addr = keys as usize;
     if keys_addr & 0x7 != 0 {
@@ -606,7 +606,8 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
 pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
     let class_id = (*obj).class_id;
-    if class_id != 0 && class_chain_may_have_to_json(class_id) {
+    if class_id != 0 && class_chain_may_have_to_json(class_id) && !class_holders_lack_to_json(ptr)
+    {
         return false;
     }
     if crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize) {
@@ -616,6 +617,30 @@ pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) ->
         return false;
     }
     true
+}
+
+/// Does no holder of the declared class instance `ptr` list `toJSON`? The
+/// question is asked of the holders' shapes directly: `Some(undefined)` from
+/// [`class_instance_inherited_read`] means neither the instance's chain of
+/// declared prototypes nor `%Object.prototype%` lists the name, read live from
+/// each holder's shape, so a member, accessor or relink added later is seen by
+/// the next call. Everything that walk does not decide alone (a `toJSON`
+/// found anywhere, an accessor, a recorded or per-instance `[[Prototype]]`, a
+/// registered prototype object, a runtime or per-evaluation class, a
+/// prototype not built yet, a cold `%Object.prototype%`) answers `false`, and
+/// the caller keeps the generic `toJSON` read.
+///
+/// Allocation-free, never collects and runs no user code, so the unrooted
+/// walk may ask it (`inherited_to_json_possible_without_gc`).
+///
+/// [`class_instance_inherited_read`]: crate::object::native_call_method::class_holder::class_instance_inherited_read
+#[inline]
+unsafe fn class_holders_lack_to_json(ptr: *const u8) -> bool {
+    crate::object::native_call_method::class_holder::class_instance_inherited_read(
+        JSValue::from_bits(make_pointer_bits(ptr)),
+        b"toJSON",
+    )
+    .is_some_and(|value| value.bits() == crate::value::TAG_UNDEFINED)
 }
 
 /// The plain-data emitter cannot enter the allocating first-time lookup of
@@ -650,7 +675,7 @@ pub(super) unsafe fn inherited_to_json_possible_without_gc(
     ptr: *const u8,
     class_plain_record: bool,
 ) -> bool {
-    !class_plain_record
+    (!class_plain_record && !class_holders_lack_to_json(ptr))
         || crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize)
         || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
             && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)

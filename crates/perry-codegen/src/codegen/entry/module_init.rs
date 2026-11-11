@@ -99,6 +99,7 @@ pub(super) fn compile_module_init(
                 "js_run_module_init_guarded",
                 &[(I64, &evaluate_addr), (I64, &guard_addr)],
             );
+            blk.store(I8, "2", &format!("@{}", done_global));
             blk.ret_void();
         }
     }
@@ -318,6 +319,7 @@ pub(super) fn compile_module_init(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -416,6 +418,7 @@ pub(super) fn compile_module_init(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,

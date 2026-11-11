@@ -303,8 +303,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let boxed = crate::expr::nanbox_pointer_inline_pub(blk, &handle);
                     blk.ret(DOUBLE, &boxed);
                 } else {
-                    ctx.block().call_void("js_throw", &[(DOUBLE, &reason)]);
-                    ctx.block().unreachable();
+                    crate::stmt::emit_throw(ctx, &reason);
                 }
 
                 // === done ===

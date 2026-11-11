@@ -20,15 +20,15 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
-crates/perry/src/commands/compile/run_pipeline.rs	6200
+crates/perry/src/commands/compile/run_pipeline.rs	6204
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3667
+crates/perry-codegen/src/codegen/mod.rs	3671
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2760
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2839
+crates/perry-codegen/src/expr/mod.rs	2843
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8354
 # Representation-aware map core; further decomposition is tracked in #1435.

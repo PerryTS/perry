@@ -239,6 +239,7 @@ mod closure_capture_cells;
 mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
+mod deferred_namespace;
 #[cfg(test)]
 mod number_local_root_tests;
 mod shared_class_method_bodies;
@@ -3037,6 +3038,7 @@ fn lower_module(
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
+        deferred_namespace_imports: opts.deferred_namespace_imports,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -3353,6 +3355,8 @@ fn lower_module(
         lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        module_deferred_init_deps: opts.module_deferred_init_deps.clone(),
+        module_deferred_readiness: opts.module_deferred_readiness.clone(),
         program_has_tla: opts.program_has_tla,
         module_graph_has_tla: opts.module_graph_has_tla,
         is_dynamic_import_target: opts.is_dynamic_import_target,

@@ -72,6 +72,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_REST_FIELDS",
     "PERRY_REST_TIERS",
     "PERRY_REST_CAPACITY",
+    "PERRY_SIG_SIGNED_INDEX",
     "PERRY_FACTS_ZERO_SIGN",
     "PERRY_FACTS_FILTER_DEMAND",
     "PERRY_WP_REP_TEMPS",
@@ -197,6 +198,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_PRECOMPILE_CAPTURE",
     "PERRY_PROBE_VERIFY",
     "PERRY_PROGRAM_FACTS",
+    "PERRY_PROLOGUE_COST",
     "PERRY_PROP_CSE",
     "PERRY_PTR_NUMARRAY_LOCALS",
     "PERRY_PTR_SHAPE_LOCALS",
@@ -695,6 +697,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_SANDBOX_BUILDRS",
         "Restricts external build-script permissions; successful script output is unchanged.",
+    ),
+    (
+        "PERRY_SIG_DIAG",
+        "Prints the typed-signature selector's verdict per method on stderr without changing emitted objects.",
     ),
     (
         "PERRY_SAVE_LL",
