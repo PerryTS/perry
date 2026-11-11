@@ -103,3 +103,111 @@ function readField(a: number): number {
 console.log("field", readField(o.x), o.x);
 const k = 7;
 console.log("const", g(k), m);
+
+// A written local passed to a body that reads its parameter before anything
+// that could run code: the inlined body may read the local itself, also
+// where a binding has no place (a loop condition).
+function onBoard(sq: number): boolean {
+  return (sq & 0x88) === 0;
+}
+function ray(from: number, delta: number): number {
+  let source = from + delta;
+  let steps = 0;
+  while (onBoard(source)) {
+    source += delta;
+    steps++;
+  }
+  return steps;
+}
+console.log("loop condition", ray(0, 1), ray(0x33, 0x11), ray(0x70, -0x10), ray(0x77, 1));
+function square(a: number): number {
+  return a * a;
+}
+function exprUse(): string {
+  let w = 3;
+  w = w + 1;
+  const first = square(w) + (onBoard(w) ? 1 : 0);
+  w = 0x88;
+  return first + "," + onBoard(w) + "," + w;
+}
+console.log("expression", exprUse());
+let top = 0x70;
+do {
+  top += 0x10;
+} while (onBoard(top));
+console.log("module loop", top, square(top));
+
+// Controls: the read must stay at the call.
+// A later argument writes the earlier one.
+function laterWrite(): string {
+  let v = 1;
+  const a = add2(v, v++);
+  const b = add2r(v, (v = 10));
+  return a + "," + b + "," + v;
+}
+console.log("later arg writes", laterWrite(), add2(m, m++), m);
+
+// A conversion runs code between two reads of the parameter.
+let boxed: any = {
+  valueOf(): number {
+    boxed = 5;
+    return 1;
+  },
+};
+function twice(a: number): number {
+  return (a & 1) + a;
+}
+console.log("conversion", twice(boxed as number), boxed);
+
+// A getter runs between two reads of the parameter.
+let holder: any = {
+  get x(): number {
+    holder = 7;
+    return 1;
+  },
+};
+function viaGetter(a: number): string {
+  return (a as any).x + ":" + (a === 7 ? "moved" : "kept");
+}
+console.log("getter", viaGetter(holder as number), holder);
+
+// A body that stores to the very local it was passed.
+let shared = 1;
+function storesFirst(a: number): boolean {
+  return (shared = 9) === a;
+}
+console.log("store", storesFirst(shared), shared);
+
+// A loop in the body that runs code: its reads are late.
+function countTo(a: number): number {
+  let n = 0;
+  while (n < a) {
+    n = n + 1 + bump();
+  }
+  return n;
+}
+m = 3;
+console.log("body loop", countTo(m), m);
+
+// Methods: the field is read after the parameter, or before it.
+class Probe {
+  k = 1;
+  early(a: number): boolean {
+    return a === this.k;
+  }
+  late(a: number): number {
+    return bump() * 0 + a;
+  }
+}
+function probes(): string {
+  const p = new Probe();
+  let q = 0;
+  q = q + 1;
+  let hits = 0;
+  while (p.early(q)) {
+    q += 1;
+    hits++;
+  }
+  return hits + "," + q + "," + p.late(m) + "," + m;
+}
+console.log("methods", probes());

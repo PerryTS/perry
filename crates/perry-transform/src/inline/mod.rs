@@ -678,7 +678,7 @@ fn inline_functions_inner(
     // wrong value from the class field.
     let module_max_id = find_max_local_id_in_module(module);
     // Which locals anything writes, for the argument-substitution rule
-    // (`WriteCensus::is_stable_arg`). Inlining keeps it true for the ids it
+    // (`WriteCensus::substitutes_arg`). Inlining keeps it true for the ids it
     // covers: a copied body writes only locals already counted, and every
     // id minted below is past its limit.
     let census = &WriteCensus::of(module);
@@ -947,6 +947,7 @@ mod tests {
         let mut next_local_id = 100;
         let (setup, param_map) = call_inliner::build_inline_arg_bindings(
             &params,
+            &[],
             &[Expr::LocalGet(42)],
             &HashSet::new(),
             &HashSet::new(),
@@ -981,6 +982,7 @@ mod tests {
         let mut next_local_id = 100;
         let (setup, param_map) = call_inliner::build_inline_arg_bindings(
             &params,
+            &[],
             &[Expr::LocalGet(42)],
             &HashSet::new(),
             &HashSet::new(),

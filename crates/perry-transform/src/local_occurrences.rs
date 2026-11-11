@@ -65,6 +65,32 @@ impl WriteCensus {
             _ => false,
         }
     }
+
+    /// The one rule for substituting the argument at `index` for its
+    /// parameter in an inlined `body`. First [`Self::is_stable_arg`]. Second,
+    /// a read of any local, written or not, when the read cannot move past
+    /// anything that could change it (`arg_read_order`): no later argument
+    /// can run code or store to the local, and every read of the parameter
+    /// in the body comes before anything in the body that could.
+    pub(crate) fn substitutes_arg(
+        &self,
+        args: &[Expr],
+        index: usize,
+        param: LocalId,
+        body: &[Stmt],
+    ) -> bool {
+        use crate::arg_read_order::{enabled, may_run_code, reads_precede_effects};
+        let arg = &args[index];
+        if self.is_stable_arg(arg) {
+            return true;
+        }
+        let Expr::LocalGet(local) = arg else {
+            return false;
+        };
+        enabled()
+            && !args[index + 1..].iter().any(|a| may_run_code(a, *local))
+            && reads_precede_effects(body, param, *local)
+    }
 }
 
 /// Every place a LocalId appears inside `stmts` and everything nested in
