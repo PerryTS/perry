@@ -1345,6 +1345,7 @@ pub(super) fn compile_closure(
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
         fn_base: Default::default(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),

@@ -56,6 +56,7 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
+pub(crate) use loops::bounded_poll;
 pub(crate) use loops::this_field_fast_off;
 pub(crate) use crate::expr::index_get::descriptor_read;
 pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
@@ -723,19 +724,47 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             condition,
             update,
             body,
-        } => lower_for(
-            ctx,
-            init.as_deref(),
-            condition.as_ref(),
-            update.as_ref(),
-            body,
-        ),
+        } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::For {
+                    condition: condition.as_ref(),
+                    update: update.as_ref(),
+                    body,
+                },
+            );
+            let lowered = lower_for(
+                ctx,
+                init.as_deref(),
+                condition.as_ref(),
+                update.as_ref(),
+                body,
+            );
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `while (cond) { body }` — same CFG as for-loop without init/update.
-        Stmt::While { condition, body } => lower_while(ctx, condition, body),
+        Stmt::While { condition, body } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::While { condition, body },
+            );
+            let lowered = lower_while(ctx, condition, body);
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `do { body } while (cond)` — body runs at least once, then cond.
-        Stmt::DoWhile { body, condition } => lower_do_while(ctx, body, condition),
+        Stmt::DoWhile { body, condition } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::DoWhile { body, condition },
+            );
+            let lowered = lower_do_while(ctx, body, condition);
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `break;` — branch to the innermost loop's exit block. The
         // current block becomes terminated; subsequent statements in
