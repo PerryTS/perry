@@ -34,17 +34,22 @@ impl<'a> Gen<'a> {
                 token,
             } => {
                 let _ = self.expr(fx, registry);
-                let _ = self.expr(fx, target);
+                // The registry keeps the target and the token by identity
+                // (DESIGN-p4l4 §2.2, the weak collections' route).
+                let t = self.expr(fx, target);
+                self.m.identity(t, IdentityRoute::Collection);
                 let h = self.expr(fx, held);
                 self.to_sink(h, "FinalizationRegistry held value");
                 if let Some(t) = token {
-                    let _ = self.expr(fx, t);
+                    let t = self.expr(fx, t);
+                    self.m.identity(t, IdentityRoute::Collection);
                 }
                 self.prim_node(prim::UNDEF)
             }
             Expr::FinalizationRegistryUnregister { registry, token } => {
                 let _ = self.expr(fx, registry);
-                let _ = self.expr(fx, token);
+                let t = self.expr(fx, token);
+                self.m.identity(t, IdentityRoute::Collection);
                 self.prim_node(prim::BOOL)
             }
             Expr::ObjectDefineProperty(o, k, d)
