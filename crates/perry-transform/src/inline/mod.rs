@@ -138,6 +138,7 @@ pub fn inline_functions(
     cross_module::localize_cross_module_functions(module, extra_functions);
     let first_fresh_id = find_max_local_id_in_module(module).saturating_add(1);
     let span_remaps = crate::source_spans::RemapSession::start(first_fresh_id);
+    let _effects = crate::effects::Session::start(module);
     inline_functions_inner(
         module,
         extra_methods,

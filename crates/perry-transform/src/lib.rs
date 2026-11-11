@@ -20,6 +20,7 @@ pub mod generator;
 pub mod i18n;
 mod immutable_numeric_arrays;
 pub mod inline;
+pub mod effects;
 mod local_copies;
 mod local_occurrences;
 mod scoped_copies;
