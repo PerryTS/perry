@@ -138,7 +138,8 @@ console.log(
 
 // 6. The method retained and called indirectly with int32 keys and values
 // of either sign: extracted, `call`, `apply`, `bind`, and through an array of
-// functions. These enter the boxed entry; direct sites stand beside them.
+// functions. The extracted method escapes, so its parameters are Boxed and
+// it keeps its index clones; direct sites stand beside the indirect ones.
 class Kept {
   cells: number[] = new Array<number>(32).fill(0);
   h = 0;
