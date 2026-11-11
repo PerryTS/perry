@@ -336,13 +336,7 @@ pub(crate) fn receiver_checked(ctx: &FnCtx<'_>, object: &Expr) {
 /// definition for the program's life (no write, no escape of the class
 /// object, no interpreted code).
 pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
-    let proved = !ctx.wpfacts_off
-        && !ctx.wpfacts.interp_guard
-        && ctx
-            .wpfacts
-            .class_statics
-            .get(&cid)
-            .is_some_and(|ks| ks.iter().any(|k| k == key));
+    let proved = !ctx.wpfacts_off && facts_static(&ctx.wpfacts, cid, key);
     if proved {
         crate::verify_facts::consumed(
             crate::verify_facts::Fact::Static,
@@ -351,6 +345,18 @@ pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
         crate::facts_consumed::used();
     }
     proved
+}
+
+/// The whole-program half of [`proves_static`], from the facts alone (the
+/// LIFE census resolves a static call by it): no interpreted code, and the
+/// facts list `key` among class `cid`'s own statics that hold their
+/// definition.
+pub(crate) fn facts_static(facts: &crate::codegen::ElisionFacts, cid: u32, key: &str) -> bool {
+    !facts.interp_guard
+        && facts
+            .class_statics
+            .get(&cid)
+            .is_some_and(|ks| ks.iter().any(|k| k == key))
 }
 
 /// The class id of a receiver the facts prove one of their classes: one

@@ -115,7 +115,7 @@ fn census_reports_every_verdict() {
         &HashSet::new(),
         &HashMap::new(),
         &sc,
-        false,
+        None,
     );
     let verdicts: HashMap<&str, Vec<&str>> = rows.iter().fold(HashMap::new(), |mut acc, r| {
         acc.entry(r.4.as_str()).or_default().push(r.5.as_str());
@@ -146,7 +146,12 @@ fn census_reports_every_verdict() {
         &HashSet::new(),
         &HashMap::new(),
         &sc,
-        true,
+        Some(&Body {
+            label: "t".into(),
+            suspends: true,
+            func: 0,
+            direct: false,
+        }),
     );
     assert_eq!(
         rows.iter()
@@ -237,7 +242,7 @@ fn census_reports_literals_closures_and_positions() {
         objects: &objects,
         arrays: &arrays,
     };
-    let rows = classify(&census, &m.init, &boxed, &globals, &sc, false);
+    let rows = classify(&census, &m.init, &boxed, &globals, &sc, None);
     let has = |k: Kind, class: &str, verdict: &str| {
         rows.iter()
             .any(|r| r.0 == k && r.1 == class && r.4 == verdict)
