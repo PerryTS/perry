@@ -357,7 +357,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // reserved bits so the GC sees the array as pointer-free until
         // the element-store loop overrides per-slot via
         // `js_gc_note_slot_layout` below.
-        let gc_packed: u64 = perry_abi::gc_array_type_pat!()
+        let gc_packed: u64 = GC_TYPE_ARRAY
             | (GC_FLAG_ARENA << 8)
             | (GC_LAYOUT_POINTER_FREE << 16)
             | (total_size << 32);
