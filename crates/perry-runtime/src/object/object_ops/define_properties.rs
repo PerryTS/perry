@@ -454,7 +454,7 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         unsafe {
             let hdr = (obj_ptr_for_record as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!((*hdr).obj_type)
                 || (*hdr).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
                 let cleaned = crate::array::clean_arr_ptr(

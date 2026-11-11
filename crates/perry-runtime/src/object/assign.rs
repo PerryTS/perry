@@ -715,7 +715,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let target_is_array = {
         let gc_header =
             (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!((*gc_header).obj_type)
     };
 
     let source = JSValue::from_bits(source_f64.to_bits());
@@ -889,7 +889,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         Some(h) => h.obj_type,
         None => return target_f64,
     };
-    let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
+    let source_is_array = crate::gc_type_is_array!(source_obj_type);
 
     // #7341: a RegExp source has no ObjectHeader keys array and must not enter
     // the plain-object copy arm. Its dedicated GC kind makes that decision
@@ -916,7 +916,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!()
         )
     {
         // Assign's [[Set]] can run a setter even for a plain data source, so

@@ -723,7 +723,7 @@ fn get_field_by_name_past_data_probe(
                             }
                             let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                                 as *const crate::gc::GcHeader;
-                            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                            if crate::gc_type_is_array!((*keys_gc).obj_type) {
                                 let key_count = keys_view.count() as usize;
                                 if key_count <= 4096 {
                                     // #8936/#8950's shared resolver: the shape's

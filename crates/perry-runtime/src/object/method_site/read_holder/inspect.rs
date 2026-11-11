@@ -23,7 +23,7 @@ unsafe fn valid_pair(lane: u64) -> Option<usize> {
     }
     let pair = (lane & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(pair)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || (*(pair as *const crate::array::ArrayHeader)).length < 2
     {
         return None;

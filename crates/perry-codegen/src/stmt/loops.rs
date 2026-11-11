@@ -3046,7 +3046,7 @@ fn emit_packed_range_receiver_forwarding_repair(ctx: &mut FnCtx<'_>, array_id: u
         let type_addr = blk.sub(I64, &handle, "8");
         let type_ptr = blk.inttoptr(I64, &type_addr);
         let gc_type = blk.load(I8, &type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1");
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let flags_addr = blk.sub(I64, &handle, "7");
         let flags_ptr = blk.inttoptr(I64, &flags_addr);
         let flags = blk.load(I8, &flags_ptr);

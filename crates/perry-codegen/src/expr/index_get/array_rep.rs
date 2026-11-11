@@ -40,7 +40,6 @@ use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// `perry_abi::GC_TYPE_ARRAY` in the header word's low byte.
 const TYPE_MASK_I32: &str = "255";
-const GC_TYPE_ARRAY_I32: &str = "1";
 /// `perry_abi::GC_FLAG_FORWARDED` in the header word's second byte.
 const FORWARDED_I32: &str = "32768";
 
@@ -111,7 +110,7 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let ty = ctx.block().and(I32, &word, TYPE_MASK_I32);
-    let array = ctx.block().icmp_eq(I32, &ty, GC_TYPE_ARRAY_I32);
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
     branch(ctx, &array, "arr_rep.forwarding", &miss_l);
     // Fixed: never forwarded. Otherwise a forwarded header ends the test.
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
@@ -195,7 +194,7 @@ pub(super) fn witness_read(
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
     let word = emit_array_guard_word(ctx.block(), &handle);
     let ty = ctx.block().and(I32, &word, TYPE_MASK_I32);
-    let array = ctx.block().icmp_eq(I32, &ty, GC_TYPE_ARRAY_I32);
+    let array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I32, &ty);
     branch(ctx, &array, "arep.verify_forwarding", &miss_l);
     let fwd_bit = ctx.block().and(I32, &word, FORWARDED_I32);
     let live = ctx.block().icmp_eq(I32, &fwd_bit, "0");

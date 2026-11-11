@@ -93,7 +93,7 @@ pub(crate) unsafe fn compiled_target_call(
             return None;
         }
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {
                 let arr = addr as *const crate::array::ArrayHeader;
                 let n = crate::array::js_array_length(arr);
                 (0..n)

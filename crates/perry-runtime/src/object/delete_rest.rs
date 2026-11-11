@@ -179,7 +179,7 @@ pub extern "C" fn js_object_delete_field(
                 }
                 return js_object_delete_field(arr as *mut ObjectHeader, key);
             }
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                     // An Array's `length` is a non-configurable exotic own
@@ -980,7 +980,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     }
     super::key_attrs::debug_assert_positional(keys, shape.logical_key_count);
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0
     {
         return None;

@@ -63,7 +63,7 @@ unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> 
     let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return true;
     };
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(keys_gc.obj_type) {
         return true;
     }
     // The receiver's own count; it names a prefix of the array.
@@ -108,7 +108,7 @@ unsafe fn member_keys_scan(keys_view: crate::object::ObjectKeys) -> Option<bool>
     }
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys_addr)?;
     let key_count = keys_view.count() as usize;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || key_count > (*keys).capacity as usize
         || key_count > (*keys).length as usize
         || key_count > 4096
@@ -284,7 +284,7 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
     } else {
         let keys_addr = keys as usize;
         let keys_header = crate::value::addr_class::try_read_tracked_gc_header(keys_addr)?.as_ref();
-        if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_header.obj_type)
             || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || keys_view.count() > (*keys).capacity
         {
@@ -383,7 +383,7 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return false;
     };
-    keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(keys_header.obj_type)
         && keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && keys_view.count() == cached.keys_len
         && keys_view.count() <= (*keys).capacity

@@ -404,7 +404,7 @@ fn gc_type_for_pointer(addr: usize) -> Option<u8> {
 
 fn is_array_value(value: f64) -> bool {
     pointer_addr(value)
-        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc::GC_TYPE_ARRAY))
+        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc_array_type_pat!()))
 }
 
 fn get_object_property(value: f64, name: &[u8]) -> f64 {

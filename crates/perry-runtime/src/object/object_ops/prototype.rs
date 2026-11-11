@@ -679,7 +679,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                         return proto;
                     }
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_array!((*gc).obj_type) {
                     if let Some(proto) =
                         super::super::array_get_prototype_of_addr(raw_addr as usize)
                     {
@@ -941,7 +941,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
             }
-            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc).obj_type) {
                 if let Some(proto) = super::super::array_get_prototype_of_addr(bits as usize) {
                     return proto;
                 }

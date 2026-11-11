@@ -1313,7 +1313,7 @@ fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
     }
     unsafe {
         let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        ((*gc).obj_type == crate::gc::GC_TYPE_ARRAY)
+        (crate::gc_type_is_array!((*gc).obj_type))
             .then_some(raw as *const crate::array::ArrayHeader)
     }
 }
