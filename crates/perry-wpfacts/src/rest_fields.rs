@@ -208,8 +208,9 @@ fn observes_this(e: &perry_hir::Expr) -> bool {
 /// class its lanes at birth (an object-literal class, born with its keys) or
 /// right after its own field definitions (any other class), so none of its
 /// fields may be computed, private or decorated, the class may carry no
-/// decorator, and its field initializers may not observe `this` (no code may
-/// read a field before the lanes exist).
+/// decorator, and neither its field initializers nor its constructor's
+/// parameter defaults may observe `this` (no code may read a field before the
+/// lanes exist, so a receiver whose class id is the class has them).
 fn decl_refusal(c: &perry_hir::Class) -> Option<&'static str> {
     if c.is_imported_stub() || !c.decorators.is_empty() || c.native_extends.is_some() {
         return Some("declaration");
@@ -225,6 +226,14 @@ fn decl_refusal(c: &perry_hir::Class) -> Option<&'static str> {
         .any(|f| f.init.as_ref().is_some_and(observes_this))
     {
         return Some("initializer observes this");
+    }
+    // A parameter default runs before the field definitions.
+    if c.constructor.as_ref().is_some_and(|k| {
+        k.params
+            .iter()
+            .any(|p| p.default.as_ref().is_some_and(observes_this))
+    }) {
+        return Some("parameter default observes this");
     }
     None
 }

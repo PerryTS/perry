@@ -505,6 +505,10 @@ fn get(
             let slot = site_slot(ctx, byte_offset).unwrap_or_default();
             return site_get(ctx, object, property, slot, want).map(Some);
         }
+        Plan::Complete if class_guard(ctx, property).is_some() => {
+            let (cids, slot) = class_guard(ctx, property).unwrap_or_default();
+            return guarded_get(ctx, object, property, &cids, slot, want).map(Some);
+        }
         Plan::Complete => {
             super::note_site(&format!(
                 "rest-field-complete-get .{} {}",
@@ -597,6 +601,123 @@ pub(crate) fn try_lower_word(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<
 /// allocation, so a store may evaluate its value after it unrooted.
 fn binding(e: &Expr) -> bool {
     matches!(e, Expr::This | Expr::LocalGet(_))
+}
+
+/// The classes that keep `property` in an I32 lane, when every one is a
+/// class (not an object-literal class, whose instances carry no class id)
+/// and all hold it at one slot: a receiver whose class id is one of them has
+/// the lane there (an admitted class has no heritage, and its instances get
+/// their lanes before any of its code runs).
+fn class_guard(ctx: &FnCtx<'_>, property: &str) -> Option<(Vec<u32>, u32)> {
+    let mut cids = Vec::new();
+    let mut slot: Option<u32> = None;
+    for (&cid, fc) in &ctx.wpfacts.classes {
+        let Some(f) = fc.fields.iter().find(|f| f.key == property && f.rest) else {
+            continue;
+        };
+        let name = wpfacts_access::class_name_of(ctx, cid)?;
+        let class = ctx.classes.get(&name)?;
+        if class.is_literal_shape() || lanes_of(ctx, &name) & (1 << f.slot) == 0 {
+            return None;
+        }
+        if slot.is_some_and(|s| s != f.slot) {
+            return None;
+        }
+        slot = Some(f.slot);
+        cids.push(cid);
+    }
+    Some((cids, slot?)).filter(|(c, s)| !c.is_empty() && *s < LANE_SLOTS)
+}
+
+/// The class-id test of a guarded lane access: the current block branches to
+/// the returned `(hit, miss)` blocks, `hit` holding the slot pointer.
+fn guard(ctx: &mut FnCtx<'_>, recv: &str, cids: &[u32], slot: u32) -> (usize, usize, String) {
+    let chk = ctx.new_block("rest_field.guard_cid");
+    let hit = ctx.new_block("rest_field.guard_hit");
+    let miss = ctx.new_block("rest_field.guard_miss");
+    let (chk_l, hit_l, miss_l) = (
+        ctx.block_label(chk),
+        ctx.block_label(hit),
+        ctx.block_label(miss),
+    );
+    let bits = ctx.block().bitcast_double_to_i64(recv);
+    let r = super::receiver_range::emit_fused_receiver_test(ctx.block(), &bits);
+    ctx.block().cond_br(&r.is_object_pointer, &chk_l, &miss_l);
+    ctx.current_block = chk;
+    let blk = ctx.block();
+    // Word 0 is a class id only on a GC_TYPE_OBJECT.
+    let type_ptr =
+        super::receiver_range::emit_field_ptr(blk, &r.biased, -(perry_abi::GC_HEADER_SIZE as i64));
+    let type_byte = blk.load(crate::types::I8, &type_ptr);
+    let is_object = crate::target_layout::emit_gc_type_is_object(blk, crate::types::I8, &type_byte);
+    let hdr = super::receiver_range::emit_field_ptr(blk, &r.biased, 0);
+    let cid = blk.load(I32, &hdr);
+    let mut any: Option<String> = None;
+    for c in cids {
+        let eq = blk.icmp_eq(I32, &cid, &c.to_string());
+        any = Some(match any {
+            Some(prev) => blk.or(I1, &prev, &eq),
+            None => eq,
+        });
+    }
+    let ok = blk.and(I1, &is_object, &any.unwrap_or_else(|| "false".into()));
+    blk.cond_br(&ok, &hit_l, &miss_l);
+    ctx.current_block = hit;
+    let form = crate::target_layout::HeaderForm::Meta;
+    let ptr = wpfacts_access::emit_slot_ptr(ctx, recv, form, slot);
+    (hit, miss, ptr)
+}
+
+/// A read guarded by the receiver's class id (`class_guard`).
+fn guarded_get(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    cids: &[u32],
+    slot: u32,
+    want: Want,
+) -> Result<String> {
+    super::note_site(&format!(
+        "rest-field-guarded-get .{} {}",
+        property, ctx.func.name
+    ));
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::FieldRep,
+        || serde_json::json!({ "rest": "guarded", "key": property, "classes": cids }),
+    );
+    crate::facts_consumed::used();
+    let recv = super::lower_expr(ctx, object)?;
+    let (_, miss, ptr) = guard(ctx, &recv, cids, slot);
+    if crate::verify_facts::enabled() {
+        witness_word(ctx, &recv, &ptr, property);
+    }
+    let v = ctx.block().load(I32, &ptr);
+    let fast = match want {
+        Want::I32 => v,
+        Want::Value => ctx.block().sitofp(I32, &v, DOUBLE),
+    };
+    let fast_end = ctx.block().label.clone();
+    let merge = ctx.new_block("rest_field.guard_read");
+    let merge_l = ctx.block_label(merge);
+    ctx.block().br(&merge_l);
+    ctx.current_block = miss;
+    let slow = complete_get(ctx, &recv, property);
+    let slow = match want {
+        Want::Value => slow,
+        Want::I32 => {
+            let n = ctx
+                .block()
+                .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &slow)]);
+            ctx.toint32_wrap(&n)
+        }
+    };
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
+    let ty = if want == Want::I32 { I32 } else { DOUBLE };
+    Ok(ctx
+        .block()
+        .phi(ty, &[(&fast, &fast_end), (&slow, &slow_end)]))
 }
 
 /// A read wpfacts proves by its site (`site_slot`): behind the receiver's
@@ -700,6 +821,27 @@ fn set(
     crate::rooting::with_operands_rooted(ctx, &[object, value], |ctx, v| {
         let (recv, val) = (&v[0], &v[1]);
         let Some(p) = &p else {
+            if let Some((cids, slot)) = class_guard(ctx, &property) {
+                super::note_site(&format!(
+                    "rest-field-guarded-set .{} {}",
+                    &property, ctx.func.name
+                ));
+                let (_, miss, ptr) = guard(ctx, recv, &cids, slot);
+                if crate::verify_facts::enabled() {
+                    witness_value(ctx, val, true, &property);
+                }
+                let word = encode(ctx, val);
+                // GC_STORE_AUDIT(POINTER_FREE): an I32 word (0x7FFE band), never a pointer.
+                ctx.block().store(I64, &word, &ptr);
+                let merge = ctx.new_block("rest_field.guard_stored");
+                let merge_l = ctx.block_label(merge);
+                ctx.block().br(&merge_l);
+                ctx.current_block = miss;
+                complete_set(ctx, recv, &property, val, strict);
+                ctx.block().br(&merge_l);
+                ctx.current_block = merge;
+                return Ok(Some(val.clone()));
+            }
             super::note_site(&format!(
                 "rest-field-complete-set .{} {}",
                 &property, ctx.func.name
