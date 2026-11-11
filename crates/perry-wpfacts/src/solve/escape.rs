@@ -308,6 +308,7 @@ impl Model {
         }
         self.escaped.insert(t, reason);
         self.arr_len_top(t);
+        self.map_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
@@ -1103,6 +1104,7 @@ impl Model {
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
         self.arr_len_top(t);
+        self.map_open(t);
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);

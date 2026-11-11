@@ -870,8 +870,10 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
     /// append reserve.
     pub loop_pushed_arrays: &'a crate::collectors::PushedArrays,
-    /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
-    pub pushed_array_birth: bool,
+    /// Set by `lower_let` while it lowers such a binding's `[]` initializer:
+    /// the slots the birth reserves (0: the plain empty birth), from the
+    /// facts (`ElisionFacts::list_capacities`) or the collector's sixteen.
+    pub pushed_array_birth: u64,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
@@ -1345,6 +1347,9 @@ pub(crate) struct FnCtx<'a> {
     /// N2: the planned function-level element bases of the method body
     /// (`stmt::fn_base`).
     pub fn_base: crate::stmt::fn_base::Pending,
+    /// The loops being lowered and the polls each may take back
+    /// (`stmt::loops::bounded_poll`).
+    pub loop_polls: crate::stmt::bounded_poll::Scopes,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
