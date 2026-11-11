@@ -71,6 +71,43 @@ pub(crate) fn compare(
     }
 }
 
+/// A compiled store into `object` when `object` is a materialized copy of an
+/// admitted record (`value_records`: the `new` of its literal-shape class,
+/// or that `new` when present). VR-3a turns a store into a record binding
+/// into a store into such a copy; the facts said no store exists (R2), so
+/// check mode reports it (rc 86). The copy is lowered once more for the
+/// witness: its birth reads only the binding's field locals.
+pub(crate) fn store_into_copy(ctx: &mut FnCtx<'_>, object: &perry_hir::Expr) -> anyhow::Result<()> {
+    use perry_hir::Expr;
+    if !active(ctx) {
+        return Ok(());
+    }
+    let born = match object {
+        Expr::Conditional { then_expr, .. } => then_expr.as_ref(),
+        e => e,
+    };
+    let Expr::New { class_name, .. } = born else {
+        return Ok(());
+    };
+    let Some(&cid) = ctx.class_ids.get(class_name) else {
+        return Ok(());
+    };
+    if !ctx.wpfacts.record_classes.contains(&cid) {
+        return Ok(());
+    }
+    let copy = super::lower_expr(ctx, object)?;
+    crate::verify_facts::covered(Fact::RecordMutation, || serde_json::json!({ "class": cid }));
+    let site = crate::verify_facts::site_arg(ctx, "store into a record copy", Fact::RecordMutation, &[]);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_record_identity",
+        &[(DOUBLE, &copy), (DOUBLE, &copy)],
+        &site,
+    );
+    Ok(())
+}
+
 /// Claim `value`, a fresh instance of class `class_name`, when its template
 /// is an admitted value record.
 pub(crate) fn claim(ctx: &mut FnCtx<'_>, class_name: &str, value: &str) {

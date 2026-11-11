@@ -394,6 +394,7 @@ fn static_rules(
     g: &Gen,
     tf: &TemplateFacts,
     interp_guard: Option<&str>,
+    ignore_r2: bool,
 ) -> Option<Result<RecordLayout, Rejected>> {
     use RecordReject::*;
     let m = &g.m;
@@ -449,7 +450,7 @@ fn static_rules(
         if !f.definite || !f.data_field {
             return r(R1Layout(format!("{k} is not a definite data field")));
         }
-        if !f.readonly {
+        if !f.readonly && !ignore_r2 {
             return r(R2Write(k.clone()));
         }
         let allowed = prim::NUM | prim::BOOL | prim::UNDEF | prim::NULL;
@@ -513,13 +514,16 @@ pub(crate) fn derive(
         return Vec::new();
     }
     // R0-R3.
+    // S0 negative control `vrwrite` (§10.3): R2 ignored.
+    let ignore_r2 = sabotage == Some("vrwrite");
     let mut verdict: FxHashMap<TmplId, Result<RecordLayout, Rejected>> = FxHashMap::default();
     for tf in templates.iter() {
-        if let Some(v) = static_rules(g, tf, interp_guard) {
+        if let Some(v) = static_rules(g, tf, interp_guard, ignore_r2) {
             verdict.insert(tf.id, v);
         }
     }
     let mut s = Scan::new(g, sites);
+    s.ignore_r2 = ignore_r2;
     // S0 negative controls (DESIGN-p4l4 §10.3): an identity route ignored.
     s.ignored_route = match sabotage {
         Some("vrident" | "vrinline") => Some("==="),
@@ -651,6 +655,8 @@ struct Scan<'a, 'g> {
     /// The identity route a negative control ignores (`vrident`,
     /// `vrinline`: `===`; `vrswitch`: `switch`).
     ignored_route: Option<&'static str>,
+    /// The negative control `vrwrite` ignores R2.
+    ignore_r2: bool,
     /// A method call's receiver node.
     mcall_recv: FxHashMap<CallId, NodeId>,
     /// The `new` calls: their result is the object they birth.
@@ -803,6 +809,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             g,
             captured,
             ignored_route: None,
+            ignore_r2: false,
             elem_atom,
             holders,
             ctor_this,
@@ -1354,6 +1361,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     Use::Allowed => {}
                                     Use::Reject(R4Identity(r))
                                         if self.ignored_route == Some(r.as_str()) => {}
+                                    Use::Reject(R2Write(_)) if self.ignore_r2 => {}
                                     Use::TypedCall(call)
                                         if self.own_array_call(call, &recs, linked) => {}
                                     Use::TypedCall(call) => {

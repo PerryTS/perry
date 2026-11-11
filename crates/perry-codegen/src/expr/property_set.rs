@@ -434,6 +434,8 @@ pub(crate) fn emit_nullish_write_guard(
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     if let Expr::PropertySet { object, value, .. } = expr {
+        // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+        super::record_witness::store_into_copy(ctx, object)?;
         return super::write_barrier::with_static_child(ctx, object, value, |ctx| {
             lower_store(ctx, expr, assignment_strict)
         });
