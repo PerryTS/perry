@@ -389,6 +389,15 @@ pub struct ElisionFacts {
     /// Arrays (wpfacts `BindingFacts::immutable_array`): every read that
     /// yields a value yields an Array nothing writes after its birth.
     pub immutable_arrays: std::collections::BTreeSet<u32>,
+    /// Locals that may hold a String and whose every String is a program
+    /// string literal's value (wpfacts `BindingFacts::literal_strings`):
+    /// born shared, never appended to in place, so a copy of one needs no
+    /// string demote (`expr::literal_strings`).
+    pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// (class id, key) of the fields every store of any unit writes only
+    /// such Strings into (wpfacts `FieldFacts::literal_strings`,
+    /// `FieldProof::literal_strings`).
+    pub literal_string_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -402,6 +411,19 @@ pub struct ElisionFacts {
     /// Template id → the layout of an admitted value record that some
     /// `record_locals` entry names.
     pub record_layouts: std::collections::BTreeMap<u32, FactsRecordLayout>,
+    /// Value records VR-4b (wpfacts `records::export`): what holds a record
+    /// array, a `GC_TYPE_RECORD_ARRAY` whose elements are records of the
+    /// named template (its layout is in `record_layouts`), inline. A binding
+    /// (local id); a named read (byte offset and key); an empty array
+    /// literal that is the whole value of a `let` or a local assignment
+    /// (local id), of a named store (its element offset), of a class field
+    /// initializer (class id, field): the births. Only the record-array
+    /// intrinsics touch such an array (`value_records`).
+    pub record_array_locals: std::collections::BTreeMap<u32, u32>,
+    pub record_array_reads: std::collections::BTreeMap<(u32, String), u32>,
+    pub record_array_birth_locals: std::collections::BTreeMap<u32, u32>,
+    pub record_array_birth_stores: std::collections::BTreeMap<u32, u32>,
+    pub record_array_birth_fields: std::collections::BTreeMap<(u32, String), u32>,
     /// VR-3b, filled by the `value_records` rewrite of this module (not by
     /// the driver): function id → its record parameters and result; the
     /// aggregate temporary of a record-returning typed call → the lanes its
@@ -463,6 +485,11 @@ pub struct ElisionFacts {
     /// interval (wpfacts `ModuleBindings::key_signs`;
     /// `expr::index_key::key_fact`).
     pub key_signs: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// Element sites (reads and stores, by `element_offset`) whose key is a
+    /// non-negative integer Number at every copy and may lie past the int32
+    /// range, with its interval (wpfacts `ModuleBindings::wide_keys`;
+    /// `expr::index_key::split_key_fact`).
+    pub wide_keys: std::collections::BTreeMap<u32, (i64, i64)>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest
@@ -541,6 +568,7 @@ impl ElisionFacts {
             && self.length_number_inputs.is_empty()
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
+            && self.literal_string_locals.is_empty()
             && self.const_arrays.is_empty()
             && self.call_arg_ranges.is_empty()
             && self.number_calls.is_empty()
@@ -558,6 +586,16 @@ impl ElisionFacts {
             && self.class_statics.is_empty()
             && self.native_member_calls.is_empty()
             && self.record_locals.is_empty()
+            && !self.has_record_arrays()
+    }
+
+    /// Some binding, read or birth of this module is a record array.
+    pub fn has_record_arrays(&self) -> bool {
+        !(self.record_array_locals.is_empty()
+            && self.record_array_reads.is_empty()
+            && self.record_array_birth_locals.is_empty()
+            && self.record_array_birth_stores.is_empty()
+            && self.record_array_birth_fields.is_empty())
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

@@ -7,6 +7,7 @@ impl<'a> Gen<'a> {
     /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
     /// length floor on (`solve::arr_len`).
     fn permuted_len(&mut self, r: NodeId) {
+        self.m.arr_permuted.insert(r);
         if !self.m.arr_floor_off {
             self.m.cons(
                 r,

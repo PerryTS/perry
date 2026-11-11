@@ -593,12 +593,40 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
         out.key_signs.extend(mb.key_signs.iter().copied());
+        out.wide_keys.extend(mb.wide_keys.iter().copied());
         out.rest_reads.extend(mb.rest_reads.iter().copied());
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
         out.rest_reserves.extend(mb.rest_reserves.iter().copied());
         out.fill_births.extend(mb.fill_births.iter().copied());
         out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
+        // DESIGN-p4l4 VR-4b: the record arrays. Their record's layout is
+        // this module's (wpfacts rejects a record array held in another
+        // module); without it codegen refuses the module.
+        {
+            let mut layout = |r: u32| {
+                if let Some(l) = record_layout(pf, path, r) {
+                    out.record_layouts.insert(r, l);
+                }
+                r
+            };
+            for (id, r) in &mb.record_array_locals {
+                out.record_array_locals.insert(*id, layout(*r));
+            }
+            for (at, k, r) in &mb.record_array_reads {
+                out.record_array_reads.insert((*at, k.clone()), layout(*r));
+            }
+            for (id, r) in &mb.record_array_birth_locals {
+                out.record_array_birth_locals.insert(*id, layout(*r));
+            }
+            for (at, r) in &mb.record_array_birth_stores {
+                out.record_array_birth_stores.insert(*at, layout(*r));
+            }
+            for (c, k, r) in &mb.record_array_birth_fields {
+                out.record_array_birth_fields
+                    .insert((*c, k.clone()), layout(*r));
+            }
+        }
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
             // DESIGN-p4l4 VR-3b: a Record slot whose layout this module
@@ -748,6 +776,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             if b.immutable_array {
                 out.immutable_arrays.insert(*id);
             }
+            if b.literal_strings {
+                out.literal_string_locals.insert(*id);
+            }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());
             }
@@ -822,6 +853,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 }
                 if f.rest {
                     out.rest_keys.insert(f.key.clone());
+                }
+                // Interpreted code can store any string.
+                if f.literal_strings && !interp {
+                    out.literal_string_fields.insert((cid, f.key.clone()));
                 }
                 Some(FactsField {
                     classes,

@@ -55,6 +55,14 @@ pub(crate) fn sign_enabled() -> bool {
     )
 }
 
+/// `PERRY_FACTS_WIDE_KEYS=0` turns the wide keys off.
+pub(crate) fn wide_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_WIDE_KEYS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 /// `(module, offset)` -> the hull of the key over every copy of every site
 /// there that `admit` takes, or `None` once a copy has no interval.
 type Hulls = std::collections::BTreeMap<(u32, u32), Option<(i64, i64)>>;
@@ -97,9 +105,33 @@ pub(crate) fn collect_signs(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     }
 }
 
+/// Fill `ModuleBindings::wide_keys` (module docs).
+pub(crate) fn collect_wide(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
+    if g.m.aborted || !g.m.wide_keys {
+        return;
+    }
+    for ((mi, offset), k) in hulls(g, |_| true, false) {
+        let Some(k) = k.filter(|&k| !int32(k)) else {
+            continue;
+        };
+        let k = if g.m.wide_key_sabotage {
+            (0, k.1.max(0))
+        } else {
+            k
+        };
+        if k.0 < 0 {
+            continue;
+        }
+        if let Some(mb) = bindings.get_mut(mi as usize) {
+            mb.wide_keys.push((offset, k));
+        }
+    }
+}
+
 /// The probe (`PERRY_FACTS_DUMP`): one `# key_sign` line per element site
 /// whose key is an integer Number at every copy, with its interval and the
-/// verdicts (`int32`: no normalization; `nonneg`: no sign test).
+/// verdicts (`int32`: no normalization; `nonneg`: no sign test; `wide`: a
+/// non-negative integer past int32, no normalization, with wide keys on).
 pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
     if !g.m.key_sign {
         return Vec::new();
@@ -118,11 +150,16 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
             let (lo, hi) = k?;
             let (r, w) = ops.get(&(mi, offset)).copied().unwrap_or_default();
             Some(format!(
-                "# key_sign module={mi} site={offset} op={}{} key=[{lo},{hi}] int32={} nonneg={}",
+                "# key_sign module={mi} site={offset} op={}{} key=[{lo},{hi}] int32={} nonneg={}{}",
                 if r { "r" } else { "" },
                 if w { "w" } else { "" },
                 int32((lo, hi)) as u8,
-                (int32((lo, hi)) && lo >= 0) as u8
+                (int32((lo, hi)) && lo >= 0) as u8,
+                if g.m.wide_keys && !int32((lo, hi)) {
+                    format!(" wide={}", (lo >= 0) as u8)
+                } else {
+                    String::new()
+                }
             ))
         })
         .collect()

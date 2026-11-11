@@ -1630,6 +1630,7 @@ pub(crate) fn lower_let(
                     // then left this alias invisible to self-append (#7846).
                     if matches!(init_expr, perry_hir::Expr::LocalGet(_))
                         && !const_array_walk::holds_no_string(ctx, id, &v)
+                        && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
                     {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
@@ -1658,6 +1659,7 @@ pub(crate) fn lower_let(
                 // `start-try`.
                 if matches!(init_expr, perry_hir::Expr::LocalGet(_))
                     && !const_array_walk::holds_no_string(ctx, id, &v)
+                    && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
                 {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }

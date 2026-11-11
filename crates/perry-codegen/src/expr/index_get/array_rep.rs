@@ -168,8 +168,9 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
 }
 
 /// Check mode at the rep-keyed tier: what the read `recv[idx]` (`idx` an
-/// i32) leans on (module docs).
-pub(super) fn witness_read(
+/// i32) leans on (module docs). The rep-keyed store (`expr::index_set_rep`)
+/// leans on the same claim and tests it here before it writes.
+pub(in crate::expr) fn witness_read(
     ctx: &mut FnCtx<'_>,
     recv: &str,
     idx: &str,

@@ -110,3 +110,87 @@ fn the_sabotage_claims_every_int32_key_non_negative() {
     };
     assert_eq!(sign_at(&src, "K[i]", cfg), Some((0, 11)));
 }
+
+/// The wide key interval of the element site whose object starts at `at`
+/// (`ModuleBindings::wide_keys`).
+fn wide_at(src: &str, at: &str, cfg: FactsConfig) -> Option<(i64, i64)> {
+    let offset = src.find(at).expect("site in source") as u32 + 1;
+    let pf = facts_with(src, cfg);
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    mb.wide_keys
+        .iter()
+        .find(|(o, _)| *o == offset)
+        .map(|(_, k)| *k)
+}
+
+#[test]
+fn a_non_negative_integer_key_past_int32_is_wide() {
+    // A uint32.
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[i >>> 0] ?? 0; }}\n\
+         console.log(f(3) + f(-1));"
+    );
+    assert_eq!(
+        wide_at(&src, "K[i >>> 0]", FactsConfig::default()),
+        Some((0, 4_294_967_295))
+    );
+    assert_eq!(sign_at(&src, "K[i >>> 0]", FactsConfig::default()), None);
+    // A counter bounded below by its loop test only.
+    let src = "const xs: number[] = [3, 1, 2];\n\
+               export function f(n: number): number {\n\
+                 let s = 0;\n\
+                 let j = n;\n\
+                 while (j >= 0 && s < 100) { s += xs[j] ?? 0; j--; }\n\
+                 return s;\n\
+               }\n\
+               console.log(f(Number(process.argv[2]) | 0) + f(2));";
+    let wide = wide_at(src, "xs[j]", FactsConfig::default());
+    assert!(matches!(wide, Some((0, hi)) if hi > i64::from(i32::MAX)) || wide.is_none());
+}
+
+#[test]
+fn an_int32_key_and_a_key_that_may_be_negative_are_not_wide() {
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[i & 7] ?? 0; }}\n\
+         console.log(f(3) + f(12));"
+    );
+    assert_eq!(wide_at(&src, "K[i & 7]", FactsConfig::default()), None);
+    // Past int32, and -1 for the first caller.
+    let src = format!(
+        "{TABLE}function f(i: number): number {{ return K[i * 1000000000 - 1] ?? 0; }}\n\
+         console.log(f(5) + f(0));"
+    );
+    assert_eq!(
+        wide_at(&src, "K[i * 1000000000 - 1]", FactsConfig::default()),
+        None
+    );
+    assert_eq!(
+        sign_at(&src, "K[i * 1000000000 - 1]", FactsConfig::default()),
+        None
+    );
+    // A fraction has no interval.
+    let src = format!(
+        "{TABLE}export function f(i: number): number {{ return K[(i >>> 0) / 2] ?? 0; }}\n\
+         console.log(f(3));"
+    );
+    assert_eq!(
+        wide_at(&src, "K[(i >>> 0) / 2]", FactsConfig::default()),
+        None
+    );
+}
+
+#[test]
+fn the_wide_sabotage_claims_a_key_that_may_be_negative() {
+    let src = format!(
+        "{TABLE}function f(i: number): number {{ return K[i * 1000000000 - 1] ?? 0; }}\n\
+         console.log(f(5) + f(0));"
+    );
+    let cfg = FactsConfig {
+        sabotage: Some("widekey".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        wide_at(&src, "K[i * 1000000000 - 1]", cfg),
+        Some((0, 4_999_999_999))
+    );
+}
