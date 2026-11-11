@@ -405,6 +405,17 @@ fn number_store_arm_switch_is_a_cache_input() {
     );
 }
 
+/// The rep-keyed element store: the switch changes every runtime-key store
+/// into an Array the facts give Number elements, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn array_store_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_ARRAY_STORE"),
+        "PERRY_FACTS_ARRAY_STORE must key the compile caches"
+    );
+}
+
 /// Typed `set`: the signed-index switch decides which methods get a typed
 /// body in place of their index clones, so `=0` must never reuse an `=1`
 /// object.
