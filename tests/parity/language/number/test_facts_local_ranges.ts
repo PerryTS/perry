@@ -88,8 +88,8 @@ let s5 = 0;
 for (let i = 0; i < 12 * RUN; i++) s5 = (s5 + boxed(i) + widened(i)) | 0;
 console.log("boxed and widened", s5);
 
-// 6. A typed parameter with a signed interval in a chain, beside an
-// indirect call that passes values outside every direct site's range.
+// 6. Typed parameters with signed intervals in a chain: every call is
+// direct, so both are I32 (`i` in [-1, 7], `j` in [-2, 8]).
 class Lookup {
   t: number[] = [];
   constructor() {
@@ -102,8 +102,26 @@ class Lookup {
 const lk = new Lookup();
 let s6 = 0;
 for (let i = 0; i < 9 * RUN; i++) for (let j = -2; j < 9 * RUN; j++) s6 += lk.get(i - 1, j);
-const viaCall = lk.get;
-console.log("typed chain", s6, viaCall.call(lk, 1000, 5), viaCall.call(lk, 0.5, 1), viaCall.call(lk, -1, 9));
+(lk.t as any)[-3] = 1000;
+for (let j = -2; j < 3 * RUN; j++) s6 += lk.get(-1, j + 3);
+console.log("typed chain", s6);
+
+// 6b. The same helper also called indirectly with a key past every direct
+// site's range, a fraction and a negative chain: its parameters are no I32.
+class LookupLoose {
+  t: number[] = [];
+  constructor() {
+    for (let i = 0; i < 64; i++) this.t.push(i * i);
+  }
+  get(i: number, j: number): number {
+    return this.t[i * 8 + j] ?? -1;
+  }
+}
+const ll = new LookupLoose();
+let s6b = 0;
+for (let i = 0; i < 9 * RUN; i++) for (let j = -2; j < 9 * RUN; j++) s6b += ll.get(i - 1, j);
+const viaCall = ll.get;
+console.log("loose chain", s6b, viaCall.call(ll, 1000, 5), viaCall.call(ll, 0.5, 1), viaCall.call(ll, -1, 9));
 
 // 7. Loop counters keep their own (narrower) facts beside a facts interval.
 function sweep(): number {
