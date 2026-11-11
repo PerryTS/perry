@@ -396,6 +396,18 @@ fn literal_strings_switch_is_a_cache_input() {
     );
 }
 
+/// Bounded loops: the switch decides which loops keep their back-edge polls,
+/// so `=0` must never reuse an `=1` object; the probe line is keyed with it.
+#[test]
+fn bounded_loops_switch_is_a_cache_input() {
+    for name in ["PERRY_FACTS_BOUNDED_LOOPS", "PERRY_LOOP_POLL_DIAG"] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// Wide keys: the switch changes the exported facts and every element site
 /// that converts a wide key without the normalizer, so `=0` must never reuse
 /// an `=1` object.
