@@ -155,13 +155,17 @@ fn an_int32_key_and_a_key_that_may_be_negative_are_not_wide() {
          console.log(f(3) + f(12));"
     );
     assert_eq!(wide_at(&src, "K[i & 7]", FactsConfig::default()), None);
-    // `(i >>> 0) - 1` may be -1.
+    // Past int32, and -1 for the first caller.
     let src = format!(
-        "{TABLE}export function f(i: number): number {{ return K[(i >>> 0) - 1] ?? 0; }}\n\
-         console.log(f(3) + f(0));"
+        "{TABLE}function f(i: number): number {{ return K[i * 1000000000 - 1] ?? 0; }}\n\
+         console.log(f(5) + f(0));"
     );
     assert_eq!(
-        wide_at(&src, "K[(i >>> 0) - 1]", FactsConfig::default()),
+        wide_at(&src, "K[i * 1000000000 - 1]", FactsConfig::default()),
+        None
+    );
+    assert_eq!(
+        sign_at(&src, "K[i * 1000000000 - 1]", FactsConfig::default()),
         None
     );
     // A fraction has no interval.
@@ -178,15 +182,15 @@ fn an_int32_key_and_a_key_that_may_be_negative_are_not_wide() {
 #[test]
 fn the_wide_sabotage_claims_a_key_that_may_be_negative() {
     let src = format!(
-        "{TABLE}export function f(i: number): number {{ return K[(i >>> 0) - 1] ?? 0; }}\n\
-         console.log(f(3) + f(0));"
+        "{TABLE}function f(i: number): number {{ return K[i * 1000000000 - 1] ?? 0; }}\n\
+         console.log(f(5) + f(0));"
     );
     let cfg = FactsConfig {
         sabotage: Some("widekey".to_string()),
         ..Default::default()
     };
     assert_eq!(
-        wide_at(&src, "K[(i >>> 0) - 1]", cfg),
-        Some((0, 4_294_967_294))
+        wide_at(&src, "K[i * 1000000000 - 1]", cfg),
+        Some((0, 4_999_999_999))
     );
 }
