@@ -97,6 +97,8 @@ pub struct FlatExport {
     /// nested `js_create_namespace` call sourced from that module's own
     /// `__perry_ns_<prefix>`. Otherwise `None` (the typical case).
     pub nested_namespace_of: Option<String>,
+    /// The namespace binding retains the defer phase across barrel chains.
+    pub nested_namespace_deferred: bool,
 }
 
 /// Issue #100: resolve a module's exports — flattening `ExportAll`,
@@ -137,6 +139,7 @@ fn same_binding(a: &FlatExport, b: &FlatExport) -> bool {
     a.source_module == b.source_module
         && a.source_local == b.source_local
         && a.nested_namespace_of == b.nested_namespace_of
+        && a.nested_namespace_deferred == b.nested_namespace_deferred
 }
 
 /// The exported bindings of `module_name` (see [`flatten_exports`]).
@@ -187,12 +190,14 @@ where
                         source_module: module_name.to_string(),
                         source_local: local.clone(),
                         namespace_of: None,
+                        namespace_deferred: false,
                     });
                 explicit.push(FlatExport {
                     name: exported.clone(),
                     source_module: origin.source_module,
                     source_local: origin.source_local,
                     nested_namespace_of: origin.namespace_of,
+                    nested_namespace_deferred: origin.namespace_deferred,
                 });
             }
             Export::ReExport {
@@ -214,6 +219,7 @@ where
                             source_module: source.clone(),
                             source_local: imported.clone(),
                             namespace_of: None,
+                            namespace_deferred: false,
                         }
                     });
                 explicit.push(FlatExport {
@@ -221,6 +227,7 @@ where
                     source_module: origin.source_module,
                     source_local: origin.source_local,
                     nested_namespace_of: origin.namespace_of,
+                    nested_namespace_deferred: origin.namespace_deferred,
                 });
             }
             Export::ExportAll { source } => star_sources.push(source),
@@ -230,6 +237,7 @@ where
                     source_module: source.clone(),
                     source_local: String::new(),
                     nested_namespace_of: Some(source.clone()),
+                    nested_namespace_deferred: false,
                 });
             }
         }

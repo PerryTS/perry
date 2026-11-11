@@ -246,6 +246,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
 #[cfg(feature = "web-fetch")]
 pub(super) unsafe fn install_fetch_registrations() {
     extern "C" {
+        fn js_sea_install_blob_factory(factory: usize);
         fn js_register_global_fetch_with_options(
             f: unsafe extern "C" fn(
                 *const perry_runtime::StringHeader,
@@ -291,6 +292,7 @@ pub(super) unsafe fn install_fetch_registrations() {
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
         );
     }
+    js_sea_install_blob_factory(crate::fetch_blob::js_blob_from_raw_bytes_v1 as *const () as usize);
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     // turnloop P6: the abort hook has to be registered next to the fetch hook.
     // Before this, `notify_fetch_abort` only reached the stdlib through a

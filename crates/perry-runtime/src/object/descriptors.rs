@@ -227,6 +227,17 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
     {
         return process_env_own_property(key_value);
     }
+    if let Some(result) =
+        super::deferred_namespace::with_key_target(obj_value, key_value, |obj, key| {
+            own_property_ordinary(obj, key)
+        })
+    {
+        return result;
+    }
+    own_property_ordinary(obj_value, key_value)
+}
+
+unsafe fn own_property_ordinary(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -1094,6 +1105,11 @@ pub(crate) use builders::{
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     let obj_value = crate::process::refresh_process_env(obj_value);
+    if let Some(result) = super::deferred_namespace::with_keys_target(obj_value, |target| {
+        js_object_get_own_property_names(target)
+    }) {
+        return result;
+    }
     // A class object stores everything it owns except `prototype`
     // (`class_object_has_prototype_property`), which was created with it,
     // right after `length` and `name`.

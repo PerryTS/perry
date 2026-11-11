@@ -12,6 +12,19 @@ use crate::string::{js_string_from_bytes, StringHeader};
 /// with POINTER_TAG before handing the result to user code.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_get_own_property_symbols(obj_f64: f64) -> i64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(obj_f64);
+    if let Some(result) =
+        crate::object::deferred_namespace::with_keys_target(receiver.get_nanbox_f64(), |_| {
+            get_own_symbols_ordinary(receiver.get_nanbox_f64())
+        })
+    {
+        return result;
+    }
+    get_own_symbols_ordinary(receiver.get_nanbox_f64())
+}
+
+unsafe fn get_own_symbols_ordinary(obj_f64: f64) -> i64 {
     // A live ordinary shape proves symbol absence from its immutable key
     // prefix. Retain the fresh array and allocation point shared by all
     // callers; only enumeration work is omitted.
