@@ -74,7 +74,7 @@ pub(super) fn family_load(
         return;
     }
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
-        if buffer_member_absent(m, what, &name) {
+        if buffer_member_absent(m, what, &name) || regexp_member_absent(what, &name) {
             m.add_prim(dst, prim::UNDEF);
         } else if let Some(e) = declared_accessor(m, fam, what, &name) {
             // An accessor whose getter the runtime declares (`RegExp
@@ -164,6 +164,18 @@ pub(super) fn family_member(
 /// or `SharedArrayBuffer` (its own prototype, then `Object.prototype`)? The
 /// realm declares those prototypes' string keys exactly and none of them an
 /// `@@iterator`; another symbol key is left undescribed.
+/// Whether a RegExp object's chain lacks key `name`: `RegExp.prototype`
+/// does not own it (`regexp_inherited`; a well-known symbol counts as own)
+/// and no prototype of its realm chain to `null` declares it. ECMA-262
+/// 10.1.8.1 OrdinaryGet: a key on no object of the chain reads `undefined`
+/// (own data fields are the object's field storage, `load_from`; a key a
+/// store wrote onto the chain is `intrinsic_miss`'s).
+fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
+    what == Some("RegExp")
+        && members::regexp_inherited(name)
+            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+}
+
 pub(super) fn buffer_member_absent(m: &Model, what: Option<&str>, name: &str) -> bool {
     let Some(w @ ("DataView" | "ArrayBuffer" | "SharedArrayBuffer")) = what else {
         return false;

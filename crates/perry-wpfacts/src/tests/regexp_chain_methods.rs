@@ -36,6 +36,39 @@ fn src(tail: &str) -> String {
     )
 }
 
+/// A key on no object of a RegExp's chain reads `undefined` (10.1.8.1):
+/// never a builtin function a call could pass the argument to. skinbench:
+/// GLTF json keys (`weights`, `stride`, `indexOf`) read on RegExp literals.
+#[test]
+fn an_absent_regexp_key_reads_undefined() {
+    let pf = whole(&src("const f: any = re.weights; if (typeof f === \"function\") f(cb);"));
+    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+}
+
+/// `indexOf` is `Array.prototype`'s and `String.prototype`'s, not on a
+/// RegExp's chain: the value read is `undefined`, its call throws.
+#[test]
+fn an_absent_regexp_method_value_takes_no_argument() {
+    let pf = whole(&src("const g: any = re.indexOf; try { g(cb); } catch (e) { console.log(\"t\"); }"));
+    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+}
+
+/// Control: a key written onto the chain through ⊤ reads what was stored.
+#[test]
+fn a_chain_key_written_through_top_reads_the_store() {
+    let pf = whole(&src(
+        "(Object.prototype as any).weights = unknown; const f: any = re.weights; f(cb);",
+    ));
+    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+}
+
+/// Control: the absent key's value handed to unknown code with the argument.
+#[test]
+fn an_absent_key_value_given_to_unknown_code_with_the_argument_escapes() {
+    let pf = whole(&src("new Function(process.argv[4])()(re.weights, cb);"));
+    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+}
+
 /// `Object.prototype.toLocaleString` on a RegExp: the arguments are unused.
 #[test]
 fn regexp_tolocalestring_uses_no_argument() {
