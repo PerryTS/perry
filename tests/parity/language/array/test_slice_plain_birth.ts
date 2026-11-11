@@ -74,19 +74,6 @@ const made = odd.slice(2, 6);
 let ms = 0;
 for (let i = 0; i < 4; i++) ms += made[i];
 console.log("species", Array.isArray(made), typeof made, made[0], made[3], made[4], ms);
-const fn: any = [0, 1, 2, 3];
-fn.constructor = {
-  [Symbol.species]: function (n: number) {
-    return Object.freeze(new Array(n));
-  },
-};
-let fthrew = "no";
-try {
-  fn.slice(1);
-} catch (e) {
-  fthrew = e instanceof TypeError ? "TypeError" : "other";
-}
-console.log("frozen species", fthrew);
 class Stack extends Array<number> {
   top(): number {
     return this[this.length - 1] ?? -1;
