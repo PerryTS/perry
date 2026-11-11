@@ -5234,14 +5234,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-db-turnloop"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-tls-turnloop",
-]
-
-[[package]]
 name = "perry-diagnostics"
 version = "0.5.1663"
 dependencies = [
@@ -5716,15 +5708,6 @@ dependencies = [
 name = "perry-tls-session"
 version = "0.5.1663"
 dependencies = [
- "turnloop-tls",
-]
-
-[[package]]
-name = "perry-tls-turnloop"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-tls-session",
  "turnloop-tls",
 ]
 
