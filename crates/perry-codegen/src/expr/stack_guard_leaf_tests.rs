@@ -177,8 +177,21 @@ fn the_dominated_check_pass_reads_the_emitted_check_on_each_target() {
         let ir = String::from_utf8(compile_module(&m, opts).unwrap()).unwrap();
         let emitted = ir.matches("call void @js_stack_overflow()").count();
         assert!(emitted >= 2, "{target}: rec and outer check:\n{ir}");
-        let (found, covering) = crate::inprocess::stack_checks::recognized_checks(&ir);
-        assert_eq!(found, emitted, "{target}: every emitted check is found");
-        assert_eq!(covering, emitted, "{target}: every check covers its body");
+        let seen = crate::inprocess::stack_checks::recognized_checks(&ir);
+        assert_eq!(
+            seen.found, emitted,
+            "{target}: every emitted check is found"
+        );
+        // A check in a block nothing enters (the fallback arm of a call whose
+        // typed arm is always taken) is found but covers nothing.
+        assert!(seen.reachable >= 2, "{target}: {seen:?}");
+        assert_eq!(
+            seen.covering, seen.reachable,
+            "{target}: every reachable check covers its body: {seen:?}"
+        );
+        assert_eq!(
+            seen.dropped, 0,
+            "{target}: no body repeats a check: {seen:?}"
+        );
     }
 }
