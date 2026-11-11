@@ -257,6 +257,8 @@ const ITERATOR: &[(&str, Mem)] = &[
     ("find", Mem::Fn),
     ("flatMap", Mem::Fn),
     ("forEach", Mem::Fn),
+    ("includes", Mem::Fn),
+    ("join", Mem::Fn),
     ("map", Mem::Fn),
     ("next", Mem::Fn),
     ("reduce", Mem::Fn),
