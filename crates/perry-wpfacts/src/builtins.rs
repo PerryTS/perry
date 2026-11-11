@@ -2454,14 +2454,31 @@ fn ns_method_inner(
                 true,
             )
         }
-        (_, n) => unknown_method_proto(
-            m,
-            call,
-            &format!("argument of builtin {ns:?}.{n}"),
-            None,
-            true,
-        ),
+        (_, n) => {
+            let recv = if statics_ignore_this(ns) && members::ns_own_fn(ns, n) {
+                Recv::Ignored
+            } else {
+                Recv::Own
+            };
+            unknown_method_at(m, call, &format!("argument of builtin {ns:?}.{n}"), None, recv)
+        }
     }
+}
+
+/// A namespace none of whose own static functions reads the this value:
+/// `Object` (ECMA-262 20.1.2), `Reflect` (28.1), `Math` (21.3.2) and `JSON`
+/// (25.5). Such a static called as a value with any receiver (a field
+/// holding it, called as its object's method; the ToPrimitive call of
+/// `toString` / `valueOf`) does what the plain call does: the receiver is
+/// given to no one. Not `Array.from` / `of`, `Promise.*` or
+/// `%TypedArray%.from` / `of`, which construct with the this value; and a
+/// member found on the namespace's chain (`Function.prototype.call`) is no
+/// own static.
+fn statics_ignore_this(ns: BuiltinNs) -> bool {
+    matches!(
+        ns,
+        BuiltinNs::Object | BuiltinNs::Reflect | BuiltinNs::Math | BuiltinNs::Json
+    )
 }
 
 /// The realm identity of module member `module.method` (`async_hooks`,
