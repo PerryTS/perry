@@ -108,10 +108,12 @@ impl TokInfo {
 
 /// Nodes no body owns that hold a value only while a builtin runs on it:
 /// the receiver relay of a builtin method's run (`builtins::array_method`,
-/// `builtins::effects`). What the method does with the receiver is its
-/// modeled effect (a store, a result, a callback's argument), judged where
-/// it lands.
-const RELAYS: [&str; 1] = ["arr-recv"];
+/// `builtins::effects`), and the one its species constructor is read
+/// through (`builtins::species_from`: `slice` and its kin read
+/// `constructor`; what they construct gets a length, never the receiver).
+/// What the method does with the receiver is its modeled effect (a store,
+/// a result, a callback's argument), judged where it lands.
+const RELAYS: [&str; 2] = ["arr-recv", "array-species-receiver"];
 
 /// The function a store site is in; `None` for a site the solve made.
 fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {

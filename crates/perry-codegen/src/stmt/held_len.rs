@@ -9,6 +9,10 @@
 //! - `k` starts non-negative, is stepped by the update only and by one
 //!   (`loops::loop_counter_bounds_are_safe`), so `k` is in `[0, length)`
 //!   wherever the body runs.
+//!
+//! The loop gets the hoisted length and the `i32` bound of the walker's
+//! loop, but not its bounded-index descriptor or its receiver validation:
+//! the bounded read of such a loop is `expr::held_len::lower_read` alone.
 
 use perry_hir::{CompareOp, Expr, Stmt};
 
@@ -51,7 +55,16 @@ pub(super) fn classify(
         held_len::diag(ctx, *arr, &format!("refused:{why}"));
         None
     };
-    if !super::loops::array_length_receiver_is_loop_local(ctx, *arr) {
+    // A plain stack local that holds the Array's word. (The walker's
+    // materialization hazard is not asked: the facts prove a plain Array.)
+    let plain_local = ctx.locals.contains_key(arr)
+        && !ctx.boxed_vars.contains(arr)
+        && !ctx.module_globals.contains_key(arr)
+        && !ctx.closure_captures.contains_key(arr)
+        && !ctx.scalar_replaced_arrays.contains_key(arr)
+        && !ctx.array_row_aliases.contains_key(arr)
+        && !ctx.scalar_replaced.contains_key(arr);
+    if !plain_local {
         return refuse("receiver");
     }
     match crate::codegen::facts_rep::local(ctx, *arr) {

@@ -41,7 +41,10 @@ use super::{lower_expr, FnCtx};
 use crate::types::{DOUBLE, I32, I64, I8};
 
 /// One loop that holds the length of `arr` by the facts, with `counter`
-/// its bounded index (`FnCtx::held_lens`).
+/// its bounded index (`FnCtx::held_lens`): the loop tests `counter <
+/// arr.length` before every run of its body, nothing in it assigns either,
+/// and `counter` starts non-negative (`stmt::held_len::classify`), so
+/// `counter` is in `[0, length)` wherever the body reads it.
 #[derive(Clone, Copy, Debug)]
 pub struct HeldLen {
     pub(crate) arr: u32,
@@ -155,10 +158,6 @@ pub(crate) fn lower_read(
     let Some(h) = held(ctx, *arr).filter(|h| h.counter == *idx) else {
         return Ok(None);
     };
-    // The loop's own proof that the counter is in `[0, length)`.
-    if !ctx.receiver_descriptors.has_bounded_index(*arr, *idx) {
-        return Ok(None);
-    }
     let Some(i32_slot) = ctx.i32_counter_slots.get(idx).cloned() else {
         return Ok(None);
     };

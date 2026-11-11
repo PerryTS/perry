@@ -7896,11 +7896,13 @@ fn lower_for_after_init_impl(
         record_loop_array_length_effect(ctx, rejection.arr_id, rejection.effect, false);
     }
     let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|hoist| hoist.arr_id);
-    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|hoist| {
-        matches!(hoist.op, perry_hir::CompareOp::Lt)
-            && hoist.lhs_addend == 0
-            && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
-    });
+    // A facts-held loop's bounded read is `held_len`'s own.
+    let hoisted_index_bounds_are_safe = held_by_facts.is_none()
+        && hoist_classification.is_some_and(|hoist| {
+            matches!(hoist.op, perry_hir::CompareOp::Lt)
+                && hoist.lhs_addend == 0
+                && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        });
     let hoisted_buffer_bounds_width = hoist_classification.and_then(|hoist| {
         hoist.buffer_bounds_width_units.filter(|_| {
             ctx.receiver_descriptors.contains_buffer_view(hoist.arr_id)
@@ -8036,14 +8038,17 @@ fn lower_for_after_init_impl(
     // concrete, validate a numeric receiver once for the dynamic extent of
     // this ordinary loop. Specialized clones keep precedence and own their
     // existing descriptors; this path is for the generic counted-loop tier.
-    let ordinary_receiver_descriptor_installed =
-        if !in_call_free_clone && hoisted_length_slot.is_some() && i32_length_slot.is_some() {
-            hoist_classification.is_some_and(|hoist| {
-                materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
-            })
-        } else {
-            false
-        };
+    let ordinary_receiver_descriptor_installed = if !in_call_free_clone
+        && held_by_facts.is_none()
+        && hoisted_length_slot.is_some()
+        && i32_length_slot.is_some()
+    {
+        hoist_classification.is_some_and(|hoist| {
+            materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
+        })
+    } else {
+        false
+    };
     // b2: cold-arm descriptors for the loop's other array reads.
     let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
     let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
@@ -9238,10 +9243,7 @@ fn classify_for_length_hoist_rejection(
     None
 }
 
-pub(super) fn array_length_receiver_is_loop_local(
-    ctx: &crate::expr::FnCtx<'_>,
-    arr_id: u32,
-) -> bool {
+fn array_length_receiver_is_loop_local(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
     // A typed-array annotation can name a getter-bearing object. Only an
     // owned sealed binding or a proven native view licenses a header length;
     // the generic path must evaluate a possibly observable getter each time.
