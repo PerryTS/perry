@@ -1649,7 +1649,9 @@ impl<'a> Gen<'a> {
                 if self.arr_lengths {
                     self.m.arr_birth_len.insert(tm, elems.len() as i64);
                 }
-                if self.m.const_arrays {
+                // A push-filled birth is born with its final length.
+                let filled = crate::push_fills::born_at(self, e, tm);
+                if self.m.const_arrays && !filled {
                     if let Some(c) = crate::const_arrays::literal_elems(mi, elems) {
                         self.m.arr_const.insert(tm, c);
                     }

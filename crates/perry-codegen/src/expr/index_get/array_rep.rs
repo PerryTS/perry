@@ -230,6 +230,11 @@ pub(in crate::expr) fn witness_read(
         let below = ctx.block().icmp_ult(I32, idx, &read.key_floor.to_string());
         branch(ctx, &below, "arep.verify_stored", &miss_l);
     }
+    if read.below_length {
+        // The key was proven below this Array's own length (`walk_read`).
+        let inside = ctx.block().icmp_ult(I32, idx, &length);
+        branch(ctx, &inside, "arep.verify_walk", &miss_l);
+    }
     // The slot, when the store holds it.
     let stored = ctx.block().icmp_ult(I32, idx, &capacity);
     branch(ctx, &stored, "arep.verify_slot", &next_l);
@@ -244,7 +249,15 @@ pub(in crate::expr) fn witness_read(
     let past = ctx.block().icmp_uge(I32, idx, &length);
     let below = ctx.block().icmp_ult(I32, idx, &floor);
     let must_hole = past;
-    let no_hole = if r.dense { below } else { "false".to_string() };
+    // A dense Array of fixed length has no hole below its own length, which
+    // such a key was just tested against.
+    let no_hole = if read.below_length && r.dense && r.fixed {
+        "true".to_string()
+    } else if r.dense {
+        below
+    } else {
+        "false".to_string()
+    };
     let present = ctx.block().xor(I1, &hole, "true");
     let stale = ctx.block().and(I1, &must_hole, &present);
     let gap = ctx.block().and(I1, &no_hole, &hole);

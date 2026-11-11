@@ -27,6 +27,10 @@
 //!   index below the length is ever a hole, so a permutation moves none
 //!   there; past the birth length it may.
 //!
+//! A push-filled birth (`push_fills`: `k = []` filled by `this.k.push(v)` in
+//! the constructor before anything else can see the Array) is born with its
+//! final length: its fill pushes are the steps of that birth, no appends.
+//!
 //! Every other event makes the length ⊤, and nothing narrows it again:
 //! - a store of `length`, of a numeric name, or under a computed key
 //!   (`arr_len_store`);
@@ -136,11 +140,28 @@ impl Model {
         if !moves {
             return;
         }
+        // A fill push is one of the steps the Array is born in
+        // (`push_fills`): its birth length counts it already.
+        if elem
+            && self
+                .push_fill_of(t)
+                .is_some_and(|f| self.push_fill_sites.get(&site) == Some(&f))
+        {
+            return;
+        }
         // An element store at a site that is no index store appends.
         if elem && matches!(key, Key::Any(_)) {
             self.arr_len_append(t);
         } else {
             self.arr_len_top(t);
+        }
+    }
+
+    /// The fill that births Array `t` (`push_fills`), if one does.
+    pub(crate) fn push_fill_of(&self, t: Tok) -> Option<u32> {
+        match self.toks.get(t as usize) {
+            Some(&TokKind::Obj(tm, _)) => self.push_fill_tmpls.get(&tm).copied(),
+            _ => None,
         }
     }
 

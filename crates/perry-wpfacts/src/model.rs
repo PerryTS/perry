@@ -1494,6 +1494,21 @@ pub struct Model {
     pub(crate) arr_permuted: crate::pts::FxHashSet<NodeId>,
     /// The receiver relays `array_method` makes for a fused fill's call.
     pub rest_fill_relays: Vec<NodeId>,
+    /// Push-filled births (`push_fills`; `PERRY_REST_PUSH_FILL=0` turns them
+    /// off), and the negative control `PERRY_FACTS_SABOTAGE=restpush`.
+    pub push_fills: bool,
+    pub push_fill_sabotage: bool,
+    /// Each fill's final length, by its index (`push_fills::Fills::lens`).
+    pub push_fill_lens: Vec<u32>,
+    /// The templates a fill births (`push_fills::born`), with the fill.
+    pub push_fill_tmpls: FxHashMap<TmplId, u32>,
+    /// The store sites of fill pushes, with the fill: no append and no
+    /// generic use for an Array of that fill.
+    pub push_fill_sites: FxHashMap<SiteId, u32>,
+    /// `new Array()` call sites that are a fill's birth, with the fill.
+    pub push_fill_new_sites: FxHashMap<SiteId, u32>,
+    /// The fill pushes the generator walked.
+    pub(crate) push_fill_pushes: Vec<crate::push_fills::FillPush>,
     /// The templates admitted at rest (`rest_elems::admit`), and why each
     /// other candidate was not (`rest_elems::probe`).
     pub rest_tmpls: crate::pts::FxHashSet<TmplId>,

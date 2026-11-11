@@ -680,12 +680,27 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     }
     let facts = ctx.wpfacts.clone();
     let keys = facts.record_layouts[&r.tmpl].keys.clone();
-    // An absent result leaves its words unwritten: the lanes read then are
-    // never used (every read of the destination tests its presence).
+    // An absent result leaves its words unwritten. No read of the
+    // destination uses a lane then (each tests its presence), but a Number
+    // lane holds a Number at all times (VR-4c: its local carries the field's
+    // Number facts), so an absent result binds the lane's filler.
+    let numeric = facts.record_layouts[&r.tmpl].numeric.clone();
+    let is_present = r.opt.then(|| {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&present);
+        blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64)
+    });
     for (j, field) in dest.fields.iter().enumerate() {
         let blk = ctx.block();
         let slot = blk.gep(DOUBLE, &result_words, &[(I64, &j.to_string())]);
         let lane = blk.load(DOUBLE, &slot);
+        let lane = match &is_present {
+            Some(p) => {
+                let absent = filler(numeric.get(j) == Some(&true));
+                blk.select(I1, p, DOUBLE, &lane, &absent)
+            }
+            None => lane,
+        };
         // The hint is the boxed program's read of this lane.
         let hint = Expr::PropertyGet {
             object: Box::new(Expr::LocalGet(*id)),
@@ -695,16 +710,75 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
         };
         crate::expr::bind_local(ctx, *field, &lane, &hint)?;
     }
-    let state = if r.opt {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(&present);
-        let is_true = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
-        blk.select(I1, &is_true, DOUBLE, &bool_lit(true), &undefined_lit())
-    } else {
-        bool_lit(true)
+    let state = match &is_present {
+        Some(p) => ctx
+            .block()
+            .select(I1, p, DOUBLE, &bool_lit(true), &undefined_lit()),
+        None => bool_lit(true),
     };
     crate::expr::bind_local(ctx, *id, &state, &Expr::Undefined)?;
+    // VR-4c: the lanes are bound and the record is never absent, so the
+    // boxed program's key-by-key read that follows never runs.
+    BOUND.with(|b| *b.borrow_mut() = (!r.opt).then(|| (ctx.func.name.clone(), *id)));
     Ok(Some(state))
+}
+
+thread_local! {
+    /// The aggregate temporary `try_lower_agg_set` just bound to a
+    /// never-absent record's lanes, with its function: the rewrite's next
+    /// expression on it is `agg === true ? undefined : <read agg key by key>`
+    /// (`value_records::Rewriter::call_into`), whose else arm is the boxed
+    /// result's.
+    static BOUND: std::cell::RefCell<Option<(String, u32)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// VR-4c: `agg === true ? undefined : <boxed read>` right after the typed
+/// call bound `agg`'s never-absent lanes: `undefined`, nothing lowered for
+/// the boxed read. Any other expression forgets the binding.
+pub(crate) fn try_fold_bound_agg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<String> {
+    let bound = BOUND.with(|b| b.borrow().clone())?;
+    match expr {
+        Expr::Conditional {
+            condition,
+            then_expr,
+            ..
+        } => {
+            let Expr::Compare {
+                op: perry_hir::CompareOp::Eq,
+                left,
+                right,
+            } = condition.as_ref()
+            else {
+                return None;
+            };
+            let hit = matches!(left.as_ref(), Expr::LocalGet(id) if *id == bound.1)
+                && matches!(right.as_ref(), Expr::Bool(true))
+                && matches!(then_expr.as_ref(), Expr::Undefined)
+                && ctx.func.name == bound.0;
+            if hit {
+                BOUND.with(|b| *b.borrow_mut() = None);
+                return Some(undefined_lit());
+            }
+            None
+        }
+        // The presence write between the call and the read keeps it.
+        Expr::LocalSet(_, v)
+            if matches!(v.as_ref(), Expr::Compare { left, .. }
+                if matches!(left.as_ref(), Expr::LocalGet(id) if *id == bound.1)) =>
+        {
+            None
+        }
+        // A sequence lowers its parts through the dispatch.
+        Expr::Sequence(_)
+        | Expr::LocalGet(_)
+        | Expr::Undefined
+        | Expr::Bool(_)
+        | Expr::Compare { .. } => None,
+        _ => {
+            BOUND.with(|b| *b.borrow_mut() = None);
+            None
+        }
+    }
 }
 
 /// A typed call of a record plan in a value position: its value, when it

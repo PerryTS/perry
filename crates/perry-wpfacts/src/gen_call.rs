@@ -689,6 +689,12 @@ impl<'a> Gen<'a> {
             if let Some(k) = birth_len {
                 self.m.arr_len_at_site.entry(site).or_default().len = Some(k);
             }
+            // A push-filled `new Array()` (`push_fills`): born empty, so
+            // without a hole, and with its fill's final length.
+            if let Some(fill) = self.push_fill_new.take() {
+                self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                self.m.push_fill_new_sites.insert(site, fill);
+            }
             // The fused fill (`call_with`) marks this birth after it.
             self.new_array_site = Some(site);
         }
