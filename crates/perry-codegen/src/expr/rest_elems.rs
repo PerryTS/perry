@@ -3,9 +3,10 @@
 //!
 //! wpfacts (`rest_elems`) admits an Array template at rest when every
 //! element of every Array it births is an int32 Number with int demand, the
-//! Array's length is fixed and dense below a floor (its storage never grows,
-//! moves or holds a hole), and nothing but the element sites below touches
-//! its elements. Such an Array holds each element as an I32 word
+//! Array's length is fixed, or moves only inside the capacity its birth
+//! reserves, and dense below a floor (its storage never grows or moves and
+//! holds no hole below the floor), and nothing but the element sites below
+//! touches its elements. Such an Array holds each element as an I32 word
 //! `INT32_TAG | (u32)v`. The facts name the sites by `element_offset`
 //! (`ElisionFacts::rest_reads` / `rest_writes`) and the births by their
 //! `fill` call's offset (`rest_births`); every receiver such a site may see
@@ -13,7 +14,14 @@
 //!
 //! - **Birth** (`encode_birth`): `new Array(k).fill(v)` lowers as it always
 //!   does; its result is handed to `js_array_rest_encode`, which encodes the
-//!   words and marks the header (`perry-runtime` `layout_slot`).
+//!   words and marks the header (`perry-runtime` `layout_slot`). A birth
+//!   the facts give a capacity (`rest_reserves`, wpfacts `rest_elems::
+//!   reserve`: its length may move inside a small proven hull) is handed to
+//!   `js_array_rest_reserve` instead, which first reserves that many slots.
+//!   Every store the facts allow then lands below the capacity, where the
+//!   cold `js_array_rest_set` lengthens the Array in place, so the storage
+//!   never moves (`FactsArrRep::unmoved`). `PERRY_REST_CAPACITY=0` turns the
+//!   reservation off in the facts (no such Array is at rest).
 //! - **Read** (`lower_read`, `lower_read_i32`, `read_at`): a key that is an
 //!   integer in `[0, floor)` loads the low half of the slot at
 //!   `h + 24 + 8 * key` (the floor is defined, so the elements start behind
@@ -50,8 +58,10 @@
 //! Check mode (`PERRY_VERIFY_FACTS=1`): every at-rest load first tests that
 //! the slot's high half is `INT32_TAG`, and every store that its value is an
 //! int32 Number that is not `-0`; a miss reports the false proof and exits
-//! 86 (`Fact::ArrayRep`). Negative control `PERRY_FACTS_SABOTAGE=restraw`:
-//! a store writes the value's double word, unencoded.
+//! 86 (`Fact::ArrayRep`). A cold store first tests that its key is below
+//! the capacity ("never past capacity", `witness_capacity`). Negative
+//! controls `PERRY_FACTS_SABOTAGE=restraw`: a store writes the value's double
+//! word, unencoded; `restcap`: a birth reserves nothing.
 
 use anyhow::Result;
 use perry_hir::{Expr, Stmt};
@@ -252,15 +262,46 @@ pub(crate) fn is_birth(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     property == "fill" && offset != 0 && ctx.wpfacts.rest_births.contains(&offset)
 }
 
-/// The at-rest Array `arr` (a boxed word) is born: encode its words.
-pub(crate) fn encode_birth(ctx: &mut FnCtx<'_>, arr: &str) -> String {
+/// The capacity the at-rest birth `e` (`is_birth`) reserves, if any.
+pub(crate) fn birth_reserve(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
+    let Expr::Call {
+        callee,
+        byte_offset,
+        ..
+    } = e
+    else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        byte_offset: member,
+        ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let offset = if *member != 0 { *member } else { *byte_offset };
+    ctx.wpfacts.rest_reserves.get(&offset).copied()
+}
+
+/// The at-rest Array `arr` (a boxed word) is born: reserve `reserve` slots
+/// when the facts give a capacity (the head may be a new one), and encode
+/// its words. The value is the born Array.
+pub(crate) fn encode_birth(ctx: &mut FnCtx<'_>, arr: &str, reserve: Option<u32>) -> String {
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "rest": "birth" }),
+        || serde_json::json!({ "rest": "birth", "reserve": reserve }),
     );
     crate::facts_consumed::used();
-    ctx.block()
-        .call(DOUBLE, "js_array_rest_encode", &[(DOUBLE, arr)])
+    match reserve.filter(|_| !sabotaged("restcap")) {
+        Some(cap) => ctx.block().call(
+            DOUBLE,
+            "js_array_rest_reserve",
+            &[(DOUBLE, arr), (I32, &cap.to_string())],
+        ),
+        None => ctx
+            .block()
+            .call(DOUBLE, "js_array_rest_encode", &[(DOUBLE, arr)]),
+    }
 }
 
 /// An expression of `stmts` / `exprs` (closures aside) is an at-rest site.
@@ -556,6 +597,9 @@ fn store_slot(
     ctx.block().br(&merge_l);
 
     ctx.current_block = cold;
+    if crate::verify_facts::enabled() {
+        witness_capacity(ctx, arr, key);
+    }
     ctx.block().call_void(
         "js_array_rest_set",
         &[(DOUBLE, arr), (DOUBLE, key), (DOUBLE, val)],
@@ -611,6 +655,33 @@ fn witness_value(ctx: &mut FnCtx<'_>, val: &str) {
         &ok,
         val,
         "rest elem: an at-rest store of a value that is no int32",
+    );
+}
+
+/// Check mode: the key `key` (a double) of a cold store is below the
+/// capacity of `arr`. The facts bound every index store of an at-rest Array
+/// by the capacity its birth has (its fixed length, or the reservation), so
+/// no store reallocates the storage. A negative key names a property, no
+/// slot.
+fn witness_capacity(ctx: &mut FnCtx<'_>, arr: &str, key: &str) {
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::ArrayRep,
+        || serde_json::json!({ "rest": "capacity" }),
+    );
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(arr);
+    let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+    let ptr = blk.inttoptr(I64, &handle);
+    let cap_ptr = blk.gep(crate::types::I8, &ptr, &[(I64, "4")]);
+    let cap = blk.load(I32, &cap_ptr);
+    let cap = blk.uitofp(I32, &cap, DOUBLE);
+    // Unordered or below: a NaN key is no index either.
+    let ok = blk.fcmp("ult", key, &cap);
+    miss_unless(
+        ctx,
+        &ok,
+        arr,
+        "rest elem: an at-rest store at or past the capacity",
     );
 }
 

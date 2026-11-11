@@ -142,6 +142,7 @@ def main():
         ("rest-lane-raw-negative", "restlaneraw", "field rep"),
         ("rest-held-negative", "restheld", "field read call"),
         ("rest-rep-negative", "restrep", "array rep"),
+        ("rest-cap-negative", "restcap", "array rep"),
         ("zero-sign-negative", "zerosign", "zero sign"),
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
     ]:
@@ -172,10 +173,14 @@ def main():
     # claims every instance of an admitted template at birth; the facts say
     # its identity is never compared, so a compiled identity compare that
     # sees a claimed operand reports "value record identity".
-    for name, wrong_claim in [
-        ("vr-ident-negative", "vrident"),
-        ("vr-switch-negative", "vrswitch"),
-        ("vr-inline-negative", "vrinline"),
+    # VR-3a: a record binding is its fields, and every other use takes a
+    # materialized copy, claimed in check mode: a store into a copy reports
+    # "value record mutation".
+    for name, wrong_claim, predicate in [
+        ("vr-ident-negative", "vrident", "value record identity"),
+        ("vr-switch-negative", "vrswitch", "value record identity"),
+        ("vr-inline-negative", "vrinline", "value record identity"),
+        ("vr-write-negative", "vrwrite", "value record mutation"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:
@@ -184,7 +189,7 @@ def main():
             observed = observe(exe, e)
             if claim:
                 value = report(observed)
-                assert value["predicate"] == "value record identity", value
+                assert value["predicate"] == predicate, value
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)

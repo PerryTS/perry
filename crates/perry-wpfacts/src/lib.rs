@@ -527,6 +527,7 @@ fn generate<'a>(
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_capacity = rest_elems::capacity_enabled();
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");

@@ -520,10 +520,12 @@ pub struct ModuleBindings {
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call
-    /// offsets of the at-rest births. Sorted.
+    /// offsets of the at-rest births, and of those that reserve a capacity
+    /// with it (`rest_elems::reserve`). Sorted.
     pub rest_reads: Vec<(u32, u32)>,
     pub rest_writes: Vec<(u32, u32)>,
     pub rest_births: Vec<u32>,
+    pub rest_reserves: Vec<(u32, u32)>,
     /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
     /// byte offset) whose receiver may hold an instance with an I32 lane at
     /// the read's key, with the lane's slot when every receiver value is such

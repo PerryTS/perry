@@ -264,6 +264,31 @@ fn an_at_rest_receiver_decodes_its_i32_word() {
 }
 
 #[test]
+fn an_at_rest_array_with_a_reserved_capacity_never_moves() {
+    // The capacity reservation: an at-rest Array whose length may move
+    // (`fixed` false) keeps its storage, so a read in the floor has no
+    // forwarding test, no bound and no cold arm, and one outside it only
+    // the floor bound, as with a fixed length.
+    let rest = FactsArrRep {
+        elem: FactsElemRep::I32,
+        fixed: false,
+        im: false,
+        at_rest: true,
+        ..BOARD
+    };
+    assert!(rest.unmoved());
+    let ir = rep_ir(rest, Some((0, 127)), true);
+    let f = body(&ir, "__at").join("\n");
+    assert!(!forwarding_test(&f), "no forwarding test\n{f}");
+    assert!(!f.contains("arep."), "in the floor: no test\n{f}");
+    let ir = rep_ir(rest, Some((0, 255)), true);
+    let f = body(&ir, "__at").join("\n");
+    assert!(!forwarding_test(&f), "no forwarding test\n{f}");
+    assert!(f.contains("arep.inside") && bound_128(&f), "{f}");
+    assert!(f.contains("js_array_rest_get"), "the accessor\n{f}");
+}
+
+#[test]
 fn a_growable_array_keeps_its_forwarding_test() {
     let rep = FactsArrRep {
         fixed: false,

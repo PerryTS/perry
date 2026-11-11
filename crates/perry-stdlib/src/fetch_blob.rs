@@ -214,6 +214,37 @@ pub unsafe extern "C" fn js_blob_new(parts: f64, content_type: f64) -> f64 {
     handle_to_f64(alloc_blob(BlobData::blob(body, type_str)))
 }
 
+/// Build a Blob handle from raw bytes supplied by the SEA asset registry.
+/// This keeps SEA blobs in the same registry as `new Blob()` and
+/// `URL.createObjectURL()`.
+#[no_mangle]
+pub unsafe extern "C" fn js_blob_from_raw_bytes_v1(
+    bytes: *const u8,
+    bytes_len: usize,
+    content_type: *const u8,
+    content_type_len: usize,
+) -> f64 {
+    let body = if bytes_len == 0 {
+        Vec::new()
+    } else if bytes.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    } else {
+        std::slice::from_raw_parts(bytes, bytes_len).to_vec()
+    };
+    let raw_type = if content_type_len == 0 {
+        String::new()
+    } else if content_type.is_null() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(content_type, content_type_len))
+            .into_owned()
+    };
+    handle_to_f64(alloc_blob(BlobData::blob(
+        body,
+        normalize_blob_type(&raw_type),
+    )))
+}
+
 /// `new File(parts, name, { type, lastModified })` — same registry as
 /// Blob, with `name` / `last_modified_ms` populated so
 /// `js_file_name` / `js_file_last_modified` can read them back. The

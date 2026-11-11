@@ -587,6 +587,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.rest_reads.extend(mb.rest_reads.iter().copied());
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
+        out.rest_reserves.extend(mb.rest_reserves.iter().copied());
         out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
@@ -670,6 +671,22 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 }
             }
             out.local_reps.insert(*id, facts_rep(b.rep));
+            // DESIGN-p4l4 VR-3a: a binding of one admitted value record is
+            // its fields by value (`perry_codegen::value_records`). The
+            // template's literal must be born in this module (its class is
+            // this module's, or it stays an `Expr::Object`).
+            if let perry_wpfacts::Rep::Record(r) = b.rep {
+                if let Some(layout) = record_layout(pf, path, r.tmpl) {
+                    out.record_layouts.insert(r.tmpl, layout);
+                    out.record_locals.insert(
+                        *id,
+                        perry_codegen::FactsRecRep {
+                            tmpl: r.tmpl,
+                            opt: r.opt,
+                        },
+                    );
+                }
+            }
             if b.length_number {
                 out.length_number_inputs.insert(*id);
             }
@@ -1090,6 +1107,28 @@ fn element_reads_enabled() -> bool {
         std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// The layout codegen lowers an admitted value record of template `tmpl`
+/// with, when its literal is born in module `path` (DESIGN-p4l4 VR-3a).
+fn record_layout(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: &str,
+    tmpl: u32,
+) -> Option<perry_codegen::FactsRecordLayout> {
+    let t = match pf.templates.get(tmpl as usize) {
+        Some(t) if t.id == tmpl => t,
+        _ => pf.templates.iter().find(|t| t.id == tmpl)?,
+    };
+    let layout = t.record.as_ref().ok()?;
+    let module = pf.module_paths.iter().position(|p| p == path)?;
+    if t.module != Some(module as u32) {
+        return None;
+    }
+    Some(perry_codegen::FactsRecordLayout {
+        class_id: t.class_id,
+        keys: layout.fields.iter().map(|(k, _)| k.clone()).collect(),
+    })
 }
 
 /// wpfacts `Rep` as codegen's `FactsRep`, one to one.
