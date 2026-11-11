@@ -769,7 +769,11 @@ pub(crate) fn try_fold_bound_agg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<Str
             None
         }
         // A sequence lowers its parts through the dispatch.
-        Expr::Sequence(_) | Expr::LocalGet(_) | Expr::Undefined | Expr::Bool(_) | Expr::Compare { .. } => None,
+        Expr::Sequence(_)
+        | Expr::LocalGet(_)
+        | Expr::Undefined
+        | Expr::Bool(_)
+        | Expr::Compare { .. } => None,
         _ => {
             BOUND.with(|b| *b.borrow_mut() = None);
             None

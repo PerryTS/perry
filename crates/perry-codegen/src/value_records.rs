@@ -292,9 +292,13 @@ pub(crate) fn rewrite_module(
     // leaves them untyped).
     match lane_facts() {
         LaneFacts::None => {}
-        LaneFacts::Number => elision.number_inputs.extend(abi.number_lanes.iter().copied()),
+        LaneFacts::Number => elision
+            .number_inputs
+            .extend(abi.number_lanes.iter().copied()),
         LaneFacts::All => {
-            elision.number_inputs.extend(abi.number_lanes.iter().copied());
+            elision
+                .number_inputs
+                .extend(abi.number_lanes.iter().copied());
             elision.int32_inputs.extend(abi.int32_lanes.iter().copied());
         }
     }
