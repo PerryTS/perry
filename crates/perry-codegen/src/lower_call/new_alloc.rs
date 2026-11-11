@@ -169,6 +169,8 @@ pub(super) struct InstanceAlloc {
     pub(super) constructor_stores_ready: bool,
     /// True only on the arm that already wrote every constructor field.
     pub(super) fields_written: Option<String>,
+    /// An image birth's argument re-read failed to lower.
+    pub(super) image_error: Option<anyhow::Error>,
 }
 
 /// Fresh(parent) for a complete constructor prologue: all argument evaluation
@@ -180,12 +182,12 @@ pub(super) fn prove_fresh_prologue(alloc: &InstanceAlloc) -> bool {
     alloc.fresh_nursery
 }
 
-pub(super) struct ConstructorBirth {
+pub(super) struct ConstructorBirth<'g, 'a> {
     /// None keeps the existing finite-number guard and constructor stores.
     pub(super) fields: Option<Vec<(u32, String)>>,
     /// An image birth (`new/birth_image.rs`): the nursery arm writes these
     /// words instead of calling the shared birth.
-    pub(super) image: Option<super::new::birth_image::ImageValues>,
+    pub(super) image: Option<super::new::birth_image::ImageValues<'g, 'a>>,
 }
 
 /// The number of distinct static keys the constructor chain of `class` stores
@@ -261,11 +263,12 @@ pub(super) fn emit_instance_alloc(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     class: &Class,
-    constructor_birth: Option<&ConstructorBirth>,
+    constructor_birth: Option<&ConstructorBirth<'_, '_>>,
 ) -> InstanceAlloc {
     let mut constructor_stores_ready = false;
     let mut fields_written = None;
     let mut fresh_nursery = false;
+    let mut image_error = None;
     let handle = emit_instance_alloc_inner(
         ctx,
         class_name,
@@ -274,12 +277,14 @@ pub(super) fn emit_instance_alloc(
         constructor_birth,
         &mut fields_written,
         &mut fresh_nursery,
+        &mut image_error,
     );
     InstanceAlloc {
         handle,
         constructor_stores_ready,
         fields_written,
         fresh_nursery,
+        image_error,
     }
 }
 
@@ -312,9 +317,10 @@ fn emit_instance_alloc_inner(
     class_name: &str,
     class: &Class,
     constructor_stores_ready: &mut bool,
-    constructor_birth: Option<&ConstructorBirth>,
+    constructor_birth: Option<&ConstructorBirth<'_, '_>>,
     fields_written: &mut Option<String>,
     fresh_nursery: &mut bool,
+    image_error: &mut Option<anyhow::Error>,
 ) -> String {
     // Compute total field count including inherited parent fields.
     // The runtime allocates at least 8 inline slots regardless, so this
@@ -839,38 +845,36 @@ fn emit_instance_alloc_inner(
             crate::expr::inline_birth::arena_store(blk, &arena, &new_offset, &offset_field_ptr);
             let data_ptr = blk.load(PTR, &state_ptr);
             let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            // Birth cost: an image birth writes the header and every slot's
-            // final word here.
-            let fast_handle = if let Some(image) = image {
-                super::new::birth_image::emit(
-                    ctx,
-                    image,
-                    &raw_fast,
-                    &header_image,
-                    birth_rep,
-                    total_size,
-                )
-            } else if let Some(slots) = compact_slots {
-                crate::expr::inline_birth::fixed_class(
-                    ctx,
-                    &raw_fast,
-                    &header_image,
-                    birth_rep,
-                    slots,
-                    complete_birth.unwrap().fields.as_deref(),
-                )
-            } else {
-                crate::expr::inline_birth::class(
-                    ctx,
-                    &raw_fast,
-                    &state_ptr,
-                    &header_image,
-                    birth_rep,
-                    true,
-                )
-            };
-            let fast_pred = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
+            // Birth cost: an image birth writes its header here and joins
+            // its slots block (`birth_image`).
+            let image_header = image.map(|_| {
+                super::new::birth_image::emit_header(ctx, &raw_fast, &header_image, total_size)
+            });
+            let mut arms: Vec<(String, String, bool)> = Vec::new();
+            if image.is_none() {
+                let fast_handle = if let Some(slots) = compact_slots {
+                    crate::expr::inline_birth::fixed_class(
+                        ctx,
+                        &raw_fast,
+                        &header_image,
+                        birth_rep,
+                        slots,
+                        complete_birth.unwrap().fields.as_deref(),
+                    )
+                } else {
+                    crate::expr::inline_birth::class(
+                        ctx,
+                        &raw_fast,
+                        &state_ptr,
+                        &header_image,
+                        birth_rep,
+                        true,
+                    )
+                };
+                let fast_pred = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+                arms.push((fast_handle, fast_pred, true));
+            }
             ctx.current_block = slow_idx;
             // A construction whose bump fits but whose values fail the number
             // test hands its committed bump to the shared birth; one that does
@@ -894,27 +898,43 @@ fn emit_instance_alloc_inner(
                 birth_rep,
                 false,
             );
-            if image.is_some() {
-                // I32 at rest (PR C): the constructor this arm runs stores
-                // into lanes that start as the word of 0; the image arm
-                // wrote its lanes' final words.
+            if let (Some(image), Some(header)) = (image, image_header) {
+                // I32 at rest (PR C): the constructor a failed number test
+                // runs stores into lanes that start as the word of 0.
                 crate::expr::rest_fields::emit_birth_fill(ctx, class_name, &slow_handle, i32_lanes);
+                match super::new::birth_image::emit_slots(
+                    ctx,
+                    image,
+                    header,
+                    &raw_fast,
+                    &slow_handle,
+                    birth_rep,
+                    total_size,
+                    &merge_label,
+                ) {
+                    Ok(image_arms) => arms.extend(image_arms),
+                    Err(error) => *image_error = Some(error),
+                }
+            } else {
+                let slow_pred = ctx.block().label.clone();
+                ctx.block().br(&merge_label);
+                arms.push((slow_handle, slow_pred, false));
             }
-            let slow_pred = ctx.block().label.clone();
-            ctx.block().br(&merge_label);
             ctx.current_block = merge_idx;
             if image.is_some()
                 || compact_slots.is_some() && complete_birth.unwrap().fields.is_some()
             {
-                *fields_written = Some(ctx.block().phi(
-                    crate::types::I1,
-                    &[("true", &fast_pred), ("false", &slow_pred)],
-                ));
+                let written: Vec<(&str, &str)> = arms
+                    .iter()
+                    .map(|(_, pred, wrote)| (if *wrote { "true" } else { "false" }, pred.as_str()))
+                    .collect();
+                *fields_written = Some(ctx.block().phi(crate::types::I1, &written));
             }
-            let handle = ctx.block().phi(
-                I64,
-                &[(&fast_handle, &fast_pred), (&slow_handle, &slow_pred)],
-            );
+            let handles: Vec<(&str, &str)> = arms
+                .iter()
+                .map(|(handle, pred, _)| (handle.as_str(), pred.as_str()))
+                .collect();
+            let handle = ctx.block().phi(I64, &handles);
             // I32 at rest (PR C): each I32 lane starts as the word of 0.
             if image.is_none() {
                 crate::expr::rest_fields::emit_birth_fill(ctx, class_name, &handle, i32_lanes);
