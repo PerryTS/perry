@@ -323,6 +323,7 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::reserve_capacity;
 #[cfg(test)]
 pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};

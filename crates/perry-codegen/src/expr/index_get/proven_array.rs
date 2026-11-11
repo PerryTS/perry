@@ -8,11 +8,12 @@
 //! plain program Arrays: each is a `GC_TYPE_ARRAY` for its whole life, with
 //! no element descriptor and no deleted element (no hard marker), `length`
 //! and `capacity` of at least `r.floor`, no hole below the floor when
-//! `r.dense`, storage that never moves when `r.fixed`, and, when its length
+//! `r.dense`, storage that never moves when `r.unmoved()` (a fixed length,
+//! or an at-rest Array's reserved capacity), and, when its length
 //! is defined (which `r.floor > 0` implies), elements that start at the
 //! front of its allocation. So the read needs no band test and no type
 //! test, and:
-//! - the forwarding test only when the storage may move (`!r.fixed`);
+//! - the forwarding test only when the storage may move (`!r.unmoved()`);
 //! - no bound when the key's interval lies in `[0, r.floor)` (wpfacts
 //!   `element_keys`), else `idx <u capacity`: the runtime keeps
 //!   `[length, capacity)` hole-filled (`array::storage`), so a slot past
@@ -120,7 +121,7 @@ impl RepRead {
     /// The read cannot miss: no test, no cold arm. A present at-rest slot
     /// holds an int32 Number (`expr::rest_elems`).
     pub(crate) fn total(self, numeric: bool) -> bool {
-        self.rep.fixed
+        self.rep.unmoved()
             && self.in_floor
             && self.rep.dense
             && (!numeric || self.number || self.rep.at_rest)
@@ -376,7 +377,7 @@ fn lower_rep(
     };
     let bits = ctx.block().bitcast_double_to_i64(arr_box);
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    if !r.fixed {
+    if !r.unmoved() {
         // Growth moves the storage and forwards this header.
         let word = super::guarded_array::emit_array_guard_word(ctx.block(), &handle);
         let moved = ctx.block().and(I32, &word, FORWARDED_I32);
@@ -464,7 +465,7 @@ fn lower_rep(
 }
 
 /// The cold read of an at-rest Array (I32 at rest B2): a key at or past its
-/// fixed length names no own slot, so it is the shared cold read a double
+/// length names no own slot, so it is the shared cold read a double
 /// Array's miss takes (it can meet no element word); a key below the length
 /// is an element, read through the accessor (`rest_elems::cold_read`).
 fn rest_cold(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, numeric: bool) -> String {

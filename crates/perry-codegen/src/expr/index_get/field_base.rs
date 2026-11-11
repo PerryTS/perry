@@ -127,7 +127,7 @@ pub(crate) fn emit_install(ctx: &mut FnCtx<'_>, base: &FieldBase) -> Result<()> 
     let boxed = super::lower_expr(ctx, &base.read)?;
     let bits = ctx.block().bitcast_double_to_i64(&boxed);
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    let head = if base.rep.fixed || sabotaged("arrbase") {
+    let head = if base.rep.unmoved() || sabotaged("arrbase") {
         handle
     } else {
         live_head(ctx, &handle)

@@ -8,7 +8,10 @@
 //! puts the word in the `0x7FFE` band, which the collector never takes for a
 //! pointer (`gc::layout_pointer_bearing_bits`), so the scanner, the layout
 //! notes, the copying collector and the conservative stack scan need no
-//! change. A hole stays `TAG_HOLE` (an at-rest Array never has one).
+//! change. A hole stays `TAG_HOLE`: an at-rest Array has none below its
+//! floor, and one whose length may move (the capacity reservation below) has
+//! them in `[length, capacity)` and in the gap a store past the length
+//! leaves.
 //!
 //! The birth is the fused fill `new Array(k).fill(v)`; codegen calls
 //! [`js_array_rest_encode`] on the filled Array, which encodes each word,
@@ -17,6 +20,18 @@
 //! layout bits (an I32 word is no raw double, so no raw-f64 tier admits the
 //! Array) and declares the payload pointer free. Proven code never reads the
 //! header bit: the facts are the authority. The accessor reads it.
+//!
+//! **The capacity reservation** (wpfacts `rest_elems::reserve`). A birth
+//! whose length may move inside a small proven hull `[lo, hi]` calls
+//! [`js_array_rest_reserve`] instead: it gives the fresh Array `hi` slots
+//! (lengthened where it stands, else one exact replacement before anyone
+//! holds it), then encodes. Every store the facts allow has a key below
+//! `hi`, so [`js_array_rest_set`] lengthens the Array in place: the slot is
+//! already there, the gap is already holes, and only `length` moves. The
+//! storage is never reallocated, so no at-rest head is ever forwarded and a
+//! slot below the floor keeps its address. A store at or past the capacity
+//! is a false proof ("never past capacity"). A hole below the length reads
+//! through the shared cold read (`undefined`, or what a prototype answers).
 //!
 //! **Who reads an at-rest Array.** The proven element sites codegen lowers
 //! with the encoding (`perry-codegen` `expr::rest_elems`), and the cold arms
@@ -258,9 +273,36 @@ pub extern "C" fn js_array_rest_encode(arr: f64) -> f64 {
     arr
 }
 
-/// The cold read of an at-rest element site: an element by its index, any
-/// other key through the generic `Get`, whose INT32 word (an element named
-/// by a string key) is decoded.
+/// The birth of an at-rest Array whose length may move (module docs):
+/// reserve `cap` slots, then [`js_array_rest_encode`] on the head that has
+/// them. Returns that head. May collect (the replacement arm allocates).
+#[no_mangle]
+pub extern "C" fn js_array_rest_reserve(arr: f64, cap: u32) -> f64 {
+    let a = handle(arr);
+    if a.is_null() {
+        return arr;
+    }
+    let head = unsafe { reserve(a, cap) };
+    if head == a {
+        return js_array_rest_encode(arr);
+    }
+    js_array_rest_encode(crate::value::js_nanbox_pointer(head as i64))
+}
+
+/// The head of `a` with at least `cap` slots (`array::reserve_capacity`).
+///
+/// # Safety
+/// `a` is a live array head.
+unsafe fn reserve(a: *mut ArrayHeader, cap: u32) -> *mut ArrayHeader {
+    if gc_header(a).is_none() || cap <= (*a).capacity {
+        return a;
+    }
+    crate::array::reserve_capacity(a, cap)
+}
+
+/// The cold read of an at-rest element site: an element by its index (a
+/// hole is the shared cold read's miss), any other key through the generic
+/// `Get`, whose INT32 word (an element named by a string key) is decoded.
 #[no_mangle]
 pub extern "C" fn js_array_rest_get(arr: f64, key: f64) -> f64 {
     let a = handle(arr);
@@ -268,12 +310,18 @@ pub extern "C" fn js_array_rest_get(arr: f64, key: f64) -> f64 {
         unsafe {
             let len = elem_len(a);
             if let Some(i) = index_below(key, len.min((*a).capacity)) {
-                return f64::from_bits(elem_get(a, i));
+                let w = elem_get(a, i);
+                // A hole (the gap a store past the length left) is no own
+                // element: the shared cold read's miss, as below.
+                if w != crate::value::TAG_HOLE || !is_i32_layout(a) {
+                    return f64::from_bits(w);
+                }
+                return crate::array::perry_array_read_cold_shared(arr, key, 4);
             }
-            // I32 at rest B2: an integer index at or past the fixed length
-            // names no own slot (no store grows an at-rest Array), so it is
-            // the shared cold read's absent-slot miss (control 4): `undefined`
-            // unless a prototype or an element descriptor may answer.
+            // I32 at rest B2: an integer index at or past the length names
+            // no own slot, so it is the shared cold read's absent-slot miss
+            // (control 4): `undefined` unless a prototype or an element
+            // descriptor may answer.
             if is_i32_layout(a)
                 && key >= f64::from(len)
                 && key < f64::from(u32::MAX)
@@ -291,25 +339,54 @@ pub extern "C" fn js_array_rest_get(arr: f64, key: f64) -> f64 {
 }
 
 /// The cold store of an at-rest element site: an element by its index,
-/// encoded; any other key through the generic `Set` (no index at or past
-/// the length reaches here on a proven program: the length is fixed).
+/// encoded; an index in `[length, capacity)` lengthens the Array where it
+/// stands (the capacity reservation, module docs); any other key through
+/// the generic `Set`. No index at or past the capacity reaches here on a
+/// proven program.
 #[no_mangle]
 pub extern "C" fn js_array_rest_set(arr: f64, key: f64, value: f64) {
     let a = handle(arr);
     if !a.is_null() {
         unsafe {
-            if let Some(i) = index_below(key, elem_len(a).min((*a).capacity)) {
+            let len = elem_len(a);
+            let cap = (*a).capacity;
+            if let Some(i) = index_below(key, len.min(cap)) {
                 if !elem_set(a, i, value.to_bits()) {
                     false_proof(value.to_bits());
                 }
                 return;
             }
-            if is_i32_layout(a) && key >= f64::from(elem_len(a)) {
-                false_proof(key.to_bits());
+            if is_i32_layout(a) {
+                if let Some(i) = index_below(key, cap) {
+                    if extend(a, i, value.to_bits()) {
+                        return;
+                    }
+                    false_proof(value.to_bits());
+                } else if key >= f64::from(len) {
+                    false_proof(key.to_bits());
+                }
             }
         }
     }
     crate::value::js_dyn_index_set(arr, key, value);
+}
+
+/// Store `v` as element `i` of the I32-layout array `arr`, `length <= i <
+/// capacity`, and lengthen it to `i + 1`. The slots in `[length, i)` are
+/// already holes (`array::storage`: `[length, capacity)` is hole-filled) and
+/// stay holes. `false`, with nothing written: `v` is no int32 Number.
+///
+/// # Safety
+/// `arr` is a live array head with `length <= i < capacity`.
+unsafe fn extend(arr: *mut ArrayHeader, i: u32, v: u64) -> bool {
+    let Some(w) = encode(v) else {
+        return false;
+    };
+    // GC_STORE_AUDIT(POINTER_FREE): an I32 word is in the 0x7FFE band, which no collector takes for a pointer.
+    *crate::array::array_elements_ptr(arr).add(i as usize) = w;
+    (*arr).length = i + 1;
+    crate::array::ek_note_published(arr, i as usize);
+    true
 }
 
 /// The receiver object of a NaN-boxed value, if it is a heap object.
@@ -443,5 +520,102 @@ mod tests {
         assert_eq!(index_below(1.5, 4), None);
         assert_eq!(index_below(-1.0, 4), None);
         assert_eq!(index_below(f64::NAN, 4), None);
+    }
+
+    /// A filled `new Array(len).fill(3)`, born at rest with `cap` slots.
+    fn born(len: u32, cap: u32) -> f64 {
+        let arr = crate::array::js_array_alloc_with_length(len);
+        let arr = crate::array::js_array_fill(arr, 3.0);
+        js_array_rest_reserve(crate::value::js_nanbox_pointer(arr as i64), cap)
+    }
+
+    unsafe fn word(a: *const ArrayHeader, i: usize) -> u64 {
+        *crate::array::array_elements_ptr(a).add(i)
+    }
+
+    /// The reserved birth: `cap` slots behind the header, I32 words below
+    /// the length, holes above it.
+    unsafe fn assert_reserved(a: *const ArrayHeader, len: u32, cap: u32) {
+        assert_eq!((elem_len(a), (*a).capacity), (len, cap));
+        assert!(is_i32_layout(a));
+        assert_eq!(
+            crate::array::array_elements_ptr(a) as usize,
+            a as usize + std::mem::size_of::<ArrayHeader>(),
+            "the elements start behind the header"
+        );
+        for i in 0..len as usize {
+            assert_eq!(word(a, i), INT32_TAG | 3);
+        }
+        for i in len as usize..cap as usize {
+            assert_eq!(word(a, i), crate::value::TAG_HOLE);
+        }
+    }
+
+    #[test]
+    fn a_reserving_birth_has_its_capacity_where_it_stands_or_in_one_replacement() {
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        // Unit tests copy by default: one exact replacement.
+        let v = born(8, 16);
+        unsafe { assert_reserved(handle(v), 8, 16) };
+        // The most recent birth is lengthened where it stands.
+        let _in_place = crate::array::GrowInPlaceTestGuard::on();
+        let arr = crate::array::js_array_alloc_with_length(8);
+        let arr = crate::array::js_array_fill(arr, 3.0);
+        let v = js_array_rest_reserve(crate::value::js_nanbox_pointer(arr as i64), 16);
+        assert_eq!(handle(v), arr);
+        unsafe { assert_reserved(arr, 8, 16) };
+        // A capacity the birth already has is kept.
+        let v = born(8, 8);
+        unsafe { assert_reserved(handle(v), 8, 8) };
+    }
+
+    #[test]
+    fn a_store_below_the_capacity_lengthens_the_array_where_it_stands() {
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let undefined = crate::value::TAG_UNDEFINED;
+        let v = born(8, 16);
+        let a = handle(v);
+        unsafe {
+            let base = crate::array::array_elements_ptr(a);
+            js_array_rest_set(v, 11.0, 4096.0);
+            assert_eq!((elem_len(a), (*a).capacity), (12, 16));
+            assert_eq!(crate::array::array_elements_ptr(a), base);
+            assert_eq!(crate::array::clean_arr_ptr(a), a as *const ArrayHeader);
+            assert_eq!(word(a, 11), INT32_TAG | 4096);
+            assert_eq!(js_array_rest_get(v, 11.0), 4096.0);
+            // The gap stays holes, and a hole below the length reads
+            // `undefined`, as a key at or past the length does.
+            for k in [8.0, 9.0, 10.0, 12.0, 15.0, 16.0] {
+                assert_eq!(js_array_rest_get(v, k).to_bits(), undefined, "{k}");
+            }
+            assert_eq!(js_array_rest_get(v, 7.0), 3.0);
+            // A hole below the length is filled in place.
+            js_array_rest_set(v, 9.0, -1.0);
+            assert_eq!(elem_len(a), 12);
+            assert_eq!(js_array_rest_get(v, 9.0), -1.0);
+            // The last reserved slot.
+            js_array_rest_set(v, 15.0, 7.0);
+            assert_eq!((elem_len(a), (*a).capacity), (16, 16));
+            assert_eq!(js_array_rest_get(v, 15.0), 7.0);
+            assert_eq!(js_array_rest_get(v, 14.0).to_bits(), undefined);
+            assert_eq!(crate::array::array_elements_ptr(a), base);
+        }
+    }
+
+    #[test]
+    fn a_store_that_is_no_int32_or_past_the_capacity_does_not_lengthen_in_place() {
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let v = born(8, 16);
+        let a = handle(v);
+        unsafe {
+            assert!(!extend(a, 10, 0.5f64.to_bits()));
+            assert_eq!(elem_len(a), 8);
+            assert_eq!(word(a, 10), crate::value::TAG_HOLE);
+            // Past the capacity: a false proof (reported in check mode), then
+            // the generic store, which keeps JavaScript's length.
+            js_array_rest_set(v, 16.0, 1.0);
+            let live = crate::array::clean_arr_ptr(a);
+            assert_eq!(elem_len(live), 17);
+        }
     }
 }
