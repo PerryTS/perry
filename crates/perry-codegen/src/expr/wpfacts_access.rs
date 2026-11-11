@@ -458,7 +458,6 @@ pub(crate) fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
         .map(|(name, _)| name.clone())
 }
 
-/// The zero-guard proof for `object.property`, if the facts give one.
 /// The whole-program half of a field read's proof, from the facts alone:
 /// the receiver binding's class set is known and small, and in every class
 /// the key is a birth data field. `prove` gates on it before it consults
@@ -490,6 +489,7 @@ pub(crate) fn facts_read(
     Ok(bare)
 }
 
+/// The zero-guard proof for `object.property`, if the facts give one.
 pub(crate) fn prove(
     ctx: &FnCtx<'_>,
     object: &Expr,
@@ -1335,3 +1335,7 @@ impl FieldProof {
         crate::target_layout::HeaderForm::Meta
     }
 }
+
+#[cfg(test)]
+#[path = "wpfacts_access_tests.rs"]
+mod tests;

@@ -508,6 +508,13 @@ pub fn run_with_parse_cache(
         std::env::set_var("PERRY_NO_CACHE", "1");
         perry_codegen::verify_facts::reset();
     }
+    // The lifetime census (`PERRY_LIFE_CENSUS`) writes its rows from codegen;
+    // a cache hit skips codegen and would leave the census silently empty.
+    // It changes no emitted byte, so it is not a cache key; it forces the
+    // uncached path instead.
+    if perry_codegen::life_census_enabled() {
+        std::env::set_var("PERRY_NO_CACHE", "1");
+    }
     if perry_codegen::fallback_diag::enabled() {
         perry_codegen::fallback_diag::reset();
     }
