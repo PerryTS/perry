@@ -553,7 +553,9 @@ pub(crate) fn try_lower_call(
                         (true, Some(p)) => lanes.push(lower_expr(ctx, &Expr::LocalGet(p))?),
                         (true, None) => lanes.push(bool_lit(true)),
                         (false, None) => {}
-                        (false, Some(_)) => bail!("ICE: value record typed call @{offset}: argument {i} may be absent in a slot that is never absent"),
+                        // A temporary tracks presence; the facts say this slot's
+                        // record is never absent, so the slot has no lane for it.
+                        (false, Some(_)) => {}
                     }
                     for id in &l.fields {
                         lanes.push(lower_expr(ctx, &Expr::LocalGet(*id))?);

@@ -276,7 +276,13 @@ fn ir(m: &Module, elision: ElisionFacts) -> String {
         },
         ..Default::default()
     };
-    String::from_utf8(compile_module(m, opts).expect("compiles")).expect("UTF-8 IR")
+    let text = String::from_utf8(compile_module(m, opts).expect("compiles")).expect("UTF-8 IR");
+    if let Ok(dir) = std::env::var("PERRY_TEST_IR_OUT") {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::fs::write(format!("{dir}/vr-{}-{n}.ll", std::process::id()), &text).expect("writes");
+    }
+    text
 }
 
 /// The `define` line of the `$sig` whose symbol contains `name`.
@@ -378,4 +384,54 @@ fn a_self_recursive_record_function_has_a_record_sig() {
     assert_eq!(define.matches("double %arg").count(), 3, "{define}");
     let define = sig_define(&text, "mk").expect("mk$sig");
     assert!(define.contains("[3 x double]"), "{define}");
+}
+
+/// The instructions that birth an instance of a literal-shape class.
+fn births(ir: &str) -> Vec<&str> {
+    ir.lines()
+        .filter(|l| {
+            l.starts_with("  ")
+                && (l.contains("perry_class_header_image") || l.contains("@js_object_alloc_class"))
+        })
+        .collect()
+}
+
+/// Every form a record takes around a typed call lowers: a call's result
+/// passed straight to a record slot, a conditional of calls returned, an
+/// optional result tested and read, a parameter reassigned in the callee, a
+/// discarded call, a call in a loop condition and a field of a call.
+#[test]
+fn the_record_call_forms_compile() {
+    let src = "function mk(n: number, d: number): { a: number; b: number } { if (d > 0) return mk(n + 1, d - 1); return { a: n, b: 2 }; }\n\
+function pick(n: number): { a: number; b: number } { return n > 2 ? mk(n, 0) : mk(n, 1); }\n\
+function maybe(n: number): { a: number; b: number } | undefined { if (n > 3) return undefined; if (n > 2) return; return mk(n, 0); }\n\
+function use(r: { a: number; b: number }, d: number): number { if (d > 0) { r = mk(r.a, 0); return use(r, d - 1); } return r.a + r.b; }\n\
+function f(n: number): number {\n  let s = use(mk(n, 1), 2) + use(pick(n), 0) + mk(n, 2).b;\n  mk(n, 0);\n  const v = maybe(n);\n  if (v !== undefined) s += v.a;\n  let w = mk(n, 0);\n  while (mk(s, 0).a < 10) { s += w.b; w = pick(s); }\n  return s + w.a;\n}\n\
+console.log(f(1), f(3), f(5));\n";
+    let m = lower(src);
+    let mut on = facts(&m, &[("v", true), ("w", false)]);
+    for (name, params, ret) in [
+        ("mk", vec![None, None], Some(false)),
+        ("pick", vec![None], Some(false)),
+        ("maybe", vec![None], Some(true)),
+        ("use", vec![Some(false), None], None),
+    ] {
+        on = with_signature(&m, on, name, &params, ret);
+    }
+    let (_, c, abi) = rewrite(&m, &on).expect("rewritten");
+    assert_eq!((c.params, c.returns), (1, 3), "{c:?}");
+    assert_eq!(c.materialized, 0, "{c:?}");
+    assert_eq!(c.unpacked, 0, "{c:?}");
+    assert!(abi.fns.len() == 4 && c.calls >= 12, "{c:?}");
+    let text = ir(&m, on);
+    for name in ["mk", "pick", "maybe"] {
+        let define = sig_define(&text, name).unwrap_or_else(|| panic!("{name}$sig"));
+        assert!(define.contains("[3 x double]"), "{define}");
+    }
+    assert!(sig_define(&text, "use").is_some());
+    // No copy is born anywhere: every record crosses as lanes.
+    assert_eq!(births(&text), Vec::<&str>::new(), "a copy is born");
+    // Negative control: without the signatures the literal is born.
+    let off = ir(&m, facts(&m, &[("v", true), ("w", false)]));
+    assert!(!births(&off).is_empty());
 }
