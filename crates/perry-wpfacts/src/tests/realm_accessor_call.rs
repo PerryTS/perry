@@ -85,3 +85,17 @@ fn value_handed_to_new_function_code_escapes() {
         false,
     );
 }
+
+/// The result of `g.call(p)` is no property value of `p`: no realm getter
+/// returns one (`flags` only applies ToBoolean to what it reads, 22.2.6.4).
+/// `p.f` is then called by no code, so the dynamic code in it never runs.
+#[test]
+fn realm_accessor_result_is_no_field_value_of_this() {
+    check(
+        &prog(
+            "const p: any = { f() { new Function(process.argv[2])(cell); } };",
+            "const r = g.call(p); r();",
+        ),
+        true,
+    );
+}

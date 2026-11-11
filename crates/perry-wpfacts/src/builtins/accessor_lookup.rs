@@ -29,9 +29,10 @@ pub(crate) fn is_realm_accessor(identity: &str) -> bool {
 /// [[Get]] under any key (whose program getters run on it), its prototype is
 /// read and, with an argument, replaced (the `Object.setPrototypeOf`
 /// predicate: E6 and the prototype edge), and the argument may become a data
-/// property of it. The result is a value of those reads, `this`, its
-/// prototype, a primitive, or a host value no receiver decides (the lazy
-/// global getters return a host module object): ⊤.
+/// property of it. No getter returns a value it reads from `this`: the
+/// result is an internal-slot primitive, `this` (@@species), its prototype
+/// (`__proto__`), a string (`flags`), or a host value no receiver decides
+/// (the lazy global getters return a host module object): ⊤.
 pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
     let c = m.calls[call as usize].clone();
     m.add_prim(c.ret, prim::ALL);
@@ -61,11 +62,15 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
     let n = m.node_l("realm-accessor-this");
     m.add_tok(n, r);
     m.add_tok(c.ret, r);
+    // `RegExp.prototype.flags` [[Get]]s the flag keys of `this` (program
+    // getters run on it) and only applies ToBoolean to them (22.2.6.4): the
+    // values reach no result.
+    let got = m.node_l("realm-accessor-get");
     m.cons(
         n,
         Cons::Load {
             key: Key::any(),
-            dst: c.ret,
+            dst: got,
         },
     );
     m.cons(n, Cons::ProtoOf { dst: c.ret });
