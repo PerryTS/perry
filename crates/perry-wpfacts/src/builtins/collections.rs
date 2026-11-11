@@ -1396,13 +1396,18 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             for &a in &c.args {
                 m.edge(a, elems);
             }
+            if kind == "Map" && name == Some("set") {
+                m.map_set(t, &c.args, !c.spread.is_empty());
+            }
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
             if let Some(&k) = c.args.first() {
                 m.identity(k, IdentityRoute::Collection);
             }
-            m.edge(elems, c.ret);
+            // A Map's values, not its keys (`solve/map_vals.rs`).
+            let vals = if kind == "Map" { m.map_vals(t) } else { elems };
+            m.edge(vals, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
         ("Collection", Some("has" | "delete")) => {

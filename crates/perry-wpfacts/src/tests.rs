@@ -62,6 +62,7 @@ mod const_key_set_store;
 mod const_numbers;
 pub(crate) mod computed_key_members;
 mod key_strings;
+mod map_values;
 mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;

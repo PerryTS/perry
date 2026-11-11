@@ -12,6 +12,7 @@ mod accessor_lookup;
 mod copy;
 mod define;
 mod lookup;
+pub(crate) mod map_vals;
 mod own_read;
 
 use crate::builtins;

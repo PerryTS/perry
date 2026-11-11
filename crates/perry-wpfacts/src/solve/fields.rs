@@ -138,6 +138,7 @@ impl Model {
         let opaque = !self.own_props_modelled(s);
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
+        self.map_open(d);
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque {
