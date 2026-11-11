@@ -221,6 +221,23 @@ pub enum FactsElemRep {
     I32,
 }
 
+/// wpfacts `RecRep` (DESIGN-p4l4 §1.1): the admitted template, and whether
+/// `undefined` is among the values (`opt`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FactsRecRep {
+    pub tmpl: u32,
+    pub opt: bool,
+}
+
+/// An admitted value record's layout (wpfacts `RecordLayout`): its keys in
+/// birth order, and the class its literal lowers to (`new __AnonShape_*`),
+/// `None` for a literal that stays an `Expr::Object`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsRecordLayout {
+    pub class_id: Option<u32>,
+    pub keys: Vec<String>,
+}
+
 /// wpfacts `Enc`: how a slot's word is stored and passed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FactsEnc {
@@ -319,6 +336,13 @@ pub struct ElisionFacts {
     /// compiled identity comparison (`expr/record_witness.rs`). Empty with
     /// the switch off.
     pub record_classes: std::collections::BTreeSet<u32>,
+    /// Local id → the value record it holds (wpfacts `Rep::Record` of the
+    /// binding, DESIGN-p4l4 VR-3a): its fields by value (`value_records`).
+    /// Empty with `PERRY_FACTS_VALUE_RECORDS` off.
+    pub record_locals: std::collections::BTreeMap<u32, FactsRecRep>,
+    /// Template id → the layout of an admitted value record that some
+    /// `record_locals` entry names.
+    pub record_layouts: std::collections::BTreeMap<u32, FactsRecordLayout>,
     /// Local id → the constant contents of every value it holds: such a
     /// local whose Arrays are all born from literals of these constant
     /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).
@@ -435,6 +459,7 @@ impl ElisionFacts {
             && self.local_classes.is_empty()
             && self.class_statics.is_empty()
             && self.native_member_calls.is_empty()
+            && self.record_locals.is_empty()
     }
 
     pub fn field(&self, class_id: u32, key: &str) -> Option<&FactsField> {

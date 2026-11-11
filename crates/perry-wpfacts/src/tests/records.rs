@@ -1,5 +1,7 @@
 //! VR-1 (DESIGN-p4l4 §2): the value-record verdicts, one rule at a time,
-//! each with its negative control.
+//! each with its negative control. Since VR-3a a record crosses no typed
+//! call slot (`RECORD_SIGNATURES`), so each source births its record in the
+//! body that uses it.
 use super::facts_with;
 use crate::records::RecordReject;
 use crate::FactsConfig;
@@ -33,13 +35,17 @@ fn verdict(src: &str, keys: &[&str], cfg: FactsConfig) -> Result<String, String>
 
 const MK: &str = "function mk(n: number) { return { a: n, b: n > 1 }; }\nfunction use(r: { a: number; b: boolean }): number { return r.b ? r.a : 0; }\n";
 
+/// One literal site of the template, used inside its body (VR-3a: a record
+/// crosses no typed call slot until the VR-3b signature ABI).
+const U: &str = "const u = { a: Math.random() > 2 ? 1 : 2, b: Math.random() > 2 };\n";
+
 fn rejected(src: &str) -> String {
-    verdict(&format!("{MK}{src}"), &["a", "b"], on()).expect_err("rejected")
+    verdict(&format!("{U}{src}"), &["a", "b"], on()).expect_err("rejected")
 }
 
 fn admitted(src: &str) {
-    if let Err(e) = verdict(&format!("{MK}{src}"), &["a", "b"], on()) {
-        let pf = facts_with(&format!("{MK}{src}"), on());
+    if let Err(e) = verdict(&format!("{U}{src}"), &["a", "b"], on()) {
+        let pf = facts_with(&format!("{U}{src}"), on());
         let lines: Vec<String> = pf
             .dump_text()
             .lines()
@@ -52,7 +58,7 @@ fn admitted(src: &str) {
 
 #[test]
 fn the_switch_is_off_by_default() {
-    let src = format!("{MK}console.log(use(mk(1)));\n");
+    let src = format!("{U}console.log(u.a);\n");
     assert_eq!(
         verdict(&src, &["a", "b"], FactsConfig::default()),
         Err("Off".into())
@@ -62,9 +68,9 @@ fn the_switch_is_off_by_default() {
 }
 
 #[test]
-fn a_value_passed_read_and_logged_is_admitted() {
-    admitted("let s = 0;\nfor (let i = 0; i < 3; i++) { const r = mk(i); s += use(r); }\nconsole.log(s, mk(5), `${mk(2).a}`, \"%o\", mk(3));\n");
-    let pf = facts_with(&format!("{MK}console.log(use(mk(1)));\n"), on());
+fn a_value_read_and_logged_is_admitted() {
+    admitted("let s = 0;\nfor (let i = 0; i < 3; i++) { s += u.b ? u.a : i; }\nconsole.log(s, u, `${u.a}`, \"%o\", u);\n");
+    let pf = facts_with(&format!("{U}console.log(u.a, u);\n"), on());
     let text = pf.dump_text();
     assert!(text.contains("ADMITTED fields=a:"), "{text}");
     assert!(
@@ -73,32 +79,51 @@ fn a_value_passed_read_and_logged_is_admitted() {
     );
 }
 
+/// VR-3a (`RECORD_SIGNATURES`): a record in a typed call's argument or
+/// result waits for the VR-3b signature ABI; a Boxed helper parameter
+/// receives a copy (owner ruling §4.4) and is no such slot.
+#[test]
+fn a_record_signature_slot_waits_for_vr3b() {
+    let r = verdict(
+        &format!("{MK}console.log(use(mk(1)));\n"),
+        &["a", "b"],
+        on(),
+    )
+    .expect_err("a record result of a typed call");
+    assert!(
+        r.starts_with("R5UntypedCall(") && r.contains("VR-3b"),
+        "{r}"
+    );
+    let r = rejected("function use2(r: { a: number; b: boolean }): number { return r.a; }\nconsole.log(use2(u), use2(u));\n");
+    assert!(
+        r.starts_with("R5UntypedCall(") && r.contains("arg(0)"),
+        "{r}"
+    );
+    // Negative control: a Boxed helper parameter.
+    admitted("function show(x: unknown) { console.log(x); }\nshow(u);\nshow(5);\n");
+}
+
 #[test]
 fn identity_rejects() {
+    assert_eq!(rejected("console.log(u === u);\n"), "R4Identity(===)");
+    assert_eq!(rejected("console.log(u == u);\n"), "R4Identity(==)");
     assert_eq!(
-        rejected("const x = mk(1), y = mk(2);\nconsole.log(x === y);\n"),
-        "R4Identity(===)"
-    );
-    assert_eq!(
-        rejected("const x = mk(1), y = mk(2);\nconsole.log(x == y);\n"),
-        "R4Identity(==)"
-    );
-    assert_eq!(
-        rejected("const x = mk(1);\nconsole.log(Object.is(x, x));\n"),
+        rejected("console.log(Object.is(u, u));\n"),
         "R4Identity(Object.is)"
     );
     assert_eq!(
-        rejected("const x = mk(1), y = mk(2);\nswitch (x) { case y: console.log(1); }\n"),
+        rejected("switch (u) { case u: console.log(1); }\n"),
         "R4Identity(switch)"
     );
     // Negative control: a presence test is no identity.
-    admitted("const x: { a: number; b: boolean } | undefined = Math.random() > 2 ? undefined : mk(1);\nconsole.log(x === undefined, x !== undefined ? use(x) : 0);\n");
+    let src = "const x: { a: number; b: boolean } | undefined = Math.random() > 2 ? undefined : { a: 1, b: true };\nconsole.log(x === undefined, x !== undefined ? x.a : 0);\n";
+    assert!(verdict(src, &["a", "b"], on()).is_ok(), "{src}");
 }
 
 #[test]
 fn a_write_after_birth_rejects() {
     assert_eq!(
-        rejected("const x = mk(1);\n(x as any).a = 2;\nconsole.log(use(x));\n"),
+        rejected("(u as any).a = 2;\nconsole.log(u.a);\n"),
         "R2Write(a)"
     );
 }
@@ -123,14 +148,14 @@ fn a_large_template_rejects() {
 #[test]
 fn throw_rejects() {
     assert_eq!(
-        rejected("try { throw mk(1); } catch (e) { console.log(e); }\n"),
+        rejected("try { throw u; } catch (e) { console.log(e); }\n"),
         "R5Throw"
     );
 }
 
 #[test]
 fn an_untyped_call_rejects() {
-    let r = rejected("function use2(r: { a: number; b: boolean }) { return r.a * 2; }\nconst hs = [use, use2];\nlet s = 0;\nfor (let i = 0; i < 2; i++) s += hs[i](mk(i));\nconsole.log(s);\n");
+    let r = rejected("function use2(r: { a: number; b: boolean }) { return r.a * 2; }\nfunction use3(r: { a: number; b: boolean }) { return r.a * 3; }\nconst hs = [use2, use3];\nlet s = 0;\nfor (let i = 0; i < 2; i++) s += hs[i](u);\nconsole.log(s);\n");
     assert!(
         r.starts_with("R5UntypedCall(") || r.starts_with("R5StoreHeap("),
         "{r}"
@@ -139,8 +164,7 @@ fn an_untyped_call_rejects() {
 
 #[test]
 fn a_retaining_native_rejects() {
-    let r =
-        rejected("const m = new Map<number, unknown>();\nm.set(1, mk(1));\nconsole.log(m.size);\n");
+    let r = rejected("const m = new Map<number, unknown>();\nm.set(1, u);\nconsole.log(m.size);\n");
     assert!(
         r.starts_with("R5StoreHeap(") || r.starts_with("R5Native("),
         "{r}"
@@ -149,9 +173,9 @@ fn a_retaining_native_rejects() {
 
 #[test]
 fn a_record_array_waits_for_the_intrinsics() {
-    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nconst u = mk(1);\nxs.push(u);\nconsole.log(xs.length);\n");
+    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconsole.log(xs.length);\n");
     assert_eq!(r, "R6Op(push)");
-    let pf = facts_with(&format!("{MK}const xs: {{ a: number; b: boolean }}[] = [];\nconst u = mk(1);\nxs.push(u);\nconsole.log(xs.length);\n"), on());
+    let pf = facts_with(&format!("{U}const xs: {{ a: number; b: boolean }}[] = [];\nxs.push(u);\nconsole.log(xs.length);\n"), on());
     assert!(
         pf.dump_text().contains("# record-array "),
         "{}",
@@ -161,36 +185,36 @@ fn a_record_array_waits_for_the_intrinsics() {
 
 #[test]
 fn json_without_a_function_replacer_is_a_boundary() {
-    admitted("console.log(JSON.stringify(mk(1)), JSON.stringify(mk(2), null, 2), JSON.stringify(mk(3), [\"a\"]));\n");
+    admitted("console.log(JSON.stringify(u), JSON.stringify(u, null, 2), JSON.stringify(u, [\"a\"]));\n");
     assert_eq!(
-        rejected("console.log(JSON.stringify(mk(1), (k, v) => v));\n"),
+        rejected("console.log(JSON.stringify(u, (k, v) => v));\n"),
         "R5Protocol(JsonReplacer)"
     );
 }
 
 #[test]
 fn a_boundary_wrapper_is_admitted() {
-    admitted("const u = mk(1);\nconsole.log({ u });\nconsole.log(\"pv\", { ply: 3, u });\nconsole.log([u, 4]);\n");
+    admitted("console.log({ u });\nconsole.log(\"pv\", { ply: 3, u });\nconsole.log([u, 4]);\n");
     // Negative control: a wrapper the program reads is a heap object.
-    let r = rejected("const u = mk(1);\nconst w = { u };\nconsole.log(w.u.a);\n");
+    let r = rejected("const w = { u };\nconsole.log(w.u.a);\n");
     assert!(r.starts_with("R5StoreHeap("), "{r}");
 }
 
 #[test]
 fn a_logging_helper_with_a_boxed_parameter_is_admitted() {
     // Owner ruling 2026-11-10 (§4.4): the record is materialized at the call.
-    admitted("function show(x: unknown) { console.log(x); }\nshow(mk(1));\nshow(5);\n");
-    admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nshow(mk(1));\nshow(c ? 5 : \"s\");\n");
+    admitted("function show(x: unknown) { console.log(x); }\nshow(u);\nshow(5);\n");
+    admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nshow(u);\nshow(c ? 5 : \"s\");\n");
 }
 
 #[test]
 fn a_retaining_helper_rejects() {
     assert_eq!(
-        rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(mk(1));\nkeep(5);\nconsole.log(saved.length);\n"),
+        rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(u);\nkeep(5);\nconsole.log(saved.length);\n"),
         "R5RetainingHelper(keep, retain)"
     );
     assert_eq!(
-        rejected("let last: unknown;\nfunction same(x: unknown) { return x === last; }\nconsole.log(same(mk(1)), same(5));\n"),
+        rejected("let last: unknown;\nfunction same(x: unknown) { return x === last; }\nconsole.log(same(u), same(5));\n"),
         "R5RetainingHelper(same, identity)"
     );
 }
@@ -202,7 +226,7 @@ fn interpreted_code_admits_nothing() {
         dynamic_code: Some("eval".into()),
         ..FactsConfig::default()
     };
-    let src = format!("{MK}const g: any = globalThis;\nconsole.log(use(mk(1)), g[\"ev\" + \"al\"](\"1\"), eval(\"2\"));\n");
+    let src = format!("{U}const g: any = globalThis;\nconsole.log(u.a, g[\"ev\" + \"al\"](\"1\"), eval(\"2\"));\n");
     let v = verdict(&src, &["a", "b"], cfg);
     assert!(
         matches!(v, Err(ref e) if e.starts_with("R0Interp(") || e.starts_with("R5")),
@@ -226,7 +250,7 @@ fn the_reject_list_prints_every_reason() {
 #[test]
 fn an_admitted_record_binding_is_a_record_rep() {
     use crate::bindings::{Enc, Rep};
-    let src = format!("{MK}const r = mk(1);\nconst q: {{ a: number; b: boolean }} | undefined = Math.random() > 2 ? undefined : mk(2);\nconsole.log(use(r), q === undefined ? 0 : use(q));\n");
+    let src = "const r = { a: 1, b: true };\nconst q: { a: number; b: boolean } | undefined = Math.random() > 2 ? undefined : { a: 2, b: false };\nconsole.log(r.a, q === undefined ? 0 : q.a);\n".to_string();
     let reps = super::array_reps::reps_with(&src, on());
     let r = reps["r"];
     assert!(matches!(r, Rep::Record(x) if !x.opt), "{r:?}");
@@ -241,7 +265,7 @@ fn an_admitted_record_binding_is_a_record_rep() {
     // Negative controls: the switch off, and a rejected template.
     let off = super::array_reps::reps_with(&src, FactsConfig::default());
     assert_eq!(off["r"], Rep::Boxed);
-    let src = format!("{MK}const r = mk(1);\nconst s = mk(2);\nconsole.log(r === s, use(r));\n");
+    let src = "const r = { a: 1, b: true };\nconsole.log(r === r, r.a);\n".to_string();
     assert_eq!(super::array_reps::reps_with(&src, on())["r"], Rep::Boxed);
 }
 
@@ -267,25 +291,25 @@ fn a_record_join_is_its_template_only() {
 #[test]
 fn a_captured_record_rejects() {
     // Closure capture by value is VR-7: a captured local is a heap cell.
-    let r = rejected("const u = mk(1);\nconst f = () => use(u);\nconsole.log(f());\n");
+    let r = rejected("const f = () => u.a;\nconsole.log(f());\n");
     assert_eq!(r, "R5StoreHeap(closure capture)");
 }
 
 #[test]
 fn a_record_popped_from_its_array_is_the_array_s_operation() {
     // `xs.pop()` returns the record from a record array: R6 decides it.
-    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(mk(1));\nconst last = xs.pop();\nconsole.log(last === undefined ? 0 : use(last));\n");
+    let r = rejected("const xs: { a: number; b: boolean }[] = [];\nxs.push(u);\nconst last = xs.pop();\nconsole.log(last === undefined ? 0 : last.a);\n");
     assert!(r.starts_with("R6"), "{r}");
 }
 
 #[test]
 fn a_mixed_argument_of_a_logging_helper_is_admitted() {
     // Owner ruling 2026-11-10: `show(c ? 5 : u)` materializes at the call.
-    admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nconst u = mk(8);\nshow(c ? 5 : u);\nshow(u);\nconsole.log(use(u));\n");
+    admitted("function show(x: unknown) { console.log(x); }\nconst c = Math.random() > 2;\nshow(c ? 5 : u);\nshow(u);\nconsole.log(u.a);\n");
 }
 
 #[test]
 fn a_retaining_helper_is_named_before_what_it_causes() {
-    let r = rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(mk(1));\nkeep(5);\nconsole.log(saved.length, saved[0], saved[1]);\n");
+    let r = rejected("const saved: unknown[] = [];\nfunction keep(x: unknown) { saved.push(x); }\nkeep(u);\nkeep(5);\nconsole.log(saved.length, saved[0], saved[1]);\n");
     assert_eq!(r, "R5RetainingHelper(keep, retain)");
 }
