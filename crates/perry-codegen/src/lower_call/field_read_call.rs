@@ -116,7 +116,8 @@ pub(crate) fn try_lower(
     );
     crate::facts_consumed::used();
     // I32 at rest: the body's read is at rest or not wherever the call is
-    // (`expr::rest_elems`); at rest, it is that read, not a held or C3 load.
+    // (`expr::rest_elems`); at rest, the held and C3 loads decode its word
+    // (B2), and any other form is that read.
     let fact = &ctx.wpfacts.field_read_calls[&site];
     let rest = (fact.element_offset, fact.rest);
     let saved = ctx.rest_b1.replace(rest);
@@ -134,17 +135,30 @@ pub(crate) fn try_lower(
 }
 
 /// The read `read` of the call at `site`, and whether a held base served
-/// it. `rest`: the body's read is at rest.
+/// it. `rest`: the body's read is at rest. A held base or C3's in-floor
+/// load serves an at-rest read when the field's representation agrees
+/// (`FactsArrRep::at_rest`): they address the slot as for a double Array,
+/// and the load decodes the I32 word (`rest_elems::decode`).
 fn lower_read(ctx: &mut FnCtx<'_>, site: u32, read: &Expr, rest: bool) -> Result<(String, bool)> {
-    if rest {
-        return Ok((crate::expr::lower_expr(ctx, read)?, false));
-    }
+    let agrees = |rep: crate::codegen::FactsArrRep| rep.at_rest == rest;
+    let tiers = !rest || crate::expr::rest_elems::tiers_enabled();
+    let held = tiers
+        && crate::expr::index_get::field_base::servable(ctx, read).is_some_and(|s| agrees(s.rep));
     // PR-D: a loop that holds the field's element base serves the read.
-    if let Some(value) = crate::expr::index_get::field_base::try_lower_read(ctx, site, read)? {
-        return Ok((value, true));
+    if held {
+        if let Some(value) = crate::expr::index_get::field_base::try_lower_read(ctx, site, read)? {
+            if rest {
+                crate::expr::rest_elems::probe(ctx, "call", "held", site);
+            }
+            return Ok((value, true));
+        }
     }
-    let value = match in_floor(ctx, site, read) {
+    let floor = in_floor(ctx, site, read).filter(|f| tiers && agrees(f.2));
+    let value = match floor {
         Some((object, index, rep, floor)) => {
+            if rest {
+                crate::expr::rest_elems::probe(ctx, "call", "c3", site);
+            }
             // The index is inert and reaches no ender (the accessor), so
             // no collection runs between it and the field load.
             let idx = crate::expr::lower_expr_as_i32(ctx, index)?;

@@ -155,6 +155,7 @@ const BOARD: FactsArrRep = FactsArrRep {
     dense: true,
     fixed: true,
     im: false,
+    at_rest: false,
 };
 
 /// The forwarding bit of the header word, as the tier tests it.
@@ -220,10 +221,54 @@ fn a_key_outside_the_floor_is_bounded_by_the_capacity() {
 }
 
 #[test]
+fn an_at_rest_receiver_decodes_its_i32_word() {
+    // I32 at rest B2: the rep-keyed tier addresses an at-rest Array's slot
+    // as a double Array's and decodes the I32 word (`rest_elems::decode`).
+    let rest = FactsArrRep {
+        elem: FactsElemRep::I32,
+        at_rest: true,
+        ..BOARD
+    };
+    // The loaded slot word itself is truncated to its low half.
+    let decodes = |f: &str| {
+        f.lines()
+            .filter_map(|l| l.trim().split_once(" = load i64, ptr "))
+            .any(|(word, _)| f.contains(&format!("trunc i64 {word} to i32")))
+    };
+    let ir = rep_ir(rest, Some((0, 127)), true);
+    let f = body(&ir, "__at").join("\n");
+    assert!(decodes(&f), "decoded\n{f}");
+    assert!(!f.contains("arep."), "in the floor: no test\n{f}");
+    assert!(!f.contains("js_array_rest_get"), "no cold arm\n{f}");
+    // Outside the floor: one unsigned bound against the floor (the slots
+    // below it are present I32 words: no capacity, no hole test), and the
+    // accessor's cold read (never the generic tier's).
+    let ir = rep_ir(rest, Some((0, 128)), true);
+    let f = body(&ir, "__at").join("\n");
+    assert!(f.contains("arep.inside") && bound_128(&f), "{f}");
+    assert!(!f.contains("arep.own"), "no hole test\n{f}");
+    // A key at or past the length meets no element word: the shared cold
+    // read; one below it, the accessor.
+    assert!(
+        f.contains("js_array_rest_get"),
+        "the accessor's cold read\n{f}"
+    );
+    assert!(
+        f.contains("arep.rest_miss"),
+        "the absent key's cold read\n{f}"
+    );
+    // The double Array of the same shape takes no decode.
+    let ir = rep_ir(BOARD, Some((0, 127)), true);
+    let f = body(&ir, "__at").join("\n");
+    assert!(!decodes(&f), "{f}");
+}
+
+#[test]
 fn a_growable_array_keeps_its_forwarding_test() {
     let rep = FactsArrRep {
         fixed: false,
         im: false,
+        at_rest: false,
         ..BOARD
     };
     let ir = rep_ir(rep, Some((0, 127)), true);
@@ -257,6 +302,7 @@ fn an_array_without_a_floor_is_bounded_by_its_capacity() {
         dense: false,
         fixed: false,
         im: false,
+        at_rest: false,
     };
     let ir = rep_ir(rep, Some((0, 7)), true);
     let f = body(&ir, "__at").join("\n");
@@ -300,6 +346,7 @@ fn a_scalar_replaced_literal_never_takes_the_tier() {
                     dense: true,
                     fixed: true,
                     im: false,
+                    at_rest: false,
                 }),
             );
             for (at, _) in src.match_indices("d[") {
@@ -344,6 +391,7 @@ const GROWABLE: FactsArrRep = FactsArrRep {
     dense: true,
     fixed: false,
     im: false,
+    at_rest: false,
 };
 
 /// IR of `FIELD_SRC` with `this` a `Board` in every method, `board` of
@@ -509,6 +557,7 @@ fn the_array_rep_join_says_what_both_say() {
         dense: true,
         fixed: true,
         im: false,
+        at_rest: false,
     };
     let b = FactsArrRep {
         elem: FactsElemRep::F64,
@@ -516,6 +565,7 @@ fn the_array_rep_join_says_what_both_say() {
         dense: true,
         fixed: false,
         im: false,
+        at_rest: false,
     };
     let j = FactsArrRep::join(a, b);
     assert_eq!(

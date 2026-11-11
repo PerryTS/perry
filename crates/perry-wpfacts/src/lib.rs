@@ -993,6 +993,7 @@ fn compute_act<'a>(
     if !g.m.aborted {
         let (rest, refused) = rest_elems::admit(&g, interp_guard.is_some());
         (g.m.rest_tmpls, g.m.rest_refused) = (rest, refused);
+        rest_elems::mark_fields(&g.m, &mut templates);
     }
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);

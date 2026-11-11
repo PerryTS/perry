@@ -231,6 +231,7 @@ pub use self::indexing::{
 };
 pub(crate) use self::indexing::{
     js_array_set_f64_extend_sloppy, js_array_set_index_or_string_with_strictness,
+    perry_array_read_cold_shared,
 };
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;

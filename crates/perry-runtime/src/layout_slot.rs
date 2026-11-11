@@ -266,8 +266,20 @@ pub extern "C" fn js_array_rest_get(arr: f64, key: f64) -> f64 {
     let a = handle(arr);
     if !a.is_null() {
         unsafe {
-            if let Some(i) = index_below(key, elem_len(a).min((*a).capacity)) {
+            let len = elem_len(a);
+            if let Some(i) = index_below(key, len.min((*a).capacity)) {
                 return f64::from_bits(elem_get(a, i));
+            }
+            // I32 at rest B2: an integer index at or past the fixed length
+            // names no own slot (no store grows an at-rest Array), so it is
+            // the shared cold read's absent-slot miss (control 4): `undefined`
+            // unless a prototype or an element descriptor may answer.
+            if is_i32_layout(a)
+                && key >= f64::from(len)
+                && key < f64::from(u32::MAX)
+                && key == key.trunc()
+            {
+                return crate::array::perry_array_read_cold_shared(arr, key, 4);
             }
         }
     }

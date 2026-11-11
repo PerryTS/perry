@@ -1367,11 +1367,9 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
-    if let (Some(floor), Expr::IndexGet { object, index, .. }) =
-        (super::rest_elems::read_floor(ctx, e), e)
-    {
+    if let Some(floor) = super::rest_elems::read_floor(ctx, e) {
         let want = super::rest_elems::Want::I32;
-        let value = super::rest_elems::lower_read(ctx, object, index, floor, want)?;
+        let value = super::rest_elems::lower_read(ctx, e, floor, want)?;
         return Ok(i32_lowered(value));
     }
     // I32 at rest (PR C): an I32 lane's read is the i32 in the slot.
@@ -1815,7 +1813,8 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
-    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e);
+    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e)
+        || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
             || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
@@ -1843,7 +1842,8 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
 }
 
 fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> {
-    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e);
+    let stable_numeric_index = crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e)
+        || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
             || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
