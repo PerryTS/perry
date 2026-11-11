@@ -43,6 +43,7 @@ mod builtin_members;
 mod builtin_program_fields;
 mod builtin_proto_value;
 mod builtin_spread;
+mod forin_key_string;
 mod call_shadow;
 mod callable_contract;
 mod callback_origin;
