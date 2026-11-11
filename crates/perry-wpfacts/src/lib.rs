@@ -1520,6 +1520,24 @@ fn compute_act<'a>(
             cells_out.push((format!("{key}#named"), vc));
         }
     }
+    // A cell is one per key: the copies of one array template (one per
+    // context) all leave through the same `arr:<display>`, so the unit's
+    // write to it is the join of theirs. Two entries under one key would
+    // read as two writers (the unit seeing its own write as another's), and
+    // the round join (`units::driver`) would carry only one of them: the
+    // other, fresh each round, cycles with what it is read back as.
+    let mut at: pts::FxHashMap<String, usize> = pts::FxHashMap::default();
+    let mut one: Vec<(String, units::ValueContract)> = Vec::with_capacity(cells_out.len());
+    for (k, vc) in cells_out {
+        match at.get(&k) {
+            Some(&i) => one[i].1.join(&vc),
+            None => {
+                at.insert(k.clone(), one.len());
+                one.push((k, vc));
+            }
+        }
+    }
+    let mut cells_out = one;
     // What it writes into other units' module-scope bindings (`Gen::local_write`):
     // per binding (its unit's path, its name) a value contract, as of a
     // published binding; ⊤ for one no contract describes, and for every
