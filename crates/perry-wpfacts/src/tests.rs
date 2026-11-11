@@ -86,6 +86,7 @@ mod escaped_method_this;
 mod escaped_beside_top;
 mod export_star;
 mod field_array_push;
+mod first_store_order;
 mod fn_inst_default_proto;
 mod fn_intrinsic_proto;
 mod folded_call_own;
