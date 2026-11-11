@@ -68,7 +68,7 @@ impl Log for Logger {
         let _ = writeln!(
             std::io::stderr().lock(),
             "[{} {:5} {}] {}",
-            crate::utc::now_rfc3339(),
+            super::utc::now_rfc3339(),
             record.level(),
             record.target(),
             message

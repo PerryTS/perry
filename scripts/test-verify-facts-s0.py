@@ -130,6 +130,7 @@ def main():
         ("key-sign-negative", "keysign", "key sign"),
         ("literal-string-negative", "litstr", "literal string"),
         ("number-call-negative", "numbercall", "numeric result"),
+        ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
         ("const-number-negative", "constnum", "constant number"),

@@ -126,6 +126,23 @@ fn a_call_whose_every_callee_returns_a_number_is_a_number_call() {
     assert!(!number_call_at(src, "this.name(5)"));
 }
 
+/// A direct call of a function is a Number call on the same proof as a
+/// method call: every callee the site reaches returns only Numbers.
+#[test]
+fn a_direct_call_whose_callee_returns_a_number_is_a_number_call() {
+    let src = "function enc(a: number, b: number, c = 0): number { let r = a | (b << 7); for (let k = 0; k < c; k++) r += k; return r; }\n\
+               function mix(k: number): number | string { let r = k; for (let i = 0; i < k; i++) r += i; return r > 9 ? 'x' : r; }\n\
+               function hole(k: number): number { const a = [1, 2, 3]; let r = 0; for (let i = 0; i < 2; i++) r += i; return a[k + r] as number; }\n\
+               const out: number[] = [];\n\
+               const f = Math.random() < 2 ? enc : mix;\n\
+               for (let i = 0; i < 9; i++) { out.push(enc(i, i + 1)); console.log(mix(i), hole(i), f(i, 1)); }\n\
+               console.log(out.length);";
+    assert!(number_call_at(src, "enc(i, i + 1)"));
+    assert!(!number_call_at(src, "mix(i)"));
+    assert!(!number_call_at(src, "hole(i)"));
+    assert!(!number_call_at(src, "f(i, 1)"));
+}
+
 #[test]
 fn a_body_that_may_complete_returns_undefined() {
     // `probe` returns `this.#p` or, when the read throws, completes after

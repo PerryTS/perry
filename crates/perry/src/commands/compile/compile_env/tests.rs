@@ -434,6 +434,16 @@ fn int32_operand_switches_are_cache_inputs() {
     }
 }
 
+/// The direct Number call switch decides whether a consumer of `f(a)` takes
+/// the proven-Number lowering, so `=0` must never reuse an `=1` object.
+#[test]
+fn direct_number_calls_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_DIRECT_NUMBER_CALLS"),
+        "PERRY_FACTS_DIRECT_NUMBER_CALLS must key the compile caches"
+    );
+}
+
 /// The at-rest default read's switch decides how `a[k] ?? <int32>` is
 /// lowered, so `=0` must never reuse an `=1` object.
 #[test]
@@ -482,5 +492,16 @@ fn inline_pure_args_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_INLINE_PURE_ARGS"),
         "PERRY_INLINE_PURE_ARGS must key the compile caches"
+    );
+}
+
+/// The small-string switch decides how a string `+`, a one-digit
+/// `String(n)` and a `charAt` operand are lowered, so `=0` must never reuse
+/// an `=1` object.
+#[test]
+fn small_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_SMALL_STRINGS"),
+        "PERRY_SMALL_STRINGS must key the compile caches"
     );
 }

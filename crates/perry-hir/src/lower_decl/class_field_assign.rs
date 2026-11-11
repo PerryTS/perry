@@ -112,7 +112,9 @@ pub(crate) fn with_synthesized_constructor(
 
 /// Keeps the constructor-store reservations the constructor stores, in the
 /// order it creates their keys: parameter properties, assigned initializers,
-/// then its top-level `this.x = v` statements. These are the reservations the
+/// then its `this.x = v` stores in first-store order, a store in a branch,
+/// loop or `try` at its place in the text (`constructor_store_keys`). These
+/// are the reservations the
 /// constructor scan finds for JavaScript; codegen predicts the completed
 /// layout (`birth_lanes`) and a static family's keys from them. A field the
 /// constructor does not store (`fileName!: string` set by a caller) is no
@@ -149,10 +151,8 @@ pub(crate) fn settle_reservations(
                 .into_iter()
                 .filter_map(|prop| key_name(&prop.key)),
         );
-        for stmt in ctor.body.iter().flat_map(|body| &body.stmts) {
-            if let ast::Stmt::Expr(stmt) = stmt {
-                super::class_decl::collect_this_field_assigns(&stmt.expr, &mut order);
-            }
+        if let Some(body) = &ctor.body {
+            super::class_decl::constructor_store_keys(&body.stmts, &mut order);
         }
     }
     fields.retain(|field| field.origin.is_definition() || order.contains(&field.name));
