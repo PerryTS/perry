@@ -8,6 +8,8 @@
 //! and rewrite phases.
 
 mod analysis;
+#[cfg(test)]
+mod argument_order_tests;
 mod call_inliner;
 mod clamp;
 mod closure_analysis;
@@ -58,6 +60,7 @@ pub(crate) use substitute::{
 pub(crate) use super_detect::MAX_INLINE_EXPR_RECURSION_DEPTH;
 pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super};
 
+use crate::local_occurrences::WriteCensus;
 use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 use std::collections::{HashMap, HashSet};
@@ -673,6 +676,11 @@ fn inline_functions_inner(
     // is already true for the method parameter), leaving the method reading the
     // wrong value from the class field.
     let module_max_id = find_max_local_id_in_module(module);
+    // Which locals anything writes, for the argument-substitution rule
+    // (`WriteCensus::is_stable_arg`). Inlining keeps it true for the ids it
+    // covers: a copied body writes only locals already counted, and every
+    // id minted below is past its limit.
+    let census = &WriteCensus::of(module);
 
     // Phase 4: Inline calls in init statements.
     // Method calls are always safe (they access `this.field` via pointer indirection).
@@ -702,6 +710,7 @@ fn inline_functions_inner(
             &mut local_types,
             &mut exact_receiver_facts,
             &mut next_local_id,
+            census,
             None,
             &class_field_types,
             false,
@@ -738,6 +747,7 @@ fn inline_functions_inner(
             &mut local_types,
             &mut exact_receiver_facts,
             &mut local_id,
+            census,
             None,
             &class_field_types,
             false,
@@ -788,6 +798,7 @@ fn inline_functions_inner(
                 &mut local_types,
                 &mut exact_receiver_facts,
                 &mut local_id,
+                census,
                 Some(&class_name),
                 &class_field_types,
                 false,
@@ -939,6 +950,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &mut next_local_id,
+            &WriteCensus::unwritten(),
         )
         .unwrap();
 
@@ -972,6 +984,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &mut next_local_id,
+            &WriteCensus::unwritten(),
         )
         .unwrap();
 
