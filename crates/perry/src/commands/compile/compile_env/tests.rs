@@ -411,7 +411,11 @@ fn local_ranges_switch_is_a_cache_input() {
 /// reuse an `=1` object.
 #[test]
 fn int32_operand_switches_are_cache_inputs() {
-    for name in ["PERRY_FACTS_INT32_READS", "PERRY_INT32_OPERANDS"] {
+    for name in [
+        "PERRY_FACTS_INT32_READS",
+        "PERRY_INT32_OPERANDS",
+        "PERRY_INT32_SHADOWS",
+    ] {
         assert!(
             COMPILE_ENV_VARS.contains(&name),
             "{name} must key the compile caches"
