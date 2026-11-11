@@ -261,6 +261,7 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) mod image_cells;
 mod remembered;
 use remembered::*;
+mod restore_walk;
 mod rewrite;
 pub use rewrite::*;
 mod verify;
