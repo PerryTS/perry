@@ -1277,6 +1277,12 @@ fn own_table(fam: Family) -> Option<&'static [(&'static str, Mem)]> {
     })
 }
 
+/// Is family `fam` described member by member (`own_table`)? Box, Wrapper
+/// and Opaque are not: every name is a member of unknown kind.
+pub(super) fn described(fam: Family) -> bool {
+    own_table(fam).is_some()
+}
+
 /// The names on family `fam`'s intrinsic chain: its own prototype's, then
 /// the `Object.prototype` ones it does not shadow (`member`'s order).
 /// `None`: the family has no member table.

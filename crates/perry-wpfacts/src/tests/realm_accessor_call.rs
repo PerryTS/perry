@@ -9,6 +9,9 @@
 //! tssrc (PEELS12, seq 19895): checker.ts `targets[i]()` with `mapper` read as
 //! `Debug.__lookupGetter__(m)`: the array `targets` is the receiver of a call
 //! whose callee may be a realm accessor.
+//! The receiver `o` is a Map: `Map.prototype.size` is the realm accessor its
+//! chain holds under an unknown string key (`Object.prototype` holds only
+//! `__proto__`, which such a key never names: DECISIONS 217).
 use super::annexb_known_accessor::check;
 
 const ANY: &str = "process.argv[3]";
@@ -19,7 +22,7 @@ fn prog(setup: &str, use_: &str) -> String {
         declare function unknown(): any;
         class Cell {{ witness = 1; }}
         const cell = new Cell();
-        const o: any = {{}};
+        const o: any = new Map();
         {setup}
         const g = o.__lookupGetter__({ANY});
         {use_}
@@ -97,5 +100,87 @@ fn realm_accessor_result_is_no_field_value_of_this() {
             "const r = g.call(p); r();",
         ),
         true,
+    );
+}
+
+/// B.2.2.4 on the chain of `recv`, key `key`; the result, called, is stored
+/// into: a ⊤ result (a realm accessor's host value) escapes `cell`.
+fn lookup_prog(setup: &str, recv: &str, key: &str) -> String {
+    format!(
+        r#"
+        declare function unknown(): any;
+        class Cell {{ witness = 1; }}
+        const cell = new Cell();
+        {setup}
+        const g = ({recv} as any).__lookupGetter__({key});
+        const r: any = g ? g.call({{}}) : {{}};
+        r.c = cell;
+        console.log(cell.witness);
+    "#
+    )
+}
+
+/// PEELS15 (tssrc `Debug.__lookupGetter__(m)`): a plain object's chain is
+/// `Object.prototype`, whose one accessor `__proto__` an unknown string key
+/// never names: the query answers `undefined`, nothing is called.
+#[test]
+fn unknown_key_on_a_plain_object_names_no_realm_accessor() {
+    check(&lookup_prog("const o: any = { a: 1 };", "o", ANY), true);
+}
+
+/// The same on a namespace object (debug.ts `Debug`).
+#[test]
+fn unknown_key_on_a_namespace_names_no_realm_accessor() {
+    check(
+        &lookup_prog("namespace NS { export const a = 1; }", "NS", ANY),
+        true,
+    );
+}
+
+/// `Map.prototype.size` is on a Map's chain: the query may return it.
+#[test]
+fn unknown_key_on_a_map_may_name_its_size_getter() {
+    check(&lookup_prog("const o = new Map();", "o", ANY), false);
+}
+
+/// A constant `"__proto__"` names Object.prototype's accessor (20.1.3.8).
+#[test]
+fn proto_key_names_the_proto_accessor() {
+    check(
+        &lookup_prog("const o: any = { a: 1 };", "o", "\"__proto__\""),
+        false,
+    );
+}
+
+/// A program getter under an unknown key is what the query returns.
+#[test]
+fn program_getter_under_an_unknown_key_is_returned() {
+    check(
+        &format!(
+            r#"
+        class Cell {{ witness = 1; }}
+        const cell = new Cell();
+        const box = {{ cell }};
+        const o: any = {{}};
+        Object.defineProperty(o, {ANY}, {{ get() {{ return box; }} }});
+        const g = o.__lookupGetter__({ANY});
+        const r: any = g ? g.call(o) : box;
+        console.log((r.cell as Cell).witness);
+    "#
+        ),
+        true,
+    );
+}
+
+/// Control: a getter dynamic code installs on the plain object's chain.
+#[test]
+fn unknown_key_after_new_function_code_stays_unknown() {
+    check(
+        &lookup_prog(
+            "const o: any = { a: 1 }; new Function(process.argv[2])(o);",
+            "o",
+            ANY,
+        ),
+        false,
     );
 }

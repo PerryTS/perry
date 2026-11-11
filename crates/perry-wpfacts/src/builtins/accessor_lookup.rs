@@ -149,16 +149,8 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
     };
     // B.2.2.4/5: an own accessor of a holder on the chain answers its
     // [[Get]]/[[Set]], a data property or the end of the chain `undefined`.
-    // Under a key that may name any property that includes the realm's own
-    // accessors (`Object.prototype.__proto__`, `Map.prototype.size`, ...),
-    // whose functions only the realm holds: the call hands them out.
-    if key.is_any() {
-        let f = m.tok(TokKind::BuiltinFn(Native::Member {
-            identity: REALM_ACCESSOR,
-            holder: None,
-        }));
-        m.add_tok(c.ret, f);
-    }
+    // The realm's own accessors answer only from the intrinsic holders the
+    // walk passes (`lookup_native_descriptor`): those on `origin`'s chain.
     let act = ChainAct::Lookup { dst: c.ret, setter };
     m.accessor_walk(origin, origin, key, act);
     m.builtin_field_use(origin, key, act);
@@ -176,7 +168,7 @@ pub(crate) fn lookup_native_descriptor(
     setter: bool,
 ) {
     let Key::Named(a) = key else {
-        native_accessor_any(m, holder, dst, setter);
+        native_accessor_any(m, origin, holder, dst, setter);
         return;
     };
     let name = m.atoms[a as usize].clone();
@@ -205,12 +197,33 @@ pub(crate) fn lookup_native_descriptor(
         _ => return,
     };
     if let Some(family) = family {
-        if members::member(family, &name).is_some()
-            || !intrinsic_unwritten(m, family, None, a, NativeMiss::Lookup(dst, setter))
-        {
+        // A described family declares its members' kinds: a function member
+        // and `constructor` are data properties (B.2.2.4: the query answers
+        // `undefined`); `__proto__` (20.1.3.8) and a primitive member may be
+        // one of the realm's own accessors. A family without a member table
+        // (Box, Wrapper, Opaque) may hold any accessor.
+        let unknown = match members::member(family, &name) {
+            None => false,
+            Some(_) if !members::described(family) => true,
+            Some(members::Mem::Proto | members::Mem::Prim(_)) => {
+                realm_accessor_into(m, dst);
+                false
+            }
+            Some(members::Mem::Fn | members::Mem::Ctor) => false,
+        };
+        if unknown || !intrinsic_unwritten(m, family, None, a, NativeMiss::Lookup(dst, setter)) {
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
         }
     }
+}
+
+/// The realm's own accessor functions (`REALM_ACCESSOR`), into `dst`.
+fn realm_accessor_into(m: &mut Model, dst: NodeId) {
+    let f = m.tok(TokKind::BuiltinFn(Native::Member {
+        identity: REALM_ACCESSOR,
+        holder: None,
+    }));
+    m.add_tok(dst, f);
 }
 
 /// A descriptor query under a key that may name any property, on an
@@ -220,17 +233,30 @@ pub(crate) fn lookup_native_descriptor(
 /// write the model does not place on the holder (through ⊤, or onto it under
 /// any key) may have installed a program function: that write answers ⊤,
 /// now or when it arrives (`NativeMiss::Lookup`).
-fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId, setter: bool) {
-    match m.toks[holder as usize] {
+fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, setter: bool) {
+    // The realm's own accessors on this holder: those its declaration may
+    // hold under a key of unknown string. Such a key never names `__proto__`
+    // (DECISIONS 217, `is_proto_key`), so `Object.prototype` holds none; a
+    // primitive member may be an accessor (`Map.prototype.size`); a family
+    // without a member table or a namespace may hold any.
+    let family = match m.toks[holder as usize] {
         TokKind::BuiltinFn(Native::Any) => {
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
             return;
         }
-        TokKind::ObjectProto
-        | TokKind::BuiltinFn(_)
-        | TokKind::Builtin(_)
-        | TokKind::NativeProto(_) => {}
+        TokKind::ObjectProto => Some(seed_family(m, origin).unwrap_or(Family::Object)),
+        TokKind::BuiltinFn(_) => Some(Family::Function),
+        TokKind::NativeProto(ref n) => Some(
+            ns_by_name(n)
+                .and_then(loads::proto_family)
+                .map(|(f, _, _)| f)
+                .unwrap_or(Family::Opaque),
+        ),
+        TokKind::Builtin(_) => None,
         _ => return,
+    };
+    if family.is_none_or(|f| members::any_member(f).1 != 0) {
+        realm_accessor_into(m, dst);
     }
     let star = m.atom(crate::STAR_KEY);
     if native_accessor_written(m, holder, star) {

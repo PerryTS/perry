@@ -404,10 +404,30 @@ console.log(payload.n); // LOOKUP_N
     .unwrap();
 }
 
-/// Control: the found function may be the realm's `__proto__` setter;
-/// called with the payload as receiver it is an unknown call.
+/// Control: under the key `"__proto__"` the found function is the realm's
+/// `__proto__` setter (20.1.3.8.2): called on the payload with `null` it
+/// replaces the payload's prototype (E6).
 #[test]
-fn accessor_lookup_unknown_key_found_function_called_on_the_payload_stays_unproven() {
+fn accessor_lookup_proto_key_found_setter_called_on_the_payload_stays_unproven() {
+    lookup_site(
+        r#"
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = { get x() { return 1; } };
+const found: any = receiver.__lookupSetter__("__proto__");
+if (found) found.call(payload, null);
+console.log(payload.n); // LOOKUP_N
+"#,
+        false,
+    )
+    .unwrap();
+}
+
+/// An unknown string key never names `__proto__` (DECISIONS 217): the
+/// chain {receiver, Object.prototype} holds no setter under it (B.2.2.5),
+/// the query answers `undefined` and nothing is called.
+#[test]
+fn accessor_lookup_unknown_key_names_no_proto_setter() {
     lookup_site(
         r#"
 class Payload { n = 1; }
@@ -417,7 +437,7 @@ const found: any = receiver.__lookupSetter__(process.argv[0]);
 if (found) found.call(payload, null);
 console.log(payload.n); // LOOKUP_N
 "#,
-        false,
+        true,
     )
     .unwrap();
 }
