@@ -59,7 +59,7 @@ fn spread_tail_retains_the_confirmed_image_key_in_its_shape_owner() {
     // immediates in the shape owner and have no image spelling to retain.
     unsafe {
         let source = object(&[("xkey_1", 3.0), ("y", 5.0), ("z", 7.0)]);
-        let result = js_object_spread_fresh_leading(empty_prefix(), source);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         let id = shapes::object_shape_stamp(receiver(result));
         let record = shapes::shape_record_for_word(id).unwrap();
         let key = crate::JSValue::string_ptr(&IMAGE.string as *const _ as *mut _);
@@ -87,8 +87,8 @@ fn spread_birth_reuses_shape_and_keeps_all_values_inline() {
             .map(|(i, s)| (s.as_str(), i as f64))
             .collect();
         let source = object(&entries);
-        let a = js_object_spread_fresh_leading(empty_prefix(), source);
-        let b = js_object_spread_fresh_leading(empty_prefix(), source);
+        let a = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        let b = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         assert_ne!(a.to_bits(), b.to_bits());
         assert_eq!(
             shapes::object_shape_stamp(receiver(a)),
@@ -115,7 +115,7 @@ fn spread_prefix_overlap_keeps_order_and_overwrites_source_slots() {
         let prefix = object(&[("before", 1.0), ("shared", 2.0)]);
         let source = object(&[("shared", 3.0), ("after", 4.0)]);
         for _ in 0..2 {
-            let result = js_object_spread_fresh(prefix, source);
+            let result = js_object_spread_fresh(prefix, source, 0);
             assert_eq!(get(result, "before"), 1.0);
             assert_eq!(get(result, "shared"), 3.0);
             assert_eq!(get(result, "after"), 4.0);
@@ -139,7 +139,7 @@ fn spread_frozen_source_births_default_writable_attributes() {
     unsafe {
         let source = object(&[("x", 3.0), ("y", 5.0)]);
         js_object_freeze(source);
-        let result = js_object_spread_fresh_leading(empty_prefix(), source);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         let record =
             shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(result))).unwrap();
         assert_eq!(record.summary(), 0);
@@ -156,8 +156,8 @@ fn spread_number_copy_refuses_a_generalized_source_shape() {
     let _suppress = crate::gc::GcSuppressScope::new();
     unsafe {
         let source = object(&[("number_copy_x", 3.0), ("number_copy_y", 5.0)]);
-        let first = js_object_spread_fresh_leading(empty_prefix(), source);
-        let second = js_object_spread_fresh_leading(empty_prefix(), source);
+        let first = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        let second = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         let record =
             shapes::shape_record_for_word(shapes::object_shape_stamp(receiver(second))).unwrap();
         assert_eq!(field_rep::slot_rep(record.rep(), 0), field_rep::REP_F64);
@@ -165,7 +165,7 @@ fn spread_number_copy_refuses_a_generalized_source_shape() {
         let child = object(&[("value", 17.0)]);
         let key = crate::string::js_string_from_bytes(b"number_copy_x".as_ptr(), 13);
         js_object_set_field_by_name(receiver(source), key, child);
-        let third = js_object_spread_fresh_leading(empty_prefix(), source);
+        let third = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         assert_eq!(get(third, "number_copy_x").to_bits(), child.to_bits());
         assert_eq!(get(third, "number_copy_y"), 5.0);
         assert_eq!(get(first, "number_copy_x"), 3.0);
@@ -179,10 +179,10 @@ fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
     unsafe {
         let source = object(&[("spread_gc_namespace", 3.0)]);
         js_object_freeze(source);
-        let result = js_object_spread_fresh_leading(empty_prefix(), source);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
         let id = shapes::object_shape_stamp(receiver(source));
         let kid = id.0 as usize;
-        let slot = spread::cache_slot(LayoutWord(0), id.0);
+        let slot = spread::cache_slot(LayoutWord(0), id.0, 0);
         let entry = with_transition_cache(|t| (*t)[slot]);
         assert_eq!(spread::source_shape(&entry), Some(id));
         assert_eq!(
@@ -210,5 +210,116 @@ fn spread_namespace_is_not_rewritten_as_a_heap_key_and_prunes_retired_source() {
         assert!(shapes::shape_is_retired(id));
         prune_dead_transition_cache_entries(&|_| false);
         assert_eq!(with_transition_cache(|t| (*t)[slot].next_keys), 0);
+    }
+}
+
+unsafe fn has_meta(value: f64) -> bool {
+    !(*crate::meta_slot_of!(crate::meta_obj_runtime_born!(receiver(value)))).is_null()
+}
+
+unsafe fn keyed(prefix: &str, n: usize) -> Vec<(String, f64)> {
+    (0..n).map(|i| (format!("{prefix}{i}"), i as f64)).collect()
+}
+
+unsafe fn object_of(entries: &[(String, f64)]) -> f64 {
+    let pairs: Vec<(&str, f64)> = entries.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    object(&pairs)
+}
+
+/// `{...src, x, y}`: the spread result is born with room for the two later
+/// keys, so defining them fills inline slots and hangs no meta record (no
+/// spill array) on the object. Cold birth first, then the learned edge.
+#[test]
+fn spread_with_later_keys_is_born_wide_enough_to_hold_them() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let entries = keyed("born_wide_", 5);
+        for _ in 0..2 {
+            let source = object_of(&entries);
+            let result = js_object_spread_fresh_leading(empty_prefix(), source, 2);
+            assert!(object_inline_capacity(receiver(result)) >= 7);
+            for (i, name) in ["born_wide_x", "born_wide_y"].iter().enumerate() {
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                js_object_set_field_by_name(receiver(result), key, 10.0 + i as f64);
+            }
+            assert!(!has_meta(result), "a later literal key spilled");
+            assert_eq!(object_keys(receiver(result)).count(), 7);
+            assert_eq!(get(result, "born_wide_4"), 4.0);
+            assert_eq!(get(result, "born_wide_y"), 11.0);
+        }
+        // With a prefix: `{p, ...src, z}`.
+        for _ in 0..2 {
+            let prefix = object(&[("born_wide_p", 9.0)]);
+            let source = object_of(&entries);
+            let result = super::spread::js_object_spread_fresh(prefix, source, 1);
+            assert!(object_inline_capacity(receiver(result)) >= 7);
+            let key = crate::string::js_string_from_bytes(b"born_wide_z".as_ptr(), 11);
+            js_object_set_field_by_name(receiver(result), key, 3.0);
+            assert!(!has_meta(result), "a later literal key spilled");
+            assert_eq!(get(result, "born_wide_p"), 9.0);
+            assert_eq!(get(result, "born_wide_z"), 3.0);
+        }
+    }
+}
+
+/// `Object.assign({}, src)`: the fresh target is born at the source's key
+/// count, so the copy spills nothing; a source the shape does not answer for
+/// (a number) gets the empty literal's width and copies nothing.
+#[test]
+fn assign_into_a_fresh_target_is_born_with_the_source_width() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        for n in [1usize, 5, 8, 40] {
+            let entries = keyed("assign_fresh_", n);
+            let source = object_of(&entries);
+            let result = super::assign::js_object_assign_fresh(source);
+            assert!(object_inline_capacity(receiver(result)) as usize >= n);
+            assert!(!has_meta(result), "the copy of {n} keys spilled");
+            assert_eq!(object_keys(receiver(result)).count() as usize, n);
+            for (k, v) in &entries {
+                assert_eq!(get(result, k), *v);
+            }
+        }
+        let result = super::assign::js_object_assign_fresh(7.0);
+        assert_eq!(
+            object_inline_capacity(receiver(result)) as usize,
+            INLINE_SLOT_FLOOR
+        );
+        assert!(
+            object_keys(receiver(result)).is_null() || object_keys(receiver(result)).count() == 0
+        );
+    }
+}
+
+/// The reserved slots are part of the result's inline bound, so a result born
+/// with a tail and one born without carry different shapes: a key added to the
+/// narrow one after the wide one learned its edge still lands where its own
+/// width puts it (a shared shape would hand the narrow object an inline slot
+/// past its allocation).
+#[test]
+fn spread_tail_width_is_part_of_the_result_shape() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let source = object(&[("tail_shape_i", 1.0), ("tail_shape_j", 2.0)]);
+        let wide = js_object_spread_fresh_leading(empty_prefix(), source, 1);
+        let narrow = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        assert_ne!(
+            shapes::object_shape_stamp(receiver(wide)),
+            shapes::object_shape_stamp(receiver(narrow))
+        );
+        let key = crate::string::js_string_from_bytes(b"tail_shape_k".as_ptr(), 12);
+        js_object_set_field_by_name(receiver(wide), key, 5.0);
+        let key = crate::string::js_string_from_bytes(b"tail_shape_k".as_ptr(), 12);
+        js_object_set_field_by_name(receiver(narrow), key, 6.0);
+        let key = crate::string::js_string_from_bytes(b"tail_shape_l".as_ptr(), 12);
+        js_object_set_field_by_name(receiver(narrow), key, 7.0);
+        assert!(!has_meta(wide));
+        assert_eq!(get(wide, "tail_shape_k"), 5.0);
+        assert_eq!(get(narrow, "tail_shape_k"), 6.0);
+        assert_eq!(get(narrow, "tail_shape_l"), 7.0);
+        assert_eq!(get(narrow, "tail_shape_j"), 2.0);
     }
 }

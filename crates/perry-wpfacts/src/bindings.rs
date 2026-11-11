@@ -337,6 +337,13 @@ pub struct BindingFacts {
     /// program string literal (`literal_strings`): born shared, never
     /// appended to in place.
     pub literal_strings: bool,
+    /// It holds only plain Arrays whose length nothing changes while its
+    /// function runs (`held_lengths`): a loop of that function may hold
+    /// `x.length` across its calls.
+    pub stable_length: bool,
+    /// Such a local whose Arrays all have a defined length
+    /// (`solve::arr_len`): their elements start right behind the header.
+    pub stable_front: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities

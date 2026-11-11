@@ -6,7 +6,8 @@ impl<'a> Gen<'a> {
     /// The receiver of a generic in-place permutation (`reverse`,
     /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
     /// length floor on (`solve::arr_len`).
-    fn permuted_len(&mut self, r: NodeId) {
+    fn permuted_len(&mut self, fx: &Fx, r: NodeId) {
+        self.len_index_site(fx, r, "permuted");
         self.m.arr_permuted.insert(r);
         if !self.m.arr_floor_off {
             self.m.cons(
@@ -16,6 +17,16 @@ impl<'a> Gen<'a> {
                     hi: crate::model::Iv::TOP.hi,
                 },
             );
+        }
+    }
+
+    /// Where the storeless `Cons::LenIndex` of receiver `r` runs
+    /// (`Model::len_index_sites`). One site per node: a second function's
+    /// rule on a node the first owns is a capture, which ends the fact.
+    fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
+        if self.m.held_lengths && !self.m.len_index_sites.contains_key(&r) {
+            let site = self.store_site(fx.module, fx.f, what.into(), None, false);
+            self.m.len_index_sites.insert(r, site);
         }
     }
 
@@ -33,6 +44,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ArrayPop(id) => {
                 let a = self.local(mi, *id);
+                self.len_index_site(fx, a, "pop");
                 // `pop` sets `length` (ArraySetLength): the array's length
                 // moves (`solve::arr_len`).
                 self.m.cons(
@@ -52,7 +64,7 @@ impl<'a> Gen<'a> {
             // every array receiver, as `pop` does.
             Expr::ArrayReverseValue { receiver } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 r
             }
             Expr::ArrayCopyWithinValue {
@@ -62,7 +74,7 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 let _ = self.prim_op(
                     fx,
                     &[target, start],

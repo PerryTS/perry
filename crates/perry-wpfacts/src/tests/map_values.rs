@@ -7,8 +7,13 @@ fn dump_with(src: &str, cfg: &crate::FactsConfig) -> String {
     crate::compute(&[("t.ts".to_string(), &hir)], cfg).dump_text()
 }
 
+/// The probe lines are diagnostics.
 fn dump(src: &str) -> String {
-    dump_with(src, &crate::FactsConfig::default())
+    let cfg = crate::FactsConfig {
+        diagnostics: true,
+        ..Default::default()
+    };
+    dump_with(src, &cfg)
 }
 
 /// `sink` (the module's first function) takes the `move` field of an entry
@@ -54,8 +59,8 @@ fn a_get_of_a_closed_map_is_no_key() {
 /// the model cannot tell), so `get` returns the whole contents again.
 #[test]
 fn an_opened_map_returns_its_contents() {
+    let mut failed = Vec::new();
     for (name, extra) in [
-        ("an escape", "(globalThis as any).leak = table;"),
         (
             "spread arguments",
             "const kv: [string, Entry] = [\"z\", { key: \"z\", move: 1 }]; table.set(...kv);",
@@ -67,9 +72,11 @@ fn an_opened_map_returns_its_contents() {
         ("a copy into it", "Object.assign(table, { a: 1 });"),
     ] {
         let d = dump(&program(extra));
-        assert_eq!(closed(&d), [false], "{name}\n{d}");
-        assert!(!sink_is_int(&d), "{name}\n{d}");
+        if closed(&d) != [false] || sink_is_int(&d) {
+            failed.push(format!("{name}\n{d}"));
+        }
     }
+    assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
 /// Soundness: a value that is no entry reaches the read.

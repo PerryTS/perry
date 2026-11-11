@@ -41,7 +41,18 @@ impl Model {
                 }
             }
             Cons::LenIndex { lo, hi } => {
+                // An index store's rule comes with its `Cons::Store`, which
+                // records the event; `pop` and a generic permutation have
+                // only this rule (`held_lengths`).
+                let at = match self.len_index_sites.get(&n) {
+                    _ if self.len_index_stores.contains(&n) => None,
+                    Some(&site) => Some(site),
+                    None => Some(u32::MAX),
+                };
                 for &t in toks {
+                    if let Some(at) = at {
+                        self.len_event(t, at, false);
+                    }
                     self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
             }
@@ -523,6 +534,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
+                        self.len_event(t, u32::MAX, false);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
@@ -1412,6 +1424,7 @@ impl Model {
                 len_ivs.extend(index_strs.iter().map(|&v| Iv::int(v, v)));
                 for iv in len_ivs {
                     self.indexed_store_sites.insert(site);
+                    self.len_index_stores.insert(o);
                     if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
                         self.cons(
                             o,
@@ -1689,6 +1702,7 @@ impl Model {
                 for &d in toks {
                     // A copy into an Array (`Object.assign`) may write any
                     // index, past its end too.
+                    self.len_event(d, site, false);
                     self.arr_len_top(d);
                     self.spread_into(src, d, site, from);
                 }

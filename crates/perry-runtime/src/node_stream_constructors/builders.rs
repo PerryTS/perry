@@ -610,6 +610,7 @@ fn init_transform_kind(
             crate::object::js_object_spread_fresh(
                 f64::from_bits(TAG_UNDEFINED),
                 opts.get_nanbox_f64(),
+                0,
             )
         });
         let writable_hwm =

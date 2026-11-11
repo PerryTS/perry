@@ -41,20 +41,41 @@ unsafe fn source_record(value: f64) -> Option<(*const ObjectHeader, u32, shapes:
     record.spread_data().then_some((object, id, record))
 }
 
+/// The own key count of a source whose shape proves every key an enumerable
+/// string-keyed data property ([`source_record`]); 0 for any other value.
+pub(super) unsafe fn plain_data_key_count(value: f64) -> u32 {
+    source_record(value).map_or(0, |(_, _, record)| record.logical_key_count())
+}
+
+/// Whether `value` is an ordinary-band object whose shape proves it owns no
+/// symbol-keyed property.
+pub(super) unsafe fn proves_no_symbols(value: f64) -> bool {
+    ordinary_shape(value)
+        .and_then(|(_, id)| shapes::shape_record_for_word(LayoutWord(id)))
+        .is_some_and(|record| record.proves_no_symbols())
+}
+
+/// An edge is learned per (prefix, source, tail): the result's inline bound
+/// (its shape's `live_inline_slot_count`) includes the tail's reserved slots,
+/// so a different tail is a different result shape.
 #[inline]
-fn spread_key(source: u32) -> u64 {
-    u64::from(source)
+fn spread_key(source: u32, tail: u32) -> u64 {
+    u64::from(source) | (u64::from(tail) << 32)
 }
 
 #[inline]
-pub(super) fn cache_slot(prefix: LayoutWord, source: u32) -> usize {
-    transition_cache_slot(prefix, spread_key(source), SPREAD_TRANSITION_NAMESPACE)
+pub(super) fn cache_slot(prefix: LayoutWord, source: u32, tail: u32) -> usize {
+    transition_cache_slot(
+        prefix,
+        spread_key(source, tail),
+        SPREAD_TRANSITION_NAMESPACE,
+    )
 }
 
 #[inline]
-fn lookup(prefix: LayoutWord, source: u32) -> Option<TransitionEntry> {
-    let kid = spread_key(source);
-    let entry = with_transition_cache(|t| unsafe { (*t)[cache_slot(prefix, source)] });
+fn lookup(prefix: LayoutWord, source: u32, tail: u32) -> Option<TransitionEntry> {
+    let kid = spread_key(source, tail);
+    let entry = with_transition_cache(|t| unsafe { (*t)[cache_slot(prefix, source, tail)] });
     (entry.next_keys != 0
         && entry.prev_shape_id == prefix
         && entry.key_id == kid
@@ -65,14 +86,14 @@ fn lookup(prefix: LayoutWord, source: u32) -> Option<TransitionEntry> {
 /// Used by the existing carrier/prune walks; a source id is weak metadata,
 /// never a string address to be rewritten by the collector.
 pub(super) fn source_shape(entry: &TransitionEntry) -> Option<LayoutWord> {
-    (entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE)
-        .then(|| u32::try_from(entry.key_id).ok().map(LayoutWord))
-        .flatten()
+    // The low word of the key is the source ShapeId (`spread_key`).
+    (entry.slot_idx >> 24 == SPREAD_TRANSITION_NAMESPACE).then(|| LayoutWord(entry.key_id as u32))
 }
 
 fn learn(
     prefix: LayoutWord,
     source: LayoutWord,
+    tail: u32,
     source_inline: u32,
     shape: LayoutWord,
     keys: ObjectKeys,
@@ -81,8 +102,8 @@ fn learn(
     if source_inline > SOURCE_INLINE_MASK {
         return;
     }
-    let kid = spread_key(source.0);
-    let slot = cache_slot(prefix, source.0);
+    let kid = spread_key(source.0, tail);
+    let slot = cache_slot(prefix, source.0, tail);
     arm_transition_cache_young(slot, keys.arr() as usize, kid, SPREAD_TRANSITION_NAMESPACE);
     with_transition_cache(|table| unsafe {
         // GC_STORE_AUDIT(ROOT): existing weak transition edge and young log.
@@ -275,25 +296,43 @@ unsafe fn copy_source_slots(
     }
 }
 
+/// The birth width of a spread result: its own `count` keys plus the `tail`
+/// keys the literal defines after this spread part, so those definitions fill
+/// inline slots instead of spilling. A later key that repeats a copied key
+/// overwrites it and leaves its reserved slot as undefined slack.
+#[inline]
+fn birth_width(count: u32, tail: u32) -> usize {
+    (count as usize)
+        .saturating_add(tail as usize)
+        .max(INLINE_SLOT_FLOOR)
+}
+
 /// The shared prefixed entry retains the complete source-ordered path.
+/// `tail` is the number of literal keys after this spread part.
 #[no_mangle]
-pub unsafe extern "C" fn js_object_spread_fresh(prefix: f64, source: f64) -> f64 {
-    spread_general(prefix, source)
+pub unsafe extern "C" fn js_object_spread_fresh(prefix: f64, source: f64, tail: u32) -> f64 {
+    spread_general(prefix, source, tail)
 }
 
 /// One shared leading-spread entry. Its ignored prefix is the compiler
 /// accumulator (undefined); the ABI lets the same rooting combinator advance it.
+/// `tail` is the number of literal keys after the spread.
 #[no_mangle]
-pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f64) -> f64 {
+pub unsafe extern "C" fn js_object_spread_fresh_leading(
+    _prefix: f64,
+    source: f64,
+    tail: u32,
+) -> f64 {
     if let Some((src, source_id)) = ordinary_shape(source) {
-        if let Some(entry) = lookup(LayoutWord(0), source_id) {
+        if let Some(entry) = lookup(LayoutWord(0), source_id, tail) {
             // The full source ShapeId names the admission learned by
             // birth_slow. Getters, symbols, deletions and attribute edits
             // change that id; dictionary layouts never teach an edge.
             // Reuse the learned bounds, just as a named transition reuses
             // its learned slot, without lifting either descriptor again.
             let count = entry.target_len;
-            let size = meta_form_alloc_bytes((count as usize).max(INLINE_SLOT_FLOOR));
+            let width = birth_width(count, tail);
+            let size = meta_form_alloc_bytes(width);
             let raw = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
             if !raw.is_null() {
                 debug_assert_edge(src, entry.target_shape_id);
@@ -315,19 +354,19 @@ pub unsafe extern "C" fn js_object_spread_fresh_leading(_prefix: f64, source: f6
                         ptr::null(),
                     );
                 }
-                initialize_slack(object, count as usize);
+                initialize_slack(object, count as usize, width);
                 return crate::value::js_nanbox_pointer(object as i64);
             }
-            return leading_collect(source, entry);
+            return leading_collect(source, entry, tail);
         }
     }
-    leading_slow(source)
+    leading_slow(source, tail)
 }
 
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
+unsafe fn spread_general(prefix: f64, source: f64, tail: u32) -> f64 {
     if let Some((src, source_id, record)) = source_record(source) {
         let predecessor = if prefix.to_bits() == crate::value::TAG_UNDEFINED {
             Some((None, 0))
@@ -344,25 +383,25 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
             })
         };
         if let Some((previous, prefix_id)) = predecessor {
-            if let Some(entry) = lookup(LayoutWord(prefix_id), source_id) {
+            if let Some(entry) = lookup(LayoutWord(prefix_id), source_id, tail) {
                 // A stabilized edge owns its exact target descriptor, just as
                 // the named transition hit does. A leading positional copy
                 // needs no second descriptor probe merely to stamp that id.
                 let result =
                     previous.and_then(|_| shapes::shape_record_for_word(entry.target_shape_id));
                 if previous.is_none() || result.is_some() {
-                    let size =
-                        meta_form_alloc_bytes((entry.target_len as usize).max(INLINE_SLOT_FLOOR));
+                    let width = birth_width(entry.target_len, tail);
+                    let size = meta_form_alloc_bytes(width);
                     let raw =
                         crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT);
                     if !raw.is_null() {
                         debug_assert_edge(src, entry.target_shape_id);
                         let object = finish_header(raw.cast(), entry.target_shape_id);
                         copy_slots(object, previous, src, record, result, ptr::null());
-                        initialize_slack(object, entry.target_len as usize);
+                        initialize_slack(object, entry.target_len as usize, width);
                         return crate::value::js_nanbox_pointer(object as i64);
                     }
-                    return birth_cached_collect(prefix, source);
+                    return birth_cached_collect(prefix, source, tail);
                 }
             }
             return birth_slow(
@@ -371,10 +410,11 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
                 src,
                 LayoutWord(source_id),
                 record,
+                tail,
             );
         }
     }
-    generic(prefix, source)
+    generic(prefix, source, tail)
 }
 
 /// A bump refusal is an allocation safepoint, not a new shape construction.
@@ -383,20 +423,20 @@ unsafe fn spread_general(prefix: f64, source: f64) -> f64 {
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
+unsafe fn birth_cached_collect(prefix: f64, source: f64, tail: u32) -> f64 {
     let (_, source_id) = ordinary_shape(source).unwrap();
     let prefix_id = if prefix.to_bits() == crate::value::TAG_UNDEFINED {
         0
     } else {
         ordinary_shape(prefix).unwrap().1
     };
-    let entry =
-        lookup(LayoutWord(prefix_id), source_id).expect("nonmoving bump refusal retains its edge");
+    let entry = lookup(LayoutWord(prefix_id), source_id, tail)
+        .expect("nonmoving bump refusal retains its edge");
     let scope = crate::gc::RuntimeHandleScope::new();
     let prefix = scope.root_nanbox_f64(prefix);
     let source = scope.root_nanbox_f64(source);
     let _keys = scope.root_raw_mut_ptr(entry.next_keys as *mut ArrayHeader);
-    let raw = allocate_fields(entry.target_len);
+    let raw = allocate_fields(entry.target_len, tail);
     let p = prefix.get_nanbox_f64();
     let s = source.get_nanbox_f64();
     let (src, _, record) = source_record(s).expect("rooted spread source retains its shape");
@@ -413,18 +453,17 @@ unsafe fn birth_cached_collect(prefix: f64, source: f64) -> f64 {
         shapes::stamp_object_shape_id_with_carrier_note(object, entry.target_shape_id);
     }
     copy_slots(object, previous, src, record, Some(result), ptr::null());
-    initialize_slack(object, entry.target_len as usize);
     crate::value::js_nanbox_pointer(object as i64)
 }
 
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn leading_collect(source: f64, entry: TransitionEntry) -> f64 {
+unsafe fn leading_collect(source: f64, entry: TransitionEntry, tail: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(source);
     let _keys = scope.root_raw_mut_ptr(entry.next_keys as *mut ArrayHeader);
-    let raw = allocate_fields(entry.target_len);
+    let raw = allocate_fields(entry.target_len, tail);
     let (src, _, record) = source_record(source.get_nanbox_f64()).unwrap();
     let object = finish_header(raw, entry.target_shape_id);
     if !crate::arena::pointer_in_nursery(object as usize) {
@@ -437,23 +476,22 @@ unsafe fn leading_collect(source: f64, entry: TransitionEntry) -> f64 {
         record.live_inline_slot_count(),
         ptr::null(),
     );
-    initialize_slack(object, entry.target_len as usize);
     crate::value::js_nanbox_pointer(object as i64)
 }
 
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn leading_slow(source: f64) -> f64 {
+unsafe fn leading_slow(source: f64, tail: u32) -> f64 {
     let Some((src, source_id, record)) = source_record(source) else {
-        return generic(f64::from_bits(crate::value::TAG_UNDEFINED), source);
+        return generic(f64::from_bits(crate::value::TAG_UNDEFINED), source, tail);
     };
     let count = record.logical_key_count();
     if count == 0 {
         // No source edge remains live. Reuse the existing keyless birth
         // authority and normal collection pacing (a null key list cannot
         // teach a weak transition edge).
-        return crate::value::js_nanbox_pointer(js_object_alloc_plain(0) as i64);
+        return crate::value::js_nanbox_pointer(js_object_alloc_plain(tail) as i64);
     }
     let _suppress = crate::gc::GcSuppressScope::new();
     let numbers = count <= field_rep::REP_SLOTS
@@ -484,8 +522,8 @@ unsafe fn leading_slow(source: f64) -> f64 {
         let proof = canonical_keys::SharedLayout::of_receiver(src.cast_mut()).unwrap();
         canonical_keys::canonicalize(&proof, list, count).view()
     };
-    let shape = intern_result(keys, rep);
-    let object = allocate_fields(count);
+    let shape = intern_result(keys, rep, tail);
+    let object = allocate_fields(count, tail);
     finish_header(object, LayoutWord(shape));
     shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
     let source_keys = positional_source(record, keys.arr());
@@ -500,6 +538,7 @@ unsafe fn leading_slow(source: f64) -> f64 {
         learn(
             LayoutWord(0),
             LayoutWord(source_id),
+            tail,
             record.live_inline_slot_count(),
             LayoutWord(shape),
             keys,
@@ -512,11 +551,13 @@ unsafe fn leading_slow(source: f64) -> f64 {
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
+/// `tail` slots past the keys are the result's reserved inline slack: they
+/// are part of its inline bound, as for a keyless birth of that width.
+unsafe fn intern_result(keys: ObjectKeys, rep: u64, tail: u32) -> u32 {
     shapes::publish_shape_result(shapes::shape_descriptor_intern_with_rep(
         keys,
         keys.count(),
-        keys.count(),
+        keys.count().saturating_add(tail),
         0,
         shapes::ShapeObjectKind::Ordinary,
         0,
@@ -531,12 +572,14 @@ unsafe fn intern_result(keys: ObjectKeys, rep: u64) -> u32 {
 }
 
 /// Cold minting and collecting cache hits use the same unpublished allocator.
-/// Keep its allocation/initialization sequence out of both cold callers.
+/// Keep its allocation/initialization sequence out of both cold callers. It
+/// initializes every slot of the [`birth_width`], the slack included.
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-fn allocate_fields(count: u32) -> *mut ObjectHeader {
-    super::alloc_basic::object_alloc_unpublished(0, count)
+fn allocate_fields(count: u32, tail: u32) -> *mut ObjectHeader {
+    let width = u32::try_from(birth_width(count, tail)).unwrap_or(u32::MAX);
+    super::alloc_basic::object_alloc_unpublished(0, width)
 }
 
 #[inline]
@@ -549,9 +592,9 @@ unsafe fn finish_header(object: *mut ObjectHeader, shape: LayoutWord) -> *mut Ob
     object
 }
 
-unsafe fn initialize_slack(object: *mut ObjectHeader, count: usize) {
-    for slot in count..INLINE_SLOT_FLOOR {
-        // GC_STORE_AUDIT(INIT): untraced allocation-floor slack is undefined.
+unsafe fn initialize_slack(object: *mut ObjectHeader, count: usize, width: usize) {
+    for slot in count..width {
+        // GC_STORE_AUDIT(INIT): untraced birth-width slack is undefined.
         fields(object)
             .cast_mut()
             .add(slot)
@@ -568,6 +611,7 @@ unsafe fn birth_slow(
     source: *const ObjectHeader,
     source_id: LayoutWord,
     record: shapes::ShapeRecordRef,
+    tail: u32,
 ) -> f64 {
     // No callbacks in this construction. Suppress collection only while its
     // borrowed inputs and unfinished storage lack independent roots.
@@ -635,9 +679,9 @@ unsafe fn birth_slow(
         super::rebuild_array_layout_from_slots(list);
         canonical_keys::canonicalize(&proof, list, words.len() as u32).view()
     };
-    let shape = intern_result(keys, rep);
+    let shape = intern_result(keys, rep, tail);
     drop(census);
-    let object = allocate_fields(keys.count());
+    let object = allocate_fields(keys.count(), tail);
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::stamp_object_shape_id_with_carrier_note(object, LayoutWord(shape));
     let result = shapes::shape_record_for_word(LayoutWord(shape)).unwrap();
@@ -648,6 +692,7 @@ unsafe fn birth_slow(
         learn(
             prefix_id,
             source_id,
+            tail,
             record.live_inline_slot_count(),
             LayoutWord(shape),
             keys,
@@ -660,11 +705,13 @@ unsafe fn birth_slow(
 #[cold]
 #[inline(never)]
 #[optimize(size)]
-unsafe fn generic(prefix: f64, source: f64) -> f64 {
+unsafe fn generic(prefix: f64, source: f64, tail: u32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_nanbox_f64(source);
+    // The source's own key count is unknown here (a proxy, an accessor or
+    // dictionary source, an array, a primitive): reserve the literal's tail only.
     let target = if prefix.to_bits() == crate::value::TAG_UNDEFINED {
-        crate::value::js_nanbox_pointer(js_object_alloc_plain(0) as i64)
+        crate::value::js_nanbox_pointer(js_object_alloc_plain(tail) as i64)
     } else {
         prefix
     };
