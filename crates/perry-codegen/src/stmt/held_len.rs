@@ -73,3 +73,11 @@ pub(super) fn classify(
         front,
     })
 }
+
+/// `len` (a length, as a double) or `i32::MAX`, whichever is less.
+pub(super) fn int32_bound(ctx: &mut FnCtx<'_>, len: &str) -> String {
+    let max = crate::nanbox::double_literal(f64::from(i32::MAX));
+    let blk = ctx.block();
+    let past = blk.fcmp("ogt", len, &max);
+    blk.select(crate::types::I1, &past, crate::types::DOUBLE, &max, len)
+}

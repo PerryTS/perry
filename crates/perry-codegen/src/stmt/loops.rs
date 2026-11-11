@@ -8014,6 +8014,12 @@ fn lower_for_after_init_impl(
             hoisted_length_slot.as_ref(),
         ) {
             let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
+            // A length past int32 has no `i32` (`held_len`): the counter's
+            // `i32` never passes `i32::MAX`, so that is its bound.
+            let len_dbl = match held_by_facts {
+                Some(_) => super::held_len::int32_bound(ctx, &len_dbl),
+                None => len_dbl,
+            };
             let len_i32 = ctx.block().fptosi(DOUBLE, &len_dbl, I32);
             let slot = ctx.func.alloca_entry(I32);
             ctx.block().store(I32, &len_i32, &slot);
