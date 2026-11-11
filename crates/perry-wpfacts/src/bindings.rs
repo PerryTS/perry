@@ -349,14 +349,16 @@ pub struct IndexedOwner {
 /// primitive values on field observation nodes; that is not a program write.
 pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
     let numeric_key = |site: &u32| {
-        m.stores[*site as usize].key_value.is_some_and(|n| {
-            let n = &m.nodes[n as usize];
-            n.prim == crate::model::prim::NUM
-                && n.pts
-                    .to_sorted()
-                    .into_iter()
-                    .all(|v| v != TOP && m.beside_values(v))
-        })
+        // A fill push (`push_fills`) stores an element, nothing else.
+        m.push_fill_sites.contains_key(site)
+            || m.stores[*site as usize].key_value.is_some_and(|n| {
+                let n = &m.nodes[n as usize];
+                n.prim == crate::model::prim::NUM
+                    && n.pts
+                        .to_sorted()
+                        .into_iter()
+                        .all(|v| v != TOP && m.beside_values(v))
+            })
     };
     if m.any_writers
         .get(&tm)
