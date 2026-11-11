@@ -28,7 +28,10 @@
 //!   whole-program receiver fact: `module`, the module has no facts at all
 //!   (facts off, over the solver bound, or nothing proven); `binding`, the
 //!   local has none; `class-set-empty` or `class-set-many`, its class set
-//!   is not one class; `class`, no layout facts for that class), `too-many-slots` (more than
+//!   is not one class; `class`, no layout facts for that class), `escaped` (the module has
+//!   facts but no receiver or class facts at all: its values escaped),
+//!   `unreached-body` (the solve gave other bindings of the module a
+//!   representation, not this one: it never saw the body), `too-many-slots` (more than
 //!   8), `pointer-or-unknown-field-kind` (a field whose whole-program kind
 //!   may be a pointer or is unknown). For a literal: `literal-shape` (not a
 //!   scalar candidate by its shape: empty, more than 16 fields or elements,
@@ -648,8 +651,12 @@ impl Census<'_> {
         }
         let facts = &self.m.facts;
         let Some(recv) = facts.locals.get(&id) else {
-            return Some(if facts.locals.is_empty() && facts.classes.is_empty() {
+            return Some(if facts.is_empty() {
                 "no-facts:module"
+            } else if facts.locals.is_empty() && facts.classes.is_empty() {
+                "escaped"
+            } else if !facts.local_reps.is_empty() && !facts.local_reps.contains_key(&id) {
+                "unreached-body"
             } else {
                 "no-facts:binding"
             });
