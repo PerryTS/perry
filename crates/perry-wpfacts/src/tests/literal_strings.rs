@@ -142,3 +142,49 @@ fn the_probe_names_the_field_with_its_constants() {
         "{line}"
     );
 }
+
+/// The probe lines of `src`.
+fn probe(src: &str) -> Vec<String> {
+    let pf = facts_with(
+        src,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    pf.rep_probe
+        .iter()
+        .filter(|l| l.starts_with("# lit_strings "))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn two_methods_choosing_among_the_same_literals_keep_the_fact() {
+    // A selection of literals in one method and a flip that reads the
+    // field in another.
+    let src = r#"
+    const many = process.argv.length > 100;
+    class B {
+      side: string = "white";
+      load(s: string): void { this.side = s === "w" ? "white" : "black"; }
+      flip(): void { this.side = this.side === "white" ? "black" : "white"; }
+    }
+    const b = new B(); b.load(many ? "w" : "b"); b.flip(); console.log(b.side);
+    "#;
+    assert!(
+        field_fact(src, "B", "side", FactsConfig::default()),
+        "{:#?}",
+        probe(src)
+    );
+}
+
+#[test]
+fn the_probe_says_what_ends_a_string_fields_fact() {
+    let lines = probe(SIDE);
+    let note = lines
+        .iter()
+        .find(|l| l.contains("Game.note "))
+        .unwrap_or_else(|| panic!("no note line in {lines:#?}"));
+    assert!(note.contains("refused=any_string:n"), "{note}");
+}

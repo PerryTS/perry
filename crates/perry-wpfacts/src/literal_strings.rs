@@ -24,7 +24,8 @@
 //! String, a wrong claim the check-mode witness at the consuming store or
 //! alias must catch. The dump (`PERRY_FACTS_DUMP`) prints one
 //! `# lit_strings` line per local and per field the fact holds for, with
-//! its constants.
+//! its constants, and one per other String field with what ends the fact
+//! (`refused=top:n<node>`, `any_string:n<node>`, `kind_top`, `accessor`).
 
 use crate::gen::Gen;
 use crate::model::{prim, Atom, Model, NodeId, STRS_TOP, TOP};
@@ -73,6 +74,30 @@ pub(crate) fn constants(m: &Model, nodes: &[NodeId]) -> Option<Vec<Atom>> {
     Some(atoms)
 }
 
+/// Why `nodes`, which may hold a String, carry no fact (the probe): the
+/// first node that holds ⊤ or a bare marker (`top`) or any string
+/// (`any_string`). `None` when the fact holds or no node holds a String.
+pub(crate) fn refusal(m: &Model, nodes: &[NodeId]) -> Option<String> {
+    if !m.literal_strings || m.literal_strings_sabotage {
+        return None;
+    }
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if node
+            .pts
+            .to_sorted()
+            .into_iter()
+            .any(|t| t == TOP || m.bare_marker(t))
+        {
+            return Some(format!("top:n{n}"));
+        }
+        if node.prim & prim::STR != 0 && node.strs == STRS_TOP {
+            return Some(format!("any_string:n{n}"));
+        }
+    }
+    None
+}
+
 /// `constants` holds for `nodes`.
 pub(crate) fn holds(m: &Model, nodes: &[NodeId]) -> bool {
     constants(m, nodes).is_some()
@@ -109,7 +134,7 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
     }
     for tf in templates {
         let ts = m.tmpl_toks(tf.id);
-        for f in tf.fields.iter().filter(|f| f.literal_strings) {
+        for f in &tf.fields {
             let key = if f.private {
                 m.private_atoms.get(&f.key).copied()
             } else {
@@ -122,12 +147,27 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                         .collect()
                 })
                 .unwrap_or_default();
-            out.push(format!(
-                "# lit_strings field {}.{} set=[{}]",
-                tf.display,
-                f.key,
-                show(&constants(m, &nodes).unwrap_or_default())
-            ));
+            if f.literal_strings {
+                out.push(format!(
+                    "# lit_strings field {}.{} set=[{}]",
+                    tf.display,
+                    f.key,
+                    show(&constants(m, &nodes).unwrap_or_default())
+                ));
+            } else if f.kind.top || f.kind.prims & prim::STR != 0 {
+                // A String field without the fact, and what ends it.
+                let why = if f.kind.top {
+                    "kind_top".to_string()
+                } else if !f.data_field {
+                    "accessor".to_string()
+                } else {
+                    refusal(m, &nodes).unwrap_or_else(|| "none".to_string())
+                };
+                out.push(format!(
+                    "# lit_strings field {}.{} refused={why}",
+                    tf.display, f.key
+                ));
+            }
         }
     }
     out
