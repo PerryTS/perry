@@ -1629,6 +1629,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
         }
+        // A member `RegExp.prototype` does not own is its chain's
+        // (`Object.prototype.toLocaleString` uses no argument) or absent
+        // (the call throws before any argument is used).
+        ("RegExp", Some(n)) if members::regexp_inherited(n).is_some() => {
+            let p = members::regexp_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
+        }
         (
             "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin"
             | "BoxedPrimitive" | "Timer",

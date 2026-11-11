@@ -772,6 +772,15 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
     None
 }
 
+/// `RegExp.prototype`'s realm declaration when a RegExp's member `name` is
+/// not one of its own (22.2.6): the member is then its declared chain's
+/// (`Object.prototype`'s) or absent, never a RegExp method.
+pub(super) fn regexp_inherited(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let p = realm_entry("RegExp.prototype").filter(|e| e.kind == RealmKind::Prototype)?;
+    let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
+    (!own).then_some(p)
+}
+
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
 /// (`realm_born`): its realm-declared own properties, then those of its
 /// declared [[Prototype]]s, to `null`.

@@ -121,6 +121,7 @@ mod fetch_headers;
 mod json_protocol;
 mod response_body;
 mod error_to_string;
+mod regexp_chain_methods;
 mod memo_context;
 mod named_accessors;
 mod named_method_on_class_value;
