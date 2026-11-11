@@ -120,6 +120,9 @@ pub struct FieldFacts {
     /// −0 tolerance (PR D): one of the field's nodes keeps its int32 interval
     /// although it may hold `-0`, which no use observes (`Node::zs_tol`).
     pub zero_tol: bool,
+    /// I32 at rest, PR C (`rest_fields::admit`): the field is an I32 lane of
+    /// its class, stored as an I32 word in every instance for its life.
+    pub rest: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -953,6 +956,7 @@ fn template_facts(
         fields.push(FieldFacts {
             rep,
             zero_tol,
+            rest: false,
             fns,
             ta_stable,
             ta_kind,
