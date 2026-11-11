@@ -150,3 +150,66 @@ console.log(s);
     let (rest, line) = field("console.log(JSON.stringify(g.cells));");
     assert!(!rest && line.contains(" at_rest=0 "), "{line}");
 }
+
+/// The capacity reservation: a length that moves inside a small hull
+/// (`hi <= 2 * lo`, `hi <= 1024`) is at rest, its birth reserves `hi`, and
+/// the floor stays the birth length.
+#[test]
+fn a_length_that_moves_inside_a_small_hull_reserves_its_upper_bound() {
+    let src = program("function grow(i: number, v: number) { a[i & 15] = v & 255; }\ngrow(s, 3);");
+    let line = arr_line(&src);
+    assert!(line.ends_with(" at_rest=1 cap=16"), "{line}");
+    let pf = facts(&src);
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    assert_eq!(mb.rest_births.len(), 1, "{:?}", mb.rest_births);
+    assert_eq!(mb.rest_reserves, vec![(mb.rest_births[0], 16)]);
+    assert_eq!(mb.rest_writes.len(), 2, "{:?}", mb.rest_writes);
+    assert!(mb.rest_writes.iter().all(|&(_, floor)| floor == 8));
+    assert!(mb.rest_reads.iter().all(|&(_, floor)| floor == 8));
+    // A fixed length reserves nothing.
+    let pf = facts(&program(""));
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    assert_eq!(mb.rest_births.len(), 1);
+    assert!(mb.rest_reserves.is_empty(), "{:?}", mb.rest_reserves);
+}
+
+/// Negative controls of the reservation: a hull past twice the birth
+/// length, a hull past 1024 slots, and a key that is no integer interval.
+#[test]
+fn a_hull_over_the_cap_or_unbounded_keeps_the_array_double() {
+    for (extra, why) in [
+        (
+            "function grow(i: number) { a[i & 31] = 1; }\ngrow(s);",
+            "why=length_over_cap len=[8,32]",
+        ),
+        (
+            "function grow(i: number) { a[i / 3] = 1; }\ngrow(s);",
+            "why=length_moves len=top",
+        ),
+    ] {
+        let line = arr_line(&program(extra));
+        assert!(
+            line.contains(" at_rest=0 ") && line.contains(why),
+            "{extra}: {line}"
+        );
+    }
+    let big = |key: &str| {
+        format!(
+            r#"
+const a = new Array(1000).fill(0);
+function put(i: number, v: number) {{ a[{key}] = v & 255; }}
+function get(i: number): number {{ return a[i & 511] | 0; }}
+let s = 0;
+for (let i = 0; i < 100; i++) {{ put(i, i * 3); s = (s + get(i + 1)) | 0; }}
+console.log(s, a.length);
+"#
+        )
+    };
+    let line = arr_line(&big("i & 1023"));
+    assert!(line.ends_with(" at_rest=1 cap=1024"), "{line}");
+    let line = arr_line(&big("(i & 1023) + 512"));
+    assert!(
+        line.contains(" at_rest=0 why=length_over_cap len=[1000,1536]"),
+        "{line}"
+    );
+}

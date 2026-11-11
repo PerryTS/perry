@@ -140,6 +140,7 @@ def main():
         ("rest-raw-negative", "restraw", "array rep"),
         ("rest-held-negative", "restheld", "field read call"),
         ("rest-rep-negative", "restrep", "array rep"),
+        ("rest-cap-negative", "restcap", "array rep"),
         ("zero-sign-negative", "zerosign", "zero sign"),
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
     ]:
