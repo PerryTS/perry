@@ -363,6 +363,11 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        /// `o[k]` in `for (k in o)`, the loop's own key on the binding it
+        /// iterates (`Gen::enum_read`): the key is one of `o`'s enumerable
+        /// string keys, so on a built-in object (`Model::enum_free`) the
+        /// read is what the program wrote there, never a built-in member.
+        enumerable: bool,
     },
     /// The node is the key of `o[k]` for object token `obj`: a string,
     /// symbol or object key runs the full lookup. It is never taken to be
@@ -390,6 +395,8 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        /// As `IdxLoad`'s.
+        enumerable: bool,
     },
     /// The node is the key of an own-only read of object token `obj`
     /// (`IdxOwnLoad`): a primitive key reads `obj`'s own fields it may name;
@@ -410,6 +417,19 @@ pub enum Cons {
         idx: NodeId,
         dst: NodeId,
         shape: KeyShapeId,
+        enumerable: bool,
+    },
+    /// The node is `ProtoNode(from)` on the chain of receiver `of` of an
+    /// enumerable-key read (`IdxLoad` `enumerable`): dst ⊇ what the program
+    /// wrote under `key` on each prototype, further up while the prototype
+    /// has no enumerable built-in member (`Model::enum_link`, which needs
+    /// `from` for the collapsed `ObjectProto`); any other prototype reads
+    /// `key` in full.
+    EnumChain {
+        key: Key,
+        dst: NodeId,
+        of: Tok,
+        from: Tok,
     },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
@@ -649,6 +669,7 @@ impl Cons {
             Cons::HasInstance { .. } => "hasinstance",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
+            Cons::EnumChain { .. } => "enumchain",
             Cons::ProtoGiven { .. } => "protogiven",
             Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",

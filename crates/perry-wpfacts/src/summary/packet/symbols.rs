@@ -313,14 +313,25 @@ impl Model {
                 "NewTargetHard reason={:?}",
                 self.reasons.get(reason as usize)
             ),
-            Cons::IdxLoad { idx, dst, shape } => {
+            Cons::IdxLoad {
+                idx,
+                dst,
+                shape,
+                enumerable,
+            } => {
                 format!(
-                    "IdxLoad idx={:?} dst={:?} shape={:?}",
+                    "IdxLoad idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                     idx,
                     dst,
                     self.packet_shape(shape)
                 )
             }
+            Cons::EnumChain { key, dst, of, .. } => format!(
+                "EnumChain key={:?} dst={:?} of={:?}",
+                key,
+                dst,
+                self.packet_token(of, packet)
+            ),
             Cons::ElemUndef { obj, key, dst } => format!(
                 "ElemUndef obj={:?} key={:?} dst={:?}",
                 self.packet_token(obj, packet),
@@ -333,9 +344,14 @@ impl Model {
                 dst,
                 self.packet_shape(shape)
             ),
-            Cons::IdxOwnLoad { idx, dst, shape } => {
+            Cons::IdxOwnLoad {
+                idx,
+                dst,
+                shape,
+                enumerable,
+            } => {
                 format!(
-                    "IdxOwnLoad idx={:?} dst={:?} shape={:?}",
+                    "IdxOwnLoad idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                     idx,
                     dst,
                     self.packet_shape(shape)
@@ -353,8 +369,9 @@ impl Model {
                 idx,
                 dst,
                 shape,
+                enumerable,
             } => format!(
-                "OwnGate obj={:?} idx={:?} dst={:?} shape={:?}",
+                "OwnGate obj={:?} idx={:?} dst={:?} shape={:?} enumerable={enumerable}",
                 obj,
                 idx,
                 dst,

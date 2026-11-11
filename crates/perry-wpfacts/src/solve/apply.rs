@@ -1155,15 +1155,54 @@ impl Model {
                     }
                 }
             }
-            Cons::IdxLoad { idx, dst, shape } => {
+            Cons::IdxLoad {
+                idx,
+                dst,
+                shape,
+                enumerable,
+            } => {
                 for &t in toks {
-                    self.idx_load_tok(idx, t, dst, shape);
+                    self.idx_load_tok(idx, t, dst, shape, enumerable);
+                }
+            }
+            Cons::EnumChain { key, dst, of, from } => {
+                for &q in toks {
+                    if q == TOP {
+                        self.add_tok(dst, TOP);
+                        continue;
+                    }
+                    // A prototype with enumerable built-in members (a host
+                    // one, or one the seed of `from` does not name): its
+                    // keys in full.
+                    if !self.enum_link(from, q) {
+                        self.load_from(of, q, key, dst);
+                        continue;
+                    }
+                    self.enum_fields(of, q, key, dst);
+                    if self.idx_done.insert((n, q, dst, crate::model::IDX_ENUM_CHAIN)) {
+                        self.accessor_walk(of, q, key, ChainAct::Load(dst));
+                        let up = self.proto_node(q);
+                        self.cons(
+                            up,
+                            Cons::EnumChain {
+                                key,
+                                dst,
+                                of,
+                                from: q,
+                            },
+                        );
+                    }
                 }
             }
             Cons::ElemUndef { obj, key, dst } => self.elem_undef(obj, key, dst),
-            Cons::IdxOwnLoad { idx, dst, shape } => {
+            Cons::IdxOwnLoad {
+                idx,
+                dst,
+                shape,
+                enumerable,
+            } => {
                 for &t in toks {
-                    self.idx_own_load_tok(idx, t, dst, shape);
+                    self.idx_own_load_tok(idx, t, dst, shape, enumerable);
                 }
             }
             Cons::IdxOwnKey { obj, dst, shape } => self.idx_own_key(n, obj, dst, shape, toks, prim),

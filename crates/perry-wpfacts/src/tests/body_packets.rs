@@ -381,7 +381,7 @@ fn another_body_interning_key_shapes_does_not_change_transfer() {
         let idx = m.node_l("index");
         let obj = m.node_l("object");
         let dst = m.funcs[0].ret;
-        m.cons(obj, Cons::IdxLoad { idx, dst, shape });
+        m.cons(obj, Cons::IdxLoad { idx, dst, shape, enumerable: false });
         m.packet_end(None, true);
         m.funcs[0].body_packet.bytes()
     }

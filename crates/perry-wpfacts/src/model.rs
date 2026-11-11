@@ -55,6 +55,9 @@ pub const IDX_OWN_ANY: u16 = 42;
 pub const IDX_OWN_STR: u16 = 43;
 pub const IDX_OWN_NUM: u16 = 44;
 pub const IDX_OWN_GATE: u16 = 45;
+/// ENUM1: an enumerable-key read of a built-in object (`Cons::EnumChain`).
+pub const IDX_ENUM_READ: u16 = 65;
+pub const IDX_ENUM_CHAIN: u16 = 66;
 pub const IDX_OWN_PRIM: u16 = 46;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not

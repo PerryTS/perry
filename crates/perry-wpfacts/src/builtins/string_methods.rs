@@ -126,6 +126,7 @@ fn read_match(m: &mut Model, rec: NodeId) {
             idx: i,
             dst: cap,
             shape: 0,
+            enumerable: false,
         },
     );
     to_prim(m, cap, "match record capture ToString");
@@ -472,6 +473,7 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             idx: i,
             dst: cap,
             shape: 0,
+            enumerable: false,
         },
     );
     let a = site_tmpl(m, call, "Array");

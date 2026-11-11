@@ -257,10 +257,22 @@ pub fn map_cons(
             expected,
             reason,
         },
-        IdxLoad { idx, dst, shape } => IdxLoad {
+        IdxLoad {
+            idx,
+            dst,
+            shape,
+            enumerable,
+        } => IdxLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
+        },
+        EnumChain { key, dst, of, from } => EnumChain {
+            key,
+            dst: n(dst),
+            of,
+            from,
         },
         IdxKey { obj, dst, shape } => IdxKey {
             obj,
@@ -272,10 +284,16 @@ pub fn map_cons(
             key: n(key),
             dst: n(dst),
         },
-        IdxOwnLoad { idx, dst, shape } => IdxOwnLoad {
+        IdxOwnLoad {
+            idx,
+            dst,
+            shape,
+            enumerable,
+        } => IdxOwnLoad {
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
         },
         IdxOwnKey { obj, dst, shape } => IdxOwnKey {
             obj,
@@ -288,11 +306,13 @@ pub fn map_cons(
             idx,
             dst,
             shape,
+            enumerable,
         } => OwnGate {
             obj: n(obj),
             idx: n(idx),
             dst: n(dst),
             shape,
+            enumerable,
         },
         IdxMCall { idx, call, shape } => IdxMCall {
             idx: n(idx),
@@ -483,6 +503,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Implicit { .. }
             | HasInstance { .. }
             | IdxLoad { .. }
+            | EnumChain { .. }
             | IdxKey { .. }
             | IdxOwnLoad { .. }
             | IdxOwnKey { .. }
@@ -526,6 +547,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | OwnValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
+        | EnumChain { dst, .. }
         | IdxKey { dst, .. }
         | ElemUndef { dst, .. }
         | IdxOwnLoad { dst, .. }

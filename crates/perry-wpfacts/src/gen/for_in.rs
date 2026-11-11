@@ -308,6 +308,49 @@ impl<'a> Gen<'a> {
         self.m.cons(gn, Cons::ForInBody { obj: on, call });
     }
 
+    /// ENUM1: the for-in of `body` (outlined or a loop) when neither its
+    /// key nor the local it iterates is written anywhere: (module, key,
+    /// iterated local). The local is the one `__forin_obj` copies (`for (k
+    /// in o)` lowers to `__forin_obj = o`), so `o[k]` in the body reads one
+    /// of `o`'s enumerable keys.
+    pub(crate) fn enum_scope(&mut self, mi: u32, body: &[Stmt]) -> Option<(u32, u32, u32)> {
+        let f = for_in_shape(body, |k| self.for_in_keys_of.get(&(mi, k)).copied())?;
+        let (key, obj) = (f.key, f.obj);
+        let src = self.local_copies.get(&(mi, obj)).copied()?;
+        let w = self.written_locals(mi);
+        if w.contains(&key) || w.contains(&obj) || w.contains(&src) {
+            return None;
+        }
+        Some((mi, key, src))
+    }
+
+    /// `o[k]` is a read of an enclosing for-in's own key on the binding it
+    /// iterates (`enum_scope`): `Cons::IdxLoad`'s `enumerable`.
+    pub(crate) fn enum_read(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
+        match (object, index) {
+            (Expr::LocalGet(o), Expr::LocalGet(k)) => self
+                .for_in_reads
+                .iter()
+                .any(|&(m, key, src)| m == mi && key == *k && src == *o),
+            _ => false,
+        }
+    }
+
+    /// Locals written anywhere this solve walks (`=`, `++`).
+    fn written_locals(&mut self, mi: u32) -> &crate::pts::FxHashSet<u32> {
+        if !self.written.contains_key(&mi) {
+            let mut s = crate::pts::FxHashSet::default();
+            self.walked(mi as usize).each_expr(&mut |e| match e {
+                Expr::LocalSet(id, _) | Expr::Update { id, .. } => {
+                    s.insert(*id);
+                }
+                _ => {}
+            });
+            self.written.insert(mi, s);
+        }
+        &self.written[&mi]
+    }
+
     /// The key parameter of the for-in body being walked when `id` is its
     /// loop variable (a nested body's read of an outer key captures it).
     pub(crate) fn for_in_key_param(&mut self, mi: u32, id: u32) -> Option<NodeId> {

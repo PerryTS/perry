@@ -90,7 +90,7 @@ pub(crate) fn ns_parent(ns: BuiltinNs) -> Option<BuiltinNs> {
 }
 
 /// Global names the `GlobalGet(0)` sentinel resolves to.
-fn ns_by_name(name: &str) -> Option<BuiltinNs> {
+pub(crate) fn ns_by_name(name: &str) -> Option<BuiltinNs> {
     Some(match name {
         "Object" => BuiltinNs::Object,
         "Reflect" => BuiltinNs::Reflect,
@@ -1409,6 +1409,86 @@ pub(crate) fn builtin_proto_tok(m: &mut Model, ns: BuiltinNs) -> Option<Tok> {
 /// builtin prototype is), and the builtin's own token
 /// (`builtin_proto_tok`), so that an object whose chain the value becomes
 /// reads the builtin's members and accessors.
+/// ENUM1: a constructor, namespace or prototype of the language none of
+/// whose built-in properties is enumerable. Not a host object (`console`,
+/// `process`, the global object, `require`, a module's exports: their
+/// members are enumerable), not the Error constructors (V8's own
+/// `Error.stackTraceLimit` is enumerable).
+pub(crate) fn enum_free_ns(ns: BuiltinNs) -> bool {
+    use BuiltinNs::*;
+    matches!(
+        ns,
+        Object
+            | Reflect
+            | Array
+            | Json
+            | Math
+            | Promise
+            | Date
+            | RegExp
+            | TypedArray
+            | TypedArrayKind(_)
+            | DataView
+            | ArrayBuffer
+            | SharedArrayBuffer
+            | Symbol
+            | Number
+            | BigInt
+            | String
+            | Boolean
+            | Function
+            | Map
+            | Set
+            | WeakMap
+            | WeakSet
+            | ObjectProtoMethod
+            | ObjectProtoOwn(_)
+    )
+}
+
+/// ENUM2: the collapsed `ObjectProto` that is the prototype of chain link
+/// `from` is an intrinsic prototype none of whose built-in properties is
+/// enumerable: `from` is an `enum_free_ns` builtin (its prototype is
+/// `Object.prototype`, `Function.prototype` or `%TypedArray%.prototype`), or
+/// `from`'s kind seeds its chain with `Object.prototype`, `Array.prototype`
+/// or `Function.prototype` (`seed_family`). Not an object a builtin made
+/// other than an ordinary box (a host object: `Buffer.prototype`,
+/// `URL.prototype` hold enumerable members), not a generator's step closure
+/// (its chain holds what `f.prototype` holds). A prototype given to `from`
+/// that may be `ObjectProto` puts ⊤ on the chain (`Cons::ProtoGiven`).
+pub(crate) fn enum_free_seed(m: &Model, from: Tok) -> bool {
+    match &m.toks[from as usize] {
+        TokKind::Builtin(_) | TokKind::NativeProto(_) => m.enum_free(from),
+        TokKind::Obj(tm, _) if matches!(m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }) => {
+            ordinary_box(m, from)
+        }
+        TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => false,
+        _ => matches!(
+            seed_family(m, from),
+            Some(Family::Object | Family::Array | Family::Function)
+        ),
+    }
+}
+
+/// ENUM2: what a store into ⊤ may have written under any key onto a
+/// built-in link of an enumerable-key read of the chain of `of`: what a
+/// computed read of that chain finds (`family_any`'s `any_written`).
+pub(crate) fn enum_top_written_any(m: &mut Model, of: Tok, dst: NodeId) {
+    let star = m.atom(crate::STAR_KEY);
+    if !locked_chain_read(m, of, star) {
+        any_written(m, dst);
+    }
+}
+
+/// ENUM1: what a store into ⊤ may have written under named key `a` onto a
+/// built-in object an enumerable-key read reads (`Model::enum_read_tok`):
+/// the opaque answer once the key is written there, a replay before.
+pub(crate) fn enum_top_written(m: &mut Model, a: Atom, dst: NodeId) {
+    if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+    }
+}
+
 pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: NodeId) {
     let op = m.tok(TokKind::ObjectProto);
     m.add_tok(dst, op);

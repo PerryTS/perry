@@ -1096,6 +1096,57 @@ impl Model {
         )
     }
 
+    /// ENUM1: a built-in object a for-in visits only program-written keys
+    /// of (`builtins::enum_free_ns`): a language namespace or constructor,
+    /// or its prototype. Not `ObjectProto` as a receiver (it stands for
+    /// every builtin prototype, a host one whose methods are enumerable
+    /// among them), not a builtin function value (a host function may hold
+    /// enumerable data, `fs.realpath.native`).
+    pub(crate) fn enum_free(&self, t: Tok) -> bool {
+        match &self.toks[t as usize] {
+            TokKind::Builtin(ns) => builtins::enum_free_ns(*ns),
+            TokKind::NativeProto(n) => builtins::ns_by_name(n).is_some_and(builtins::enum_free_ns),
+            _ => false,
+        }
+    }
+
+    /// ENUM2: a value whose properties are its program-written fields as a
+    /// for-in sees them (its built-in own properties, a function's `name`,
+    /// `length`, `prototype`, an array's `length`, are not enumerable): a
+    /// program object, array, function, class object or class prototype.
+    /// Not a marker, not a builtin-made object (`BObj`), not a generator's
+    /// step closure (it stands for the generator object).
+    pub(crate) fn enum_obj(&self, t: Tok) -> bool {
+        if t == TOP || self.is_marker(t) {
+            return false;
+        }
+        match &self.toks[t as usize] {
+            TokKind::Obj(tm, _) => matches!(
+                self.tmpls[*tm as usize].kind,
+                TmplKind::Lit { .. }
+                    | TmplKind::Class { .. }
+                    | TmplKind::FnInst { .. }
+                    | TmplKind::ObjCreate { .. }
+                    | TmplKind::Arr { .. }
+            ),
+            TokKind::Proto(_) | TokKind::ClassObj(_) => true,
+            TokKind::Func(f, _) => !self.funcs[*f as usize].gen_step(),
+            _ => false,
+        }
+    }
+
+    /// ENUM2: prototype `q` of chain link `from` has no enumerable built-in
+    /// member: a built-in object of `enum_free`, a program value
+    /// (`enum_obj`), or the collapsed `ObjectProto` where the seed of
+    /// `from` makes it such an intrinsic prototype
+    /// (`builtins::enum_free_seed`).
+    pub(crate) fn enum_link(&self, from: Tok, q: Tok) -> bool {
+        self.enum_free(q)
+            || self.enum_obj(q)
+            || matches!(self.toks[q as usize], TokKind::ObjectProto)
+                && builtins::enum_free_seed(self, from)
+    }
+
     /// A builtin prototype on a chain (`ObjectProto` stands for each of
     /// them): its members are the runtime's, and what stores into ⊤ wrote.
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {

@@ -25,7 +25,17 @@ impl Model {
         self.is_marker(t) || !matches!(self.toks[t as usize], TokKind::Obj(..))
     }
     /// `Cons::IdxLoad` for one object token `t`.
-    pub(super) fn idx_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
+    pub(super) fn idx_load_tok(
+        &mut self,
+        idx: NodeId,
+        t: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+        enumerable: bool,
+    ) {
+        if enumerable && t != TOP && (self.enum_free(t) || self.enum_obj(t)) {
+            return self.enum_read_tok(idx, t, dst, shape);
+        }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
         if let Some(&a) = self.key_nodes.get(&idx) {
             self.load_from(t, t, Key::Named(a), dst);
@@ -68,6 +78,56 @@ impl Model {
         }
     }
 
+    /// ENUM1/ENUM2: `o[k]` of `for (k in o)` on built-in object `t` none of
+    /// whose built-in properties is enumerable, or on a program object
+    /// (`enum_obj`): `k` is a key the program wrote on `t` or on its chain
+    /// (`Cons::EnumChain`, up to the first prototype with enumerable
+    /// built-in members); a deleted key reads `undefined`. No built-in
+    /// member of a link the rule covers, no generic member.
+    pub(super) fn enum_read_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
+        if self.enum_obj(t) {
+            self.mark_use(t, crate::model::MARK_READ);
+        }
+        self.add_prim(dst, prim::UNDEF);
+        let key = match self.key_nodes.get(&idx) {
+            Some(&a) => Key::Named(a),
+            None => Key::Any(shape),
+        };
+        self.enum_fields(t, t, key, dst);
+        if self.idx_done.insert((idx, t, dst, crate::model::IDX_ENUM_READ)) {
+            self.accessor_walk(t, t, key, ChainAct::Load(dst));
+            let pn = self.proto_node(t);
+            self.cons(
+                pn,
+                Cons::EnumChain {
+                    key,
+                    dst,
+                    of: t,
+                    from: t,
+                },
+            );
+        }
+    }
+
+    /// What the program wrote under `key` on link `t` of the chain of `of`:
+    /// its fields, and on a built-in object what a store into ⊤ wrote there
+    /// (under a named key that key, under any key every key such a store
+    /// wrote, as for a computed read of the builtin chain, `any_written`).
+    pub(super) fn enum_fields(&mut self, of: Tok, t: Tok, key: Key, dst: NodeId) {
+        let f = match key {
+            Key::Named(a) => self.field(t, a),
+            Key::Any(_) => self.all_fields(t),
+        };
+        self.edge(f, dst);
+        if !self.is_builtin_proto(t) {
+            return;
+        }
+        match key {
+            Key::Named(a) => self.with_b(|m| builtins::enum_top_written(m, a, dst)),
+            Key::Any(_) => self.with_b(|m| builtins::enum_top_written_any(m, of, dst)),
+        }
+    }
+
     /// A program object whose properties are its fields here: an own-only
     /// read of it is its fields. Not a marker (use tracking), not an
     /// array-like (its `length` and elements are the builtin model's), not
@@ -89,9 +149,16 @@ impl Model {
     }
 
     /// `Cons::IdxOwnLoad` for one object token `t`.
-    pub(super) fn idx_own_load_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
+    pub(super) fn idx_own_load_tok(
+        &mut self,
+        idx: NodeId,
+        t: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+        enumerable: bool,
+    ) {
         if !self.own_read_obj(t) {
-            return self.idx_load_tok(idx, t, dst, shape);
+            return self.idx_load_tok(idx, t, dst, shape, enumerable);
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
@@ -232,7 +299,8 @@ impl Model {
                         idx,
                         dst,
                         shape,
-                    } => self.own_gate(obj, idx, dst, shape),
+                        enumerable,
+                    } => self.own_gate(obj, idx, dst, shape, enumerable),
                     _ => {}
                 }
             }
@@ -255,16 +323,32 @@ impl Model {
                 idx,
                 dst,
                 shape,
-            } => self.own_gate(obj, idx, dst, shape),
+                enumerable,
+            } => self.own_gate(obj, idx, dst, shape, enumerable),
             _ => {}
         }
     }
 
     /// Refuted evidence restores the ordinary read, once.
-    fn own_gate(&mut self, obj: NodeId, idx: NodeId, dst: NodeId, shape: KeyShapeId) {
+    fn own_gate(
+        &mut self,
+        obj: NodeId,
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+        enumerable: bool,
+    ) {
         if self.idx_done.insert((obj, TOP, dst, IDX_OWN_GATE)) {
             self.own_read_census[1] += 1;
-            self.cons(obj, Cons::IdxLoad { idx, dst, shape });
+            self.cons(
+                obj,
+                Cons::IdxLoad {
+                    idx,
+                    dst,
+                    shape,
+                    enumerable,
+                },
+            );
         }
     }
 }
