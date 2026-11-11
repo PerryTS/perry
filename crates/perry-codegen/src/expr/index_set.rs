@@ -311,7 +311,12 @@ fn lower_array_index_set_via_runtime_key(
     rep: Option<super::index_get::proven_array::RepRead>,
 ) -> Result<String> {
     let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
-    let value_is_numeric = is_numeric_expr(ctx, value);
+    // A value the facts prove a Number (`a[j] ?? 0` over an Array of
+    // Numbers whose static type says nothing) selects the guarded store's
+    // number-over-number arm as a statically numeric one does: the arm
+    // tests the value itself, so this is a choice of code, not a proof.
+    let value_is_numeric = is_numeric_expr(ctx, value)
+        || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number);
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
