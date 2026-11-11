@@ -1,6 +1,6 @@
 use super::*;
 use perry_hir::types::Type;
-use perry_hir::{ClassField, ClassFieldOrigin, Param};
+use perry_hir::{ClassField, ClassFieldOrigin, Function, Param};
 
 fn param(id: u32) -> Param {
     Param {
