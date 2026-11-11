@@ -31,6 +31,78 @@ pub(crate) struct ForIn<'s> {
 /// `stmts` (the `For` body) as a for-in over the keys local `keys` of
 /// object local `obj` (`Gen::for_in_keys_of`): `if (guard) { const k =
 /// __keys[i]; body }`.
+/// What the receiver of an ENUM read `Q[k]` must be (`Gen::enum_scope`).
+#[derive(Clone, Debug)]
+pub(crate) enum EnumSubject {
+    /// ENUM1 (exact): the local `__forin_obj` copies, never written.
+    Local(u32),
+    /// Rule R (optimistic): the loop subject path, re-read in the body.
+    Path(SubjPath),
+}
+
+/// Rule R: a side-effect-free loop subject path `x.a.b` or `this.a.b`:
+/// a local or `this`, then one or more static member reads; no call, no
+/// computed member. `root` is `None` for `this`.
+///
+/// Optimistic assumption: at each body read `Q[k]` with `Q` this same path,
+/// `Q` evaluates to the object the for-in iterates, so `k` is one of its
+/// enumerated keys (ECMA-262 14.7.5.9 EnumerateObjectProperties: enumerable
+/// String keys of the object and its chain) and the read never yields a
+/// non-enumerable built-in member (Array.prototype, Object.prototype
+/// methods).
+/// Check-mode obligation: at each such read, `Q` evaluated in the body is
+/// `===` the object being iterated.
+/// TODO(CHECK-FORIN-PATH): no generic per-site claim export exists in
+/// check mode yet (`element_floors` covers `Cons::ElemUndef` only); this
+/// claim is to be exported there when one does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SubjPath {
+    pub(crate) root: Option<u32>,
+    pub(crate) members: Vec<String>,
+}
+
+impl SubjPath {
+    /// Is `e` this path, syntactically?
+    pub(crate) fn is(&self, mut e: &Expr) -> bool {
+        for m in self.members.iter().rev() {
+            match e {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if property == m => e = object,
+                _ => return false,
+            }
+        }
+        match (e, self.root) {
+            (Expr::LocalGet(id), Some(r)) => *id == r,
+            (Expr::This, None) => true,
+            _ => false,
+        }
+    }
+}
+
+/// The `SubjPath` of `e`, when it is one.
+pub(crate) fn subj_path(mut e: &Expr) -> Option<SubjPath> {
+    let mut members = Vec::new();
+    let root = loop {
+        match e {
+            Expr::PropertyGet {
+                object, property, ..
+            } => {
+                members.push(property.clone());
+                e = object;
+            }
+            Expr::LocalGet(id) => break Some(*id),
+            Expr::This => break None,
+            _ => return None,
+        }
+    };
+    if members.is_empty() {
+        return None;
+    }
+    members.reverse();
+    Some(SubjPath { root, members })
+}
+
 fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> Option<ForIn<'s>> {
     let [Stmt::If {
         condition,
@@ -313,25 +385,47 @@ impl<'a> Gen<'a> {
     /// iterated local). The local is the one `__forin_obj` copies (`for (k
     /// in o)` lowers to `__forin_obj = o`), so `o[k]` in the body reads one
     /// of `o`'s enumerable keys.
-    pub(crate) fn enum_scope(&mut self, mi: u32, body: &[Stmt]) -> Option<(u32, u32, u32)> {
+    ///
+    /// Rule R (optimistic, `FactsConfig::no_forin_path` switches it off):
+    /// for `for (k in P)` with `P` a side-effect-free path (`SubjPath`),
+    /// `P[k]` in the body is that same read. ASSUMPTION: the re-evaluated
+    /// path still names the iterated object.
+    pub(crate) fn enum_scope(&mut self, mi: u32, body: &[Stmt]) -> Option<(u32, u32, EnumSubject)> {
         let f = for_in_shape(body, |k| self.for_in_keys_of.get(&(mi, k)).copied())?;
         let (key, obj) = (f.key, f.obj);
-        let src = self.local_copies.get(&(mi, obj)).copied()?;
+        let src = self.local_copies.get(&(mi, obj)).copied();
+        let path = match src {
+            Some(_) => None,
+            None => Some(self.for_in_paths.get(&(mi, obj)).cloned()?),
+        };
         let w = self.written_locals(mi);
-        if w.contains(&key) || w.contains(&obj) || w.contains(&src) {
+        if w.contains(&key) || w.contains(&obj) {
             return None;
         }
-        Some((mi, key, src))
+        match (src, path) {
+            (Some(src), _) if !w.contains(&src) => Some((mi, key, EnumSubject::Local(src))),
+            (None, Some(p)) if p.root.is_none_or(|r| !w.contains(&r)) => {
+                if std::env::var_os("PERRY_FACTS_FORIN_PATH_COUNT").is_some() {
+                    eprintln!("forin-path: module {mi} key {key} path {p:?}");
+                }
+                Some((mi, key, EnumSubject::Path(p)))
+            }
+            _ => None,
+        }
     }
 
     /// `o[k]` is a read of an enclosing for-in's own key on the binding it
     /// iterates (`enum_scope`): `Cons::IdxLoad`'s `enumerable`.
     pub(crate) fn enum_read(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
         match (object, index) {
-            (Expr::LocalGet(o), Expr::LocalGet(k)) => self
-                .for_in_reads
-                .iter()
-                .any(|&(m, key, src)| m == mi && key == *k && src == *o),
+            (o, Expr::LocalGet(k)) => self.for_in_reads.iter().any(|(m, key, s)| {
+                *m == mi
+                    && *key == *k
+                    && match s {
+                        EnumSubject::Local(src) => matches!(o, Expr::LocalGet(l) if l == src),
+                        EnumSubject::Path(p) => p.is(o),
+                    }
+            }),
             _ => false,
         }
     }

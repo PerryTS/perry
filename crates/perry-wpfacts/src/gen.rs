@@ -368,6 +368,8 @@ pub struct Gen<'a> {
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// Rule R (`FactsConfig::no_forin_path`, `Gen::enum_scope`).
+    pub forin_path: bool,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -429,7 +431,10 @@ pub struct Gen<'a> {
     /// ENUM1: the for-in loops being walked, outlined or not, whose key and
     /// iterated binding are never written: (module, loop variable, the
     /// local `__forin_obj` copies) (`Gen::enum_read`).
-    pub(crate) for_in_reads: Vec<(u32, u32, u32)>,
+    pub(crate) for_in_reads: Vec<(u32, u32, for_in::EnumSubject)>,
+    /// Rule R: (module, `__forin_obj` local) -> the side-effect-free path
+    /// it is initialized from (`for (k in a.b.c)`).
+    pub(crate) for_in_paths: FxHashMap<(u32, u32), for_in::SubjPath>,
     /// `let a = b` of locals: (module, a) -> b (the `__forin_obj` copy).
     pub(crate) local_copies: FxHashMap<(u32, u32), u32>,
     /// Per module: locals written anywhere (`=`, `++`).
@@ -702,6 +707,7 @@ impl<'a> Gen<'a> {
             new_array_site: None,
             guard_ranges: true,
             guard_presence: true,
+            forin_path: true,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -725,6 +731,7 @@ impl<'a> Gen<'a> {
             for_in_key: Vec::new(),
             for_in_reads: Vec::new(),
             local_copies: FxHashMap::default(),
+            for_in_paths: FxHashMap::default(),
             written: FxHashMap::default(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),

@@ -5,10 +5,14 @@
 use super::*;
 
 fn whole(src: &str) -> ProgramFacts {
+    whole_cfg(src, &FactsConfig::default())
+}
+
+fn whole_cfg(src: &str, cfg: &FactsConfig) -> ProgramFacts {
     let path = "t.ts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
-    crate::compute(&[(path, &hir)], &FactsConfig::default())
+    crate::compute(&[(path, &hir)], cfg)
 }
 
 fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
@@ -26,7 +30,11 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 /// = `kept`: an Array.prototype method there (map, forEach, ...) would
 /// hand `kept` to `unknown`.
 fn src(extras: bool, body: &str) -> String {
-    let ex = if extras { "Object.assign(obj.userData, j.extras);" } else { "" };
+    let ex = if extras {
+        "Object.assign(obj.userData, j.extras);"
+    } else {
+        ""
+    };
     format!(
         "const unknown: any = (globalThis as any)[process.argv[2]];
          const kept = {{ keptmark: 1 }};
@@ -61,33 +69,127 @@ const LOCAL: &str = "function add(known: any, object: any, def: any) {
 add({}, obj, j.nodes[0]);";
 
 #[test]
+fn gltf_shape_with_extras() {
+    let pf = whole(&src(true, GLTF));
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
 fn gltf_shape_without_extras() {
     let pf = whole(&src(false, GLTF));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn local_receiver_with_extras() {
     let pf = whole(&src(true, LOCAL));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 #[test]
 fn baseline_no_loop() {
     let pf = whole(&src(true, ""));
-    assert_eq!(escape_with_field(&pf, "keptmark"), None, "{}", pf.dump_text());
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: an unknown string key on a json value may name an Array method.
 #[test]
 fn control_unknown_key_escapes() {
     let pf = whole(&src(true, "obj.userData.ext = obj.userData.ext || {}; obj.userData.ext[process.argv[4]] = j.nodes[0].extensions[process.argv[4]];"));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: the parsed value handed to unknown code.
 #[test]
 fn control_new_function_escapes() {
-    let pf = whole(&src(true, &format!("{GLTF} new Function(process.argv[4])()(j);")));
-    assert!(escape_with_field(&pf, "keptmark").is_some(), "{}", pf.dump_text());
+    let pf = whole(&src(
+        true,
+        &format!("{GLTF} new Function(process.argv[4])()(j);"),
+    ));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Rule R off (`no_forin_path`): the re-read of the subject path is a plain
+/// computed read again, which on a parsed array may load an Array method.
+#[test]
+fn control_rule_r_off_escapes() {
+    let cfg = FactsConfig {
+        no_forin_path: true,
+        ..FactsConfig::default()
+    };
+    let pf = whole_cfg(&src(true, GLTF), &cfg);
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Control: the read names another path than the loop subject.
+#[test]
+fn control_other_path_escapes() {
+    let body = GLTF
+        .replace(
+            "(known: any, object: any, def: any)",
+            "(known: any, object: any, def: any, other: any)",
+        )
+        .replace("= def.extensions[name]", "= other.extensions[name]")
+        .replace(
+            "add({}, obj, j.nodes[0]);",
+            "add({}, obj, j.nodes[0], j.nodes[1]);",
+        );
+    let pf = whole(&src(true, &body));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// Control: a call in the subject path is no `SubjPath`.
+#[test]
+fn control_call_in_path_escapes() {
+    let body = "function add(known: any, object: any, f: any) {
+    for (const name in f().extensions) {
+        if (known[name] === undefined) {
+            object.userData.ext = object.userData.ext || {};
+            object.userData.ext[name] = f().extensions[name];
+        }
+    }
+}
+add({}, obj, () => j.nodes[0]);";
+    let pf = whole(&src(true, body));
+    assert!(
+        escape_with_field(&pf, "keptmark").is_some(),
+        "{}",
+        pf.dump_text()
+    );
 }
