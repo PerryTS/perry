@@ -455,6 +455,7 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             idx: i,
             dst: cap,
             shape: 0,
+            enumerable: false,
         },
     );
     let a = site_tmpl(m, call, "Array");

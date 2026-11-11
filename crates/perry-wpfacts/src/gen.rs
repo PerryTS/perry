@@ -426,6 +426,14 @@ pub struct Gen<'a> {
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// ENUM1: the for-in loops being walked, outlined or not, whose key and
+    /// iterated binding are never written: (module, loop variable, the
+    /// local `__forin_obj` copies) (`Gen::enum_read`).
+    pub(crate) for_in_reads: Vec<(u32, u32, u32)>,
+    /// `let a = b` of locals: (module, a) -> b (the `__forin_obj` copy).
+    pub(crate) local_copies: FxHashMap<(u32, u32), u32>,
+    /// Per module: locals written anywhere (`=`, `++`).
+    pub(crate) written: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
     /// Constant bindings' initializers: (module, global, id) -> init
     /// (`Gen::note_define_keys`, `Gen::const_key`).
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
@@ -715,6 +723,9 @@ impl<'a> Gen<'a> {
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
+            for_in_reads: Vec::new(),
+            local_copies: FxHashMap::default(),
+            written: FxHashMap::default(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
             param_calls: FxHashMap::default(),

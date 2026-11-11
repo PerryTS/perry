@@ -1096,6 +1096,20 @@ impl Model {
         )
     }
 
+    /// ENUM1: a built-in object a for-in visits only program-written keys
+    /// of (`builtins::enum_free_ns`): a language namespace or constructor,
+    /// or its prototype. Not `ObjectProto` as a receiver (it stands for
+    /// every builtin prototype, a host one whose methods are enumerable
+    /// among them), not a builtin function value (a host function may hold
+    /// enumerable data, `fs.realpath.native`).
+    pub(crate) fn enum_free(&self, t: Tok) -> bool {
+        match &self.toks[t as usize] {
+            TokKind::Builtin(ns) => builtins::enum_free_ns(*ns),
+            TokKind::NativeProto(n) => builtins::ns_by_name(n).is_some_and(builtins::enum_free_ns),
+            _ => false,
+        }
+    }
+
     /// A builtin prototype on a chain (`ObjectProto` stands for each of
     /// them): its members are the runtime's, and what stores into ⊤ wrote.
     pub(crate) fn is_builtin_proto(&self, q: Tok) -> bool {

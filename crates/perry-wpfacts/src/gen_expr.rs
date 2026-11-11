@@ -1367,10 +1367,19 @@ impl<'a> Gen<'a> {
                         // A for-in run's key is its key parameter (FVA 4.3b).
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                         let shape = self.key_shape(fx.module, index);
+                        let enumerable = self.enum_read(fx.module, object, index);
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
                             Some(bad) => {
-                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape });
+                                self.m.cons(
+                                    o,
+                                    Cons::IdxOwnLoad {
+                                        idx,
+                                        dst,
+                                        shape,
+                                        enumerable,
+                                    },
+                                );
                                 self.m.cons(
                                     bad,
                                     Cons::OwnGate {
@@ -1378,15 +1387,32 @@ impl<'a> Gen<'a> {
                                         idx,
                                         dst,
                                         shape,
+                                        enumerable,
                                     },
                                 );
                             }
                             // After a store of the same object and key
                             // (`gen/own_store.rs`).
                             None if self.own_store_reads.contains(&(e as *const Expr as usize)) => {
-                                self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape })
+                                self.m.cons(
+                                    o,
+                                    Cons::IdxOwnLoad {
+                                        idx,
+                                        dst,
+                                        shape,
+                                        enumerable,
+                                    },
+                                )
                             }
-                            None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
+                            None => self.m.cons(
+                                o,
+                                Cons::IdxLoad {
+                                    idx,
+                                    dst,
+                                    shape,
+                                    enumerable,
+                                },
+                            ),
                         }
                         dst
                     }

@@ -1189,6 +1189,9 @@ impl<'a> Gen<'a> {
                         self.for_in_keys_of.insert((fx.module, *id), *obj);
                     }
                 }
+                if let Some(perry_hir::Expr::LocalGet(src)) = init {
+                    self.local_copies.insert((fx.module, *id), *src);
+                }
             }
             Stmt::Expr(e) => {
                 let _ = self.expr(fx, e);
@@ -1274,9 +1277,16 @@ impl<'a> Gen<'a> {
                 if narrowed {
                     self.narrow_in_update(false);
                 }
+                let scope = self.enum_scope(fx.module, body);
+                if let Some(s) = scope {
+                    self.for_in_reads.push(s);
+                }
                 match self.for_in_of(fx, body) {
                     Some(f) => self.for_in_body(fx, &f),
                     None => self.stmts(fx, body),
+                }
+                if scope.is_some() {
+                    self.for_in_reads.pop();
                 }
                 if narrowed {
                     self.narrow_end();
