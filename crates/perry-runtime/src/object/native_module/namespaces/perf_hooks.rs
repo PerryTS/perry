@@ -5,7 +5,7 @@
 crate::realm_decl! {
     namespace NM_PERF_HOOKS_CONSTANTS = "perf_hooks.constants" {
         cell = "node:perf_hooks.constants";
-        names = ["performance.constants", "performance.default.constants"];
+        names = ["node:perf_hooks.default.constants"];
         members = {
             NODE_PERFORMANCE_GC_MAJOR = (4.0);
             NODE_PERFORMANCE_GC_MINOR = (1.0);
@@ -40,14 +40,14 @@ crate::realm_decl! {
             createHistogram = (ref(performance.createHistogram));
             performance = (ref(performance));
             constants = (ref("node:perf_hooks.constants"));
-            default = (ref(performance.default));
+            default = (ref("node:perf_hooks.default"));
         }
     }
 }
 
 crate::realm_decl! {
     namespace NM_PERF_HOOKS_DEFAULT = "perf_hooks.default" {
-        cell = "performance.default";
+        cell = "node:perf_hooks.default";
         members = {
             Performance = (ref(Performance));
             PerformanceEntry = (ref(PerformanceEntry));

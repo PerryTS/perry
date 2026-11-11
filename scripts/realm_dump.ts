@@ -308,7 +308,12 @@ if (restrictedNames === null && realm_native_20 !== undefined) {
         const values: any[] = [];
         for (let j = 0; j < roots.length; j++) values.push(key === "" ? roots[j] : roots[j][key]);
         if (name === "console") values.push(globalThis.console);
-        if (name === "node:perf_hooks.constants") values.push((globalThis as any).performance.constants);
+        if (name === "node:perf_hooks.constants") {
+            const singleton: any = globalThis.performance;
+            if (singleton.constants !== undefined || singleton.default !== undefined) {
+                throw new Error("performance must not expose perf_hooks namespace aliases");
+            }
+        }
         let one = typeof values[0] === "object" && values[0] !== null;
         for (let j = 1; j < values.length; j++) if (values[j] !== values[0]) one = false;
         console.log("@identity " + JSON.stringify({ name: name, one: one }));
