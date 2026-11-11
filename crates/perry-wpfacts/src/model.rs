@@ -497,7 +497,8 @@ pub struct Template {
     /// Birth keys reserved for a constructor store
     /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
     /// can observe the instance before the constructor stores them (a method
-    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// call on `this`, ...), or a run skips the store (a branch, a loop body,
+    /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
