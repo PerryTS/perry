@@ -570,6 +570,19 @@ fn color_depth_for_env(env: ColorEnv<'_>) -> u8 {
     color_depth_from_lookup(|name| env.get(name))
 }
 
+/// Whether text styled for `process.stdout` gets its escapes: node's
+/// `shouldColorize(process.stdout)`. With `FORCE_COLOR` set it is
+/// `getColorDepth() > 2`, whatever stdout is; otherwise stdout must be a tty
+/// and `getColorDepth() > 2`. So `FORCE_COLOR=""` colours (depth 16), and
+/// `NO_COLOR`, `NODE_DISABLE_COLORS` and `TERM=dumb` give depth 2 unless
+/// `FORCE_COLOR` is set.
+pub(crate) fn stdout_style_bit() -> bool {
+    let env = ColorEnv::process();
+    let forced = env.get("FORCE_COLOR").is_some();
+    let depth = color_depth_for_env(env);
+    (forced || is_tty_fd(1)) && depth > 2
+}
+
 fn has_colors_for_depth(count: f64, depth: u8) -> bool {
     count <= 2_f64.powi(depth as i32)
 }
@@ -1401,14 +1414,8 @@ mod tests {
         assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
         assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
 
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
-            Some(7)
-        );
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
-            None
-        );
+        assert_eq!(tty_isatty_fd_arg(f64::from(7)), Some(7));
+        assert_eq!(tty_isatty_fd_arg(f64::from(-1)), None);
 
         assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
         assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);

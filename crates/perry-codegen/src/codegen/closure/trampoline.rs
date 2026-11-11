@@ -1,6 +1,5 @@
 //! Raw-return branches of typed closure entry trampolines.
-use super::super::typed_abi::{TypedFunctionTrampolineKind, TypedParamRep};
-use super::super::typed_entry::emit_typed_arg_to_raw_after_entry_tier;
+use super::super::typed_abi::{emit_typed_arg_to_raw, TypedFunctionTrampolineKind, TypedParamRep};
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 
 pub(super) fn emit_typed_closure_trampoline_fast_value(
@@ -16,7 +15,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -33,7 +32,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -50,7 +49,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));
@@ -68,7 +67,7 @@ pub(super) fn emit_typed_closure_trampoline_fast_value(
             let raw_args: Vec<String> = arg_names
                 .iter()
                 .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
+                .map(|(arg, rep)| emit_typed_arg_to_raw(blk, *rep, arg))
                 .collect();
             let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
             typed_args.push((I64, "%this_closure"));

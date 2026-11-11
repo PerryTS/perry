@@ -94,7 +94,6 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
-    "third_party/turnloop",
     "tests/integration/wasi/p1-host",
 ]
 
@@ -446,17 +445,20 @@ memchr = "2"
 # 0.1.18 walks one-pass captures off the lazy automaton in fewer instructions.
 # It retains format 16, complete captures and exact work charging.
 perex = "0.1.18"
-# The per-agent event-loop driver. alpha.10 adds owned TCP connect, live socket
-# controls and cancellation-safe shutdown used by the synchronous WASI adapter.
-# Release source: e31526b5399d00e94b1452ffe8a8e0e76e4824ad (turnloop PR #115).
-# Resolved once on 2026-10-24 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow
-# before this release clears the 7-day publish-age window (bounded exception for
-# exactly this crate and version, first-party turnloop release for the no-tokio WASI
-# host, owner-approved 10-24; published 2026-10-24T08:07Z, expires 2026-10-31T08:07Z).
-# The global window is unchanged. Cargo.lock pins the published artifact, verified against the
-# crates.io sparse index and .cargo_vcs_info.json; SHA256:
-# f579fbcc6620a3bda7ea47135ea3c3e8ea0a10f110cd7206350ad78b136d26d2
-turnloop = "=0.1.0-alpha.10"
+# The per-agent event-loop driver. beta.2 carries every provider API Perry uses
+# (owned TCP connect, live socket controls, cancellation-safe shutdown, the h2
+# unsolicited-PING-ack switch, strict RFC 7932 Brotli, no epoll_pwait2 probe on
+# Android, whose seccomp filter kills it) in the published crates.
+# Release source: turnloop main 0df1277 (turnloop PR #137). Resolved once on
+# 2026-11-08 with CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow before this
+# release clears the 7-day publish-age window (bounded exception for exactly the
+# turnloop, turnloop-io, turnloop-http, turnloop-tls, turnloop-websocket,
+# turnloop-wasi-random and turnloop-zstd-decoder 0.1.0-beta.2 artifacts, first-party
+# turnloop release, owner-approved 2026-11-08; published 2026-11-08T20:22Z, expires
+# 2026-11-15T20:22Z). The global window is unchanged. Cargo.lock pins the published
+# artifacts; turnloop SHA256:
+# 49e2f1ca53e1247f717acf892f0f36d25b962f865e4e9d6b3c579ddc93d1b40f
+turnloop = "=0.1.0-beta.2"
 
 # The component provider uses its own LocalExecutor on the I/O owner thread.
 
@@ -485,8 +487,8 @@ turnloop = "=0.1.0-alpha.10"
 # rustls process-default provider, failing at RUNTIME ("no rustls crypto
 # provider") rather than at compile time. So this line restores exactly what
 # alpha.6 gave Perry; it does not opt into anything new.
-turnloop-http = { version = "=0.1.0-alpha.9", default-features = false }
-turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features = [
+turnloop-http = { version = "=0.1.0-beta.2", default-features = false }
+turnloop-tls = { version = "=0.1.0-beta.2", default-features = false, features = [
     "ring",
 ] }
 # turnloop WS lane: the sans-I/O WebSocket protocol + HTTP-upgrade helpers that
@@ -494,7 +496,7 @@ turnloop-tls = { version = "0.1.0-alpha.9", default-features = false, features =
 # the `turnloop` feature pulls turnloop-io's LocalExecutor, which Perry cannot
 # adopt for the same reason P5 recorded (it builds its own Driver and drops
 # every completion it did not issue). See docs/turnloop/ws-report.md.
-turnloop-websocket = { version = "0.1.0-alpha.9", default-features = false }
+turnloop-websocket = { version = "=0.1.0-beta.2", default-features = false }
 # turnloop P7 (docs/turnloop/p7-report.md): the sans-I/O database protocol
 # cores that replace sqlx on the
 # paths Perry's bindings own. Default features only, for the same reason as the
@@ -658,9 +660,3 @@ inherits = "release"
 debug-assertions = true
 lto = false
 codegen-units = 1
-
-# Required provider APIs are not all present in published alpha.10. Keep the
-# exact sources qualified with the component engine; see vendor provenance.
-[patch.crates-io]
-turnloop = { path = "third_party/turnloop/turnloop" }
-turnloop-http = { path = "third_party/turnloop/turnloop-http" }

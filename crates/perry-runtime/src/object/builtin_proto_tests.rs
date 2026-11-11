@@ -889,3 +889,79 @@ fn the_collection_and_string_iterator_prototypes_lock_their_image_and_take_adds(
         assert_eq!(locked_object_name(family), name);
     }
 }
+
+/// A method `call_unknown_collection_method` reaches whose body dispatches
+/// its own name by name again: a recursion of runtime frames only, no
+/// compiled prologue in the cycle.
+extern "C" fn redispatching_method_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    unsafe { call_unknown_collection_method(this.as_f64(), b"foo", &[]) }
+}
+
+/// A body that invokes a DIFFERENT name through the same lookup (the
+/// `toLocaleString` -> `Invoke(this, "toString")` shape).
+extern "C" fn other_name_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    unsafe { call_unknown_collection_method(this.as_f64(), b"bar", &[]) }
+}
+
+extern "C" fn seven_fixture(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    7.0
+}
+
+/// The unknown-collection-method lookup is bounded by the agent's stack
+/// limit, not by a per-thread flag: a same-name runtime-only cycle throws
+/// node's catchable `RangeError: Maximum call stack size exceeded` (a flag
+/// guard answers `undefined`, no guard overflows the native stack), and a
+/// nested call of another name is an ordinary call.
+#[test]
+fn unknown_collection_method_recursion_throws_the_stack_range_error() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    crate::stack_guard::publish_stack_limit();
+    assert!(
+        !crate::agent_ptrs::read(crate::agent_ptrs::AGENT_PTR_STACK_LIMIT).is_null(),
+        "premise: this thread has a published stack limit"
+    );
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 3);
+        let recv = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
+        let foo = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(redispatching_method_fixture, 0), 0)
+                as i64,
+        ));
+        let baz = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(other_name_fixture, 0), 0) as i64,
+        ));
+        let bar = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(seven_fixture, 0), 0) as i64,
+        ));
+        add_key(obj, b"foo", foo.get_nanbox_f64());
+        add_key(obj, b"baz", baz.get_nanbox_f64());
+        add_key(obj, b"bar", bar.get_nanbox_f64());
+
+        let nested = call_unknown_collection_method(recv.get_nanbox_f64(), b"baz", &[]);
+        assert_eq!(nested, 7.0, "a nested call of another name is an ordinary call");
+
+        let thrown = crate::exception::catch_js_throw(|| {
+            call_unknown_collection_method(recv.get_nanbox_f64(), b"foo", &[])
+        });
+        let exception = match thrown {
+            Ok(value) => panic!("a same-name cycle must throw, answered {:#x}", value.to_bits()),
+            Err(exception) => exception,
+        };
+        let message = thrown_message(exception);
+        assert!(
+            message.contains("Maximum call stack size exceeded"),
+            "node's RangeError, got {message:?}"
+        );
+    }
+}

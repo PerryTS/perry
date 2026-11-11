@@ -459,6 +459,7 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         extern_funcs,
         init_was_unrolled,
         has_top_level_await,
+        async_init_function,
         init_kind,
         async_step_closures,
         closure_display_names,
@@ -503,6 +504,7 @@ fn beside(module: &Module, init: Vec<Stmt>, inlined: &FxHashSet<u32>) -> Module 
         extern_funcs: extern_funcs.clone(),
         init_was_unrolled: *init_was_unrolled,
         has_top_level_await: *has_top_level_await,
+        async_init_function: *async_init_function,
         init_kind: *init_kind,
         async_step_closures: async_step_closures.clone(),
         closure_display_names: closure_display_names.clone(),
@@ -960,6 +962,18 @@ pub(crate) fn closed_bindings(
 ) -> (FxHashMap<String, u32>, FxHashSet<String>, FxHashSet<String>) {
     let (_, out, published, passed) = closed(module, Some(unit_of), named);
     (out, published, passed)
+}
+
+/// The closed bindings of `module` (decision 13, every export counting)
+/// whose every reference is the callee of a direct call or a TDZ check:
+/// none is passed as an argument, so only those calls run it. By key
+/// (`(true, function id)`, `(false, local id)`), with the body's id.
+pub(crate) fn call_only_bindings(module: &Module) -> FxHashMap<(bool, u32), u32> {
+    let (cand, _, _, passed) = closed(module, None, &|_| true);
+    cand.into_iter()
+        .filter(|(_, (name, _))| !passed.contains(name))
+        .map(|(k, (_, body))| (k, body))
+        .collect()
 }
 
 /// The closed bindings by key (`(true, function id)` for a module function,

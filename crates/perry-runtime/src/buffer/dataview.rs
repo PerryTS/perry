@@ -36,6 +36,7 @@ pub enum DataViewKind {
     Float64 = 7,
     BigInt64 = 8,
     BigUint64 = 9,
+    Float16 = 10,
 }
 
 impl DataViewKind {
@@ -60,6 +61,7 @@ impl DataViewKind {
             7 => DataViewKind::Float64,
             8 => DataViewKind::BigInt64,
             9 => DataViewKind::BigUint64,
+            10 => DataViewKind::Float16,
             _ => return None,
         })
     }
@@ -78,25 +80,8 @@ impl DataViewKind {
             DataViewKind::Float64 => "Float64",
             DataViewKind::BigInt64 => "BigInt64",
             DataViewKind::BigUint64 => "BigUint64",
+            DataViewKind::Float16 => "Float16",
         }
-    }
-
-    /// Map a `get*`/`set*` method name (without the `get`/`set` prefix) to a
-    /// kind. Returns `None` for an unrecognized element name.
-    pub fn from_method_suffix(suffix: &str) -> Option<DataViewKind> {
-        Some(match suffix {
-            "Int8" => DataViewKind::Int8,
-            "Uint8" => DataViewKind::Uint8,
-            "Int16" => DataViewKind::Int16,
-            "Uint16" => DataViewKind::Uint16,
-            "Int32" => DataViewKind::Int32,
-            "Uint32" => DataViewKind::Uint32,
-            "Float32" => DataViewKind::Float32,
-            "Float64" => DataViewKind::Float64,
-            "BigInt64" => DataViewKind::BigInt64,
-            "BigUint64" => DataViewKind::BigUint64,
-            _ => return None,
-        })
     }
 }
 
@@ -257,6 +242,15 @@ unsafe fn write_number(
             };
             write_bytes(buf, offset, &bytes);
         }
+        DataViewKind::Float16 => {
+            let v = crate::math::f64_to_binary16(n);
+            let bytes = if little {
+                v.to_le_bytes()
+            } else {
+                v.to_be_bytes()
+            };
+            write_bytes(buf, offset, &bytes);
+        }
         DataViewKind::Float32 => {
             let v = n as f32;
             let bytes = if little {
@@ -321,6 +315,14 @@ pub fn js_data_view_get(buf_f64: f64, offset_value: f64, kind: DataViewKind, lit
             // #10779: same reasoning as `typedarray::load_at` — these two are
             // the only `get*` kinds that can return a NaN, and the bytes are
             // whatever the program wrote.
+            DataViewKind::Float16 => {
+                let b = read_bytes::<2>(buf, offset);
+                crate::math::binary16_to_f64(if little {
+                    u16::from_le_bytes(b)
+                } else {
+                    u16::from_be_bytes(b)
+                })
+            }
             DataViewKind::Float32 => {
                 let b = read_bytes::<4>(buf, offset);
                 crate::array::canonical_raw_f64(if little {
@@ -418,13 +420,50 @@ fn data_view_direct_receiver(recv: f64, method_name: &str) -> Option<usize> {
     if !super::is_data_view(addr) {
         return None;
     }
-    // `dv.getFloat64 = fn` style shadows live in the buffer own-props table;
-    // the monotonic flag keeps this probe (a process-global mutex) off the
-    // hot path for programs that never store props on a buffer.
-    if super::buffer_get_own_prop(addr, method_name).is_some() {
+    // The cell's own properties (`dv.getFloat64 = fn`) and a recorded
+    // [[Prototype]] (`Object.setPrototypeOf(dv, p)`, a subclass instance) both
+    // live in its bag: one ownership proof, then the two keys. Otherwise the
+    // member is read from `%DataView.prototype%`, so the built-in runs only
+    // while the program never wrote, deleted or relinked it (its shadow bit,
+    // set-only): `DataView.prototype.getInt8 = f` takes the generic call.
+    if !super::header::header_is_owned(addr) {
+        return None;
+    }
+    // SAFETY: `addr` is a tracked, live DataView cell; its bag is null or a
+    // live object.
+    unsafe {
+        let bag = super::store::bag(addr);
+        if !bag.is_null()
+            && (super::store::bag_holds(bag, method_name.as_bytes())
+                || super::store::bag_holds(bag, super::store::PROTOTYPE_KEY.as_bytes()))
+        {
+            return None;
+        }
+    }
+    if !data_view_prototype_unwritten() {
         return None;
     }
     Some(addr)
+}
+
+/// `%DataView.prototype%` still holds exactly the runtime's members: not born
+/// yet, or sealed at birth with its shadow bit clear.
+#[inline]
+fn data_view_prototype_unwritten() -> bool {
+    let proto = crate::array::intrinsic_prototype_addr_if_bound(
+        crate::object::BuiltinConstructorIdentity::DataView,
+    ) as *const crate::ObjectHeader;
+    if proto.is_null() {
+        return true;
+    }
+    // SAFETY: a live realm intrinsic (born old, never moved); its meta record
+    // is null or live.
+    unsafe {
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(proto as *mut _));
+        !meta.is_null()
+            && (*meta).flags & crate::object::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0
+            && (*proto).parent_class_id < crate::object::layout_desc::UNSHADOWED_WORD_END
+    }
 }
 
 /// Cold fallback for the direct entries: a receiver whose static type said

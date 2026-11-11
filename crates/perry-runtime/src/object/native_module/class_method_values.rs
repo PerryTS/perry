@@ -3,17 +3,47 @@ pub(crate) fn class_evaluation_method_value_for_name(
     method_name: &str,
     evaluation_brand: f64,
 ) -> f64 {
+    // The method's home is this evaluation's prototype object, the value a
+    // `C.prototype` read of `evaluation_brand` returns. Building it fills
+    // every method value of the evaluation (`finish_class_evaluation_prototype`,
+    // which passes the prototype it is filling), so the read below finds the
+    // value that fill made.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let brand = scope.root_nanbox_f64(evaluation_brand);
+    let home = scope.root_nanbox_f64(evaluation_method_home(owner_class_id, evaluation_brand));
     class_evaluation_method_value_for_name_bytes(
         owner_class_id,
         method_name.as_bytes(),
-        evaluation_brand,
+        brand.get_nanbox_f64(),
+        home.get_nanbox_f64(),
     )
 }
 
+/// The prototype object a method of `owner_class_id`'s evaluation
+/// `evaluation_brand` belongs to: that evaluation's prototype when the brand
+/// is its class object, else the declared prototype (what B2's `prototype`
+/// read returns for the class).
+fn evaluation_method_home(owner_class_id: u32, evaluation_brand: f64) -> f64 {
+    if class_registry::is_class_object_value(evaluation_brand) {
+        let class = JSValue::from_bits(evaluation_brand.to_bits()).as_pointer::<ObjectHeader>();
+        if !class.is_null() && crate::object::js_object_get_class_id(class) == owner_class_id {
+            // SAFETY: a live class object of `owner_class_id`.
+            let proto =
+                unsafe { crate::object::field_get_set::class_object_prototype_value(class) };
+            return f64::from_bits(proto.bits());
+        }
+    }
+    class_registry::class_decl_prototype_value(owner_class_id)
+}
+
+/// `home` is the method's prototype object (P3 B4a: a bound method value's
+/// receiver is never the 0x7FFE prototype word; dispatch reads the owner off
+/// the prototype object, `class_prototype_object_id`).
 pub(crate) fn class_evaluation_method_value_for_name_bytes(
     owner_class_id: u32,
     method_name: &[u8],
     evaluation_brand: f64,
+    home: f64,
 ) -> f64 {
     // A template compiled with method entries gives each evaluation's
     // prototype its own function object per method (`<method>__eclo`): that
@@ -37,9 +67,10 @@ pub(crate) fn class_evaluation_method_value_for_name_bytes(
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let brand = scope.root_nanbox_f64(evaluation_brand);
+    let home = scope.root_nanbox_f64(home);
     let name = intern_class_method_name_bytes(owner_class_id, method_name);
     let method = build_bound_method_closure_with_private_brand(
-        class_prototype_ref_value(owner_class_id),
+        home.get_nanbox_f64(),
         name.as_ptr(),
         name.len(),
         Some(brand.get_nanbox_f64()),

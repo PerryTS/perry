@@ -102,6 +102,8 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -644,11 +646,27 @@ fn the_field_write_back_compares_a_rooted_pre_append_head() {
         .and_then(|(_, r)| r.split_once(','))
         .map(|(a, _)| a.trim())
         .expect("operand");
-    // "does the field still hold the old head?": the branch into the store.
+    // "does the field still hold the old head?": the branch into the store
+    // (through the stack check moved in front of the store's calling block;
+    // the check's own branch, inside a `stack_guard.*` block, is not it).
+    let mut label = "entry";
     let br = body
         .lines()
+        .filter(|l| {
+            if !l.starts_with(' ') && l.ends_with(':') {
+                label = l.trim_end_matches(':');
+            }
+            !label.starts_with("stack_guard.")
+        })
         .map(str::trim)
-        .find(|l| l.starts_with("br i1 ") && l.contains("label %apush.field.writeback"))
+        .find(|l| {
+            l.starts_with("br i1 ")
+                && l.split("label %").skip(1).any(|part| {
+                    let target = part.split([',', ' ']).next().unwrap();
+                    super::class_field_barrier_tests::through_stack_check(body, target)
+                        .starts_with("apush.field.writeback")
+                })
+        })
         .unwrap_or_else(|| panic!("the field-still-held branch must exist:\n{body}"));
     let held = br["br i1 ".len()..]
         .split(',')

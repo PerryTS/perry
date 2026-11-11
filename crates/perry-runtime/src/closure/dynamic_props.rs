@@ -39,7 +39,16 @@ pub fn closure_is_key_deleted(ptr: usize, key: &str) -> bool {
 /// walk the static-prototype chain, unlike `closure_get_dynamic_prop`). Used
 /// by `hasOwnProperty`/`getOwnPropertyNames` to report own user props and the
 /// constructor `prototype` slot without inheriting from a set prototype.
+#[inline(never)]
 pub fn closure_has_own_dynamic_prop(ptr: usize, prop: &str) -> bool {
+    // Presence is not a read: an unborn lazy constructor (no bag yet) owns its
+    // declared statics without a birth (`props::is_declared_static`). Every
+    // other closure answers through the one out-of-line own-value read.
+    // One call per caller, as before the declared statics (it called the
+    // out-of-line read): no inlined copy of the closure test per call site.
+    if ptr != 0 && is_closure_ptr(ptr) && unsafe { super::props::bag_of(ptr).is_null() } {
+        return unsafe { super::props::is_declared_static(ptr, prop.as_bytes()) };
+    }
     closure_get_own_dynamic_prop(ptr, prop).is_some()
 }
 
@@ -204,6 +213,12 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
 ) -> f64 {
     if !is_closure_ptr(ptr) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+
+    // An unborn lazy builtin family answers `prototype` by being born (F2).
+    if prop == "prototype" {
+        // SAFETY: `ptr` is a proven, live closure cell.
+        unsafe { crate::object::birth_unborn_family_of(ptr) };
     }
 
     // `PerformanceObserver.supportedEntryTypes` is a built-in static accessor:

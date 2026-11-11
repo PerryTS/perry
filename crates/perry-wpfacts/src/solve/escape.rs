@@ -15,6 +15,11 @@ impl Model {
     }
 
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if let Some(c) = self.cur_native_call {
+            let region = self.calls[c as usize].region;
+            let ret = self.calls[c as usize].ret;
+            self.raise_top(region, ret, "a native hands a value to unknown code, which may throw");
+        }
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
             return;
@@ -186,10 +191,7 @@ impl Model {
                 self.note_shared(SharedWrite::Unmodeled(s));
             }
         }
-        if matches!(
-            self.toks[t as usize],
-            TokKind::Builtin(BuiltinNs::GlobalThis)
-        ) {
+        if builtins::global_object(self, t) {
             crate::builtins::note_global_in_top(self);
             if !self.unit_mode {
                 crate::builtins::note_native_write(
@@ -219,7 +221,7 @@ impl Model {
         if !self.chain_escape {
             if let Some(s) = self
                 .shared_of(t)
-                .filter(|s| *s != Shared::Builtin(BuiltinNs::GlobalThis))
+                .filter(|_| !builtins::global_object(self, t))
             {
                 self.note_shared(SharedWrite::Handed(s));
             }
@@ -241,13 +243,14 @@ impl Model {
                 self.builtin_fields_sink(t, Some(reason));
             }
             // Unknown code given `process` (or the global object) may write
-            // the array `process.argv` holds.
-            if matches!(
-                self.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
-            ) {
-                let a = self.process_argv_tok;
-                self.escape(a, reason);
+            // the arrays `process.argv` and `process.execArgv` hold.
+            if builtins::global_object(self, t)
+                || matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
+            {
+                for i in 0..self.process_arrays.len() {
+                    let a = self.process_arrays[i].2;
+                    self.escape(a, reason);
+                }
             }
             return;
         }
@@ -304,6 +307,7 @@ impl Model {
             }
         }
         self.escaped.insert(t, reason);
+        self.arr_len_top(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
@@ -312,6 +316,35 @@ impl Model {
             self.esc_bits.resize(w + 1, 0);
         }
         self.esc_bits[w] |= 1 << (t & 63);
+    }
+
+    /// Unknown code holding `t` runs every accessor on its chain: a setter
+    /// with `w` (the unknown value), a getter whose result escapes. It also
+    /// holds the accessor functions themselves (`Object.getOwnPropertyDescriptor`,
+    /// `__lookupGetter__` on `t` or its chain): they escape, so unknown code
+    /// may call them with any receiver and catch what they throw
+    /// (`escape_fn_params`: their throw region feeds ESCRAISE).
+    fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        let r = self.node_l("escaped-load");
+        self.sink_node(r, reason);
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        let fns = self.esc_accessors;
+        for setter in [false, true] {
+            self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
+        }
+    }
+
+    /// Escaped `f` (`reason`) has callers in unknown code, which retain its
+    /// result and may catch what it throws: true unless it is a contract
+    /// function published through its contract (an export or a published
+    /// literal's field, DECISIONS 210) or with known closed callers
+    /// (DECISIONS 19), whose callers are the units' modeled calls.
+    pub(crate) fn unknown_caller(&self, f: FnIdx, reason: u32) -> bool {
+        !self.contract_fns.contains(&f)
+            || (self.pub_reason != Some(reason)
+                && self.field_fn_reason != Some(reason)
+                && !(self.closed_pub_reason == Some(reason) && self.closed_params.contains_key(&f)))
     }
 
     /// Unknown code calls `f`: unknown arguments, the result escapes.
@@ -323,6 +356,16 @@ impl Model {
             return;
         }
         let f = self.tok_fn(ft);
+        // What a call returns or throws goes to its caller. Where unknown
+        // code calls it (its result escapes: no contract publication, no
+        // known closed callers), it may catch what it throws: the throw
+        // region feeds ESCRAISE, the escape sink of escape-made calls
+        // (DESIGN SEEDE section 8).
+        if self.unknown_caller(f, reason) {
+            let raise = self.raise_of(f);
+            let esc = self.esc_raise;
+            self.edge(raise, esc);
+        }
         if self.summarized(f) {
             self.escape_summarized(ft, reason);
             return;
@@ -384,13 +427,7 @@ impl Model {
             }
             self.add_top(fi.args_all, why);
             self.contract_rets.push((f, fi.ret));
-            // Beyond its publication (an export or a published literal's
-            // field, DECISIONS 210, or known closed callers, DECISIONS 19),
-            // unknown code calls it and retains its result.
-            if self.pub_reason != Some(reason)
-                && self.field_fn_reason != Some(reason)
-                && closed.is_none()
-            {
+            if self.unknown_caller(f, reason) {
                 self.sink_node(fi.ret, reason);
             }
             return;
@@ -646,6 +683,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
+            region: self.esc_raise,
         });
         self.contract_new.insert(call);
         self.construct(call, cobj);
@@ -705,6 +743,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
+            region: self.esc_raise,
         });
         self.construct(call, t);
         self.sink_node(ret, reason);
@@ -757,10 +796,7 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.escaped_accessor_runs(t, w, reason);
     }
 
     /// A named property `n` of function `t` whose properties left
@@ -969,10 +1005,7 @@ impl Model {
             )
         });
         self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.escaped_accessor_runs(t, w, reason);
         match self.toks[t as usize].clone() {
             TokKind::Func(f, _) => {
                 let fi = self.funcs[f as usize].clone();
@@ -1005,6 +1038,7 @@ impl Model {
                     spread: vec![],
                     ret,
                     site: 0,
+                    region: self.esc_raise,
                 });
                 self.construct(call, t);
                 let esc = self.escaped_classes;
@@ -1068,6 +1102,7 @@ impl Model {
         // never sees (`members::locked_read`, the same decision). It removes
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
+        self.arr_len_top(t);
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);

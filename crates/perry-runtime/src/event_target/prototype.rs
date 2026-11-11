@@ -312,7 +312,7 @@ extern "C" fn get_dom_code(closure: *const ClosureHeader, this: crate::closure::
     dom_exception_code(&String::from_utf8_lossy(bytes))
 }
 
-pub(super) fn accessor(
+pub(crate) fn accessor(
     proto: *mut ObjectHeader,
     name: &str,
     getter: *const crate::closure::JsFunctionInfo,
@@ -494,11 +494,11 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "AbortController" => {
             get(
                 "signal",
-                crate::fn_info!(#[realm("AbortController.prototype.signal.<get>")] export crate::event_target::prototype::get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortController.prototype.signal.<get>", effects = { returns(islot(this, signal)) })] export crate::event_target::prototype::get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             method(
                 "abort",
-                crate::fn_info!(#[realm(AbortController.prototype.abort, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype)]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 realm_abortcontroller_prototype_abort_metadata!(length),
                 true,
@@ -507,12 +507,12 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "AbortSignal" => {
             get(
                 "aborted",
-                crate::fn_info!(#[realm("AbortSignal.prototype.aborted.<get>")] export crate::event_target::prototype::get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.aborted.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             accessor(
                 proto,
                 "reason",
-                crate::fn_info!(#[realm("AbortSignal.prototype.reason.<get>")] export crate::event_target::prototype::get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.reason.<get>", effects = { returns(islot(this, reason) | fresh(DOMException.prototype) | prim(undefined)) })] export crate::event_target::prototype::get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
                 None,
                 false,
             );
@@ -526,8 +526,8 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             accessor(
                 proto,
                 "onabort",
-                crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<get>")] export crate::event_target::prototype::get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
-                Some(crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<set>")] export crate::event_target::prototype::set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
+                crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<get>", effects = { returns(islot(this, onabort) | prim(null)) })] export crate::event_target::prototype::get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
+                Some(crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<set>", effects = { stores(arg(0) -> islot(this, onabort)); returns(prim(undefined)) })] export crate::event_target::prototype::set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
         }

@@ -26,6 +26,7 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression boundary refreshes them.
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    crate::verify_facts::zero_sign::witness(ctx, expr);
     // What the expression does to the receiver run in flight.
     let run = crate::expr::layout_read::run_transparency(expr);
     crate::expr::layout_read::run_enter(ctx, &run);
@@ -781,6 +782,41 @@ pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Str
     } else {
         Ok(emit_math_to_number(ctx, &raw))
     }
+}
+
+/// c1: the operands of a Math call that lowers to an LLVM intrinsic and
+/// nothing else, once every operand is a proven Number
+/// (`expr::math_simple` / `logical_collections`: `llvm.fabs`, `llvm.floor`,
+/// `llvm.ceil`, `llvm.sqrt`, and `llvm.minimum` / `llvm.maximum` folds, which
+/// give JS's NaN and signed-zero results; `Math.max()` folds to its
+/// identity). `MathRound`, `MathTrunc`, `MathSign` call `js_math_*`, and the
+/// spread forms allocate: not listed. Whatever the lowering of the node is,
+/// this describes it; a `Math` member the program writes never becomes the
+/// node (`perry_hir::patched_builtins`, #10848; under dynamic code the node
+/// sits inside the `NamespacePatched` guard, #12643).
+pub(crate) fn math_intrinsic_operands(e: &Expr) -> Option<&[Expr]> {
+    if !inert_math_enabled() {
+        return None;
+    }
+    match e {
+        Expr::MathAbs(x) | Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathSqrt(x) => {
+            Some(std::slice::from_ref(x.as_ref()))
+        }
+        Expr::MathMin(v) | Expr::MathMax(v) => Some(v.as_slice()),
+        _ => None,
+    }
+}
+
+/// `PERRY_INERT_MATH=0` turns c1 off (the Math-intrinsic and conditional arms
+/// of `expr_is_inert_primitive` and everything that reads it).
+pub(crate) fn inert_math_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INERT_MATH").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
 }
 
 /// The operand lowers to a plain double by construction.

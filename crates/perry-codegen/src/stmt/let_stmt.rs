@@ -1085,18 +1085,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let slot = ctx
                     .i32_counter_slots
@@ -1165,17 +1169,29 @@ pub(crate) fn lower_let(
     // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
     // where the mixed representation additionally costs the loop its
     // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    let unprofitable = ctx
-        .native_facts
-        .unprofitable_canonical_i32_locals()
-        .contains(&id);
+    // Representation RFC §10 (P1): the whole-program facts' representation
+    // is the decision for a local they cover (`codegen/facts_rep.rs`).
+    let facts_rep = crate::codegen::facts_rep::local(ctx, id);
+    let unprofitable = match facts_rep {
+        Some(crate::codegen::FactsRep::I32) => false,
+        Some(_) => true,
+        None => ctx
+            .native_facts
+            .unprofitable_canonical_i32_locals()
+            .contains(&id),
+    };
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
-    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // A local the facts give `I32` is proven int32 (never -0) on every
+    // write by the whole-program interval: that proof is the value-level
+    // admission, and the per-function collectors' proofs are not needed.
+    let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
+    let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
         && !unprofitable
-        && init_in_i32_range
+        && init_in_i32_range;
+    let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
@@ -1241,18 +1257,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 // i32-native init: compute directly in i32, single store.
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 ctx.block().store(I32, &v_i32, &i32_slot);
@@ -1432,18 +1452,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let unsigned_i32 = ctx.unsigned_i32_locals.contains(&id);
                 let blk = ctx.block();
@@ -1590,9 +1614,14 @@ pub(crate) fn lower_let(
                     // for a local source. A declared numeric/object type can
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
-                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                        && !const_array_walk::holds_no_string(ctx, id, &v)
+                    {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
+                    let v = crate::codegen::facts_number_locals::accept_let_value(
+                        ctx, id, init_expr, v,
+                    );
                     ctx.block().store(DOUBLE, &v, &slot);
                     v
                 }
@@ -1613,9 +1642,13 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                    && !const_array_walk::holds_no_string(ctx, id, &v)
+                {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
+                let v =
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, id, init_expr, v);
                 ctx.block().store(DOUBLE, &v, &slot);
                 v
             };

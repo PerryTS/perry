@@ -99,13 +99,10 @@ impl<'a> Gen<'a> {
                 // (`Cons::DefineAll`); any other map's own values are these
                 // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                let va = self.m.atom("value");
-                let value = self.load(descs, Key::Named(va));
+                let [value, dget, dset] = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
                 let star = self.m.atom(crate::STAR_KEY);
-                for (name, setter) in [("get", false), ("set", true)] {
-                    let a = self.m.atom(name);
-                    let f = self.load(descs, Key::Named(a));
+                for (f, setter) in [(dget, false), (dset, true)] {
                     self.m.cons(
                         f,
                         Cons::Accessor {
@@ -268,13 +265,41 @@ impl<'a> Gen<'a> {
                 // toJSON / getters run; replacer functions are called by
                 // the runtime with runtime values.
                 let ks = kids(e);
-                let out = self.prim_op(
-                    fx,
-                    &ks[..ks.len().min(1)],
-                    prim::STR | prim::UNDEF,
-                    "JSON.stringify value",
-                    Protocol::Json,
-                );
+                let replacer = match e {
+                    Expr::JsonStringifyFull(_, r, _) => Some(&**r),
+                    Expr::JsonStringifyPretty { replacer, .. } => replacer.as_deref(),
+                    _ => None,
+                };
+                // A replacer function sees every value serialized, unseen
+                // by the model (DESIGN-p4l4 §4.1, finding 14): with value
+                // records on, the value's identity is observed.
+                let replaced = self.m.value_records
+                    && replacer.is_some_and(|r| {
+                        !matches!(r, Expr::Null | Expr::Undefined | Expr::Array(..))
+                    });
+                let out = if replaced && !ks.is_empty() {
+                    let r = self.m.reason("JSON.stringify value");
+                    let v = self.expr(fx, ks[0]);
+                    self.m.cons(
+                        v,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::Json,
+                        },
+                    );
+                    self.m.identity(v, IdentityRoute::JsonReplacer);
+                    let out = self.tmp("primop");
+                    self.m.add_prim(out, prim::STR | prim::UNDEF);
+                    out
+                } else {
+                    self.prim_op(
+                        fx,
+                        &ks[..ks.len().min(1)],
+                        prim::STR | prim::UNDEF,
+                        "JSON.stringify value",
+                        Protocol::Json,
+                    )
+                };
                 let rest = &ks[ks.len().min(1)..];
                 let _ = self.prim_op(
                     fx,
@@ -349,7 +374,13 @@ impl<'a> Gen<'a> {
                 // Typed arrays / buffers hold numbers; an array argument is
                 // read, a buffer/view argument is shared (B1, flow only).
                 let ks = kids(e);
-                let (t, n) = self.bobj(mi, "TypedArray");
+                // The host's file contents are a Buffer: its own methods
+                // are `Buffer.prototype`'s, the rest its typed array chain.
+                let what = match e {
+                    Expr::FsReadFileBinary(..) => "Buffer",
+                    _ => "TypedArray",
+                };
+                let (t, n) = self.bobj(mi, what);
                 let owner = self.begin_indexed_owner(mi, t, e);
                 for k in ks {
                     let v = self.expr(fx, k);
@@ -395,6 +426,8 @@ impl<'a> Gen<'a> {
                 // serializing the source reads its values recursively (own
                 // getters run) and calls nothing.
                 let v = self.expr(fx, value);
+                // The copy keeps the sharing of what it copies.
+                self.m.identity(v, IdentityRoute::Clone);
                 let r = self.m.reason("structuredClone source");
                 self.m.cons(
                     v,
@@ -517,7 +550,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(aw, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                self.callback(s, vec![arg, b])
+                self.async_callback(s, vec![arg, b])
             }
             Expr::AsyncStepResumeNow {
                 value,
@@ -550,7 +583,7 @@ impl<'a> Gen<'a> {
                 let s = self.expr(fx, step_closure);
                 let u = self.prim_node(prim::UNDEF);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![u, b]);
+                let r = self.async_callback(s, vec![u, b]);
                 self.promise_of(mi, r)
             }
             Expr::AsyncGenResume {
@@ -564,7 +597,7 @@ impl<'a> Gen<'a> {
                 self.m.edge(v, arg);
                 self.m.edge(self.thrown, arg);
                 let b = self.prim_node(prim::BOOL);
-                let r = self.callback(s, vec![arg, b]);
+                let r = self.async_callback(s, vec![arg, b]);
                 let p = self.promise_of(mi, r);
                 self.m.add_tok(p, TOP);
                 p

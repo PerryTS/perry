@@ -24,6 +24,8 @@ use super::{
     TrustedBoxCapturePtr,
 };
 
+mod facts_const_number;
+
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
 /// retain their existing ABI; trusted inline loads pass the name only on
 /// their cold TDZ arm. Names come from permanent, GC-rooted string globals.
@@ -473,6 +475,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::LocalGet(id) => {
             crate::codegen::arguments::ensure_arguments_object(ctx, *id);
+            if let Some(value) = facts_const_number::read(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }
@@ -712,7 +717,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
-                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 // Within a stable-packed numeric clone, when `x` is a
                 // canonical raw Number, `x | 0` may feed the canonical i32
                 // slot directly: materializing a double here only to convert
@@ -1389,6 +1395,7 @@ pub(crate) fn bind_lowered_value_to_local(
     v: &str,
     value: &Expr,
 ) -> Result<()> {
+    let v = &crate::codegen::facts_number_locals::accept_let_value(ctx, id, value, v.to_string());
     crate::codegen::arguments::note_arguments_assignment(ctx, id);
     // `target = source` creates the same string-buffer alias as a
     // `let target = source` initializer. The declaration path has

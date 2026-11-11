@@ -216,6 +216,7 @@ pub(in crate::codegen) fn compile_static_method(
         &cross_module.module_dispatch,
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     crate::codegen::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
@@ -251,6 +252,7 @@ pub(in crate::codegen) fn compile_static_method(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -298,6 +300,8 @@ pub(in crate::codegen) fn compile_static_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -413,6 +417,8 @@ pub(in crate::codegen) fn compile_static_method(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -438,6 +444,7 @@ pub(in crate::codegen) fn compile_static_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -464,6 +471,8 @@ pub(in crate::codegen) fn compile_static_method(
         ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,

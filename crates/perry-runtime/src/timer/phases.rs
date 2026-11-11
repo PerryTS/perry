@@ -125,6 +125,12 @@ pub(crate) fn run_timers_phase() -> i32 {
 /// round trip has (`store::insert_pending`). The phase runs BEFORE the check
 /// phase, so an immediate queued by one of these callbacks runs in the same
 /// iteration — measured on Node 26.5.1, stable 5/5, delta exactly one turn.
+///
+/// Out of line: it is called from three timer-tick entries that are inlined
+/// into further settle helpers. Inlined, its body is copied into each of
+/// them, and whether LLVM does that depends on the visiting order inside the
+/// timer/callback call cycle, not on the code.
+#[inline(never)]
 pub(crate) fn run_poll_callbacks() -> i32 {
     if in_timer_callback_dispatch() {
         return 0;
@@ -151,6 +157,10 @@ pub(crate) fn run_check_phase() -> i32 {
     if in_timer_callback_dispatch() {
         return 0;
     }
+    // An EOF read behind data waits for the end of the next check phase to
+    // begin, after the immediates its data handler queued (`defer_eof`).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::check_phase_begin();
     let horizon = store::with_current(|timers| timers.seq_horizon());
     let mut fired = 0;
     loop {
@@ -164,6 +174,8 @@ pub(crate) fn run_check_phase() -> i32 {
     // safe event-loop point the callback phase always used. The reader thread
     // notifies on each keypress; this is a cheap empty-buffer check otherwise.
     crate::os_hook_slots::pump_process_stdin();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::check_phase_end();
     if fired != 0 && crate::promise::mt_profile_enabled() {
         use std::sync::atomic::Ordering;
         PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);

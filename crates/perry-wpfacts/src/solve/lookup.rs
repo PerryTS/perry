@@ -227,7 +227,7 @@ impl Model {
             }
             ChainAct::Call(call) => {
                 if own_members {
-                    self.with_b(|m| builtins::own_method(m, t, key, call));
+                    self.with_native(call, |m| builtins::own_method(m, t, key, call));
                 }
                 // Methods on the chain (shared) and builtin prototype
                 // methods.
@@ -554,7 +554,7 @@ impl Model {
         }
         self.builtin_field_use(t, key, ChainAct::Load(dst));
         if self.is_array_length(t, key) {
-            self.add_prim(dst, prim::NUM);
+            self.arr_len_into(t, dst);
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
@@ -675,6 +675,13 @@ impl Model {
                 .or_default()
                 .push((origin, act));
             self.accessor_hit(origin, t, Key::any(), act);
+            // An ordinary object a builtin made finds `Object.prototype`'s
+            // members in `tok_load`; a prototype the program gave it
+            // (`Object.setPrototypeOf`) is on its chain: its values.
+            if crate::builtins::ordinary_box(self, t) {
+                let cv = self.cv_of(t, key, false);
+                self.edge(cv, dst);
+            }
             return;
         }
         // The prototype chain's values, shared by every receiver of `t`.
@@ -761,6 +768,16 @@ impl Model {
             self.builtin_field_use(t, key, ChainAct::Load(dst));
         }
         self.proto_value_at(t, dst);
+        // A program function born with another intrinsic prototype
+        // (`%AsyncGeneratorFunction.prototype%`, a generator object's
+        // `%GeneratorPrototype%` chain) has one the model does not
+        // describe: not `Function.prototype`, whose reads differ.
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            if !builtins::born_with_function_proto(self, f) {
+                self.add_tok(dst, TOP);
+                return;
+            }
+        }
         if let Some(ns) = builtins::chain_ns(self, t) {
             self.with_b(|m| builtins::builtin_proto_value(m, Some(ns), dst));
         }
@@ -1302,7 +1319,9 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
-                self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
+                self.with_native(call, |m| {
+                    builtins::proto_method(m, start, origin, key, call)
+                });
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);
                     self.bind_via(up, call, origin);
@@ -1489,15 +1508,18 @@ impl Model {
 
     /// Accessor `f` hangs off group (holder, key).
     pub(super) fn group_connect(&mut self, holder: Tok, key: Key, f: Tok, setter: bool) {
+        let func = matches!(self.toks[f as usize], TokKind::Func(..));
         // DECISIONS 225: a lookup reached the accessor's group.
-        if self.act.is_some() {
+        if self.act.is_some() && func {
             let g = self.tok_fn(f);
             self.activate(g, "accessor");
         }
         let g = self.acc_groups[&(holder, key)].clone();
         // An accessor with a lexical `this` (arrow) never sees the
-        // receiver, as for a call (`call_tok`).
-        let this = (!self.funcs[self.tok_fn(f) as usize].lexical_this).then(|| self.this_any(f));
+        // receiver, as for a call (`call_tok`). A class or builtin
+        // accessor gets its receivers through its call (`group_call`).
+        let this =
+            (func && !self.funcs[self.tok_fn(f) as usize].lexical_this).then(|| self.this_any(f));
         if setter {
             if let Some(this) = this {
                 self.edge_quiet(g.st, this);
@@ -1517,11 +1539,26 @@ impl Model {
 
     /// The parameter/result half of `group_connect`.
     pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
+        if !matches!(self.toks[ft as usize], TokKind::Func(..)) {
+            if !self.sum.ready {
+                self.sum
+                    .deferred
+                    .push(crate::summary::Deferred::Group(holder, key, ft, setter));
+                return;
+            }
+            return self.group_call(holder, key, ft, setter);
+        }
         let f = self.tok_fn(ft);
         self.activate(f, "accessor");
         if self.diagnostic.is_some() {
             self.diagnostic_reach(f, "accessor", u32::MAX);
         }
+        // An accessor run is a call made outside generation: what it throws
+        // reaches its region, the shared cell every catch reads (DESIGN
+        // SEEDE section 8).
+        let raise = self.raise_of(f);
+        let thrown = self.thrown;
+        self.edge(raise, thrown);
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -1553,6 +1590,44 @@ impl Model {
             let ret = self.funcs[f as usize].ret;
             self.edge_quiet(ret, ar);
         }
+    }
+
+    /// An accessor whose function is a class, a builtin or a bound function
+    /// (B.2.2.2-3 `__defineGetter__(k, Object)`, a descriptor `get: C`):
+    /// [[Get]] runs `Call(getter, receiver)`, [[Set]] runs
+    /// `Call(setter, receiver, « v »)`, as for a program accessor. The
+    /// group's call of `f`, with each receiver of the group as `this`
+    /// (`Cons::NativeThis`), runs that value's ordinary call: a class
+    /// throws a TypeError before it reads `this` (nothing flows), `Object()`
+    /// is a fresh object, an `Object.prototype` method runs on the receiver,
+    /// a bound function calls its target. It runs outside generation: what
+    /// it throws reaches the shared cell every catch reads.
+    fn group_call(&mut self, holder: Tok, key: Key, f: Tok, setter: bool) {
+        let g = self.acc_groups[&(holder, key)].clone();
+        let ret = self.node_l(if setter {
+            "acc-call-setret"
+        } else {
+            "acc-call-ret"
+        });
+        if !setter {
+            self.edge(ret, g.ar);
+        }
+        let (recv, args) = if setter {
+            (g.st, vec![g.sp])
+        } else {
+            (g.gt, vec![])
+        };
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            this: ThisArg::Node(recv),
+            args,
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.thrown,
+        });
+        self.rel(|| format!("accessorcall {call} {holder} {f} {}", setter as u8));
+        self.cons(recv, Cons::NativeThis { call, f });
     }
 
     /// A group has a setter: its waiting store sources flow from now on.

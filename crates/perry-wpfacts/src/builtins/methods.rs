@@ -65,9 +65,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 );
             }
             let r = m.reason("E20 stored on a builtin/global object");
-            let retained = if !m.unit_mode
-                && matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
-            {
+            let retained = if !m.unit_mode && super::global_object(m, t) {
                 match _key {
                     Key::Named(a) => m
                         .native_property(t, &m.atoms[a as usize])
@@ -75,7 +73,7 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m
@@ -102,14 +100,16 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                 m.sink_node(src, r);
             }
             // `process.argv = v`: later reads of the property see `v`.
-            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
-                && match _key {
-                    Key::Named(a) => m.atoms[a as usize] == "argv",
-                    Key::Any(_) => true,
+            if matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::Process)) {
+                for i in 0..m.process_arrays.len() {
+                    let (k, a, _) = m.process_arrays[i];
+                    if match _key {
+                        Key::Named(n) => n == k,
+                        Key::Any(_) => true,
+                    } {
+                        m.edge(src, a);
+                    }
                 }
-            {
-                let a = m.process_argv;
-                m.edge(src, a);
             }
         }
         _ => {}
@@ -240,6 +240,73 @@ pub(super) fn undescribed_method(
     }
 }
 
+/// `name` called on `t`, an object a realm declaration made, of kind `born`
+/// (`members::realm_born`): `born` is its [[Prototype]] (W2a). The member
+/// is the first declaration's own property on the declared chain
+/// (`members::realm_chain_find`): a function whose effects the runtime
+/// declares runs them; a primitive data member is no function (a
+/// TypeError); any other member runs as an unknown method (`why`). A key no
+/// declaration on the chain has is absent, a TypeError: no instance of a
+/// declared prototype owns a callable property the realm leaves out (an
+/// error's own `stack`/`message`/`cause` are data). A method the lookup
+/// finds on `Object.prototype` is that intrinsic's own method and runs its
+/// model (`proto_method`, as on any object whose chain ends there:
+/// `toString` reads `@@toStringTag` and returns a string, `valueOf` returns
+/// the receiver, ...), never unknown code. Found or absent, a key
+/// a store into ⊤ may have written onto the chain runs what was stored
+/// (`intrinsic_unwritten`, replayed when the write comes later).
+pub(super) fn realm_born_method(
+    m: &mut Model,
+    t: Tok,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+    call: CallId,
+    why: &str,
+) {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
+    let a = m.atom(name);
+    let written = !intrinsic_unwritten(m, Family::Opaque, Some(born.name), a, NativeMiss::Call(t, call));
+    match members::realm_chain_find(born, name) {
+        members::RealmFind::Absent => {
+            if written {
+                unknown_method(m, call, why);
+            }
+        }
+        members::RealmFind::Own(p, holder) => {
+            match p.value {
+                _ if holder.name == "Object.prototype"
+                    && matches!(members::member(Family::Object, name), Some(Mem::Fn)) =>
+                {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, t, Key::Named(a), call);
+                }
+                RealmOwnValue::Undefined
+                | RealmOwnValue::Null
+                | RealmOwnValue::Boolean
+                | RealmOwnValue::Number
+                | RealmOwnValue::String
+                | RealmOwnValue::Symbol => {}
+                RealmOwnValue::Reference(r) => match members::realm_entry(r) {
+                    Some(e)
+                        if matches!(e.kind, RealmKind::Function | RealmKind::Method)
+                            && !e.effects.is_empty()
+                            && effects::interpretable(e.effects) =>
+                    {
+                        effects::run_native(m, e, t, call)
+                    }
+                    _ => unknown_method(m, call, why),
+                },
+                RealmOwnValue::Accessor { .. } | RealmOwnValue::Other => {
+                    unknown_method(m, call, why)
+                }
+            }
+            if written {
+                unknown_method(m, call, &format!("argument of a written method {name}"));
+            }
+        }
+    }
+}
+
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
     if native_waits(m, NativeRecv::Own(t), key, call) {
@@ -265,17 +332,30 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // A well-known-symbol method is a named member of the intrinsic chain
     // where the chain is described (a function value, an array, a described
     // builtin object: absent unless the description names it, as the
-    // iteration protocol of the builtin iterables is); on anything else it
-    // is a computed-key method.
+    // iteration protocol of the builtin iterables is; a builtin namespace
+    // whose own keys and chain are described, `Object[Symbol.iterator]`
+    // included); on anything else it is a computed-key method.
     let described = match &m.toks[t as usize] {
         TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
+        TokKind::Builtin(ns) => name
+            .as_deref()
+            .is_some_and(|n| n.starts_with(WK_PREFIX) && members::ns_member(*ns, n).is_some()),
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::Arr { .. } => true,
             TmplKind::BObj { what, .. } => {
                 members::bobj_family(what) != Family::Opaque
                     || matches!(
                         *what,
-                        "Date" | "TypedArray" | "URL" | "URLSearchParams" | "TextCodec" | "Timer"
+                        "Date"
+                            | "TypedArray"
+                            | "DataView"
+                            | "ArrayBuffer"
+                            | "SharedArrayBuffer"
+                            | "Buffer"
+                            | "URL"
+                            | "URLSearchParams"
+                            | "TextCodec"
+                            | "Timer"
                     )
                     || (*what == "RegExp"
                         && name.as_deref().is_some_and(|n| {
@@ -476,6 +556,15 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
         TokKind::ObjectProto => match name.as_str() {
             "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
                 implicit_args(m, call, "ToPropertyKey", Protocol::ToPrimitive);
+                if name == "isPrototypeOf" && m.value_records {
+                    // The receiver against each object on the argument's chain.
+                    let recv = m.node_l("isprototypeof-recv");
+                    m.add_tok(recv, origin);
+                    m.identity(recv, IdentityRoute::IsPrototypeOf);
+                    if let Some(&a) = m.calls[call as usize].args.first() {
+                        m.identity(a, IdentityRoute::IsPrototypeOf);
+                    }
+                }
                 ret_prim(m, call, prim::BOOL);
             }
             // 20.1.3.6 step 15: `Get(O, @@toStringTag)` runs a getter there;
@@ -542,7 +631,8 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
     // Object.prototype is a modeled holder: the define records the accessor
     // there as defineProperty does (an accessor on it is E23), under a
     // computed key too (the AccessorInstall any-key branch).
-    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto) {
+    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto)
+    {
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
         // Spread positions are not retained in CallSite: any direct or
@@ -601,8 +691,11 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
         ) || super::undeclared(m, t, key))
 }
 
-/// Callable values whose bodies the accessor groups cannot bind precisely.
-pub(crate) fn unknown_accessor_callable(m: &Model, t: Tok) -> bool {
+/// Callable values other than a program function that an accessor may
+/// hold: ⊤, a builtin function, a bound function, a class. Only ⊤ is an
+/// opaque accessor (`Cons::AccessorInstall`); the others run as an ordinary
+/// call of that value (`Model::group_call`).
+pub(crate) fn accessor_callable(m: &Model, t: Tok) -> bool {
     match m.toks[t as usize] {
         TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => true,
         TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,

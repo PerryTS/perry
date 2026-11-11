@@ -110,7 +110,8 @@ impl Model {
     /// stored under the same key on `d`; computed keys and getter results
     /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
     /// keys unknown; an unmodeled target takes `s`'s values.
-    pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId) {
+    pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
+        self.rest_used(s);
         if !self.spread_done.insert((s, d)) {
             return;
         }
@@ -140,7 +141,16 @@ impl Model {
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque {
+            // Census only: a spread of ⊤ is propagation of the ⊤ its source value holds, so the
+            // injection is attributed to that source node, not to the target node whose rule runs.
+            let saved = match self.diagnostic.as_mut() {
+                Some(dg) if s == TOP && from != NO_NODE => Some(dg.cause_node.replace(from)),
+                _ => None,
+            };
             self.add_top(fa_d, |_| "spread of an unmodeled object".into());
+            if let (Some(dg), Some(saved)) = (self.diagnostic.as_mut(), saved) {
+                dg.cause_node = saved;
+            }
             self.add_prim(fa_d, prim::ALL);
             if s == TOP {
                 return;
@@ -370,18 +380,19 @@ impl Model {
     /// the field funnel. A builtin object's are when its template is a
     /// container the model fills (`builtins::own_values_filled`): its birth
     /// puts every value the runtime gives it under its any key, and the
-    /// runtime gives it no own accessor. Every other builtin object (Date,
-    /// RegExp, typed arrays, collections, markers …), a builtin namespace or
-    /// function, a native prototype and ⊤ hold own properties the model does
-    /// not list. A stand-in (`site: u32::MAX`, another unit's array as this
+    /// runtime gives it no own accessor. A builtin namespace or constructor
+    /// the realm gives no enumerable own property
+    /// (`builtins::realm_own_props_unenumerable`) holds, for a copy, only
+    /// what the program stored on it: its fields. Every other builtin object
+    /// (Date, RegExp, typed arrays, collections, markers …), a host
+    /// namespace, a builtin function, a native prototype and ⊤ hold own
+    /// properties the model does not list. A stand-in (`site: u32::MAX`, another unit's array as this
     /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
     /// not in these fields.
     pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
-            TokKind::Top
-            | TokKind::Builtin(_)
-            | TokKind::BuiltinFn(_)
-            | TokKind::NativeProto(_) => false,
+            TokKind::Builtin(ns) => builtins::realm_own_props_unenumerable(*ns),
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
                     site != u32::MAX && builtins::own_values_filled(what)
@@ -394,6 +405,7 @@ impl Model {
 
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
+        self.rest_used(t);
         let opaque = !self.own_props_modelled(t);
         if opaque {
             self.add_top(dst, |_| "own values of an unmodeled object".into());

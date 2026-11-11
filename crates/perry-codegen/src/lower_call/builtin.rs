@@ -328,7 +328,7 @@ pub(super) fn lower_builtin_new<'a>(
         // `maxByteLength` AFTER `ToIndex(length)`, per spec, so both operands
         // go over raw. `length` can be an object (its `valueOf` runs in the
         // runtime), and lowering the options literal allocates: root it.
-        "ArrayBuffer" if args.len() >= 2 => {
+        "ArrayBuffer" | "SharedArrayBuffer" if args.len() >= 2 => {
             let size_collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
             let size_idx = group.lower(ctx, &args[0], size_collects)?;
             let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
@@ -340,9 +340,14 @@ pub(super) fn lower_builtin_new<'a>(
                 Some(i) => group.reread(ctx, i)?,
                 None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
+            let runtime = if class_name == "SharedArrayBuffer" {
+                "js_shared_array_buffer_new_with_options"
+            } else {
+                "js_array_buffer_new_with_options"
+            };
             let handle = ctx.block().call(
                 I64,
-                "js_array_buffer_new_with_options",
+                runtime,
                 &[(DOUBLE, &size_box), (DOUBLE, &options_box)],
             );
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))

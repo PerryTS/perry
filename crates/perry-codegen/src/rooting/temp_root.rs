@@ -444,6 +444,15 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         } if matches!(object.as_ref(), Expr::This) && this_field_read_is_load(ctx, property) => {
             false
         }
+        // A field of a scalar-replaced object is an alloca load (or the
+        // constant undefined for a field the shape lacks): no getter, no
+        // helper call, nothing that allocates. Whether the VALUE read needs a
+        // slot across a later collecting window is the consumer's question.
+        Expr::PropertyGet { object, .. }
+            if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.scalar_replaced.contains_key(id)) =>
+        {
+            false
+        }
         Expr::Unary { .. } | Expr::Compare { .. } | Expr::Binary { .. } => {
             !expr_is_inert_primitive(ctx, expr)
         }
@@ -531,6 +540,28 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         // operand lists, where an embedded `Update` is vanishingly rare. The
         // loop-poll caller is the one that needs it (`for (…; …; i++)`).
         Expr::Update { id, .. } => local_is_inert_primitive(ctx, *id),
+        // c1: a Math intrinsic over proven Numbers.
+        e if crate::expr::math_intrinsic_operands(e).is_some() => {
+            crate::expr::math_intrinsic_operands(e)
+                .unwrap()
+                .iter()
+                .all(|x| {
+                    expr_is_inert_primitive(ctx, x)
+                        && crate::expr::math_operand_is_proven_number(ctx, x)
+                })
+        }
+        // c1: `c ? a : b` evaluates `c` (ToBoolean only: on a primitive it
+        // reads no property and runs no code) and then one arm. Inert when
+        // all three are, so ToBoolean never meets an object.
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } if crate::expr::inert_math_enabled() => {
+            expr_is_inert_primitive(ctx, condition)
+                && expr_is_inert_primitive(ctx, then_expr)
+                && expr_is_inert_primitive(ctx, else_expr)
+        }
         Expr::Unary { operand, .. } => expr_is_inert_primitive(ctx, operand),
         Expr::Compare { left, right, .. } => {
             expr_is_inert_primitive(ctx, left) && expr_is_inert_primitive(ctx, right)

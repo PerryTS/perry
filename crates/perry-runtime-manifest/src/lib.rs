@@ -337,6 +337,8 @@ mod tests {
 }
 
 mod realm_exports;
+#[cfg(test)]
+mod realm_identity_audit;
 pub mod realm_json;
 /// Shared ABI for typed manifest consumers, including build scripts.
 pub use perry_abi as abi;

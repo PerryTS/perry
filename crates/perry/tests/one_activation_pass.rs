@@ -88,7 +88,11 @@ fn passes(err: &str) -> Vec<(String, String, bool)> {
 fn one_activation_pass_per_compile() {
     let dir = tempfile::tempdir().unwrap();
     let err = facts_only(dir.path(), false);
-    assert_eq!(passes(&err).len(), 1, "one activation pass per compile\n{err}");
+    assert_eq!(
+        passes(&err).len(),
+        1,
+        "one activation pass per compile\n{err}"
+    );
     assert!(
         err.contains("dynamic reach: 2 dynamic edges, 1 held only by bodies that cannot run; 1 modules dropped"),
         "dynamic reach counts its edges without the report\n{err}"
@@ -101,6 +105,9 @@ fn the_facts_own_pass_over_the_final_hir_agrees() {
     let err = facts_only(dir.path(), true);
     let p = passes(&err);
     assert_eq!(p.len(), 2, "the check runs the facts' own pass too\n{err}");
-    assert_eq!(p[0], p[1], "the handed-over pass equals the final-HIR pass\n{err}");
+    assert_eq!(
+        p[0], p[1],
+        "the handed-over pass equals the final-HIR pass\n{err}"
+    );
     assert!(!p[0].2, "{err}");
 }

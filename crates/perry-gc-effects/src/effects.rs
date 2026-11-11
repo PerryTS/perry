@@ -122,7 +122,12 @@ pub fn natives(manifest: &str) -> Result<Vec<Native>> {
             .as_str()
             .context("declaration without name")?
             .to_owned();
-        let Some(symbol) = d["function_info"]["source_symbol"]
+        // A bound_method member's effects describe the function its
+        // native_module_dispatch arm calls (`effects_body`), not the
+        // sentinel body every bound method shares.
+        let Some(symbol) = d
+            .get("effects_body")
+            .unwrap_or(&d["function_info"]["source_symbol"])
             .as_str()
             .and_then(|s| s.strip_prefix("source:"))
         else {
@@ -154,7 +159,8 @@ fn species(o: &RealmOperand) -> bool {
 
 fn fresh(o: &RealmOperand) -> bool {
     match o {
-        RealmOperand::Fresh { .. } => true,
+        // A promise is an object the call makes.
+        RealmOperand::Fresh { .. } | RealmOperand::Promise { .. } => true,
         RealmOperand::Union(members) => members.iter().any(fresh),
         _ => false,
     }
@@ -166,18 +172,26 @@ fn runs_code(e: &RealmEffect) -> bool {
         | RealmEffect::Coerce { .. }
         | RealmEffect::Reads(_)
         | RealmEffect::Stores { .. }
+        | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
         | RealmEffect::Open => true,
         RealmEffect::Returns(o) => species(o),
-        RealmEffect::StoresFresh => false,
+        // A comparison runs no program code.
+        RealmEffect::StoresFresh | RealmEffect::Identity(_) => false,
     }
 }
 
 fn keeps(e: &RealmEffect) -> bool {
     match e {
-        RealmEffect::Stores { .. } | RealmEffect::StoresFresh | RealmEffect::Open => true,
+        RealmEffect::Stores { .. }
+        | RealmEffect::StoresFresh
+        | RealmEffect::Escapes(_)
+        | RealmEffect::AsyncResource(_)
+        | RealmEffect::Open => true,
+
         RealmEffect::Returns(o) => fresh(o) || species(o),
         RealmEffect::Calls { args, this, .. } => species(this) || args.iter().any(species),
-        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } => false,
+        RealmEffect::Reads(_) | RealmEffect::Coerce { .. } | RealmEffect::Identity(_) => false,
     }
 }
 
@@ -308,6 +322,19 @@ mod tests {
         }
     }
 
+    /// A bound_method member's effects are checked on the function its
+    /// dispatch arm calls, not on the sentinel body all bound methods share.
+    #[test]
+    fn a_member_declared_at_its_dispatch_callee_is_checked_there() {
+        let manifest = r#"{"declarations":[{"name":"node:x.has","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+            "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."},
+            "effects_body":"source:js_x_has","effects":[{"returns":{"prim":["bool"]}}]}]}"#;
+        let natives = super::natives(manifest).unwrap();
+        assert_eq!(natives.len(), 1);
+        assert_eq!(natives[0].symbol, "js_x_has");
+        assert_eq!(natives[0].effects.len(), 1);
+    }
+
     #[test]
     fn a_callback_caller_declared_as_returning_a_primitive_fails() {
         // Sabotage: forEach declared `returns(prim(undefined))` only.
@@ -339,6 +366,8 @@ mod tests {
         let fresh = [RealmEffect::Returns(RealmOperand::Fresh {
             proto: Cow::Borrowed("Array.prototype"),
             elems: Cow::Borrowed(&[]),
+            fields: Cow::Borrowed(&[]),
+            slots: Cow::Borrowed(&[]),
         })];
         assert!(violations(&fresh, false, true).is_empty());
         let stores = [RealmEffect::Stores {

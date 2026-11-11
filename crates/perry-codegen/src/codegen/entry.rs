@@ -22,7 +22,9 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod module_frame;
 mod module_init;
+mod async_module;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
 
@@ -157,7 +159,7 @@ pub(super) fn compile_module_entry(
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
-    let entry_in_init = is_entry && llmod.program_has_worker;
+    let entry_in_init = is_entry && (llmod.program_has_worker || cross_module.program_has_tla);
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -419,7 +421,15 @@ pub(super) fn compile_module_entry(
                     // A program with worker entries always has thread-local
                     // init guards (`program_has_worker`), so the guarded
                     // wrapper runs once per thread.
-                    (cn, len, format!("{prefix}__init"))
+                    let init = if cross_module.program_has_tla {
+                        format!("{prefix}__async_entry")
+                    } else {
+                        format!("{prefix}__init")
+                    };
+                    if cross_module.program_has_tla {
+                        llmod.declare_function(&init, VOID, &[]);
+                    }
+                    (cn, len, init)
                 })
                 .collect()
         } else {
@@ -461,6 +471,19 @@ pub(super) fn compile_module_entry(
             }
             None => Vec::new(),
         };
+        let entry_name = if is_dylib {
+            "perry_module_init".to_string()
+        } else {
+            std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string())
+        };
+        if !entry_in_init {
+            module_frame::record(
+                llmod,
+                hir,
+                &entry_name,
+                cross_module.app_metadata.module_source_path.as_deref(),
+            );
+        }
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -736,7 +759,9 @@ pub(super) fn compile_module_entry(
                 if let Some(const_name) = debug_init_chain.get(index) {
                     blk.call_void("puts", &[(PTR, &format!("@{}", const_name))]);
                 }
-                blk.call_void(&format!("{}__init", prefix), &[]);
+                if !cross_module.program_has_tla {
+                    blk.call_void(&format!("{}__init", prefix), &[]);
+                }
             }
             // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
             // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
@@ -794,6 +819,7 @@ pub(super) fn compile_module_entry(
             // too — passing an empty map kept top-level accumulator loops on
             // the rooted/guarded path while in-function ones were clean.
             &cross_module.module_global_proven_types,
+            crate::codegen::facts_int32_locals::none(),
         );
         // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
         // does, which module init never got. The shadow map is built above
@@ -850,6 +876,7 @@ pub(super) fn compile_module_entry(
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -895,6 +922,8 @@ pub(super) fn compile_module_entry(
             wpfacts_sites: 0,
             wpfacts_tested: Vec::new(),
             wpfacts_off: false,
+            rest_b1: None,
+            rest_counter: Vec::new(),
             inline_new_leaf: Vec::new(),
             ctor_receiver: None,
             ctor_receiver_selector: None,
@@ -1008,6 +1037,8 @@ pub(super) fn compile_module_entry(
             int_valued_i64_locals: main_native_facts.int_valued_i64_locals(),
             not_bigint_locals: main_native_facts.not_bigint_locals(),
             number_by_construction_locals: main_native_facts.number_by_construction_locals(),
+            facts_number_locals: crate::codegen::facts_number_locals::none(),
+            facts_int32_locals: crate::codegen::facts_int32_locals::none(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),
@@ -1031,6 +1062,7 @@ pub(super) fn compile_module_entry(
             record_packed_admissions: std::collections::HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
             receiver_descriptors: Default::default(),
+            fn_base: Default::default(),
             poll_stride_counter_slot: None,
             deferred_integer_update_accumulators: HashSet::new(),
             local_slot_reps: HashMap::new(),
@@ -1058,6 +1090,8 @@ pub(super) fn compile_module_entry(
             spec_ta_ready: std::collections::HashSet::new(),
             spec_i32_params: std::collections::HashSet::new(),
             spec_bool_params: std::collections::HashSet::new(),
+            sig_return: None,
+            typed_methods: &cross_module.typed_methods,
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
             class_guard_window: None,
@@ -1167,8 +1201,15 @@ pub(super) fn compile_module_entry(
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
                 ctx.block().call_void("js_snap_entry_module", &[]);
             }
-            ctx.block()
-                .call_void(&format!("{}__init", module_prefix), &[]);
+            if cross_module.program_has_tla {
+                if entry_evaluates_as_esm(hir, cross_module) {
+                    ctx.block().call_void("js_mark_entry_module_esm", &[]);
+                }
+                let record = ctx.block().call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block().call_void("js_async_module_entry", &[(I64, &record)]);
+            } else {
+                ctx.block().call_void(&format!("{}__init", module_prefix), &[]);
+            }
         } else {
             // Register every module-level global's ADDRESS as a GC root so
             // the mark phase can discover pointer-typed values (Maps, Arrays,

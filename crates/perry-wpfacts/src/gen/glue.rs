@@ -16,6 +16,24 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// ToPropertyDescriptor of `desc` (`DESCRIPTOR_KEYS`): each key read with
+    /// [[Get]], getters run. The values of `value`, `get` and `set`, the keys
+    /// a definition uses.
+    pub(crate) fn descriptor_reads(&mut self, desc: NodeId) -> [NodeId; 3] {
+        let mut used = [desc; 3];
+        for name in DESCRIPTOR_KEYS {
+            let a = self.m.atom(name);
+            let v = self.load(desc, Key::Named(a));
+            match name {
+                "value" => used[0] = v,
+                "get" => used[1] = v,
+                "set" => used[2] = v,
+                _ => {}
+            }
+        }
+        used
+    }
+
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
     /// descriptor's value is a post-construction write, and its accessors
     /// become accessors of the target (called with `this` = the target).
@@ -58,10 +76,9 @@ impl<'a> Gen<'a> {
                 },
             ),
         }
+        let [v, dget, dset] = self.descriptor_reads(desc);
         // An accessor descriptor has no value: the getter is the read.
         if !accessor {
-            let va = self.m.atom("value");
-            let v = self.load(desc, Key::Named(va));
             let k = match &key {
                 Some(s) => Key::Named(self.m.atom(s)),
                 None => Key::any(),
@@ -75,15 +92,9 @@ impl<'a> Gen<'a> {
         if key.is_some() {
             self.m.add_accessor_atom(ka);
         }
-        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
+        for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             // A literal descriptor's own get/set (`accessor_literal`).
-            let f = match own {
-                Some(f) => f,
-                None => {
-                    let a = self.m.atom(name);
-                    self.load(desc, Key::Named(a))
-                }
-            };
+            let f = own.unwrap_or(read);
             self.m.cons(
                 f,
                 Cons::Accessor {
@@ -121,20 +132,13 @@ impl<'a> Gen<'a> {
                 accessor,
             },
         );
+        let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
-            let va = self.m.atom("value");
-            let v = self.load(desc, Key::Named(va));
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
             self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
         }
-        for ((name, setter), own) in [("get", false), ("set", true)].into_iter().zip(own) {
-            let f = match own {
-                Some(f) => f,
-                None => {
-                    let a = self.m.atom(name);
-                    self.load(desc, Key::Named(a))
-                }
-            };
+        for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
+            let f = own.unwrap_or(read);
             self.m.cons(
                 kn,
                 Cons::AccessorKeyed {
@@ -169,6 +173,15 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+        if self.m.arr_lazy_sabotage {
+            // Negative control (`arrlazy`): a plain Array of Numbers, where
+            // the runtime may return a lazy JSON array header.
+            let arr = self.new_arr_birth(mi, "json", false, true);
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            let afa = self.m.field_any(at);
+            self.m.add_prim(afa, prim::NUM);
+            return self.tok_node(at);
+        }
         let (t, n) = self.bobj(mi, "json");
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
@@ -304,8 +317,11 @@ impl<'a> Gen<'a> {
                 let (Some(it), Some(next)) = (arg(0), arg(1)) else {
                     return self.prim_node(prim::BOOL);
                 };
-                let res =
-                    self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // IteratorStep is IteratorNext with no value: `Call(next,
+                // iterator, «»)` (ECMA-262 7.4.4, 7.4.7), as `js_iterator_step`
+                // does it (a generator resumes with `undefined`, any other
+                // `next` gets argc 0). Nothing unknown is passed.
+                let res = self.call_value(next, ThisArg::Node(it), vec![], vec![]);
                 // The step output: the value of a result that is not done,
                 // or `undefined` the runtime publishes at done
                 // (`js_iterator_step`), which destructuring reads.
@@ -393,10 +409,29 @@ impl<'a> Gen<'a> {
             // A literal CommonJS require (design CJS_LINK §3): the target's
             // init runs (every module body is in the program), and the value
             // is a read of its record binding; the caller reads `.exports`.
-            "cjsRequireEdge" => match arg(0) {
-                Some(record) => record,
-                None => self.m.top_val("cjsRequireEdge without its record binding"),
-            },
+            "cjsRequireEdge" => {
+                // The target's init guard runs its body here when it has not
+                // run yet: what that body throws, this call throws.
+                if let Some(Expr::ExternFuncRef { name, .. }) = source_args.first() {
+                    let t = self.imports_of(fx.module as usize).into_iter().find_map(|i| {
+                        let binds = i.specifiers.iter().any(|sp| match sp {
+                            perry_hir::ImportSpecifier::Named { local, .. }
+                            | perry_hir::ImportSpecifier::Default { local }
+                            | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                        });
+                        binds.then_some(i.resolved_path.as_ref()).flatten()
+                    });
+                    if let Some(t) = t.and_then(|p| self.path_index.get(p).copied()) {
+                        let rt = self.module_raise(t);
+                        let r = self.region();
+                        self.m.edge(rt, r);
+                    }
+                }
+                match arg(0) {
+                    Some(record) => record,
+                    None => self.m.top_val("cjsRequireEdge without its record binding"),
+                }
+            }
             "registerPathModule" | "registerPathModulePartial" => {
                 if let Some(value) = arg(1) {
                     let registry = match source_args.first() {
@@ -417,7 +452,11 @@ impl<'a> Gen<'a> {
                 // again after its cache entry was deleted.
                 if method == "registerPathModulePartial" {
                     if let Some(factory) = arg(2) {
+                        // It runs inside a later require: a lazy module body.
+                        let lazy = Some(self.m.lazy_raise);
+                        let region = std::mem::replace(&mut self.m.gen_region, lazy);
                         let _ = self.call_value(factory, ThisArg::Undef, vec![], vec![]);
+                        self.m.gen_region = region;
                     }
                 }
                 self.prim_node(prim::UNDEF)
@@ -489,6 +528,9 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF)
             }
             "requirePathModule" => {
+                // The registry may run a lazy module body here.
+                let r = self.region();
+                self.m.edge(self.m.lazy_raise, r);
                 // A path an instance knows is as good as a literal.
                 let known = match source_args.first().map(|x| self.const_eval(fx.module, x)) {
                     Some(Some(crate::gen_const::Const::Str(s))) => Some(Expr::String(s)),

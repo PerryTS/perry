@@ -85,6 +85,8 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -497,6 +499,14 @@ fn fast_clone_slice(ir: &str) -> String {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in ir.split_inclusive('\n') {
         let trimmed = line.trim_end();
+        // The second copy may also be told apart by its function header: the
+        // specialised and the generic body of one source function number their
+        // blocks differently whenever one of them lowers extra straight-line
+        // blocks ahead of the loop (a guarded `x | 0` on an untyped value), so
+        // equal labels are not a reliable marker.
+        if line.starts_with("define ") && !owned.is_empty() {
+            break;
+        }
         // A block DEFINITION starts at column 0 and ends in `:`; anything else
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {

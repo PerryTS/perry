@@ -128,6 +128,19 @@ fn lower_new_impl(
     cap_args_appended: usize,
     heritage_checked: bool,
 ) -> Result<String> {
+    let born = lower_new_birth(ctx, class_name, args, cap_args_appended, heritage_checked)?;
+    // Value records' check mode (DESIGN-p4l4 B7): claim an admitted record.
+    crate::expr::record_witness::claim(ctx, class_name, &born);
+    Ok(born)
+}
+
+fn lower_new_birth(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    cap_args_appended: usize,
+    heritage_checked: bool,
+) -> Result<String> {
     if let Some(class) = ctx.classes.get(class_name).copied() {
         if class.is_declared_keys_record() {
             return Ok(lower_declared_keys_birth(
@@ -505,16 +518,20 @@ fn lower_new_impl_inner<'a>(
     // ran, and `g()` can collect. That collection rewrote only the group's
     // roots, so the stored values must be the group's re-reads, as for every
     // other consumer after a collection point (#12462).
-    let birth_args = if birth_plan
-        .as_ref()
-        .is_some_and(|plan| plan.iter().all(|store| !store.requires_raw_f64))
-    {
+    // A store whose value needs the plain-finite-number test cannot be
+    // written in the birth: the test decides between this plan and the
+    // constructor, so it runs after the allocation (`ctor_prologue.fast`).
+    let birth_unchecked = birth_plan.as_ref().is_some_and(|plan| {
+        plan.iter()
+            .all(|store| !store.requires_number_check(ctx, args))
+    });
+    let birth_args = if birth_unchecked {
         refresh_rooted_args(ctx, group)?
     } else {
         lowered_args.clone()
     };
     let constructor_birth = birth_plan.as_ref().map(|plan| {
-        let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
+        let fields = birth_unchecked.then(|| {
             plan.iter()
                 .map(|store| {
                     let value = store.numeric_addend.map_or_else(
@@ -749,14 +766,21 @@ fn lower_new_impl_inner<'a>(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
+            let checked: Vec<bool> = plan
+                .iter()
+                .map(|store| store.requires_number_check(ctx, args))
+                .collect();
             {
                 let blk = ctx.block();
                 let mut acc = "true".to_string();
                 // Charter step 5: a plain finite double is valid in an `F64` lane
                 // and in an `Any` lane alike, so the per-store number test
                 // below is the whole proof; no header layout bit is read.
-                for (store_index, store) in plan.iter().enumerate() {
-                    if !store.requires_raw_f64 {
+                // A `<param> + <literal>` store is tested too: its `fadd` is
+                // JS `+` only for a Number argument
+                // (`PrologueStore::requires_number_check`).
+                for (store_index, &needs_check) in checked.iter().enumerate() {
+                    if !needs_check {
                         continue;
                     }
                     let bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);

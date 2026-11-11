@@ -107,3 +107,18 @@ console.log(typeof e.on);
 "#
     ));
 }
+
+/// The same prototype reached through a module namespace and through
+/// `require`: `Readable`'s declared [[Prototype]] chain (`Stream`, then
+/// `EventEmitter`) holds the given object whatever spelling read the
+/// constructors.
+#[test]
+fn a_literal_given_to_a_native_constructor_runs_through_its_declared_chain() {
+    let body = "function hit() { return 1; }\nObject.setPrototypeOf(EventEmitter, { apply() { hit(); return \"x\"; } });\nconsole.log((Readable as any).apply({}, []));\n";
+    for (form, head) in [
+        ("namespace", "import * as ev from \"events\";\nimport * as st from \"stream\";\nconst EventEmitter = ev.EventEmitter; const Readable = st.Readable;\n"),
+        ("require", "const EventEmitter = require(\"events\").EventEmitter; const Readable = require(\"stream\").Readable;\n"),
+    ] {
+        assert!(hit_runs(&format!("{head}{body}")), "{form}: hit inactive, Node runs it");
+    }
+}

@@ -1467,6 +1467,7 @@ impl WasmModuleEmitter {
                             start_temp_local,
                             start_temp_i32,
                         );
+                        ctx.returns_value = false;
                         ctx.emit_expr(&mut func, init);
                         let gidx = self.global_map[&global.id];
                         func.instruction(&Instruction::GlobalSet(gidx));
@@ -1607,6 +1608,7 @@ impl WasmModuleEmitter {
                                 start_temp_local,
                                 start_temp_i32,
                             );
+                            ctx.returns_value = false;
                             ctx.emit_expr(&mut func, init);
                             // Use temp local to store the value
                             func.instruction(&Instruction::LocalSet(start_temp_local));
@@ -1641,6 +1643,7 @@ impl WasmModuleEmitter {
                 self.current_mod_idx = mod_idx;
                 let mod_locals = &per_module_init_locals[mod_idx];
                 let mut ctx = FuncEmitCtx::new(self, mod_locals, start_temp_local, start_temp_i32);
+                ctx.returns_value = false;
                 for stmt in &module.init {
                     ctx.emit_stmt(&mut func, stmt, false);
                 }
@@ -1677,3 +1680,7 @@ impl WasmModuleEmitter {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

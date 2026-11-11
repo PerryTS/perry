@@ -63,6 +63,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -209,13 +210,34 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             for &a in &c.args {
                 to_prim(m, a, "string method operand");
             }
+            // −0 tolerance (`Model::with_native`): ToString and
+            // ToIntegerOrInfinity give `-0` and `0` the same result.
+            m.zs_absorbing = true;
             let r = match name {
                 "at" => prim::STR | prim::UNDEF,
                 "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
                 "codePointAt" => prim::NUM | prim::UNDEF,
                 _ => prim::STR,
             };
+            // `charAt` and `at` read one code unit (or none: `""`,
+            // `undefined`); `"lit".indexOf(..)` is in `[-1, len]` (PR D,
+            // `Model::str_index_len`).
+            let one_unit = matches!(name, "charAt" | "at");
+            let index_len = m
+                .str_index_len
+                .get(&call)
+                .copied()
+                .filter(|_| matches!(name, "indexOf" | "lastIndexOf"));
+            let saved = (one_unit || index_len.is_some()).then(|| {
+                m.cur_range.replace(crate::model::Rg {
+                    num: index_len.map_or(crate::model::Iv::TOP, |l| crate::model::Iv::int(-1, l)),
+                    chr: crate::model::range::CHAR_ANY,
+                })
+            });
             ret_prim(m, call, r);
+            if let Some(saved) = saved {
+                m.cur_range = saved;
+            }
             return true;
         }
         // 22.1.3.28 / .30 / .10 / .31: no operand is read.
@@ -464,6 +486,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             spread: vec![],
             ret,
             site: call,
+            region: m.thrown,
         },
     );
     m.cons(ctor, Cons::New { call });

@@ -210,27 +210,60 @@ npm() { printf '%s\n' "$*" >> "$CALLS"; }
         for source in sources:
             start = source.index('if _bad=')
             lines = source[start:].splitlines()
-            end = next(i for i, line in enumerate(lines) if 'apt-get install' in line and 'sudo' in line)
-            while lines[end].rstrip().endswith('\\'):
-                end += 1
+            cached = 'install_online() {' in source
+            if cached:
+                end = lines.index(
+                    'if [ "$mirror_ok" -ne 1 ]; then install_offline; fi'
+                )
+            else:
+                end = next(i for i, line in enumerate(lines)
+                           if 'apt-get install' in line and 'sudo' in line)
+                while lines[end].rstrip().endswith('\\'):
+                    end += 1
             fragment = '\n'.join(lines[:end + 1])
-            for install_rc in [0, 42]:
-                with self.subTest(fragment=fragment, install_rc=install_rc):
+            # online rc, offline rc, populated cache, expected final rc
+            cases = [(0, 0, False, 0), (42, 42, cached, 42)]
+            if cached:
+                cases += [(42, 0, True, 0), (42, 0, False, 1)]
+            for install_rc, offline_rc, warm, expected in cases:
+                with self.subTest(case=(cached, install_rc, offline_rc, warm)), tempfile.TemporaryDirectory() as tmp:
+                    cache = Path(tmp) / 'debs'
+                    cache.mkdir()
+                    if cached and warm:
+                        for pkg in ('llvm-22-dev', 'llvm-22-tools',
+                                    'libpolly-22-dev', 'clang-22'):
+                            (cache / f'{pkg}_fixture.deb').touch()
                     stub = r'''
 sudo() {
   case "$*" in
     'grep '*) return 1 ;;
     'apt-get update'*) return 100 ;;
+    *'apt-get install'*'.deb'*)
+      echo OFFLINE_REACHED; return "$OFFLINE_RC" ;;
     *'apt-get install'*) echo INSTALL_REACHED; return "$INSTALL_RC" ;;
     *) echo "unexpected sudo: $*" >&2; return 99 ;;
   esac
 }
-apt-cache() { echo 'Candidate: 22.1.4'; }
+apt-cache() { echo 'Candidate: 22.1.5'; }
+getent() { return 1; }
 sleep() { :; }
 '''
-                    result = shell(stub + fragment, env={'INSTALL_RC': str(install_rc)})
-                    self.assertEqual(result.returncode, install_rc, result.stdout + result.stderr)
+                    result = shell(stub + fragment, cwd=Path(tmp), env={
+                        'INSTALL_RC': str(install_rc),
+                        'OFFLINE_RC': str(offline_rc),
+                        'LLVM_DEBS': str(cache),
+                        'LLVM_DEBS_EXACT_HIT': 'true',
+                        'TMPDIR': tmp,
+                    })
+                    self.assertEqual(result.returncode, expected,
+                                     result.stdout + result.stderr)
                     self.assertIn('INSTALL_REACHED', result.stdout)
+                    self.assertEqual(
+                        'OFFLINE_REACHED' in result.stdout,
+                        cached and warm and install_rc != 0,
+                    )
+                    if cached and install_rc and not warm:
+                        self.assertIn('cache is cold', result.stdout)
 
     def test_release_notes_cap_preserves_unicode_and_bounds(self):
         source = step('create-release', 'Create tag')

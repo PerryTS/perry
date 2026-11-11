@@ -199,8 +199,32 @@ fn published_native_keeps_missing_member_open() {
 
 #[test]
 fn native_declared_members_keep_their_models() {
-    natives("f.call(o, { toString() { g(o); return 'x'; } });", false);
-    natives("f.bind(o)({ toString() { g(o); return 'x'; } });", false);
+    let has_own = "const f: any = Object.prototype.hasOwnProperty;";
+    check(
+        &format!("{has_own} f.call(o, {{ toString() {{ g(o); return 'x'; }} }});"),
+        false,
+    );
+    check(
+        &format!("{has_own} f.bind(o)({{ toString() {{ g(o); return 'x'; }} }});"),
+        false,
+    );
+    // `map` is generic over `this`: it runs its callback over the
+    // receiver's elements (one is `o`); on `o` (no `length`: 0) with a
+    // callback that is no function it throws before it runs anything
+    // (ECMA-262 23.1.3.21 step 3).
+    let map = "const f: any = [1].map;";
+    check(
+        &format!("{map} f.call({{ length: 1, 0: o }}, (x: any) => g(x));"),
+        false,
+    );
+    check(
+        &format!("{map} f.bind({{ length: 1, 0: o }})((x: any) => g(x));"),
+        false,
+    );
+    check(
+        &format!("{map} f.call(o, {{ toString() {{ g(o); return 'x'; }} }});"),
+        true,
+    );
     natives(
         "f.hasOwnProperty({ toString() { external(o); return 'x'; } });",
         false,
@@ -232,5 +256,112 @@ fn stored_members_keep_the_receiver_as_this() {
     natives(
         "f.arg = o; f.zap = function() { g(this.arg); }; f.zap();",
         false,
+    );
+}
+
+/// SEEDK: `Object[Symbol.iterator]` is a named member of the described
+/// namespace: absent on Object, Function.prototype and Object.prototype, so
+/// iterating the namespace throws (GetIterator) and nothing unknown runs.
+fn sym_iter(setup: &str, iterated: &str, proven: bool) {
+    check_at(
+        &format!(
+            "{setup}\no.result = {{ value: 1 }};
+const original: any = {iterated};
+for (const value of original) {{ o.result = value; }}"
+        ),
+        "o.result.value",
+        "value",
+        proven,
+    );
+}
+
+#[test]
+fn namespace_symbol_iterator_absent_runs_nothing() {
+    for iterated in ["N", "Function", "Object.prototype.hasOwnProperty"] {
+        sym_iter("", iterated, true);
+    }
+}
+
+/// Controls: every way a program adds `@@iterator` to the namespace keeps
+/// the call on what it added (the generator yields an unknown value).
+#[test]
+fn namespace_symbol_iterator_program_added_is_called() {
+    let gen = "function* () { yield unknown(); }";
+    for setup in [
+        format!("(Object as any)[Symbol.iterator] = {gen};"),
+        format!("(Object as any)[process.argv[3]] = {gen};"),
+        format!("unknown()[Symbol.iterator] = {gen};"),
+        format!("Object.defineProperty(Object, Symbol.iterator, {{ get() {{ return {gen}; }} }});"),
+        format!("Object.setPrototypeOf(Object, {{ [Symbol.iterator]: {gen} }});"),
+        "external(N);".to_string(),
+        "eval(process.argv[3]);".to_string(),
+    ] {
+        sym_iter(&setup, "N", false);
+    }
+}
+
+/// Control: a namespace whose own keys are undescribed (the statics of
+/// the `RegExp` constructor) keeps the any-key path.
+#[test]
+fn undescribed_namespace_symbol_iterator_stays_open() {
+    sym_iter("", "RegExp", false);
+}
+
+/// The callees of the iteration call of `for (const v of N)`, as the solve
+/// records them: an opaque builtin summary run for the call (the census'
+/// builtin injections at a call) and an unknown callee (`unknown-call`).
+/// The iteration protocol's calls are the program's only calls.
+fn iteration_callees(iterated: &str) -> Vec<String> {
+    let src =
+        format!("const it: any = {iterated};\nfor (const value of it) {{ value.field = 1; }}\n");
+    let cfg = FactsConfig {
+        diagnostics: true,
+        birth_census: true,
+        ..Default::default()
+    };
+    let pf = facts_with(&src, cfg);
+    let field = |l: &str, k: &str| {
+        let s = l.find(&format!("\"{k}\":"))? + k.len() + 3;
+        Some(
+            l[s..]
+                .split([',', '}'])
+                .next()?
+                .trim_matches('"')
+                .to_string(),
+        )
+    };
+    let lines = pf.diagnostics.iter().flat_map(|(_, l)| l);
+    let mut callees: Vec<String> = lines
+        .filter_map(|l| {
+            if l.starts_with("{\"record\":\"unknown-call\"") {
+                Some(format!("unknown callee (call {})", field(l, "call")?))
+            } else if l.starts_with("{\"record\":\"birth-injection\"")
+                && field(l, "injector")?.ends_with("src/builtins.rs")
+                && field(l, "call")? != u32::MAX.to_string()
+            {
+                Some(format!("opaque builtin: {}", field(l, "why")?))
+            } else {
+                None
+            }
+        })
+        .collect();
+    callees.sort();
+    callees.dedup();
+    callees
+}
+
+/// Fact level: the iteration call of a described namespace has no callee
+/// (GetIterator throws: no unknown callee, no opaque summary); an
+/// undescribed namespace's (`RegExp`'s statics) keeps the any-key callee.
+#[test]
+fn namespace_iteration_call_callee_set() {
+    for ns in ["Object", "Function", "Object.prototype.hasOwnProperty"] {
+        let c = iteration_callees(ns);
+        assert!(c.is_empty(), "{ns}: {c:?}");
+    }
+    let c = iteration_callees("RegExp");
+    assert!(
+        c.iter().any(|c| c.contains("builtin RegExp[computed]")),
+        "RegExp: {c:?}"
     );
 }

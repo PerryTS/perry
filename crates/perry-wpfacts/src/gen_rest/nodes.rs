@@ -85,7 +85,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let s = self.expr(fx, string);
         crate::builtins::string_methods::to_prim(&mut self.m, s, "string method receiver ToString");
-        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        // The method classifies its operands (`zero_sign`, `with_native`).
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr_zs(fx, o)).collect();
         let recv = self.prim_node(prim::STR);
         let a = self.m.atom(name);
         self.mcall(recv, Key::Named(a), args, vec![])
@@ -120,7 +121,7 @@ impl<'a> Gen<'a> {
     }
 
     fn new_arr_of(&mut self, mi: u32, what: &str, elems: &[NodeId], dense: bool) -> NodeId {
-        let tm = self.new_arr_birth(mi, what, dense);
+        let tm = self.new_arr_birth(mi, what, dense, false);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
@@ -146,6 +147,23 @@ impl<'a> Gen<'a> {
     pub(super) fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
         let ek = self.m.elem_key();
         self.store(fx, recv, ek, v, what.to_string(), None, false);
+    }
+
+    /// An operation without a rule of its own runs code on `n` once ⊤ is
+    /// there (DESIGN SEEDE section 8): ⊤ into the current throw region.
+    pub(crate) fn raise_on(&mut self, n: NodeId) {
+        let region = self.region();
+        self.m.cons(n, Cons::Raise { region });
+    }
+
+    /// An async step closure's call: what its body throws settles the
+    /// promise, so it runs in the shared cell (rejections; DESIGN SEEDE
+    /// section 8), not the caller's region.
+    pub(super) fn async_callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
+        let region = std::mem::replace(&mut self.m.gen_region, Some(self.thrown));
+        let r = self.callback(cb, args);
+        self.m.gen_region = region;
+        r
     }
 
     /// Call `cb` with `args` (this = undefined); returns the result node.

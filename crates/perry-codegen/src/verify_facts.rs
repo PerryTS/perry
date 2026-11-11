@@ -10,6 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
+pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
 #[cfg(feature = "llvm-inprocess")]
@@ -382,6 +383,31 @@ fn raw_site_inner(
     }
 }
 
+/// The witness site of code lowered outside any body context (P2's boxed
+/// entry, DESIGN-p2 §5): the metadata `raw_site_inner` writes, with the
+/// emitting symbol as the copy and no source offset.
+pub(crate) fn raw_entry_site(prefix: &str, copy: &str, fact: Fact, what: &str) -> SiteArg {
+    let (name, ordinal) = MODULE.with(|m| {
+        let m = m.borrow();
+        let m = m.as_ref().expect("verification module initialized");
+        (m.name.clone(), m.ordinal)
+    });
+    let metadata = serde_json::json!({
+        "marker": "PERRY_FALSE_PROOF", "module": name, "byte_offset": null,
+        "key": what, "verdict": fact.name(), "proven_receivers": [],
+        "copy": {"body": copy, "site": null, "emission": ordinal},
+        "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
+        "expectation": what, "predicate": fact.name(),
+    });
+    let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
+    assert_eq!(bytes.pop(), Some(b'}'));
+    let (pointer, len) = raw_bytes(prefix, &bytes);
+    SiteArg {
+        pointer,
+        len: Some(len),
+    }
+}
+
 pub(crate) fn check(
     ctx: &mut FnCtx<'_>,
     result: LlvmType,
@@ -397,6 +423,7 @@ pub(crate) fn check(
             "perry_wpfacts_check_call" => "perry_verify_facts_call",
             "perry_wpfacts_check_call_miss" => "perry_verify_facts_call_miss",
             "perry_wpfacts_check_miss" => "perry_verify_facts_miss",
+            "perry_wpfacts_check_record_identity" => "perry_verify_facts_record_identity",
             _ => unreachable!("verification ABI"),
         }
     } else {
@@ -545,6 +572,14 @@ fn source_key(e: &Expr) -> String {
 
 pub(crate) fn number_checked(id: u32) {
     coverage::number(id);
+}
+
+pub(crate) fn int32_checked(id: u32) {
+    coverage::int32(id);
+}
+
+pub(crate) fn const_length_checked(id: u32) {
+    coverage::const_length(id);
 }
 
 pub(crate) fn covered(fact: Fact, operands: impl FnOnce() -> serde_json::Value) {

@@ -180,6 +180,31 @@ fn stmts_any_expr(
         .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |e| found(e)))
 }
 
+/// A BigInt64/BigUint64 view lowers to a numeric `kind` that the HIR debug
+/// text never spells by name, yet every element read produces a BigInt.
+fn module_uses_bigint_typed_array(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::{TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64};
+    use perry_hir::Expr;
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. }
+                if matches!(*kind, TYPED_ARRAY_KIND_BIGINT64 | TYPED_ARRAY_KIND_BIGUINT64) =>
+            {
+                return true
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| found = found || uses(child));
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
 /// `global-math`: does the program evaluate the `Math` namespace object?
 ///
 /// Direct calls (`Math.max(a, b)`) lower to intrinsics and never read it. A
@@ -586,6 +611,8 @@ fn detect_optional_feature_usage_with_capabilities(
             "TextEncoder",
             "NativeMemory",
             "ProcessStdin",
+            // The embedded-file read of `perry` returns a Buffer.
+            "readEmbedded",
         ]
         .iter()
         .any(|name| hir_debug.contains(name))
@@ -616,6 +643,24 @@ fn detect_optional_feature_usage_with_capabilities(
                         | "bun:ffi"
                         | "sqlite"
                         | "perry/thread"
+                        // Modules whose results are Buffers without the program
+                        // naming one: compressed output, byte-mode stream chunks,
+                        // StringDecoder lastChar, WebSocket messages, BLOB columns.
+                        | "zlib"
+                        | "stream"
+                        | "stream/consumers"
+                        | "string_decoder"
+                        | "ws"
+                        | "better-sqlite3"
+                        | "bun:sqlite"
+                        // Well-known providers whose code is not in this repo.
+                        | "pg"
+                        | "mysql2"
+                        | "mysql2/promise"
+                        | "tursodb"
+                        | "iroh"
+                        // tty.ReadStream reads hand out Buffers.
+                        | "tty"
                 )
         });
     ctx.uses_event_target |= global_object::may_escape(hir_module)
@@ -648,6 +693,10 @@ fn detect_optional_feature_usage_with_capabilities(
                     "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
                 )
         });
+    ctx.uses_navigator |= global_object::may_escape(hir_module)
+        || ["navigator", "Navigator"]
+            .iter()
+            .any(|name| hir_debug.contains(&format!("\"{name}\"")));
     ctx.uses_messaging |= global_object::may_escape(hir_module)
         || hir_debug.contains(r#""worker_threads""#)
         || hir_module.imports.iter().any(|import| {
@@ -740,8 +789,9 @@ fn detect_optional_feature_usage_with_capabilities(
         || hir_debug.contains("Bigint")
         || hir_debug.contains("bigint")
         || hir_debug.contains("Buffer")
-        || hir_debug.contains("BigUint64Array")
+        || hir_debug.contains("BigUint64")
         || hir_debug.contains("GlobalThisExpr")
+        || module_uses_bigint_typed_array(hir_module)
         || hir_debug.contains("property: \"globalThis\"")
     {
         ctx.uses_bigint = true;
@@ -1515,6 +1565,19 @@ mod tests {
             crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
         super::detect_optional_feature_usage(&mut ctx, &hir);
         ctx
+    }
+
+    #[test]
+    fn bigint_views_select_the_bigint_producer() {
+        for source in [
+            "const b = new BigUint64Array(new Float64Array([-4]).buffer)[0]; console.log(String(b));",
+            "const b = new BigInt64Array(2)[0]; console.log(String(b));",
+            "const b = BigUint64Array.from([]); console.log(b.length);",
+            "const v = new DataView(new ArrayBuffer(8)); console.log(String(v.getBigUint64(0)));",
+        ] {
+            assert!(detect_for_source(source).uses_bigint, "{source}");
+        }
+        assert!(!detect_for_source("console.log(new Float64Array(2)[0]);").uses_bigint);
     }
 
     #[test]

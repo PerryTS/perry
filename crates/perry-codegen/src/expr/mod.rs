@@ -81,6 +81,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod record_witness;
 pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
@@ -105,6 +106,7 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod rest_elems;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -126,6 +128,7 @@ mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
 pub(crate) mod collection_receiver;
+pub(crate) mod facts_canonical;
 pub(crate) mod facts_number;
 mod helpers;
 mod i32_fast_path;
@@ -157,7 +160,7 @@ pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec,
+    lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -179,6 +182,7 @@ pub(crate) use helpers::{
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
+pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
@@ -228,16 +232,16 @@ pub(crate) use v8_interop::{
 pub(crate) use write_barrier::{
     emit_array_numeric_write_note_on_block, emit_gated_root_nanbox_store,
     emit_jsvalue_slot_store_on_block, emit_jsvalue_slot_store_pointer_tested,
-    emit_jsvalue_slot_store_pointer_tested_known,
-    emit_jsvalue_slot_store_scalar_aware_on_block, emit_jsvalue_slot_store_with_flags_on_block,
-    emit_jsvalue_slot_store_with_value_bits_on_block, emit_layout_note_slot_on_block,
-    emit_may_carry_heap_pointer_check, emit_root_nanbox_store_for_expr,
-    emit_root_nanbox_store_on_block, emit_scalar_aware_store_gated_on_pointerness,
-    emit_write_barrier, emit_write_barrier_birth_slots_generation_tested,
-    emit_write_barrier_slot_generation_tested, emit_write_barrier_slot_on_block,
-    emit_write_barrier_slot_value_and_generation_tested, lower_array_super_init,
-    lower_event_emitter_async_resource_subclass_init, lower_event_emitter_subclass_init,
-    lower_node_stream_super_init, lower_stream_super_init, EVENT_EMITTER_INIT_KEYS,
+    emit_jsvalue_slot_store_pointer_tested_known, emit_jsvalue_slot_store_scalar_aware_on_block,
+    emit_jsvalue_slot_store_with_flags_on_block, emit_jsvalue_slot_store_with_value_bits_on_block,
+    emit_layout_note_slot_on_block, emit_may_carry_heap_pointer_check,
+    emit_root_nanbox_store_for_expr, emit_root_nanbox_store_on_block,
+    emit_scalar_aware_store_gated_on_pointerness, emit_write_barrier,
+    emit_write_barrier_birth_slots_generation_tested, emit_write_barrier_slot_generation_tested,
+    emit_write_barrier_slot_on_block, emit_write_barrier_slot_value_and_generation_tested,
+    lower_array_super_init, lower_event_emitter_async_resource_subclass_init,
+    lower_event_emitter_subclass_init, lower_node_stream_super_init, lower_stream_super_init,
+    EVENT_EMITTER_INIT_KEYS,
 };
 
 // Issue #1098 phase 3: the `FnCtx` definition stays in this trunk, but its
@@ -327,7 +331,10 @@ pub(crate) use slot_rep::{
     PTR_SHAPE_REGION_AUTHORITY, PTR_SHAPE_SCALAR_REPLACED,
 };
 
-pub(crate) use dispatch::{lower_expr, lower_math_operand};
+pub(crate) use dispatch::{
+    inert_math_enabled, lower_expr, lower_math_operand, math_intrinsic_operands,
+    math_operand_is_proven_number,
+};
 pub(crate) use scalar_slot_root::{
     entry_init_load_rooted_global, root_entry_alloca, root_scalar_replaced_slot,
     root_scalar_replaced_slot_unconditional,
@@ -413,7 +420,15 @@ pub(crate) struct FnCtx<'a> {
     /// Set while lowering the generic arm of a guarded proof (decision 150):
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
+    /// While a b1 call lowers its body's read here: that read's offset (the
+    /// body module's) and its at-rest floor (`expr::rest_elems`).
+    pub rest_b1: Option<(u32, Option<u32>)>,
+    /// I32 at rest B2: (counter, at-rest local, scope) pairs a counter
+    /// entry check proved in the floor in the loop copy being lowered
+    /// (`stmt::loops::lower_counter_versions`, `expr::rest_elems`).
+    pub rest_counter: Vec<(u32, u32, u32)>,
     pub program_has_worker: bool,
+    pub program_has_tla: bool,
     pub program_has_thread_agents: bool,
     /// Function being built (blocks, params, registers).
     pub func: &'a mut LlFunction,
@@ -1148,6 +1163,14 @@ pub(crate) struct FnCtx<'a> {
     /// `js_number_coerce`. Structural, never a declared type — see
     /// `collectors::collect_number_by_construction_locals`.
     pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
+    /// `let` bindings the whole-program facts prove hold only Numbers
+    /// (`codegen/facts_number_locals.rs`). A read is a Number; unlike
+    /// `number_by_construction_locals` this says nothing about the operands
+    /// of the writes, which keep their own lowering.
+    pub facts_number_locals: &'a std::collections::HashSet<u32>,
+    /// Locals the whole-program interval proof shows hold only int32 values
+    /// (`codegen/facts_int32_locals.rs`).
+    pub facts_int32_locals: &'a std::collections::HashSet<u32>,
 
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
     /// frame slot index. Empty on native statepoint targets.
@@ -1305,6 +1328,9 @@ pub(crate) struct FnCtx<'a> {
     /// buffer views. Lookup, nested-scope teardown and boundary validation
     /// live in that table instead of independent `FnCtx` maps.
     pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
+    /// N2: the planned function-level element bases of the method body
+    /// (`stmt::fn_base`).
+    pub fn_base: crate::stmt::fn_base::Pending,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
@@ -1509,6 +1535,13 @@ pub(crate) struct FnCtx<'a> {
     /// is never written, its truthiness is tag identity. Empty in the generic
     /// body, in module init, in methods and in every closure.
     pub spec_bool_params: std::collections::HashSet<u32>,
+    /// P2: the signature's `ret` when this body is a typed entry (`F$sig`):
+    /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
+    /// mode witnesses every returned value against it (§5).
+    pub sig_return: Option<crate::codegen::FactsRep>,
+    /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
+    pub typed_methods:
+        &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
     /// Bindings initialized from a declared typed-array element read
     /// (`typed_element::yields_element`). A selection hint for the relational
     /// lowering, which is exact for any value.
@@ -3318,7 +3351,7 @@ mod env_clones;
 mod fs_await;
 #[cfg(test)]
 mod hit_path_tests;
-mod index_get;
+pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
@@ -4887,6 +4920,8 @@ mod byte_prepass_tests;
 #[cfg(test)]
 mod array_layout_loop_tests;
 
+#[cfg(test)]
+mod buffer_bounds_source_tests;
 #[cfg(test)]
 mod sort_numeric_source_tests;
 

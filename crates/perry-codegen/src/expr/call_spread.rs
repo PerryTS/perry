@@ -133,7 +133,11 @@ pub(crate) fn emit_spread_append(
         .then(|| crate::proto_constants::iterator_member_site(ctx, operand))
         .flatten();
     let Some(site) = site else {
-        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+        acc.advance(
+            ctx,
+            "js_array_spread_append",
+            &[Arg::Plain(DOUBLE, part_box)],
+        );
         return;
     };
     let slow = ctx.new_block("spreaditer.generic");
@@ -141,10 +145,18 @@ pub(crate) fn emit_spread_append(
     let slow_l = ctx.block_label(slow);
     let merge_l = ctx.block_label(merge);
     let iter = crate::proto_constants::emit_iterator_call(ctx, part_box, &site, &slow_l);
-    acc.advance(ctx, "js_array_spread_append_iterator", &[Arg::Plain(DOUBLE, &iter)]);
+    acc.advance(
+        ctx,
+        "js_array_spread_append_iterator",
+        &[Arg::Plain(DOUBLE, &iter)],
+    );
     ctx.block().br(&merge_l);
     ctx.current_block = slow;
-    acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, part_box)]);
+    acc.advance(
+        ctx,
+        "js_array_spread_append",
+        &[Arg::Plain(DOUBLE, part_box)],
+    );
     ctx.block().br(&merge_l);
     ctx.current_block = merge;
 }
@@ -257,6 +269,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "log" | "info" | "warn" | "error" | "debug"
                     )
                 {
+                    if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                        // The real call: `globalThis.console.<m>(...args)`.
+                        let real = Expr::CallSpread {
+                            byte_offset: 0,
+                            byte_end: 0,
+                            callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
+                                byte_offset: 0,
+                                object: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
+                                    byte_offset: 0,
+                                    object: Box::new(Expr::GlobalThisExpr),
+                                    property: "console".to_string(),
+                                }),
+                                property: property.clone(),
+                            }),
+                            args: args.to_vec(),
+                            type_args: Vec::new(),
+                        };
+                        return lower_expr(ctx, &real);
+                    }
                     let runtime_fn = match property.as_str() {
                         "info" => "js_console_info_spread",
                         "debug" => "js_console_debug_spread",

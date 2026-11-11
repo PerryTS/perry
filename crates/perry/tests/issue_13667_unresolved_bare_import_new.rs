@@ -16,6 +16,8 @@ fn compile(main: &str) -> (Output, String, tempfile::TempDir) {
             "compile",
             "main.ts",
             "--no-cache",
+            "--no-auto-optimize",
+            "--no-codegen",
             "--no-link",
             "-o",
             "objects",
@@ -104,4 +106,41 @@ fn a_property_read_or_type_use_of_a_missing_package_keeps_compiling() {
     );
     assert!(output.status.success(), "{message}");
     assert!(!message.contains("Cannot find package"), "{message}");
+}
+
+#[test]
+fn spread_construction_rejects_missing_named_default_and_subpath_imports() {
+    for (declaration, source, package) in [
+        ("{ Simple }", "missing-named-13547", "missing-named-13547"),
+        ("Simple", "missing-default-13547", "missing-default-13547"),
+        (
+            "{ Simple }",
+            "@missing-13547/pkg/subpath",
+            "@missing-13547/pkg",
+        ),
+    ] {
+        for arguments in ["'kind'", "...['kind']"] {
+            let (output, message, dir) = compile(&format!(
+                "import {declaration} from '{source}'; const value = new Simple({arguments}); console.log(value);"
+            ));
+            assert!(!output.status.success(), "{message}");
+            assert!(
+                message.contains(&format!("Cannot find package '{package}'")),
+                "{message}"
+            );
+            assert!(message.contains("binding 'Simple'"), "{message}");
+            assert!(message.contains("main.ts"), "{message}");
+            assert!(!dir.path().join("objects").exists(), "{message}");
+            assert!(
+                std::fs::read_dir(dir.path()).unwrap().all(|entry| {
+                    entry
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .is_none_or(|extension| extension != "o")
+                }),
+                "a rejected construction must not emit an object"
+            );
+        }
+    }
 }

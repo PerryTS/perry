@@ -7,21 +7,25 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod compare;
 mod define_keys;
 mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+pub(crate) mod narrow;
 mod native_result;
 mod once;
 mod own_guard;
 mod own_store;
+mod param_key;
 pub(crate) use own_guard::Region;
 mod primitives;
 mod private_methods;
 mod shared_closures;
 mod view;
 mod walk;
+pub(crate) mod zero_sign;
 pub(crate) use walk::variant_name;
 
 /// A read site the precision report can match against the dynamic census:
@@ -140,6 +144,9 @@ pub struct Gen<'a> {
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
     pub thrown: NodeId,
+    /// The realm error a failed runtime operation throws (`Model::runtime_error`,
+    /// held by `thrown`), for a site that throws it into its own region.
+    pub runtime_error: Tok,
     /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
     /// Canonical module path -> the publications for that path.
@@ -148,6 +155,9 @@ pub struct Gen<'a> {
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
     pub(crate) element_sites: Vec<ElementSite>,
+    /// `(module, element_offset, value node)` of every `IndexGet` copy
+    /// (`canonical_numbers`, P3 B1).
+    pub(crate) element_values: Vec<(u32, u32, NodeId)>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -263,6 +273,27 @@ pub struct Gen<'a> {
     /// While a for-of binding is walked (`Gen::stmts`): its value local
     /// reads the value the loop's `arrayRecordForValue` just wrote.
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// Loop-test narrowings being walked (`gen/narrow.rs`).
+    pub(crate) narrow: Vec<narrow::Narrow>,
+    /// The function body being walked and its locals a guard may narrow
+    /// (`narrow::scope_locals`).
+    pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    /// The `const` bindings the bodies being walked declare
+    /// (`narrow::Consts`): a body a closure creates may narrow the ones it
+    /// captures.
+    pub(crate) narrow_consts: crate::pts::FxHashSet<(u32, u32)>,
+    /// `(module, byte offset, argument nodes)` of each method call site
+    /// (`bindings::ModuleBindings::call_arg_ranges`).
+    pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
+    /// `(module, byte offset, result node)` of each method call site
+    /// (`bindings::ModuleBindings::number_calls`).
+    pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
+    /// identity (the callee expression's address), whether it spreads, and
+    /// for a direct call its callee node (`signatures::typed_calls`).
+    pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,
+    /// One-unit String literal nodes by code (`Gen::str_literal`).
+    pub(crate) str_lits: FxHashMap<i64, NodeId>,
     /// The counted walks HIR lowers a for-of over an ordinary array to
     /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
     /// local, counter local). Their `array[k]` binding is what the
@@ -309,6 +340,9 @@ pub struct Gen<'a> {
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
     pub prim_const: [NodeId; 7],
+    /// One node per integer literal value, holding that Number with its
+    /// point interval (`Gen::num_literal`); shared like `prim_const`.
+    pub num_lits: FxHashMap<i64, NodeId>,
     pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 225: the bodies not walked yet because they are not
@@ -322,6 +356,39 @@ pub struct Gen<'a> {
     /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
     /// sites skip their module mapping (DECISIONS 226).
     pub dynimport_sabotage: bool,
+    /// Integer intervals are generated (`FactsConfig::no_int_ranges`).
+    pub int_ranges: bool,
+    /// Array literals record their birth length (`solve::arr_len`;
+    /// `FactsConfig::no_array_lengths`).
+    pub arr_lengths: bool,
+    /// The source site of the last `new Array(...)` of the builtin
+    /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
+    pub new_array_site: Option<SiteId>,
+    /// Guards narrow locals and one-unit Strings carry codes
+    /// (`FactsConfig::no_guard_ranges`).
+    pub guard_ranges: bool,
+    /// Guards narrow locals by presence: a truthy or non-nullish test
+    /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
+    pub guard_presence: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves past
+    /// the narrowing's code does not end its narrowed reads after the branch
+    /// (`gen::narrow`, "Writes on a leaving path";
+    /// `FactsConfig::no_leaving_writes`).
+    pub leaving_writes: bool,
+    /// −0 tolerance (`zero_sign`): the expression `expr` evaluates next is
+    /// an operand whose parent classifies its use (a compare, an integer
+    /// rule, a copy, a store, a call argument); any other is a
+    /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
+    pub zs_ok: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
+    /// branch's writes are dropped from the reads after it, also a branch
+    /// that falls through to them.
+    pub leaving_write_sabotage: bool,
+    /// The loops and `switch`es (`jumps`) and `try` statements (`tries`)
+    /// the walk is inside: where an unlabeled `break`/`continue` lands, and
+    /// whether a `throw` or a `finally` stays inside a narrowing's code.
+    pub jumps: u32,
+    pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -347,7 +414,7 @@ pub struct Gen<'a> {
     pub rooted_stores: std::collections::BTreeMap<usize, bool>,
     /// Locals holding a class method's lexical home (`ClassMethodHome`):
     /// (module, local) → the class. `super` through such a home starts at
-    /// that class's parent, exactly like `SuperPropertyGet`.
+    /// the home's prototypes, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
     /// The unpublished object of each enclosing chunked literal birth
     /// (`Expr::LiteralChunks`), innermost last: what its chunk calls'
@@ -385,6 +452,9 @@ pub struct Gen<'a> {
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// Per module: its call-only functions' parameters and calls
+    /// (`Gen::key_shape_of`).
+    pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
 }
 
 /// Per-function walking context.
@@ -511,10 +581,24 @@ impl<'a> Gen<'a> {
         m.add_prim(all, prim::ALL);
         m.all_prim_node = all;
         let thrown = m.node_l("THROWN");
-        // Runtime-thrown errors are runtime objects: ⊤-origin.
-        m.add_top(thrown, |_| "thrown value (runtime errors)".into());
-        m.add_prim(thrown, prim::ALL);
+        // What a `catch` (or a rejection handler) receives beside the values
+        // the program throws (edges): the error object a failed runtime
+        // operation makes (`exception::throw_core`; codegen inserts such
+        // throws the model never sees, so every program can catch one). It is
+        // also the region of every call made outside generation (DESIGN SEEDE
+        // section 8); ⊤ reaches it only through such a region.
+        let rterr = m.runtime_error();
+        m.add_tok(thrown, rterr);
         m.thrown = thrown;
+        let esc = m.node_l("ESCRAISE");
+        let r = m.reason("thrown into unknown code");
+        m.sink_node(esc, r);
+        m.esc_raise = esc;
+        let acc = m.node_l("ESCACCESSORS");
+        let r = m.reason("accessor function of a value unknown code holds");
+        m.sink_node(acc, r);
+        m.esc_accessors = acc;
+        m.lazy_raise = m.node_l("LAZYRAISE");
         m.escaped_classes = m.node_l("ESCCLASSES");
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
@@ -525,9 +609,7 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
-        m.process_argv_tok = m.process_argv_array();
-        m.process_argv = m.node_l("PROCESSARGV");
-        m.add_tok(m.process_argv, m.process_argv_tok);
+        m.process_arrays = m.process_string_arrays();
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -542,11 +624,13 @@ impl<'a> Gen<'a> {
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
             thrown,
+            runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
             element_sites: Vec::new(),
+            element_values: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -591,6 +675,13 @@ impl<'a> Gen<'a> {
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
             for_binding: None,
+            narrow: Vec::new(),
+            narrow_scope: None,
+            narrow_consts: Default::default(),
+            call_args_at: Vec::new(),
+            call_results_at: Vec::new(),
+            call_sites_at: Vec::new(),
+            str_lits: Default::default(),
             for_of_walks: Default::default(),
             initialized_consts: Default::default(),
             write_top: Default::default(),
@@ -612,12 +703,23 @@ impl<'a> Gen<'a> {
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),
             prim_const,
+            num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             dynimport_sabotage: false,
+            int_ranges: true,
+            arr_lengths: true,
+            new_array_site: None,
+            guard_ranges: true,
+            guard_presence: true,
+            leaving_writes: true,
+            zs_ok: false,
+            leaving_write_sabotage: false,
+            jumps: 0,
+            tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -641,6 +743,7 @@ impl<'a> Gen<'a> {
             for_in_key: Vec::new(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
+            param_calls: FxHashMap::default(),
         }
     }
 
@@ -1284,6 +1387,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: id,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: ps,
             rest,
@@ -1619,6 +1723,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: vec![],
             rest: None,
@@ -1656,18 +1761,34 @@ impl<'a> Gen<'a> {
             self.m.constructor_origins.insert(tm, origin);
             self.m.rel(|| format!("ctororigin {tm} {origin}"));
         }
-        let parent = c
-            .extends_name
-            .as_ref()
-            .and_then(|n| self.resolve_class_name(mi, n));
-        let builtin_parent = c
-            .extends_name
-            .as_deref()
-            .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        // The name a member heritage carries (`extends O.Base`, `O["Base"]`)
+        // is its property key, which names no binding: the parent is the
+        // value the heritage evaluated to, whatever class elsewhere carries
+        // that name (§17.2). A global name (`extends Error`) is a read of
+        // the global object (`GlobalGet(0)`), a binding.
+        let member = match c.extends_expr.as_deref() {
+            Some(perry_hir::Expr::PropertyGet { object, .. }) => {
+                !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(0))
+            }
+            Some(perry_hir::Expr::IndexGet { .. } | perry_hir::Expr::StaticFieldGet { .. }) => true,
+            _ => false,
+        };
+        let binding = c.extends_name.as_deref().filter(|_| !member);
+        let parent = binding.and_then(|n| self.resolve_class_name(mi, n));
+        let builtin_parent =
+            binding.filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
-            self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.to_string()));
+            // The binding's module when HIR resolved it to an import of a
+            // node module (`import { EventEmitter } from "events"`), else
+            // the global object's built-in.
+            let module = c
+                .native_extends
+                .as_ref()
+                .filter(|(_, name)| name == n)
+                .map_or("builtin", |(m, _)| m.as_str());
+            self.m.tmpls[tm as usize].native_parent = Some((module.into(), n.to_string()));
         } else if c.extends_name.as_deref() == Some("Object") && c.extends_expr.is_none() {
             // `extends Object`: the ordinary chain.
         } else if c.extends_expr.is_some()
@@ -1683,7 +1804,8 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, c.extends_name.clone()));
+            self.parent_values
+                .push((mi, tm, binding.map(str::to_string)));
         }
     }
 
@@ -1717,7 +1839,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
-        let native = tm.and_then(|tm| self.native_parent_value(tm));
+        let native = tm.and_then(|tm| crate::builtins::native_parent_value(&mut self.m, tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1750,6 +1872,13 @@ impl<'a> Gen<'a> {
                 self.m.parent_unsettled.insert(tm);
                 let chk = self.m.node_l("native-parent-check");
                 self.m.edge(v, chk);
+                // The class object's [[Prototype]] is the evaluated `extends`
+                // value (ClassDefinitionEvaluation), as for any parent value:
+                // a static read or call on the class (`X.g()`) reaches what
+                // the program stored on that constructor.
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                let cp = self.m.proto_node(c);
+                self.m.edge(v, cp);
                 let reason = self.m.reason(why);
                 self.m.cons(
                     chk,
@@ -1770,19 +1899,6 @@ impl<'a> Gen<'a> {
                 }
             }
         }
-    }
-
-    /// The value of the global object's declared constructor that class `tm`'s
-    /// built-in parent names (`extends Error`: the realm's `Error`); `None`
-    /// when the class has no built-in parent or the global declares none
-    /// under that name (`EventEmitter` is a module export).
-    fn native_parent_value(&mut self, tm: TmplId) -> Option<Tok> {
-        let (_, name) = self.m.tmpls[tm as usize].native_parent.clone()?;
-        let identity = self
-            .m
-            .namespace_property(BuiltinNs::GlobalThis, &name)?
-            .native?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity })))
     }
 
     /// After the bodies: a parent value no evaluated parent fed takes the
@@ -2061,17 +2177,25 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
-        self.new_arr_birth(mi, what, false)
+        self.new_arr_birth(mi, what, false, false)
     }
 
     /// An array born with every index below its length (`TmplKind::Arr`
-    /// `hole_free`) or not.
-    pub(crate) fn new_arr_birth(&mut self, mi: u32, what: &str, hole_free: bool) -> TmplId {
+    /// `hole_free`) or not. `plain`: a program literal or spread literal
+    /// (`TmplKind::Arr::plain`), set only with `Model::array_reps` on.
+    pub(crate) fn new_arr_birth(
+        &mut self,
+        mi: u32,
+        what: &str,
+        hole_free: bool,
+        plain: bool,
+    ) -> TmplId {
         let site = self.next_site(mi);
         let kind = TmplKind::Arr {
             module: mi,
             site,
             hole_free,
+            plain: plain && self.m.array_reps,
         };
         self.new_indexed_template(mi, kind, what, site)
     }

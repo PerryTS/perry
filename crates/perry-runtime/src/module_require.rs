@@ -1265,18 +1265,44 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
     }
 }
 
+/// Record numbers of module evaluations, process-wide so a guard that exists
+/// once per thread (a worker program) still names a distinct record.
+static MODULE_INIT_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The evaluation record number kept beside a module's guard byte, assigned on
+/// the guard's first evaluation. It follows the program's evaluation order; the
+/// guard's address follows the link and must not reach the record's key (the
+/// key text is hashed and compared on every module entry).
+///
+/// # Safety
+/// `guard_addr` names an emitted eight-byte guard global (`module_init.rs`):
+/// the guard is its first byte, bytes 4..8 are this number.
+unsafe fn module_init_record_number(guard_addr: i64) -> u32 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let slot =
+        std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
+    let number = slot.load(Relaxed);
+    if number != 0 {
+        return number;
+    }
+    let number = MODULE_INIT_SEQUENCE.fetch_add(1, Relaxed) + 1;
+    slot.store(number, Relaxed);
+    number
+}
+
 /// Execute one compiled module evaluation using the existing module registry.
-/// Its per-module guard address identifies the evaluation record independently
+/// Its per-module guard identifies the evaluation record independently
 /// of a possibly folded initializer body or CommonJS partial-export publication.
 /// An ESM or parse-error stub may throw before publishing anything. Successful reentries retain the emitted
 /// one-byte guard; a failure clears that guard and remains in the registry.
 ///
 /// # Safety
 /// `init_addr` names an `extern "C" fn()` evaluation body; `guard_addr` names
-/// its stable generated i8 global, thread-local for worker programs.
+/// its stable generated eight-byte global (guard byte, then the record number),
+/// thread-local for worker programs.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
-    let key = format!("\0module-init:{guard_addr:x}");
+    let key = format!("\0module-init:{:x}", module_init_record_number(guard_addr));
     let outcome = MODULE_PATH_REGISTRY.with(|registry| {
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)

@@ -23,9 +23,58 @@ pub enum OwnGateAt {
     Value,
 }
 
+/// Where a program observes the identity of what a node holds
+/// (`Cons::Identity`; DESIGN-p4l4 §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityRoute {
+    /// `===` / `!==` between two values neither of which is a primitive
+    /// literal (a comparison with one is a presence test).
+    StrictEq,
+    /// `==` / `!=`: object against object is identity.
+    LooseEq,
+    /// A `switch` discriminant and its case expressions (`===`).
+    Switch,
+    /// `Object.is`.
+    ObjectIs,
+    /// `Object.prototype.isPrototypeOf`: the receiver against each object on
+    /// the argument's chain.
+    IsPrototypeOf,
+    /// A Map/Set/WeakMap/WeakSet key (SameValueZero, or identity).
+    Collection,
+    /// `structuredClone` keeps the sharing of what it copies.
+    Clone,
+    /// A realm declaration's `identity(slot)`.
+    Native,
+    /// `JSON.stringify` with a replacer that is no literal `null`,
+    /// `undefined` or array: the replacer receives every value serialized,
+    /// unseen by the model (DESIGN-p4l4 finding 14).
+    JsonReplacer,
+}
+
+impl IdentityRoute {
+    pub fn name(self) -> &'static str {
+        match self {
+            IdentityRoute::StrictEq => "===",
+            IdentityRoute::LooseEq => "==",
+            IdentityRoute::Switch => "switch",
+            IdentityRoute::ObjectIs => "Object.is",
+            IdentityRoute::IsPrototypeOf => "isPrototypeOf",
+            IdentityRoute::Collection => "collection-key",
+            IdentityRoute::Clone => "structuredClone",
+            IdentityRoute::Native => "native",
+            IdentityRoute::JsonReplacer => "JSON replacer",
+        }
+    }
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The program observes the identity of every object the node holds
+    /// (`route`). No flow and no effect on the solve: a fact the value-record
+    /// derive reads (DESIGN-p4l4 R4). Generated only under
+    /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
+    Identity { route: IdentityRoute },
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -95,6 +144,10 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// An operation on the node runs in throw region `region` (DESIGN SEEDE
+    /// section 8): once ⊤ is here, unknown code may run (a getter, a trap,
+    /// ToPrimitive, a callee) and throw anything into the region.
+    Raise { region: NodeId },
     /// A realm field already retains its canonical value. Storing it again
     /// exposes no new reach; every other alternative takes the usual sink.
     RuntimeStore { reason: u32, retained: Tok },
@@ -147,12 +200,17 @@ pub enum Cons {
     /// Once anything (a token or a primitive) reaches the node, `dst` holds
     /// ⊤ and everything `from` holds: the result of a call that exists only
     /// when an argument reaches it.
-    /// (`reason` `None`: only `from`, no ⊤.)
+    /// (`reason` `None`: only `from`, no ⊤; `from` = `dst`: only ⊤.)
     TopIfAny {
         dst: NodeId,
         from: NodeId,
         reason: Option<u32>,
     },
+    /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
+    /// data value or a marker leaves it inert (an instance's ⊤ arrives as
+    /// ⊤). The result of a rule that is unknown only when the node is: an
+    /// accessor walk over a holder whose any-key node holds ⊤.
+    TopIfTop { dst: NodeId, reason: u32 },
     /// `from` flows into `dst` once the node may hold a value `test`
     /// admits (`guard`): a conditional's branch, a logical operator's right
     /// operand, a destructuring default reach the result only when their
@@ -225,6 +283,10 @@ pub enum Cons {
     AddsKeys,
     /// Builtin protocol touch: what `proto` reads on every token.
     Implicit { reason: u32, proto: Protocol },
+    /// InstanceofOperator (13.10.2) with the node as its right-hand side:
+    /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
+    /// left-hand side value (`Call(instOfHandler, C, « V »)`).
+    HasInstance { reason: u32, arg: NodeId },
     /// The node holds `Object.create` prototype arguments (E10).
     CreateProto { reason: u32 },
     /// The node is `ProtoNode(of)`: dst ⊇ the values of `key` on each
@@ -264,6 +326,14 @@ pub enum Cons {
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
+    /// The node holds the prototypes of a `super` access's home object
+    /// (its [[GetPrototypeOf]] at the access): continue the lookup at each
+    /// (`Cons::Super`), with each token of `recv` as the receiver.
+    SuperFrom {
+        recv: NodeId,
+        key: Key,
+        act: ChainAct,
+    },
     /// The node is `this` of a constructor of `class`: run the parent
     /// constructor chain for each instance (`super(...)`).
     SuperCtor { class: TmplId, call: CallId },
@@ -289,7 +359,14 @@ pub enum Cons {
     },
     /// Internal: install accessor `f` on every token of the node.
     /// `f`: the accessor's callable token (a known body or opaque callback).
-    AccessorInstall { key: Atom, f: Tok, setter: bool },
+    /// `from`: the node that held `f` (`NO_NODE`: none), the source the
+    /// census attributes an opaque accessor's ⊤ to.
+    AccessorInstall {
+        key: Atom,
+        f: Tok,
+        setter: bool,
+        from: NodeId,
+    },
     /// A direct Annex B runtime entry, dispatched per receiver token.
     AnnexBDefine { call: CallId, setter: bool },
     /// Reflect an accessor descriptor after ToPropertyKey.
@@ -345,6 +422,14 @@ pub enum Cons {
         dst: NodeId,
         shape: KeyShapeId,
     },
+    /// The past-the-end `undefined` of a computed-key read `o[key]` of
+    /// program Array token `obj` (DESIGN-p4l1 §2.8, PR-C1). Watches both
+    /// inputs: it sits on the key node and on `arr_len(obj)`. `dst` ⊇
+    /// `undefined` once the read may be at or past the length: the length
+    /// is ⊤, or the key may be anything but an integer Number in
+    /// `[0, arr_len(obj).lo)`. Below the length the read is an element or a
+    /// hole, which the read's own edges carry (`all_fields`, `hole`).
+    ElemUndef { obj: Tok, key: NodeId, dst: NodeId },
     /// `IdxLoad` of a read that runs only after an own-property test of the
     /// same object and key (`gen/own_guard.rs`): a program object's own
     /// fields under the key (`IdxOwnKey`), never its prototype chain; any
@@ -438,6 +523,25 @@ pub enum Cons {
     /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
     /// BigInt; both for an object, whose ToPrimitive may return either).
     Arith { dst: NodeId },
+    /// The node is an operand of a numeric operator whose result `dst`
+    /// takes its integer interval from this rule (`range::eval`), the
+    /// operand's interval beside `other`'s (`NO_NODE`: a unary operator).
+    /// The kinds of `dst` stay `Arith`'s / `Plus`'s.
+    Range {
+        op: RangeOp,
+        other: NodeId,
+        dst: NodeId,
+        /// The node is the right operand (`eval`'s second argument).
+        right: bool,
+    },
+    /// The node holds Arrays an index store writes, with its index in
+    /// `[lo, hi]`: each keeps its birth length only when that interval lies
+    /// inside it (`Model::arr_len_index`).
+    LenIndex { lo: i64, hi: i64 },
+    /// The node is token `t`'s length node (`Model::arr_len`), and `t` is
+    /// permuted in place (`reverse`, `copyWithin`): once the length is not
+    /// a point it is ⊤ (`Model::arr_len_permuted`).
+    LenPermuted { t: Tok },
     /// The node is an operand of `+`: `str` ⊇ String when the value may be
     /// a String (or an object, whose ToPrimitive may return one); `num` ⊇
     /// the numeric kinds of its other values (Number for a Number, Boolean,
@@ -476,8 +580,13 @@ pub enum Cons {
     /// by key, into each target (`Model::spread_into`), never through one
     /// any-key bucket.
     Spread { into: NodeId, site: SiteId },
-    /// The node holds the targets of a spread from source token `src`.
-    SpreadFrom { src: Tok, site: SiteId },
+    /// The node holds the targets of a spread from source token `src`; `from` is the node of the
+    /// spread's source value (the census attributes a spread of ⊤ to it).
+    SpreadFrom {
+        src: Tok,
+        site: SiteId,
+        from: NodeId,
+    },
     /// The node is a receiver of summarized function token `ft` at `call`
     /// (or of no call: `NO_NODE`): each value binds the instance of its
     /// layout (`Model::bind_layout`).
@@ -515,8 +624,39 @@ pub enum Cons {
 }
 
 impl Cons {
+    /// The rule reads the key node's string constants (`Node::strs`): a
+    /// pop where only they grew runs it (`Model::solve_fixpoint`).
+    pub fn carries_strs(&self) -> bool {
+        matches!(
+            self,
+            Cons::StoreIndexed { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+        )
+    }
+
+    /// The rule delivers Numbers of its host with the host's interval
+    /// (`model::range`): it re-runs when only that interval grows, so the
+    /// interval it delivered keeps covering the host's.
+    pub fn carries_range(&self) -> bool {
+        matches!(
+            self,
+            Cons::Range { .. }
+                | Cons::LenPermuted { .. }
+                | Cons::ElemUndef { .. }
+                | Cons::StoreIndexed { .. }
+                | Cons::RetInto { .. }
+                | Cons::Defined { .. }
+                | Cons::NotNullish { .. }
+                | Cons::NotUndefined { .. }
+                | Cons::Falsy { .. }
+        )
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
+            Cons::Identity { .. } => "identity",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
@@ -534,6 +674,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
+            Cons::Raise { .. } => "raise",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",
@@ -541,6 +682,7 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
@@ -554,6 +696,7 @@ impl Cons {
             Cons::DefineAll { .. } => "defineall",
             Cons::DefineDesc { .. } => "definedesc",
             Cons::Implicit { .. } => "implicit",
+            Cons::HasInstance { .. } => "hasinstance",
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::ProtoGiven { .. } => "protogiven",
@@ -564,6 +707,7 @@ impl Cons {
             Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::Super { .. } => "super",
+            Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",
             Cons::SuperCtorParent { .. } => "superctorparent",
             Cons::ThisFrom { .. } => "thisfrom",
@@ -580,10 +724,14 @@ impl Cons {
             Cons::NewTargetHard { .. } => "newtargethard",
             Cons::NativeParent { .. } => "nativeparent",
             Cons::Arith { .. } => "arith",
+            Cons::Range { .. } => "range",
+            Cons::LenIndex { .. } => "lenindex",
+            Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
+            Cons::ElemUndef { .. } => "elemundef",
             Cons::IdxOwnLoad { .. } => "idxownload",
             Cons::IdxOwnKey { .. } => "idxownkey",
             Cons::OwnGate { .. } => "owngate",

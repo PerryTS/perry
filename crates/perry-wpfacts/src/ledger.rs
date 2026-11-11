@@ -209,6 +209,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || w.contains("from unmodeled code")
             || w.contains("unknown code")
             || starts("unknown holder of the box")
+            || w.contains("hands its resource to async_hooks init")
             || starts("unregistered function id")
             || starts("bind with spread arguments")
             || w.contains("decorator")
@@ -217,8 +218,11 @@ pub(crate) fn route(why: &str) -> Option<Route> {
         } else if starts("argument of native ")
             || starts("argument of builtin ")
             || starts("argument of a primitive method")
+            // Class.prototype.method: the argument of a native method the realm declares.
+            || w.strip_prefix("argument of ").is_some_and(|r| r.contains('.') && !r.contains(' '))
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")
@@ -361,6 +365,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("__lookupGetter__ result")
+            || starts("result of a getter the realm does not declare")
             || starts("accessor descriptor")
             || starts("unrepresented native accessor descriptor")
             || starts("accessor lookup without a receiver")
@@ -368,6 +373,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
             || starts("result of an unmodeled native accessor lookup")
+            || starts("a closure native's captures")
         {
             OpaqueBuiltin
         } else if starts("global ")
@@ -398,6 +404,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("iteratorRestAppend")
             || starts("cjsRequireEdge")
             || starts("unknown result alternative")
+            || starts("value a finally capability is resolved with")
         {
             UnmodeledConstruct
         } else {

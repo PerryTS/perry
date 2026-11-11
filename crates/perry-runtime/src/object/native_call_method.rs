@@ -1750,8 +1750,8 @@ pub(crate) unsafe fn native_call_method_tower(
         let args = refreshed_args();
         // The proxy is the call's receiver, matching the receiver semantics
         // of a normal `obj.method(args)` invocation. A canonical class-method
-        // value takes it via `canonical_bound_method_receiver` (#6699 routes a
-        // proxy receiver through there).
+        // value takes it as its call-time `this` in `dispatch_bound_method`
+        // (#6699 routes a proxy receiver through there).
         let proxy_class_id =
             crate::proxy_hooks::proxy_target_class_id(object_handle.get_nanbox_f64());
         let is_static_class_method = proxy_class_id.is_some_and(|class_id| {

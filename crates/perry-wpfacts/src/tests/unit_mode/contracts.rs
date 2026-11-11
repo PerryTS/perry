@@ -306,8 +306,45 @@ pub(super) fn a_broken_namespace_field_function_resolves_only_the_units_that_see
     // (`Model::unknown_constructible`): the later rounds build no unknown
     // `new` of it (was [889, 1241, 1079, 260]). A folded
     // builtin call is the method call it folds, and a native method runs
-    // once summaries exist (`Deferred::Native`).
-    assert_eq!(pf.round_work, [832, 1203, 988, 258], "{:?}", pf.units);
+    // once summaries exist (`Deferred::Native`). HOST-P: every model finds
+    // the keys `process` declares as host arrays of strings in the realm's
+    // declarations (charged per search step, as rule G) and holds the
+    // runtime-made `process.execArgv` array beside `process.argv`: 25 work
+    // per unit solve, 9/7/7/2 solves per round (was [832, 1203, 988, 258]).
+    // SEEDE: every unit holds the runtime error object in `thrown`, each
+    // body its throw region, and an operation of a body on a value that can
+    // be ⊤ its `Raise` constraint (DESIGN SEEDE section 8), charged per
+    // delivered set like any constraint (was [1057, 1378, 1163, 308]; with
+    // the regions but no `Raise` constraints [1273, 1549, 1334, 356]); the
+    // `Raise` constraints are summary constraints (`summary::map::gen_kind`),
+    // so the bodies holding them keep their summaries: [1482, 1763, 1479,
+    // 395]. Every escaped value's accessor functions escape (descriptor
+    // reads, ESCACCESSORS): a getter and a setter descriptor walk per
+    // escaped value, charged in each round that escapes it. SEEDKV: a
+    // string literal is its own source node holding its constant
+    // (`Gen::str_literal`), popped once: `a` and `m` hold "get" and "g",
+    // solved in rounds 0-2 (was [1719, 2122, 1854, 449]). NUMBIG: `BigInt`
+    // is its own namespace, one more declared shape on the realm's linear
+    // namespace and family searches (charged per step) (was [1721, 2124,
+    // 1856, 449]). MULTINS: `Error`, the six NativeErrors and
+    // `AggregateError` are eight namespaces, the NativeErrors' chain
+    // `Error`: seven more declared shapes on the same charged searches
+    // (was [1732, 2133, 1864, 452]). WPNS: `%TypedArray%`, the twelve
+    // concrete typed arrays, `DataView`, `ArrayBuffer`, `SharedArrayBuffer`
+    // (and `%BufferSpeciesConstructor%`) are namespaces of their own, more
+    // declared shapes on the same charged searches (was [1799, 2188, 1913,
+    // 470]). A function expression whose body may complete returns
+    // `undefined` (`narrow::may_complete`): the `util` IIFE's result is one
+    // more popped kind in rounds 1-2 (was [1962, 2323, 2034, 512]). The
+    // changed-holder accessor lookup no longer adds a ⊤-token edge beside
+    // its own ⊤ (census attribution): two fewer deliveries in rounds 1-2
+    // (was [1962, 2326, 2037, 512]). A member that escaped after a set
+    // listed it is that set's ⊤ (`escaped_beside_top`) and leaves when ⊤
+    // arrives or at the pop: each shrunk set is rebuilt, charged per member
+    // it held. In rounds 1-2 the removed members fed no later delivery
+    // (with the rebuild uncharged the rounds are the old ones exactly), so
+    // the rebuilds are the whole difference (was [1962, 2324, 2035, 512]).
+    assert_eq!(pf.round_work, [1962, 2339, 2044, 512], "{:?}", pf.units);
     // Reading native function fields records the shared-object dependency:
     // a later shared write re-solves its reader, even when the stored key
     // is not a layout field of the broken contract.

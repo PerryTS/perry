@@ -25,6 +25,9 @@ use std::time::Instant;
 
 use crate::OutputFormat;
 
+mod codegen_helpers;
+use codegen_helpers::{configured_module_codegen_threads, namespace_local_function_wrapper_symbol};
+
 mod dylib_target;
 use dylib_target::{apple_dylib_cross_target, apple_sdk_sysroot, verify_dylib_target_linkable};
 
@@ -33,30 +36,6 @@ use dylib_target::{apple_dylib_cross_target, apple_sdk_sysroot, verify_dylib_tar
 /// the wild are a handful of levels deep at most; the cap is a belt-and-braces
 /// stop so a pathological (or cyclic) re-export graph can never spin forever.
 const MAX_REEXPORT_HOPS: usize = 16;
-
-/// How many module codegen jobs may run at once: `PERRY_MODULE_JOBS` when set
-/// to a positive count, else one per CPU slot of the compile's budget. Memory,
-/// not this count, is what keeps large graphs in bounds (see
-/// `module_schedule`).
-fn configured_module_codegen_threads(total_modules: usize, budget_cpus: usize) -> usize {
-    std::env::var("PERRY_MODULE_JOBS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|&value| value > 0)
-        .unwrap_or(budget_cpus)
-        .clamp(1, total_modules.max(1))
-}
-
-/// Wrapper symbol used when a dynamic-import namespace materializes a local
-/// function as a JavaScript value. Keep this routed through codegen's own
-/// function mangler: module-name sanitization is intentionally not injective
-/// for `$` and would point `$a` at `_a`'s symbol instead.
-fn namespace_local_function_wrapper_symbol(module_name: &str, function_name: &str) -> String {
-    format!(
-        "__perry_wrap_{}",
-        perry_codegen::user_function_symbol(module_name, function_name)
-    )
-}
 
 /// Design §4.4: a module's emitted registry symbols (or a cached object's
 /// manifest) must name only providers the HIR pass put in the link set.
@@ -213,22 +192,6 @@ impl Drop for ModuleCodegenCompletion<'_> {
             elapsed / 60.0,
             eta / 60.0
         );
-    }
-}
-
-#[cfg(test)]
-mod module_codegen_job_tests {
-    use super::configured_module_codegen_threads;
-
-    #[test]
-    fn one_job_per_cpu_slot_but_never_more_than_modules() {
-        if std::env::var("PERRY_MODULE_JOBS").is_ok() {
-            return;
-        }
-        assert_eq!(configured_module_codegen_threads(764, 48), 48);
-        assert_eq!(configured_module_codegen_threads(3, 48), 3);
-        assert_eq!(configured_module_codegen_threads(0, 48), 1);
-        assert_eq!(configured_module_codegen_threads(10, 0), 1);
     }
 }
 
@@ -812,6 +775,7 @@ pub fn run_with_parse_cache(
         .unwrap_or_else(|| PathBuf::from("."));
 
     let mut ctx = CompilationContext::new(project_root.clone());
+    ctx.macro_import_stack = args.macro_import_stack.clone();
     ctx.bun_platform = args.platform == JavaScriptPlatform::Bun;
     // #10281: the package `exports` / `imports` resolvers rank `bun` above
     // `node` for this target, so a package shipping both entries resolves the
@@ -3936,7 +3900,9 @@ pub fn run_with_parse_cache(
         // module's re-export chain. For Eager modules the calls
         // short-circuit on the idempotent guard's first-write
         // check (one load + cmp + cond_br each).
-        let module_init_deps: Vec<String> = if is_entry && !program_has_worker {
+        let program_has_tla = ctx.native_modules.values().any(|m| m.has_top_level_await);
+        let module_graph_has_tla = super::init_order::graph_has_tla(&ctx, path);
+        let module_init_deps: Vec<String> = if is_entry && !program_has_worker && !program_has_tla {
             Vec::new()
         } else {
             let mut deps: Vec<String> = Vec::new();
@@ -3948,7 +3914,7 @@ pub fn run_with_parse_cache(
             let push_dep = |deps: &mut Vec<String>,
                             seen: &mut std::collections::HashSet<String>,
                             prefix: String| {
-                if Some(&prefix) == entry_prefix.as_ref() {
+                if !program_has_tla && Some(&prefix) == entry_prefix.as_ref() {
                     return;
                 }
                 if seen.insert(prefix.clone()) {
@@ -4033,11 +3999,28 @@ pub fn run_with_parse_cache(
             // Eager ordering #6463 fixed: a module statically imported by an
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
+            if !program_has_tla {
             if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
                 deps.retain(|dep| {
                     deferred_module_prefixes.contains(dep)
                         || init_pos.get(dep).map_or(true, |&p| p < self_pos)
                 });
+            }
+            }
+            if program_has_tla {
+                let mut ordered = super::init_order::static_requested_paths(&ctx, path);
+                // The open CommonJS cache exists before any user module runs.
+                // This is the same support edge the synchronous eager driver seeds.
+                if is_entry && !ctx.cjs_closed {
+                    if let Some(support) = &ctx.cjs_support_path {
+                        if ctx.native_modules.contains_key(support) {
+                            ordered.retain(|p| p != support);
+                            ordered.insert(0, support.clone());
+                        }
+                    }
+                }
+                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name)).collect();
             }
             deps
         };
@@ -6279,24 +6262,13 @@ pub fn run_with_parse_cache(
             i18n_table: i18n_snapshot.clone(),
             fast_math: ctx.fast_math,
             fp_contract_mode: ctx.fp_contract_mode,
-            app_metadata: perry_codegen::AppMetadata {
-                entry_source_path: if is_entry && args.output_type == "executable" {
-                    Some(path.to_string_lossy().into_owned())
-                } else {
-                    None
-                },
-                entry_declared_esm: if is_entry {
-                    super::cjs_wrap::declared_module_format_is_esm(path)
-                } else {
-                    None
-                },
-                native_provider_installs: if is_entry {
-                    native_provider_installs.clone()
-                } else {
-                    Vec::new()
-                },
-                ..ctx.app_metadata.clone()
-            },
+            app_metadata: super::app_metadata::for_module(
+                &ctx.app_metadata,
+                path,
+                is_entry,
+                &args.output_type,
+                &native_provider_installs,
+            ),
             // Issue #100: namespace_entries empty unless this
             // module is a dynamic-import target; the consumer-side
             // dispatch map is empty unless this module performs
@@ -6313,6 +6285,8 @@ pub fn run_with_parse_cache(
             lazy_path_init_modules,
             deferred_module_prefixes,
             module_init_deps,
+            program_has_tla,
+            module_graph_has_tla,
             // Issue #842: signal side-effect-only dynamic-import
             // targets to codegen so it still emits
             // `@__perry_ns_<prefix>` + populator. `dyn_target_paths`

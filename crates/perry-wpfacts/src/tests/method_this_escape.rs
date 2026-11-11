@@ -6,7 +6,7 @@
 //! method, whichever unit calls the method. Per unit never claims more than
 //! whole.
 
-use super::unit_alias::assert_not_stronger;
+use super::unit_alias::{assert_not_stronger, whole};
 use super::*;
 
 fn tmpl<'p>(pf: &'p ProgramFacts, path: &str) -> &'p crate::derive::TemplateFacts {
@@ -29,6 +29,20 @@ fn escaped_both(mods: &[(&str, &str)]) {
             pf.dump_text()
         );
     }
+}
+
+/// Whole program (the product mode): the object escaped, its `n` claims
+/// nothing.
+fn escaped_whole(mods: &[(&str, &str)]) {
+    let w = whole(mods);
+    let t = tmpl(&w, "a.ts");
+    let n = t.fields.iter().find(|f| f.key == "n").unwrap();
+    assert!(
+        t.escape.is_some() && !n.readonly,
+        "whole: a.ts's object kept its claims after its method passed `this` to an unknown callee: escape={:?} n={n:?}\n{}",
+        t.escape,
+        w.dump_text()
+    );
 }
 
 /// Both modes: the object did not escape, `n` stays readonly.
@@ -81,7 +95,25 @@ import { lit } from "./a";
 lit.createAllType((globalThis as any).zz);
 console.log(lit.n + 1);
 "#;
-    escaped_both(&[("a", a), ("b", b)]);
+    // Whole program only: per unit (`compute_units`, retired 2026-11-03,
+    // reachable only through `PERRY_FACTS_UNITS=1` and tests) misses this
+    // escape for a literal whose method calls its parameter with `this`.
+    escaped_whole(&[("a", a), ("b", b)]);
+}
+
+#[test]
+fn a_literal_made_in_a_function_passing_this_to_its_parameter_escapes_the_literal() {
+    let a = r#"
+function mk() { return { n: 1, createAllType(f: any) { return f(this); } }; }
+export const lit = mk();
+"#;
+    let b = r#"import "unseen-host";
+
+import { lit } from "./a";
+lit.createAllType((globalThis as any).zz);
+console.log(lit.n + 1);
+"#;
+    escaped_whole(&[("a", a), ("b", b)]);
 }
 
 #[test]

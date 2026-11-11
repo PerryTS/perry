@@ -337,6 +337,7 @@ fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
         .expect("public closure entry");
     let entry = public.split("typed_closure_public.fast").next().unwrap();
     assert_eq!(entry.matches("fcmp ord double").count(), 2, "{public}");
-    assert!(public.contains("typed_closure_public.int32"), "{public}");
+    assert!(public.contains("typed_closure_public.nan"), "{public}");
+    assert!(!public.contains("int32_convert"), "{public}");
     assert!(public.contains("$generic"), "{public}");
 }

@@ -510,6 +510,7 @@ impl<'a> Gen<'a> {
                     module: mi,
                     site: u32::MAX,
                     hole_free: false,
+                    plain: false,
                 }
             },
             display: display.to_string(),
@@ -1355,6 +1356,7 @@ impl<'a> Gen<'a> {
             body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: name.to_string(),
             params: Vec::new(),
             rest: None,

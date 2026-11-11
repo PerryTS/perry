@@ -362,9 +362,10 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn(crate::model::Native::Member { identity }) => {
-                format!("builtin-fn:{identity}")
-            }
+            TokKind::BuiltinFn(crate::model::Native::Member { identity, holder }) => match holder {
+                None => format!("builtin-fn:{identity}"),
+                Some(h) => format!("builtin-fn:{identity}@{h}"),
+            },
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
@@ -1714,9 +1715,34 @@ impl Model {
         v
     }
 
-    /// The array `process.argv` holds at startup: made once by the runtime,
-    /// its elements strings.
-    pub(crate) fn process_argv_array(&mut self) -> Tok {
+    /// Per key of `process` the realm declares as a host array of strings
+    /// (`value = dynamic, elements = string`): the property's node, holding
+    /// the array the runtime makes once, its elements strings.
+    pub(crate) fn process_string_arrays(&mut self) -> Vec<(Atom, NodeId, Tok)> {
+        let declared: Vec<(&'static str, &'static str)> = self
+            .declarations
+            .namespace(BuiltinNs::Process, self)
+            .map(|s| {
+                self.declarations
+                    .shape(s)
+                    .properties
+                    .iter()
+                    .filter_map(|p| Some((p.key, p.strings?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        declared
+            .into_iter()
+            .map(|(key, display)| {
+                let t = self.host_string_array(display);
+                let n = self.node_l(display);
+                self.add_tok(n, t);
+                (self.atom(key), n, t)
+            })
+            .collect()
+    }
+
+    fn host_string_array(&mut self, display: &str) -> Tok {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
             kind: TmplKind::BObj {
@@ -1724,7 +1750,7 @@ impl Model {
                 site: u32::MAX - 1,
                 what: "arraybox",
             },
-            display: "process.argv".into(),
+            display: display.into(),
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
@@ -1748,6 +1774,52 @@ impl Model {
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.field_any(t);
         self.add_prim(fa, prim::STR);
+        t
+    }
+
+    /// The object a failed runtime operation throws (`exception::throw_core`:
+    /// TypeError, RangeError, SyntaxError, ReferenceError, URIError, the fs
+    /// errors): a fresh realm `Error` (family Error, as `new Error()`), one
+    /// for every kind. Its own `message`, `stack` and `name` are strings;
+    /// any other own key the runtime writes on it (`code`, `errno`,
+    /// `syscall`, `path`, ...: `set_error_user_prop`) holds a primitive.
+    pub(crate) fn runtime_error(&mut self) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 2,
+                what: "Error",
+            },
+            display: "runtime:Error".into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        for k in ["message", "stack", "name"] {
+            let a = self.atom(k);
+            let f = self.field(t, a);
+            self.add_prim(f, prim::STR);
+        }
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::ALL);
         t
     }
 

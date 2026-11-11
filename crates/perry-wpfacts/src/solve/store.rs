@@ -391,15 +391,32 @@ impl Model {
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
-        // A program-owned global: an ordinary field of the global object.
-        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
-            (&self.toks[t as usize], key)
-        {
-            if builtins::global_user_key(self, &self.atoms[a as usize])
+        // A program-owned global: an ordinary field of the global object
+        // (one field per key, whichever token stored it).
+        if let Key::Named(a) = key {
+            if builtins::global_object(self, t)
+                && builtins::global_user_key(self, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
-                let f = builtins::global_field(self, t, a);
+                let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let f = builtins::global_field(self, g, a);
                 self.edge(src, f);
+                return;
+            }
+        }
+        // A [[Set]] that meets the realm's accessor without a setter
+        // (`navigator` on the global object) writes nothing; in strict code
+        // it throws the runtime's TypeError (`Model::thrown`). Until a
+        // native write may have replaced the accessor: then the store runs
+        // again on the ordinary path (`NativeMiss::Store`).
+        if let Key::Named(a) = key {
+            if !elem
+                && !theirs
+                && !self.unit_mode
+                && builtins::getter_only(self, t, &self.atoms[a as usize])
+                && !builtins::native_written(self, t, a)
+            {
+                self.native_missing.push((t, a, NativeMiss::Store(src, site)));
                 return;
             }
         }
@@ -678,6 +695,10 @@ impl Model {
                 }
             }
         }
+        if self.is_arr(t) {
+            self.arr_len_store(t, key, elem, site);
+            self.arr_written(t);
+        }
         // An index past the end, a computed key or a `length` store may
         // leave a hole; an append (`elem`) never does (`hole`).
         let index = match key {
@@ -770,6 +791,8 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native.
         self.builtin_field_use(t, key, ChainAct::Store(src));
+        // A setter a declaration made the receiver with (`onabort`).
+        self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -777,12 +800,28 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        // Callable namespaces still expose their declared static keys to
-        // the runtime. Their program-owned fields use the function graph.
+        // A callable namespace's own property is the realm's only under a
+        // static the realm itself reads (`realm_reads_store`). Every other
+        // key is a field of the function graph (above), which program
+        // reads and the protocols run on it read.
         let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
             if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
-        let program_field = matches!(key, Key::Named(a) if builtins::undeclared(self, t, a));
-        if !builtins::builtin_function(self, t) || (namespace && !program_field) {
+        // A number key names no declared static (the realm declares no
+        // index) and the runtime reads no index of a built-in function or
+        // namespace: an element store there writes that object's own
+        // numeric field (above), which its reads see; no E20 sink. Not the
+        // global object's (its indices are globals unmodeled code reads),
+        // not a prototype's (the lock's, `note_native_write`).
+        let own_index = elem
+            && match self.toks[t as usize] {
+                _ if builtins::global_object(self, t) => false,
+                TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
+                _ => false,
+            };
+        if (!builtins::builtin_function(self, t)
+            || (namespace && builtins::realm_reads_store(self, t, key)))
+            && !own_index
+        {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }
     }

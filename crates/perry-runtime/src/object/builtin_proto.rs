@@ -1668,27 +1668,19 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the
 /// spec call, `Call(Get(recv, name), recv, args)` — `m.isPrototypeOf(x)`,
-/// `m.foo()` on a relinked `Map.prototype`, or the TypeError for a missing
-/// method — instead of the old silent `undefined`. A builtin closure found
-/// here is called as a value; one level only, so a builtin body that
-/// dispatches the same name by name again answers `undefined` as before
-/// rather than recursing.
+/// `m.toLocaleString()` (whose body invokes `toString`, an ordinary nested
+/// call here), `m.foo()` on a relinked `Map.prototype`, or the TypeError for
+/// a missing method.
+///
+/// A method reached here that dispatches by name back into this lookup can
+/// form a cycle of runtime frames only, which no compiled prologue's stack
+/// check sees; the same check at this entry bounds it, so a runaway
+/// recursion through this path throws node's `RangeError` instead of running
+/// into the guard page. No state of its own: the agent's stack limit is the
+/// one every prologue reads.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
-    thread_local! {
-        static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if ACTIVE.with(|a| a.get()) {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(false));
-        }
-    }
-    ACTIVE.with(|a| a.set(true));
-    let _reset = Reset;
+    crate::stack_guard::check_native_stack();
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }

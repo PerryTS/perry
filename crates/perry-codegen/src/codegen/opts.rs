@@ -32,6 +32,8 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Canonical source path of this module, used by its static stack frame.
+    pub module_source_path: Option<String>,
     /// The module format Node declares for the entry before looking at its
     /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
     /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
@@ -57,6 +59,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            module_source_path: None,
             entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }
@@ -494,6 +497,10 @@ pub struct CompileOptions {
     /// module globals. For Eager modules the redundant calls
     /// short-circuit on the guard's first-write check.
     pub module_init_deps: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
 
     /// Issue #842: true iff this module is the target of at least one
     /// `await import("./this_module.ts")` site anywhere in the program.
@@ -1149,6 +1156,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// P2 (DESIGN-p2 §3.2): typed class methods by HIR function id
+    /// (`signature_entry::select_methods`).
+    pub typed_methods: std::collections::HashMap<u32, super::signature_entry::TypedMethod>,
     /// Declared return types independently verified from the specialized
     /// body's guarded inputs and runtime-derived constructions. A direct call
     /// result may become a local proof only when its arguments also route to
@@ -1385,6 +1395,10 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// fires before the body — transitively pulls in any Deferred dep
     /// chain reached only through this module's re-exports.
     pub module_init_deps: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
     /// Issue #842: true iff this module is the target of at least one
     /// dynamic `import()` site in the program. Forces emission of
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`

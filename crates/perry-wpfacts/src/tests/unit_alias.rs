@@ -95,6 +95,11 @@ pub(super) fn stronger(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
     out
 }
 
+/// Whole-program facts (the product mode) of a multi-module program.
+pub(super) fn whole(mods: &[(&str, &str)]) -> ProgramFacts {
+    run(mods, false, &FactsConfig::default())
+}
+
 fn both(mods: &[(&str, &str)]) -> (ProgramFacts, ProgramFacts) {
     let cfg = FactsConfig::default();
     (run(mods, true, &cfg), run(mods, false, &cfg))

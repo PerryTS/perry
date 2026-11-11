@@ -103,6 +103,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -124,6 +125,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread,
                     ret: c.ret,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, None);
@@ -135,10 +137,15 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             effects::run_native(m, e, t, call);
         }
         // Generator protocol (a generator object is its step closure): the
-        // step closure only; any other function value has no such methods
-        // (a computed key on one is a runtime property: unknown).
+        // step closure only. On any other function, bound function or class
+        // value a named `next`/`return`/`throw` is an ordinary [[Get]]: its
+        // own statics (they shadow these members, `builtin_members`), then
+        // `Function.prototype` and `Object.prototype`, which define none of
+        // them unless the program wrote one there (the written-method
+        // arrival, `own_method_inner`); absent, the call throws a TypeError.
+        // A computed key on one is a runtime property: unknown.
         Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
-            if name.is_none() || !matches!(m.toks[t as usize], TokKind::Func(..)) {
+            if name.is_none() {
                 unknown_method(m, call, "computed method of a function value");
             }
         }
@@ -146,6 +153,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         Some("next" | "return" | "throw") | None if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_async) =>
         {
             m.call_tok(call, t, Some(t));
+            // It rejects: the shared cell.
+            let thrown = m.thrown;
+            gen_throw_passes(m, name, thrown, &c.args, &c.spread);
         }
         // A sync generator's public `next`/`return`/`throw`: the step runs
         // with this = itself and hands back its raw value (step kind 0
@@ -166,6 +176,8 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 let key = m.elem_key();
                 m.cons(spread, Cons::Load { key, dst: arg });
             }
+            let region = m.calls[call as usize].region;
+            gen_throw_passes(m, name, region, &[arg], &[]);
             let args = if matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].params.len() == 1)
             {
                 vec![arg]
@@ -185,6 +197,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: vec![],
                     ret: raw,
                     site: c.site,
+                    region: m.thrown,
                 },
             );
             m.call_tok(call2, t, Some(t));
@@ -212,6 +225,31 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
     }
 }
 
+/// A generator's `throw(v)` the runtime raises itself when the generator has
+/// not started or has finished (`generator_state.rs`, `throw_program_value`;
+/// an async one rejects with it): `v` is caught as it is. A computed method
+/// may be `throw`.
+/// `thrown` is the region of the `throw` call, or the shared cell for an
+/// async generator's (it rejects).
+fn gen_throw_passes(
+    m: &mut Model,
+    name: Option<&str>,
+    thrown: NodeId,
+    args: &[NodeId],
+    spread: &[NodeId],
+) {
+    if !matches!(name, Some("throw") | None) {
+        return;
+    }
+    for &a in args {
+        m.edge(a, thrown);
+    }
+    for &s in spread {
+        let key = m.elem_key();
+        m.cons(s, Cons::Load { key, dst: thrown });
+    }
+}
+
 // ------------------------------------------------------------- arrays
 
 pub(super) fn cb_call(
@@ -232,10 +270,65 @@ pub(super) fn cb_call(
             spread: vec![],
             ret,
             site: call2,
+            region: m.thrown,
         },
     );
     m.cons(cb, Cons::Call { call: call2 });
     ret
+}
+
+/// The one call a builtin method makes of member `key` of receiver `t`
+/// (`Array.prototype.toString`'s Invoke(this, "join"), `toLocaleString`'s
+/// of each element), whatever call ran the method: the member, its `this`
+/// and its arguments depend on `t` alone, so every run of the method on `t`
+/// shares it. A call per run never settles when the member is the method
+/// itself (`o.join = Array.prototype.toString`: the method's run on `o` in
+/// the new call makes a new call again). Its `nargs` argument nodes and its
+/// result are of `t`'s run (`fam_home`), as a protocol call's; it is born
+/// at no program site. `true`: made now, the caller adds its callee.
+fn recv_call(m: &mut Model, t: Tok, key: Atom, this: ThisArg, nargs: usize) -> (CallId, bool) {
+    member_call(m, t, key, false, this, nargs)
+}
+
+/// The one run of the declared getter of key `key` on receiver `t`
+/// (`effects::getter_load`): what a load of the key reads on `t` depends on
+/// `t` alone, so every load shares it, and a `fresh` result is born once
+/// per receiver. `true`: made now, the caller runs the declaration.
+pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
+    member_call(m, t, key, true, ThisArg::Tok(t), 0)
+}
+
+fn member_call(
+    m: &mut Model,
+    t: Tok,
+    key: Atom,
+    get: bool,
+    this: ThisArg,
+    nargs: usize,
+) -> (CallId, bool) {
+    if let Some(&c) = m.recv_calls.get(&(t, key, get)) {
+        return (c, false);
+    }
+    let home = m.fam_home(t);
+    let mut args = Vec::with_capacity(nargs);
+    for _ in 0..nargs {
+        let a = m.node_l("recv-call-arg");
+        m.nodes[a as usize].frame = home;
+        args.push(a);
+    }
+    let ret = m.node_l("recv-call-ret");
+    m.nodes[ret as usize].frame = home;
+    let call = m.calls.len() as CallId;
+    m.calls.push(CallSite {
+        this,
+        args,
+        spread: vec![],
+        ret,
+        site: call,
+        region: m.thrown,
+    });
+    m.recv_calls.insert((t, key, get), call);
+    (call, true)
 }
 
 /// ToPrimitive on `v`: its `@@toPrimitive`, `valueOf` and `toString` run.
@@ -281,6 +374,120 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
     );
 }
 
+/// `then`, `catch` and `finally` (27.2.5.1, 27.2.5.3, 27.2.5.4) take the
+/// result's constructor with SpeciesConstructor(p, %Promise%): `constructor`
+/// is read from the promise and its `@@species` from that value. A program
+/// species is constructed (NewPromiseCapability, 27.2.1.5) with the
+/// capability's executor `executor` (`capability_executor`); what it makes is
+/// the call's result. The realm's own promise constructors make the call's
+/// own promise (the rule below).
+fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
+    let recv = m.node_l("promise");
+    m.add_tok(recv, t);
+    let k = m.atom("constructor");
+    let cn = m.node_l("species-constructor");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(k),
+            dst: cn,
+        },
+    );
+    let sa = m.atom("@@__perry_wk_species");
+    let sp = m.node_l("species");
+    m.cons(
+        cn,
+        Cons::Load {
+            key: Key::Named(sa),
+            dst: sp,
+        },
+    );
+    let exec = m.node_l("capability-executor");
+    m.add_tok(exec, executor);
+    let c = m.calls[call as usize].clone();
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            this: ThisArg::Undef,
+            args: vec![exec],
+            spread: vec![],
+            ret: c.ret,
+            site: c.site,
+            region: m.thrown,
+        },
+    );
+    m.cons(sp, Cons::NewProgram { call: mc });
+}
+
+/// The executor NewPromiseCapability (27.2.1.5) hands `new C(executor)`: a
+/// runtime function (GetCapabilitiesExecutor, 27.2.1.5.1) whose closure is
+/// the capability. Called with `(resolve, reject)` it keeps them in the
+/// capability and returns `undefined`; a call after one was kept throws a
+/// TypeError, the runtime error every catch already holds (`gen`'s
+/// THROWN). The reaction jobs (27.2.2.1) then call what it kept: resolve
+/// with the value the derived promise is resolved with (`settled`: a
+/// handler's result, or the receiver's value passed through), reject with
+/// a rejection reason (THROWN). For `finally` (27.2.5.3) resolve gets the
+/// result of `then` invoked on PromiseResolve(C, onFinally()), a call of
+/// the species' own `then` the model does not follow: any value
+/// (`unknown`). One executor per capability (its `settled` node).
+fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool) -> Tok {
+    if let Some(&t) = m.executors.get(&settled) {
+        return t;
+    }
+    let fx = m.funcs.len() as FnIdx;
+    let tok = m.tok(TokKind::Func(fx, NO_CTX));
+    let this = m.node_l("this(capability executor)");
+    let ret = m.node_l("ret(capability executor)");
+    let args_all = m.node_l("args(capability executor)");
+    let res = m.node_l("capability-resolve");
+    let rej = m.node_l("capability-reject");
+    m.funcs.push(FuncInfo {
+        #[cfg(test)]
+        body_packet: Default::default(),
+        module: 0,
+        func_id: u32::MAX,
+        raise: u32::MAX,
+        name: "<capability executor>".into(),
+        params: vec![res, rej],
+        rest: None,
+        this,
+        ret,
+        args_all,
+        has_arguments: false,
+        own_test: crate::model::OwnTestBody::Unknown,
+        token: tok,
+        ctor_of: None,
+        lexical_this: true,
+        no_summary: false,
+        gen_proto: None,
+        gen_fn_protos: None,
+        gen_async: false,
+        gen_reyields: false,
+        proto: None,
+        captures: Vec::new(),
+        forwards_super: false,
+        parent: NO_FN,
+        forwarded: false,
+    });
+    m.add_prim(ret, prim::UNDEF);
+    m.executors.insert(settled, tok);
+    let value = if unknown {
+        let v = m.node_l("finally-settled");
+        m.edge(settled, v);
+        m.add_top(v, |_| {
+            "value a finally capability is resolved with: the species' own then result".into()
+        });
+        v
+    } else {
+        settled
+    };
+    let thrown = m.thrown;
+    let _ = cb_call(m, by, res, ThisArg::Undef, vec![value]);
+    let _ = cb_call(m, by, rej, ThisArg::Undef, vec![thrown]);
+    tok
+}
+
 /// `recv[name](...args)` where the algorithm looks the method up as a
 /// property: a method the program stored on the receiver runs, with the
 /// receiver as `this`.
@@ -303,6 +510,7 @@ pub(crate) fn method_call(
             spread: vec![],
             ret,
             site,
+            region: m.thrown,
         },
     );
     m.cons(
@@ -335,6 +543,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
+                region: m.thrown,
             },
         );
         m.protocol_calls.insert(c2);
@@ -543,6 +752,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             spread: vec![],
             ret: made,
             site: c.site,
+            region: m.thrown,
         },
     );
     construct_into(m, sc, mc, out, made, c.ret);
@@ -642,7 +852,119 @@ fn arr_iterated(m: &mut Model, t: Tok) -> NodeId {
     n
 }
 
+/// `Array.prototype.<name>` run with `this` = object `t`, an array or not
+/// (`native_receiver`): `array_method`, and for an object that is no array
+/// what the method does with it beyond an array's elements. ECMA-262 23.1.3:
+/// the method touches `this` only through Get, Set, HasProperty,
+/// DeletePropertyOrThrow and CreateDataPropertyOrThrow, under `length` and
+/// the indices, any of which may be an accessor, own or inherited. Each is
+/// the program's own operation on a node holding `t` (`non_array_this`), so
+/// accessors, setters and the chain are the solver's ordinary ones. Its
+/// indices are [[Get]]s under a number: its own fields a number key names
+/// (`num_fields`: numeric names too, `{ 0: v }`) and past them its chain
+/// (`plain_key`: program prototypes' numeric fields; an intrinsic
+/// prototype refuses index adds), all of them its elements here; an
+/// accessor under a numeric name runs through `array_method`'s
+/// `native_index_access`. `concat` makes it one element unless it is
+/// spreadable (IsConcatSpreadable: its `@@isConcatSpreadable`, whose
+/// elements the call already takes).
+pub(super) fn array_method_on(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    if !m.is_arr(t) {
+        let own = m.num_fields(t);
+        let elems = m.field_any(t);
+        m.edge(own, elems);
+        m.plain_key(t, ChainAct::Load(elems));
+        non_array_this(m, t, name, call);
+    }
+    array_method(m, t, Some(name), call);
+    if name == "concat" && !m.is_arr(t) {
+        let out = site_tmpl(m, call, "Array");
+        let ofa = m.field_any(out);
+        m.add_tok(ofa, t);
+    }
+}
+
+/// What `Array.prototype.<name>` does to a receiver `t` that is no array
+/// beyond its indices, each as the program's own operation on `t`:
+/// LengthOfArrayLike (Get `length`, then ToLength: ToPrimitive of what it
+/// read), Set `length` (the methods that store it), DeletePropertyOrThrow
+/// of an index (the program's `delete o[i]`: E7), `toString`'s Invoke of
+/// `join`, `concat`'s Get of `@@isConcatSpreadable`. HasProperty runs
+/// program code only as a Proxy's `has` trap, and a Proxy is ⊤.
+fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
+    let recv = m.node_l("array-like-this");
+    m.add_tok(recv, t);
+    let length = Key::Named(m.atom("length"));
+    let len = m.node_l("array-like-length");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: length,
+            dst: len,
+        },
+    );
+    to_prim(m, len, "array-like length (ToLength)");
+    if matches!(name, "push" | "pop" | "shift" | "unshift" | "splice") {
+        let num = m.node_l("array-like-new-length");
+        m.add_prim(num, prim::NUM);
+        let site = m.anon_store_site();
+        m.cons(
+            recv,
+            Cons::Store {
+                key: length,
+                src: num,
+                site,
+            },
+        );
+    }
+    if matches!(
+        name,
+        "pop" | "shift" | "splice" | "unshift" | "reverse" | "copyWithin" | "sort"
+    ) {
+        let reason = m.reason("E7 delete of an index by an Array.prototype method");
+        m.cons(
+            recv,
+            Cons::Hard {
+                kind: Hard::E7Delete,
+                reason,
+            },
+        );
+    }
+    match name {
+        "toString" => {
+            let ja = m.atom("join");
+            let (jc, made) = recv_call(m, t, ja, ThisArg::Tok(t), 0);
+            if made {
+                let f = m.node_l("array-like-join");
+                m.cons(
+                    recv,
+                    Cons::Load {
+                        key: Key::Named(ja),
+                        dst: f,
+                    },
+                );
+                m.cons(f, Cons::Call { call: jc });
+            }
+            let r = m.calls[jc as usize].ret;
+            let ret = m.calls[call as usize].ret;
+            m.edge(r, ret);
+        }
+        "concat" => {
+            let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
+            let v = m.node_l("array-like-spreadable");
+            m.cons(recv, Cons::Load { key: k, dst: v });
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    // I32 at rest (PR B): a builtin method touches the elements undecoded,
+    // but the fused fill of an at-rest birth (`rest_elems`) and the negative
+    // control `restelem`.
+    if !m.rest_elem_sabotage && !crate::rest_elems::fused_fill(m, call) {
+        m.rest_used(t);
+    }
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
             let owner = if matches!(members::member(Family::Object, name), Some(Mem::Fn)) {
@@ -654,6 +976,62 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
     }
 
+    // A method that may move the receiver's length (`solve::arr_len`);
+    // these never do.
+    let keeps_length = matches!(
+        name,
+        Some(
+            WK_ITERATOR
+                | "next"
+                | "return"
+                | "throw"
+                | "at"
+                | "indexOf"
+                | "lastIndexOf"
+                | "includes"
+                | "join"
+                | "toString"
+                | "toLocaleString"
+                | "slice"
+                | "concat"
+                | "map"
+                | "filter"
+                | "forEach"
+                | "every"
+                | "some"
+                | "find"
+                | "findIndex"
+                | "findLast"
+                | "findLastIndex"
+                | "reduce"
+                | "reduceRight"
+                | "flat"
+                | "flatMap"
+                | "keys"
+                | "values"
+                | "entries"
+                | "fill"
+                | "copyWithin"
+                | "reverse"
+                | "sort"
+                | "toReversed"
+                | "toSorted"
+                | "toSpliced"
+                | "with"
+        )
+    );
+    if !crate::const_arrays::method_reads_only(name) {
+        m.arr_written(t);
+    }
+    if name == Some("push") {
+        m.arr_len_append(t);
+    } else if !keeps_length {
+        if !(m.arr_front_sabotage && name == Some("shift")) {
+            m.arr_len_top(t);
+        }
+    } else if matches!(name, Some("reverse" | "copyWithin")) {
+        m.arr_len_permuted(t);
+    }
     let c = m.calls[call as usize].clone();
     let elems = m.field_any(t);
     // Every method here reads or writes the receiver's indices through its
@@ -664,6 +1042,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
     m.add_tok(recv, t);
+    if crate::rest_elems::fused_fill(m, call) {
+        // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
+        m.rest_fill_relays.push(recv);
+    }
     let this_arg = |i: usize| match c.args.get(i) {
         Some(&n) => ThisArg::Node(n),
         None => ThisArg::Undef,
@@ -733,7 +1115,28 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // into the copy never reaches the source (`args.slice()` then
         // `copy[i] = v`).
         Some("slice" | "concat" | "toReversed" | "flat" | "with" | "toSpliced") => {
-            let out = site_tmpl(m, call, "Array");
+            // `slice` keeps exactly the receiver's holes (it skips an absent
+            // index, ECMA-262 23.1.3.28 step 15.c); `toReversed`, `with` and
+            // `toSpliced` write every index, reading a hole as `undefined`.
+            // An array-like receiver may lack any index, and `concat` and
+            // `flat` keep the general birth.
+            let dense =
+                matches!(name, Some("slice" | "toReversed" | "with" | "toSpliced")) && m.is_arr(t);
+            let out = if dense {
+                site_dense_arr(m, call)
+            } else {
+                site_tmpl(m, call, "Array")
+            };
+            if dense {
+                let source_holes = m.hole(t);
+                if name == Some("slice") {
+                    let out_holes = m.hole(out);
+                    m.edge(source_holes, out_holes);
+                } else {
+                    let out_elems = m.field_any(out);
+                    m.edge(source_holes, out_elems);
+                }
+            }
             if matches!(name, Some("slice" | "concat" | "flat")) {
                 species_from(m, out, t, call, None);
             }
@@ -838,33 +1241,29 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // element is skipped.
         Some("toLocaleString") => {
             let a = m.atom("toLocaleString");
-            let nested = m.calls.len() as CallId;
-            let r = m.node_l("array-locale-result");
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Node(elems),
-                    args: c.args.iter().take(2).copied().collect(),
-                    spread: vec![],
-                    ret: r,
-                    site: nested,
-                },
-            );
-            m.cons(
-                elems,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                },
-            );
-            let why = m.reason("array join (locale element ToString)");
-            m.cons(
-                r,
-                Cons::Implicit {
-                    reason: why,
-                    proto: Protocol::ToPrimitive,
-                },
-            );
+            let (nested, made) = recv_call(m, t, a, ThisArg::Node(elems), 2);
+            if made {
+                m.cons(
+                    elems,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call: nested,
+                    },
+                );
+                let r = m.calls[nested as usize].ret;
+                let why = m.reason("array join (locale element ToString)");
+                m.cons(
+                    r,
+                    Cons::Implicit {
+                        reason: why,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+            }
+            let params = m.calls[nested as usize].args.clone();
+            for (&x, p) in c.args.iter().zip(params) {
+                m.edge(x, p);
+            }
             ret_prim(m, call, prim::STR);
         }
         Some("toString") => {
@@ -916,11 +1315,19 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
 }
 
 pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>, call: CallId) {
+    let born = members::realm_born(what);
     if let Some(name) = name {
-        if matches!(
-            members::member(members::bobj_family(what), name),
-            Some(Mem::Fn)
-        ) {
+        let callable = match born {
+            Some(b) => matches!(
+                members::realm_chain_find(b, name),
+                members::RealmFind::Own(p, _) if matches!(p.value, perry_hir::realm_manifest::RealmOwnValue::Reference(_))
+            ),
+            None => matches!(
+                members::member(members::bobj_family(what), name),
+                Some(Mem::Fn)
+            ),
+        };
+        if callable {
             m.diagnostic_builtin(call, |_| format!("{what}.prototype.{name}"));
         }
     }
@@ -930,17 +1337,41 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
     // The four collection kinds share one model of their contents; a
     // member no arm models is looked up on the kind's own chain.
     let (kind, fam) = (what, members::bobj_family(what));
+    // A Buffer's method `Buffer.prototype` does not own is its typed
+    // array chain's.
+    let buffer_owns = |m: &Model, n: &str| {
+        m.declarations
+            .named("Buffer.prototype", m)
+            .is_some_and(|h| m.declarations.property(h, n, m).is_some())
+    };
     let what = match fam {
         Family::Collection => "Collection",
         Family::Iterator => "Iterator",
+        _ if what == "Buffer" && !name.is_some_and(|n| buffer_owns(m, n)) => "TypedArray",
         _ => what,
     };
     match (what, name) {
+        // An object a realm declaration made (`fresh(P)`) has `P` as its
+        // [[Prototype]]: the method is the member of `P`'s declared chain,
+        // or absent (`realm_born_method`).
+        (_, Some(n)) if born.is_some() => {
+            let why = format!("argument of {kind}.{n}");
+            realm_born_method(m, t, born.expect("born"), n, call, &why)
+        }
+        // A method the realm declares on the prototype of an object a
+        // declaration made (`AbortController.prototype.abort`): its
+        // declaration runs.
+        (w, Some(n)) if w.ends_with(".prototype") && effects::declared_at(w, n).is_some() => {
+            let e = effects::declared_at(w, n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
         ("Iterator", _) => iterator_method(m, t, name, call),
+
         // Iterables or plain results, not iterators: no `next`/`return`/
         // `throw` (a call throws).
         (
-            "Collection" | "TypedArray" | "Promise" | "Error" | "IterResult",
+            "Collection" | "TypedArray" | "Buffer" | "Promise" | "Error" | "IterResult"
+            | "DataView" | "ArrayBuffer" | "SharedArrayBuffer",
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
@@ -954,16 +1385,28 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
+            // The key is compared by SameValueZero (identity for objects).
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
             for &a in &c.args {
                 m.edge(a, elems);
             }
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
             m.edge(elems, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
-        ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
+        ("Collection", Some("has" | "delete")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
+            ret_prim(m, call, prim::BOOL)
+        }
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
         ("Collection", Some("keys" | "values")) => {
             let it = iter_over(m, call, members::collection_iterator(kind), elems);
@@ -990,6 +1433,8 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let v = promise_value(m, t);
             let out = site_tmpl(m, call, "Promise");
             let ov = promise_value(m, out);
+            let exec = capability_executor(m, call, ov, name == Some("finally"));
+            promise_species(m, t, call, exec);
             let thrown = m.thrown;
             let (on_ok, on_err) = match name {
                 Some("then") => (c.args.first().copied(), c.args.get(1).copied()),
@@ -1079,6 +1524,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
+                    region: m.thrown,
                 },
             );
             m.cons(
@@ -1213,13 +1659,52 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 ret_tok(m, call, t);
             }
         }
+        // A `Buffer.prototype` method the runtime declares the effects of.
+        ("Buffer", Some(n)) if effects::declared_at("Buffer.prototype", n).is_some() => {
+            let e = effects::declared_at("Buffer.prototype", n).expect("declared");
+            effects::run_native(m, e, t, call);
+        }
+        ("Buffer", _) => {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
+        }
         ("TypedArray", Some(n)) if typed_array_methods::method(m, t, n, call) => {}
-        ("TypedArray", Some("transfer" | "transferToFixedLength" | "resize" | "grow")) => {
+        ("ArrayBuffer", Some("slice")) if c.spread.is_empty() => {
+            typed_array_methods::buffer_slice(m, t, "ArrayBuffer", call)
+        }
+        ("SharedArrayBuffer", Some("slice")) if c.spread.is_empty() => {
+            typed_array_methods::buffer_slice(m, t, "SharedArrayBuffer", call)
+        }
+        (
+            "TypedArray" | "ArrayBuffer" | "SharedArrayBuffer",
+            Some("transfer" | "transferToFixedLength" | "resize" | "grow"),
+        ) => {
             let r = m.reason("B2 buffer transfer/resize");
             m.mark_hard(t, Hard::B2BufferResize, r);
             ret_tok(m, call, t);
             implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
         }
+        // A method the buffer's or DataView's prototype chain declares
+        // (`getInt8`, `slice` spread, `toString`): its arguments converted,
+        // its result a primitive.
+        ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
+            if !super::loads::buffer_member_absent(m, Some(what), n) =>
+        {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
+        }
+        // A key neither the buffer's own prototype nor `Object.prototype`
+        // declares (`buffer_member_absent`; `@@iterator` among them: a
+        // buffer is not iterable): the lookup is `undefined` and the call
+        // throws a fresh TypeError. Nothing runs and nothing escapes. A key
+        // a program store may have written onto a builtin prototype was
+        // already answered by `own_method_inner` (the receiver is described:
+        // the written method runs now, or on the replay of the miss).
+        ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(_)) => {}
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
             if name == Some("toString") {
@@ -1234,7 +1719,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups",
+            | "fromEntries" | "mapGroups" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

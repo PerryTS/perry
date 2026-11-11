@@ -107,6 +107,10 @@ pub struct CompileArgs {
     #[arg(long, value_name = "PATH")]
     pub source_root_target: Option<String>,
 
+    /// Compiler-owned ancestry for recursive build-time macro expansion.
+    #[arg(long, hide = true)]
+    pub macro_import_stack: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -681,6 +685,10 @@ pub struct GeneratedAssetModule {
 
 /// Compilation context tracking all modules
 pub struct CompilationContext {
+    /// This compilation executed build-time code with external inputs.
+    pub(crate) has_build_time_execution: bool,
+    /// Active importing modules, forwarded to native macro compiler children.
+    pub(crate) macro_import_stack: Vec<PathBuf>,
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
@@ -694,6 +702,9 @@ pub struct CompilationContext {
     pub(crate) uses_os: bool,
     pub(crate) uses_messaging: bool,
     pub(crate) uses_event_target: bool,
+    /// The program may read `navigator` / `Navigator` (named, or through an
+    /// escaped global object): `Navigator.prototype` gets its getters.
+    pub(crate) uses_navigator: bool,
     pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
@@ -1425,6 +1436,8 @@ impl CompilationContext {
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            has_build_time_execution: false,
+            macro_import_stack: Vec::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
             uses_thread_codec: false,
@@ -1433,6 +1446,7 @@ impl CompilationContext {
             uses_os: false,
             uses_messaging: false,
             uses_event_target: false,
+            uses_navigator: false,
             uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),

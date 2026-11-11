@@ -124,6 +124,8 @@ pub(crate) fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -589,7 +591,7 @@ fn the_gated_arm_still_reaches_the_barrier_call() {
 /// The block an edge into `label` really enters: a body's moved stack check
 /// (`stack_guard::move_check_to_call_sites`) sits in front of a calling block
 /// as `stack_guard.*` blocks, which this follows to the one block they lead to.
-fn through_stack_check(ir: &str, label: &str) -> String {
+pub(super) fn through_stack_check(ir: &str, label: &str) -> String {
     let mut work = vec![label.to_string()];
     let mut seen = std::collections::HashSet::new();
     let mut exits = std::collections::BTreeSet::new();

@@ -33,11 +33,30 @@ ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
 
+## Worker listeners
+
+Worker `on`, `once`, `addListener`, `off` and `removeListener` require function
+listeners, including for unknown events and exited workers. The add/remove
+aliases use the same listener registry as `on`/`off`.
+
+MessagePort uses EventListener admission instead: nullish values and objects are
+accepted, while other primitives throw `TypeError` with `ERR_INVALID_ARG_TYPE`.
+This applies to its Node-style methods and Web-style add/remove methods.
+Adding a nullish listener schedules an `AddEventListenerArgumentTypeWarning`;
+removing one is a silent no-op.
+Perry does not dispatch MessagePort listener objects through `handleEvent`.
+
 ## Transferring MessagePorts
+
+Closing a port outside message dispatch discards its incoming queue. Closing it
+from its message callback lets the active dispatch drain that same FIFO before
+the `close` event. Peer messages posted during that drain are included, and
+`receiveMessageOnPort` can consume queued messages synchronously. The closing
+port cannot be transferred or send further messages.
 
 Include every `MessagePort` reachable from a message in its transfer list:
 
-```typescript
+```typescript,no-test
 const channel = new MessageChannel();
 worker.postMessage({ port: channel.port1 }, [channel.port1]);
 ```
@@ -390,3 +409,43 @@ invoked through `call`, `apply` or spread arguments. These callable values use
 the same environment, clone-marker, `receiveMessageOnPort` and
 `postMessageToThread` implementations as direct calls. Realm movement through
 `moveMessagePortToContext` remains unsupported on this callable path.
+
+### CommonJS worker entry discovery
+
+Perry includes literal file paths passed to immutable CommonJS Worker bindings
+(`const { Worker } = require("node:worker_threads")`, including renamed bindings)
+and immutable namespace bindings (`const threads = require("worker_threads")`).
+These paths are compiled as worker entries, not executed as ordinary imports.
+The constructor and its arguments still evaluate at runtime.
+
+Automatic discovery requires an unshadowed, unreassigned `require`, a literal
+relative or absolute filename, and no options or a plain file-mode options object.
+Eval workers, opaque options, spread arguments, and forwarded or mutable
+constructor bindings are not inferred by this analysis. A literal
+`new URL("./child.cjs", import.meta.url)` can explicitly include an entry when
+the runtime constructor is obtained indirectly.
+
+### Error stack accessors
+
+Message cloning reads an Error's `stack` property, including non-enumerable
+accessors. A throwing getter aborts `structuredClone` or `postMessage` with the
+original exception; no message is delivered. An undefined stack remains
+undefined in the recipient rather than exposing a newly captured stack.
+
+Uncaught worker exceptions use best-effort diagnostic delivery: a throwing stack
+getter does not replace the original error or prevent its `error` and `exit`
+events. This does not provide support for custom `Error.prepareStackTrace` hooks.
+
+Message cloning preserves an Error's own data `cause`, including non-enumerable
+and explicitly undefined values, within the existing clone graph. Shared causes,
+back-references and self-references keep their identity. The data cause is
+captured before reentrant stack accessors run. Cause accessors are
+ignored without invoking their getters.
+
+Uncaught Worker diagnostics use a separate prototype-first property snapshot.
+Cause getters run with the original Error receiver, successful undefined values
+remain own properties, and descriptor attributes survive delivery. A failing
+cause getter falls back to ordinary cloning without custom diagnostic code.
+Synchronous eval-entry exceptions observe stack decoration before this snapshot;
+errors from later callbacks do not repeat that execution phase. Diagnostic getters
+run before agent cleanup, while cooperative Worker termination remains active.

@@ -27,6 +27,25 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
     }
 }
 
+/// The value of the declared constructor that class `tm`'s built-in parent
+/// names, read where the heritage binding reads it: the global object's
+/// (`extends Error`: the realm's `Error`) or the node module's export
+/// (`import { EventEmitter } from "events"`: the module's `EventEmitter`,
+/// the value the class object's [[Prototype]] holds). `None` when the class
+/// has no built-in parent or its holder declares none under that name.
+pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
+    let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let ns = if module == "builtin" {
+        BuiltinNs::GlobalThis
+    } else {
+        let ns = node_module_ns(&module)?;
+        m.tok(TokKind::Builtin(ns));
+        ns
+    };
+    let identity = m.namespace_property(ns, &name)?.native?;
+    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+}
+
 /// `super(...)` into a native parent.
 pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
     let name = m.tmpls[tm as usize]
@@ -148,10 +167,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // its value is in the global's field.
     let stored = |t: Tok| {
         field_carries_stores
-            && matches!(
-                m.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-            )
+            && super::global_object(m, t)
             && !m.accessors.contains_key(&(t, a))
             && !m.native_given.iter().any(|&(w, _)| w == t)
     };
@@ -168,10 +184,7 @@ fn written_by(m: &Model, np: Tok, a: Atom, field_carries_stores: bool) -> (bool,
     // The HIR global sentinel (`Other`, what a bare global name is read
     // off) is the global object: a write through either token is a write
     // of the one object.
-    let is_global = matches!(
-        m.toks[np as usize],
-        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
-    );
+    let is_global = super::global_object(m, np);
     let global = match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
         _ => is_global,
@@ -247,8 +260,7 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         _ => None,
     };
     if k.is_none() && !m.shared_replay && t != TOP {
-        m.global_written_own |=
-            matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+        m.global_written_own |= super::global_object(m, t);
     }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
@@ -300,7 +312,29 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 continue;
             }
             more = true;
+            // The census attributes the write to the operation that gave the
+            // prototype (its receiver node, or its call), and keeps the given
+            // value as `proto`: a ⊤ on either side makes the write derived.
+            let (by_node, by_call) = match m.census_given_by(t, src) {
+                Some((n, c)) => (
+                    if n == NO_NODE { src } else { n },
+                    (c != u32::MAX).then_some(c),
+                ),
+                None => (src, None),
+            };
+            let saved = m
+                .diagnostic
+                .as_mut()
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(by_node)));
+            if let Some(d) = m.diagnostic.as_mut() {
+                d.cur_call = by_call;
+            }
+            m.census_settling(Some(src));
             note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            m.census_settling(None);
+            if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
+                (d.cur_call, d.cause_node) = saved;
+            }
         }
     }
     more
@@ -437,8 +471,6 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     });
                 }
                 NativeMiss::Load(dst) => {
-                    let bf = builtin_fn(m, "written key replay");
-                    m.add_tok(dst, bf);
                     m.add_top(dst, |_| {
                         "member of a builtin prototype written through ⊤".into()
                     });
@@ -471,6 +503,11 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     // Unmodeled code may also read what the program stored.
                     let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
                     m.sink_node(f, r);
+                }
+                NativeMiss::Store(src, site) => {
+                    let prev = m.store_at.take();
+                    m.store_into(np, Key::Named(a), src, site);
+                    m.store_at = prev;
                 }
                 NativeMiss::Call(origin, call) => {
                     let native = m.tok_name(np);
@@ -517,6 +554,20 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     m.add_tok(cache, c);
     m.add_tok(ext, e);
     (c, e)
+}
+
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    t
 }
 
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
@@ -623,6 +674,17 @@ pub(super) fn native_method(
             ret_tok(m, call, origin);
         }
         ("EventEmitter", "emit") => {
+            // `emit("error", er)` with no `error` listener throws `er` itself
+            // when it is an Error (`event_emitter_error.rs`); otherwise a
+            // runtime error (always in `thrown`).
+            let thrown = m.calls[call as usize].region;
+            if let Some(&er) = c.args.get(1) {
+                m.edge(er, thrown);
+            }
+            for &s in &c.spread {
+                let key = m.elem_key();
+                m.cons(s, Cons::Load { key, dst: thrown });
+            }
             let a = m.atom("#listeners");
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
@@ -635,6 +697,7 @@ pub(super) fn native_method(
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
+                    region: m.thrown,
                 },
             );
             m.cons(fl, Cons::Call { call: call2 });
@@ -653,9 +716,47 @@ pub(super) fn native_method(
             m.add_prim(fa, prim::STR);
             ret_tok(m, call, arr);
         }
+        // `Array.prototype` taken as a value (`Object.create(Array.prototype)`,
+        // a prototype given to an array): the runtime refuses to replace its
+        // image methods (DEC 250), so the method found is the intrinsic one,
+        // run with the receiver as `this` (`native_receiver`), as the call of
+        // that method's value is.
+        ("Array", n)
+            if array_image_method(n) && native_receiver(m, Family::Array, None, origin) =>
+        {
+            array_method_on(m, origin, n, call)
+        }
+        // Past `Array.prototype` taken as a value, under a key it does not own
+        // in the image and no write may have added: the lookup continues on
+        // `Object.prototype`, add-locked and image-locked (DEC 250), so what
+        // it finds there is final. Its method runs with the receiver as
+        // `this` (the models `proto_method` gives `Object.prototype`'s own
+        // methods); a key absent on both is no callee (the call throws).
+        // Parked: a later write of the key onto `Array.prototype` (or one that
+        // may reach it) replays the call as the opaque written member.
+        ("Array", n) if members::own(Family::Array, n).is_none() && !native_written(m, np, a) => {
+            m.native_missing
+                .push((np, a, NativeMiss::Call(origin, call)));
+            match members::member(Family::Object, n) {
+                Some(Mem::Fn) => {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, origin, Key::Named(a), call);
+                }
+                None => {}
+                Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
+            }
+        }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
     }
+}
+
+/// Is `name` a method `Array.prototype` owns in the image, whose read there
+/// is final (`members::locked_read`)? `constructor`, a data member and an
+/// absent key (`Array.prototype` takes named adds) are not.
+fn array_image_method(name: &str) -> bool {
+    matches!(members::member(Family::Array, name), Some(Mem::Fn))
+        && members::locked_read(Family::Array, None, name)
 }
 
 pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
@@ -664,7 +765,6 @@ pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
 pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
     match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
-        _ => false,
+        _ => super::global_object(m, np),
     }
 }

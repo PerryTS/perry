@@ -110,8 +110,8 @@ pub fn is_strictly_i32_bounded_expr(
             }
         }
         // #6339: a plain copy is i32-bounded only if the *source* is proven
-        // i32-RANGED. Answering this from `integer_locals` (merely
-        // integer-VALUED, which by design admits overflowing `Add`/`Sub`/`Mul`)
+        // i32-RANGED. Answering this from `integer_locals` (which then admitted
+        // overflowing `Add`/`Sub`/`Mul`; it now requires an exact-range proof)
         // is what let `let big2 = big1 + big1; t = big2;` truncate `t`.
         Expr::LocalGet(id) => {
             let ok = known_i32_ranged_locals.contains(id);
@@ -222,8 +222,9 @@ fn record_strict_write(
 ///
 /// The set is defined by mutual recursion: a copy `t = big2` is strict iff
 /// `big2` is i32-ranged, which is this very set. The oracle used to be
-/// `integer_locals`, which is a *different* property — integer-VALUED, and by
-/// its own doc deliberately admits overflowing `Add`/`Sub`/`Mul`. So
+/// `integer_locals`, which then was a *different* property — integer-VALUED,
+/// admitting overflowing `Add`/`Sub`/`Mul` (it now requires the exact result to
+/// be proven inside i32, `collectors/exact_i32_range.rs`). So
 ///
 /// ```text
 /// let big1 = 2000000000;

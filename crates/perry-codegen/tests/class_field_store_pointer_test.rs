@@ -85,6 +85,8 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -235,6 +237,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -263,12 +266,14 @@ fn compile_ir(module: &Module) -> String {
 /// its own.
 fn assert_store_site(ir: &str, strict: &str) {
     assert!(
-        ir.lines().any(|l| l.contains("call double @perry_store_or_put(")
-            && l.contains(&format!(", i32 {strict})"))),
+        ir.lines()
+            .any(|l| l.contains("call double @perry_store_or_put(")
+                && l.contains(&format!(", i32 {strict})"))),
         "the field store is one store-site call (Throw = {strict}):\n{ir}"
     );
     assert!(
-        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("call double @js_put_value_set("),
+        !ir.contains("call i32 @perry_probe_set(")
+            && !ir.contains("call double @js_put_value_set("),
         "the probe and [[Set]] are the store-site call's, not the site's:\n{ir}"
     );
     assert!(

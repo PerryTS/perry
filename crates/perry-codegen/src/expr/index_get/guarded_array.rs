@@ -353,7 +353,102 @@ pub(super) fn lower_guarded_array_index_get(
         require_numeric_layout,
         coerce_numeric_fallback,
         receiver_slot,
+        None,
     )
+}
+
+/// [`lower_guarded_array_index_get`] for a key the caller has NOT tested
+/// for sign (N10, `runtime_key`'s split): every hit is behind `idx <u n`,
+/// and a miss sends a negative key to `negative_exit` before the cold read.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_guarded_array_index_get_bounded(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
+    negative_exit: Option<&str>,
+) -> Result<String> {
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Signed(idx_i32),
+        block_prefix,
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+        negative_exit,
+    )
+}
+
+/// N10 (CENSUS-residual cause i): the element tier a split key enters has
+/// an unsigned bound in front of every element arm, so the split's sign
+/// test can move to the tier's miss arm. The guarded tier bounds every hit
+/// (`idx <u prefix`, `idx <u length` and `idx <u capacity`) unless the
+/// observing guard of a diagnostic build takes the key first; a proven read
+/// is bounded unless its key is proven in range
+/// (`proven_array::bounds_key`).
+pub(super) fn unsigned_bound_covers(proven: Option<super::proven_array::Proven>) -> bool {
+    crate::expr::index_key::unsigned_bound()
+        && match proven {
+            Some(fact) => super::proven_array::bounds_key(fact),
+            None => !typed_feedback_emission_enabled(),
+        }
+}
+
+/// The start of a tier's miss arm under N10: a negative key leaves for
+/// `negative_exit` (the split's runtime-key arm, which reads the original
+/// key), so only a non-negative key reaches the cold read that follows,
+/// exactly as when the split tested the sign first. Check mode
+/// (`PERRY_VERIFY_FACTS=1`) tests that claim on the cold read's key; the
+/// negative control `PERRY_FACTS_SABOTAGE=unsignedbound` drops the exit.
+pub(super) fn emit_negative_exit(ctx: &mut FnCtx<'_>, idx_i32: &str, negative_exit: Option<&str>) {
+    let Some(exit) = negative_exit else {
+        return;
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::UnsignedBound,
+        || serde_json::json!({ "bound": "unsigned" }),
+    );
+    if !super::field_base::sabotaged("unsignedbound") {
+        let cold = ctx.new_block("ubound.cold");
+        let cold_l = ctx.block_label(cold);
+        let negative = ctx.block().icmp_slt(I32, idx_i32, "0");
+        ctx.block().cond_br(&negative, exit, &cold_l);
+        ctx.current_block = cold;
+    }
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::UnsignedBound,
+        || serde_json::json!({ "bound": "unsigned" }),
+    );
+    let miss = ctx.new_block("ubound.verify_miss");
+    let next = ctx.new_block("ubound.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    crate::verify_facts::tick(ctx);
+    let nonnegative = ctx.block().icmp_sge(I32, idx_i32, "0");
+    ctx.block().cond_br(&nonnegative, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        "a negative key at an element tier's cold read",
+        crate::verify_facts::Fact::UnsignedBound,
+        &[],
+    );
+    let key = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, &key)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
 
 /// The same indexed read with a compiler proof of a nonnegative u32 index.
@@ -376,6 +471,7 @@ pub(super) fn lower_unsigned_array_index_get(
         false,
         false,
         receiver_slot,
+        None,
     )
 }
 
@@ -384,6 +480,7 @@ enum GuardedArrayIndex<'a> {
     Unsigned { i32_value: &'a str, number: &'a str },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_guarded_array_index_get_with_index(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -392,6 +489,7 @@ fn lower_guarded_array_index_get_with_index(
     require_numeric_layout: bool,
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
+    negative_exit: Option<&str>,
 ) -> Result<String> {
     let canonical = matches!(index, GuardedArrayIndex::Signed(_));
     let (idx_i32, unsigned_index) = match index {
@@ -577,6 +675,7 @@ fn lower_guarded_array_index_get_with_index(
     ];
     ctx.current_block = fallback_idx;
     let cold_mode = ctx.block().phi(I64, &cold_inputs);
+    emit_negative_exit(ctx, idx_i32, negative_exit);
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     let idx_box = unsigned_index
         .map(str::to_owned)

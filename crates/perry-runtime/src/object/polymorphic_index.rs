@@ -96,7 +96,7 @@ fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
 
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
     let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         let index = crate::value::JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index as u32);
     }
@@ -109,7 +109,7 @@ fn numeric_key_u32_index(value: f64) -> Option<u32> {
 
 fn numeric_key_i32_index(value: f64) -> Option<i32> {
     let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         let index = crate::value::JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index);
     }
@@ -174,14 +174,6 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
                     f64::from_bits(obj_handle as u64),
                     idx,
                 );
-            }
-            // A `C.prototype` ref word; an INT32 number has no elements.
-            0x7FFE => {
-                if crate::object::class_prototype_ref_id(f64::from_bits(obj_handle as u64)).is_some()
-                {
-                    return crate::value::js_dyn_index_get(f64::from_bits(obj_handle as u64), idx);
-                }
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
             }
             _ => return f64::from_bits(crate::value::TAG_UNDEFINED),
         }
@@ -254,6 +246,15 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             // so the MockBuffer no-op swap never happened and the packet-sizing
             // pass wrote into a zero-length Buffer (RangeError
             // [ERR_OUT_OF_RANGE] at the MySQL handshake).
+            // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView reads
+            // own, then its [[Prototype]] chain, never the Buffer table.
+            if crate::buffer::is_non_indexed_buffer_view(raw as usize) {
+                if let Some(name) = buffer_key_name(idx) {
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let v = crate::object::view_get(raw as *const crate::object::ObjectHeader, key);
+                    return f64::from_bits(v.bits());
+                }
+            }
             if let Some(name) = buffer_key_name(idx) {
                 if let Some(v) = crate::buffer::buffer_read_own_prop(raw as usize, &name) {
                     return v;
@@ -595,3 +596,7 @@ fn buffer_key_name(idx: f64) -> Option<String> {
         Some(String::from_utf8_lossy(bytes).into_owned())
     }
 }
+
+#[cfg(test)]
+#[path = "polymorphic_index_int32_exact_tests.rs"]
+mod int32_exact_tests;
