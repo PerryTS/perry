@@ -662,6 +662,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
                 {
                     out.int32_inputs.insert(*id);
+                    if let Some(range) = b.int_range {
+                        out.int32_ranges.insert(*id, range);
+                    }
                     if b.zero_tol {
                         out.zero_tolerant_locals.insert(*id);
                     }

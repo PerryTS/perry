@@ -135,6 +135,7 @@ def main():
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
         ("signed-index-negative", "signature-range", "signature"),
+        ("local-range-negative", "localrange", "int32 input"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),

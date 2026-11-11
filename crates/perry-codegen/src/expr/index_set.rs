@@ -320,7 +320,13 @@ fn lower_array_index_set_via_runtime_key(
         &[object],
         &[index, value],
         |ctx| {
-            let idx_double = lower_expr(ctx, index)?;
+            // A key the range proofs bound to int32 is lowered as that i32
+            // (`int32_key`): the guarded store takes it as a native key.
+            let idx_double = if super::int32_key::proven(ctx, index) {
+                super::int32_key::lower(ctx, index)?
+            } else {
+                lower_expr(ctx, index)?
+            };
             let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
             let (val_double, val_bits) = lower_value_for_dynamic_index_set(
                 ctx,

@@ -385,6 +385,17 @@ fn signed_index_switch_is_a_cache_input() {
     );
 }
 
+/// The local-range switch decides whether codegen's range proofs read the
+/// facts' interval of an int32 local, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn local_ranges_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_LOCAL_RANGES"),
+        "PERRY_FACTS_LOCAL_RANGES must key the compile caches"
+    );
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]

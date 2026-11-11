@@ -335,6 +335,11 @@ pub struct ElisionFacts {
     pub local_reps: std::collections::BTreeMap<u32, FactsRep>,
     /// The `int32_inputs` whose interval is non-negative.
     pub nonneg_int32_inputs: std::collections::BTreeSet<u32>,
+    /// Each of the `int32_inputs` with its interval (wpfacts
+    /// `BindingFacts::int_range`): every value the binding ever holds lies
+    /// in it. Codegen's range proofs read it for a proven int32 `let`
+    /// (`expr::range_facts::facts_local_range`).
+    pub int32_ranges: std::collections::BTreeMap<u32, (i64, i64)>,
     /// Local id → it holds only strings and ordinary Arrays: `x.length` is a
     /// Number.
     pub length_number_inputs: std::collections::BTreeSet<u32>,
