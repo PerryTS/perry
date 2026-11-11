@@ -232,6 +232,17 @@ pub(crate) fn collect(
     }
     let mut cands: Vec<Cand> = Vec::new();
     let mut info: FxHashMap<Tok, TokInfo> = FxHashMap::default();
+    // A local of a summarized function holds, in each instance of the
+    // summary, that instance's values (an Array a literal of the body
+    // bears per instance is its own token, and only the instance's copy of
+    // the local holds it): the local's tokens are those of its node and of
+    // every instance copy.
+    let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for inst in 0..m.sum.insts.len() as u32 {
+        m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
+    }
     for (mi, mb) in bindings.iter().enumerate().take(g.mods.len()) {
         for (at, (id, b)) in mb.locals.iter().enumerate() {
             if !matches!(b.rep, Rep::Arr(_)) {
@@ -244,7 +255,14 @@ pub(crate) fn collect(
             if f == NO_FN {
                 continue;
             }
-            let toks = m.nodes[n as usize].pts.to_sorted();
+            let mut toks = m.nodes[n as usize].pts.to_sorted();
+            for &c in copies.get(&n).into_iter().flatten() {
+                if let Some(node) = m.nodes.get(c as usize) {
+                    node.pts.sorted_into(&mut toks);
+                }
+            }
+            toks.sort_unstable();
+            toks.dedup();
             let early = if toks.is_empty() {
                 Some("no-array")
             } else if !plain(m, &bodies, f) {

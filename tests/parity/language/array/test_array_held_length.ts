@@ -32,7 +32,7 @@ function fill(out: number[], n: number): void {
 
 function gen2(n: number): number[] {
   const out: number[] = [];
-  fill(out, n);
+  for (let half = 0; half < 2; half++) fill(out, n >> 1);
   return out;
 }
 
@@ -71,7 +71,7 @@ function p3(n: number): number {
 // P4: a parameter is walked; a different Array is handed down and grows.
 function p4(xs: number[]): number {
   let s = 0;
-  const other: number[] = [5, 6, 7];
+  const other = mk(3);
   for (const v of xs) {
     s += v + other.length;
     fill(other, 1);
