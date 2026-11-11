@@ -479,3 +479,71 @@ fn property_list_enforces_the_nesting_limit_in_compact_output() {
         );
     }
 }
+
+thread_local! {
+    static TO_JSON_RESULT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+extern "C" fn recorded_to_json(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    f64::from_bits(TO_JSON_RESULT.with(|value| value.get()))
+}
+
+unsafe fn with_to_json(value: JSValue) -> JSValue {
+    let callback = crate::closure::js_closure_alloc(crate::fn_info!(recorded_to_json, 0), 0);
+    crate::object::js_object_set_field_by_name(
+        value.as_pointer::<crate::ObjectHeader>().cast_mut(),
+        key("toJSON"),
+        crate::value::js_nanbox_pointer(callback as i64),
+    );
+    value
+}
+
+#[test]
+fn property_list_applies_to_json_before_filtering_and_serializing() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let keep = parse(r#"{"b":1}"#);
+        let holder = parse(r#"{"a":0}"#);
+        crate::object::js_object_set_field_by_name(
+            holder.as_pointer::<crate::ObjectHeader>().cast_mut(),
+            key("a"),
+            f64::from_bits(with_to_json(parse(r#"{"b":1}"#)).bits()),
+        );
+        let list = parse(r#"[0]"#);
+        *(crate::array::array_elements_ptr(list.as_pointer::<crate::ArrayHeader>()) as *mut f64) =
+            f64::from_bits(with_to_json(parse(r#"{"b":1}"#)).bits());
+
+        // toJSON replaces the root, a member and an element before the
+        // whitelist filters anything, and its key parameter is irrelevant here.
+        TO_JSON_RESULT.with(|value| value.set(JSValue::string_ptr(key("r")).bits()));
+        assert_eq!(
+            stringify(
+                with_to_json(keep),
+                r#"["b"]"#,
+                f64::from_bits(TAG_UNDEFINED)
+            ),
+            r#""r""#,
+        );
+        assert_eq!(
+            stringify(holder, r#"["a"]"#, f64::from_bits(TAG_UNDEFINED)),
+            r#"{"a":"r"}"#,
+        );
+        assert_eq!(
+            stringify(list, r#"["b"]"#, f64::from_bits(TAG_UNDEFINED)),
+            r#"["r"]"#,
+        );
+
+        // A toJSON that returns undefined omits the member and nulls the element.
+        TO_JSON_RESULT.with(|value| value.set(TAG_UNDEFINED as u64));
+        assert_eq!(
+            stringify(holder, r#"["a"]"#, f64::from_bits(TAG_UNDEFINED)),
+            r#"{}"#,
+        );
+        assert_eq!(
+            stringify(list, r#"["b"]"#, f64::from_bits(TAG_UNDEFINED)),
+            r#"[null]"#,
+        );
+    }
+}

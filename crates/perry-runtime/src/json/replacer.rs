@@ -1503,8 +1503,17 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // (`JSON.stringify([1, {a:2}], [])` → "[1,{}]"). The shared dispatcher
         // routes objects/arrays into the whitelist-aware walks and everything
         // else into the plain serializer.
+        //
+        // SerializeJSONProperty step 2 at the root: `toJSON` runs before the
+        // whitelist walk sees the value, and whatever it returns stays alive
+        // across the walk (it can be a freshly allocated object or string).
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let empty_str = js_string_from_bytes(b"".as_ptr(), 0);
+        let empty_key_root = root_scope.root_nanbox_f64(nanbox_string_f64(empty_str));
+        let value_after_to_json =
+            root_scope.root_nanbox_f64(apply_to_json_keyed(value, empty_key_root.get_nanbox_f64()));
         stringify_value_with_array_replacer(
-            value,
+            value_after_to_json.get_nanbox_f64(),
             allowed_keys,
             &mut buf,
             &indent_str,

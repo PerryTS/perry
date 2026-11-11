@@ -25,6 +25,11 @@ current header, so a wrapper's `toString` or a nested serialization that grows
 an array cannot leave a stale elements pointer behind. Runtime-private storage
 remains hidden, and the whitelist does not filter array indices.
 
+A value's `toJSON` runs before the whitelist decides anything: on the root
+value, on each listed member, and on each array element with its index as the
+key. A `toJSON` that returns `undefined` therefore omits the member and nulls
+the element.
+
 Symbol-valued members are omitted like `undefined` and function values. Compact
 output advances nesting depth per member, so the 1000-level limit still throws
 `RangeError` instead of exhausting the native stack.

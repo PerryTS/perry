@@ -55,6 +55,14 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
             })
         });
         let field_val = member_scope.root_nanbox_f64(f64::from_bits(field_val.bits()));
+        let field_key =
+            key.with_const_ptr(|key: *const StringHeader| nanbox_string_f64(key.cast_mut()));
+        // SerializeJSONProperty step 2: `toJSON` runs on the property value --
+        // before it is filtered out or serialized -- and receives the key.
+        let field_val = member_scope.root_nanbox_f64(super::apply_to_json_keyed(
+            field_val.get_nanbox_f64(),
+            field_key,
+        ));
         let field_bits = field_val.get_nanbox_f64().to_bits();
         if field_bits == TAG_UNDEFINED
             || is_closure_value(field_bits)
@@ -222,12 +230,25 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
             let arr = crate::array::clean_arr_ptr(arr);
             *(crate::array::array_elements_ptr(arr) as *const f64).add(i as usize)
         });
+        // TAG_HOLE: a sparse hole surfaces to `toJSON` as `undefined`.
+        let elem = if elem.to_bits() == crate::value::TAG_HOLE {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            elem
+        };
+        // Root before the index key allocates, then run `toJSON` on the element
+        // with its stringified index, as the function-replacer walk does.
+        let elem = scope.root_nanbox_f64(elem);
+        let index = i.to_string();
+        let index_ptr = js_string_from_bytes(index.as_ptr(), index.len() as u32);
+        let elem = scope.root_nanbox_f64(super::apply_to_json_keyed(
+            elem.get_nanbox_f64(),
+            nanbox_string_f64(index_ptr),
+        ));
+        let elem = elem.get_nanbox_f64();
         let elem_bits = elem.to_bits();
-        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
-        if elem_bits == TAG_UNDEFINED
-            || elem_bits == crate::value::TAG_HOLE
-            || is_closure_value(elem_bits)
-        {
+        // Undefined, function and hole elements serialize as null.
+        if elem_bits == TAG_UNDEFINED || is_closure_value(elem_bits) {
             buf.push_str("null");
         } else {
             stringify_value_with_array_replacer(
