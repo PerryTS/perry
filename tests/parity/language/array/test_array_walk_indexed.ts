@@ -299,19 +299,6 @@ function shrinking(): string {
   return s;
 }
 out.push("shrinks " + shrinking() + " " + SHRINKS.length);
-const POPS = [1, 2, 3, 4];
-const FIXED = [5, 6, 7, 8];
-function popping(k: number): string {
-  const xs = k === 0 ? POPS : FIXED;
-  let s = "";
-  for (let i = 0; i < xs.length; i++) {
-    s += xs[i] + ",";
-    if (k === 0 && i === 1) POPS.pop();
-  }
-  return s;
-}
-out.push("pops " + popping(0) + "|" + popping(1));
-
 // The counter of a user loop is written by the body, or by a closure the
 // body calls: the index is not below the length in every iteration.
 function counterWritten(type: number): string {

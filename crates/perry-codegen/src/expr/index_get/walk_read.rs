@@ -28,8 +28,9 @@
 //! writer either).
 //!
 //! `PERRY_FACTS_WALK_INDEXED=0` turns it off: the loop keeps the guard and
-//! the read it had. Negative control `PERRY_FACTS_SABOTAGE=walkdense`: an
-//! immutable Array of fixed length counts as dense. Check mode
+//! the read it had. Negative control `PERRY_FACTS_SABOTAGE=walkfixed`: any
+//! local the facts give an Array of Numbers counts as an indexed receiver
+//! (immutable, dense, of fixed length). Check mode
 //! (`PERRY_VERIFY_FACTS=1`) tests each read (`array_rep::witness_read`):
 //! the key is below the length the Array has now, the slot is no hole and
 //! holds a Number of `elem`. `PERRY_ARRAY_BASE_DIAG=1` prints the verdict
@@ -73,7 +74,9 @@ pub(crate) fn verdict(ctx: &FnCtx<'_>, id: u32) -> std::result::Result<FactsArrR
     let Some(FactsRep::Arr(rep)) = crate::codegen::facts_rep::local(ctx, id) else {
         return Err("no-array-rep");
     };
-    if !rep.im || !rep.fixed || !ctx.wpfacts.immutable_arrays.contains(&id) {
+    // The negative control (module docs).
+    let forged = super::field_base::sabotaged("walkfixed");
+    if !forged && (!rep.im || !rep.fixed || !ctx.wpfacts.immutable_arrays.contains(&id)) {
         return Err("not-immutable");
     }
     if rep.at_rest {
@@ -82,11 +85,19 @@ pub(crate) fn verdict(ctx: &FnCtx<'_>, id: u32) -> std::result::Result<FactsArrR
     if rep.elem == FactsElemRep::Boxed {
         return Err("boxed-element");
     }
-    let dense = rep.dense || super::field_base::sabotaged("walkdense");
-    if !dense || rep.floor == 0 {
+    if forged {
+        return Ok(FactsArrRep {
+            floor: rep.floor.max(1),
+            dense: true,
+            fixed: true,
+            im: true,
+            ..rep
+        });
+    }
+    if !rep.dense || rep.floor == 0 {
         return Err("not-dense");
     }
-    Ok(FactsArrRep { dense, ..rep })
+    Ok(rep)
 }
 
 /// Local `id` is an indexed receiver (module docs): its representation.
