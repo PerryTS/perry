@@ -1498,6 +1498,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                         false,
                                         repair_slot.as_deref(),
                                         proven,
+                                        // The key is already its i32 here
+                                        // (`int32_key::lower`): the split
+                                        // takes it as a native key, so no
+                                        // key-sign fact applies to it.
+                                        None,
                                     )
                                 })
                             },

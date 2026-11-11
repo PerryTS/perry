@@ -1,0 +1,1 @@
+codegen: the int32-key element read passes the split helper its key-fact argument (`None`: the key is already an i32), so `perry-codegen` compiles again after key signs (#14458) met int32 local ranges (#14453).
