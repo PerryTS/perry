@@ -325,11 +325,7 @@ struct Refs {
 }
 
 impl Refs {
-    fn of(
-        hir: &Module,
-        cands: &HashMap<LocalId, FactsRecRep>,
-        params: &HashSet<LocalId>,
-    ) -> Refs {
+    fn of(hir: &Module, cands: &HashMap<LocalId, FactsRecRep>, params: &HashSet<LocalId>) -> Refs {
         let mut r = Refs {
             refs: HashMap::new(),
             lets: HashMap::new(),
@@ -1119,10 +1115,7 @@ impl Rewriter<'_> {
     fn assign(&mut self, u: LocalId, mut e: Expr) -> Vec<Expr> {
         let rec = self.recs[&u].clone();
         // VR-3b: a typed call that returns this record.
-        if self
-            .record_ret_call(&e)
-            .is_some_and(|r| r.tmpl == rec.tmpl)
-        {
+        if self.record_ret_call(&e).is_some_and(|r| r.tmpl == rec.tmpl) {
             return self.call_into(u, e);
         }
         // A literal birth: its values in their evaluation order. When one
@@ -1348,9 +1341,9 @@ impl Rewriter<'_> {
             // A field of a typed call's record result: no copy.
             Expr::PropertyGet {
                 object, property, ..
-            } if self.record_ret_call(object).is_some_and(|r| {
-                self.shapes[&r.tmpl].keys.iter().any(|k| k == property)
-            }) =>
+            } if self
+                .record_ret_call(object)
+                .is_some_and(|r| self.shapes[&r.tmpl].keys.iter().any(|k| k == property)) =>
             {
                 let r = self.record_ret_call(object).expect("a record result");
                 let t = self.temp(r.tmpl);

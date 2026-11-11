@@ -431,11 +431,10 @@ pub(crate) fn select_methods(
                 continue;
             }
             // DESIGN-p4l4 VR-3b: the lane signature of a record plan.
-            let (lane_sig, record) =
-                match super::record_sig::expand(sig, m, &facts, &defaults) {
-                    Some((lanes, record)) => (lanes, Some(record)),
-                    None => (sig.clone(), None),
-                };
+            let (lane_sig, record) = match super::record_sig::expand(sig, m, &facts, &defaults) {
+                Some((lanes, record)) => (lanes, Some(record)),
+                None => (sig.clone(), None),
+            };
             let Some(body) = super::record_sig::sig_body(m, &defaults, record.as_ref()) else {
                 continue;
             };

@@ -201,7 +201,9 @@ pub(crate) fn expand(
 /// the body).
 pub(crate) fn trace_boxed(name: &str, why: &str) {
     if std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
-        eprintln!("perry: value records: {name} gets no record $sig ({why}): its records cross boxed");
+        eprintln!(
+            "perry: value records: {name} gets no record $sig ({why}): its records cross boxed"
+        );
     }
 }
 
@@ -500,9 +502,10 @@ pub(crate) fn try_lower_call(
     };
     let facts = ctx.wpfacts.clone();
     let offset = site.offset;
-    crate::verify_facts::consumed(crate::verify_facts::Fact::Signature, || {
-        serde_json::json!({ "call": offset, "record": true })
-    });
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::Signature,
+        || serde_json::json!({ "call": offset, "record": true }),
+    );
     crate::facts_consumed::used();
     // The receiver and the plain arguments are rooted values; a record
     // slot's lanes are immediates, read where the argument is evaluated.

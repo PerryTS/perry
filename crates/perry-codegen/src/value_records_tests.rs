@@ -232,10 +232,20 @@ fn with_signature(
         FactsSignature {
             params: params
                 .iter()
-                .map(|p| if p.is_some() { FactsRep::Boxed } else { FactsRep::F64 })
+                .map(|p| {
+                    if p.is_some() {
+                        FactsRep::Boxed
+                    } else {
+                        FactsRep::F64
+                    }
+                })
                 .collect(),
             ranges: vec![None; params.len()],
-            ret: if ret.is_some() { FactsRep::Boxed } else { FactsRep::F64 },
+            ret: if ret.is_some() {
+                FactsRep::Boxed
+            } else {
+                FactsRep::F64
+            },
             this_class: None,
             zero_ok: false,
             record_params: params.iter().map(|p| p.map(rec)).collect(),
@@ -334,13 +344,7 @@ fn a_record_result_is_an_aggregate() {
 fn an_optional_record_parameter_has_a_presence_lane() {
     let src = "function use(r: { a: number; b: number } | undefined): number { return r === undefined ? 0 : r.a + r.b; }\nfunction f(n: number): number { const u = n > 1 ? { a: n, b: 2 } : undefined; return use(u) + use(undefined); }\nconsole.log(f(1), f(2));\n";
     let m = lower(src);
-    let on = with_signature(
-        &m,
-        facts(&m, &[("u", true)]),
-        "use",
-        &[Some(true)],
-        None,
-    );
+    let on = with_signature(&m, facts(&m, &[("u", true)]), "use", &[Some(true)], None);
     let (_, c, abi) = rewrite(&m, &on).expect("rewritten");
     assert_eq!((c.params, c.passed, c.materialized), (1, 1, 0), "{c:?}");
     let (fid, _) = function(&m, "use");
@@ -359,7 +363,13 @@ fn an_optional_record_parameter_has_a_presence_lane() {
 fn a_self_recursive_record_function_has_a_record_sig() {
     let src = "function use(r: { a: number; b: number }, d: number): number { if (d > 0) return use(r, d - 1); return r.a + r.b; }\nfunction mk(n: number, d: number): { a: number; b: number } { if (d > 0) return mk(n + 1, d - 1); return { a: n, b: 2 }; }\nfunction f(n: number): number { const u = mk(n, 1); return use(u, 2); }\nconsole.log(f(1), f(2));\n";
     let m = lower(src);
-    let on = with_signature(&m, facts(&m, &[("u", false)]), "use", &[Some(false), None], None);
+    let on = with_signature(
+        &m,
+        facts(&m, &[("u", false)]),
+        "use",
+        &[Some(false), None],
+        None,
+    );
     let on = with_signature(&m, on, "mk", &[None, None], Some(false));
     let (_, c, _) = rewrite(&m, &on).expect("rewritten");
     assert_eq!((c.params, c.returns, c.materialized), (1, 1, 0), "{c:?}");

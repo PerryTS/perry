@@ -253,7 +253,10 @@ pub(crate) fn collect(
     for (key, (t, recs)) in &targets {
         let Some(sig) = sigs.get(t) else { continue };
         if sig.has_record()
-            && (key.0 != t.0 || !recs.iter().all(|r| admits(g, &all, sig, &defaults[t], &r.args)))
+            && (key.0 != t.0
+                || !recs
+                    .iter()
+                    .all(|r| admits(g, &all, sig, &defaults[t], &r.args)))
         {
             demoted.insert(*t);
         }

@@ -130,9 +130,7 @@ fn a_record_crosses_a_typed_call_in_a_record_slot() {
         "{r}"
     );
     // Negative control: a Boxed helper parameter is a copy, not a slot.
-    let src = format!(
-        "{U}function show(x: unknown) {{ console.log(x); }}\nshow(u);\nshow(5);\n"
-    );
+    let src = format!("{U}function show(x: unknown) {{ console.log(x); }}\nshow(u);\nshow(5);\n");
     assert!(verdict(&src, &["a", "b"], on()).is_ok());
     assert_eq!(record_slots(&src, on()).0, vec![]);
 }
@@ -171,7 +169,9 @@ fn identity_rejects() {
         "R4Identity(collection-key)"
     );
     assert_eq!(
-        rejected(&format!("{FR}const k = {{}};\nfr.register(k, 1, u);\nconsole.log(u.a);\n")),
+        rejected(&format!(
+            "{FR}const k = {{}};\nfr.register(k, 1, u);\nconsole.log(u.a);\n"
+        )),
         "R4Identity(collection-key)"
     );
     assert_eq!(

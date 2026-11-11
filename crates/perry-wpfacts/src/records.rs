@@ -40,7 +40,6 @@ pub const RECORD_MAX_WORDS: u16 = 16;
 /// until VR-4b: every operation on a record array is `R6Op` before then.
 pub const RECORD_ARRAY_INTRINSICS: &[&str] = &[];
 
-
 /// A record lane's representation in SSA (§1.2); in memory every lane is one
 /// valid JSValue word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1566,8 +1565,12 @@ impl<'a, 'g> Scan<'a, 'g> {
             Some(i) => format!("arg({i})"),
             None => "result".to_string(),
         };
-        let untyped =
-            |why: &str| Some(RecordReject::R5UntypedCall(format!("{} {slot}: {why}", self.site(c))));
+        let untyped = |why: &str| {
+            Some(RecordReject::R5UntypedCall(format!(
+                "{} {slot}: {why}",
+                self.site(c)
+            )))
+        };
         if !m.record_signatures {
             return untyped("record signatures are off");
         }
