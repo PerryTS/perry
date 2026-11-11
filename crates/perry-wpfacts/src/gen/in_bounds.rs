@@ -402,10 +402,39 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// After the store `e` (`object[index] = v` into `recv` under `key`) is
+    /// generated at `site`: the site is in bounds when the text proves it
+    /// (`in_bounds_store`). The solve reads the verdict
+    /// (`Model::inbounds_sites`).
+    pub(crate) fn in_bounds_site(
+        &mut self,
+        fx: &Fx,
+        e: &Expr,
+        recv: NodeId,
+        key: Key,
+        site: SiteId,
+    ) {
+        let Expr::IndexSet {
+            object,
+            index,
+            element_offset,
+            ..
+        } = e
+        else {
+            return;
+        };
+        if matches!(key, Key::Any(_)) && self.in_bounds_store(fx, object, index) {
+            self.m.inbounds_sites.insert(site);
+            self.in_bounds
+                .proven
+                .push((fx.module, *element_offset, recv));
+        }
+    }
+
     /// Whether the store `a[key] = v` being walked is in bounds by the
     /// text: `key <= i < a.length` held at a guard of the walked code, and
     /// `a` and `i` hold the values it tested (module docs).
-    pub(crate) fn in_bounds_store(&self, fx: &Fx, object: &Expr, key: &Expr) -> bool {
+    fn in_bounds_store(&self, fx: &Fx, object: &Expr, key: &Expr) -> bool {
         let Some(body) = &self.in_bounds.body else {
             return false;
         };
