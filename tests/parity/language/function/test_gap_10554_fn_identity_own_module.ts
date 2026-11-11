@@ -10,7 +10,7 @@ import useDecl, {
   bothSame,
   makeSet,
 } from "../../../fixtures/programs/_helpers/fn_identity_10554/lib.ts";
-import * as ns from "./_helpers/fn_identity_10554/lib.ts";
+import * as ns from "../../../fixtures/programs/_helpers/fn_identity_10554/lib.ts";
 import {
   fnDecl as reFnDecl,
   isSameDecl as reIsSameDecl,
