@@ -41,8 +41,26 @@
 //! spread or native touches its Arrays. Check mode (`PERRY_VERIFY_FACTS=1`)
 //! asserts it in the JSON array writer (`generic_reader`).
 //!
-//! The field half (`slot_get`/`slot_set`, PR C) and VR-5's record element
-//! accessor take the same entry shape (`len`, `get(i) -> JSValue bits`).
+//! **Fields (PR C).** A shape's `11` lane outside its ConstFn mask is an I32
+//! lane (`object::field_rep::i32_lane_slots`): every object carrying the
+//! shape holds an I32 word in that slot. The lane is an identity fact of the
+//! shape, fixed when the class layout is reached (its birth rep for a class
+//! born with its keys, [`js_object_rest_lanes`] after the field definitions
+//! of a class born keyless). [`slot_get`] / [`slot_set`] are the field
+//! accessor: the generic read funnel (`object_field_at_with_live`) decodes
+//! through [`slot_get`], the store funnel (`field_rep_store::checked_slot_bits`)
+//! encodes, the runtime's unknown-receiver probe declines every record with
+//! an I32 lane (no shape/slot memo of such a slot is ever made), and a
+//! codegen site that names a key some class stores at rest and that wpfacts
+//! does not prove reads and writes through [`js_object_rest_get`] /
+//! [`js_object_rest_set`]. Proven sites load the slot's low half as an i32
+//! and store `INT32_TAG | zext v`. wpfacts admits a class only when no other
+//! generic reader (JSON, keys/values, spread, inspect, a dynamic key) can
+//! reach its instances (`perry-wpfacts` `rest_fields`); check mode asserts it
+//! in the JSON object writer ([`generic_object_reader`]).
+//!
+//! VR-5's record element accessor takes the same entry shape (`len`,
+//! `get(i) -> JSValue bits`).
 
 use crate::array::ArrayHeader;
 use crate::value::{INT32_TAG, TAG_MASK};
@@ -118,6 +136,73 @@ pub(crate) unsafe fn elem_set(arr: *mut ArrayHeader, i: u32, v: u64) -> bool {
     }
 }
 
+/// Is `w` an I32 word (the `0x7FFE_0000` high half: an INT32 tag with bit 32
+/// clear, which no class reference word has)?
+#[inline(always)]
+pub(crate) fn is_i32_word(w: u64) -> bool {
+    w >> 32 == INT32_TAG >> 32
+}
+
+/// The canonical double bits of the I32 word `w`; any other word unchanged.
+#[inline]
+pub(crate) fn decode_word(w: u64) -> u64 {
+    if is_i32_word(w) {
+        f64::from(w as u32 as i32).to_bits()
+    } else {
+        w
+    }
+}
+
+/// The JSValue bits of `obj`'s inline slot `slot` whose word is `w`: an I32
+/// lane's word as its canonical double, any other word as it is. The band
+/// test comes first, so a word of any other slot costs one compare.
+///
+/// # Safety
+/// `obj` is a live ordinary object and `w` the word of its slot `slot`.
+#[inline(always)]
+pub(crate) unsafe fn slot_word_value(
+    obj: *const crate::object::ObjectHeader,
+    slot: u32,
+    w: u64,
+) -> u64 {
+    if !is_i32_word(w) {
+        return w;
+    }
+    slot_word_value_cold(obj, slot, w)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn slot_word_value_cold(obj: *const crate::object::ObjectHeader, slot: u32, w: u64) -> u64 {
+    let id = crate::object::shapes::object_shape_stamp(obj);
+    match crate::object::shapes::shape_record_of_receiver(id.0) {
+        Some(r) if r.lane_is_i32(slot) => decode_word(w),
+        _ => w,
+    }
+}
+
+/// The JSValue bits of `obj`'s inline slot `slot` (fields, PR C).
+///
+/// # Safety
+/// `obj` is a live ordinary object and `slot` below its live inline bound.
+#[allow(dead_code)] // the accessor entry shape VR-5 shares (module docs)
+pub(crate) unsafe fn slot_get(obj: *const crate::object::ObjectHeader, slot: u32) -> u64 {
+    let fields =
+        (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
+    slot_word_value(obj, slot, *fields.add(slot as usize))
+}
+
+/// Store the JSValue `v` into `obj`'s inline slot `slot`, encoded for its
+/// lane: the checked store funnel (`slot_store`), which encodes an int32
+/// Number for an I32 lane and generalizes the slot for any other value.
+///
+/// # Safety
+/// `obj` is a live ordinary object and `slot` below its live inline bound.
+#[allow(dead_code)] // the accessor entry shape VR-5 shares (module docs)
+pub(crate) unsafe fn slot_set(obj: *mut crate::object::ObjectHeader, slot: u32, v: u64) {
+    crate::object::slot_store::store_object_field_slot(obj, slot as usize, v);
+}
+
 unsafe fn decode(arr: *const ArrayHeader, w: u64) -> u64 {
     if w & TAG_MASK == INT32_TAG && is_i32_layout(arr) {
         f64::from(w as u32 as i32).to_bits()
@@ -128,7 +213,7 @@ unsafe fn decode(arr: *const ArrayHeader, w: u64) -> u64 {
 
 /// The I32 word of an int32 Number (a canonical double, or an INT32-boxed
 /// word), never `-0`.
-fn encode(v: u64) -> Option<u64> {
+pub(crate) fn encode(v: u64) -> Option<u64> {
     if v & TAG_MASK == INT32_TAG {
         return Some(v);
     }
@@ -137,8 +222,19 @@ fn encode(v: u64) -> Option<u64> {
     (f64::from(i) == d && v != (-0.0f64).to_bits()).then(|| INT32_TAG | u64::from(i as u32))
 }
 
+/// The I32 word a field's I32 lane stores for the JS value `v` (PR C): an
+/// int32 Number, and `-0` as the word of 0. A field is I32 while it may hold
+/// `-0` only when no use of it can observe the sign (RFC §10.3, −0
+/// tolerance), so the word is exact for every observable value.
+pub(crate) fn encode_lane(v: u64) -> Option<u64> {
+    if v == (-0.0f64).to_bits() {
+        return Some(INT32_TAG);
+    }
+    encode(v)
+}
+
 /// A proof the runtime found false: check mode reports it (exit 86).
-fn false_proof(v: u64) {
+pub(crate) fn false_proof(v: u64) {
     if VERIFY.load(std::sync::atomic::Ordering::Relaxed) {
         crate::wpfacts_check::perry_wpfacts_check_miss(f64::from_bits(v), 0);
     }
@@ -293,6 +389,68 @@ unsafe fn extend(arr: *mut ArrayHeader, i: u32, v: u64) -> bool {
     true
 }
 
+/// The receiver object of a NaN-boxed value, if it is a heap object.
+fn object_of(v: f64) -> Option<*mut crate::object::ObjectHeader> {
+    let bits = v.to_bits();
+    if bits >> 48 != crate::value::POINTER_TAG >> 48 {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    Some(addr as *mut crate::object::ObjectHeader)
+}
+
+/// The read of an unproven site whose key some class stores at rest (PR C):
+/// the complete read (no site memo), with an I32 word decoded to its
+/// canonical double.
+#[no_mangle]
+pub extern "C" fn js_object_rest_get(obj: f64, key: f64) -> f64 {
+    let key_ptr = (key.to_bits() & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    let v =
+        crate::object::field_get_set::js_object_get_field_value(obj.to_bits() as i64, key_ptr, 0);
+    f64::from_bits(decode_word(v.to_bits()))
+}
+
+/// The store of an unproven site whose key some class stores at rest
+/// (PR C): the complete `PutValue` with the receiver, whose own-slot store
+/// goes through the checked store funnel (encoded for an I32 lane). Returns
+/// `value`.
+#[no_mangle]
+pub extern "C" fn js_object_rest_set(obj: f64, key: f64, value: f64, strict: i32) -> f64 {
+    crate::object::property_ops::put_value::js_put_value_set(obj, key, value, obj, strict);
+    value
+}
+
+/// The I32 lanes of a class born keyless (PR C): after its field definitions
+/// (`field_rep_store::install_i32_lanes`). `mask` has one bit per slot.
+/// Returns `obj`.
+#[no_mangle]
+pub extern "C" fn js_object_rest_lanes(obj: f64, mask: i32) -> f64 {
+    if let Some(o) = object_of(obj) {
+        if unsafe { crate::object::object_is_shaped(o) } {
+            unsafe { crate::object::field_rep_store::install_i32_lanes(o, mask as u32) };
+        }
+    }
+    obj
+}
+
+/// Check mode: a generic reader that copies or prints an object's slot words
+/// met an object with an I32 lane, which wpfacts says it never does (PR C).
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+pub(crate) unsafe fn generic_object_reader(obj: *const crate::object::ObjectHeader) {
+    if !VERIFY.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let id = crate::object::shapes::object_shape_stamp(obj);
+    if crate::object::shapes::shape_record_of_receiver(id.0).is_some_and(|r| r.i32_lanes() != 0) {
+        crate::wpfacts_check::perry_wpfacts_check_miss(f64::from_bits(obj as u64), 0);
+    }
+}
+
 /// Check mode: a generic reader (one that reads element words undecoded)
 /// met an at-rest Array, which wpfacts says it never does.
 ///
@@ -332,6 +490,26 @@ mod tests {
             assert_eq!(encode(v.to_bits()), None, "{v}");
         }
         assert_eq!(encode(crate::value::TAG_UNDEFINED), None);
+    }
+
+    #[test]
+    fn an_i32_word_decodes_to_its_double_and_nothing_else_does() {
+        for v in [0i32, 5, -1, 4096, i32::MIN, i32::MAX] {
+            let w = encode(f64::from(v).to_bits()).unwrap();
+            assert!(is_i32_word(w));
+            assert_eq!(decode_word(w), f64::from(v).to_bits());
+        }
+        // A class reference word (INT32 tag, bit 32 set) is no I32 word.
+        assert!(!is_i32_word(INT32_TAG | (1 << 32) | 7));
+        for w in [
+            1.5f64.to_bits(),
+            crate::value::TAG_UNDEFINED,
+            crate::value::TAG_HOLE,
+            (-0.0f64).to_bits(),
+        ] {
+            assert!(!is_i32_word(w));
+            assert_eq!(decode_word(w), w);
+        }
     }
 
     #[test]

@@ -66,6 +66,11 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     {
         return Ok(value);
     }
+    // I32 at rest (PR C): a site of a key some class stores in an I32 lane is
+    // decided before every other tier (`rest_fields`).
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     // #10943: HIR folds a builtin method call on a proven receiver into a
     // dedicated node that lowers straight to the native helper, below the
     // chain guard entirely. An own property still beats the builtin, so the

@@ -1403,6 +1403,15 @@ pub struct Model {
     /// The at-rest capacity reservation (`rest_elems::reserve`;
     /// `PERRY_REST_CAPACITY=0` turns it off).
     pub rest_capacity: bool,
+    /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
+    pub rest_fields: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
+    /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
+    /// claim the proven store's witness must catch.
+    pub rest_lane_sabotage: bool,
+    /// Object tokens a generic reader may touch (`Model::rest_obj_used`):
+    /// their class gets no I32 lane.
+    pub obj_used: crate::pts::FxHashSet<Tok>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restelem`): a builtin
     /// method's use of an Array is not recorded (`Model::rest_used`), so an
     /// Array a native writes may be admitted at rest, a wrong claim the

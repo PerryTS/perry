@@ -158,6 +158,10 @@ pub struct Gen<'a> {
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
     pub(crate) element_values: Vec<(u32, u32, NodeId)>,
+    /// The result node of every named property read codegen lowers as a
+    /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
+    /// `rest_fields`' use record admits (I32 at rest, PR C).
+    pub(crate) field_reads: Vec<NodeId>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -631,6 +635,7 @@ impl<'a> Gen<'a> {
             read_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
+            field_reads: Vec::new(),
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),

@@ -6422,6 +6422,40 @@ pub fn run_with_parse_cache(
             ),
         }
     };
+    // I32 at rest (PR C): the facts run before the births pre-pass, whose
+    // class birth contents carry the I32 field lanes the facts admit
+    // (`perry_codegen` `expr::rest_fields`), so a module's mint and the
+    // program's static ids name the same contents.
+    // wpfacts (whole-program invariance facts, slice 1): one more
+    // whole-program pre-pass over the final HIR. It removes no check yet:
+    // each module's codegen gets only the digest of the facts it can observe
+    // (object-cache key) and, in a contract build, the claims section the
+    // runtime checks. See `program_facts.rs` for the knobs.
+    let facts_started = Instant::now();
+    program_step("whole-program facts", None);
+    let program_facts = super::program_facts::run(
+        &ctx.native_modules,
+        super::program_facts::export_sources(&ctx),
+        // The dyn-eval interpreter is installed (E14 possible): the same
+        // condition that selects `perry-runtime/dyn-eval` for the installer.
+        perry_hir::has_deferred_dynamic_code_sites()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        // A real eval-like source site (DECISIONS 235); the link decision
+        // above also counts a `Function` member name.
+        !perry_hir::interpreted_source_sites().is_empty()
+            || ctx.native_module_imports.contains("vm")
+            || ctx.uses_data_url_dynamic_import,
+        &ctx.patched_builtins.dynamic_code_reach,
+        &ctx.cjs_wrap_debug_sources,
+        activation_roots
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        &ctx.cache_dir,
+        activation,
+    );
+    program_step("whole-program facts", Some(facts_started));
     program_step("births pre-pass", None);
     let descriptor_inputs = std::sync::Mutex::new(Vec::new());
     let module_births: Vec<(&PathBuf, Vec<perry_codegen::ModuleBirth>)> = module_pool
@@ -6440,6 +6474,7 @@ pub fn run_with_parse_cache(
                         &mut opts,
                     );
                     opts.program_layouts = std::sync::Arc::clone(&program_layouts);
+                    opts.program_facts = super::program_facts::view_for(&program_facts, path);
                     let births = perry_codegen::module_birth_shapes(hir_module, opts)
                         .map_err(|e| format!("{}: {e:#}", path.display()))?;
                     descriptor_inputs
@@ -6559,36 +6594,6 @@ pub fn run_with_parse_cache(
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
-    // wpfacts (whole-program invariance facts, slice 1): one more
-    // whole-program pre-pass over the final HIR. It removes no check yet:
-    // each module's codegen gets only the digest of the facts it can observe
-    // (object-cache key) and, in a contract build, the claims section the
-    // runtime checks. See `program_facts.rs` for the knobs.
-    let facts_started = Instant::now();
-    program_step("whole-program facts", None);
-    let program_facts = super::program_facts::run(
-        &ctx.native_modules,
-        super::program_facts::export_sources(&ctx),
-        // The dyn-eval interpreter is installed (E14 possible): the same
-        // condition that selects `perry-runtime/dyn-eval` for the installer.
-        perry_hir::has_deferred_dynamic_code_sites()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        // A real eval-like source site (DECISIONS 235); the link decision
-        // above also counts a `Function` member name.
-        !perry_hir::interpreted_source_sites().is_empty()
-            || ctx.native_module_imports.contains("vm")
-            || ctx.uses_data_url_dynamic_import,
-        &ctx.patched_builtins.dynamic_code_reach,
-        &ctx.cjs_wrap_debug_sources,
-        activation_roots
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect(),
-        &ctx.cache_dir,
-        activation,
-    );
-    program_step("whole-program facts", Some(facts_started));
     #[allow(clippy::type_complexity)]
     let static_shape_ids_by_module: HashMap<
         PathBuf,

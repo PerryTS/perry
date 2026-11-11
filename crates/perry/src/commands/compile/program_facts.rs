@@ -588,6 +588,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
         out.rest_reserves.extend(mb.rest_reserves.iter().copied());
+        out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
             out.signatures.insert(
@@ -751,6 +752,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 if f.zero_tol {
                     out.zero_tolerant_fields.insert((cid, f.key.clone()));
                 }
+                if f.rest {
+                    out.rest_keys.insert(f.key.clone());
+                }
                 Some(FactsField {
                     classes,
                     nullable,
@@ -764,6 +768,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     declared: f.declared,
                     reserved: f.reserved,
                     rep: facts_rep(f.rep),
+                    rest: f.rest,
                 })
             })
             .collect();

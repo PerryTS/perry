@@ -153,6 +153,8 @@ impl Model {
         if self.rest_elems && t != TOP && self.is_arr(t) {
             self.arr_used.insert(t);
         }
+        // PR C: an object's slots, read by the same generic reader.
+        self.rest_obj_used(t);
     }
 }
 
@@ -164,7 +166,7 @@ pub(crate) fn fused_fill(m: &Model, call: crate::model::CallId) -> bool {
 }
 
 /// Every copy a summarized body's node has (`Inst::fresh`), by original.
-fn node_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
+pub(crate) fn node_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
     let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
     for inst in 0..m.sum.insts.len() as u32 {
         m.inst_copies(inst, |orig, copy| {

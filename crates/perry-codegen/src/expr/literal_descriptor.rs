@@ -99,6 +99,10 @@ impl Descriptor {
         let shape_id = crate::typed_shape::shape_id_global_name_from_keys_global(keys);
         // The birth rep the module-init mint gave that id (T1).
         let rep = ctx.class_birth_reps.get(keys).copied().unwrap_or(0);
+        // I32 at rest (PR C): a descriptor births raw value words.
+        if crate::expr::rest_fields::lanes_of_rep(rep) != 0 {
+            return None;
+        }
         let index = u32::try_from(self.shapes.len()).ok()?;
         let width = argc as u32
             + crate::lower_call::new_alloc::birth_slack_in(
