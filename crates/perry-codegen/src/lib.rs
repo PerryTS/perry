@@ -347,7 +347,7 @@ pub mod realm_manifest {
     fn temporal_reach_closes_the_generated_family_without_selecting_top() {
         let mut reach = perry_hir::realm_reach::RealmReach::default();
         reach.names.insert("Temporal".into());
-        reach.close(REALM);
+        reach.close(&perry_hir::realm_reach_index::RealmIndex::new(REALM));
         assert!(!reach.is_full());
         for name in [
             "Temporal.Duration.prototype.years.<get>",

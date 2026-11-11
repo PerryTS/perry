@@ -1,9 +1,8 @@
-//! Whole-program realm reachability (DESIGN §2.2). This analysis never controls
-//! emission in WRT3a. Keep the five top boundaries explicit and independently
-//! testable; an unfamiliar operation is not a reason to select the full realm.
+//! Whole-program realm reachability for runtime-layout emission. Keep the five
+//! top boundaries explicit: an unfamiliar operation does not select the full realm.
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::realm_manifest::RealmEntry;
+use crate::realm_reach_index::RealmIndex;
 use swc_common::{Globals, Mark, SyntaxContext, GLOBALS};
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitMut, VisitMutWith, VisitWith};
@@ -70,32 +69,30 @@ impl RealmReach {
         self.names = names.into_iter().collect();
     }
 
-    pub fn close(&mut self, entries: &[RealmEntry]) {
+    pub fn close(&mut self, entries: &RealmIndex) {
         if self.is_full() {
             self.names
-                .extend(entries.iter().map(|e| e.name.to_string()));
+                .extend(entries.rows().map(|e| e.name().to_string()));
             return;
         }
-        let by_name: BTreeMap<_, _> = entries.iter().map(|e| (e.name, e)).collect();
         // Every program has the global cell, born on the layout its declaration
         // names (object/global_this/fetch_globals.rs): that `%Layout:` birth is
         // in every R. Its member births stay conditional (RealmPlan keeps only
         // the reached members), so `%Global%` itself is not a root.
-        if let Some(global) = by_name.get("%Global%") {
+        if let Some(global) = entries.last("%Global%") {
             self.names.extend(
                 global
-                    .births
-                    .iter()
+                    .births()
                     .filter(|birth| birth.starts_with("%Layout:"))
-                    .map(|birth| (*birth).to_string()),
+                    .map(|birth| birth.to_string()),
             );
         }
         let mut pending: Vec<_> = self.names.iter().cloned().collect();
         while let Some(name) = pending.pop() {
-            if let Some(entry) = by_name.get(name.as_str()) {
-                for birth in entry.births {
-                    if self.names.insert((*birth).to_string()) {
-                        pending.push((*birth).to_string());
+            if let Some(entry) = entries.last(name.as_str()) {
+                for birth in entry.births() {
+                    if self.names.insert(birth.to_string()) {
+                        pending.push(birth.to_string());
                     }
                 }
             }
@@ -110,7 +107,7 @@ pub fn is_global(name: &str) -> bool {
 /// Scan a module's value expressions with SWC's binding resolver. A parameter
 /// or local called Map/globalThis/require must not name a builtin or select top.
 /// Constant evaluator bodies are ordinary program source and are scanned too.
-pub fn scan(module: &ast::Module, entries: &[RealmEntry]) -> RealmReach {
+pub fn scan(module: &ast::Module, entries: &RealmIndex) -> RealmReach {
     let mut out = RealmReach::default();
     let mut dynamic = crate::dynamic_code::DynamicCodeReach::default();
     crate::dynamic_code::scan(module, "<realm>", &mut dynamic);
@@ -131,7 +128,7 @@ pub fn scan(module: &ast::Module, entries: &[RealmEntry]) -> RealmReach {
         "AggregateError",
         "SuppressedError",
     ] {
-        if entries.iter().any(|e| e.name == name) {
+        if entries.has(name) {
             out.names.insert(name.into());
         }
     }
@@ -147,7 +144,7 @@ pub fn scan(module: &ast::Module, entries: &[RealmEntry]) -> RealmReach {
     out
 }
 
-fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmReach) {
+fn scan_resolved(module: &ast::Module, entries: &RealmIndex, out: &mut RealmReach) {
     // Transforms may supply an AST resolved under a different Globals arena.
     // This analysis owns its binding identities and must not reuse those ids.
     struct Clear;
@@ -273,13 +270,13 @@ impl Visit for Constants {
 /// Lowering can expose the global object without a literal global spelling,
 /// notably constant Function('return this')() and global-script top-level this.
 /// Static member receivers still name only that member; they do not escape.
-pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut RealmReach) {
+pub fn scan_lowered(module: &crate::Module, entries: &RealmIndex, out: &mut RealmReach) {
     use crate::Expr;
     let mut static_receivers = BTreeSet::new();
     let mut permit = |receiver: &Expr, key: &str| {
         if matches!(receiver, Expr::GlobalThisExpr) {
             static_receivers.insert(receiver as *const Expr as usize);
-            if entries.iter().any(|e| e.name == key) {
+            if entries.has(key) {
                 out.names.insert(key.into());
             }
         }
@@ -505,7 +502,7 @@ impl Visit for Loaders<'_> {
 }
 
 struct Scan<'a> {
-    entries: &'a [RealmEntry],
+    entries: &'a RealmIndex,
     out: &'a mut RealmReach,
     unresolved: Mark,
     constants: &'a BTreeMap<ast::Id, String>,
@@ -519,7 +516,7 @@ impl Scan<'_> {
     }
 
     fn add(&mut self, name: &str) {
-        if self.entries.iter().any(|e| e.name == name) {
+        if self.entries.has(name) {
             self.out.names.insert(name.into());
         }
     }
@@ -541,10 +538,8 @@ impl Scan<'_> {
 
     fn native_module(&mut self, name: &str) {
         let name = name.strip_prefix("node:").unwrap_or(name);
-        for entry in self.entries {
-            if entry.module == Some(name) {
-                self.out.names.insert(entry.name.into());
-            }
+        for entry in self.entries.module_rows(name) {
+            self.out.names.insert(entry.name().into());
         }
     }
 
@@ -566,15 +561,23 @@ impl Scan<'_> {
     }
 
     /// A call, optional call or `import()` (callee `None`).
-    fn call(&mut self, span: swc_common::Span, callee: Option<&ast::Expr>, args: &[ast::ExprOrSpread]) {
+    fn call(
+        &mut self,
+        span: swc_common::Span,
+        callee: Option<&ast::Expr>,
+        args: &[ast::ExprOrSpread],
+    ) {
         let module_call = match callee {
             None => true,
             Some(callee) => {
                 self.loaders.loader(callee)
-                    || self.loaders.create_require_call(callee).is_some_and(|maker| {
-                        self.called_makers.insert(maker);
-                        true
-                    })
+                    || self
+                        .loaders
+                        .create_require_call(callee)
+                        .is_some_and(|maker| {
+                            self.called_makers.insert(maker);
+                            true
+                        })
             }
         };
         // A loader made by `createRequire` that is neither a const alias nor

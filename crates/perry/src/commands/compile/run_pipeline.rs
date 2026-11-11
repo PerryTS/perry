@@ -6591,11 +6591,7 @@ pub fn run_with_parse_cache(
     );
     let mut realm_reach = ctx.realm_reach.clone();
     for module in ctx.native_modules.values() {
-        perry_hir::realm_reach::scan_lowered(
-            module,
-            perry_codegen::realm_manifest::REALM,
-            &mut realm_reach,
-        );
+        perry_hir::realm_reach::scan_lowered(module, &ctx.realm_index, &mut realm_reach);
     }
     realm_reach.program_signals(&ctx.patched_builtins);
     // Test-only input of the realm-diff gate (DESIGN §3.2, "The R-restricted
@@ -6623,7 +6619,7 @@ pub fn run_with_parse_cache(
         );
         realm_reach.restrict_to(names);
     }
-    realm_reach.close(perry_codegen::realm_manifest::REALM);
+    realm_reach.close(&ctx.realm_index);
     if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
         let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
         eprintln!(

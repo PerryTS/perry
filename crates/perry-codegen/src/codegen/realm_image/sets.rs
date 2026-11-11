@@ -155,7 +155,10 @@ mod tests {
     #[test]
     fn full_realm_sets_have_entries_and_readonly_indexes_on_each_target() {
         let hir = perry_parser::parse_typescript("with ({}) {}", "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         for target in [
             "x86_64-unknown-linux-gnu",

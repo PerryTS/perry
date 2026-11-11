@@ -5,7 +5,10 @@ use perry_abi::{LayoutRow, LayoutWord, ShapeObjectKind};
 #[test]
 fn descriptor_values_and_direct_aliases_verify_on_each_target() {
     let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
-    let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+    let reach = perry_hir::realm_reach::scan(
+        &hir,
+        &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+    );
     let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
     for target in [
         "x86_64-unknown-linux-gnu",
@@ -145,7 +148,10 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
     let mut associated = 0;
     for source in ["console.log('hi');", "1 + 2;", "with ({}) {}"] {
         let hir = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         assert_eq!(
             reach.is_full(),
@@ -384,7 +390,10 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
 fn every_runtime_key_list_section_is_linked_to_its_own_descriptor_on_elf() {
     let target = "x86_64-unknown-linux-gnu";
     let hir = perry_parser::parse_typescript("1 + 2;", "realm.cjs").unwrap();
-    let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+    let reach = perry_hir::realm_reach::scan(
+        &hir,
+        &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+    );
     let mut module = LlModule::new(target);
     emit_program_runtime_layouts(&mut module, &reach).unwrap();
     let ir = module.to_ir();

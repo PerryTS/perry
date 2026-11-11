@@ -145,7 +145,10 @@ mod tests {
     fn every_reached_function_owns_its_info_bag_captures_and_prototype_state() {
         for source in ["console.log('hi');", "with ({}) {}"] {
             let hir = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
-            let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+            let reach = perry_hir::realm_reach::scan(
+                &hir,
+                &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+            );
             let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
             for target in [
                 "x86_64-unknown-linux-gnu",

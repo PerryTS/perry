@@ -4,7 +4,7 @@ fn plan(source: &str) -> RealmPlan {
     let module = perry_parser::parse_typescript(source, "realm_atoms.cjs").unwrap();
     RealmPlan::from_reach(&perry_hir::realm_reach::scan(
         &module,
-        crate::realm_manifest::REALM,
+        &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
     ))
     .unwrap()
 }

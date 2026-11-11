@@ -28,11 +28,12 @@ pub struct RealmPlan {
 
 impl RealmPlan {
     pub fn from_reach(reach: &RealmReach) -> Result<Self, String> {
-        let declarations = crate::realm_manifest::REALM
-            .iter()
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let declarations = index
+            .rows()
             .map(|entry| {
-                serde_json::from_str(entry.facts)
-                    .map_err(|error| format!("realm {}: {error}", entry.name))
+                serde_json::from_value(entry.facts().clone())
+                    .map_err(|error| format!("realm {}: {error}", entry.name()))
             })
             .collect::<Result<Vec<RealmDeclaration>, String>>()?;
         Self::from_declarations(reach, declarations)
@@ -320,7 +321,10 @@ mod tests {
 
     fn reach(source: &str) -> RealmReach {
         let module = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
-        perry_hir::realm_reach::scan(&module, crate::realm_manifest::REALM)
+        perry_hir::realm_reach::scan(
+            &module,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        )
     }
 
     #[test]
@@ -508,10 +512,10 @@ mod tests {
         // born by the key's own R node: a program that reads only that key
         // gets a closed plan. `navigator` became an accessor whose getter no
         // node birthed.
-        let global: RealmDeclaration = crate::realm_manifest::REALM
-            .iter()
-            .find(|entry| entry.name == "%Global%")
-            .map(|entry| serde_json::from_str(entry.facts).unwrap())
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let global: RealmDeclaration = index
+            .first("%Global%")
+            .map(|entry| serde_json::from_value(entry.facts().clone()).unwrap())
             .unwrap();
         let keys: Vec<_> = global
             .properties

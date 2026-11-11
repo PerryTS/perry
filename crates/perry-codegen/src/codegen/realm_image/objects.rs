@@ -68,7 +68,10 @@ mod tests {
     #[test]
     fn hello_objects_emit_values_back_edges_and_custom_prototypes() {
         let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         for target in [
             "x86_64-unknown-linux-gnu",

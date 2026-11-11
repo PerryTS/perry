@@ -1,4 +1,5 @@
 use super::*;
+use crate::realm_manifest::RealmEntry;
 use crate::realm_manifest::RealmKind;
 
 macro_rules! entry {
@@ -56,7 +57,7 @@ const CATALOG: &[RealmEntry] = &[
 
 fn reach(source: &str) -> RealmReach {
     let module = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
-    scan(&module, CATALOG)
+    scan(&module, &RealmIndex::new(CATALOG))
 }
 
 #[test]
@@ -141,14 +142,14 @@ fn only_a_global_any_member_patch_selects_top() {
     patched.insert(("Map".into(), crate::patched_builtins::ANY_MEMBER.into()));
     let mut r = RealmReach::default();
     r.program_signals(&patched);
-    r.close(CATALOG);
+    r.close(&RealmIndex::new(CATALOG));
     assert!(!r.is_full());
     for spelling in ["globalThis", "global", "self", "window", "frames"] {
         let mut p = patched.clone();
         p.insert((spelling.into(), crate::patched_builtins::ANY_MEMBER.into()));
         let mut r = RealmReach::default();
         r.program_signals(&p);
-        r.close(CATALOG);
+        r.close(&RealmIndex::new(CATALOG));
         assert_eq!(r.top, BTreeSet::from([RealmTop::GlobalAnyMember]));
         assert_eq!(r.names.len(), CATALOG.len());
     }
@@ -192,7 +193,7 @@ fn restricting_drops_top_and_closes_the_given_names() {
     assert_eq!(r.names.len(), CATALOG.len());
     r.restrict_to(["Buffer".to_string()]);
     assert!(!r.is_full());
-    r.close(CATALOG);
+    r.close(&RealmIndex::new(CATALOG));
     // The given names and their births; nothing else.
     let expected = ["Buffer", "Uint8Array", "%TypedArray%", "ArrayBuffer"];
     assert_eq!(
@@ -218,14 +219,14 @@ fn merged_modules_close_new_edges_and_apply_program_signals() {
     let mut a = reach("0;");
     let b = reach("require('node:fs');");
     a.merge(&b);
-    a.close(CATALOG);
+    a.close(&RealmIndex::new(CATALOG));
     assert!(a.names.contains("ArrayBuffer"));
     let mut patched = crate::PatchedBuiltins::default();
     patched
         .dynamic_code_reach
         .record_global("other module".into());
     a.program_signals(&patched);
-    a.close(CATALOG);
+    a.close(&RealmIndex::new(CATALOG));
     assert_eq!(a.names.len(), CATALOG.len());
 }
 
@@ -265,7 +266,7 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
         let mut module = crate::Module::new("realm");
         module.init.push(crate::Stmt::Expr(expr));
         let mut r = RealmReach::default();
-        scan_lowered(&module, CATALOG, &mut r);
+        scan_lowered(&module, &RealmIndex::new(CATALOG), &mut r);
         assert_eq!(r.is_full(), full, "{r:?}");
         if !full {
             assert!(r.names.contains("Map"));
@@ -281,8 +282,8 @@ fn non_top_fixture_remains_partial_after_hir_lowering() {
             let source = include_str!("realm_fixtures/non_top.ts");
             let module = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
             let lowered = crate::lower_module(&module, "realm", "realm.cjs").unwrap();
-            let mut r = scan(&module, CATALOG);
-            scan_lowered(&lowered, CATALOG, &mut r);
+            let mut r = scan(&module, &RealmIndex::new(CATALOG));
+            scan_lowered(&lowered, &RealmIndex::new(CATALOG), &mut r);
             assert!(!r.is_full(), "{r:?}");
         })
         .unwrap()
@@ -339,7 +340,7 @@ fn global_patch_fixture_reaches_top_through_the_program_patch_signal() {
     }
     let mut r = RealmReach::default();
     r.program_signals(&patched);
-    r.close(CATALOG);
+    r.close(&RealmIndex::new(CATALOG));
     assert_eq!(r.top, BTreeSet::from([RealmTop::GlobalAnyMember]));
     assert_eq!(r.names.len(), CATALOG.len());
 }

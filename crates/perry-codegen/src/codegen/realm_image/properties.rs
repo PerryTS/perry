@@ -68,7 +68,10 @@ mod tests {
     #[test]
     fn accessor_halves_and_data_references_emit_in_manifest_order() {
         let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         for target in [
             "x86_64-unknown-linux-gnu",
@@ -119,7 +122,10 @@ mod tests {
     #[test]
     fn inherited_constructor_prototype_uses_function_state() {
         let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         assert!(!function_has_prototype_state(&plan.cells["Array"]).unwrap());
         assert!(
@@ -135,7 +141,10 @@ mod tests {
     #[test]
     fn body_kind_defaults_resolve_manifest_cells_and_overrides_need_state() {
         let hir = perry_parser::parse_typescript("with ({}) {}", "realm.cjs").unwrap();
-        let reach = perry_hir::realm_reach::scan(&hir, crate::realm_manifest::REALM);
+        let reach = perry_hir::realm_reach::scan(
+            &hir,
+            &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
+        );
         let plan = crate::realm_plan::RealmPlan::from_reach(&reach).unwrap();
         for flags in [
             0,

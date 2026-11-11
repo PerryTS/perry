@@ -812,10 +812,8 @@ fn collect_module_one(
     let dynamic_ast = specialized_dynamic_code
         .as_ref()
         .unwrap_or(solid_module.as_ref().unwrap_or(ast_module));
-    ctx.realm_reach.merge(&perry_hir::realm_reach::scan(
-        dynamic_ast,
-        perry_codegen::realm_manifest::REALM,
-    ));
+    ctx.realm_reach
+        .merge(&perry_hir::realm_reach::scan(dynamic_ast, &ctx.realm_index));
     let patched_before = ctx.patched_builtins.len();
     let guarded_before = ctx
         .patched_builtins

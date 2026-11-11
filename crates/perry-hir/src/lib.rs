@@ -107,6 +107,7 @@ mod iterator_record;
 
 pub mod dynamic_code;
 pub mod realm_reach;
+pub mod realm_reach_index;
 pub mod static_dynamic_code;
 
 // Build-time schema shared with codegen; the runtime producer stays dependency-free.
