@@ -84,6 +84,7 @@ pub(super) fn family_load(
         } else if realm_accessor(m, fam, what, &name) {
             undeclared_getter_result(m, dst);
         } else {
+            anyfall("undescribed member", &(fam, what), &name);
             undescribed_member(m, dst);
         }
         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
@@ -130,7 +131,10 @@ pub(super) fn family_member(
                     }
                     m.tok(TokKind::BuiltinFn(n))
                 }
-                None => builtin_fn(m, "described member"),
+                None => {
+                    anyfall("described member", &(fam, what), &name);
+                    builtin_fn(m, "described member")
+                }
             };
             m.add_tok(dst, bf);
         }
@@ -281,6 +285,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         }
     }
     let Some(mem) = members::ns_member(ns, &name) else {
+        anyfall("undescribed namespace member", &ns, &name);
         undescribed_member(m, dst);
         if native_written(m, t, a) {
             return opaque_member(m, dst);
@@ -357,7 +362,10 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
             for fam in members::prim_families(prim) {
                 let bf = match member_native(m, fam, None, &name) {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
-                    None => builtin_fn(m, "primitive member"),
+                    None => {
+                        anyfall("primitive member", &fam, &name);
+                        builtin_fn(m, "primitive member")
+                    }
                 };
                 m.add_tok(dst, bf);
             }
@@ -735,7 +743,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     .flatten()
                 {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
-                    None => builtin_fn(m, "function call/apply/bind/toString"),
+                    None => {
+                        anyfall("function call/apply/bind/toString", &"Function", &name);
+                        builtin_fn(m, "function call/apply/bind/toString")
+                    }
                 };
                 m.add_tok(dst, bf);
                 // Final on a `Function.prototype`-only chain (DEC 250).
@@ -995,7 +1006,10 @@ fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
     }
     let f = match member_native(m, Family::Object, None, &name) {
         Some(n) => m.tok(TokKind::BuiltinFn(n)),
-        None => builtin_fn(m, "described member"),
+        None => {
+            anyfall("described member", &"Object", &name);
+            builtin_fn(m, "described member")
+        }
     };
     m.add_tok(dst, f);
 }

@@ -1641,6 +1641,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             | "BoxedPrimitive" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
+            anyfall("builtin method argument", &what, &n);
             implicit_args(m, call, "builtin method argument", Protocol::Any);
             if what == "Date" && n == "toJSON" {
                 // 21.4.4.37: ToPrimitive(this), then Invoke(this, "toISOString").
@@ -1665,6 +1666,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             effects::run_native(m, e, t, call);
         }
         ("Buffer", _) => {
+            anyfall("buffer method argument", &what, &name);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
@@ -1692,6 +1694,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
             if !super::loads::buffer_member_absent(m, Some(what), n) =>
         {
+            anyfall("buffer method argument", &what, &n);
             implicit_args(m, call, "buffer method argument", Protocol::Any);
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");

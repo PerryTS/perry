@@ -947,6 +947,16 @@ fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
     m.tok(TokKind::BuiltinFn(Native::Any))
 }
 
+/// `PERRY_WPF_ANYFALL=1`: one stderr line per place a builtin member or
+/// builtin function value falls back to the opaque builtin function value or
+/// to `Protocol::Any` on its arguments, naming the family and member.
+pub(crate) fn anyfall(why: &str, fam: &dyn std::fmt::Debug, name: &dyn std::fmt::Debug) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("PERRY_WPF_ANYFALL").is_some()) {
+        eprintln!("perry: wpfacts anyfall: {why} | {fam:?} | {name:?}");
+    }
+}
+
 /// Resolve the member's object reference before interning its token. The
 /// receiver family locates the holder, but is never part of value identity.
 /// The realm prototype a builtin object of family `fam` (`what`) reads its
@@ -1255,6 +1265,7 @@ pub fn intrinsic_proto_own(m: &mut Model, key: Key, dst: NodeId) {
             return;
         }
     }
+    anyfall("undescribed intrinsic prototype member", &"intrinsic", &key);
     undescribed_member(m, dst);
 }
 
