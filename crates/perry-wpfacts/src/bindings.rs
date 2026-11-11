@@ -986,6 +986,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     out.extend(rest_probe(m));
     out.extend(crate::rest_elems::probe(m));
     out.extend(crate::fill_births::probe(m));
+    out.extend(g.m.map_values_probe());
     out.extend(crate::element_keys::probe(g));
     out
 }

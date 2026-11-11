@@ -32,6 +32,11 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             };
             let c = site_tmpl(m, call, what);
             let fa = m.field_any(c);
+            if ns == BuiltinNs::Map {
+                // Born without an iterable, its contents are what `set`
+                // stores (`solve/map_vals.rs`).
+                m.map_born(c, arg(m, call, 0).is_none());
+            }
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
                 if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {

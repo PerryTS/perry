@@ -103,7 +103,11 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::MapNew => {
+                let (t, n) = self.bobj(mi, "Map");
+                self.m.map_born(t, true);
+                n
+            }
             Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
