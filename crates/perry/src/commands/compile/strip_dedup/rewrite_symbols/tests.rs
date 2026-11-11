@@ -14,15 +14,20 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Option<Self> {
-        let tools = std::env::var_os("LLVM_TEST_TOOL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let declared = std::env::var_os("LLVM_TEST_TOOL_DIR").map(PathBuf::from);
+        let tools = declared.clone().unwrap_or_default();
         for tool in ["clang", "llvm-nm", "llvm-readobj", "llvm-objcopy"] {
             if !Command::new(tools.join(tool))
                 .arg("--version")
                 .output()
                 .is_ok_and(|out| out.status.success())
             {
+                // A lane that declares its tool directory must not pass this
+                // suite having exercised nothing.
+                assert!(
+                    declared.is_none(),
+                    "LLVM_TEST_TOOL_DIR is set but {tool} is unusable"
+                );
                 eprintln!("unavailable: {tool}; real symbol-rewrite test not exercised");
                 return None;
             }
@@ -92,6 +97,25 @@ impl Fixture {
             .unwrap_or_default()
             .lines()
             .count()
+    }
+
+    /// Replay the recorded argv and assert every objcopy call stayed inside the
+    /// production argument budget, counted the way `rewrite_member_symbols`
+    /// counts it (objcopy and member path included in every batch).
+    fn assert_bounded_argv(&self, objcopy: &Path, member: &Path) {
+        let args = std::fs::read_to_string(self.dir.join("argv")).unwrap();
+        // `rewrite_member_symbols` counts the objcopy path as the base of every
+        // batch and adds each argument, the member path included, as it goes.
+        let base = argument_bytes(objcopy.as_os_str());
+        let mut cost = base;
+        for arg in args.lines() {
+            cost += argument_bytes(std::ffi::OsStr::new(arg));
+            if arg == member.to_str().unwrap() {
+                assert!(cost <= 8192, "command arguments exceeded budget: {cost}");
+                cost = base;
+            }
+        }
+        assert_eq!(cost, base);
     }
 
     fn symbols(&self, object: &Path) -> BTreeMap<String, String> {
@@ -237,7 +261,8 @@ fn long_symbol_lists_are_batched_but_keep_command_lines_bounded() {
         .map(|s| format!("int {s}=1;\n"))
         .collect::<String>();
     let object = f.object("large", "x86_64-unknown-linux-gnu", &source);
-    rewrite_member_symbols(&f.wrapper(), &object, "large", &symbols, false, "a", 0).unwrap();
+    let wrapper = f.wrapper();
+    rewrite_member_symbols(&wrapper, &object, "large", &symbols, false, "a", 0).unwrap();
     let rewritten = f.symbols(&object);
     assert!(symbols
         .iter()
@@ -248,16 +273,7 @@ fn long_symbol_lists_are_batched_but_keep_command_lines_bounded() {
         "bounded batches, not {calls} processes"
     );
     // The log retains every actual argument; the member path terminates a batch.
-    let args = std::fs::read_to_string(f.dir.join("argv")).unwrap();
-    let mut bytes = 0;
-    for arg in args.lines() {
-        bytes += 2 * arg.len() + 3;
-        if arg == object.to_str().unwrap() {
-            assert!(bytes <= 8192, "command arguments exceeded budget: {bytes}");
-            bytes = 0;
-        }
-    }
-    assert_eq!(bytes, 0);
+    f.assert_bounded_argv(&wrapper, &object);
 }
 
 #[test]
@@ -362,15 +378,5 @@ fn coff_batch_splits_keep_original_symbol_and_member_indices() {
         assert_eq!(symbols[&renamed], "D");
         assert!(relocations.contains(&format!("{renamed} (")));
     }
-    let args = std::fs::read_to_string(f.dir.join("argv")).unwrap();
-    let base = 2 * wrapper.as_os_str().as_encoded_bytes().len() + 3;
-    let mut cost = base;
-    for arg in args.lines() {
-        cost += 2 * arg.len() + 3;
-        if arg == object.to_str().unwrap() {
-            assert!(cost <= 8192, "command arguments exceeded budget: {cost}");
-            cost = base;
-        }
-    }
-    assert_eq!(cost, base);
+    f.assert_bounded_argv(&wrapper, &object);
 }
