@@ -135,3 +135,23 @@ fn control_program_class_value_constructs_class() {
         pf.dump_text()
     );
 }
+
+/// skinbench GLTFLoader `loadBufferView`: `buffer.slice(byteOffset, byteOffset + byteLength)`
+/// on the ArrayBuffer `Body.arrayBuffer()` makes. ArrayBuffer.prototype.slice
+/// (25.1.6.7) converts its operands ToIntegerOrInfinity and hands them to no code.
+#[test]
+fn realm_array_buffer_slice() {
+    let pf = whole(
+        "const kept: any = { keptmark: 1 };
+         new Response(\"abc\").arrayBuffer().then(function (buffer: any) {
+             const s = buffer.slice(kept, kept + 1);
+             console.log(s.byteLength);
+         });",
+    );
+    assert_eq!(
+        escape_with_field(&pf, "keptmark"),
+        None,
+        "{}",
+        pf.dump_text()
+    );
+}
