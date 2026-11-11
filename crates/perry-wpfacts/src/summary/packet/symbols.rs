@@ -454,6 +454,11 @@ impl Model {
             ),
             Cons::Plus { str, num } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
+            Cons::BoundCall { reason, bound } => format!(
+                "BoundCall reason={:?} bound={:?}",
+                self.reasons.get(reason as usize),
+                self.packet_token(bound, packet)
+            ),
             Cons::ShareBuffer { ta } => {
                 format!("ShareBuffer ta={:?}", self.packet_token(ta, packet))
             }
