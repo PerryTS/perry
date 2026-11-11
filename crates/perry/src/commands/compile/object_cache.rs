@@ -1391,7 +1391,15 @@ impl ObjectCache {
     ///
     /// Counts a hit only when the entry is usable, so `--verbose` cache
     /// stats stay honest about what was actually reused.
-    pub fn lookup_path_with_ffi(&self, key: u64) -> Option<(PathBuf, Vec<String>, Vec<String>)> {
+    ///
+    /// The seed lines are decoded here: an entry whose sidecar does not
+    /// decode is unreadable, and an unreadable entry is a miss like a missing
+    /// one (the module recompiles and the entry is rewritten), never an error.
+    #[allow(clippy::type_complexity)]
+    pub fn lookup_path_with_ffi(
+        &self,
+        key: u64,
+    ) -> Option<(PathBuf, Vec<String>, Vec<(u32, perry_codegen::BirthShape)>)> {
         let path = self.path_for(key)?;
         let manifest_path = self.ffi_manifest_path_for(key)?;
         let seeds_path = self.static_seeds_path_for(key)?;
@@ -1399,14 +1407,6 @@ impl ObjectCache {
             fs::File::open(&path).and_then(|f| f.metadata()),
             Ok(meta) if meta.is_file()
         );
-        let sidecars = object_ok
-            .then(|| {
-                Some((
-                    fs::read_to_string(&manifest_path).ok()?,
-                    fs::read_to_string(&seeds_path).ok()?,
-                ))
-            })
-            .flatten();
         let lines = |text: String| -> Vec<String> {
             text.lines()
                 .map(str::trim)
@@ -1414,11 +1414,21 @@ impl ObjectCache {
                 .map(str::to_string)
                 .collect()
         };
+        let sidecars = object_ok
+            .then(|| {
+                let manifest = lines(fs::read_to_string(&manifest_path).ok()?);
+                let seeds = lines(fs::read_to_string(&seeds_path).ok()?)
+                    .iter()
+                    .map(|line| perry_codegen::decode_static_seed(line))
+                    .collect::<Option<Vec<_>>>()?;
+                Some((manifest, seeds))
+            })
+            .flatten();
         match sidecars {
             Some((manifest, seeds)) => {
                 self.hits.fetch_add(1, Ordering::Relaxed);
                 self.path_reuses.fetch_add(1, Ordering::Relaxed);
-                Some((path, lines(manifest), lines(seeds)))
+                Some((path, manifest, seeds))
             }
             None => {
                 self.misses.fetch_add(1, Ordering::Relaxed);
@@ -1440,11 +1450,36 @@ impl ObjectCache {
         }
     }
 
-    /// Persist the static shape seed lines for `key` (design step 4), like
+    /// Persist the static shape seeds for `key` (design step 4), like
     /// [`Self::store_ffi_manifest`]; store it before the `.o`.
-    pub fn store_static_seeds(&self, key: u64, lines: &[&str]) {
-        if let Some(path) = self.static_seeds_path_for(key) {
-            Self::store_sidecar(&path, lines);
+    ///
+    /// The sidecar holds only what a warm build can replay exactly: every
+    /// seed must decode back to itself. When one does not, nothing is
+    /// written, any older sidecar is removed so the entry reads as a miss,
+    /// and `false` tells the caller not to store the `.o` either.
+    pub fn store_static_seeds(&self, key: u64, seeds: &[(u32, perry_codegen::BirthShape)]) -> bool {
+        let Some(path) = self.static_seeds_path_for(key) else {
+            return false;
+        };
+        let lines: Option<Vec<String>> = seeds
+            .iter()
+            .map(|(id, shape)| {
+                let line = perry_codegen::encode_static_seed(*id, shape);
+                let exact = perry_codegen::decode_static_seed(&line)
+                    .is_some_and(|(back_id, back)| back_id == *id && &back == shape);
+                exact.then_some(line)
+            })
+            .collect();
+        match lines {
+            Some(lines) => {
+                Self::store_sidecar(&path, &lines.iter().map(String::as_str).collect::<Vec<_>>());
+                true
+            }
+            None => {
+                let _ = fs::remove_file(&path);
+                self.store_errors.fetch_add(1, Ordering::Relaxed);
+                false
+            }
         }
     }
 

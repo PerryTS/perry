@@ -1313,6 +1313,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
                 return Ok(value);
             }
+            // Operands the facts hold as int32 words (an I32 lane, an at-rest
+            // or int32 element) stay i32 through the operator.
+            if let Some(value) = super::int32_operand::try_lower_bitwise(ctx, *op, left, right)? {
+                return Ok(value);
+            }
             if matches!(op, BinaryOp::Add) {
                 // CLS D2: Numbers and primitive-kind reads the facts prove:
                 // an fadd of the two ToNumber values, no dynamic helper.

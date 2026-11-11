@@ -323,8 +323,43 @@ fn int_range_for_local(
     // parameter. Without it one unbounded parameter leaf poisons the whole
     // index expression and demotes EVERY array access in the function.
     let result = result.or_else(|| ctx.param_int_ranges.get(&id).copied());
+    // The whole-program interval of a proven int32 `let`: the weakest proof,
+    // read only when nothing local bounds the local.
+    let result = result.or_else(|| facts_local_range(ctx, id));
     seen.remove(&id);
     result
+}
+
+/// `PERRY_FACTS_LOCAL_RANGES=0` (`off`, `false`): codegen's range proofs do
+/// not read the whole-program interval of a proven int32 `let` or of a typed
+/// body's I32 parameter (main before this rule).
+pub(crate) fn facts_local_ranges() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_LOCAL_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// The whole-program interval (wpfacts `BindingFacts::int_range`) of local
+/// `id` when this body holds it as a proven int32 `let`
+/// (`FnCtx::facts_int32_locals`): every value the local ever holds is an
+/// integer in it, at every read, so it is a range proof that needs no
+/// dominating guard. Check mode witnesses the interval at every store into
+/// such a local (`codegen::facts_int32_locals::witness_exact`). The negative
+/// control `PERRY_FACTS_SABOTAGE=localrange` claims the interval's lower
+/// bound alone.
+pub(crate) fn facts_local_range(ctx: &FnCtx<'_>, id: u32) -> Option<IntRange> {
+    if !facts_local_ranges() || ctx.wpfacts_off || !ctx.facts_int32_locals.contains(&id) {
+        return None;
+    }
+    let &(min, max) = ctx.wpfacts.int32_ranges.get(&id)?;
+    if std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("localrange") {
+        return Some(IntRange { min, max: min });
+    }
+    Some(IntRange { min, max })
 }
 
 fn int_range_expr_inner(

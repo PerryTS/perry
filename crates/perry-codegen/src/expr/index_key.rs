@@ -93,6 +93,116 @@ pub(crate) fn unsigned_bound() -> bool {
     })
 }
 
+/// What wpfacts proves of the key of an element site (`ElisionFacts::
+/// key_signs`, wpfacts `element_keys::collect_signs`): at every copy of the
+/// site it is an integer Number inside the int32 range, so its `i32` is the
+/// key exactly and the site needs no normalizer ([`exact_i32`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyFact {
+    /// Its interval has `lo >= 0`: the key is an array index. The site
+    /// needs no sign test and no property-key arm.
+    pub(crate) nonneg: bool,
+}
+
+/// `PERRY_FACTS_KEY_SIGN=0` (`off`, `false`): no element site consumes its
+/// key's interval; every site keeps its normalizer and its sign test.
+pub(crate) fn key_sign_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_KEY_SIGN").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// THE query for the key of the element site at `element_offset` (a read or
+/// a store of this module). A b1 call's synthesized read carries the body
+/// module's offset (`FnCtx::rest_b1`): this module's facts say nothing of
+/// its key.
+pub(crate) fn key_fact(ctx: &FnCtx<'_>, element_offset: u32) -> Option<KeyFact> {
+    if element_offset == 0 || ctx.wpfacts_off || !key_sign_enabled() {
+        return None;
+    }
+    if matches!(ctx.rest_b1, Some((o, _)) if o == element_offset) {
+        return None;
+    }
+    let &(lo, hi) = ctx.wpfacts.key_signs.get(&element_offset)?;
+    (lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX)).then_some(KeyFact { nonneg: lo >= 0 })
+}
+
+/// [`key_fact`] for the element store `e` (`a[k] = v` as an `IndexSet`).
+pub(crate) fn store_key_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<KeyFact> {
+    match e {
+        Expr::IndexSet { element_offset, .. } => key_fact(ctx, *element_offset),
+        _ => None,
+    }
+}
+
+/// The `i32` of the key `key` (a double) under `fact`: the native integer it
+/// was widened from, else one `fptosi` (exact: the key is an integer inside
+/// the int32 range; `-0` is index 0, as its property key `"0"` is). Check
+/// mode (`PERRY_VERIFY_FACTS=1`) tests the claim first ([`witness_sign`]).
+pub(crate) fn exact_i32(ctx: &mut FnCtx<'_>, key: &str, fact: KeyFact) -> String {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::KeySign,
+        || serde_json::json!({ "nonneg": fact.nonneg }),
+    );
+    crate::facts_consumed::used();
+    if crate::verify_facts::enabled() {
+        witness_sign(ctx, key, fact);
+    }
+    let source = ctx
+        .func
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|b| b.widened_i32_source(key));
+    source.unwrap_or_else(|| ctx.block().fptosi(DOUBLE, key, I32))
+}
+
+/// Check mode: the key `key` is an integer Number inside the int32 range
+/// and, under `fact.nonneg`, not negative. A miss reports the false proof
+/// ("key sign") and exits 86.
+fn witness_sign(ctx: &mut FnCtx<'_>, key: &str, fact: KeyFact) {
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::KeySign,
+        || serde_json::json!({ "nonneg": fact.nonneg }),
+    );
+    let blk = ctx.block();
+    let low = if fact.nonneg { "0.0" } else { "-2147483648.0" };
+    let ge = blk.fcmp("oge", key, low);
+    let le = blk.fcmp("ole", key, "2147483647.0");
+    let inside = blk.and(I1, &ge, &le);
+    // Sanitize before `fptosi`: a rejected conversion must not poison.
+    let safe = blk.select(I1, &inside, DOUBLE, key, "0.5");
+    let int = blk.fptosi(DOUBLE, &safe, I32);
+    let back = blk.sitofp(I32, &int, DOUBLE);
+    let exact = blk.fcmp("oeq", &back, key);
+    let ok = blk.and(I1, &inside, &exact);
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("keysign.verify_miss");
+    let next = ctx.new_block("keysign.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let what = if fact.nonneg {
+        "an element key that is no non-negative int32"
+    } else {
+        "an element key that is no int32"
+    };
+    let site = crate::verify_facts::site_arg(ctx, what, crate::verify_facts::Fact::KeySign, &[]);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, key)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+}
+
 fn normalize_keyed(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>, wrap: bool) -> String {
     let source = ctx
         .func
@@ -163,6 +273,10 @@ fn publish(ctx: &mut FnCtx<'_>) {
     f.create_block("reject").ret(I32, "-1");
     ctx.pending_helpers.push(f);
 }
+
+#[cfg(test)]
+#[path = "index_key_sign_tests.rs"]
+mod sign_tests;
 
 #[cfg(test)]
 mod tests {

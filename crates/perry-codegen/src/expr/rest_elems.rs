@@ -346,7 +346,14 @@ pub(crate) fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, floor: u32, want: Want) 
         unreachable!("an at-rest read is an IndexGet")
     };
     let (object, index) = (object.as_ref(), index.as_ref());
-    if tiers_enabled() && !ctx.wpfacts_off && int32_key(ctx, index) {
+    // Key signs: a key only the facts prove an int32 (`index_key::key_fact`)
+    // is lowered as a double and converted exactly.
+    let fact = if int32_key(ctx, index) {
+        None
+    } else {
+        super::index_key::key_fact(ctx, *element_offset)
+    };
+    if tiers_enabled() && !ctx.wpfacts_off && (fact.is_some() || int32_key(ctx, index)) {
         // A b1 call's synthesized read carries the body module's offset: the
         // key facts here are this module's, so only the call's own verdicts
         // (`lower_call::field_read_call`) bound its key.
@@ -369,7 +376,13 @@ pub(crate) fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, floor: u32, want: Want) 
             ctx,
             &[object],
             &[index],
-            |ctx| super::lower_expr_as_i32(ctx, index),
+            |ctx| match fact {
+                Some(fact) => {
+                    let key = super::lower_expr(ctx, index)?;
+                    Ok(super::index_key::exact_i32(ctx, &key, fact))
+                }
+                None => super::lower_expr_as_i32(ctx, index),
+            },
             |ctx, v, idx| {
                 Ok(match rep {
                     Some(read) => {

@@ -1378,6 +1378,10 @@ pub struct Model {
     /// observations are recorded (`Cons::Identity`). Off, the model is the
     /// one without the lever.
     pub value_records: bool,
+    /// A record crosses a program call in a `Record` signature slot
+    /// (DESIGN-p4l4 §5.2, VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
+    /// off: such a call slot then rejects the template, as in VR-3a).
+    pub record_signatures: bool,
     /// The admitted value-record templates (`TemplateFacts::record` is
     /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
     pub records: crate::pts::FxHashSet<TmplId>,
@@ -1407,6 +1411,13 @@ pub struct Model {
     pub fill_births: bool,
     /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
     pub rest_fields: bool,
+    /// The key signs (`element_keys::collect_signs`;
+    /// `PERRY_FACTS_KEY_SIGN=0` turns them off).
+    pub key_sign: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=keysign`): every int32 key
+    /// is claimed non-negative, a wrong claim the witness at the element
+    /// site must catch.
+    pub key_sign_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.

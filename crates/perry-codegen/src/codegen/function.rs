@@ -796,6 +796,14 @@ pub(super) fn compile_function(
     let sig_return = spec_entry
         .and_then(|plan| plan.signature.as_ref())
         .map(|sig| sig.ret);
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
+    let sig_record_return = spec_entry
+        .and_then(|plan| plan.record.as_ref())
+        .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((PTR, super::record_sig::RESULT_PARAM.to_string()));
+    }
     let lf = llmod.define_function(
         &llvm_name,
         super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
@@ -1604,6 +1612,7 @@ pub(super) fn compile_function(
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
         sig_return: None,
+        sig_record_return: None,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
@@ -1697,6 +1706,8 @@ pub(super) fn compile_function(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(&f.body),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -1710,8 +1721,11 @@ pub(super) fn compile_function(
 
     if let Some(plan) = spec_entry.filter(|plan| plan.signature.is_some()) {
         ctx.sig_return = sig_return;
+        ctx.sig_record_return = sig_record_return;
         ctx.nonnegative_integer_locals
             .extend(super::signature_entry::nonnegative_params(f, plan));
+        ctx.int_range_facts
+            .extend(super::signature_entry::param_range_facts(f, plan));
     }
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
@@ -1720,6 +1734,9 @@ pub(super) fn compile_function(
         Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
+    for p in &f.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
     if reads_this && !f.is_strict {
         let slot = ctx.this_stack[0].clone();
         crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
@@ -1922,6 +1939,12 @@ pub(super) fn compile_function(
     // does `f() === undefined` / `f() !== undefined` observes the
     // correct value. For async functions, wrap undefined in a
     // resolved promise so callers can await the result.
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
     if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
         // P2: the facts prove an I32 entry never completes normally.
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
