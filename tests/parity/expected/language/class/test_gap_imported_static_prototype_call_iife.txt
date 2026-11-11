@@ -1,0 +1,2 @@
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program

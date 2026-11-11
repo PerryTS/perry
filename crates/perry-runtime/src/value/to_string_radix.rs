@@ -90,8 +90,7 @@ fn throw_radix_range_error() -> ! {
     // Node/V8 message verbatim: includes the word "argument" (#3146).
     let message = b"toString() radix argument must be between 2 and 36";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// V8-style `DoubleToRadixCString`: render a finite f64 in
@@ -419,10 +418,7 @@ mod radix_tostring_tests {
             // ToInteger truncation.
             assert_eq!(coerce_validate_radix(2.9), Some(2));
             // int32-boxed radix.
-            assert_eq!(
-                coerce_validate_radix(f64::from_bits(JSValue::int32(16).bits())),
-                Some(16)
-            );
+            assert_eq!(coerce_validate_radix(f64::from(16)), Some(16));
             // String radix coerces via ToNumber.
             let s = crate::string::js_string_from_bytes(b"16".as_ptr(), 2);
             assert_eq!(

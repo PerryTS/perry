@@ -1563,8 +1563,8 @@ jobs:
           for lib in staging/libperry_runtime*.a; do
             [ -f "$lib.gc-effects" ] || { echo "::error::$lib has no .gc-effects sidecar"; exit 1; }
           done
-          cd staging
-          tar czf ../${{ matrix.artifact }}.tar.gz *
+          node scripts/publish/archive-kind.mts --stage-host staging host-staging
+          tar czf ${{ matrix.artifact }}.tar.gz -C host-staging .
 
       # Bundle xwin.exe so `perry setup windows` can download the MS CRT + Windows
       # SDK without requiring users to have Rust installed. xwin is pinned here to
@@ -1717,7 +1717,9 @@ jobs:
               }
             }
           }
-          Compress-Archive -Path staging/* -DestinationPath "${{ matrix.artifact }}.zip"
+          node scripts/publish/archive-kind.mts --stage-host staging host-staging
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path host-staging/* -DestinationPath "${{ matrix.artifact }}.zip"
 
       # SHA256 sidecars uploaded next to each archive so package-manager
       # manifests (Scoop autoupdate, future winget/chocolatey/Homebrew bumps)
@@ -2645,6 +2647,8 @@ jobs:
             case "$package" in
               "@perryts/perry-target-$triple") kind=() ;;
               "@perryts/perry-ext-$triple") kind=(--ext) ;;
+              "@perryts/perry-ui-$triple") kind=(--ui) ;;
+              "@perryts/perry-wasm-host-$triple") kind=(--wasm-host) ;;
               *) echo "::error::$tgz is $package, not a target or ext package of $triple" >&2; exit 1 ;;
             esac
             name="${package#@perryts/}-${version}.tgz"
@@ -2756,6 +2760,7 @@ jobs:
               url "https://github.com/PerryTS/perry/archive/refs/tags/${{ steps.release.outputs.tag }}.tar.gz"
               sha256 "${{ steps.sha.outputs.sha256 }}"
               depends_on "rust" => :build
+              depends_on "node" => :build
             end
 
             def install
@@ -2767,7 +2772,8 @@ jobs:
                 system "cargo", "build", "--profile", "prod", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
                 system "cargo", "run", "--release", "-p", "perry-gc-effects", "--", "sidecars", "target/prod"
                 bin.install "target/prod/perry"
-                lib.install Dir["target/prod/libperry_*.a"] + Dir["target/prod/libperry_*.a.gc-effects"]
+                system "node", "scripts/publish/archive-kind.mts", "--stage-host", "target/prod", "host-staging"
+                lib.install Dir["host-staging/libperry_*.a"] + Dir["host-staging/libperry_*.a.gc-effects"]
               end
             end
 
@@ -2864,6 +2870,9 @@ jobs:
 
       - name: Build .deb packages
         run: |
+          node scripts/publish/archive-kind.mts --stage-host staging apt-host
+          rm -rf staging
+          mv apt-host staging
           VERSION="${{ steps.release.outputs.version }}"
           ARCH="${{ matrix.arch }}"
           umask 022
@@ -2920,10 +2929,6 @@ jobs:
             mkdir -p "${pkg_dir}/usr/lib/perry"
             cp "staging/$lib" "${pkg_dir}/usr/lib/perry/"
 
-            # Strip DWARF debug info but keep the symbol table. Perry's
-            # codegen linker still needs the #[no_mangle] symbols, while
-            # release users do not need archive debug sections.
-            strip --strip-debug "${pkg_dir}/usr/lib/perry/$lib" || true
             chmod 644 "${pkg_dir}/usr/lib/perry/$lib"
           }
 
@@ -2979,9 +2984,7 @@ jobs:
           require_staging_file libperry_stdlib.a
 
           MAIN_DEPENDS="libc6 (>= 2.31), gcc | clang, perry-runtime (= ${VERSION}), perry-stdlib (= ${VERSION})"
-          if [ -f staging/libperry_ui_gtk4.a ]; then
-            MAIN_DEPENDS="${MAIN_DEPENDS}, perry-ui-gtk4 (= ${VERSION})"
-          fi
+
 
           MAIN_PKG="perry_${VERSION}_${ARCH}"
           init_package "$MAIN_PKG" \
@@ -3013,16 +3016,7 @@ jobs:
           copy_static_archive libperry_stdlib.a "$STDLIB_PKG"
           build_deb "$STDLIB_PKG"
 
-          if [ -f staging/libperry_ui_gtk4.a ]; then
-            UI_PKG="perry-ui-gtk4_${VERSION}_${ARCH}"
-            init_package "$UI_PKG" \
-              "perry-ui-gtk4" \
-              "" \
-              "Perry GTK4 UI static archive" \
-              "Static GTK4 UI archive used by Perry programs that import the Linux UI backend."
-            copy_static_archive libperry_ui_gtk4.a "$UI_PKG"
-            build_deb "$UI_PKG"
-          fi
+
 
           check_deb_sizes
 
@@ -3352,6 +3346,8 @@ jobs:
           path: |
             npm/perry-target-*/*.tgz
             npm/perry-ext-*/*.tgz
+            npm/perry-ui-*/*.tgz
+            npm/perry-wasm-host-*/*.tgz
           if-no-files-found: error
           compression-level: 0
 
@@ -3380,20 +3376,21 @@ jobs:
           work="$RUNNER_TEMP/target-smoke"
           mkdir -p "$work"
           printf 'console.log("target package ok")\n' > "$work/hello.ts"
-          if "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
+          # A missing target package is fetched from the release by default;
+          # the release this build belongs to may not exist yet.
+          if PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm" > "$work/missing.log" 2>&1; then
             echo "::error::perry compiled --target wasi with no target package installed" >&2
             exit 1
           fi
           grep -F "npm install -g @perryts/perry-target-wasm32-wasip2@" "$work/missing.log"
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
             "./$(tgz perry-target-wasm32-wasip2)"
-          "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile --target wasi "$work/hello.ts" -o "$work/hello.wasm"
           test -s "$work/hello.wasm"
 
       - name: Smoke-test the ext package from a global npm install
-        # node:http links libperry_ext_http.a, which only the ext package has.
-        # With the fetch turned off perry must name both install commands;
-        # with the packed ext package installed beside it, it must link.
+        # The packed host links hello alone; each optional kind refuses its
+        # own package and resolves after only that package is npm-installed.
         shell: bash
         run: |
           set -euo pipefail
@@ -3402,17 +3399,28 @@ jobs:
           perry="$prefix/lib/node_modules/@perryts/perry-linux-x64/bin/perry"
           work="$RUNNER_TEMP/ext-smoke"
           mkdir -p "$work"
+          printf 'console.log("host package ok")\n' > "$work/hello.ts"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/hello.ts" -o "$work/hello"
+          "$work/hello" | grep -Fx "host package ok"
           printf 'import * as http from "http";\nconst s = http.createServer((_q, r) => r.end("ok"));\nconsole.log("ext package ok", typeof s.listen);\n' > "$work/server.ts"
-          if PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/server.ts" -o "$work/server" > "$work/missing.log" 2>&1; then
-            echo "::error::perry linked node:http with no ext package and the fetch off" >&2
-            exit 1
-          fi
-          grep -F "npm install -g @perryts/perry-ext-x86_64-unknown-linux-gnu@" "$work/missing.log"
-          grep -F "perry target add --ext" "$work/missing.log"
+          # (module (func (export "add") (param i32 i32) (result i32) local.get 0 local.get 1 i32.add))
+          printf 'const bytes = new Uint8Array([0,97,115,109,1,0,0,0,1,7,1,96,2,127,127,1,127,3,2,1,0,7,7,1,3,97,100,100,0,0,10,9,1,7,0,32,0,32,1,106,11]);\nconst m = WebAssembly.instantiate(bytes);\nconsole.log("wasm host ok", m.instance.exports.add(2, 3));\n' > "$work/wasm.ts"
+          for pair in server:ext wasm:wasm-host; do
+            program=${pair%:*}
+            kind=${pair#*:}
+            if PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/$program.ts" -o "$work/$program" > "$work/$program-missing.log" 2>&1; then
+              echo "::error::perry linked $program.ts with no matching package and the fetch off" >&2
+              exit 1
+            fi
+            grep -F "npm install -g @perryts/perry-$kind-x86_64-unknown-linux-gnu@" "$work/$program-missing.log"
+            grep -F "perry target add --$kind" "$work/$program-missing.log"
+          done
           npm install -g --prefix "$prefix" --ignore-scripts --no-audit --no-fund \
-            "./$(tgz perry-ext-x86_64-unknown-linux-gnu)"
+            "./$(tgz perry-ext-x86_64-unknown-linux-gnu)" "./$(tgz perry-wasm-host-x86_64-unknown-linux-gnu)"
           PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/server.ts" -o "$work/server"
           "$work/server" | grep -Fx "ext package ok function"
+          PERRY_NO_AUTO_FETCH=1 "$perry" compile "$work/wasm.ts" -o "$work/wasm"
+          "$work/wasm" | grep -Fx "wasm host ok 5"
 
   # ---------------------------------------------------------------------------
   # Publish npm packages (@perryts/perry, the per-platform packages, the
@@ -3516,6 +3524,8 @@ jobs:
           path: |
             npm/perry-target-*/*.tgz
             npm/perry-ext-*/*.tgz
+            npm/perry-ui-*/*.tgz
+            npm/perry-wasm-host-*/*.tgz
           if-no-files-found: error
           compression-level: 0
 

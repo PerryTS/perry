@@ -332,6 +332,11 @@ fn link(value: f64, parent: f64, parent_prototype: fn(f64) -> f64) -> f64 {
             dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
         }
     }
+    if (module, name) == ("worker_threads", "Worker") {
+        let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+        crate::messaging::install_worker_metadata_getters(proto.get_nanbox_f64());
+        crate::messaging::install_worker_async_dispose(proto.get_nanbox_f64());
+    }
     if (module, name) == ("zlib", "#ZlibBase") {
         install_zlib_closed_getter(prototype(ctor.get_nanbox_f64()));
     }
@@ -453,7 +458,7 @@ extern "C" fn own_static_thunk(
             argument_scope.root_nanbox_cell(arg);
         }
     }
-    let result = crate::exception::catch_js_throw(|| unsafe {
+    let result = crate::exception::catch_thrown(|| unsafe {
         let dispatch: crate::value::JsNativeNetDispatchFn = std::mem::transmute(ptr);
         dispatch(
             method.as_ptr(),
@@ -465,7 +470,7 @@ extern "C" fn own_static_thunk(
     drop(argument_scope);
     match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

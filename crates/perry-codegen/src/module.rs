@@ -53,6 +53,7 @@ fn push_statepoint_declarations(ir: &mut String) {
 }
 
 pub struct LlModule {
+    pub(crate) callable_worker: bool,
     /// Per-compile module-state ownership, copied from CompileOptions.
     pub(crate) program_has_worker: bool,
     pub target_triple: String,
@@ -177,6 +178,7 @@ impl LlModule {
 
     pub fn new_with_fp_flags(target_triple: impl Into<String>, fp_flags: FpFlags) -> Self {
         Self {
+            callable_worker: false,
             target_triple: target_triple.into(),
             program_has_worker: false,
             declarations: Vec::new(),
@@ -596,13 +598,19 @@ impl LlModule {
             })
             .map(|f| f.name.clone())
             .collect();
-        let bodies: Vec<_> = self
+        let mut bodies: Vec<_> = self
             .fn_infos
             .borrow()
             .entry_bodies(&exported)
             .into_iter()
             .filter(|body| self.has_function(body))
             .collect();
+        // Module frames append to the existing callable inventory so their
+        // publication cannot change a callable's owner ordinal.
+        bodies.sort_by_key(|body| self.fn_infos.borrow().facts(body).module_frame);
+        let publishes_callables = bodies
+            .iter()
+            .any(|body| !self.fn_infos.borrow().facts(body).module_frame);
         // The bodies the runtime names in a stack trace (a published info
         // with a non-empty name) are the JS text section's functions.
         let named: std::collections::HashSet<&str> = bodies
@@ -620,9 +628,9 @@ impl LlModule {
         for function in &mut self.functions {
             function.js_text = named.contains(function.name.as_str());
         }
-        if bodies.is_empty() {
-            // Publishing an empty descriptor cannot make any metadata visible.
-            // Omit the dead registration at the same final inventory boundary.
+        if !publishes_callables {
+            // Stack-only records are read through static image bounds on demand;
+            // they do not create a startup registration for an empty owner.
             for function in &mut self.functions {
                 for block in function.blocks_mut() {
                     block.insts_mut().retain(|inst| !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_register_function_metadata"));
@@ -679,6 +687,12 @@ impl LlModule {
     /// bodies.  They use this lookup to decide whether flattening that body
     /// before statepoint rewriting stays inside the explicit native-roots
     /// code-size budget.
+    pub(crate) fn function_named_mut(&mut self, name: &str) -> Option<&mut LlFunction> {
+        self.functions
+            .iter_mut()
+            .find(|function| function.name == name)
+    }
+
     pub(crate) fn function_estimated_ir_bytes(&self, name: &str) -> Option<usize> {
         self.functions
             .iter()
@@ -1981,3 +1995,5 @@ fn llvm_metadata_string(text: &str) -> String {
     }
     out
 }
+
+mod callable;

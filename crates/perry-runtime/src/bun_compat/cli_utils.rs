@@ -24,17 +24,16 @@ fn undefined() -> f64 {
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-fn error_value(message: &str) -> f64 {
+fn error_value(message: &str) -> crate::error::CoreError {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_message(message);
-    f64::from_bits(JSValue::pointer(error as *const u8).bits())
+    let error = crate::error::CoreError::error(message);
+    error
 }
-use crate::builtin_value_support::syntax_error_value;
+use crate::builtin_value_support::syntax_error;
 
 fn throw_type_error(message: &str) -> ! {
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(message))
 }
 
 fn number_arg(value: f64) -> Option<f64> {
@@ -141,35 +140,43 @@ extern "C" fn toml_parse_closure(
     let source = value_to_string(input);
     match toml_parse_result_impl(&source) {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(crate::builtin_value_support::DataError::Core(error)) => {
+            crate::exception::throw_core(error)
+        }
+        Err(crate::builtin_value_support::DataError::Open(value)) => {
+            crate::exception::throw_open(value)
+        }
     }
 }
 
 /// Shared by Bun.TOML.parse and the runtime import loader. Returning errors
 /// lets import() reject its promise without throwing through Rust I/O frames.
-pub(crate) fn toml_parse_result_impl(source: &str) -> Result<f64, f64> {
-    // `Value::from_str` in toml 1.x parses a single TOML value expression;
-    // Bun.TOML.parse consumes a complete document, whose root is a table.
+pub(crate) fn toml_parse_result_impl(
+    source: &str,
+) -> Result<f64, crate::builtin_value_support::DataError> {
+    use crate::builtin_value_support::DataError;
+    // Bun consumes a TOML document, whose root is a table.
     let parsed = match toml::from_str::<toml::Table>(source) {
         Ok(parsed) => parsed,
         Err(error) => {
-            return Err(syntax_error_value(&format!(
+            return Err(DataError::Core(syntax_error(&format!(
                 "Failed to parse TOML: {error}"
-            )))
+            ))))
         }
     };
     let json = match serde_json::to_string(&parsed) {
         Ok(json) => json,
         Err(error) => {
-            return Err(syntax_error_value(&format!(
+            return Err(DataError::Core(syntax_error(&format!(
                 "Failed to convert TOML value: {error}"
-            )))
+            ))))
         }
     };
     let source = js_string_from_bytes(json.as_ptr(), json.len() as u32);
-    match unsafe { crate::json_hooks::parse_result(source) } {
-        Ok(value) => Ok(f64::from_bits(value.bits())),
-        Err(error) => Err(error),
+    match unsafe { crate::json_hooks::parse_core_result(source) } {
+        Some(Ok(value)) => Ok(f64::from_bits(value.bits())),
+        Some(Err(error)) => Err(DataError::Core(error)),
+        None => Err(DataError::Open(undefined())),
     }
 }
 
@@ -198,14 +205,14 @@ extern "C" fn semver_order_closure(
     let right_source = value_to_string(right);
     let left = match node_semver::Version::parse(normalize_semver_version(&left_source)) {
         Ok(version) => version,
-        Err(_) => crate::exception::js_throw(error_value(&format!(
+        Err(_) => crate::exception::throw_core(error_value(&format!(
             "Invalid SemVer: {}",
             left_source.trim()
         ))),
     };
     let right = match node_semver::Version::parse(normalize_semver_version(&right_source)) {
         Ok(version) => version,
-        Err(_) => crate::exception::js_throw(error_value(&format!(
+        Err(_) => crate::exception::throw_core(error_value(&format!(
             "Invalid SemVer: {}",
             right_source.trim()
         ))),
@@ -554,7 +561,7 @@ pub extern "C" fn js_bun_which(command: f64, options: f64) -> f64 {
 // zstd, xxHash64, GC and heap snapshots
 // ---------------------------------------------------------------------------
 
-fn zstd_decode(input: f64) -> Result<f64, f64> {
+fn zstd_decode(input: f64) -> Result<f64, crate::error::CoreError> {
     let bytes = payload_bytes(input)?;
     match zstd::stream::decode_all(bytes.as_slice()) {
         Ok(decoded) => Ok(crate::node_submodules::consumers::bytes_to_buffer_value(
@@ -568,7 +575,7 @@ fn zstd_decode(input: f64) -> Result<f64, f64> {
 pub extern "C" fn js_bun_zstd_decompress_sync(input: f64) -> f64 {
     match zstd_decode(input) {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     }
 }
 
@@ -576,7 +583,7 @@ pub extern "C" fn js_bun_zstd_decompress_sync(input: f64) -> f64 {
 pub extern "C" fn js_bun_zstd_decompress(input: f64) -> f64 {
     match zstd_decode(input) {
         Ok(value) => promise_value(value),
-        Err(error) => promise_rejected(error),
+        Err(error) => promise_rejected(error.value()),
     }
 }
 
@@ -645,7 +652,7 @@ fn jsonl_parse_chunk(input: f64, start: f64, end: f64) -> f64 {
     } else {
         match payload_bytes(input) {
             Ok(bytes) => (bytes, false),
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::throw_core(error),
         }
     };
     let mut cursor = number_arg(start)
@@ -721,9 +728,10 @@ fn jsonl_parse_chunk(input: f64, start: f64, end: f64) -> f64 {
         scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(values as *const u8).bits()));
     for (index, (start, end)) in spans.into_iter().enumerate() {
         let source = js_string_from_bytes(bytes[start..end].as_ptr(), (end - start) as u32);
-        let value = match unsafe { crate::json_hooks::parse_result(source) } {
-            Ok(value) => f64::from_bits(value.bits()),
-            Err(error) => crate::exception::js_throw(error),
+        let value = match unsafe { crate::json_hooks::parse_core_result(source) } {
+            Some(Ok(value)) => f64::from_bits(value.bits()),
+            Some(Err(error)) => crate::exception::throw_core(error),
+            None => crate::exception::throw_open(undefined()),
         };
         let value = scope.root_nanbox_f64(value);
         let array = JSValue::from_bits(values.get_nanbox_f64().to_bits())
@@ -732,7 +740,7 @@ fn jsonl_parse_chunk(input: f64, start: f64, end: f64) -> f64 {
     }
 
     let error = if syntax_error {
-        syntax_error_value("Failed to parse JSONL")
+        crate::builtin_value_support::syntax_error("Failed to parse JSONL").value()
     } else {
         null_value()
     };
@@ -969,7 +977,7 @@ fn yaml_parse(input: f64) -> f64 {
     unsafe {
         let mut parser = std::mem::MaybeUninit::<unsafe_libyaml::yaml_parser_t>::uninit();
         if unsafe_libyaml::yaml_parser_initialize(parser.as_mut_ptr()).fail {
-            crate::exception::js_throw(syntax_error_value("Failed to initialize YAML parser"));
+            crate::exception::throw_core(syntax_error("Failed to initialize YAML parser"));
         }
         let mut parser = parser.assume_init();
         unsafe_libyaml::yaml_parser_set_input_string(
@@ -992,7 +1000,7 @@ fn yaml_parse(input: f64) -> f64 {
                 let line = parser.problem_mark.line + 1;
                 let column = parser.problem_mark.column + 1;
                 unsafe_libyaml::yaml_parser_delete(&mut parser);
-                crate::exception::js_throw(syntax_error_value(&format!(
+                crate::exception::throw_core(syntax_error(&format!(
                     "Failed to parse YAML at {line}:{column}: {problem}"
                 )));
             }
@@ -1128,7 +1136,7 @@ unsafe fn yaml_add_js_value(
     };
     if !matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc_object_type_pat!()
+        crate::gc_array_type_pat!() | crate::gc_object_type_pat!()
     ) {
         return 0;
     }
@@ -1138,7 +1146,7 @@ unsafe fn yaml_add_js_value(
         }
     }
 
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(header.obj_type) {
         let style = if flow {
             unsafe_libyaml::YAML_FLOW_SEQUENCE_STYLE
         } else {

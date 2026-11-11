@@ -596,6 +596,7 @@ pub(crate) fn lower_ident_assignment(
                     value: Box::new(Expr::LocalGet(id)),
                     receiver: global_this,
                     strict: ctx.current_strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 },
@@ -715,6 +716,7 @@ fn lower_assignment_target(
                             value,
                             receiver: proxy,
                             strict: ctx.current_strict,
+                            element_offset: member.span.lo.0,
                             byte_offset: 0,
                             byte_end: 0,
                         });
@@ -1024,6 +1026,7 @@ fn lower_assignment_target(
                             value,
                             receiver: object,
                             strict: ctx.current_strict,
+                            element_offset: member.span.lo.0,
                             byte_offset: 0,
                             byte_end: 0,
                         },
@@ -1083,6 +1086,7 @@ fn lower_assignment_target(
                                     value,
                                     receiver: object,
                                     strict: ctx.current_strict,
+                                    element_offset: member.span.lo.0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                 },
@@ -1097,6 +1101,7 @@ fn lower_assignment_target(
                             value,
                             receiver: object,
                             strict: ctx.current_strict,
+                            element_offset: member.span.lo.0,
                             byte_offset: 0,
                             byte_end: 0,
                         },
@@ -1153,11 +1158,10 @@ fn lower_assignment_target(
                 })
             }
         }
-        ast::AssignTarget::Pat(pat) => {
-            // Destructuring assignment: [a, b] = expr or { a, b } = expr
-            // We need to lower this to a sequence of assignments
-            lower_destructuring_assignment(ctx, pat, value)
+        ast::AssignTarget::Pat(pat @ ast::AssignTargetPat::Array(_)) if !suspends(pat) => {
+            array_assignment_iife(ctx, pat, value)
         }
+        ast::AssignTarget::Pat(pat) => lower_destructuring_assignment(ctx, pat, value),
         // Unwrap TypeScript type annotations and parentheses for assignment
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
             lower_expr_assignment(ctx, &paren.expr, value)
@@ -1176,6 +1180,69 @@ fn lower_assignment_target(
         }
         other => Err(anyhow!("Unsupported assignment target: {:?}", other)),
     }
+}
+
+const DESTRUCT_SOURCE: &str = "__perry_destruct_source";
+
+/// Array destructuring in expression position needs the iterator protocol,
+/// which only the statement lowering emits (it needs `try` and `if`). It runs
+/// as `((s) => { <pat> = s; return s; })(value)`: the arrow keeps `this`,
+/// `arguments` and `super` lexical, and the source is evaluated once.
+fn array_assignment_iife(
+    ctx: &mut LoweringContext,
+    pat: &ast::AssignTargetPat,
+    value: Box<Expr>,
+) -> Result<Expr> {
+    use swc_common::DUMMY_SP;
+    let source = || ast::Ident::new_no_ctxt(DESTRUCT_SOURCE.into(), DUMMY_SP);
+    let assign = ast::Stmt::Expr(ast::ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(ast::Expr::Assign(ast::AssignExpr {
+            span: DUMMY_SP,
+            op: ast::AssignOp::Assign,
+            left: ast::AssignTarget::Pat(pat.clone()),
+            right: Box::new(ast::Expr::Ident(source())),
+        })),
+    });
+    let ret = ast::Stmt::Return(ast::ReturnStmt {
+        span: DUMMY_SP,
+        arg: Some(Box::new(ast::Expr::Ident(source()))),
+    });
+    let arrow = ast::ArrowExpr {
+        params: vec![ast::Pat::Ident(source().into())],
+        body: Box::new(ast::ArrowFunctionBody::FunctionBody(ast::FunctionBody {
+            span: DUMMY_SP,
+            stmts: vec![assign, ret],
+        })),
+        ..Default::default()
+    };
+    Ok(Expr::Call {
+        callee: Box::new(super::expr_function::lower_arrow(ctx, &arrow)?),
+        args: vec![*value],
+        type_args: Vec::new(),
+        byte_offset: 0,
+        byte_end: 0,
+    })
+}
+
+/// `await` and `yield` cannot move into the arrow; such a pattern keeps the
+/// element-read lowering.
+fn suspends(pat: &ast::AssignTargetPat) -> bool {
+    use swc_ecma_visit::{Visit, VisitWith};
+    struct Scan(bool);
+    impl Visit for Scan {
+        fn visit_await_expr(&mut self, _: &ast::AwaitExpr) {
+            self.0 = true;
+        }
+        fn visit_yield_expr(&mut self, _: &ast::YieldExpr) {
+            self.0 = true;
+        }
+        fn visit_function(&mut self, _: &ast::Function) {}
+        fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
+    }
+    let mut scan = Scan(false);
+    pat.visit_with(&mut scan);
+    scan.0
 }
 
 /// #5437: prepend a once-evaluated object prelude (`LocalSet(tmp, object)`)
@@ -1286,6 +1353,7 @@ fn compound_member_assign_once(
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
+            element_offset: member.span.lo.0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(base_id)),
@@ -1306,6 +1374,7 @@ fn compound_member_assign_once(
                 object: Box::new(Expr::LocalGet(base_id)),
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
+                element_offset: member.span.lo.0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -1462,9 +1531,28 @@ pub(crate) fn hoist_compound_member_assign(
     let base_binding = immutable_binding(ctx, &base)
         .filter(|_| key.is_none() || key_binding.is_some())
         .or_else(|| unrebound_param(ctx, &base));
-    let base_id = match base_binding {
-        Some(id) => id,
-        None => spill(ctx, &mut stmts, "base", base),
+    // `this` with a static key is read in place, like an immutable binding:
+    // nothing can rebind `this`, and a static key has no evaluation of its
+    // own to order the base read against. In a derived constructor before
+    // `super()` the read of `this.p` still happens first, so the TDZ throw is
+    // unchanged; once the read succeeded, `this` is initialized and stays the
+    // same object for the write. The spill made the receiver a fresh local
+    // per statement, so a loop over `this.f op= v` re-guarded `this` on every
+    // iteration instead of once in the loop region's preheader.
+    // `PERRY_UNBOXED_CLASS_FIELDS=0` restores the spill.
+    let this_in_place = matches!(base, Expr::This)
+        && matches!(member.prop, ast::MemberProp::Ident(_))
+        && !matches!(
+            std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        );
+    let base_ref: Expr = if this_in_place {
+        Expr::This
+    } else {
+        Expr::LocalGet(match base_binding {
+            Some(id) => id,
+            None => spill(ctx, &mut stmts, "base", base),
+        })
     };
 
     // Property name (static) or computed key spilled to its own temp.
@@ -1490,13 +1578,14 @@ pub(crate) fn hoist_compound_member_assign(
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
             byte_offset: 0,
-            object: Box::new(Expr::LocalGet(base_id)),
+            object: Box::new(base_ref.clone()),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
+            element_offset: member.span.lo.0,
             byte_offset: 0,
             byte_end: 0,
-            object: Box::new(Expr::LocalGet(base_id)),
+            object: Box::new(base_ref.clone()),
             index: Box::new(Expr::LocalGet(k)),
         },
         _ => unreachable!(),
@@ -1506,16 +1595,17 @@ pub(crate) fn hoist_compound_member_assign(
     let write_of = |value: Expr| -> Expr {
         match (&prop, key_id) {
             (Some(p), _) => Expr::PropertySet {
-                object: Box::new(Expr::LocalGet(base_id)),
+                object: Box::new(base_ref.clone()),
                 property: p.clone(),
                 value: Box::new(value),
                 byte_offset: 0,
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(base_id)),
+                object: Box::new(base_ref.clone()),
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
+                element_offset: member.span.lo.0,
                 byte_offset: 0,
                 byte_end: 0,
             },

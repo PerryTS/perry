@@ -123,7 +123,7 @@ extern "C" fn source_map_line_lengths_getter(
         return module_undefined();
     }
     let gc = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(gc.obj_type) {
         return module_undefined();
     }
     let cloned = crate::array::js_array_clone(ptr as *const crate::array::ArrayHeader);
@@ -412,7 +412,7 @@ fn source_map_array_element(payload: f64, field: &str, index: i64) -> f64 {
         return undefined_value();
     }
     let gc = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(gc.obj_type) {
         return undefined_value();
     }
     let arr = ptr as *const crate::array::ArrayHeader;
@@ -525,7 +525,7 @@ fn source_map_array_value(payload: f64, field: &str) -> Option<f64> {
         return None;
     }
     let gc = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    (gc.obj_type == crate::gc::GC_TYPE_ARRAY).then_some(value)
+    (crate::gc_type_is_array!(gc.obj_type)).then_some(value)
 }
 
 fn source_map_entry_payload(payload: f64, section_path: &[u32]) -> f64 {

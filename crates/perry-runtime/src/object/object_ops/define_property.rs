@@ -208,8 +208,7 @@ pub(crate) unsafe fn throw_definition_rejected(
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     drop(message);
     drop(name);
-    let error = crate::error::js_typeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(string));
 }
 
 pub(crate) unsafe fn definition_target_is_object(value: f64) -> bool {
@@ -226,12 +225,38 @@ pub(crate) unsafe fn define_own_property_decoded(
     key: &crate::gc::RuntimeHandle<'_>,
     descriptor: &DescView<'_>,
 ) -> bool {
+    if let Some(result) = super::super::deferred_namespace::with_key_target(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        |target, property_key| {
+            let receiver = scope.root_nanbox_f64(target);
+            let key = scope.root_nanbox_f64(property_key);
+            define_own_property_decoded_ordinary(scope, &receiver, &key, descriptor)
+        },
+    ) {
+        return result;
+    }
+    define_own_property_decoded_ordinary(scope, receiver, key, descriptor)
+}
+
+unsafe fn define_own_property_decoded_ordinary(
+    scope: &crate::gc::RuntimeHandleScope,
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: &crate::gc::RuntimeHandle<'_>,
+    descriptor: &DescView<'_>,
+) -> bool {
     // Object model §3.2: defining an optional layout key whose slot holds the
-    // hole defines a new property (`layout_desc::prepare_hole_define`).
-    crate::object::layout_desc::prepare_hole_define(
+    // hole defines a new property (`layout_desc::prepare_hole_define`); a
+    // data definition with exactly the attributes the layout carries the key
+    // with fills the slot (a constructor's `Object.defineProperty(this, k,
+    // {...})`), and is then complete.
+    if crate::object::layout_desc::prepare_hole_define(
         receiver.get_nanbox_u64(),
         key.get_nanbox_u64(),
-    );
+        descriptor,
+    ) {
+        return true;
+    }
     let current = f64::from_bits(receiver.get_nanbox_u64());
     if crate::array::subclass_elements::backed_value(current).is_some()
         && crate::array::subclass_elements::key_of_value(key.get_nanbox_f64()).is_some()
@@ -295,6 +320,9 @@ pub(crate) unsafe fn apply_property_descriptor(
     descriptor: &crate::object::object_ops::DescView<'_>,
 ) -> bool {
     unsafe {
+        // DEC 250: a definition that touches a built-in member is a redefine,
+        // reported before any store (the stores below would say "replace").
+        note_definition_target(obj_value, key_value);
         // #6748 follow-up: classify the receiver ONCE. A `GC_TYPE_OBJECT` that
         // is not an exotic cell (RegExp is the one OBJECT-typed exotic) cannot
         // be a proxy or handle id, a typed array, a buffer, a closure, or an
@@ -315,8 +343,9 @@ pub(crate) unsafe fn apply_property_descriptor(
         // through array hole/OOB reads — flip the global flag.
         {
             let kb = key_value.to_bits();
-            let is_numeric_key =
-                (kb >> 48) == 0x7FFE || crate::value::JSValue::from_bits(kb).is_number() || {
+            let is_numeric_key = crate::value::is_int32_bits(kb)
+                || crate::value::JSValue::from_bits(kb).is_number()
+                || {
                     let sp = crate::value::js_get_string_pointer_unified(key_value)
                         as *const crate::StringHeader;
                     !sp.is_null()
@@ -519,13 +548,6 @@ pub(crate) unsafe fn apply_property_descriptor(
             return true;
         }
 
-        // Legacy prototype refs denote the same ordinary object as a
-        // reflective C.prototype read. Define the descriptor on that holder.
-        if let Some(cid) = super::super::class_prototype_ref_id(obj_value) {
-            let proto = super::super::class_registry::class_decl_prototype_value(cid);
-            let proto = scope.root_nanbox_u64(proto.to_bits());
-            return define_own_property_decoded(scope, &proto, &key_handle, descriptor);
-        }
         // Constructor refs use their static property storage.
         if let Some(target_cid) = super::super::class_ref_id(obj_value) {
             if crate::symbol::js_is_symbol(key_value) != 0 {
@@ -540,14 +562,10 @@ pub(crate) unsafe fn apply_property_descriptor(
                 );
             }
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
-                // #10480: a declared accessor — instance on the prototype ref,
-                // static on the class ref — keeps its get/set under a generic
-                // descriptor; only its attributes change.
+                // #10480: a declared static accessor keeps its get/set under a
+                // generic descriptor; only its attributes change.
                 if let Some(verdict) = super::define_class_accessor::define_declared_class_accessor(
-                    target_cid,
-                    super::super::class_prototype_ref_id(obj_value).is_none(),
-                    &name,
-                    descriptor,
+                    target_cid, &name, descriptor,
                 ) {
                     return verdict;
                 }
@@ -593,8 +611,7 @@ pub(crate) unsafe fn apply_property_descriptor(
 
                 let has_get = descriptor.has_named(b"get");
                 let has_set = descriptor.has_named(b"set");
-                if super::super::class_prototype_ref_id(obj_value).is_none() && (has_get || has_set)
-                {
+                if has_get || has_set {
                     let get_field = descriptor.read_named(b"get");
                     let get_field = scope.root_nanbox_u64(get_field.bits());
                     let set_field = descriptor.read_named(b"set");
@@ -639,14 +656,10 @@ pub(crate) unsafe fn apply_property_descriptor(
                     // static keeps every attribute the descriptor omits (a
                     // declared `static x` is writable+enumerable+configurable);
                     // a new key defaults them to false.
-                    let existing_static = super::super::class_prototype_ref_id(obj_value)
-                        .is_none()
-                        .then(|| {
-                            super::super::class_registry::class_own_static_field_value(
-                                target_cid, &name,
-                            )
-                        })
-                        .flatten()
+                    let existing_static =
+                        super::super::class_registry::class_own_static_field_value(
+                            target_cid, &name,
+                        )
                         .map(|_| {
                             super::super::class_registry::class_static_defined_attrs(
                                 target_cid, &name,
@@ -654,76 +667,58 @@ pub(crate) unsafe fn apply_property_descriptor(
                             .unwrap_or((true, true, true))
                         });
                     if !value_field.is_undefined() || has_value || existing_static.is_some() {
-                        // #7190: `C` and `C.prototype` both answer
-                        // `class_ref_id` with the SAME class id — the arm this
-                        // sits in exists because `C.prototype` maps back to the
-                        // class in Perry. So the two receivers were
-                        // indistinguishable here, and every define took the
-                        // prototype route. That is right for
-                        // `Object.defineProperty(C.prototype, …)` (the drizzle
-                        // `applyMixins` case this arm was written for) and wrong
-                        // for `Object.defineProperty(C, …)`, which is a STATIC
-                        // own property: `C.zzz` came back `undefined`, and so
-                        // did `new C().zzz`, so the value went nowhere at all.
-                        //
-                        // `class_prototype_ref_id` is the discriminator — it
-                        // answers only for the prototype ref — and it is what
-                        // `descriptors.rs` already uses to tell the two apart
-                        // when reporting descriptors.
-                        if super::super::class_prototype_ref_id(obj_value).is_none() {
-                            // A static own property lands in CLASS_DYNAMIC_PROPS,
-                            // the same table `static x = …` and
-                            // `js_class_register_static_field` write to, so the
-                            // existing static read path finds it with no new
-                            // lookup.
-                            if has_value || existing_static.is_none() {
-                                super::super::class_registry::class_dynamic_prop_root_store(
-                                    target_cid,
-                                    &name,
-                                    f64::from_bits(value_field.bits()),
-                                );
-                            }
-                            // A data descriptor is non-enumerable unless it
-                            // says otherwise; a `static x = …` field IS
-                            // enumerable, and both share CLASS_DYNAMIC_PROPS.
-                            // Record which this was, or `Object.keys(C)` gains
-                            // a key node does not report.
-                            // ECMA-262 [[DefineOwnProperty]]: a field the
-                            // descriptor omits DEFAULTS to false on a new
-                            // property but is RETAINED on an existing one. The
-                            // built-in `name`/`length` slots are
-                            // `configurable: true`, which is why redefining
-                            // `name` without saying `configurable` must stay
-                            // configurable — while a brand-new key must not.
-                            let has_cfg = descriptor.has_named(b"configurable");
-                            let configurable = if has_cfg {
-                                crate::value::js_is_truthy(f64::from_bits(
-                                    descriptor.read_named(b"configurable").bits(),
-                                )) != 0
-                            } else {
-                                existing_static
-                                    .map(|(_, _, cfg)| cfg)
-                                    .unwrap_or(matches!(name.as_str(), "name" | "length"))
-                            };
-                            let writable = if descriptor.has_named(b"writable") {
-                                descriptor.flag(b"writable").unwrap_or(false)
-                            } else {
-                                existing_static.is_some_and(|(w, _, _)| w)
-                            };
-                            let enumerable = if descriptor.has_named(b"enumerable") {
-                                descriptor.flag(b"enumerable").unwrap_or(false)
-                            } else {
-                                existing_static.is_some_and(|(_, e, _)| e)
-                            };
-                            super::super::class_registry::class_static_set_defined_attrs(
+                        // A static own property lands in CLASS_DYNAMIC_PROPS,
+                        // the same table `static x = …` and
+                        // `js_class_register_static_field` write to, so the
+                        // existing static read path finds it with no new
+                        // lookup.
+                        if has_value || existing_static.is_none() {
+                            super::super::class_registry::class_dynamic_prop_root_store(
                                 target_cid,
                                 &name,
-                                writable,
-                                enumerable,
-                                configurable,
+                                f64::from_bits(value_field.bits()),
                             );
-                            return true;
                         }
+                        // A data descriptor is non-enumerable unless it
+                        // says otherwise; a `static x = …` field IS
+                        // enumerable, and both share CLASS_DYNAMIC_PROPS.
+                        // Record which this was, or `Object.keys(C)` gains
+                        // a key node does not report.
+                        // ECMA-262 [[DefineOwnProperty]]: a field the
+                        // descriptor omits DEFAULTS to false on a new
+                        // property but is RETAINED on an existing one. The
+                        // built-in `name`/`length` slots are
+                        // `configurable: true`, which is why redefining
+                        // `name` without saying `configurable` must stay
+                        // configurable — while a brand-new key must not.
+                        let has_cfg = descriptor.has_named(b"configurable");
+                        let configurable = if has_cfg {
+                            crate::value::js_is_truthy(f64::from_bits(
+                                descriptor.read_named(b"configurable").bits(),
+                            )) != 0
+                        } else {
+                            existing_static
+                                .map(|(_, _, cfg)| cfg)
+                                .unwrap_or(matches!(name.as_str(), "name" | "length"))
+                        };
+                        let writable = if descriptor.has_named(b"writable") {
+                            descriptor.flag(b"writable").unwrap_or(false)
+                        } else {
+                            existing_static.is_some_and(|(w, _, _)| w)
+                        };
+                        let enumerable = if descriptor.has_named(b"enumerable") {
+                            descriptor.flag(b"enumerable").unwrap_or(false)
+                        } else {
+                            existing_static.is_some_and(|(_, e, _)| e)
+                        };
+                        super::super::class_registry::class_static_set_defined_attrs(
+                            target_cid,
+                            &name,
+                            writable,
+                            enumerable,
+                            configurable,
+                        );
+                        return true;
                     }
                 }
             }
@@ -1285,4 +1280,36 @@ pub(crate) unsafe fn apply_property_descriptor(
         super::super::arguments_object_after_define(obj, key_str, descriptor);
         true
     }
+}
+
+/// Reports a DefineOwnProperty of the key on the receiver to the built-in lock.
+unsafe fn note_definition_target(obj_value: f64, key_value: f64) {
+    let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
+    if !jv.is_pointer() {
+        return;
+    }
+    let addr = jv.as_pointer::<u8>() as usize;
+    // Only a string key is read as text: `js_get_string_pointer_unified`
+    // hands back any pointer-tagged value's address, and a symbol read as a
+    // `StringHeader` is a read of the wrong allocation.
+    let key = crate::value::JSValue::from_bits(key_value.to_bits());
+    let sp = if key.is_string() || key.is_short_string() {
+        crate::value::js_get_string_pointer_unified(key_value) as *const crate::StringHeader
+    } else {
+        std::ptr::null()
+    };
+    let bytes = if sp.is_null() {
+        None
+    } else {
+        super::super::has_own_helpers::str_from_string_header(sp)
+    };
+    let key = match bytes {
+        Some(name) => crate::object::builtin_proto::Key::Bytes(name.as_bytes()),
+        None => crate::object::builtin_proto::Key::Value(key_value),
+    };
+    crate::object::builtin_proto::note_write_addr(
+        addr,
+        crate::object::builtin_proto::Mutation::Redefine(key),
+        "defineProperty",
+    );
 }

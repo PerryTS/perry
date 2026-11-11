@@ -72,11 +72,12 @@ pub extern "C" fn js_worker_threads_worker_new_with_source(
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let filename = scope.root_nanbox_f64(filename);
     let options = scope.root_nanbox_f64(options);
-    let outcome = perry_runtime::exception::catch_js_throw(|| {
+    let outcome = perry_runtime::exception::catch_thrown(|| {
         let argv =
             scope.root_nanbox_f64(super::WorkerOptions::prepare_argv(options.get_nanbox_f64()));
         let eval = get_object_field_from_value(options.get_nanbox_f64(), "eval");
-        let (init, source) = if perry_runtime::value::js_is_truthy(eval) != 0 {
+        let is_eval = perry_runtime::value::js_is_truthy(eval) != 0;
+        let (init, source) = if is_eval {
             if !JSValue::from_bits(filename.get_nanbox_f64().to_bits()).is_any_string() {
                 let received = scope.root_nanbox_f64(get_object_field_from_value(
                     options.get_nanbox_f64(),
@@ -110,12 +111,12 @@ pub extern "C" fn js_worker_threads_worker_new_with_source(
             options.get_nanbox_f64(),
             argv.get_nanbox_f64(),
         );
-        super::worker_new_prepared(init, options.get_nanbox_f64(), state, Some(source))
+        super::worker_new_prepared(init, options.get_nanbox_f64(), state, Some(source), is_eval)
     });
     drop(scope);
     match outcome {
         Ok(value) => value,
-        Err(error) => perry_runtime::exception::js_throw(error),
+        Err(error) => perry_runtime::exception::rethrow_caught(error),
     }
 }
 

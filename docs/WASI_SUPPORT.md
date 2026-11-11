@@ -11,6 +11,20 @@ provide the imported members as well as Wasm exception handling; a generic
 host. A macOS check with Wasmtime **44.0.0** first required `-W exceptions=y`
 and then failed because `wasi:cli/exit@0.2.12`'s `exit-with-code` was missing.
 
+## Target names
+
+| WASI version | `--target` | Also accepted | Output | Run with Wasmtime |
+| --- | --- | --- | --- | --- |
+| 0.1 (Preview 1) | `wasip1` | `wasm32-wasip1` | Core module | `wasmtime run -W exceptions=y app.wasm` |
+| 0.2 (Preview 2) | `wasi` | `wasip2`, `wasm32-wasip2` | Command component | `wasmtime run -W exceptions=y app.wasm` |
+| 0.3 (Preview 3) | none yet | `wasip3` and `wasm32-wasip3` fail with an error | | |
+
+`wasm32-wasip1` and `wasm32-wasip2` are the triples wasi-sdk and Rust use. The
+short `wasi` name predates the preview 1 output and stays the canonical name of
+the WASI 0.2 target; every spelling in a row builds the same output. Wasmtime
+48 enables exception handling by default, so `-W exceptions=y` only matters for
+older hosts and is harmless on newer ones.
+
 ## Output versus hosting
 
 WASI versions here mean 0.1 (Preview 1), 0.2 (Preview 2), and 0.3
@@ -173,6 +187,19 @@ skips relocation compression and wasm-opt, which change debug offsets.
 - Arguments, environment variables, standard output, and filesystem access
   through explicit directory preopens. Denied filesystem access raises a
   catchable error.
+- `for await (const chunk of process.stdin)` without threads: the event loop
+  polls fd 0 and an idle loop waits in that poll, as on preview 1. Before
+  #13953 the stdin reader was a thread, and its spawn panicked with
+  `failed to spawn thread: ... Not supported`. `process.stdin.on("data")`
+  uses perry-stdlib's readline, which both WASI archives bundle.
+- perry-stdlib and the Node module crates (http/http2, zlib, ws) ride in the
+  runtime archive of both WASI targets, as one Rust staticlib under one
+  allocator (`perry-runtime-static`'s `wasi-node-modules`): web streams,
+  webcrypto, `node:crypto` and the http modules link under `--target wasi` as
+  under `--target wasip1`. The linker keeps only what the program reaches.
+- `navigator.userAgent` is `"Node.js/22"` and `process.version` is `v22.0.0`
+  on every target, WASI included. These are compatibility values for code
+  that feature-detects Node; no Node.js is embedded or required.
 - UTC date operations. Local-time operations use the existing UTC fallback.
 - Nested exceptions, catch/finally/rethrow, runtime-originated errors and
   errors crossing promise callbacks. Generated regions use wasm-native
@@ -196,6 +223,21 @@ skips relocation compression and wasm-opt, which change debug offsets.
   read/write, write-side shutdown and close. The runtime static archive bundles
   the existing net extension and its callback bridges with one Rust allocator.
   Network denial produces the socket's normal asynchronous error event.
+- `node:dgram` UDP sockets over wasi-libc's WASIp2 UDP, polled by the same
+  event-loop pump. `reuseAddr` is accepted and does nothing: WASI sockets have
+  no `SO_REUSEADDR`, so a second bind of the same address fails as an ordinary
+  `EADDRINUSE`. `ipv6Only: true` and multicast source/interface options raise
+  `ENOTSUP`.
+- Node-API addons linked statically into the component. A package listed in
+  `perry.nativeAddons` declares its wasm32 build as
+  `{"name": "<pkg>", "wasm": {"<entry .node path>": ["<archive>", ...]}}`
+  (archive paths relative to the project `package.json`). Perry pre-links each
+  addon's archives into one relocatable object rooted at
+  `napi_register_wasm_v1`, makes every other symbol of it local (two addons
+  may define the same names), and registers it under the native logical id,
+  so `require` of the entry resolves to it as it does to the sidecar addon on
+  native targets. Addons are built without C++ exceptions (the noeh libc++
+  is linked); `.node` files themselves are never loaded on WASI.
 - `parallelMap`/`parallelFilter` run sequentially; `spawn` is deferred on the
   current agent with promise adoption and rejection. Captured references and
   pending results remain rooted. There are no parallel WASIp2 worker threads.
@@ -203,8 +245,8 @@ skips relocation compression and wasm-opt, which change debug offsets.
   `child_process is not supported on WASI`, including fork and async creation.
 
 The net extension builds its rustls client path with WebPKI roots on WASI;
-TLS interoperability is not established by the TCP acceptance probes. UDP
-(`mod-dgram`), Unix-domain/named pipes, native addons, host process creation,
+TLS interoperability is not established by the TCP acceptance probes.
+Unix-domain/named pipes, loaded (`.node`) addons, host process creation,
 and general platform-specific Node/Bun APIs are outside the tested profile.
 This is not a claim of complete Node API compatibility. Fresh compiler/runtime
 builds pass on Linux, macOS and Windows, as detailed below. Typed library
@@ -322,7 +364,7 @@ python scripts/wasi_run.py target/debug/perry.exe --suite gap --node <path-to-pi
 The checksum-pinned PowerShell installer supports Windows x64 and ARM64;
 only x64 was tested. The runtime build uses standard release settings and
 all runtime default features except the 64-bit-only allocator (`alloc-mimalloc`).
-UDP transport is excluded by the wasm32 target configuration. LLVM development headers
+LLVM development headers
 are needed to build the wasm exception-model target-options shim.
 
 On x86_64 or ARM64 Linux/macOS, configure tools with the checksum-pinned shell
@@ -351,7 +393,7 @@ and `PERRY_GC_VERIFY_EVACUATION=1` in the guest environment.
 Harness and ABI checks:
 
 ```powershell
-python scripts/test_wasi_run.py
+python tests/tooling/infrastructure/test_wasi_run.py
 python scripts/runtime_abi_check.py --self-test
 python scripts/runtime_abi_check.py --check-wasm-abi
 python -X utf8 scripts/check_actions_topology.py

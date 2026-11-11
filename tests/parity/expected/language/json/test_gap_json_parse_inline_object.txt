@@ -1,0 +1,11 @@
+fresh true {"a":1,"b":true} {"a":2,"b":false}
+independent {"a":7,"c":"new"} {"a":2,"b":false} {"a":3,"b":true}
+values 0 799980000 5000 4999
+duplicate {"b":3,"a":2}
+numeric {"2":2,"9":1,"x":3}
+zero true
+DEC 250: Cannot add member Object.prototype.a: built-in objects are read-only in a compiled program
+own 0 42 true
+reviver 3 {"a":2,"b":true}
+invalid 7
+cache 0 {"b":false,"a":4}

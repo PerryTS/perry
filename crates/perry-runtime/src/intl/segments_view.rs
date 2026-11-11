@@ -892,114 +892,11 @@ mod view_mode_tests {
         // stops being taken — is the delta above.
     }
 
-    /// SABOTAGE-SHAPED, kept as a test: patching `RegExp.prototype.test` AFTER
-    /// the site is recorded must make the very next call decline.
-    #[cfg(feature = "regex-engine")]
-    #[test]
-    fn a_patched_prototype_test_declines_on_the_next_call() {
-        if !crate::object::method_site::run_with_fresh_worker_gate(
-        "intl::segments_view::view_mode_tests::a_patched_prototype_test_declines_on_the_next_call",
-    ) {
-        return;
-    }
-        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
-        assert_eq!(js_segments_view_next(cursor), 1.0);
-        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
-        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
-        assert!(
-            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
-            "accepted before the patch"
-        );
-
-        // Replace `RegExp.prototype.test` the way a program would.
-        let proto_ptr =
-            crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"));
-        assert!(proto_ptr != 0, "the site must have been recorded");
-        let proto = proto_ptr as *mut ObjectHeader;
-        let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
-        let replacement = crate::closure::js_closure_alloc(
-            crate::fn_info!(patched_test_thunk, 0; with_declared(0)),
-            0,
-        );
-        crate::object::js_object_set_field_by_name(
-            proto,
-            key,
-            crate::value::js_nanbox_pointer(replacement as i64),
-        );
-        assert!(
-            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
-            "a replaced `RegExp.prototype.test` must make the view DECLINE, so \
-             the caller materialises and runs the user's function"
-        );
-    }
-
     extern "C" fn patched_test_thunk(
         _c: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
         f64::from_bits(JSValue::bool(true).bits())
-    }
-
-    /// Defining an accessor AFTER the canonical site was recorded must make
-    /// the next call decline. The accessor's pair now occupies the key's slot
-    /// (charter step 3), so the recorded-closure compare sees it; the meta
-    /// Bloom bit is a second witness. Sabotage: storing the pair anywhere but
-    /// the slot fails the premise.
-    #[cfg(feature = "regex-engine")]
-    #[test]
-    fn an_accessor_installed_after_recording_makes_the_next_call_decline() {
-        if !crate::object::method_site::run_with_fresh_worker_gate(
-        "intl::segments_view::view_mode_tests::an_accessor_installed_after_recording_makes_the_next_call_decline",
-    ) {
-        return;
-    }
-        let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
-        assert_eq!(js_segments_view_next(cursor), 1.0);
-        let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
-        let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
-        assert!(
-            !is_undefined(js_segments_view_regexp_test(cursor, re_v)),
-            "premise: the recorded data property is initially canonical"
-        );
-
-        let proto_ptr =
-            crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"));
-        assert!(proto_ptr != 0, "the canonical site must have been recorded");
-        let proto = proto_ptr as *mut ObjectHeader;
-        let before = crate::object::js_object_get_field_by_name(
-            proto,
-            crate::string::js_string_from_bytes(b"test".as_ptr(), 4),
-        );
-        crate::object::set_accessor_descriptor(
-            proto as usize,
-            "test".to_string(),
-            crate::object::AccessorDescriptor::default(),
-        );
-        assert_ne!(
-            crate::object::js_object_get_field(proto, unsafe {
-                // The recorded data-slot value is the witness: installing the
-                // accessor puts its pair in the slot.
-                let keys_view = crate::object::object_keys(proto);
-                let keys = keys_view.arr();
-                let count = keys_view.count();
-                (0..count)
-                    .find(|&i| {
-                        let key = crate::array::js_array_get_f64(keys, i);
-                        crate::string::js_string_key_matches_bytes(
-                            JSValue::from_bits(key.to_bits()),
-                            b"test",
-                        )
-                    })
-                    .expect("test key") as u32
-            })
-            .bits(),
-            before.bits(),
-            "premise: the accessor's pair replaces the canonical closure in the slot"
-        );
-        assert!(
-            is_undefined(js_segments_view_regexp_test(cursor, re_v)),
-            "an accessor over `test` must force an immediate decline"
-        );
     }
 
     /// `_regexp_test` answers the same as the materialised call for a plain

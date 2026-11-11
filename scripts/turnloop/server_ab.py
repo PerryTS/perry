@@ -94,7 +94,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-APP = ROOT / "scripts/turnloop/apps/node_http_hello.ts"
+APP = ROOT / "tests/integration/turnloop/apps/node_http_hello.ts"
 
 ARMS = ("turnloop", "tokio")
 # The tokio arm carries no extra features. It used to be selected in-tree by
@@ -1594,7 +1594,7 @@ def markdown(summary, doc):
 
 # ─── callgrind: instructions EXECUTED, deterministic, microbenchmarks only ───
 
-CALLGRIND_PROBES = sorted((ROOT / "test-files").glob("test_turnloop_p0_*.ts"))
+CALLGRIND_PROBES = sorted((ROOT / "tests/parity/node-suite/timers").glob("test_turnloop_p0_*.ts"))
 IR_RE = re.compile(r"I\s+refs:\s+([\d,]+)")
 
 CALLGRIND_NOTE = """\

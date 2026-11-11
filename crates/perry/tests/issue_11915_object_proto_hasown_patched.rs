@@ -40,17 +40,21 @@ fn compile_and_run(dir: &std::path::Path, source: &str) -> String {
 }
 
 #[test]
-fn object_prototype_hasownproperty_call_observes_patched_method() {
+fn object_prototype_hasownproperty_replacement_is_a_type_error_and_call_still_works() {
     let dir = tempfile::tempdir().expect("tempdir");
     let stdout = compile_and_run(
         dir.path(),
         r#"
 const original = Object.prototype.hasOwnProperty;
-Object.prototype.hasOwnProperty = ((key: PropertyKey) => "patched:" + String(key)) as any;
-console.log(Object.prototype.hasOwnProperty.call({ x: 1 }, "x"));
-Object.prototype.hasOwnProperty = original;
+try {
+  Object.prototype.hasOwnProperty = ((key: PropertyKey) => "patched:" + String(key)) as any;
+  console.log("no throw");
+} catch (e) {
+  console.log(e instanceof TypeError);
+}
+console.log(Object.prototype.hasOwnProperty === original);
 console.log(Object.prototype.hasOwnProperty.call({ x: 1 }, "x"));
 "#,
     );
-    assert_eq!(stdout, "patched:x\ntrue\n");
+    assert_eq!(stdout, "true\ntrue\ntrue\n");
 }

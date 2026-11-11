@@ -140,6 +140,7 @@ fn assert_seen_headers(label: &str, seen: &[usize], expected: &[usize]) {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 fn synthetic_old_block_range() -> (usize, usize) {
     (0x4000_0000_0000usize, GENERATION_PAGE_SIZE * 3)
 }
@@ -220,6 +221,7 @@ fn old_page_metadata_snapshot_is_sorted_by_page() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn old_page_metadata_reregisters_after_block_metadata_removal() {
     run_with_fresh_arenas(|| {
@@ -290,6 +292,7 @@ fn old_page_metadata_distributes_multi_page_object_bytes_and_indexes_pages() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn old_page_metadata_removes_object_and_block_metadata() {
     run_with_fresh_arenas(|| {
@@ -346,6 +349,7 @@ fn generation_metadata_classifies_arena_regions() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn generation_metadata_bucket_keeps_exact_range_boundaries() {
     run_with_fresh_arenas(|| {
@@ -1556,6 +1560,7 @@ fn deferred_registration_flush_sites() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A synthetic old-gen block plus `count` distinct in-range header addresses.
 /// Registration never dereferences a header, so fabricated addresses exercise
 /// the bookkeeping exactly as real ones do — and keep the test independent of
@@ -1636,6 +1641,7 @@ fn every_cycle_constructor_routes_through_the_flush_point() {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn deferral_buffer_flushes_at_its_size_cap() {
     run_with_fresh_arenas(|| {
@@ -1654,6 +1660,7 @@ fn deferral_buffer_flushes_at_its_size_cap() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// Each reader of the two tables, one obligation per assertion. Delete any one
 /// `flush_deferred_old_page_registrations()` in `page_meta.rs` and exactly one
 /// of these goes red.
@@ -1709,6 +1716,7 @@ fn every_index_reader_flushes_before_reading() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The remover obligation, and the one that is easiest to get wrong: a removal
 /// that runs while the object is still only DEFERRED is a no-op, and the later
 /// flush then puts the dead object back. Registration ORDER, not just eventual
@@ -1762,6 +1770,7 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A copying minor's promotion owes its pages the live (and pinned) accounting
 /// as well as the registration; both ride one deferred entry. The flush must
 /// count every promoted object live on every page it overlaps — a
@@ -1808,6 +1817,7 @@ fn promoted_deferral_applies_live_and_pinned_page_accounting() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The batched flush skips the dedup scan over entries added within the same
 /// batch. That is only sound if it still catches the case the dedup exists for:
 /// hole reuse handing back an address registered BEFORE the batch.

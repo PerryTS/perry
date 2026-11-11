@@ -324,6 +324,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
     // The row stays so that no other runtime word moves.
     "CJS_MODULE_RECORD",
+    "DGRAM_RINFO",
     "DUPLEX",
     "DUPLEX_PROTOTYPE",
     "EE_ASYNC_RESOURCE_PROTO",
@@ -571,7 +572,7 @@ mod tests {
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 126);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 127);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
             assert_eq!(native_layout_row(name).0, 11 + i as u32);
@@ -609,6 +610,11 @@ const _: () = {
 /// reads the name without validating it. Clear, the name is validated, and one
 /// that is not UTF-8 (a WTF-8 name) names no member.
 pub const CLASS_MEMBER_NAME_UTF8: u8 = 4;
+/// `ClassMemberDecl.flags`: the member is keyed by a symbol the compiler knows
+/// (a well-known symbol or `Symbol.for("lit")`); the name bytes are that
+/// symbol's `Symbol.for` spelling (`@@__perry_wk_<name>` or the registry key),
+/// never a string key.
+pub const CLASS_MEMBER_NAME_SYMBOL: u8 = 8;
 
 /// Explicit dynamic mints: all returns and finalizer carriers are LayoutWords.
 pub mod dynamic_layout_ffi {

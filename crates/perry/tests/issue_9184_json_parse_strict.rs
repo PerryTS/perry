@@ -18,7 +18,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn json_parse_matches_node_across_strict_syntax_battery() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = workspace_root().join("test-files/test_issue_9184_json_parse_strict.ts");
+    let entry =
+        workspace_root().join("tests/parity/language/json/test_issue_9184_json_parse_strict.ts");
     let output = dir.path().join("main_bin");
 
     let compile = Command::new(perry_bin())

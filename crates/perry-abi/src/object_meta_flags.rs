@@ -51,6 +51,17 @@ pub const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
 pub const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 /// Mask of the sealed intrinsic's family after the shift.
 pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
+/// DEC 250 (locked built-ins): on a sealed intrinsic (bit 3), bits 16..31
+/// hold the number of own keys the realm image gave it, PLUS ONE (0 = not
+/// yet recorded). The runtime records it at the program's first mutation of
+/// the object, while its layout is still the image's; from then on a key at
+/// a position below the count is an image member the program never writes
+/// (`builtin_proto::note_sealed_write`). Like the family field, it lives in
+/// the verified-prefix-bound bits an Array-subclass instance uses, which a
+/// sealed intrinsic never is.
+pub const OBJECT_META_IMAGE_KEYS_SHIFT: u32 = 16;
+/// Mask of the image key count (plus one) after the shift.
+pub const OBJECT_META_IMAGE_KEYS_MASK: u64 = 0xFFFF;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in
 // `array/subclass.rs` and every reader in the tree:
@@ -65,7 +76,8 @@ pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***
 //   bits 8..31 verified prefix bound              (#8690)
 //              — on a sealed intrinsic (bit 3), bits 8..13 are its
-//              family instead (#11915; never both)
+//              family instead (#11915; never both) and bits 16..31 its
+//              image key count + 1 (DEC 250; 0 = not yet recorded)
 //   bits 32..63 exact semantic ShapeId            (#8690)
 //
 // `PACKED_NUMERIC_META_MASK` clears only bits 1, 2 and 8..63, so bits 0 and

@@ -24,7 +24,7 @@ pub(super) unsafe fn checked_slot(
     let address = (obj as *mut u8)
         .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
         .cast::<u64>();
-    let rep = crate::object::field_rep::slot_rep((*r).rep, slot);
+    let rep = (*r).lane(slot);
     if bits & 0x7ff0_0000_0000_0000 != 0x7ff0_0000_0000_0000
         && rep != crate::object::field_rep::REP_SPECIAL
     {

@@ -1,10 +1,14 @@
-//! A failed spawn has no live reactor entry to deliver output-pipe EOF.
-//! Finish those empty streams after the child error and before child close.
+//! A failed spawn has no live reactor entry. On unix its pipe slots are
+//! sockets whose child ends never reached a child, so they read EOF and close
+//! by themselves, and `'close'` is counted on the ChildProcess
+//! (`reactor::cp_attach_failed_pipe_sockets`). Elsewhere the empty streams are
+//! finished after the child error and before child close.
 use super::*;
 
-/// Schedule close only after delivering the error. A close timer armed at spawn
-/// time can already be overdue before the error's setImmediate callback runs.
-/// Keep fork's separate failure contract unchanged by using this for spawn only.
+/// Node's `onexit` for a spawn that failed: destroy stdin, emit the error,
+/// then count the exit toward `'close'` (unix), or schedule close only after
+/// delivering the error (elsewhere: a close timer armed at spawn time can
+/// already be overdue before the error's setImmediate callback runs).
 pub(super) extern "C" fn emit_error_then_close(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -12,8 +16,15 @@ pub(super) extern "C" fn emit_error_then_close(
     let unhandled = {
         let scope = crate::gc::RuntimeHandleScope::new();
         let cp = scope.root_nanbox_f64(cp_this(this, closure));
+        #[cfg(unix)]
+        reactor::cp_destroy_stdin(cp.get_nanbox_f64());
         let unhandled = emit_spawn_error(cp.get_nanbox_f64());
         // An unhandled error ends the process in Node before `close` fires.
+        #[cfg(unix)]
+        if unhandled.is_none() {
+            reactor::cp_failed_count_close(cp.get_nanbox_f64());
+        }
+        #[cfg(not(unix))]
         if unhandled.is_none() {
             let close = crate::closure::js_closure_alloc(
                 crate::fn_info!(reactor::cp_emit_spawn_close, 0),
@@ -55,10 +66,11 @@ pub(super) fn emit_spawn_error(cp: f64) -> Option<f64> {
 /// scope in the emitting frame has dropped, so the throw skips no cleanup.
 pub(super) fn throw_if_unhandled(unhandled: Option<f64>) {
     if let Some(err) = unhandled {
-        crate::exception::js_throw(err);
+        crate::exception::throw_open(err);
     }
 }
 
+#[cfg(not(unix))]
 pub(super) fn finish_outputs(cp: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cp = scope.root_nanbox_f64(cp);
@@ -77,6 +89,7 @@ pub(super) fn finish_outputs(cp: f64) {
     }
 }
 
+#[cfg(not(unix))]
 fn finish_output(stream: f64) {
     if cp_object_ptr(stream).is_none() {
         return;
@@ -96,6 +109,7 @@ fn finish_output(stream: f64) {
 mod tests {
     use super::*;
 
+    #[cfg(not(unix))]
     #[test]
     fn failed_output_retains_end_and_closed_state() {
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -163,6 +177,7 @@ mod tests {
         assert!(emit_spawn_error(cp.get_nanbox_f64()).is_none());
     }
 
+    #[cfg(not(unix))]
     #[test]
     fn absent_failed_output_is_ignored() {
         finish_output(TAG_NULL_F64);

@@ -80,11 +80,37 @@ pub(crate) fn scan_tty_resize_callback_root_mut(visitor: &mut crate::gc::Runtime
 
 #[cfg(unix)]
 fn isatty_impl(fd: i32) -> bool {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            unsafe { libc::isatty(fd) != 0 }
+        });
+    }
+
+    crate::effect!(host_read, tty);
     unsafe { libc::isatty(fd) != 0 }
 }
 
 #[cfg(unix)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            unsafe {
+                let mut ws: libc::winsize = std::mem::zeroed();
+                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0
+                {
+                    Some((ws.ws_col as i32, ws.ws_row as i32))
+                } else {
+                    None
+                }
+            }
+        });
+    }
+
+    crate::effect!(host_read, tty);
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
         if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
@@ -97,6 +123,19 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
 
 #[cfg(windows)]
 fn isatty_impl(fd: i32) -> bool {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+            // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+            // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+            // Piped/redirected handles fail the probe → false, matching Node.
+            crate::win_console::is_console_fd(fd)
+        });
+    }
+
+    crate::effect!(host_read, tty);
     // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
     // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
     // and the same criterion libuv uses to classify a handle as `UV_TTY`.
@@ -106,6 +145,17 @@ fn isatty_impl(fd: i32) -> bool {
 
 #[cfg(windows)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+            // bottom-top+1) for the stdout/stderr console handle.
+            crate::win_console::window_size(fd)
+        });
+    }
+
+    crate::effect!(host_read, tty);
     // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
     // bottom-top+1) for the stdout/stderr console handle.
     crate::win_console::window_size(fd)
@@ -113,11 +163,29 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
 
 #[cfg(not(any(unix, windows)))]
 fn isatty_impl(_fd: i32) -> bool {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            false
+        });
+    }
+
+    crate::effect!(host_read, tty);
     false
 }
 
 #[cfg(not(any(unix, windows)))]
 fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            None
+        });
+    }
+
+    crate::effect!(host_read, tty);
     None
 }
 
@@ -564,6 +632,25 @@ fn color_depth_for_env(env: ColorEnv<'_>) -> u8 {
     color_depth_from_lookup(|name| env.get(name))
 }
 
+/// Whether text styled for `process.stdout` gets its escapes: node's
+/// `shouldColorize(process.stdout)`. With `FORCE_COLOR` set it is
+/// `getColorDepth() > 2`, whatever stdout is; otherwise stdout must be a tty
+/// and `getColorDepth() > 2`. So `FORCE_COLOR=""` colours (depth 16), and
+/// `NO_COLOR`, `NODE_DISABLE_COLORS` and `TERM=dumb` give depth 2 unless
+/// `FORCE_COLOR` is set. One funnel: the SNAP guard computes the same bit at
+/// startup that the run computes here (DESIGN27 §3 member 6).
+pub(crate) fn stdout_style_bit() -> bool {
+    crate::snap_funnel!(StyleBit);
+    let env = ColorEnv::process();
+    let forced = env.get("FORCE_COLOR").is_some();
+    let depth = color_depth_for_env(env);
+    let tty = forced || is_tty_fd(1);
+    let bit = tty && depth > 2;
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::style_bit(bit, tty, depth);
+    bit
+}
+
 fn has_colors_for_depth(count: f64, depth: u8) -> bool {
     count <= 2_f64.powi(depth as i32)
 }
@@ -889,6 +976,9 @@ pub(crate) fn tty_listener_remove_all_value() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::record_input_value("native_resource.tty_stream", &fd);
+
     validate_tty_read_fd(fd);
     ensure_tty_prototypes();
     let keys = b"isRaw\0isTTY\0";
@@ -906,6 +996,9 @@ pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_new(fd: f64) -> f64 {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::record_input_value("native_resource.tty_stream", &fd);
+
     validate_tty_write_fd(fd);
     ensure_tty_prototypes();
     let obj = crate::object::js_object_alloc_class_with_keys(
@@ -1176,33 +1269,18 @@ pub extern "C" fn js_tty_write_stream_remove_all_listeners(
 }
 
 pub fn throw_invalid_fd(fd: f64) -> ! {
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-        let str_val = |s: &str| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(JSValue::string_ptr(ptr).bits())
-        };
-        let set = |key: &str, value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        set("name", str_val("RangeError"));
-        set("code", str_val("ERR_INVALID_FD"));
-        set(
-            "message",
-            str_val(&format!("\"fd\" must be a positive integer: {}", fd as i64)),
-        );
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+    let message = format!("\"fd\" must be a positive integer: {}", fd as i64);
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        message.as_bytes(),
+        b"ERR_INVALID_FD",
+    ))
 }
 
 pub fn throw_tty_init_failed() -> ! {
     let message = "TTY initialization failed: uv_tty_init returned EINVAL (invalid argument)";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_TTY_INIT_FAILED");
-    let err = crate::error::js_error_new_with_name_message(b"SystemError", msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"SystemError", msg))
 }
 
 /// `process.stdin.isTTY` / `process.stdout.isTTY` / `process.stderr.isTTY`.
@@ -1410,14 +1488,8 @@ mod tests {
         assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
         assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
 
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
-            Some(7)
-        );
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
-            None
-        );
+        assert_eq!(tty_isatty_fd_arg(f64::from(7)), Some(7));
+        assert_eq!(tty_isatty_fd_arg(f64::from(-1)), None);
 
         assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
         assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);

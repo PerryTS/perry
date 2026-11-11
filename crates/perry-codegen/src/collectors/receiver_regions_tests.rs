@@ -35,6 +35,19 @@ fn stub_inert(e: &Expr) -> bool {
         Expr::Compare { left, right, .. } | Expr::Binary { left, right, .. } => {
             stub_inert(left) && stub_inert(right)
         }
+        // c1: mirrors `expr_is_inert_primitive`'s Math-intrinsic and
+        // conditional arms (a stub-inert operand stands for a proven Number).
+        e if crate::expr::math_intrinsic_operands(e).is_some() => {
+            crate::expr::math_intrinsic_operands(e)
+                .unwrap()
+                .iter()
+                .all(stub_inert)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
         _ => false,
     }
 }
@@ -337,6 +350,7 @@ fn representation_payloads_use_the_common_scope_boundary() {
         values_i32: false,
         elem: crate::expr::MaskedWindowElem::PlainF64,
         allows_stores: false,
+        elements_slot: None,
     });
     assert_eq!(
         table
@@ -463,6 +477,7 @@ fn ordinary_loop_descriptor_is_not_installed_across_a_call() {
 #[test]
 fn trusting_an_operation_does_not_trust_its_effectful_children() {
     let read = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(num(OBJ)),
@@ -649,6 +664,7 @@ fn generic_property_and_index_reads_are_enders() {
     assert!(has(&get, RegionEnder::CollectingCall));
 
     let idx = vec![Stmt::Expr(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(num(OBJ)),
@@ -792,6 +808,47 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
                 right: Box::new(Expr::Null),
             })],
         ),
+        (
+            "c1: Math.max over proven numbers",
+            vec![Stmt::Expr(Expr::MathMax(vec![num(NUM), num(NUM2)]))],
+        ),
+        (
+            "c1: Math.abs inside proven arithmetic",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::MathAbs(Box::new(num(NUM2))),
+            ))],
+        ),
+        (
+            "c1: a conditional of primitives under +",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::Conditional {
+                    condition: Box::new(lt(num(NUM), num(NUM2))),
+                    then_expr: Box::new(Expr::Integer(1)),
+                    else_expr: Box::new(Expr::Integer(-1)),
+                },
+            ))],
+        ),
+        (
+            "c1: Math.abs over an object",
+            vec![Stmt::Expr(Expr::MathAbs(Box::new(num(OBJ))))],
+        ),
+        (
+            "c1: Math.round calls the runtime",
+            vec![Stmt::Expr(Expr::MathRound(Box::new(num(NUM))))],
+        ),
+        (
+            "c1: a conditional with an object arm under +",
+            vec![Stmt::Expr(add(
+                num(NUM),
+                Expr::Conditional {
+                    condition: Box::new(lt(num(NUM), num(NUM2))),
+                    then_expr: Box::new(num(OBJ)),
+                    else_expr: Box::new(Expr::Integer(1)),
+                },
+            ))],
+        ),
         ("a call", vec![Stmt::Expr(call(vec![]))]),
         (
             "coercion over an unproven operand",
@@ -817,22 +874,18 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         ),
         (
             "generic index read",
-            vec![Stmt::Expr(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(num(OBJ)),
-                index: Box::new(num(NUM)),
-            })],
+            vec![Stmt::Expr(Expr::synthetic_index_get(
+                Box::new(num(OBJ)),
+                Box::new(num(NUM)),
+            ))],
         ),
         (
             "generic index write",
-            vec![Stmt::Expr(Expr::IndexSet {
-                object: Box::new(num(OBJ)),
-                index: Box::new(num(NUM)),
-                value: Box::new(Expr::Number(1.0)),
-                byte_offset: 0,
-                byte_end: 0,
-            })],
+            vec![Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(num(OBJ)),
+                Box::new(num(NUM)),
+                Box::new(Expr::Number(1.0)),
+            ))],
         ),
         (
             "conditional over clean operands",
@@ -1261,4 +1314,176 @@ fn a_flow_refined_number_local_joins_and_leaves_its_copy_scope() {
     assert!(table.admit_number_local(9, NUM));
     table.dematerialize_scope(9);
     assert!(!table.local_is_number_in_scope(NUM));
+}
+
+// ---------------------------------------------------------------------------
+// b2: cold-arm descriptors (DESIGN-b2-cold-arm-refresh rev 2, C4).
+// ---------------------------------------------------------------------------
+
+fn cold_arm(table: &mut ReceiverDescriptorTable, receiver: u32) -> Result<bool, BoundaryViolation> {
+    table.materialize_cold_arm_array(
+        receiver,
+        format!("%box{receiver}"),
+        format!("%handle{receiver}"),
+        format!("%source{receiver}"),
+        ReceiverArrayValidationKind::Plain,
+        format!("%valid{receiver}"),
+        &[RegionEnder::ColdArmCall, RegionEnder::BackEdgePoll],
+        vec![1, 2],
+    )
+}
+
+#[test]
+fn a_cold_arm_descriptor_survives_its_poll_and_its_cold_arm() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(cold_arm(&mut table, OBJ).expect("both enders are refreshed"));
+    // Its address is refreshed at the poll too (`poll_refreshes` no longer
+    // panics on a `ColdArmRefresh` entry).
+    assert_eq!(table.poll_refreshes().unwrap().len(), 1);
+    let recipes = table.cold_arm_refreshes().unwrap();
+    assert_eq!(recipes.len(), 1);
+    assert_eq!(recipes[0].valid_slot, format!("%valid{OBJ}"));
+    assert!(table.cold_arm_access(OBJ).is_some());
+    // Phase 3's consumer never reads a cold-arm entry's slot as an SSA i1.
+    assert_eq!(table.array_access(OBJ, false), None);
+    assert!(table.is_trusted_cold_arm_read(1) && !table.is_trusted_cold_arm_read(3));
+}
+
+#[test]
+fn a_cold_arm_is_refused_beside_any_receiver_s_cached_length() {
+    let mut table = ReceiverDescriptorTable::default();
+    assert!(table.materialize_cached_length(NUM2, "%len".into()));
+    let v = cold_arm(&mut table, OBJ).expect_err("another array's length is not refreshed");
+    assert_eq!(v.ender, RegionEnder::ColdArmCall);
+}
+
+#[test]
+fn a_cold_arm_is_refused_beside_a_phase_three_address() {
+    let mut table = ReceiverDescriptorTable::default();
+    table
+        .materialize_region_validated_array(
+            NUM2,
+            "%b".into(),
+            "%h".into(),
+            "%s".into(),
+            ReceiverArrayValidationKind::Numeric,
+            "%v".into(),
+            &[RegionEnder::BackEdgePoll],
+        )
+        .unwrap();
+    assert!(cold_arm(&mut table, OBJ).is_err());
+}
+
+#[test]
+fn a_cold_arm_is_refused_inside_a_number_local_scope() {
+    let mut table = ReceiverDescriptorTable::default();
+    table.materialize_number_locals(7, &[NUM]);
+    assert!(cold_arm(&mut table, OBJ).is_err());
+}
+
+#[test]
+fn a_cold_arm_descriptor_is_refused_across_other_user_code() {
+    let mut table = ReceiverDescriptorTable::default();
+    for ender in [
+        RegionEnder::CollectingCall,
+        RegionEnder::UnwindEdge,
+        RegionEnder::Coercion,
+        RegionEnder::Unmodelled,
+    ] {
+        let v = table
+            .materialize_cold_arm_array(
+                OBJ,
+                "%b".into(),
+                "%h".into(),
+                "%s".into(),
+                ReceiverArrayValidationKind::Plain,
+                "%v".into(),
+                &[RegionEnder::ColdArmCall, ender],
+                vec![],
+            )
+            .expect_err("only the poll and the read's own cold arm are refreshed");
+        assert_eq!(v.ender, ender);
+    }
+}
+
+#[test]
+fn scalar_and_non_moving_claims_deny_a_cold_arm() {
+    for claim in [
+        ReceiverClaim::ScalarRelation,
+        ReceiverClaim::NonMovingAddress,
+    ] {
+        let d = ReceiverDescriptor {
+            table: "t",
+            receiver: OBJ,
+            claim,
+            boundary: FactBoundary::Never,
+            excludes_try: true,
+        };
+        assert!(boundary_admits(&d, RegionEnder::ColdArmCall).is_err());
+        assert!(boundary_admits(&d, RegionEnder::BackEdgePoll).is_ok());
+    }
+    assert!(RegionEnder::ColdArmCall.may_unwind() && RegionEnder::ColdArmCall.is_fallthrough());
+}
+
+/// REVIEW-b2 F8: the classified walk reports a descriptor read as its cold
+/// arm where `loop_purity` counts the read as allocating, and keeps the
+/// index's own enders (a call in the index stays a `CollectingCall`).
+#[test]
+fn a_cold_arm_read_is_allocating_in_loop_purity_terms() {
+    let read = Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
+        object: Box::new(num(OBJ)),
+        index: Box::new(num(NUM)),
+    };
+    let body = vec![Stmt::Expr(read)];
+    let classified = region_enders_in_stmts_classified(&body, &[], &stub_inert, &|e| {
+        matches!(e, Expr::IndexGet { .. }).then_some(Some(RegionEnder::ColdArmCall))
+    });
+    assert_eq!(classified, vec![RegionEnder::ColdArmCall]);
+    assert!(crate::loop_purity::loop_may_allocate(
+        &body,
+        &[],
+        &stub_inert
+    ));
+
+    let effectful = vec![Stmt::Expr(Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
+        object: Box::new(num(OBJ)),
+        index: Box::new(call(vec![])),
+    })];
+    let classified = region_enders_in_stmts_classified(&effectful, &[], &stub_inert, &|e| {
+        matches!(e, Expr::IndexGet { .. }).then_some(Some(RegionEnder::ColdArmCall))
+    });
+    assert_eq!(
+        classified,
+        vec![RegionEnder::CollectingCall, RegionEnder::ColdArmCall]
+    );
+    assert!(!region_enders_in_expr(&call(vec![]), &stub_inert).is_empty());
+}
+
+/// c1: the Math intrinsics and the conditional are clean exactly when their
+/// operands are proven; every other Math form stays `Unmodelled`.
+#[test]
+fn c1_math_intrinsics_and_conditionals_end_regions_only_when_unproven() {
+    let clean = |e: Expr| enders(&[Stmt::Expr(e)]).is_empty();
+    assert!(clean(Expr::MathMin(vec![num(NUM), Expr::Integer(7)])));
+    assert!(clean(Expr::MathMax(vec![])));
+    assert!(clean(Expr::MathFloor(Box::new(num(NUM)))));
+    assert!(!clean(Expr::MathMax(vec![num(NUM), num(OBJ)])));
+    assert!(has(
+        &[Stmt::Expr(Expr::MathSign(Box::new(num(NUM))))],
+        RegionEnder::Unmodelled
+    ));
+    assert!(has(
+        &[Stmt::Expr(Expr::MathMinSpread(Box::new(num(NUM))))],
+        RegionEnder::Unmodelled
+    ));
+    assert!(has(
+        &[Stmt::Expr(lt(num(NUM), Expr::MathAbs(Box::new(num(OBJ)))))],
+        RegionEnder::Coercion
+    ));
 }

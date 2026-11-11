@@ -153,11 +153,18 @@ fn an_escaped_value_binds_no_layout_instance() {
         {esc}"
         )
     };
+    // The escape adds one unknown-code entry instance of each of `a`, `b`,
+    // `c` and one of the constructor of `r`'s literal shape (unknown code
+    // may construct it again through `r.constructor`). The console prints
+    // no function's result, so nothing else runs (the base arm used to run
+    // `a`, `b`, `c` already: the console's any-key touch escaped them).
     let base = facts(&src("")).stats.instances;
-    let esc = facts(&src("(globalThis as any).out = r;")).stats.instances;
+    let esc = facts(&src("import \"unseen-host\"; (globalThis as any).out = r;"))
+        .stats
+        .instances;
     assert!(esc > base, "the value must escape: {base} -> {esc}");
     assert!(
-        esc - base <= 3,
+        esc - base <= 4,
         "{base} -> {esc}: more than one entry instance per function"
     );
 }

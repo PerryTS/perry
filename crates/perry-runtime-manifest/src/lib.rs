@@ -206,10 +206,64 @@ pub const NODE_API_HOST_SYMBOLS: &str = include_str!("node_api_host_symbols.txt"
 
 /// The symbol names of [`NODE_API_HOST_SYMBOLS`], without blank and `#` lines.
 pub fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
+    node_api_host_entries().map(|(name, _)| name)
+}
+
+/// Supplemental Perry C APIs that a native C addon may resolve from the
+/// executable. This inventory is separate from Node-API by design.
+pub fn perry_c_host_symbols() -> impl Iterator<Item = &'static str> {
+    include_str!("perry_c_host_symbols.txt")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+}
+
+/// What an addon reaches through one Node-API import, beyond the values the
+/// program hands it: the mark of its line in [`NODE_API_HOST_SYMBOLS`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NodeApiReach {
+    /// Any JS value (global, property, prototype, script, call result): the
+    /// addon is open, a dynamic-code site.
+    World,
+    /// BigInt values it creates.
+    Bigint,
+    /// Date values it creates.
+    Date,
+    /// ArrayBuffer, Buffer, typed-array and DataView values it creates.
+    Typedarray,
+}
+
+impl NodeApiReach {
+    fn parse(mark: &str) -> Option<Self> {
+        Some(match mark {
+            "world" => Self::World,
+            "bigint" => Self::Bigint,
+            "date" => Self::Date,
+            "typedarray" => Self::Typedarray,
+            _ => return None,
+        })
+    }
+}
+
+/// (symbol, mark) per inventory line.
+fn node_api_host_entries() -> impl Iterator<Item = (&'static str, Option<&'static str>)> {
     NODE_API_HOST_SYMBOLS
         .lines()
         .map(str::trim)
-        .filter(|name| !name.is_empty() && !name.starts_with('#'))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| {
+            let mut words = line.split_whitespace();
+            (words.next().unwrap_or_default(), words.next())
+        })
+}
+
+/// The reach of importing the Node-API `symbol` (no leading `_`). A symbol
+/// the host does not list reaches the world: nothing is known about it.
+pub fn node_api_import_reach(symbol: &str) -> Option<NodeApiReach> {
+    match node_api_host_entries().find(|(name, _)| *name == symbol) {
+        Some((_, mark)) => mark.map(|mark| NodeApiReach::parse(mark).expect("inventory mark")),
+        None => Some(NodeApiReach::World),
+    }
 }
 
 #[cfg(test)]
@@ -233,16 +287,67 @@ mod tests {
     #[test]
     fn node_api_inventory_is_symbol_names() {
         assert!(node_api_host_symbols().count() > 100);
-        for name in node_api_host_symbols() {
+        for (name, mark) in node_api_host_entries() {
             assert!(
                 name.starts_with("napi_") || name.starts_with("node_api_"),
                 "{name}"
             );
+            assert!(
+                mark.is_none_or(|mark| NodeApiReach::parse(mark).is_some()),
+                "{name}"
+            );
         }
+    }
+
+    /// An addon that can obtain a value it was not handed is open; one that
+    /// only makes and fills values reaches the subsystems of what it makes.
+    #[test]
+    fn node_api_imports_reach_what_they_can_obtain() {
+        for symbol in [
+            "napi_get_global",
+            "napi_run_script",
+            "napi_get_named_property",
+            "napi_get_property",
+            "napi_get_element",
+            "napi_get_prototype",
+            "napi_get_all_property_names",
+            "napi_call_function",
+            "napi_new_instance",
+            "napi_not_in_the_inventory",
+        ] {
+            assert_eq!(
+                node_api_import_reach(symbol),
+                Some(NodeApiReach::World),
+                "{symbol}"
+            );
+        }
+        for symbol in [
+            "napi_create_function",
+            "napi_create_int32",
+            "napi_get_cb_info",
+            "napi_get_value_int32",
+            "napi_set_named_property",
+        ] {
+            assert_eq!(node_api_import_reach(symbol), None, "{symbol}");
+        }
+        assert_eq!(
+            node_api_import_reach("napi_create_bigint_words"),
+            Some(NodeApiReach::Bigint)
+        );
+        assert_eq!(
+            node_api_import_reach("napi_create_date"),
+            Some(NodeApiReach::Date)
+        );
+        assert_eq!(
+            node_api_import_reach("napi_create_buffer"),
+            Some(NodeApiReach::Typedarray)
+        );
     }
 }
 
 mod realm_exports;
+#[cfg(test)]
+mod realm_identity_audit;
 pub mod realm_json;
 /// Shared ABI for typed manifest consumers, including build scripts.
 pub use perry_abi as abi;

@@ -40,7 +40,9 @@ fn large_presized_arrays_fill_densely_and_preserve_every_value() {
     std::fs::write(
         &entry,
         concat!(
-            include_str!("../../../test-files/test_gap_9784_module_presized_array.ts"),
+            include_str!(
+                "../../../tests/parity/language/array/test_gap_9784_module_presized_array.ts"
+            ),
             r#"
 declare function gc(): void;
 

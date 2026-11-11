@@ -21,27 +21,41 @@ fn write_handle(env: NapiEnv, bits: u64, result: *mut NapiValue) -> NapiStatus {
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(handle) = add_handle(env, bits) else {
-        return NapiStatus::InvalidArg;
-    };
-    unsafe { *result = handle };
-    ok(env)
+    enter(env, |env| {
+        unsafe { *result = env.add_handle(bits) };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
+/// A number, as `typeof` sees it. An INT32 word is a number: compiled code
+/// names a class by its function object (`js_class_value`), so the INT32
+/// class-id immediate is a runtime-internal key, never a value (#10461).
+#[inline]
 fn value_as_number(bits: u64) -> Option<f64> {
     let value = JSValue::from_bits(bits);
     if value.is_int32() {
-        // A compiled class constructor shares the INT32 encoding. It is a
-        // function, as `napi_typeof` reports, not its class id (#10461).
-        if crate::object::class_ref_id(f64::from_bits(bits)).is_some() {
-            return None;
-        }
         Some(value.as_int32() as f64)
     } else if value.is_number() {
         Some(value.as_number())
     } else {
         None
     }
+}
+
+/// The `napi_get_value_<number>` body: one environment entry reads the
+/// handle, classifies it and records the status.
+#[inline]
+fn get_number(env: NapiEnv, value: NapiValue, write: impl FnOnce(f64)) -> NapiStatus {
+    enter(env, |env| {
+        let Some(bits) = env.value_bits(value) else {
+            return env.set_status(NapiStatus::InvalidArg, "value is not a live handle");
+        };
+        let Some(number) = value_as_number(bits) else {
+            return env.set_status(NapiStatus::NumberExpected, "value must be a number");
+        };
+        write(number);
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 fn value_as_bool(bits: u64) -> Option<bool> {
@@ -200,11 +214,72 @@ fn set_string_error(env: NapiEnv, status: NapiStatus) -> NapiStatus {
     }
 }
 
-fn named_key(env: NapiEnv, name: *const c_char) -> Result<NapiValue, NapiStatus> {
+/// A Node-API property name is a named key: its UTF-8 text resolves to the
+/// property atom every shape keys by (minted once for a new name). No JS
+/// string and no handle are made per call. The atom is unrooted, so the
+/// caller passes it to the store or lookup before anything else allocates.
+fn named_atom(name: *const c_char) -> Result<*const crate::StringHeader, NapiStatus> {
     let len = input_len(name, NAPI_AUTO_LENGTH)?;
     let bytes = unsafe { std::slice::from_raw_parts(name.cast::<u8>(), len) };
-    let ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-    add_handle(env, string_bits(ptr))
+    Ok(unsafe { crate::string::property_atom_from_bytes(bytes) })
+}
+
+/// A Node-API named access is a fixed-key site whose receiver no fact
+/// names, so it takes the one path an emitted `o.k` on an unknown receiver
+/// takes: the receiver's layout probe answers from the shape's own key index
+/// (own or inherited data, a proven absence, a plain writable own store or a
+/// plain add), and only a decline runs the complete operation (getters,
+/// setters, non-writable and frozen, proxies and other exotics, index-like
+/// names). The probes are GC leaves, so the unrooted key atom stays valid.
+fn named_get(object: f64, key: f64) -> f64 {
+    let v = unsafe {
+        crate::object::layout_probe::perry_probe_get_keyed(
+            crate::object::shapes::ordinary_dir_addr(),
+            object.to_bits(),
+            key.to_bits(),
+        )
+    };
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return v;
+    }
+    unsafe { crate::object::js_object_get_property_key(object, key) }
+}
+
+/// [`named_get`]'s store: the store probe, else V8's `Object::Set` (the
+/// ordinary `[[Set]]` with the object as receiver; a primitive stores
+/// nothing). Returns the value stored.
+fn named_set(object: f64, key: f64, value: f64) -> f64 {
+    if unsafe {
+        crate::object::layout_probe::probe_set_keyed(
+            crate::object::shapes::ordinary_dir_addr(),
+            object.to_bits(),
+            key.to_bits(),
+            value,
+        )
+    } {
+        return value;
+    }
+    if !crate::object::property_ops::reflect_value_is_object(object) {
+        return value;
+    }
+    crate::object::property_ops::reflect::set_resolved(object, key, value, object)
+}
+
+/// Node-API's store is V8's `Object::Set`: the ordinary `[[Set]]` with the
+/// object as its receiver. A refused write (a frozen object, a non-writable
+/// or setter-less property, a new key on a non-extensible object) is not an
+/// error; an exception the store raises (a setter, a proxy trap) is. A
+/// primitive receiver stores nothing.
+fn node_api_set(object: f64, key: f64, value: f64) -> f64 {
+    if crate::object::property_ops::reflect_value_is_object(object) {
+        crate::object::property_ops::reflect::js_reflect_set(
+            object,
+            key,
+            value,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+    value
 }
 
 fn property_call(
@@ -216,8 +291,22 @@ fn property_call(
     if pending_exception(env).is_some() {
         return Err(NapiStatus::PendingException);
     }
-    let object_bits = value_bits(env, object)?;
     let key_bits = value_bits(env, key)?;
+    named_call(env, object, key_bits, f)
+}
+
+/// [`property_call`] for a key already in hand as a string value (a named
+/// key's atom): the name never becomes a handle.
+fn named_call(
+    env: NapiEnv,
+    object: NapiValue,
+    key_bits: u64,
+    f: impl FnOnce(f64, f64) -> f64,
+) -> Result<f64, NapiStatus> {
+    if pending_exception(env).is_some() {
+        return Err(NapiStatus::PendingException);
+    }
+    let object_bits = value_bits(env, object)?;
     catch_value_call(env, || {
         f(f64::from_bits(object_bits), f64::from_bits(key_bits))
     })
@@ -253,7 +342,10 @@ pub unsafe extern "C" fn napi_get_boolean(
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_object(env: NapiEnv, result: *mut NapiValue) -> NapiStatus {
-    let object = crate::object::js_object_alloc(0, 0);
+    // Node's `napi_create_object` is `{}`: an ordinary object with ordinary
+    // [[Set]] from birth, born through the literal's plain-ordinary funnel
+    // (its shape is `Ordinary`, the one kind the store probe admits).
+    let object = crate::object::object_alloc_plain(0);
     write_handle(env, pointer_bits(object.cast()), result)
 }
 
@@ -330,14 +422,7 @@ pub unsafe extern "C" fn napi_get_value_double(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = number;
-    ok(env)
+    get_number(env, value, |number| *result = number)
 }
 
 #[no_mangle]
@@ -349,14 +434,7 @@ pub unsafe extern "C" fn napi_get_value_int32(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = to_int32(number);
-    ok(env)
+    get_number(env, value, |number| *result = to_int32(number))
 }
 
 #[no_mangle]
@@ -368,14 +446,7 @@ pub unsafe extern "C" fn napi_get_value_uint32(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = to_int32(number) as u32;
-    ok(env)
+    get_number(env, value, |number| *result = to_int32(number) as u32)
 }
 
 #[no_mangle]
@@ -387,14 +458,7 @@ pub unsafe extern "C" fn napi_get_value_int64(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(number) = value_as_number(bits) else {
-        return set_status(env, NapiStatus::NumberExpected, "value must be a number");
-    };
-    *result = number as i64;
-    ok(env)
+    get_number(env, value, |number| *result = number as i64)
 }
 
 #[no_mangle]
@@ -406,14 +470,16 @@ pub unsafe extern "C" fn napi_get_value_bool(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    let Ok(bits) = value_bits(env, value) else {
-        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
-    };
-    let Some(boolean) = value_as_bool(bits) else {
-        return set_status(env, NapiStatus::BooleanExpected, "value must be a boolean");
-    };
-    *result = boolean;
-    ok(env)
+    enter(env, |env| {
+        let Some(bits) = env.value_bits(value) else {
+            return env.set_status(NapiStatus::InvalidArg, "value is not a live handle");
+        };
+        let Some(boolean) = value_as_bool(bits) else {
+            return env.set_status(NapiStatus::BooleanExpected, "value must be a boolean");
+        };
+        unsafe { *result = boolean };
+        env.set_status(NapiStatus::Ok, "napi_ok")
+    })
 }
 
 #[no_mangle]
@@ -431,9 +497,12 @@ pub unsafe extern "C" fn napi_typeof(
     let js = JSValue::from_bits(bits);
     let value_type = if js.is_null() {
         NapiValueType::Null
+    } else if js.is_int32() {
+        // A number, as `napi_get_value_double` reads it (`value_as_number`).
+        NapiValueType::Number
     } else {
         // Everything classifies exactly as the `typeof` operator does, so
-        // Perry's other callable representations (INT32-tagged class refs,
+        // Perry's other callable representations (class function objects,
         // class objects, callable proxies) are functions here too (#10461).
         // An external is an ordinary object (`napi_create_external`), so only
         // an object can be one: asking the metadata of a symbol, bigint or
@@ -803,7 +872,7 @@ pub unsafe extern "C" fn napi_set_property(
         return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
     };
     match property_call(env, object, key, |object, key| {
-        crate::object::js_object_set_property_key(object, key, f64::from_bits(value_bits))
+        node_api_set(object, key, f64::from_bits(value_bits))
     }) {
         Ok(_) => ok(env),
         Err(status) => set_status(env, status, "property assignment failed"),
@@ -894,11 +963,27 @@ pub unsafe extern "C" fn napi_set_named_property(
     name: *const c_char,
     value: NapiValue,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    if name.is_null() {
+        return set_status(
+            env,
+            NapiStatus::InvalidArg,
+            "property name must not be null",
+        );
+    }
+    let Ok(value_bits) = value_bits(env, value) else {
+        return set_status(env, NapiStatus::InvalidArg, "value is not a live handle");
+    };
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_set_property(env, object, key, value)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, |object, key| {
+        named_set(object, key, f64::from_bits(value_bits))
+    }) {
+        Ok(_) => ok(env),
+        Err(status) => set_status(env, status, "property assignment failed"),
+    }
 }
 
 #[no_mangle]
@@ -908,11 +993,15 @@ pub unsafe extern "C" fn napi_get_named_property(
     name: *const c_char,
     result: *mut NapiValue,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_get_property(env, object, key, result)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, named_get) {
+        Ok(value) => write_handle(env, value.to_bits(), result),
+        Err(status) => set_status(env, status, "property lookup failed"),
+    }
 }
 
 #[no_mangle]
@@ -922,11 +1011,23 @@ pub unsafe extern "C" fn napi_has_named_property(
     name: *const c_char,
     result: *mut bool,
 ) -> NapiStatus {
-    let key = match named_key(env, name) {
-        Ok(key) => key,
+    if result.is_null() {
+        return set_status(env, NapiStatus::InvalidArg, "result must not be null");
+    }
+    let atom = match named_atom(name) {
+        Ok(atom) => atom,
         Err(status) => return set_status(env, status, "property name must not be null"),
     };
-    napi_has_property(env, object, key, result)
+    let key_bits = string_bits(atom as *mut crate::StringHeader);
+    match named_call(env, object, key_bits, |object, key| {
+        crate::object::js_object_has_property(object, key)
+    }) {
+        Ok(value) => {
+            *result = JSValue::from_bits(value.to_bits()).to_bool();
+            ok(env)
+        }
+        Err(status) => set_status(env, status, "property lookup failed"),
+    }
 }
 
 fn element_key(env: NapiEnv, index: u32) -> Result<NapiValue, NapiStatus> {

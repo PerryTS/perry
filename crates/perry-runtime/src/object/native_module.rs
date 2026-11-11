@@ -23,7 +23,7 @@ mod callable_export_table;
 pub(crate) mod callable_exports;
 mod perf_instance_bind;
 mod static_exports;
-pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_namespace_method};
+pub(crate) use perf_instance_bind::instance_bound_perf_method;
 pub(crate) use static_exports::construct as static_export_construct;
 pub(crate) use static_exports::selected_value as selected_native_export_value;
 // `assert`'s constructors are read through their own export bodies: whichever
@@ -51,6 +51,18 @@ pub(crate) mod worker_environment;
 
 pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
+
+pub(crate) fn worker_constructor_value() -> f64 {
+    // Lowered Worker construction can bypass every namespace/export read.
+    // Arm the existing decorator before its canonical constructor is minted.
+    super::native_module_registry::js_nm_install_worker_threads();
+    bound_native_callable_export_value(
+        &namespaces::worker_threads::NM_WORKER_THREADS,
+        "worker_threads",
+        "Worker",
+    )
+}
+
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
 pub(crate) use callable_exports::minted_native_callable_export;
@@ -98,6 +110,7 @@ pub use namespaces::domain::NM_DOMAIN;
 pub use namespaces::events::NM_EVENTS;
 pub use namespaces::net::NM_NET;
 pub use namespaces::process::NM_PROCESS;
+pub use namespaces::worker_threads::NM_WORKER_THREADS;
 use vtable_impls::vt_get_own_field;
 pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
@@ -163,10 +176,7 @@ struct GlobalAgentListener {
 /// (`require('node:timers').setImmediate = fn`). Wins subsequent reads via
 /// `vt_get_own_field`.
 pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, value: f64) {
-    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
-        m.borrow_mut()
-            .insert(format!("{module}\0{prop}"), value.to_bits());
-    });
+    let key = [module, prop].join("\0");
     // `node:tls` is a CommonJS builtin and its default import is the mutable
     // exports object. Codegen currently shares the snapshot-backed property
     // read used by native ESM imports for that default object, so keep the TLS
@@ -179,7 +189,6 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
             "DEFAULT_CIPHERS" | "DEFAULT_MIN_VERSION" | "DEFAULT_MAX_VERSION"
         )
     {
-        let key = format!("{module}\0{prop}");
         NATIVE_ESM_EXPORT_VALUES.with(|values| {
             if let Some(slot) = values.borrow_mut().get_mut(&key) {
                 *slot = value.to_bits();
@@ -187,10 +196,63 @@ pub(crate) fn native_namespace_prop_override_store(module: &str, prop: &str, val
         });
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     }
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut().insert(key, value.to_bits());
+    });
+    // An override of a `console` member (`console.log = f` through a value,
+    // or from interpreted code) replaces a member of the builtin namespace,
+    // and no holder write funnel sees this table: report it as a write to
+    // the namespace, so its guarded sites stop binding the intrinsic. The
+    // holder is live once this thread's realm is populated and sealed (a
+    // program may reach the console object before anything populates its
+    // global): populate it first, so the report is never lost.
+    if module == "console" {
+        crate::object::js_get_global_this();
+        // SAFETY: a namespace family names no object; `note_write` reads none.
+        unsafe {
+            super::builtin_namespace::note_write(
+                std::ptr::null_mut(),
+                super::builtin_namespace::CONSOLE_FAMILY,
+                None,
+                "namespace override",
+            )
+        };
+    }
 }
 
-/// Read back a stored native-namespace property override, if any.
+/// `delete ns.prop`: the member reads `undefined` wherever a store would be
+/// seen (the store keeps the TLS defaults and the console holder coherent),
+/// and its override entry becomes [`DELETED`], so every read, `in`, key
+/// enumeration and has-own probe treats it as absent until a store replaces
+/// the entry.
+pub(crate) fn native_namespace_prop_override_delete(module: &str, prop: &str) {
+    // The key first: the store can allocate (and so move `prop`'s string).
+    let key = [module, prop].join("\0");
+    native_namespace_prop_override_store(module, prop, f64::from_bits(crate::value::TAG_UNDEFINED));
+    NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
+        m.borrow_mut().insert(key, DELETED);
+    });
+}
+
+/// The override entry of a deleted member: `TAG_HOLE`, never a JS value.
+const DELETED: u64 = crate::value::TAG_HOLE;
+
+/// Read back a stored native-namespace property override, if any. A deleted
+/// member reads `undefined` here (a name-keyed read has no object to continue
+/// at); `vt_get_own_field` continues at the namespace's prototype instead.
+#[inline]
 pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Option<f64> {
+    native_namespace_prop_override_bits(module, prop).map(|bits| {
+        f64::from_bits(if bits == DELETED {
+            crate::value::TAG_UNDEFINED
+        } else {
+            bits
+        })
+    })
+}
+
+/// The raw override entry of a member: a value, [`DELETED`], or none.
+fn native_namespace_prop_override_bits(module: &str, prop: &str) -> Option<u64> {
     NATIVE_NAMESPACE_PROP_OVERRIDES.with(|m| {
         let m = m.borrow();
         // #10523: every native namespace member read lands here and almost no
@@ -198,9 +260,21 @@ pub(crate) fn native_namespace_prop_override_get(module: &str, prop: &str) -> Op
         if m.is_empty() {
             return None;
         }
-        m.get(&format!("{module}\0{prop}"))
-            .map(|bits| f64::from_bits(*bits))
+        m.get(&[module, prop].join("\0")).copied()
     })
+}
+
+/// Is member `prop` of namespace `module` absent although the module's
+/// tables describe it: deleted by the program, or (when the program stored
+/// none) hidden in a worker? The one presence predicate of the namespace's
+/// own keys (`in`, has-own, descriptors, key enumeration, export copies,
+/// name-keyed reads).
+#[inline(never)]
+pub(crate) fn native_namespace_member_absent(module: &str, prop: &str) -> bool {
+    match native_namespace_prop_override_bits(module, prop) {
+        Some(bits) => bits == DELETED,
+        None => crate::process::worker_restrictions::worker_process_member_restricted(module, prop),
+    }
 }
 
 /// pi boot blocker: a user write to a builtin namespace member must win every
@@ -310,7 +384,7 @@ pub(crate) fn publish_worker_messaging_constructor(
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
 }
 
-pub(super) fn worker_messaging_constructor_value(module: &str, property: &str) -> Option<f64> {
+pub(crate) fn worker_messaging_constructor_value(module: &str, property: &str) -> Option<f64> {
     if module != "worker_threads" || !is_worker_messaging_constructor(property) {
         return None;
     }
@@ -788,6 +862,7 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
     reflect_has_enumerable: super::reflect_support::nm_reflect_has_enumerable,
     own_keys_array: nm_own_keys_array_opt,
     bind_method: nm_bind_method_ops,
+    member: super::descriptors::nm_member,
 };
 
 static NM_EE_OPS_IMPL: super::NmEeOps = super::NmEeOps {
@@ -1014,7 +1089,7 @@ pub(crate) fn create_native_module_namespace(
             return f64::from_bits(bits);
         }
     }
-    crate::realm_decl! { "%NativeNamespace:assert%", provider = native, native_namespace = "assert", births = [Object]; "%NativeNamespace:buffer.Buffer%", provider = native, native_namespace = "buffer.Buffer", births = [Object]; "%NativeNamespace:constants%", provider = native, native_namespace = "constants", vtable = crate::object::native_module::module_keys::NM_CONSTANTS, births = [Object]; "%NativeNamespace:crypto.KeyObject%", provider = native, native_namespace = "crypto.KeyObject", births = [Object]; "%NativeNamespace:crypto.Certificate%", provider = native, native_namespace = "crypto.Certificate", births = [Object]; "%NativeNamespace:inspector.DOMStorage%", provider = native, native_namespace = "inspector.DOMStorage", vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_DOMSTORAGE, births = [Object]; "%NativeNamespace:inspector.NetworkResources%", provider = native, native_namespace = "inspector.NetworkResources", vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_NETWORKRESOURCES, births = [Object]; "%NativeNamespace:perf_hooks%", provider = native, native_namespace = "perf_hooks", vtable = crate::object::native_module::namespaces::perf_hooks::NM_PERF_HOOKS, births = [Object]; "node:@lydell/node-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:@parcel/watcher", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-x64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-x64", provider = native, births = [Array, Error, Function, Object]; "node:@perryts/pdf", provider = native, births = [Array, Error, Function, Object]; "node:__disposable__", provider = native, births = [Array, Error, Function, Object]; "node:argon2", provider = native, births = [Array, Error, Function, Object]; "node:bcrypt", provider = native, births = [Array, Error, Function, Object]; "node:better-sqlite3", provider = native, births = [Array, Error, Function, Object]; "node:buffer.Buffer", provider = native, births = [Array, Error, Function, Object]; "node:bun", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN, births = [Array, Buffer, Error, Function, Object, Promise]; "node:bun-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:bun:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_FFI, births = [Array, Error, Function, Object]; "node:bun:jsc", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_JSC, births = [Array, Error, Function, Object]; "node:bun:sqlite", provider = native, births = [Array, Error, Function, Object]; "node:cheerio", provider = native, births = [Array, Error, Function, Object]; "node:ethers", provider = native, births = [Array, Error, Function, Object]; "node:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_FFI, births = [Array, Error, Function, Object]; "node:lodash", provider = native, births = [Array, Error, Function, Object]; "node:node-fetch", provider = native, births = [Array, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:node-pty", provider = native, vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:nodemailer", provider = native, births = [Array, Error, Function, Object]; "node:perry", provider = native, births = [Array, Error, Function, Object]; "node:perry/ads", provider = native, births = [Array, Error, Function, Object]; "node:perry/audio", provider = native, births = [Array, Error, Function, Object]; "node:perry/background", provider = native, births = [Array, Error, Function, Object]; "node:perry/component", provider = native, births = [Array, Error, Function, Object]; "node:perry/compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/container", provider = native, births = [Array, Error, Function, Object]; "node:perry/container-compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/gc", provider = native, births = [Array, Error, Function, Object]; "node:perry/i18n", provider = native, births = [Array, Error, Function, Object]; "node:perry/ios", provider = native, births = [Array, Error, Function, Object]; "node:perry/media", provider = native, births = [Array, Error, Function, Object]; "node:perry/native", provider = native, births = [Array, Error, Function, Object]; "node:perry/plugin", provider = native, births = [Array, Error, Function, Object]; "node:perry/system", provider = native, births = [Array, Error, Function, Object]; "node:perry/thread", provider = native, births = [Array, Error, Function, Object]; "node:perry/tui", provider = native, births = [Array, Error, Function, Object]; "node:perry/ui", provider = native, births = [Array, Error, Function, Object]; "node:perry/updater", provider = native, births = [Array, Error, Function, Object]; "node:perry/widget", provider = native, births = [Array, Error, Function, Object]; "node:perry/workloads", provider = native, births = [Array, Error, Function, Object]; "node:perry/yoga", provider = native, births = [Array, Error, Function, Object]; "node:sharp", provider = native, births = [Array, Error, Function, Object]; "node:sqlite", provider = native, vtable = crate::object::native_module::module_keys::NM_SQLITE, births = [Array, Error, Function, Object]; "node:typescript", provider = native, births = [Array, Error, Function, Object]; "node:undici", provider = native, births = [Array, ArrayBuffer, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:util.types", provider = native, vtable = crate::object::native_module::namespaces::util::NM_UTIL_TYPES, births = [Array, Error, Function, Object]; "node:ws", provider = native, births = [Array, Error, Function, Object]; }
+    crate::realm_decl! { "%NativeNamespace:assert%", provider = native, native_namespace = "assert", births = [Object]; "%NativeNamespace:buffer.Buffer%", provider = native, native_namespace = "buffer.Buffer", births = [Object]; "%NativeNamespace:constants%", provider = native, native_namespace = "constants", vtable = crate::object::native_module::module_keys::NM_CONSTANTS, births = [Object]; "%NativeNamespace:crypto.KeyObject%", provider = native, native_namespace = "crypto.KeyObject", births = [Object]; "%NativeNamespace:crypto.Certificate%", provider = native, native_namespace = "crypto.Certificate", births = [Object]; "%NativeNamespace:inspector.DOMStorage%", provider = native, native_namespace = "inspector.DOMStorage", vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_DOMSTORAGE, births = [Object]; "%NativeNamespace:inspector.NetworkResources%", provider = native, native_namespace = "inspector.NetworkResources", vtable = crate::object::native_module::namespaces::inspector::NM_INSPECTOR_NETWORKRESOURCES, births = [Object]; "node:@lydell/node-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:@parcel/watcher", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-darwin-x64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-arm64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-glibc", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-linux-x64-musl", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-arm64", provider = native, births = [Array, Error, Function, Object]; "node:@parcel/watcher-win32-x64", provider = native, births = [Array, Error, Function, Object]; "node:@perryts/pdf", provider = native, births = [Array, Error, Function, Object]; "node:__disposable__", provider = native, births = [Array, Error, Function, Object]; "node:argon2", provider = native, births = [Array, Error, Function, Object]; "node:bcrypt", provider = native, births = [Array, Error, Function, Object]; "node:better-sqlite3", provider = native, births = [Array, Error, Function, Object]; "node:buffer.Buffer", provider = native, births = [Array, Error, Function, Object]; "node:bun", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN, births = [Array, Buffer, Error, Function, Object, Promise, /* Bun.spawn stdio pipes are net.Socket objects (child_process::reactor::js_child_process_spawn_streams): node:net */ "node:net"]; "node:bun-pty", provider = native, native_namespace = "node-pty", vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:bun:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_FFI, births = [Array, Error, Function, Object]; "node:bun:jsc", provider = native, vtable = crate::object::native_module::module_keys::NM_BUN_JSC, births = [Array, Error, Function, Object]; "node:bun:sqlite", provider = native, births = [Array, Error, Function, Object]; "node:cheerio", provider = native, births = [Array, Error, Function, Object]; "node:ethers", provider = native, births = [Array, Error, Function, Object]; "node:ffi", provider = native, vtable = crate::object::native_module::module_keys::NM_FFI, births = [Array, Error, Function, Object]; "node:lodash", provider = native, births = [Array, Error, Function, Object]; "node:node-fetch", provider = native, births = [Array, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:node-pty", provider = native, vtable = crate::object::native_module::module_keys::NM_NODE_PTY, births = [Array, Error, Function, Object]; "node:nodemailer", provider = native, births = [Array, Error, Function, Object]; "node:perry", provider = native, births = [Array, Error, Function, Object]; "node:perry/ads", provider = native, births = [Array, Error, Function, Object]; "node:perry/audio", provider = native, births = [Array, Error, Function, Object]; "node:perry/background", provider = native, births = [Array, Error, Function, Object]; "node:perry/component", provider = native, births = [Array, Error, Function, Object]; "node:perry/compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/container", provider = native, births = [Array, Error, Function, Object]; "node:perry/container-compose", provider = native, births = [Array, Error, Function, Object]; "node:perry/gc", provider = native, births = [Array, Error, Function, Object]; "node:perry/i18n", provider = native, births = [Array, Error, Function, Object]; "node:perry/ios", provider = native, births = [Array, Error, Function, Object]; "node:perry/media", provider = native, births = [Array, Error, Function, Object]; "node:perry/native", provider = native, births = [Array, Error, Function, Object]; "node:perry/plugin", provider = native, births = [Array, Error, Function, Object]; "node:perry/system", provider = native, births = [Array, Error, Function, Object]; "node:perry/thread", provider = native, births = [Array, Error, Function, Object]; "node:perry/tui", provider = native, births = [Array, Error, Function, Object]; "node:perry/ui", provider = native, births = [Array, Error, Function, Object]; "node:perry/updater", provider = native, births = [Array, Error, Function, Object]; "node:perry/widget", provider = native, births = [Array, Error, Function, Object]; "node:perry/workloads", provider = native, births = [Array, Error, Function, Object]; "node:perry/yoga", provider = native, births = [Array, Error, Function, Object]; "node:sharp", provider = native, births = [Array, Error, Function, Object]; "node:sqlite", provider = native, vtable = crate::object::native_module::module_keys::NM_SQLITE, births = [Array, Error, Function, Object]; "node:typescript", provider = native, births = [Array, Error, Function, Object]; "node:undici", provider = native, births = [Array, ArrayBuffer, Error, Function, Headers, Object, Promise, Request, Response, fetch]; "node:util.types", provider = native, vtable = crate::object::native_module::namespaces::util::NM_UTIL_TYPES, births = [Array, Error, Function, Object]; "node:ws", provider = native, births = [Array, Error, Function, Object]; }
     // Create an object with one field to store the module name
     let obj = crate::realm_decl! { birth js_object_alloc(NATIVE_MODULE_CLASS_ID, 1); realm { namespaces = native_namespaces; } };
 
@@ -1222,8 +1297,7 @@ unsafe fn native_module_property_by_name_impl(
     } else {
         module_name
     };
-    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, property_name)
-    {
+    if native_namespace_member_absent(module_name, property_name) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if matches!(module_name, "process" | "process.default") {
@@ -1440,7 +1514,13 @@ fn native_module_export_value(
             base,
         )
     };
-    if live || value.to_bits() == crate::value::TAG_UNDEFINED {
+    if value.to_bits() == crate::value::TAG_UNDEFINED {
+        if observe_namespace_writes && is_namespace_inherited_method(&property) {
+            return object_prototype_member(&property);
+        }
+        return value;
+    }
+    if live {
         return value;
     }
     NATIVE_ESM_EXPORT_VALUES.with(|values| {
@@ -1448,6 +1528,33 @@ fn native_module_export_value(
     });
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
     value
+}
+
+/// `Object.prototype` methods a native-module default object inherits rather
+/// than exports (`buffer.hasOwnProperty`, which safer-buffer calls). Neither
+/// a read nor a call by one of these names belongs to the module's export
+/// table or dispatch bucket, which answer a name they lack with `undefined`.
+pub(crate) fn is_namespace_inherited_method(name: &str) -> bool {
+    matches!(
+        name,
+        "toString"
+            | "toLocaleString"
+            | "valueOf"
+            | "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "constructor"
+    )
+}
+
+fn object_prototype_member(name: &str) -> f64 {
+    let (_, proto) = crate::object::ensure_object_intrinsics();
+    if proto.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(proto, key);
+    f64::from_bits(value.bits())
 }
 
 /// Mutable property read used by native-module default and namespace objects.
@@ -1585,12 +1692,6 @@ pub extern "C" fn js_native_module_bind_method(
         }
     }
 
-    if let Some(value) =
-        performance_namespace_method(&module_name, property_name, namespace.get_nanbox_f64())
-    {
-        return value;
-    }
-
     // Check for known constant properties first
     if let Some(val) = unsafe {
         get_native_module_constant(
@@ -1661,8 +1762,8 @@ include!("native_module/class_method_values.rs");
 /// symbol method has no string name to re-resolve at call time, so the
 /// closure instead carries the already-resolved dispatch data in two extra
 /// capture slots:
-///   slot 0: receiver (NaN-boxed instance/prototype-ref, or the INT32 class
-///           ref for a static method)
+///   slot 0: receiver (NaN-boxed instance, or the class constructor for a
+///           static method)
 ///   slot 1: `SYMBOL_BOUND_METHOD_NAME.as_ptr()` — the discriminant, compared
 ///           by ADDRESS in `dispatch_bound_method`, never by content
 ///   slot 2: `SYMBOL_BOUND_METHOD_NAME.len()`
@@ -1679,8 +1780,8 @@ include!("native_module/class_method_values.rs");
 /// 3/4 on a 3-capture name closure are bounds-checked to 0 → undefined.
 pub(crate) static SYMBOL_BOUND_METHOD_NAME: &[u8] = b"@@__perry_symbol_bound_method__";
 
-/// #6173: materialize a symbol-keyed class method (already resolved via
-/// `lookup_class_symbol_method_in_chain`) as a callable bound-method value.
+/// Materialize a raw ClassBody method without a closure-convention entry.
+/// The body and calling convention come from its declaration.
 /// See [`SYMBOL_BOUND_METHOD_NAME`] for the capture layout. All captures are
 /// populated immediately after allocation, BEFORE any allocating call — the
 /// capture slots are GC-scanned roots (mirrors `build_bound_method_closure`).
@@ -1765,23 +1866,7 @@ pub(crate) fn is_static_bound_method_value(value: f64) -> bool {
         return false;
     }
     let captured = crate::closure::js_closure_get_capture_f64(closure, 0);
-    (class_ref_id(captured).is_some() && class_prototype_ref_id(captured).is_none())
-        || class_registry::is_class_object_value(captured)
-}
-
-pub(crate) fn canonical_bound_method_receiver(
-    captured: f64,
-    call_this: crate::closure::JsThis,
-) -> f64 {
-    if class_prototype_ref_id(captured).is_some() {
-        // The captured prototype identifies the method's owner, not its receiver.
-        // Class methods are strict: every call-site value, including null,
-        // undefined, primitives and arrays, must reach the body unchanged.
-        // Dispatch resolves the body from the captured owner independently.
-        call_this.as_f64()
-    } else {
-        captured
-    }
+    class_ref_id(captured).is_some() || class_registry::is_class_object_value(captured)
 }
 
 /// The `class_id` of `instance`, when `instance` really is a class instance.
@@ -1814,7 +1899,7 @@ fn class_id_from_method_receiver_known(instance: f64, class_ref: Option<u32>) ->
             // the call-site `this` was the `assert` function) would mis-substitute the
             // function object as the receiver and dispatch `assert.method(...)`
             // instead of `C.prototype.method`, bypassing the generator wrapper's
-            // param prologue. See `canonical_bound_method_receiver`.
+            // param prologue. See `dispatch_bound_method`.
             if crate::closure::is_closure_ptr(obj as usize) {
                 return None;
             }
@@ -1913,7 +1998,7 @@ pub(crate) unsafe fn copy_native_module_exports(
         .iter()
         .chain(include_permission.then_some(b"permission" as &[u8]))
     {
-        if crate::process::worker_restrictions::worker_process_member_hidden(
+        if native_namespace_member_absent(
             &module_name,
             std::str::from_utf8(key_bytes).unwrap_or(""),
         ) {

@@ -5,6 +5,7 @@
 /// UTC timestamp to get the local-time representation (i.e. local - UTC).
 #[cfg(unix)]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     unsafe {
         let t: libc::time_t = secs as libc::time_t;
         let mut tm: libc::tm = std::mem::zeroed();
@@ -28,12 +29,14 @@ pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u
 /// so local time is UTC with a zero offset.
 #[cfg(target_os = "wasi")]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     let (y, m, d, h, mi, s) = timestamp_to_components(secs);
     (y, m, d, h, mi, s, 0)
 }
 
 #[cfg(windows)]
 pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u32, u32, i64) {
+    crate::effect!(host_read, tz);
     unsafe {
         let t: libc::time_t = secs as libc::time_t;
         let mut tm: libc::tm = std::mem::zeroed();
@@ -73,6 +76,40 @@ pub(crate) fn timestamp_to_local_components(secs: i64) -> (i32, u32, u32, u32, u
 /// via the `/etc/localtime` symlink; falls back to `"UTC"`. Cached for the
 /// process lifetime (the host zone doesn't change under us).
 pub fn host_time_zone_name() -> &'static str {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("locale.time_zone", &format!("{:?}", ()), || {
+            use std::sync::OnceLock;
+            static TZ: OnceLock<String> = OnceLock::new();
+            crate::once_init::get_or_init(&TZ, || {
+                if let Some(raw) = std::env::var_os("TZ") {
+                    if let Some(s) = raw.to_str() {
+                        // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`
+                        // (leading colon) or a bare IANA id. Empty `TZ` means UTC.
+                        let s = s.trim().strip_prefix(':').unwrap_or_else(|| s.trim());
+                        if s.is_empty() {
+                            return "UTC".to_string();
+                        }
+                        if let Some(name) = iana_id_from_zoneinfo_path(s) {
+                            return name;
+                        }
+                        return s.to_string();
+                    }
+                }
+                #[cfg(unix)]
+                {
+                    if let Ok(target) = std::fs::read_link("/etc/localtime") {
+                        if let Some(name) = iana_id_from_zoneinfo_path(&target.to_string_lossy()) {
+                            return name;
+                        }
+                    }
+                }
+                "UTC".to_string()
+            })
+            .as_str()
+        });
+    }
+
     use std::sync::OnceLock;
     static TZ: OnceLock<String> = OnceLock::new();
     crate::once_init::get_or_init(&TZ, || {

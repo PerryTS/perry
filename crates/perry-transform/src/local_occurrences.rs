@@ -16,6 +16,68 @@ pub(crate) fn count_module_occurrences(module: &Module) -> Counts {
     count_module(module, false)
 }
 
+/// Which locals anything in the module writes, taken once before a pass
+/// that substitutes call arguments for parameters.
+pub(crate) struct WriteCensus {
+    writes: Counts,
+    /// Ids from here on were allocated after the census; it knows nothing
+    /// about their writes.
+    limit: LocalId,
+}
+
+impl WriteCensus {
+    pub(crate) fn of(module: &Module) -> Self {
+        Self {
+            writes: count_module(module, true),
+            limit: crate::generator::compute_max_local_id(module).saturating_add(1),
+        }
+    }
+
+    /// A census of a module that writes no local (unit tests).
+    #[cfg(test)]
+    pub(crate) fn unwritten() -> Self {
+        Self {
+            writes: Counts::new(),
+            limit: LocalId::MAX,
+        }
+    }
+
+    /// True unless the census shows `id` is never written.
+    pub(crate) fn may_be_written(&self, id: LocalId) -> bool {
+        id >= self.limit || self.writes.contains_key(&id)
+    }
+
+    /// An argument that may be substituted for its parameter: nothing the
+    /// callee's body or a later argument does can change what it reads. A
+    /// literal, or a read of a local that nothing in the module writes. A
+    /// read of any other local, or of a global, is evaluated where the call
+    /// is: substituting it would move the read past the body's effects.
+    pub(crate) fn is_stable_arg(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Integer(_)
+            | Expr::Number(_)
+            | Expr::Bool(_)
+            | Expr::String(_)
+            | Expr::WtfString(_)
+            | Expr::Null
+            | Expr::Undefined => true,
+            Expr::LocalGet(x) => !self.may_be_written(*x),
+            _ => false,
+        }
+    }
+}
+
+/// Every place a LocalId appears inside `stmts` and everything nested in
+/// them, by the same rules as [`count_module_occurrences`].
+pub(crate) fn count_list_occurrences(stmts: &[Stmt]) -> Counts {
+    let mut counter = Counter {
+        counts: Counts::new(),
+        writes_only: false,
+    };
+    count_stmts(stmts, &mut counter);
+    counter.counts
+}
+
 /// `writes_only`: count just `LocalSet` / `Update` targets.
 pub(crate) fn count_module(module: &Module, writes_only: bool) -> Counts {
     let mut counter = Counter {

@@ -121,7 +121,28 @@ pub(crate) fn ensure_gc_scanner_registered() {
         // out-of-tree installs and `PERRY_NO_AUTO_OPTIMIZE=1`). See
         // `dispatch_ext.rs`.
         crate::server::dispatch_ext::ensure_dispatch_extensions_registered();
+        // #13802: `Object.getPrototypeOf(req|res)` for the handles above.
+        extern "C" {
+            fn js_register_http_server_handle_kind_probe(f: extern "C" fn(i64) -> u8);
+        }
+        unsafe {
+            js_register_http_server_handle_kind_probe(
+                crate::server::handle_dispatch::http_server_handle_kind,
+            );
+        }
     });
+}
+
+/// Unit-test fault: skip the server's exchange slots, so a moving collection
+/// leaves a parked response word stale (the exchange test must go red).
+#[inline]
+fn exchange_slot_sabotage() -> bool {
+    #[cfg(test)]
+    {
+        return std::env::var("PERRY_TEST_CALLBACK_SABOTAGE").as_deref() == Ok("exchange_slot");
+    }
+    #[allow(unreachable_code)]
+    false
 }
 
 /// GC root scanner — walk every registered server / request /
@@ -141,6 +162,19 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     fn scan_base_server_roots(server: &mut HttpServer, visitor: &mut GcRootVisitor<'_>) {
         if server.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut server.transport_listener);
+            // The server's exchanges: pending and in-flight responses are
+            // reachable from the server, so this walk is their only root.
+            if !exchange_slot_sabotage() {
+                for pending in server.pending.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut pending.response);
+                }
+                for parked in server.in_flight.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut parked.response);
+                }
+            }
+            for promise in server.bun_promises.iter_mut() {
+                promise.scan(visitor);
+            }
         }
         visitor.visit_i64_slot(&mut server.handler);
         visitor.visit_i64_slot(&mut server.bun_error_handler);
@@ -194,9 +228,6 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         if sr.owner_agent == perry_ffi::agent_post::current_agent() {
             visitor.visit_nanbox_f64_slot(&mut sr.socket_value);
             visitor.visit_nanbox_f64_slot(&mut sr.header_values);
-            if let Some((connection, _)) = &mut sr.turnloop {
-                connection.scan(visitor);
-            }
         }
         scan_listener_roots(&mut sr.listeners, visitor);
         // #8163: `res.once(event, cb)` stores into a SECOND table that
@@ -232,7 +263,6 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
     // Closures parked in the HTTP/2 pending-event queue between a JS-side
     // `session.close/settings/ping(cb)` and the main-thread drain.
     http2_server::scan_h2_pending_event_roots(visitor);
-    bun_server::scan_pending_roots(visitor);
 }
 
 /// Remove existing logical objects' Socket edges before a worker heap is unmapped.
@@ -242,6 +272,9 @@ extern "C" fn retire_transport_edges(agent: u64) {
     let clear_server = |server: &mut HttpServer| {
         if server.owner_agent == agent {
             server.transport_listener = undefined;
+            server.pending.clear();
+            server.in_flight.clear();
+            server.bun_promises.clear();
         }
     };
     iter_handles_of_mut::<HttpServer, _>(clear_server);
@@ -678,5 +711,39 @@ mod tests {
         // Oversized `requestTimeout` clamped; unrelated knob untouched.
         assert_eq!(server.request_timeout, 9_007_199_254_740_991.0);
         assert_eq!(server.headers_timeout, 222.0);
+    }
+
+    /// NXPB2-P2: a pending or parked exchange's response word lives on its
+    /// server, and the server walk is its only root: a moving minor rewrites
+    /// it. Under PERRY_TEST_CALLBACK_SABOTAGE=exchange_slot the walk skips the
+    /// slots and this test must fail.
+    #[test]
+    fn gc_mutable_scanner_rewrites_the_servers_exchange_responses() {
+        let _guard = GcTestGuard::new();
+        perry_ffi::gc_register_mutable_root_scanner_named("perry-ext-http", scan_http_server_roots);
+        let pending_response = young_gc_value();
+        let parked_response = young_gc_value();
+        let mut http = HttpServer::with_handler(0);
+        http.pending.push_back(server::HttpPendingRequest {
+            server_handle: 0,
+            request_handle: 0,
+            response: pending_response,
+            skip_default_response: false,
+            h2_stream_handle: 0,
+            h2_stream_headers: Vec::new(),
+            is_check_continue: false,
+        });
+        http.in_flight
+            .push(server::InFlightRequest::parked_for_test(parked_response));
+        let handle = register_handle(http);
+
+        let _ = perry_runtime::gc::gc_collect_minor();
+
+        {
+            let http = get_handle::<HttpServer>(handle).expect("http server");
+            assert_nanbox_rewritten(pending_response, http.pending[0].response);
+            assert_nanbox_rewritten(parked_response, http.in_flight[0].response);
+        }
+        drop_handle(handle);
     }
 }

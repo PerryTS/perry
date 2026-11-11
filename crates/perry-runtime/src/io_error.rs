@@ -139,14 +139,31 @@ pub(crate) unsafe fn build_fs_error_value(
     syscall: &'static str,
     path: &str,
 ) -> f64 {
+    fs_error(err, syscall, path).value()
+}
+
+/// A Node-shaped fs error (`code`, `errno`, `syscall`, `path`), typed: the
+/// form a throw site takes ([`crate::exception::throw_core`]).
+pub(crate) unsafe fn fs_error(
+    err: &std::io::Error,
+    syscall: &'static str,
+    path: &str,
+) -> crate::error::CoreError {
     let code = io_error_code(err);
     let errno = io_error_errno(err);
     let desc = fs_error_description(err);
     let msg = format!("{}: {}, {} '{}'", code, desc, syscall, path);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    attach_fs_error_props(err_ptr, code, errno, syscall, Some(path), None);
-    crate::value::js_nanbox_pointer(err_ptr as i64)
+    let error = crate::error::CoreError::error(msg_ptr);
+    attach_fs_error_props(
+        error.header_addr() as *mut _,
+        code,
+        errno,
+        syscall,
+        Some(path),
+        None,
+    );
+    error
 }
 
 /// Build a Node-shaped fs error carrying both `path` and `dest`, for the
@@ -158,26 +175,57 @@ pub(crate) unsafe fn build_fs_error_value_with_dest(
     path: &str,
     dest: &str,
 ) -> f64 {
+    fs_error_with_dest(err, syscall, path, dest).value()
+}
+
+pub(crate) unsafe fn fs_error_with_dest(
+    err: &std::io::Error,
+    syscall: &'static str,
+    path: &str,
+    dest: &str,
+) -> crate::error::CoreError {
     let code = io_error_code(err);
     let errno = io_error_errno(err);
     let desc = fs_error_description(err);
     let msg = format!("{}: {}, {} '{}' -> '{}'", code, desc, syscall, path, dest);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    attach_fs_error_props(err_ptr, code, errno, syscall, Some(path), Some(dest));
-    crate::value::js_nanbox_pointer(err_ptr as i64)
+    let error = crate::error::CoreError::error(msg_ptr);
+    attach_fs_error_props(
+        error.header_addr() as *mut _,
+        code,
+        errno,
+        syscall,
+        Some(path),
+        Some(dest),
+    );
+    error
 }
 
 pub(crate) unsafe fn build_fs_error_value_no_path(
     err: &std::io::Error,
     syscall: &'static str,
 ) -> f64 {
+    fs_error_no_path(err, syscall).value()
+}
+
+/// [`fs_error`] without a `path` (fd-based syscalls).
+pub(crate) unsafe fn fs_error_no_path(
+    err: &std::io::Error,
+    syscall: &'static str,
+) -> crate::error::CoreError {
     let code = io_error_code(err);
     let errno = io_error_errno(err);
     let desc = fs_error_description(err);
     let msg = format!("{}: {}, {}", code, desc, syscall);
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    attach_fs_error_props(err_ptr, code, errno, syscall, None, None);
-    crate::value::js_nanbox_pointer(err_ptr as i64)
+    let error = crate::error::CoreError::error(msg_ptr);
+    attach_fs_error_props(
+        error.header_addr() as *mut _,
+        code,
+        errno,
+        syscall,
+        None,
+        None,
+    );
+    error
 }

@@ -85,6 +85,7 @@ pub(super) fn compile_indexed_method_clones(
         false,
         false,
         false,
+        None,
     )
     .with_context(|| {
         format!(
@@ -125,6 +126,7 @@ pub(super) fn compile_indexed_method_clones(
             true,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -170,6 +172,7 @@ pub(super) fn compile_indexed_method_clones(
             false,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -212,6 +215,7 @@ pub(super) fn compile_indexed_method_clones(
         false,
         false,
         false,
+        None,
     )
     .with_context(|| {
         format!(

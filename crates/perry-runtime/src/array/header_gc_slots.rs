@@ -46,7 +46,7 @@ unsafe fn array_scalar_store_note_is_noop(arr: *const ArrayHeader, value_bits: u
         return false;
     }
     crate::value::addr_class::try_read_gc_header(arr as usize).is_some_and(|header| {
-        header.obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && header._reserved & SCALAR_NOTE_ELIDABLE_MASK == crate::gc::GC_LAYOUT_POINTER_FREE
     })

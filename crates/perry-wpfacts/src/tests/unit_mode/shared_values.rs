@@ -762,7 +762,33 @@ pub(super) fn an_escaped_value_beside_top_is_that_top() {
         // protocol instead of escaping them): (1080, 2976, 9456) -> the pin.
         // DECISIONS 241: the published `f`s own properties hold what the units store
         // there (none), not top from its publication: one entry fewer at every n.
-        (1060, 2940, 9388),
+        // A summary birth's elements (`Key::Any`) are the array's elements, not
+        // its named keys: each `z{i} = [y]` no longer copies `y` (n + 5 tokens)
+        // into its named-key node, n * (n + 5) entries fewer.
+        // CHESS4-A: the runtime-made `process.argv` array is one more entry
+        // at every n (the growth stays n^2): (956, 2604, 8204) -> (957, 2605, 8205).
+        // The escaped class objects are one node (ESCCLASSES) that holds the
+        // escaped class token: one entry more at every n -> (958, 2606, 8206).
+        // The `{ v }` literals share one literal-shape class, a layout no
+        // unknown code constructs: its escape no longer builds the unknown
+        // `new` (result, arguments, instance), 16 entries fewer at every n.
+        // HOST-P: the runtime-made `process.execArgv` array, like `argv`, is one
+        // more entry at every n -> (943, 2591, 8191).
+        // SEEDE: the runtime error object and the throw regions are eight
+        // entries more at every n (951, 2599, 8199; the `Raise` constraints
+        // are summary constraints, `summary::map::gen_kind`). Unknown code
+        // holding a value holds its accessor functions (descriptor reads,
+        // ESCACCESSORS): each escaped `{ v }` gets a getter and a setter
+        // descriptor walk (`walk-getter`/`walk-setter` nodes), two entries
+        // per literal, plus eight once (measured at n = 8, 16, 32):
+        // 2n + 8 more -> (975, 2639, 8271). The n^2 growth is unchanged.
+        // SEEDAB: an Annex B lookup under an unknown key hands out the
+        // realm's accessor functions (one token): two entries more at every n.
+        // Guard presence (`gen::narrow`): each `if (c)` narrows the
+        // parameter `c` by presence, a start and an end node holding its
+        // marker and primitives: three entries per `if`, 3(n - 1) more
+        // (linear; the n^2 growth is unchanged) -> the pin.
+        (998, 2686, 8366),
         "entries {e8} {e16} {e32}"
     );
 }
@@ -823,11 +849,17 @@ pub(super) fn a_store_beside_top_writes_no_builtin_function_value() {
         !builtin_fn_read_top("const h: any = c ? x : g; h.k = 1;"),
         "a store into ⊤ marked builtin function values written"
     );
-    // A store into a builtin function value itself still marks them written
-    // (one token for every one): the read is ⊤.
+    // A store into a builtin function value itself still marks its key
+    // written on every one (one token for every one): the read under that
+    // key is ⊤ (rule R2).
     assert!(
-        builtin_fn_read_top("g.k = 1;"),
-        "a store into a builtin function value must mark them written"
+        builtin_fn_read_top("g.foo = 1;"),
+        "a store into a builtin function value must mark its key written"
+    );
+    // Rule R2: a store under another key leaves `foo`.
+    assert!(
+        !builtin_fn_read_top("g.k = 1;"),
+        "a store under `k` marked `foo` written"
     );
 }
 

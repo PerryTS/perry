@@ -199,6 +199,7 @@ impl LlBlock {
         }) {
             return;
         }
+        self.counter.bump_call_epoch();
         for slot in self.counter.stable_packed_revalidation_slots() {
             self.store(crate::types::I1, "1", &slot);
         }
@@ -218,6 +219,11 @@ impl LlBlock {
                 self.store(crate::types::I64, "0", &slot);
             }
         }
+    }
+
+    /// The function's call epoch (`RegCounter::call_epoch`).
+    pub(crate) fn call_epoch(&self) -> u64 {
+        self.counter.call_epoch()
     }
 
     pub fn next_reg(&self) -> String {
@@ -265,6 +271,71 @@ impl LlBlock {
     /// discipline and the try-region bookkeeping.
     pub(crate) fn insts_mut(&mut self) -> &mut Vec<crate::inst::LlInst> {
         &mut self.instructions
+    }
+
+    /// Reopen a block an emitter closed with a plain `br` whose contents it
+    /// fills later (the lazy receiver-run re-proof,
+    /// `expr::layout_read::Pending`): removes that terminator and returns
+    /// its target. `None` (and no change) for any other last instruction.
+    pub(crate) fn reopen_br(&mut self) -> Option<String> {
+        match self.instructions.last() {
+            Some(crate::inst::LlInst::Br { label, meta: None }) => {
+                let label = label.clone();
+                self.instructions.pop();
+                self.terminated = false;
+                Some(label)
+            }
+            _ => None,
+        }
+    }
+
+    /// The second operand of the `Bin`/`ICmp` instruction defining `dst`.
+    pub(crate) fn operand_b(&self, dst: &str) -> Option<&str> {
+        self.instructions.iter().find_map(|inst| match inst {
+            crate::inst::LlInst::Bin { dst: d, b, .. }
+            | crate::inst::LlInst::ICmp { dst: d, b, .. }
+                if d == dst =>
+            {
+                Some(b.as_str())
+            }
+            _ => None,
+        })
+    }
+
+    /// Replace the second operand of the `Bin`/`ICmp` instruction defining
+    /// `dst` (a receiver run's proof mask, `expr::layout_read::MaskTest`).
+    /// Returns whether that instruction exists.
+    pub(crate) fn set_operand_b(&mut self, dst: &str, value: &str) -> bool {
+        for inst in &mut self.instructions {
+            match inst {
+                crate::inst::LlInst::Bin { dst: d, b, .. }
+                | crate::inst::LlInst::ICmp { dst: d, b, .. }
+                    if d == dst =>
+                {
+                    *b = value.to_string();
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Replace the value the phi `dst` takes from predecessor `pred`.
+    /// Returns whether that phi and incoming edge exist.
+    pub(crate) fn set_phi_incoming(&mut self, dst: &str, pred: &str, value: &str) -> bool {
+        for inst in &mut self.instructions {
+            if let crate::inst::LlInst::Phi { dst: d, pairs, .. } = inst {
+                if d == dst {
+                    if let Some(pair) = pairs.iter_mut().find(|(_, l)| l == pred) {
+                        pair.0 = value.to_string();
+                        return true;
+                    }
+                    return false;
+                }
+            }
+        }
+        false
     }
 
     // -------- Arithmetic (double) --------
@@ -1607,6 +1678,21 @@ impl LlBlock {
         r
     }
 
+    /// Add one incoming `(value, label)` edge to the phi defining `dst` in
+    /// this block, for an edge whose block is emitted after the phi (a back
+    /// edge into an earlier block). False when no such phi exists.
+    pub fn add_phi_incoming(&mut self, dst: &str, value: &str, label: &str) -> bool {
+        for inst in &mut self.instructions {
+            if let crate::inst::LlInst::Phi { dst: d, pairs, .. } = inst {
+                if d == dst {
+                    pairs.push((value.to_string(), label.to_string()));
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn phi(&mut self, ty: LlvmType, incoming: &[(&str, &str)]) -> String {
         let r = self.reg();
         self.push_inst(crate::inst::LlInst::Phi {
@@ -1660,3 +1746,7 @@ fn latch_meta(tag: Option<crate::inst::LoopTag>) -> Option<Box<crate::inst::Bran
         })
     })
 }
+
+mod owned;
+pub(crate) use owned::OwnedBlock;
+pub(crate) use reg_counter::OwnedCounter;

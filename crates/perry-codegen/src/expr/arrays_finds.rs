@@ -1501,11 +1501,9 @@ pub(crate) fn lower(
         }
 
         // -------- ClassRef --------
-        // Lower to the class's runtime id NaN-boxed with INT32_TAG. The
-        // runtime distinguishes class refs from other values via the tag,
-        // letting `Object.prototype.hasOwnProperty.call(SomeClass, sym)`
-        // route through the class-static-symbol side table for drizzle's
-        // `is(value, type)`. Falls back to `0.0` when the class isn't in
+        // Fetch the class's constructor function object. Its own properties
+        // provide the static symbols used by drizzle's `is(value, type)`.
+        // Falls back to `0.0` when the class isn't in
         // class_ids (legacy callers checking truthiness). Refs #420.
         Expr::ClassRef(name) => {
             if let Some(&cid) = ctx.class_ids.get(name) {

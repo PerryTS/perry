@@ -42,8 +42,7 @@ unsafe fn validate_callback(callback: f64) -> *const ClosureHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let msg = scope.root_string_ptr(msg);
-    let err = msg.with_mut_ptr(|msg| crate::error::js_typeerror_new(msg));
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(msg.with_mut_ptr(|msg| crate::error::CoreError::type_error(msg)))
 }
 
 /// #3093 — invoke a validated callback with the forwarded rest arguments.
@@ -157,8 +156,7 @@ fn throw_invalid_receiver() -> ! {
     let scope = crate::gc::RuntimeHandleScope::new();
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let msg = scope.root_string_ptr(msg);
-    let err = msg.with_mut_ptr(|msg| crate::error::js_typeerror_new(msg));
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(msg.with_mut_ptr(|msg| crate::error::CoreError::type_error(msg)))
 }
 
 pub(crate) fn resolve_async_local_storage_token(receiver: i64) -> Option<i64> {

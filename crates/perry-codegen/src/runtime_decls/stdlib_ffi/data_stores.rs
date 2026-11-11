@@ -118,6 +118,4 @@ pub(crate) fn declare_data_stores(module: &mut LlModule) {
     );
     module.declare_function("js_crypto_x25519_keypair", I64, &[]);
     module.declare_function("js_crypto_x25519_shared_secret", I64, &[I64, I64]);
-    module.declare_function("js_keccak256_native", I64, &[I64]);
-    module.declare_function("js_keccak256_native_bytes", I64, &[I64]);
 }

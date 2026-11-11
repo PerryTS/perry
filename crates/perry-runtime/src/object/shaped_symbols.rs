@@ -36,6 +36,63 @@ pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
     (value != crate::value::TAG_HOLE).then_some(value)
 }
 
+/// The value of `obj`'s own symbol slot `symbol` (no holder redirect: `obj`
+/// is a live ordinary object). The first listed key is compared first, so a
+/// key an object was born with at index 0 costs one compare.
+#[inline]
+pub(crate) unsafe fn own_private(obj: *const ObjectHeader, symbol: usize) -> Option<u64> {
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let bits = crate::value::POINTER_TAG | symbol as u64;
+    let (slots, count) = keys.dense_slots();
+    if count == 0 {
+        return None;
+    }
+    let index = if (*slots.add(0)).to_bits() == bits {
+        0
+    } else {
+        position_in(keys, symbol)?
+    };
+    let value = object_key_field_at_with_keys(obj, keys.arr(), index, live).bits();
+    (value != crate::value::TAG_HOLE).then_some(value)
+}
+
+/// Fill the hole of `symbol` on an object whose layout lists it: the key is
+/// listed optional with `entry` (so the hole is its absence), its slot is
+/// inline and still the hole, and no later key is present (filling it keeps
+/// the key order the list states). One slot store; the object stays on its
+/// layout. `false`, having changed nothing, otherwise.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+pub(crate) unsafe fn fill_listed_hole(
+    obj: *mut ObjectHeader,
+    symbol: usize,
+    bits: u64,
+    entry: u8,
+) -> bool {
+    if super::overflow::has_overflow(obj) {
+        return false;
+    }
+    let (keys, live) = object_keys_and_live_slot_count(obj);
+    let Some(index) = position_in(keys, symbol) else {
+        return false;
+    };
+    if key_attrs::keys_entry(keys.arr(), index) != entry | key_attrs::ENTRY_OPTIONAL {
+        return false;
+    }
+    let slot = keys.storage_slot(index);
+    if slot >= object_inline_capacity(obj)
+        || (index..keys.count()).any(|i| {
+            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits()
+                != crate::value::TAG_HOLE
+        })
+    {
+        return false;
+    }
+    super::store_object_field_slot(obj, slot as usize, bits);
+    true
+}
+
 /// Root all operands while publishing the shared layout and growing storage.
 /// Existing symbol keys share exactly the same indexed store as string keys.
 pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) -> bool {
@@ -348,6 +405,13 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
 }
 
 pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(f64::from_bits(
+            crate::value::POINTER_TAG | symbol as u64,
+        ))),
+        "delete symbol",
+    );
     let _holder_edit = descriptor_state::HolderEdit::new(addr);
     let Some(obj) = owner(addr) else {
         return false;
@@ -369,7 +433,7 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
         let pos = object_keys(obj).storage_slot(pos);
         if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
             && crate::value::addr_class::try_read_tracked_gc_header(addr)
-                .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)
+                .is_some_and(|header| crate::gc_type_is_array!(header.as_ref().obj_type))
         {
             let _no_move = crate::gc::GcSuppressScope::new();
             set_entry(addr, symbol, 0);

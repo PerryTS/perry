@@ -528,3 +528,13 @@ mod tests {
         assert!(doc["load_address"].as_u64().unwrap() > 0);
     }
 }
+
+#[cfg(test)]
+pub(crate) fn test_count_allocations<R>(read: impl FnOnce() -> R) -> (R, u64) {
+    let previous = ENABLED.swap(2, Ordering::SeqCst);
+    let before = TOTAL_ALLOC_COUNT.load(Ordering::SeqCst);
+    let result = read();
+    let count = TOTAL_ALLOC_COUNT.load(Ordering::SeqCst) - before;
+    ENABLED.store(previous, Ordering::SeqCst);
+    (result, count)
+}

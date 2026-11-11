@@ -20,15 +20,10 @@ unsafe fn dispatch_handle_proto_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    // Only do the (locked) side-table walk when a prototype was actually
-    // recorded for this handle — the overwhelmingly common case (fastify /
-    // axios handles with no user setPrototypeOf) skips it cheaply.
     crate::object::prototype_chain::object_static_prototype(handle_id)?;
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let resolved = crate::object::prototype_chain::resolve_inherited_field(
-        handle_id,
-        key as *const crate::StringHeader,
-    )?;
+    let key = key as *const crate::StringHeader;
+    let resolved = crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?;
     let resolved_bits = resolved.bits();
     if (resolved_bits >> 48) != 0x7FFD {
         return None;
@@ -110,7 +105,9 @@ unsafe fn dispatch_handle_native_method(
         // handle prototype; if it yields a callable, invoke it with
         // `this` bound to the handle so the method's internal
         // `this.end(...)` / `this.statusCode = …` route back to us.
-        if r.to_bits() == crate::value::TAG_UNDEFINED {
+        if r.to_bits() == crate::value::TAG_UNDEFINED
+            && !crate::object::http_handle_prototype::is_http_handle(raw_ptr)
+        {
             if let Some(v) =
                 dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
             {
@@ -187,6 +184,22 @@ pub(super) unsafe fn dispatch_handle(
                 dispatch_handle_own_method(object, raw_ptr, method_name, args_ptr, args_len)
             {
                 return Some(v);
+            }
+            if crate::object::http_handle_prototype::is_http_handle(raw_ptr) {
+                let key = crate::string::js_string_from_bytes(
+                    method_name.as_ptr(),
+                    method_name.len() as u32,
+                ) as *const crate::StringHeader;
+                let value = crate::object::http_handle_prototype::field(raw_ptr, key)
+                    .unwrap_or_else(JSValue::undefined);
+                let value = root_scope.root_nanbox_f64(f64::from_bits(value.bits()));
+                let args = refreshed_args();
+                return Some(crate::closure::native_call_value_this(
+                    value.get_nanbox_f64(),
+                    crate::closure::JsThis::from_f64(object),
+                    args.as_ptr(),
+                    args.len(),
+                ));
             }
             return Some(dispatch_handle_native_method(
                 raw_ptr,
@@ -277,7 +290,7 @@ pub(super) unsafe fn dispatch_handle(
             let arr_gc_hdr =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let arr_obj_type = (*arr_gc_hdr).obj_type;
-            if arr_obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(arr_obj_type)
                 || arr_obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
                 // A user-stored callable own property on the array
@@ -886,7 +899,15 @@ pub(super) unsafe fn dispatch_handle(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         if crate::gc_type_is_object!((*gc_header).obj_type) {
-            if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+            // The inherited property predicates run on the namespace object
+            // itself (`buffer.hasOwnProperty(k)`, #13963); its module's bucket
+            // has no arm for them.
+            if (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                && !matches!(
+                    method_name,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                )
+            {
                 // #853: the `is_valid_obj_ptr` guard that used to live after
                 // this return was dead — the early return claims the path
                 // unconditionally. Removed.

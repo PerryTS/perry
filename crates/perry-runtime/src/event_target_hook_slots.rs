@@ -41,6 +41,20 @@ pub fn message_event(data: f64) -> f64 {
         |run| run(data),
     )
 }
+static MESSAGE_EVENT_WITH_PORTS: Hook<fn(f64, f64) -> f64> = Hook::empty();
+pub fn message_event_with_ports(data: f64, ports: f64) -> f64 {
+    MESSAGE_EVENT_WITH_PORTS.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(data, ports),
+    )
+}
+static NODE_MESSAGE_EVENT: Hook<fn(f64, Option<f64>) -> f64> = Hook::empty();
+pub fn node_message_event(data: f64, ports: Option<f64>) -> f64 {
+    NODE_MESSAGE_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(data, ports),
+    )
+}
 static MESSAGE_DISPATCH_STATE: Hook<fn(f64, f64, bool) -> bool> = Hook::empty();
 /// Keep the existing listener queue, but use canonical Event dispatch state.
 /// The runtime trap restores state even with panic=abort foreign exceptions.
@@ -53,13 +67,13 @@ pub fn with_message_event_dispatch(event: f64, target: f64, call: impl FnOnce())
             return;
         }
     }
-    let result = crate::exception::catch_js_throw(call);
-    let error = result.err().map(|value| scope.root_nanbox_f64(value));
+    let result = crate::exception::catch_thrown(call);
+    let error = result.err().map(|caught| caught.root(&scope));
     if let Some(run) = MESSAGE_DISPATCH_STATE.get() {
         run(event.get_nanbox_f64(), target.get_nanbox_f64(), false);
     }
     if let Some(error) = error {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_caught(error.caught());
     }
 }
 static JS_CUSTOM_EVENT_NEW: Hook<extern "C" fn(f64, f64, u32) -> *mut ObjectHeader> = Hook::empty();
@@ -154,6 +168,19 @@ pub unsafe extern "C" fn js_event_target_is_event_target(target: *const ObjectHe
     JS_EVENT_TARGET_IS_EVENT_TARGET
         .get()
         .map_or_else(|| 0, |run| unsafe { run(target) })
+}
+static INITIALIZE_TARGET: Hook<fn(*mut ObjectHeader, bool)> = Hook::empty();
+pub(crate) fn initialize_target(target: *mut ObjectHeader, signal: bool) {
+    if let Some(run) = INITIALIZE_TARGET.get() {
+        run(target, signal);
+    }
+}
+static DISPATCH_EVENT: Hook<unsafe extern "C" fn(*mut ObjectHeader, f64) -> f64> = Hook::empty();
+pub unsafe fn dispatch_event(target: *mut ObjectHeader, event: f64) -> f64 {
+    DISPATCH_EVENT.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_TRUE),
+        |run| unsafe { run(target, event) },
+    )
 }
 static JS_EVENT_TARGET_NEW: Hook<extern "C" fn() -> *mut ObjectHeader> = Hook::empty();
 pub(crate) extern "C" fn js_event_target_new() -> *mut ObjectHeader {
@@ -256,6 +283,14 @@ pub(crate) extern "C" fn js_abort_signal_any(
         .get()
         .map_or_else(|| std::ptr::null_mut(), |run| run(signals_arr))
 }
+static JS_ABORT_SIGNAL_REASON: Hook<extern "C" fn(*mut ObjectHeader) -> f64> = Hook::empty();
+/// An aborted signal's `reason` (`undefined` before it aborts).
+pub extern "C" fn js_abort_signal_reason(signal: *mut ObjectHeader) -> f64 {
+    JS_ABORT_SIGNAL_REASON.get().map_or_else(
+        || f64::from_bits(crate::value::TAG_UNDEFINED),
+        |run| run(signal),
+    )
+}
 static JS_ABORT_SIGNAL_IS_ABORTED: Hook<extern "C" fn(*mut ObjectHeader) -> i32> = Hook::empty();
 pub extern "C" fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32 {
     JS_ABORT_SIGNAL_IS_ABORTED
@@ -336,6 +371,8 @@ pub(crate) fn install() {
     crate::perry_install_once!({
         CONSTRUCT_MESSAGE_EVENT.set(crate::event_target::message_event::construct);
         MESSAGE_EVENT.set(crate::event_target::message_event::delivery);
+        MESSAGE_EVENT_WITH_PORTS.set(crate::event_target::message_event::delivery_with_ports);
+        NODE_MESSAGE_EVENT.set(crate::event_target::message_event::node_delivery);
         MESSAGE_DISPATCH_STATE.set(crate::event_target::message_event::dispatch_state);
         ABORT_DOM_EXCEPTION_VALUE.set(crate::event_target::abort_dom_exception_value);
         INSTALL_WEB_EVENT_PROTO_METHODS.set(crate::event_target::install_web_event_proto_methods);
@@ -353,6 +390,8 @@ pub(crate) fn install() {
         JS_EVENT_TARGET_GET_MAX_LISTENERS
             .set(crate::event_target::js_event_target_get_max_listeners);
         JS_EVENT_TARGET_IS_EVENT_TARGET.set(crate::event_target::js_event_target_is_event_target);
+        INITIALIZE_TARGET.set(crate::event_target::state::initialize_target);
+        DISPATCH_EVENT.set(crate::event_target::js_event_target_dispatch_event);
         JS_EVENT_TARGET_NEW.set(crate::event_target::js_event_target_new);
         JS_EVENT_TARGET_REMOVE_EVENT_LISTENER
             .set(crate::event_target::js_event_target_remove_event_listener);
@@ -369,6 +408,7 @@ pub(crate) fn install() {
         JS_ABORT_SIGNAL_ADD_LISTENER.set(crate::event_target::abort::js_abort_signal_add_listener);
         JS_ABORT_SIGNAL_ANY.set(crate::event_target::abort::js_abort_signal_any);
         JS_ABORT_SIGNAL_IS_ABORTED.set(crate::event_target::abort::js_abort_signal_is_aborted);
+        JS_ABORT_SIGNAL_REASON.set(crate::event_target::abort::abort_signal_reason);
         JS_ABORT_SIGNAL_LISTENER_COUNT
             .set(crate::event_target::abort::js_abort_signal_listener_count);
         JS_ABORT_SIGNAL_LISTENERS_COPY

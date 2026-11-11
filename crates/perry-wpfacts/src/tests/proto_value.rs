@@ -13,15 +13,15 @@ use super::*;
 
 /// The facts see what `p.y = new E()` stored, at `q.y` of a fresh literal:
 /// the read site `r.z` has `E` as a receiver (or ⊤).
-fn sees_e_on_literals(get: &str) -> bool {
+fn sees_e_on_literals(get: &str, key: &str) -> bool {
     let pf = facts(&format!(
         "class E {{ z = 3; }}
         const k = String(Math.random());
         const o: any = {{ a: 1 }};
         const p: any = {get};
-        p.y = new E();
+        try {{ p.{key} = new E(); }} catch (e) {{}}
         const q: any = {{}};
-        const r = q.y;
+        const r = q.{key};
         if (r) console.log(r.z);"
     ));
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
@@ -31,7 +31,9 @@ fn sees_e_on_literals(get: &str) -> bool {
 
 #[test]
 fn a_literals_prototype_as_a_value_is_object_prototype() {
-    assert!(sees_e_on_literals("Object.prototype"));
+    // DEC 250 refuses adding y; the exempt constructor store still identifies the prototype.
+    assert!(!sees_e_on_literals("Object.prototype", "y"));
+    assert!(sees_e_on_literals("Object.prototype", "constructor"));
     for get in [
         "o.__proto__",
         "o['__proto__']",
@@ -41,7 +43,7 @@ fn a_literals_prototype_as_a_value_is_object_prototype() {
         // An array's prototype's prototype.
         "Object.getPrototypeOf(Object.getPrototypeOf([1]))",
     ] {
-        assert!(sees_e_on_literals(get), "{get}");
+        assert!(sees_e_on_literals(get, "constructor"), "{get}");
     }
 }
 
@@ -69,7 +71,7 @@ fn a_computed_key_is_never_proto() {
     // DECISIONS 217 (owner): an unknown string key does not reach the
     // prototype, so no store through it is seen on other objects.
     for get in ["o[k]", "Reflect.get(o, k)"] {
-        assert!(!sees_e_on_literals(get), "{get}");
+        assert!(!sees_e_on_literals(get, "constructor"), "{get}");
     }
 }
 
@@ -81,7 +83,7 @@ fn a_class_instances_prototype_as_a_value_is_its_class_prototype() {
 }
 
 #[test]
-fn a_functions_prototype_as_a_value_is_seen_by_every_function() {
+fn a_functions_prototype_as_a_value_is_add_locked() {
     let pf = facts(
         "class E { z = 3; }
         const f: any = function () {};
@@ -92,8 +94,11 @@ fn a_functions_prototype_as_a_value_is_seen_by_every_function() {
     );
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
     assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    // DEC 250 / NMA3: Function.prototype is add-locked, so the store through
+    // f.__proto__ is refused at run time and no function chain reads y:
+    // the read r.z sees no E and is not top.
     assert!(
-        s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        !s[0].top && !s[0].receivers.iter().any(|r| r.ends_with(":E")),
         "{}",
         pf.dump_text()
     );
@@ -170,8 +175,9 @@ fn a_number_key_calls_no_object_prototype_method() {
     assert!(!call_escapes(arr, "table[n]('y', () => d)"));
     let inst = "class T { 0(a: any, b: any) { return 1; } } const table: any = new T();";
     assert!(!call_escapes(inst, "table[n]('y', () => d)"));
-    // A key that may be any string may name `__defineGetter__`.
-    assert!(call_escapes(table, "table[k]('y', () => d)"));
+    // A string key may name `__defineGetter__`, which retains the getter
+    // on the table; installing alone does not expose its result `d`.
+    assert!(!call_escapes(table, "table[k]('y', () => d)"));
 }
 
 #[test]
@@ -188,8 +194,10 @@ fn a_number_key_reads_what_a_store_into_an_intrinsic_wrote() {
     );
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
     assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    // DEC 250: the runtime refuses an add on `Object.prototype`, so `table[n]`
+    // reads only the table's own fields.
     assert!(
-        s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        !s[0].top && !s[0].receivers.iter().any(|r| r.ends_with(":E")),
         "{}",
         pf.dump_text()
     );
@@ -200,10 +208,8 @@ fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
     // A store under a computed key onto Object.prototype may write "0".
     let table = "const table: any = { a: 1 };
         (Object.prototype as any)[k] = (x: any) => (globalThis as any).sink = x;";
-    assert!(call_escapes(table, "table[n](d)"));
-    let s = "const s: any = 'ab';
-        (String.prototype as any)[k] = (x: any) => (globalThis as any).sink = x;";
-    assert!(call_escapes(s, "s[n](d)"));
+    // DEC 250: refused (an add on the locked chain), so nothing is called.
+    assert!(!call_escapes(table, "table[n](d)"));
 }
 
 /// `f` escapes from the callbacks an empty array's elements give, after
@@ -237,15 +243,16 @@ fn a_number_key_reads_no_named_key_a_store_into_top_wrote() {
     let fun = "(x: any) => ((globalThis as any).sink = x)";
     assert!(!element_callee_escapes(""));
     assert!(!element_callee_escapes(&format!("t.elided = {fun};")));
-    // A number key a store into ⊤ may have written: an element store, a
-    // numeric name, a computed key.
+    // DEC 250: a store into ⊤ under a number key is an index add on a locked
+    // chain (`Array.prototype`, `Object.prototype`), refused: `fns` holds no
+    // element a store could have written.
     for w in [
         format!("t[n] = {fun};"),
         format!("t[0] = {fun};"),
         format!("t['1'] = {fun};"),
         format!("t[k] = {fun};"),
     ] {
-        assert!(element_callee_escapes(&w), "{w}");
+        assert!(!element_callee_escapes(&w), "{w}");
     }
 }
 
@@ -256,15 +263,16 @@ export function getProto(o: any) { return Object.getPrototypeOf(o); }
 
 #[test]
 fn a_parameters_prototype_is_its_arguments_in_every_unit() {
+    // DEC 250: use the mutable constructor key so the store through the returned prototype can land.
     for get in ["protoOf(o)", "getProto(o)"] {
         let m = format!(
             "import {{ protoOf, getProto }} from './a';
             class E {{ z = 3; }}
             const o: any = {{ a: 1 }};
             const p: any = {get};
-            p.y = new E();
+            p.constructor = new E();
             const q: any = {{}};
-            const r = q.y;
+            const r = q.constructor;
             if (r) console.log(r.z);"
         );
         let mods = [("a", PROTO_OF_PARAM), ("m", m.as_str())];
@@ -317,8 +325,14 @@ fn a_parameters_prototype_is_its_class_prototype_in_every_unit() {
 fn a_hard_object_prototype_is_hard_in_every_unit() {
     // `Object.defineProperties` on Object.prototype in one unit makes every
     // chain through it HARD (E5), in the other units too, as the whole
-    // program derives it (`SharedWrite::Hard`; main: per unit stronger).
-    // The prototype may come as a value (DECISIONS 217).
+    // program derives it (`SharedWrite::Hard`). Asserted on the whole
+    // program only: per-unit facts are retired (DEC 251, H3 deletes them),
+    // and per unit this case held only through the old global-sentinel
+    // escape cascade (the per-unit shared closure does not carry unit a's
+    // top writes into unit m).
+    // The prototype may come as a value (DECISIONS 217). Under DEC 250 (Q2)
+    // the accessor lands only under `constructor`: a computed read of `c`
+    // (which may be that key) meets it, its own field `x` alone would not.
     for proto in ["Object.prototype", "Object.getPrototypeOf(o)"] {
         let a = format!(
             "const o: any = {{ a: 1 }};
@@ -331,13 +345,13 @@ fn a_hard_object_prototype_is_hard_in_every_unit() {
             class C { x = 1; }
             const c = new C();
             install(String(Math.random()));
-            console.log(c.x);";
-        let (u, _) = super::unit_alias::assert_not_stronger(&[("a", a.as_str()), ("m", m)]);
-        let c = u
+            console.log(c.x, (c as any)[String(Math.random())]);";
+        let w = super::unit_alias::whole(&[("a", a.as_str()), ("m", m)]);
+        let c = w
             .templates
             .iter()
             .find(|t| t.display == "m.ts:C")
             .expect("C");
-        assert!(!c.prefix_stable, "{proto}\n{}", u.dump_text());
+        assert!(!c.prefix_stable, "{proto}\n{}", w.dump_text());
     }
 }

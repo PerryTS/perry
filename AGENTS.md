@@ -2,14 +2,34 @@
 
 Perry compiles TypeScript to native executables: SWC parses, `perry-hir` lowers, `perry-transform` runs IR passes, `perry-codegen` emits LLVM, and the result links against `perry-runtime` and `perry-stdlib`.
 
-This file holds only what the code cannot tell you and what is expensive to get wrong. Design and internals live in `docs/src/`; point-in-time evidence lives in `docs/audits/`.
+This file holds only what the code cannot tell you and what is expensive to get wrong. Design and internals live in `docs/src/` (`docs/src/SUMMARY.md` is the shelf); point-in-time evidence lives in `docs/audits/`.
+
+## Where the change goes
+
+Find the crate that already owns the behavior before writing: the pipeline order is the map, so parsing sits in `perry-parser`/`perry-hir`, IR behavior in `perry-transform`, emitted code in `perry-codegen`, and anything that exists only at runtime in `perry-runtime`/`perry-stdlib`.
+
+- `docs/src/contributing/architecture.md` carries the crate map and the module layout. `docs/src/contributing/crate-policy.md` carries the workspace categories, the dependency rules, and what justifies a crate at all; read it before moving code across a crate boundary or adding a member.
+- `perry-runtime` owns values, objects, the heap and the GC; `perry-stdlib` owns the Node and Perry builtin implementations built on them. A builtin that needs the heap belongs in stdlib.
 
 ## Every change
 
 - `main` is protected: PRs only, squash or rebase merge. The only required check is `pr-gate`; `scripts/ci_plan.py --table` shows what runs in each tier (`docs/src/testing/ci-tiers.md`).
+- `.github/pull_request_template.md` is the contract a PR is reviewed against: one logical change, a summary, a test plan carrying the commands actually run, and the paths a user-visible change touches.
 - Do not bump the version in a PR, maintainer-authored ones included. `[workspace.package].version` in `Cargo.toml` is the only copy, and the release maintainer bumps it when cutting a release.
-- Add `changelog.d/<PR>-<slug>.md` (see `changelog.d/README.md`). Never edit `CHANGELOG.md`; it is frozen.
+- A change touching `crates/` adds `changelog.d/<PR>-<slug>.md` in the same PR, named for the real PR number. An all-zero `0000-` prefix fails `lint` outright; a wrong real number only warns, because backfills and stacked PRs legitimately name another PR. The `skip-changelog` label covers typo and CI-only churn. Never edit `CHANGELOG.md`; it is frozen.
+- A change to the CLI, the stdlib or a runtime API updates `docs/src/` in the same PR; the `check` tier regenerates the API docs and asserts no drift.
+- Commits keep the loose `feat:` / `fix:` / `docs:` / `chore:` prefix the log already uses.
 - Read `MERGE_GUIDE.md` before landing a queue of PRs.
+
+## Comments
+
+A comment earns its lines only by saying what the code cannot: the invariant, the ordering constraint, the reason the plainer form is wrong. Perry is public and long-lived, so every line a reader pays for must be one a fresh reader needs, not one the author happened to learn.
+
+- Write the present tense: the invariant as it holds now. A date, a `used to`, a `previously`, a `for now` describes the commit that wrote it, and the next change makes it false without touching it.
+- A PR or issue number may accompany the reason, never replace it. `#6117` alone points into a closed conversation, and it keeps reading as current long after the code moved.
+- Delete rather than paraphrase once a comment stops holding. The removed reasoning survives in `git log` and the pull request; the file holds the present.
+- Rationale that must outlive a refactor belongs in `docs/src/`, which is reviewed prose. Code keeps the invariant and the pointer to it.
+- The comments inside a hunk you edit are yours for that edit: fix or delete the ones that no longer hold instead of leaving them beside a change that contradicts them.
 
 ## Building and testing
 
@@ -17,7 +37,7 @@ This file holds only what the code cannot tell you and what is expensive to get 
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
 scripts/gc_call_effects/sidecars.sh target/release   # perry refuses to link without them
 RUST_TEST_THREADS=1 cargo test --release -p perry-runtime
-python3 scripts/parity.py run --suite test-files --filter test_gap_ --mode fast   # the PR gap lane
+python3 scripts/parity.py run --suite all --filter test_gap_ --mode fast   # the PR gap lane
 cargo run --release -- file.ts --trace hir --focus fnName   # one function's HIR
 cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace/llvm/
 ```
@@ -25,18 +45,30 @@ cargo run --release -- file.ts --trace llvm                 # IR in .perry-trace
 - `perry-runtime` and `perry-stdlib` are rlib-only. The `.a` archives that `perry compile` links come only from the `*-static` wrapper crates.
 - `perry-runtime` tests share process-global state. Run them single-threaded; a fixture-precondition failure under parallel threads is interference, not a regression.
 - `crates/*/tests/*.rs` suites run on a PR only when the diff names them. Put acceptance coverage in unit tests.
-- Files are capped at 2000 lines (`scripts/check_file_size.sh`).
+- `./scripts/test_affected_crates.sh --base origin/main` mirrors CI's scope: per-crate Cargo commands from committed, staged and unstaged paths (`--dry-run` prints them). Stage new files first, because untracked paths are ignored. It skips `crates/*/tests/`, and `cargo test --workspace` is not a substitute — per-crate feature sets stay isolated.
+- `scripts/run_lint_gates.sh` runs every gate the CI `lint` job runs, plus the `warnings` and `check` arms the compile tier derives, in one command. Pick this over the gates that merely look topically relevant to your diff: a gate you did not run is indistinguishable from a gate that passed. `--list` prints the set; `BASE_SHA=origin/main` arms the merge-base comparisons, and `SKIP_COMPILE_GATES=1` says so in its summary while iterating. It needs PyYAML, which only `.github/workflows/test.yml` pins.
 - Turnloop is the only event loop. No Tokio dependencies, including optional,
   transitive, target-specific, dev or build dependencies. Run
   `python3 scripts/tokio_inventory.py --offline` before changing dependencies.
 
-## TypeScript Parity Status
+## Which layer owns a test
 
-The gap suite (`test-files/test_gap_*.ts`) is compared byte-for-byte against `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`. Use that exact version locally: when Node cannot run a test, the harness marks it `node_fail` and drops it from the gate silently. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
+When adding or moving an external suite, use `tests/README.md` for placement and runner entry points. Ask what the assertion needs to see; `docs/src/testing/test-structure.md` has the full layer table. A test in the wrong layer either cannot see its subject or duplicates another layer's work:
 
-A new regression test for one Node core module goes next to that module's existing cases in `test-parity/node-suite/` (for example `test-parity/node-suite/crypto/webcrypto/get-random-values.ts`); run it with `./run_parity_tests.sh --suite node-suite --module <module>`. Other self-contained Node-parity programs go in `test-files/test_parity_*.ts`. The full placement rules are in `test-parity/README.md`.
+- **Beside the code** (`#[cfg(test)]`, `tests.rs` siblings) asserts an invariant of the implementation: an allocation count, a rooting or ordering rule, a release path, private state. This is the layer that can see what a compiled program cannot, and it is where acceptance coverage goes, because a failure here names the mechanism.
+- **`crates/*/tests/`** asserts the public API across modules, and `crates/perry/tests/` what the `perry` binary prints: diagnostics, CLI output, determinism. CI selects these from the changed paths (`scripts/ci_test_scope.py`), so a behavior that must never regress silently belongs in a unit test instead.
+- **A program case** under `tests/parity/<root>/<subject>/` asserts what a compiled program prints or exits with, diffed against Node: `node-suite/<module>`, `language/<area>`, `typescript/<feature>`, `perry/<api>` (with committed expected output) or `npm/<package>`. If the assertion reads as "this program prints X", it belongs here; if it needs to reach inside the runtime, it does not. `tests/fixtures/programs/test_gap_*` takes no new files; `lint` refuses one.
 
-Before believing a red gap shard, A/B the named tests against a pristine `main` build.
+The duplication worth deleting is a Rust test whose only assertion is output a parity case already compares byte for byte, and a parity case built to observe something the runtime must keep internal.
+
+## Program cases
+
+`scripts/parity.py` is the one runner: it compiles each case, runs it, and compares merged stdout+stderr and the exit status with `node --experimental-strip-types`. The oracle is Node `26.12.1`, pinned in `.node-version`; the runner refuses any other, because Node's output is the expected output. Select by subject or path: `python3 scripts/parity.py run node-suite/<module> --mode auto`. The builtin-module matrix (`node scripts/node_compat_matrix.mjs --module <name>`) uses its own pin, `tools.node.version` — currently **26.12.1**, in `external-tools.json`.
+
+- `--suite test-files` is a logical compatibility selector for `tests/fixtures/programs/`; its bare IDs and `test-files` snapshot subject are retained. New program cases go to their parity subject.
+- Each subject has a snapshot, `tests/parity/snapshots/<platform>-<mode>/<subject>.json`, listing the cases that do not pass. It is checked both ways: a new failure is red, and so is a listed case that starts passing. Re-baseline with `--update`; never hand-edit a status. A crash is never accepted into a snapshot.
+- A PR runs every `test_gap_*` in `tests/fixtures/programs/` and the subject trees in fast mode, plus `parity-scoped`: the cases it changes and the subjects its source owns, from `scripts/test_owners.py`. Source a Node module gains in a new path needs a row there; the self-test fails on a row that matches nothing.
+- Before believing a red gap shard, A/B the named tests against a pristine `main` build.
 
 ## Silent failures
 
@@ -58,6 +90,15 @@ A clean `git status` says nothing about what you link.
 - Rebuild with the `*-static` crates, pin `PERRY_RUNTIME_DIR`, and confirm the `.a` mtime moved after your edit. Otherwise both arms of an A/B link the same stale archive. Keep the package set identical across builds.
 - A prebuilt binary in another worktree may come from that worktree's uncommitted changes. Build your own reference and check it first.
 - Read the harness's exit code, not that of a wrapper pipe.
+
+## Gates that ratchet
+
+Most structural gates here compare the tree against a committed baseline instead of an absolute bound, so they fail on *growth*: `scripts/raw_handle_debt.py`, `scripts/runtime_size_budget.py`, `scripts/test262_ratchet.py`, and the committed baseline files they compare against.
+
+- A baseline moves **down**. `--update` refuses to raise it, and CI also runs the differential arm (`--no-raise-vs <merge-base>`), so widening a baseline or a per-module ceiling to cover new debt fails the pull request from the other side. Remove the debt site instead.
+- `scripts/check_file_size.sh` is the same idea plus an ALLOWLIST, and it measures lines of **code**: comments and blank lines are free, test code still counts. An exemption records its exact count, so it is re-asserted rather than inherited — a stale count fails as loudly as an oversized file, and `--update` re-records every entry and retires the ones that no longer need one. An allowlisted file has no size protection left, so hold it to the cap anyway, and treat adding an entry as the last resort that names the follow-up. Its error text also carries the split recipe: extract a function group into a sibling module and re-export it from `mod.rs` with explicit named `use` statements, since globs do not propagate through transitive re-exports.
+- Splitting a module that carries ledgered debt requires the ledger line to travel with it: the moving line takes a trailing `# moved-from: <old path>` so the merge-base arm credits what the source gave up (`scripts/raw_handle_debt.py`, "RELOCATIONS"). Without it, a module whose debt is spread across it cannot be split at all.
+- A new test file in a suite with an explicit registry is no test at all until it is registered. `scripts/check_test_registration.py` runs in `lint`; `docs/src/testing/test-registration.md` says which suites glob and which keep a list.
 
 ## Four ways a gate can be unable to fail
 

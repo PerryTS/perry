@@ -407,3 +407,17 @@ fn a_headerless_symbol_behind_a_date_cell_tag_is_not_a_date() {
     let date = alloc_date_cell(0.0);
     assert!(is_date_value(date));
 }
+
+/// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+/// 5: not an int32 Number, though a top-16-only test reads it as one.
+const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+
+#[test]
+fn a_non_number_0x7ffe_word_converts_to_nan() {
+    assert_eq!(
+        jsvalue_to_number(f64::from_bits(0x7FFE_0000_0000_0005)),
+        5.0
+    );
+    assert!(jsvalue_to_number(f64::from_bits(PROTO_REF_5)).is_nan());
+    assert!(jsvalue_to_number(f64::from_bits(PROTO_REF_5)).to_bits() == f64::NAN.to_bits());
+}

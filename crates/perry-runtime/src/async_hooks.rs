@@ -638,8 +638,7 @@ fn validate_create_hook_options(options: f64) {
     };
     let message = format!("Cannot destructure property 'init' of {}.", received);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// #3089 — a *present* (non-`undefined`) hook member must be callable, matching
@@ -965,7 +964,7 @@ fn with_hook_callbacks(
     for callback in rooted {
         let outcome = callback.with_const_ptr::<ClosureHeader, _>(|callback| {
             if !callback.is_null() {
-                return crate::exception::js_call_catching(|| {
+                return crate::exception::catch_thrown(|| {
                     f(callback);
                     f64::from_bits(crate::value::TAG_UNDEFINED)
                 });
@@ -973,7 +972,7 @@ fn with_hook_callbacks(
             Ok(f64::from_bits(crate::value::TAG_UNDEFINED))
         });
         if let Err(error) = outcome {
-            thrown = Some(scope.root_nanbox_f64(error));
+            thrown = Some(error.root(&scope));
             break;
         }
     }
@@ -993,7 +992,7 @@ fn with_hook_callbacks(
         }
     }
     if let Some(error) = thrown {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_caught(error.caught());
     }
 }
 
@@ -1605,7 +1604,7 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
     }
     let outcome = try_run_resource_scope(ids, || {
         let callback = crate::fs::extract_closure_ptr(rebound_handle.get_nanbox_f64());
-        let callback_outcome = crate::exception::js_call_catching(|| {
+        let callback_outcome = crate::exception::catch_thrown(|| {
             args_array_handle.with_const_ptr::<ArrayHeader, _>(|arr| {
                 if arr.is_null() {
                     unsafe {
@@ -1634,13 +1633,13 @@ pub extern "C" fn js_async_resource_run_in_async_scope(
         });
         match callback_outcome {
             Ok(value) => value,
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::rethrow_caught(error),
         }
     });
     let _ = swap_resource_value(ids.async_id, previous_resource.get_nanbox_f64());
     match outcome {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

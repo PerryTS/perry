@@ -387,7 +387,7 @@ unsafe fn keys_attrs_resolved(keys: *const ArrayHeader) -> *mut ArrayHeader {
 #[inline]
 pub(crate) unsafe fn keys_attrs_checked(keys: *const ArrayHeader) -> *mut ArrayHeader {
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => keys_attrs(keys),
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => keys_attrs(keys),
         _ => std::ptr::null_mut(),
     }
 }
@@ -571,7 +571,7 @@ pub(crate) unsafe fn keys_have_slots(keys: *const ArrayHeader, count: u32) -> bo
         return true;
     }
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+        && (crate::gc_type_is_not_array!(header.obj_type)
             || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
     {
         return false;
@@ -848,7 +848,7 @@ pub(crate) unsafe fn list_storage_slot(keys: *const ArrayHeader, pos: u32) -> Op
         return None;
     }
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+        && (crate::gc_type_is_not_array!(header.obj_type)
             || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
     {
         return Some(pos);
@@ -1400,6 +1400,19 @@ pub(crate) enum AttrsEdit<'a> {
 }
 
 impl AttrsEdit<'_> {
+    /// Does the edit leave its key with default attributes (or keep the
+    /// attributes it had)? `Data` with all of W, E and C, and the clears.
+    #[inline]
+    pub(crate) fn leaves_default(&self) -> bool {
+        match *self {
+            AttrsEdit::Data(_, bits) => bits == 0x07,
+            AttrsEdit::ClearData(_) | AttrsEdit::ClearAccessor(_) => true,
+            #[cfg(test)]
+            AttrsEdit::ClearAll => true,
+            AttrsEdit::Accessor(..) | AttrsEdit::Integrity { .. } | AttrsEdit::Private(_) => false,
+        }
+    }
+
     /// The single key this edit is about, or `None` for a whole-list edit.
     #[inline]
     pub(crate) fn key(&self) -> Option<&[u8]> {

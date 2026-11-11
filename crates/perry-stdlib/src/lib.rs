@@ -49,7 +49,6 @@ mod runtime_thread_exit_tests;
 // ordinary object built by perry-runtime (#10508).
 #[cfg(feature = "bundled-events")]
 pub mod events;
-pub mod lodash;
 pub mod readline;
 // string_decoder — issue #848. Native StringDecoder with real `write` /
 // `end` methods + `lastNeed` / `lastTotal` / `lastChar` getters wired
@@ -76,7 +75,6 @@ pub use common::*;
 pub use domain::*;
 #[cfg(feature = "bundled-events")]
 pub use events::*;
-pub use lodash::*;
 pub use querystring::*;
 pub use readline::*;
 pub use string_decoder::*;
@@ -95,17 +93,11 @@ pub use framework::*;
 // under the wildcard resolution.
 
 // === turnloop P6: the shared client TLS session ===
-// Driven by both outbound engines below (`turnloop_client`, `turnloop_smtp`).
-#[cfg(any(feature = "turnloop-http-client", feature = "turnloop-smtp-client"))]
+// Driven by the outbound HTTP engine below (`turnloop_client`). The SMTP
+// engine that also used it left with the nodemailer binding: npm
+// `nodemailer` compiles from source over `net` / `tls`.
+#[cfg(feature = "turnloop-http-client")]
 pub(crate) mod turnloop_tls_client;
-
-// === turnloop P6: SMTP on turnloop handles ===
-// `turnloop-smtp`'s sans-I/O `Connection` over a turnloop socket. Gated on its
-// own feature rather than `bundled-nodemailer` so the `js_smtp_*` entry points
-// survive the well-known flip that strips the bundled surface — that is how
-// perry-ext-nodemailer reaches this engine.
-#[cfg(feature = "turnloop-smtp-client")]
-pub mod turnloop_smtp;
 
 // === turnloop P6: outbound HTTP/1.1 on turnloop handles ===
 // The only transport `fetch` has — directly when this thread owns the agent's
@@ -266,16 +258,6 @@ pub mod webcrypto;
 #[cfg(feature = "crypto")]
 pub use webcrypto::*;
 
-// === Ethers (blockchain utilities) ===
-// Feature-gated as of v0.5.556 so the well-known flip can route
-// `import { parseUnits } from 'ethers'` to perry-ext-ethers.
-// Default-on through `crypto` (which is on by default) so
-// existing programs keep their byte-identical behavior.
-#[cfg(feature = "bundled-ethers")]
-pub mod ethers;
-#[cfg(feature = "bundled-ethers")]
-pub use ethers::*;
-
 // bcrypt + argon2 split out from the broad `crypto` feature in
 // v0.5.537 so the well-known flip can swap each one out
 // individually. The `crypto` umbrella still pulls them both in
@@ -308,23 +290,11 @@ pub use crypto_e2e::*;
 #[cfg(feature = "compression-gzip")]
 pub use perry_ext_zlib::*;
 
-// === Email ===
-#[cfg(feature = "bundled-nodemailer")]
-pub mod nodemailer;
-#[cfg(feature = "bundled-nodemailer")]
-pub use nodemailer::*;
-
 // === Image Processing ===
 #[cfg(feature = "bundled-sharp")]
 pub mod sharp;
 #[cfg(feature = "bundled-sharp")]
 pub use sharp::*;
-
-// === HTML Parsing ===
-#[cfg(feature = "bundled-cheerio")]
-pub mod cheerio;
-#[cfg(feature = "bundled-cheerio")]
-pub use cheerio::*;
 
 // === Scheduler ===
 // The native `cron` binding (perry-ext-cron / perry-stdlib's own

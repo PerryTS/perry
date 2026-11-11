@@ -51,6 +51,7 @@ mod c3c_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// #6759 C3c: ids come from the dedicated range (disjoint from real and
     /// builtin class ids), are stable per exact descriptor facts, and distinct
     /// across identities.
@@ -630,6 +631,7 @@ mod descriptor_tests_8067 {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn equivalent_local_and_external_ids_remain_resolvable() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -668,6 +670,7 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(keys);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn interning_appends_each_new_descriptor_to_the_family_exactly_once() {
         // `shape_descriptor_ensure` appends a FRESHLY allocated id with
@@ -705,6 +708,7 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(keys);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn a_foreign_agent_id_misses_instead_of_aliasing_same_address() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -734,6 +738,7 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(fake_keys);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn object_kind_reads_the_live_agent_record_and_retires_with_it() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -771,6 +776,7 @@ mod descriptor_tests_8067 {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn process_global_module_shape_id_installs_with_agent_local_keys() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -802,6 +808,7 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(module_keys);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn the_descriptor_keys_slot_is_the_record_the_collector_rewrites() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -871,6 +878,7 @@ mod descriptor_tests_8067 {
         test_drop_shape_descriptors(keys);
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn a_boxed_record_keeps_its_keys_slot_across_table_growth() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -905,6 +913,7 @@ mod descriptor_tests_8067 {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// #9706: an OWNED keys array's growth history is retired behind the
     /// version its single owner now carries, except for a version an
     /// optimization cache permanently owns.
@@ -997,6 +1006,7 @@ mod descriptor_tests_8067 {
     // line pins it on a whole real program — it is the witness the funnel
     // sabotage reddens, where the parity suite structurally cannot.
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn shape_drop_does_not_delete_a_potential_siblings_descriptor() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -1537,10 +1547,12 @@ mod field_rep_identity_tests {
         assert_eq!(LayoutWord(explicit), legacy);
     }
 
+    /// I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    /// (`field_rep::i32_lane_slots`), no longer the refused NoPointer state.
     #[test]
-    fn an_unbound_special_lane_is_refused() {
-        let reserved = with_slot_rep(0, 2, crate::object::field_rep::REP_SPECIAL);
-        assert!(shape_descriptor_ensure_with_rep(
+    fn a_special_lane_without_a_body_is_an_i32_lane() {
+        let lane = with_slot_rep(0, 2, crate::object::field_rep::REP_SPECIAL);
+        let id = shape_descriptor_ensure_with_rep(
             std::ptr::null(),
             0,
             3,
@@ -1549,9 +1561,13 @@ mod field_rep_identity_tests {
             0,
             PROTO,
             crate::object::shapes::ReceiverFacts::NONE,
-            reserved,
+            lane,
             None,
         )
-        .is_err());
+        .expect("an I32 lane is a valid lane");
+        let record = shape_record_of_receiver(id.0).expect("record");
+        assert_eq!(record.i32_lanes(), 1 << 2);
+        assert!(record.lane_is_i32(2));
+        assert!(!record.lane_is_constfn(2));
     }
 }

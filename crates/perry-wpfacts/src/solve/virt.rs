@@ -19,12 +19,17 @@ impl Model {
         for &c in &fresh {
             self.virt_by_class.entry(c).or_default().push(t);
         }
+        if self.shadowed_classed.contains(&t) {
+            for &c in &fresh {
+                self.shadowed_by_class.entry(c).or_default().push(t);
+            }
+        }
         if !fresh.is_empty() {
             self.flush_shadowed(Some(t));
         }
         if let Some(&pn) = self.proto_node.get(&t) {
             for &p in &fresh {
-                let pt = self.tok(TokKind::Proto(p));
+                let pt = self.tok(TokKind::Proto(self.constructor_origin(p)));
                 self.add_tok(pn, pt);
             }
         }
@@ -167,8 +172,11 @@ impl Model {
             self.atoms[a as usize], self.tmpls[tm as usize].display
         );
         self.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: 0,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name,
             params: Vec::new(),
             rest: None,
@@ -176,13 +184,16 @@ impl Model {
             ret,
             args_all,
             has_arguments: true,
+            own_test: crate::model::OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
-            gen_step: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
@@ -335,9 +346,10 @@ impl Model {
                     }
                     Some(a)
                 }
+                // The keys an instance gains take none away (`class_holds`
+                // does not read `virt_open`): no shadow to re-check.
                 None => {
                     self.virt_open.insert(p);
-                    self.flush_shadowed(None);
                     None
                 }
             };
@@ -452,7 +464,7 @@ impl Model {
                     self.store_into(t, Key::Named(a), v, site);
                 }
             }
-            None => self.store_into(t, Key::Any, top, site),
+            None => self.store_into(t, Key::any(), top, site),
         }
         // What the receiver reaches (its fields, transitively), as for an
         // argument (gen.rs `stand_in_fn_of`).
@@ -462,14 +474,14 @@ impl Model {
             self.cons(
                 h,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );
             self.cons(
                 q,
                 Cons::Load {
-                    key: Key::Any,
+                    key: Key::any(),
                     dst: q,
                 },
             );

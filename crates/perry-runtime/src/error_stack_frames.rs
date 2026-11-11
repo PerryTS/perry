@@ -283,7 +283,7 @@ mod walk {
     extern "C" fn js_text_anchor() {}
 
     #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
-    fn js_text_bounds() -> (usize, usize) {
+    pub(super) fn js_text_bounds() -> (usize, usize) {
         unsafe extern "C" {
             static __start_perry_js_text: u8;
             static __stop_perry_js_text: u8;
@@ -448,6 +448,29 @@ fn capture_encoded(
     origin: walk::Origin,
     want: usize,
 ) -> ([u8; MAX_CAPTURED_FRAMES * PC_CHARS], usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("stack.capture", &format!("{:?}", (want,)), || {
+            let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
+            let n = walk::capture_js(origin, &mut pcs, want);
+            crate::snap_census::pc_check(&pcs[..n], walk::js_text_bounds());
+            if diag_enabled() {
+                eprintln!(
+                    "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",
+                    walk::diag_stack_top(),
+                    walk::diag_frame_pointer(),
+                    &pcs[..n]
+                );
+            }
+            let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+            if n == 0 {
+                return (blob, 0);
+            }
+            let len = encode_pcs(&pcs[..n], &mut blob);
+            (blob, len)
+        });
+    }
+
     let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
     let n = walk::capture_js(origin, &mut pcs, want);
     if diag_enabled() {
@@ -847,10 +870,10 @@ pub(crate) fn render_frames(blob: &[u8], limit: usize) -> Option<String> {
                 out.push_str(&format!("{pc:#x}"));
                 out.push(']');
             }
-            // A module's top-level frame is registered with its own location
-            // (`Object.<anonymous> (<path>)`, node's spelling); the name
-            // already carries the position, so do not append an unknown one.
-            if !name.starts_with("Object.<anonymous> (") {
+            // Module labels carry their location: a bare ESM file URL or
+            // CommonJS's Object.<anonymous> (path). Neither needs an unknown
+            // location appended to it.
+            if !name.starts_with("Object.<anonymous> (") && !name.starts_with("file://") {
                 out.push_str(" (<anonymous>)");
             }
             rendered += 1;
@@ -901,6 +924,14 @@ fn stack_trace_limit() -> usize {
 /// it (see [`walk::origin`]).
 #[inline(always)]
 pub(crate) fn capture_frames_payload() -> Vec<u8> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("stack.payload", &format!("{:?}", ()), || {
+            let origin = walk::origin();
+            capture_frames_payload_from(origin)
+        });
+    }
+
     let origin = walk::origin();
     capture_frames_payload_from(origin)
 }
@@ -946,6 +977,38 @@ pub(crate) fn join_stack(head: &str, lines: &str) -> String {
 /// ran under (an [`ALPHABET`] index); the frame lines stop there. An empty
 /// payload is a capture that found nothing.
 pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call(
+            "stack.rendered",
+            &format!("{:?}", (payload,)),
+            || {
+                let (limit, payload) = match payload.split_first() {
+                    Some((c, rest)) => match decode_char(*c) {
+                        Some(limit) => (limit as usize, rest),
+                        None => (RENDER_LIMIT, payload),
+                    },
+                    None => (RENDER_LIMIT, payload),
+                };
+                if limit == 0 {
+                    return String::new();
+                }
+                let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
+                    Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
+                    None => (payload, None),
+                };
+                // The recorded #5247 line is the innermost frame and counts toward it.
+                let resolved = render_frames(blob, limit - usize::from(recorded.is_some()));
+                match (recorded, resolved) {
+                    (Some(line), Some(frames)) => format!("{line}\n{frames}"),
+                    (Some(line), None) => line.to_string(),
+                    (None, Some(frames)) => frames,
+                    (None, None) => "    at <anonymous>".to_string(),
+                }
+            },
+        );
+    }
+
     let (limit, payload) = match payload.split_first() {
         Some((c, rest)) => match decode_char(*c) {
             Some(limit) => (limit as usize, rest),
@@ -1030,6 +1093,7 @@ mod tests {
             .wrapping_add(17)
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn pcs_round_trip_through_the_ascii_blob() {
         let pcs = [0x1_0000_1234usize, 0x7fff_ffff_0000, 1, 0];
@@ -1117,6 +1181,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn new_image_replacement_is_visible_without_a_name_snapshot() {
         const START: usize = 0x0000_7d10_0010_0000;
@@ -1167,6 +1232,7 @@ mod tests {
     /// stack index must use only codegen's image registry, or the lower-bound
     /// lookup gives every nearby runtime function the thunk's JS name.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn describe_ip_does_not_name_runtime_code_after_a_builtin_thunk() {
         const THUNK_START: usize = 0x0000_7e00_0000_0000;
         const THUNK_NAME: &[u8] = b"get years";

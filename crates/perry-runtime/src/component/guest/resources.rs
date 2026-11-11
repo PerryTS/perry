@@ -176,7 +176,7 @@ fn release(fields: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let fields = scope.root_nanbox_f64(fields);
     let mut frame = Frame::allocate_guest_frame();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         if get(fields.get_nanbox_f64(), STATE) != OWNED {
             return undefined();
         }
@@ -192,8 +192,8 @@ fn release(fields: f64) -> f64 {
         unsafe {
             (super::ops().resource)((&mut frame as *mut Frame).cast(), ty, 1, handle);
         }
-        if let Some(error) = frame.error() {
-            crate::exception::js_throw(error);
+        if let Some(error) = frame.caught_error() {
+            crate::exception::rethrow_caught(error);
         }
         undefined()
     });

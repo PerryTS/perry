@@ -1508,7 +1508,7 @@ run_raw_numeric_object_fields_codegen_semantics() {
     local expected_output="$TMPDIR/raw_numeric_object_fields_expected.$$.$RANDOM"
     local diff_output="$TMPDIR/raw_numeric_object_fields_diff.$$.$RANDOM"
 
-    if ! $PERRY compile --no-cache tests/raw_numeric_object_fields.ts -o "$bin" \
+    if ! $PERRY compile --no-cache tests/integration/raw_numeric_object_fields.ts -o "$bin" \
         >"$compile_output" 2>&1; then
         printf "  FAIL [target-gc] %-40s compile failed\n" "$label"
         sed 's/^/    /' "$compile_output"
@@ -1794,7 +1794,7 @@ run_benchmark_gate() {
 echo "=== Memory-leak regression tests (RSS plateau under sustained alloc) ==="
 # Limits ~50-70% above measured baseline on macOS arm64. CI runners
 # may differ slightly; loosen a limit here rather than in the .ts.
-run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
+run_test tests/parity/language/object/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
 # JSON churn — widened to 290 / 315 MB for the GC rework window under
 # #1090. Observed Ubuntu CI on the v0.5.1024 release-packages run:
 # default 268 MB, gen-gc 268 MB, force-evac+verify 288 MB — the same
@@ -1805,29 +1805,29 @@ run_test test-files/test_memory_long_lived_loop.ts 100 "done, lastId=199999"
 # new comments referencing macOS arm64 baselines that don't apply on
 # Ubuntu CI. Restore the wider ceiling here; revisit + tighten when
 # #1090 closes.
-run_test test-files/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
-run_test test-files/test_memory_string_churn.ts    100 "done, total=9577780"
-run_test test-files/test_memory_closure_churn.ts    50 "done, sum=15004649874"
+run_test tests/parity/language/json/test_memory_json_churn.ts      290 "done, checksum=637747500" 315
+run_test tests/parity/language/string/test_memory_string_churn.ts    100 "done, total=9577780"
+run_test tests/parity/language/function/test_memory_closure_churn.ts    50 "done, sum=15004649874"
 # #1790: 1,000,000 create-and-discard class-EXPRESSION objects
 # (OBJECT_TYPE_CLASS). Per-evaluation class objects with no subclass must NOT
 # be retained by any side-table — RSS must plateau (measured ~106 MB macOS
 # arm64 across all four modes; limit set with headroom for Linux CI's higher
 # RSS accounting, mirroring the json_churn note above).
-run_test test-files/test_memory_class_object_churn.ts 200 "done, kept=999999 hasSink=true" 230
+run_test tests/parity/language/class/test_memory_class_object_churn.ts 200 "done, kept=999999 hasSink=true" 230
 
 echo ""
 echo "=== GC-aggression regression tests (no crash + correct result) ==="
-run_test test-files/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
-run_test test-files/test_gc_deep_recursion.ts       30 "done, result=320400"
+run_test tests/parity/language/object/test_gc_aggressive_forced.ts    50 "done, acc=8022890"
+run_test tests/parity/language/function/test_gc_deep_recursion.ts       30 "done, result=320400"
 # #1790: `class Sub extends make(...)` parent class object survives forced
 # evacuation — inherited mixed pointer/scalar static fields + static methods
 # (incl. a 2-level chain) must still resolve via the rewritten side-table ptr.
-run_test test-files/test_gc_class_object_forced.ts  50 "done: alpha|alpha|7|7|d:alpha:7|mid|d:mid:3"
+run_test tests/parity/language/class/test_gc_class_object_forced.ts  50 "done: alpha|alpha|7|7|d:alpha:7|mid|d:mid:3"
 
 echo ""
 echo "=== Server GC unsafe-zone regression tests ==="
 run_canary "issue #1425 Fastify/ws manual gc" \
-    tests/test_issue_1425_gc_unsafe_zones.sh
+    tests/integration/test_issue_1425_gc_unsafe_zones.sh
 
 echo ""
 echo "=== Forced-evacuation verifier canaries ==="
@@ -1890,7 +1890,7 @@ echo "=== Summary ==="
 echo "  PASS: $PASS"
 echo "  FAIL: $FAIL"
 
-# release_sweep.sh hook — see comment in run_parity_tests.sh.
+# release_sweep.sh hook — see sweep_tier_run_summary in release_sweep_lib.sh.
 if [[ -n "${PERRY_TEST_SUMMARY_OUT:-}" ]]; then
     cat > "$PERRY_TEST_SUMMARY_OUT" <<EOF
 {"script": "run_memory_stability_tests.sh", "passed": $PASS, "failed": $FAIL, "skipped": 0}

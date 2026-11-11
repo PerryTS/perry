@@ -288,7 +288,10 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             // The same module.
             let pf = one(&format!("{write}\n{user}\nconsole.log(run());"), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(none_native(&v), "units={units} {write}: {v:?}");
+            // DEC 250: the lock refuses each write (a member replace, an
+            // `Object.prototype` add): the read stays the builtin.
+            // The same locked native member is final in both modes.
+            assert!(native(&v), "units={units} {write}: {v:?}");
             // Another module.
             let pf = modules(
                 &[
@@ -303,7 +306,7 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             );
             let v = verdicts_in(&pf, 1, "indexOf", true);
             assert!(
-                none_native(&v),
+                native(&v),
                 "units={units} other module {write}: {v:?}\n{}",
                 pf.dump_text()
             );
@@ -318,11 +321,13 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
     }
 }
 
-/// Obligation 4 (d): a store into ⊤ may write a builtin prototype. On a
-/// String the site's reason names it (the sites only it keeps); an array's
-/// call of the now unknown member hands the array to unknown code as well.
+/// Obligation 4 (d) under DEC 250: a store into ⊤ may write a builtin
+/// prototype, but never a member the image gives a locked one (`indexOf`
+/// of String.prototype and Array.prototype): both sites stay NativeMember,
+/// and the array is handed to no unknown code. (Before the solver read the
+/// lock, both lost the proof.)
 #[test]
-fn a_store_into_top_is_no_native_member_while_it_holds() {
+fn a_store_into_top_writes_no_locked_native_member() {
     for units in [false, true] {
         for store in ["ext.indexOf = 1;", "ext[process.argv[3]] = 1;"] {
             let src = |s: &str| {
@@ -344,10 +349,7 @@ fn a_store_into_top_is_no_native_member_while_it_holds() {
             assert!(native(&v), "control units={units}: {v:?}");
             let pf = one(&src(store), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(
-                matches!(v.as_slice(), [Verdict::No(w), Verdict::No(_)] if w.starts_with("native member: a store into ⊤")),
-                "units={units} {store}: {v:?}"
-            );
+            assert!(native(&v), "units={units} {store}: {v:?}");
         }
     }
 }
@@ -437,4 +439,90 @@ fn per_unit_is_never_stronger_than_whole() {
         "{}",
         w.dump_text()
     );
+}
+
+/// A RegExp object's `test` and `exec` (chess app.ts:151
+/// `/^[a-h][1-8]$/.test(verb)`): the methods the solve's RegExp call model
+/// describes (`regexp_described`) are its intrinsic members. A literal and
+/// a constructed RegExp alike.
+#[test]
+fn a_regexp_method_call_is_a_native_member() {
+    let src = r#"
+        function main(v: string) {
+            const r: any = /^[a-h][1-8]$/;
+            const q: any = new RegExp(v);
+            return r.test(v) && /^a+$/.test(v) && q.exec(v) !== null;
+        }
+        console.log(main("e2"));
+    "#;
+    for units in [false, true] {
+        let pf = one(src, units);
+        for key in ["test", "exec"] {
+            let v = verdicts_in(&pf, 0, key, true);
+            assert!(native(&v), "units={units} {key}: {v:?}\n{}", pf.dump_text());
+        }
+    }
+}
+
+/// A RegExp's key the solve does not describe, and a receiver that may be
+/// a RegExp or another family.
+#[test]
+fn a_regexp_key_not_described_or_a_mixed_receiver_is_no_native_member() {
+    for units in [false, true] {
+        for (make, use_, key) in [
+            ("const r: any = /a/;", "r.toString()", "toString"),
+            ("const r: any = /a/;", "r.foo()", "foo"),
+            (
+                "const r: any = process.argv.length > 2 ? /a/ : \"a\";",
+                "r.test(\"a\")",
+                "test",
+            ),
+            (
+                "const r: any = process.argv.length > 2 ? /a/ : new Set();",
+                "r.test(\"a\")",
+                "test",
+            ),
+        ] {
+            let pf = one(
+                &format!("function main() {{ {make} return {use_}; }}\nconsole.log(main());"),
+                units,
+            );
+            let v = verdicts_in(&pf, 0, key, true);
+            assert!(none_native(&v), "units={units} {make} {use_}: {v:?}");
+        }
+    }
+}
+
+/// A RegExp's own `test`, its prototype replaced,
+/// or the RegExp handed to unknown code: its `.test` is no
+/// NativeMember; the same function without the write is one. (A write to
+/// `RegExp.prototype` is not here: it is sealed, see the next test.)
+#[test]
+fn an_own_key_or_escape_write_on_a_regexp_is_no_native_member() {
+    let make = "const r: any = /a/;";
+    for write in [
+        "r.test = (s: string) => true;",
+        "r[process.argv[2]] = 1;",
+        "r.__proto__ = { test() { return false; } };",
+        "Object.setPrototypeOf(r, { test() { return false; } });",
+        "Object.defineProperty(r, \"test\", { get() { return () => false; } });",
+        "(globalThis as any)[process.argv[2]](r);",
+    ] {
+        control_and_negative(make, write, "r.test(\"a\")", "test", true);
+    }
+}
+
+/// `RegExp.prototype` is sealed (DEC 250, rt/lock.ts): `RegExp.prototype.test = f`
+/// throws, so `.test` of a regexp stays an image member.
+#[test]
+fn a_sealed_regexp_prototype_write_keeps_the_native_member() {
+    // `Object.prototype.test = f` is shadowed by the own `RegExp.prototype.test`.
+    for w in ["RegExp", "Object"] {
+        for units in [false, true] {
+            let src = &format!("function main() {{ const r: any = /a/; ({w}.prototype as any).test = function () {{ return false; }}; return r.test(\"a\"); }}\nconsole.log(main());");
+            let pf = one(src, units);
+            let v = verdicts_in(&pf, 0, "test", true);
+            assert!(native(&v), "units={units}: {v:?}\n{}", pf.dump_text());
+        }
+    }
 }

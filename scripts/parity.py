@@ -6,12 +6,17 @@
                   [--report PATH] [--unpinned-oracle]
     parity.py accept REPORT [REPORT ...] [--mode fast|auto] [--platform P]
 
-A SELECTOR is a subject (`test-files`, `node-suite`, `node-suite/<module>`) or a
-path to a case file or a directory of cases. Every case is compiled, run, and
+Runnable formats are .ts, .cts, .mts and test_*.cjs in every root. Keep the
+extension to preserve Node's module mode; case ids omit TS-family suffixes
+but retain .cjs. Subject fixtures are excluded from discovery.
+
+A SELECTOR is a subject (`test-files`, or `<root>/<subject>` under tests/parity/
+for a root in SUBJECT_ROOTS), a whole root, or a path to a case file or a
+directory of cases. Every case is compiled, run, and
 compared with Node on merged stdout+stderr and exit status after the `unified`
 profile of scripts/parity_normalize.py.
 
-A subject's snapshot, test-parity/snapshots/<platform>-<mode>/<subject>.json,
+A subject's snapshot, tests/parity/snapshots/<platform>-<mode>/<subject>.json,
 lists its cases that do not pass; an unlisted case must pass. The check runs
 both ways over the cases this run executed. A crash is never a snapshot entry.
 
@@ -48,10 +53,8 @@ EXE = ".exe" if WINDOWS else ""
 
 STATUSES = ("pass", "parity_fail", "compile_fail", "crash", "node_fail", "skipped")
 TRIAGE_FIELDS = ("issue", "added", "category", "reason")
-# One run budget for every case: node_suite_run.py's 30s, because cases now
-# share the machine with parallel compiles and a slow-but-correct case must not
-# read as a crash. Compiles keep run_parity_tests.sh's 300s, or 900s when the
-# compile may build native toolchain artifacts (auto-optimize, wasm host).
+# One 30s run budget for every case: cases share the machine with parallel
+# compiles, and a slow-but-correct case must not read as a crash.
 RUN_TIMEOUT = 30
 COMPILE_TIMEOUT = 300
 TOOLCHAIN_TIMEOUT = 900
@@ -85,6 +88,16 @@ def runs_serially(cid: str, text: str, mode: str) -> bool:
     # Fast mode builds an ext-routed case's runtime with auto-optimize; one at a
     # time, so concurrent cases never rebuild the same feature set together.
     return bool(SERIAL_IMPORT.search(text)) or (mode == "fast" and bool(EXT_ROUTED.search(text)))
+
+
+def compile_budget(name: str, text: str, auto: bool, ext_routed: bool) -> int:
+    # A compile that may build native toolchain artifacts (an auto-optimize
+    # runtime rebuild, ext wrappers, a wasm host) takes minutes on hosted runners.
+    if auto or (name in FORCE_NO_AUTO and ext_routed) or WASM.search(text):
+        return TOOLCHAIN_TIMEOUT
+    return COMPILE_TIMEOUT
+
+
 # node-suite modules whose no-auto links need prebuilt wrapper archives built in
 # the same cargo invocation as the stdlib archive.
 EXT_ARCHIVES = {
@@ -98,10 +111,10 @@ EXT_BUILD = (
     "-p perry-stdlib-static -p perry-ext-http -p perry-ext-net -p perry-ext-ws "
     "--features perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump"
 )
+# A case that names a port gets the server listening on it, started once per run.
 COMPANIONS = {
-    "test_net_min": ("test_net_echo_server.py", [], 17891),
-    "test_net_socket": ("test_net_echo_server.py", [], 17891),
-    "test_net_upgrade_tls": ("test_net_upgrade_tls_server.py", ["--port", "17892"], 17892),
+    17891: ("test_net_echo_server.py", []),
+    17892: ("test_net_upgrade_tls_server.py", ["--port", "17892"]),
 }
 
 
@@ -111,29 +124,39 @@ class HarnessError(Exception):
 
 # --- selection ---------------------------------------------------------------
 
+# Directories under tests/parity/ whose second path level is a subject.
+SUBJECT_ROOTS = ("node-suite", "language", "typescript", "perry", "npm")
+
+
 def suite_dirs(root: Path) -> tuple[Path, Path]:
-    return root / "test-files", root / "test-parity" / "node-suite"
+    return root / "tests/fixtures/programs", root / "tests/parity" / "node-suite"
+
+
+def subject_root(root: Path, path: Path) -> Path | None:
+    return next((d for name in SUBJECT_ROOTS
+                 if (d := root / "tests/parity" / name) == path or d in path.parents), None)
 
 
 def is_case(root: Path, path: Path) -> bool:
-    files, nodes = suite_dirs(root)
-    if path.parent == files:
-        return path.suffix in (".ts", ".cts", ".mts") or (
-            path.suffix == ".cjs" and path.name.startswith("test_"))
-    return (path.suffix == ".ts" and nodes in path.parents
-            and "fixtures" not in path.relative_to(nodes).parts)
+    runnable = path.suffix in (".ts", ".cts", ".mts") or (
+        path.suffix == ".cjs" and path.name.startswith("test_"))
+    if not runnable:
+        return False
+    if path.parent == suite_dirs(root)[0]:
+        return True
+    base = subject_root(root, path)
+    return base is not None and "fixtures" not in path.relative_to(base).parts
 
 
 def case_id(root: Path, path: Path) -> str:
-    nodes = suite_dirs(root)[1]
-    if nodes in path.parents:
-        return "node-suite/" + path.relative_to(nodes).with_suffix("").as_posix()
-    return re.sub(r"\.(m|c)?ts$", "", path.name)
+    base = subject_root(root, path)
+    name = f"{base.name}/" + path.relative_to(base).as_posix() if base is not None else path.name
+    return re.sub(r"\.(m|c)?ts$", "", name)
 
 
 def subject_of(cid: str) -> str:
     parts = cid.split("/")
-    return "/".join(parts[:2]) if parts[0] == "node-suite" else "test-files"
+    return "/".join(parts[:2]) if parts[0] in SUBJECT_ROOTS else "test-files"
 
 
 def discover(root: Path, target: Path) -> list[Path]:
@@ -143,23 +166,24 @@ def discover(root: Path, target: Path) -> list[Path]:
 
 
 def resolve(root: Path, selector: str) -> Path:
-    files, nodes = suite_dirs(root)
     if selector == "test-files":
-        return files
-    if selector == "node-suite" or selector.startswith("node-suite/"):
-        return nodes.parent / selector
+        return suite_dirs(root)[0]
+    if selector.split("/")[0] in SUBJECT_ROOTS:
+        return root / "tests/parity" / selector
     return Path(selector).resolve()
 
 
 def select(root: Path, selectors=(), suite="all", filters=(), shard=None) -> list[tuple[str, Path]]:
     root = root.resolve()
-    files, nodes = suite_dirs(root)
+    files = suite_dirs(root)[0]
     if not selectors:
-        selectors = {"all": ["test-files", "node-suite"]}.get(suite, [suite])
+        selectors = [suite] if suite != "all" else [
+            s for s in ("test-files", *SUBJECT_ROOTS)
+            if s == "test-files" or (root / "tests/parity" / s).is_dir()]
     paths: set[Path] = set()
     for selector in selectors:
         target = resolve(root, selector)
-        if target.is_dir() and (target == files or target == nodes or nodes in target.parents):
+        if target.is_dir() and (target == files or subject_root(root, target) is not None):
             paths.update(discover(root, target))
         elif target.is_file() and is_case(root, target):
             paths.add(target)
@@ -198,7 +222,7 @@ def expected_for(root: Path, cid: str) -> tuple[Path | None, int]:
     """Expected output and exit, looked up by case id, then by basename."""
     def lookup(kind):
         keys = dict.fromkeys((cid, cid.rsplit("/", 1)[-1]))
-        return next((p for k in keys if (p := root / "test-parity" / kind / f"{k}.txt").is_file()), None)
+        return next((p for k in keys if (p := root / "tests/parity" / kind / f"{k}.txt").is_file()), None)
 
     output, code = lookup("expected"), lookup("expected-exit")
     if output is None:
@@ -308,8 +332,7 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
         flags = []
         if re.match(r"node-suite/[^/]+/.*(webassembly|wasm)", cid):
             flags.append("--enable-wasm-runtime")
-        budget = (TOOLCHAIN_TIMEOUT if auto or (name in FORCE_NO_AUTO and ext_routed)
-                  or WASM.search(text) else COMPILE_TIMEOUT)
+        budget = compile_budget(name, text, auto, ext_routed)
         binary = work / f"case{EXE}"
         compile_line = [ctx["perry"], *compile_cmd, *flags, str(source), "-o", str(binary)]
         code = run(compile_line, budget, root, env, work / "compile")
@@ -355,14 +378,14 @@ def run_case(ctx: dict, cid: str, path: Path) -> tuple[str, str]:
 # --- snapshots ---------------------------------------------------------------
 
 def case_exists(root: Path, cid: str) -> bool:
-    files, nodes = suite_dirs(root)
-    if cid.startswith("node-suite/"):
-        return (nodes.parent / f"{cid}.ts").is_file()
+    files = suite_dirs(root)[0]
+    if cid.split("/")[0] in SUBJECT_ROOTS:
+        return (root / "tests/parity" / f"{cid}.ts").is_file()
     return any((files / f"{cid}{ext}").is_file() for ext in ("", ".ts", ".cts", ".mts"))
 
 
 def snapshot_path(root: Path, plat: str, mode: str, subject: str) -> Path:
-    return root / "test-parity" / "snapshots" / f"{plat}-{mode}" / f"{subject}.json"
+    return root / "tests/parity" / "snapshots" / f"{plat}-{mode}" / f"{subject}.json"
 
 
 def load_snapshot(path: Path) -> dict:
@@ -473,10 +496,11 @@ def check_toolchain(root: Path, mode: str, cases) -> tuple[str, Path]:
     if mode == "fast":
         lib = (lambda stem: f"{stem}.lib") if WINDOWS else (lambda stem: f"lib{stem}.a")
         needed = {"perry_runtime", "perry_stdlib"}
-        for cid, _ in cases:
+        for cid, path in cases:
             if cid.startswith("node-suite/"):
                 needed.update(EXT_ARCHIVES.get(subject_of(cid).split("/")[-1], ()))
-            elif cid in FORCE_NO_AUTO:
+            # Named no-auto cases keep their preflight after their IDs gain a subject prefix.
+            if cid in FORCE_NO_AUTO or Path(path).stem in FORCE_NO_AUTO:
                 needed.update(EXT_ARCHIVES["http"])
         missing = sorted(lib(s) for s in needed if not (runtime / lib(s)).is_file())
         sidecar = runtime / (lib("perry_runtime") + ".gc-effects")
@@ -490,14 +514,12 @@ def check_toolchain(root: Path, mode: str, cases) -> tuple[str, Path]:
 
 
 def start_companions(root: Path, cases) -> list[subprocess.Popen]:
-    started, procs = set(), []
-    for cid, _ in cases:
-        key = next((k for k in COMPANIONS if cid.startswith(k)), None)
-        if key is None or COMPANIONS[key][0] in started:
+    texts = [path.read_text(encoding="utf-8", errors="replace") for _, path in cases]
+    procs = []
+    for port, (script, args) in COMPANIONS.items():
+        if not any(re.search(r"\b%d\b" % port, text) for text in texts):
             continue
-        script, args, port = COMPANIONS[key]
-        started.add(script)
-        procs.append(subprocess.Popen([sys.executable, str(root / "test-files" / script), *args],
+        procs.append(subprocess.Popen([sys.executable, str(root / "tests/fixtures/programs" / script), *args],
                                       cwd=root))
         for _ in range(50):
             try:
@@ -628,7 +650,7 @@ def main(argv=None, root: Path = ROOT) -> int:
     run_p.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     run_p.add_argument("--mode", choices=("fast", "auto"), default="fast")
     run_p.add_argument("--update", action="store_true")
-    run_p.add_argument("--report", default=str(root / "test-parity" / "reports" / "latest.json"))
+    run_p.add_argument("--report", default=str(root / "tests/parity" / "reports" / "latest.json"))
     run_p.add_argument("--unpinned-oracle", action="store_true")
     acc_p = sub.add_parser("accept")
     acc_p.add_argument("reports", nargs="+")

@@ -29,6 +29,7 @@ impl<'a> Gen<'a> {
         args: &[Expr],
         _extra: &[NodeId],
         byte_offset: u32,
+        byte_end: u32,
     ) -> NodeId {
         // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
         // …; return o })(seed)`. Its defines are the literal's birth.
@@ -55,14 +56,29 @@ impl<'a> Gen<'a> {
                     }
                     None => self.expr(fx, seed),
                 };
-                let tm = self.m.nodes[lit as usize]
-                    .pts
-                    .to_sorted()
-                    .into_iter()
-                    .find_map(|t| self.m.tmpl_of(t));
+                #[cfg(test)]
+                let direct_birth = self
+                    .m
+                    .packet_scope
+                    .as_ref()
+                    .map(|_| self.m.packet_direct_template(lit));
+                #[cfg(not(test))]
+                let direct_birth: Option<Option<TmplId>> = None;
+                let tm = direct_birth.unwrap_or_else(|| {
+                    self.m.nodes[lit as usize]
+                        .pts
+                        .to_sorted()
+                        .into_iter()
+                        .find_map(|t| self.m.tmpl_of(t))
+                });
                 if let Some(tm) = tm {
                     let pn = self.local(fx.module, params[0].id);
                     self.iife_birth.insert(pn, tm);
+                }
+                #[cfg(test)]
+                if let Expr::Closure { func_id, .. } = callee {
+                    self.m
+                        .packet_shared_birth(self.modules[fx.module as usize].0, *func_id, lit);
                 }
                 let c = self.expr(fx, callee);
                 if let Expr::Closure { func_id, .. } = callee {
@@ -73,10 +89,20 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
-        self.call_lit_arg = match args.first().map(|x| self.const_eval(fx.module, x)) {
-            Some(Some(crate::gen_const::Const::Str(s))) => Some(self.m.atom(&s)),
-            _ => None,
+        // Call arguments: the callee classifies them (`zero_sign`).
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
+        if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+            self.call_args_at.push((fx.module, byte_offset, a.clone()));
+        }
+        self.call_lit_arg = if matches!(callee, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
+            args.first()
+                .and_then(|x| self.const_property_key(fx.module, x))
+                .map(|s| self.m.atom(&s))
+        } else {
+            match args.first().and_then(|x| self.const_eval(fx.module, x)) {
+                Some(crate::gen_const::Const::Str(s)) => Some(self.m.atom(&s)),
+                _ => None,
+            }
         };
         if let Expr::ExternFuncRef { name, .. } = callee {
             if self.is_runtime_extern(fx.module, name) {
@@ -84,13 +110,25 @@ impl<'a> Gen<'a> {
                     .iter()
                     .map(|x| match x {
                         Expr::String(s) => Some(s.clone()),
+                        _ if matches!(
+                            name.as_str(),
+                            "js_object_define_getter" | "js_object_define_setter"
+                        ) =>
+                        {
+                            self.const_property_key(fx.module, x)
+                        }
                         _ => None,
                     })
                     .collect();
+                self.zs_observe(&a);
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        self.call_with(fx, callee, a, vec![], byte_offset)
+        let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
+        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+            self.call_results_at.push((fx.module, byte_offset, result));
+        }
+        result
     }
 
     /// The key of member access `object.property`: a guarded private
@@ -109,7 +147,7 @@ impl<'a> Gen<'a> {
         callee: &Expr,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
-        byte_offset: u32,
+        (byte_offset, byte_end): (u32, u32),
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
         match callee {
@@ -117,26 +155,105 @@ impl<'a> Gen<'a> {
                 object,
                 property,
                 byte_offset: pb,
+                byte_end: pe,
                 ..
             } => {
+                let fused_fill = self.m.array_reps
+                    && property == "fill"
+                    && args.len() == 1
+                    && spread.is_empty()
+                    && fused_fill_receiver(object);
+                self.new_array_site = None;
                 let o = match self.ns_member(fx.module, object, property, true) {
                     Some(o) => o,
                     None => self.expr(fx, object),
                 };
+                if fused_fill {
+                    // DESIGN-p4l1 §2.6: `new Array(k).fill(v)` is born
+                    // hole-free. The receiver is the fresh array, with no
+                    // binding and no own `fill`, whose prototype is
+                    // `%Array.prototype%`; the intrinsic lock refuses any
+                    // Replace, Delete or Redefine of its image key `fill`
+                    // and any index add on it (`perry-abi/src/lock.rs`), so
+                    // the call is the native `fill`, and with one argument
+                    // it writes every index below the length. The array
+                    // the program sees is `fill`'s return value, the same
+                    // object. `new_array_site` is the outer `new Array`'s:
+                    // its arguments were generated before its own call.
+                    if let Some(site) = self.new_array_site.take() {
+                        self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                        // I32 at rest (PR B): a birth an at-rest template
+                        // may have, keyed as codegen keys the call.
+                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let (module, recv) = (fx.module, o);
+                        let fill = crate::rest_elems::RestFill {
+                            module,
+                            offset,
+                            recv,
+                            site,
+                            fill_site: u32::MAX,
+                        };
+                        self.m.rest_fills.push(fill);
+                    }
+                }
+                self.own_test_recv = Some(o);
+                let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
-                let off = if *pb != 0 { *pb } else { byte_offset };
+                let (off, end) = if *pb != 0 {
+                    (*pb, *pe)
+                } else {
+                    (byte_offset, byte_end)
+                };
+                let rec = (off != 0).then(|| self.call_sites_at.len());
+                if off != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: off,
+                        end,
+                        args: args.clone(),
+                        spread: !spread.is_empty(),
+                        callee: None,
+                        call: crate::model::NO_CTX,
+                    });
+                }
                 if off != 0 {
                     self.read_sites.push(ReadSite {
                         module: fx.module,
                         byte_offset: off,
                         key: a,
-                        recv: o,
+                        recv: private.unwrap_or(o),
                         is_call: true,
-                        value_call: false,
+                        value_call: private.is_some(),
                         func: fx.f,
                     });
                 }
-                self.mcall(o, Key::Named(a), args, spread)
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(f) = self
+                    .m
+                    .rest_fills
+                    .last_mut()
+                    .filter(|f| fused_fill && f.recv == o)
+                {
+                    f.fill_site = self.m.calls[call as usize].site;
+                }
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
+                self.str_index_bound(object, property, call);
+                match private {
+                    Some(callee) => self.m.cons(callee, Cons::Call { call }),
+                    None => self.m.cons(
+                        o,
+                        Cons::MCall {
+                            key: Key::Named(a),
+                            call,
+                        },
+                    ),
+                }
+                ret
             }
             Expr::IndexGet { object, index, .. } => {
                 let o = self.expr(fx, object);
@@ -149,30 +266,48 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                match self.read_key(index) {
-                    Key::Named(a) => self.mcall(o, Key::Named(a), args, spread),
+                let key = self.read_key(fx.module, index);
+                let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
+                self.element_site(fx, callee, o, idx, key, crate::derive::ElementOp::Call);
+                let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(a) = lit {
+                    self.m.call_lit.insert(call, a);
+                }
+                match self.read_key(fx.module, index) {
+                    Key::Named(a) => {
+                        self.m.cons(
+                            o,
+                            Cons::MCall {
+                                key: Key::Named(a),
+                                call,
+                            },
+                        );
+                        ret
+                    }
                     // DECISIONS 217: the key's values decide which members
                     // it may name (`Cons::IdxMCall`).
-                    Key::Any => {
-                        let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
-                        self.m.cons(o, Cons::IdxMCall { idx: i, call });
+                    Key::Any(_) => {
+                        let shape = self.key_shape(fx.module, index);
+                        self.m.cons(
+                            o,
+                            Cons::IdxMCall {
+                                idx: i,
+                                call,
+                                shape,
+                            },
+                        );
                         ret
                     }
                 }
             }
             // Direct host timer calls use the same guarded global lookup
             // as globalThis.setTimeout. Import/module bindings shadow them.
+            // Unit contracts retain their direct model. The whole-program
+            // path below reads the same value an alias reads.
             Expr::ExternFuncRef { name, .. }
-                if matches!(
-                    name.as_str(),
-                    "setTimeout"
-                        | "setInterval"
-                        | "setImmediate"
-                        | "clearTimeout"
-                        | "clearInterval"
-                        | "clearImmediate"
-                        | "queueMicrotask"
-                ) && !self.is_import(fx.module, name)
+                if self.m.unit_mode
+                    && crate::builtins::global_function(&self.m, name)
+                    && !self.is_import(fx.module, name)
                     && !self.mods[fx.module as usize].scope.contains_key(name) =>
             {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
@@ -181,10 +316,24 @@ impl<'a> Gen<'a> {
                 self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
                 let c = self.expr(fx, callee);
+                self.own_test_recv = Some(c);
+                let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
+                if byte_offset != 0 {
+                    self.call_sites_at.push(crate::signatures::CallSiteRec {
+                        module: fx.module,
+                        offset: byte_offset,
+                        end: byte_end,
+                        args: args.clone(),
+                        spread: !spread.is_empty(),
+                        callee: Some(c),
+                        call: crate::model::NO_CTX,
+                    });
+                }
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
@@ -205,12 +354,18 @@ impl<'a> Gen<'a> {
                         func: fx.f,
                     });
                 }
-                let r = self.call_value(c, ThisArg::Undef, args, spread);
+                // The literal is the call's before its callee resolves it:
+                // a callee node that already holds the callee (the program's
+                // `require` from `createRequire`) runs the call at `cons`.
+                let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
-                    let call = self.m.calls.len() as CallId - 1;
                     self.m.call_lit.insert(call, a);
                 }
-                r
+                self.m.cons(c, Cons::Call { call });
+                ret
             }
         }
     }
@@ -229,6 +384,13 @@ impl<'a> Gen<'a> {
         }
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
+        }
+        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
+            let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let dst = self.m.node_l("global-function-value");
+            let key = Key::Named(self.m.atom(name));
+            self.m.load_from(t, t, key, dst);
+            return dst;
         }
         self.m.top_val(&format!("extern value {name}"))
     }
@@ -260,7 +422,23 @@ impl<'a> Gen<'a> {
             // functions (decision 23): the name carries the function id.
             .map(|n| format!("{n}#{func_id}"))
             .unwrap_or_else(|| format!("closure{func_id}"));
-        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true);
+        let Expr::Closure {
+            is_async,
+            is_generator,
+            ..
+        } = canonical
+        else {
+            unreachable!()
+        };
+        let module = self.modules[mi as usize].1;
+        let kind = perry_hir::fn_proto::FnProtoKind::of_closure(
+            module,
+            *func_id,
+            *is_async,
+            *is_generator,
+            body,
+        );
+        let f = self.register_fn(mi, *func_id, &name, params, *is_arrow, true, Some(kind));
         let info = self.m.funcs[f as usize].clone();
         // An arrow captures the enclosing `this` only when its body (or an
         // arrow nested in it) reads `this` or `super` (design §14.2 rule
@@ -292,7 +470,26 @@ impl<'a> Gen<'a> {
             // DECISIONS 225: its body is walked once the closure can run.
             let deferred = match self.emitted_closure(mi, *func_id) {
                 Some(c) => self.defer_walk(f, crate::gen::PendingWalk::Closure(cfx.clone(), c)),
-                None => false,
+                None => {
+                    #[cfg(test)]
+                    {
+                        if self.m.packets_inert {
+                            self.pending_walk.entry(f).or_default().push(
+                                crate::gen::PendingWalk::OwnedClosure(
+                                    cfx.clone(),
+                                    Box::new(canonical.clone()),
+                                ),
+                            );
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    #[cfg(not(test))]
+                    {
+                        false
+                    }
+                }
             };
             if !deferred {
                 self.walk_closure_body(&cfx, canonical);
@@ -303,6 +500,31 @@ impl<'a> Gen<'a> {
 
     /// The body of closure `e` in its context `cfx` (once per function).
     pub(crate) fn walk_closure_body(&mut self, cfx: &Fx, e: &Expr) {
+        if self.walked.contains(&cfx.f) {
+            return;
+        }
+        let plain_async = matches!(
+            e,
+            Expr::Closure {
+                is_async: true,
+                is_generator: false,
+                ..
+            }
+        );
+        if plain_async {
+            let (afx, rejected) = self.async_body(cfx);
+            let region = std::mem::replace(&mut self.m.gen_region, Some(rejected));
+            self.walk_closure_body_region(&afx, e);
+            self.m.gen_region = region;
+            return;
+        }
+        let r = self.m.raise_of(cfx.f);
+        let region = std::mem::replace(&mut self.m.gen_region, Some(r));
+        self.walk_closure_body_region(cfx, e);
+        self.m.gen_region = region;
+    }
+
+    fn walk_closure_body_region(&mut self, cfx: &Fx, e: &Expr) {
         let f = cfx.f;
         if !self.walked.insert(f) {
             return;
@@ -313,23 +535,60 @@ impl<'a> Gen<'a> {
             body,
             is_async,
             is_generator,
+            is_arrow,
+            is_strict,
+            captures,
             ..
         } = e
         else {
             return;
         };
-        let ret = self.m.funcs[f as usize].ret;
+        // The body's completion: the call result, or for an async function
+        // the value its promise settles with (`async_body`).
+        let ret = cfx.ret;
+        // A sloppy function expression's body reads its `this` through the
+        // view (`sloppy_this`); an arrow's `this` is its creator's.
+        let sloppy = !*is_strict && !*is_arrow && crate::ctor_phase::body_mentions_this(body);
+        let mut sfx;
+        let cfx = if sloppy {
+            sfx = cfx.clone();
+            let prev = std::mem::replace(&mut self.m.cur_fn, f);
+            sfx.this = self.sloppy_this(cfx.this);
+            self.m.cur_fn = prev;
+            &sfx
+        } else {
+            cfx
+        };
         // RPG1b: its statements are ordered in its own body; a parameter
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        #[cfg(test)]
+        let packet_prior = self.m.packet_body(f);
+        #[cfg(test)]
+        let packet_read_start = self.read_sites.len();
+        #[cfg(test)]
+        self.m.packet_declarations(body);
         self.params(cfx, params);
-        if *is_async || *is_generator {
+        if *is_generator {
             self.m
                 .add_top(ret, |_| "async/generator closure result".into());
         }
         self.order_ok = true;
+        let own = self.own_helper_shape(params, body, *is_async || *is_generator);
+        let scope = self.narrow_enter_body(cfx.module, f, params, body, captures);
         self.stmts(cfx, body);
+        if crate::gen::narrow::may_complete(body) {
+            // The body's normal completion returns `undefined`.
+            self.m.add_prim(ret, prim::UNDEF);
+        }
+        self.narrow_exit_body(scope);
+        self.own_helper_finish(f, own);
+        #[cfg(test)]
+        {
+            self.packet_reads(packet_read_start);
+            self.m.packet_end(packet_prior, true);
+        }
         (self.order_ok, self.loop_depth) = saved;
         let _: &Vec<Stmt> = body;
     }
@@ -345,7 +604,19 @@ impl<'a> Gen<'a> {
         let mi = fx.module;
         let callee = if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
             let t = self.m.tok(TokKind::ClassObj(tm));
-            Some(self.tok_node(t))
+            let c = self.tok_node(t);
+            // A default-derived specialization may be constructed as the
+            // class it was specialized from (codegen `super_constructor::new`
+            // constructs that class value when the heritage is live): the
+            // program then builds an instance of the class as written and
+            // runs its default constructor and field initializers. Which of
+            // the two the program builds is decided by facts about the
+            // heritage, so the callee holds both.
+            for origin in self.written_classes(mi, name) {
+                let o = self.m.tok(TokKind::ClassObj(origin));
+                self.m.add_tok(c, o);
+            }
+            Some(c)
         } else if let Some(n) = self.import_value(mi, name) {
             Some(n)
         } else {
@@ -361,6 +632,28 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The classes a default-derived specialization `name` of module `mi`
+    /// was specialized from, nearest first (`Class::is_default_derived`).
+    fn written_classes(&self, mi: u32, name: &str) -> Vec<TmplId> {
+        let module = self.modules[mi as usize].1;
+        let mut out = Vec::new();
+        let mut cur = module.classes.iter().find(|c| c.name == name);
+        for _ in 0..module.classes.len() {
+            let Some(c) = cur.filter(|c| c.is_default_derived()) else {
+                break;
+            };
+            let Some(origin) = c.specialized_from.as_deref() else {
+                break;
+            };
+            let Some(&tm) = self.mods[mi as usize].classes.get(origin) else {
+                break;
+            };
+            out.push(tm);
+            cur = module.classes.iter().find(|k| k.name == origin);
+        }
+        out
+    }
+
     /// `new Name(...)` of a name that is not a program class: a builtin.
     pub(crate) fn new_builtin(
         &mut self,
@@ -369,7 +662,34 @@ impl<'a> Gen<'a> {
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
     ) -> NodeId {
+        // `new Array(k)` of an integer literal: the length its birth has,
+        // when the runtime backs it densely (`capacity >= k`, every slot a
+        // hole: `js_array_constructor_single`). A longer one has length `k`
+        // over an empty store, so no birth length: its capacity says
+        // nothing about its length (`solve::arr_len`).
+        let dense = if self.m.arr_cap_sabotage {
+            u32::MAX
+        } else {
+            perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH
+        };
+        let birth_len = match args.as_slice() {
+            [a] if self.arr_lengths && name == "Array" && spread.is_empty() => self
+                .num_lits
+                .iter()
+                .find(|(_, &n)| n == *a)
+                .map(|(&k, _)| k)
+                .filter(|k| (0..=i64::from(dense)).contains(k)),
+            _ => None,
+        };
         let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+        if name == "Array" {
+            let site = self.m.calls[call as usize].site;
+            if let Some(k) = birth_len {
+                self.m.arr_len_at_site.entry(site).or_default().len = Some(k);
+            }
+            // The fused fill (`call_with`) marks this birth after it.
+            self.new_array_site = Some(site);
+        }
         let h = self.m.node_l("new-named");
         let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
         self.m.add_tok(h, mark);
@@ -389,7 +709,33 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
+        // No binding of the program: the global object's property, when
+        // the realm has one under the name (`AbortSignal`): a load of it,
+        // which reads the realm value while the program writes no value
+        // under the key (`native_written`) and what it wrote once it does.
+        if !self.m.unit_mode
+            && self
+                .m
+                .namespace_property(BuiltinNs::GlobalThis, name)
+                .is_some_and(|p| p.native.is_some())
+        {
+            let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let gn = self.tok_node(g);
+            let a = self.m.atom(name);
+            return self.load(gn, Key::Named(a));
+        }
         self.m.top_val(&format!("unresolved class value {name}"))
+    }
+
+    /// The class value of `instanceof Name` when `Name` is a user class
+    /// (local, or imported): codegen tests against that value
+    /// (`js_instanceof_dynamic`), not a class id. `None`: a builtin name.
+    pub(crate) fn instanceof_class(&mut self, mi: u32, name: &str) -> Option<NodeId> {
+        if let Some(&tm) = self.mods[mi as usize].classes.get(name) {
+            let t = self.m.tok(TokKind::ClassObj(tm));
+            return Some(self.tok_node(t));
+        }
+        self.import_value(mi, name)
     }
 
     /// One captured value of a class body (a slot of the class's capture
@@ -454,31 +800,32 @@ impl<'a> Gen<'a> {
         self.m.tmpls[tm as usize].has_computed_members = true;
     }
 
-    pub(crate) fn super_starts(&mut self, fx: &Fx) -> Vec<Tok> {
+    /// The home objects of a `super` access in a method of `fx`'s class:
+    /// its prototype and its class object (`Fx` does not say whether the
+    /// method is static); ⊤ outside a known class.
+    pub(crate) fn super_homes(&mut self, fx: &Fx) -> NodeId {
+        let n = self.tmp("super.home");
         match fx.class {
-            Some(tm) => self.super_starts_of(tm),
-            None => vec![TOP],
+            Some(tm) => {
+                let p = self.m.tok(TokKind::Proto(tm));
+                self.m.add_tok(n, p);
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                self.m.add_tok(n, c);
+            }
+            None => self.m.add_tok(n, TOP),
         }
+        n
     }
 
-    pub(crate) fn super_starts_of(&mut self, tm: TmplId) -> Vec<Tok> {
-        match self.m.tmpls[tm as usize].parent {
-            Some(p) => vec![
-                self.m.tok(TokKind::Proto(p)),
-                self.m.tok(TokKind::ClassObj(p)),
-            ],
-            None => {
-                // A parent value (§17.2): `super.x` starts at a prototype
-                // the solve computes; unknown here.
-                if self.m.tmpls[tm as usize].native_parent.is_some()
-                    || self.m.tmpls[tm as usize].parent_value.is_some()
-                {
-                    vec![TOP]
-                } else {
-                    vec![self.m.tok(TokKind::ObjectProto)]
-                }
-            }
-        }
+    /// `super[key]` (a read, store or call) in a method whose home object
+    /// is in `homes`: the lookup starts at the home object's
+    /// [[GetPrototypeOf]] at the access (`Cons::ProtoOf`: its declared
+    /// parent and what `Object.setPrototypeOf` of the home wrote), with each
+    /// token of `recv` as the receiver.
+    pub(crate) fn super_access(&mut self, homes: NodeId, recv: NodeId, key: Key, act: ChainAct) {
+        let base = self.tmp("super.base");
+        self.m.cons(homes, Cons::ProtoOf { dst: base });
+        self.m.cons(base, Cons::SuperFrom { recv, key, act });
     }
 
     pub(crate) fn super_ctor(&mut self, fx: &Fx, args: Vec<NodeId>, spread: Vec<NodeId>) -> NodeId {
@@ -510,16 +857,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let (call, ret) = self.new_call(ThisArg::Node(fx.this), args, spread);
         let a = self.m.atom(method);
-        for start in self.super_starts(fx) {
-            self.m.cons(
-                fx.this,
-                Cons::Super {
-                    start,
-                    key: Key::Named(a),
-                    act: ChainAct::Call(call),
-                },
-            );
-        }
+        let homes = self.super_homes(fx);
+        self.super_access(homes, fx.this, Key::Named(a), ChainAct::Call(call));
         ret
     }
 
@@ -551,7 +890,7 @@ impl<'a> Gen<'a> {
                     ("js_object_literal_define" | "js_object_set_method_by_name", Some(k)) => {
                         Key::Named(self.m.atom(&k))
                     }
-                    _ => Key::Any,
+                    _ => Key::any(),
                 };
                 if let Key::Named(a) = key {
                     if let Some(tm) = birth_tm {
@@ -625,7 +964,7 @@ impl<'a> Gen<'a> {
                 let (Some(o), Some(s)) = (arg(0), arg(1)) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let vals = self.load(s, Key::Any);
+                let vals = self.load(s, Key::any());
                 if let Some(tm) = birth_tm {
                     self.m.tmpls[tm as usize].birth_keys.clear();
                     self.m.tmpls[tm as usize].definite.clear();
@@ -634,7 +973,7 @@ impl<'a> Gen<'a> {
                 self.store(
                     fx,
                     o,
-                    Key::Any,
+                    Key::any(),
                     vals,
                     name.to_string(),
                     birth_tm,
@@ -661,9 +1000,28 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::UNDEF)
             }
-            "js_object_define_getter" | "js_object_define_setter" | "js_object_define_property" => {
+            "js_object_define_getter" | "js_object_define_setter" => {
+                let (Some(o), Some(k), Some(f)) = (arg(0), arg(1), arg(2)) else {
+                    return self.prim_node(prim::UNDEF);
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), vec![k, f], spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
+                }
+                self.m.cons(
+                    o,
+                    Cons::AnnexBDefine {
+                        call,
+                        setter: name == "js_object_define_setter",
+                    },
+                );
+                self.m.add_prim(ret, prim::UNDEF);
+                ret
+            }
+            "js_object_define_property" => {
                 // E5 on the target.
-                let r = self.m.reason("E5 defineProperty/__defineGetter__");
+                let r = self.m.reason("E5 defineProperty");
                 if let Some(o) = arg(0) {
                     let star = self.m.atom(crate::STAR_KEY);
                     self.m.define_on.insert((o, star, false));
@@ -682,17 +1040,22 @@ impl<'a> Gen<'a> {
                 arg(0).unwrap_or(self.m.top_tok_node)
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
-                let r = self.m.reason("__lookupGetter__ result");
-                for a in &args {
-                    self.m.cons(
-                        *a,
-                        Cons::Implicit {
-                            reason: r,
-                            proto: Protocol::Any,
-                        },
-                    );
+                let Some(o) = arg(0) else {
+                    return self.m.top_val("accessor lookup without a receiver");
+                };
+                let (call, ret) = self.new_call(ThisArg::Node(o), args[1..].to_vec(), spread);
+                if let Some(k) = lit(1) {
+                    let a = self.m.atom(&k);
+                    self.m.call_lit.insert(call, a);
                 }
-                self.m.top_val("__lookupGetter__ result")
+                self.m.cons(
+                    o,
+                    Cons::AnnexBLookup {
+                        call,
+                        setter: name == "js_object_lookup_setter",
+                    },
+                );
+                ret
             }
             "js_tdz_check_binding" | "js_tdz_check_binding_then" => {
                 let out = self.tmp("tdz");
@@ -758,7 +1121,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     mp,
                     Cons::Store {
-                        key: Key::Any,
+                        key: Key::any(),
                         src: v,
                         site,
                     },
@@ -769,7 +1132,7 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -777,13 +1140,14 @@ impl<'a> Gen<'a> {
                 let Some(mp) = arg(0) else {
                     return self.extern_fail(name, &args, &spread);
                 };
-                let out = self.load(mp, Key::Any);
+                let out = self.load(mp, Key::any());
                 self.m.add_prim(out, prim::ALL);
                 out
             }
             n if n.starts_with("js_throw_") => {
+                let r = self.region();
                 for a in &args {
-                    self.m.edge(*a, self.thrown);
+                    self.m.edge(*a, r);
                 }
                 self.prim_node(prim::UNDEF)
             }
@@ -838,6 +1202,55 @@ impl<'a> Gen<'a> {
             "js_object_literal_prototype_birth" => {
                 let (_, t) = self.new_lit_tmpl(fx.module, &[]);
                 self.tok_node(t)
+            }
+            // DEC 255 (hunk 2): the strict existing-global store `NS = v`
+            // (`perry-hir` `strict_global_assign_existing_or_throw`) is a
+            // store into the global object under that name, as
+            // `globalThis.NS = v` is: the same `native_writes[(GlobalThis,
+            // NS)]` the namespace call's generic arm reads. The assignment
+            // expression evaluates to its RHS.
+            "js_global_assign_existing_or_throw" => {
+                let (Some(k), Some(v)) = (lit(0), arg(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.store(fx, recv, key, v, name.to_string(), None, false);
+                v
+            }
+            // Rule G: an unresolved identifier is `[[Get]](globalThis, NAME)`
+            // (`perry-runtime` `error/global_ref.rs`; absent = ReferenceError,
+            // `typeof` = "undefined"), as the load `globalThis.NAME` is.
+            // Whole-program mode only: in per-unit mode another unit's
+            // stores are unseen, so the read stays unknown.
+            "js_global_get_or_throw_unresolved" | "js_global_get_optional" if !self.m.unit_mode => {
+                let Some(k) = lit(0) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
+            }
+            // A named ESM import of a node module read as a value
+            // (`import { performance } from "perf_hooks"`, or a destructured
+            // `require` HIR binds the same way): node's builtin ESM export
+            // cell holds `module.exports[k]` at load and changes only by
+            // `syncBuiltinESMExports()`, which copies `module.exports[k]`. So
+            // it holds what key `k` of the module object reads: the realm's
+            // declaration, or what the program stored there.
+            "js_native_module_named_esm_export_value" if !self.m.unit_mode => {
+                let (Some(module), Some(k)) = (lit(0), lit(1)) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let Some(ns) = crate::builtins::node_module_ns(&module) else {
+                    return self.extern_fail(name, &args, &spread);
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                let recv = self.tok_node(t);
+                let key = Key::Named(self.m.atom(&k));
+                self.load(recv, key)
             }
             "js_vm_module_call" => {
                 crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -920,4 +1333,13 @@ fn expr_reads_this(e: &Expr) -> bool {
             found
         }
     }
+}
+
+/// `new Array(<one argument>)` of the builtin `Array`, the receiver shape of
+/// the fused fill (`Gen::call_with`; a spread `new` is `NewDynamicSpread`). A program class or binding named
+/// `Array` is no builtin: `new_named` resolves it first and records no
+/// `new_array_site`.
+fn fused_fill_receiver(object: &Expr) -> bool {
+    matches!(object, Expr::New { class_name, args, .. }
+        if class_name == "Array" && args.len() == 1)
 }

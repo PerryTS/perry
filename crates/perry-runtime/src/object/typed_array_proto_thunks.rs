@@ -43,9 +43,11 @@ enum TypedArrayProtoReceiver {
 /// brand check is the only behavioral change for them, and on a real TypedArray
 /// receiver they still reach the existing mutator impls via the dispatch tower.
 #[rustfmt::skip] pub(super) const TYPED_ARRAY_PROTO_METHODS: &[(&str, u32)] = &[
+    ("entries", realm_typedarray_prototype_entries_metadata!(length)),
+    ("keys", realm_typedarray_prototype_keys_metadata!(length)),
+    ("values", realm_typedarray_prototype_values_metadata!(length)),
     ("at", realm_typedarray_prototype_at_metadata!(length)),
     ("copyWithin", realm_typedarray_prototype_copywithin_metadata!(length)),
-    ("entries", realm_typedarray_prototype_entries_metadata!(length)),
     ("every", realm_typedarray_prototype_every_metadata!(length)),
     ("fill", realm_typedarray_prototype_fill_metadata!(length)),
     ("filter", realm_typedarray_prototype_filter_metadata!(length)),
@@ -57,22 +59,20 @@ enum TypedArrayProtoReceiver {
     ("includes", realm_typedarray_prototype_includes_metadata!(length)),
     ("indexOf", realm_typedarray_prototype_indexof_metadata!(length)),
     ("join", realm_typedarray_prototype_join_metadata!(length)),
-    ("keys", realm_typedarray_prototype_keys_metadata!(length)),
     ("lastIndexOf", 1),
     ("map", realm_typedarray_prototype_map_metadata!(length)),
+    ("reverse", realm_typedarray_prototype_reverse_metadata!(length)),
     ("reduce", 1),
     ("reduceRight", 1),
-    ("reverse", realm_typedarray_prototype_reverse_metadata!(length)),
     ("set", realm_typedarray_prototype_set_metadata!(length)),
     ("slice", realm_typedarray_prototype_slice_metadata!(length)),
     ("some", realm_typedarray_prototype_some_metadata!(length)),
     ("sort", realm_typedarray_prototype_sort_metadata!(length)),
     ("subarray", realm_typedarray_prototype_subarray_metadata!(length)),
-    ("toLocaleString", realm_typedarray_prototype_tolocalestring_metadata!(length)),
     ("toReversed", realm_typedarray_prototype_toreversed_metadata!(length)),
     ("toSorted", realm_typedarray_prototype_tosorted_metadata!(length)),
-    ("values", realm_typedarray_prototype_values_metadata!(length)),
     ("with", realm_typedarray_prototype_with_metadata!(length)),
+    ("toLocaleString", realm_typedarray_prototype_tolocalestring_metadata!(length)),
 ];
 
 /// Install the brand-checking `%TypedArray%.prototype` methods onto a per-kind
@@ -83,6 +83,7 @@ enum TypedArrayProtoReceiver {
 /// through the normal closure-dispatch path straight into the thunk, where the
 /// brand check runs.
 pub(super) fn install_typed_array_proto_methods(proto_obj: *mut ObjectHeader) {
+    // `TYPED_ARRAY_PROTO_METHODS` is in node's own-key order (`Reflect.ownKeys`).
     use super::global_this::install_proto_method as ipm;
     for &(name, arity) in TYPED_ARRAY_PROTO_METHODS {
         // The visible spec `.length` is `arity`; the body's info declares the
@@ -202,10 +203,7 @@ fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
 fn throw_not_typed_array(method: &str) -> ! {
     let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Brand-check the `this` receiver as a real TypedArray.
@@ -678,7 +676,7 @@ impl<'s> RootedUint8Buffer<'s> {
 /// scan. `js_array_map` has carried the same root since gh #6206 / #6081; this
 /// dispatcher had it on one of its three entries.
 ///
-/// `test-files/test_gap_gc_uint8_buffer_callback_rooting.ts` reproduces it on
+/// `tests/parity/language/typed-array/test_gap_gc_uint8_buffer_callback_rooting.ts` reproduces it on
 /// the SHIPPED DEFAULT (`TypeError: value is not a function`, exit 1) and,
 /// under `PERRY_GC_SCHEDULE_RATE=1 PERRY_GC_SCHEDULE_SEED=7
 /// PERRY_GC_PROTECT_FROMSPACE=1`, faults precisely — on the FIRST scheduled
@@ -1243,10 +1241,7 @@ pub(super) extern "C" fn ta_generic_thunk(
 fn throw_not_uint8_array(method: &str) -> ! {
     let msg = format!("Method Uint8Array.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Resolve the `this` receiver to a Uint8Array-backed buffer address.
@@ -1333,14 +1328,14 @@ pub(super) fn install_uint8array_base64_hex_proto_methods(proto_obj: *mut Object
             realm_uint8array_prototype_tobase64_metadata!(length),
         ),
         (
-            "toHex",
-            fn_info!(#[realm(Uint8Array.prototype.toHex, spec = {length = 0}, emit = metadata(realm_uint8array_prototype_tohex_metadata))] export crate::object::typed_array_proto_thunks::u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
-            realm_uint8array_prototype_tohex_metadata!(length),
-        ),
-        (
             "setFromBase64",
             fn_info!(#[realm(Uint8Array.prototype.setFromBase64, spec = {length = 1}, emit = metadata(realm_uint8array_prototype_setfrombase64_metadata))] export crate::object::typed_array_proto_thunks::u8_set_from_base64_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
             realm_uint8array_prototype_setfrombase64_metadata!(length),
+        ),
+        (
+            "toHex",
+            fn_info!(#[realm(Uint8Array.prototype.toHex, spec = {length = 0}, emit = metadata(realm_uint8array_prototype_tohex_metadata))] export crate::object::typed_array_proto_thunks::u8_to_hex_thunk, 3; with_declared(3), with_flags(FN_BUILTIN)),
+            realm_uint8array_prototype_tohex_metadata!(length),
         ),
         (
             "setFromHex",

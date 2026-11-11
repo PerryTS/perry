@@ -56,7 +56,7 @@ fn value_is_array(value: f64) -> bool {
     // bands nor foreign allocations.
     let addr = jv.as_pointer::<u8>() as usize;
     unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-        .is_some_and(|header| unsafe { header.as_ref() }.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(unsafe { header.as_ref() }.obj_type))
 }
 
 pub(super) fn is_callable_value(value: f64) -> bool {
@@ -168,8 +168,7 @@ fn trigger_async_id_or_throw(value: f64) -> u64 {
 fn throw_null_trigger_async_id_options() -> ! {
     let message = b"Cannot read properties of null (reading 'triggerAsyncId')";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(super) fn trigger_id_from_options(options: f64) -> u64 {
@@ -260,8 +259,7 @@ pub(super) fn throw_apply_not_function(value: f64) -> ! {
         describe_apply_type(value)
     );
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(super) fn validate_bind_callback(value: f64) {

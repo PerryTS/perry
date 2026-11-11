@@ -26,6 +26,50 @@ pub(crate) fn lexical_class_id(ctx: &FnCtx<'_>, class: &Class) -> u32 {
     ctx.class_ids.get(&owner.name).copied().unwrap_or(owner.id)
 }
 
+/// DEC 251 B, the one predicate for static construction through a parent:
+/// the whole-program fact (`super_unrelinked`) proves `class`'s heritage
+/// unrelinked AND names the class its evaluated `extends` value is, and the
+/// chain codegen constructs through (`extends_name`) is that class.
+/// `Some(Some(p))`: construct statically through local class `p`;
+/// `Some(None)`: proven, with no local class to construct through (no class
+/// parent, or an imported one); `None`: the construction follows the live
+/// superclass (no proof, or the evaluated value is not the named class).
+pub(crate) fn static_heritage<'a>(ctx: &FnCtx<'a>, class: &Class) -> Option<Option<&'a Class>> {
+    let id = lexical_class_id(ctx, class);
+    let named = class.extends_name.as_deref();
+    let named_id = named.and_then(|n| ctx.class_ids.get(n).copied());
+    let fact = match ctx.wpfacts.super_unrelinked.get(&id) {
+        Some(parent) => *parent,
+        // Unit tests prove heritage from a synthetic census, which names
+        // no parent: the named chain is the one it proves.
+        None if crate::proto_constants::heritage_is_unrelinked(ctx, id) => named_id,
+        None => return None,
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::Super,
+        || serde_json::json!({"class":id,"parent":fact}),
+    );
+    match (fact, named_id) {
+        // A proven parent codegen has no class for constructs statically only
+        // through its named (imported) constructor; an `extends <expression>`
+        // edge has none and would construct through the dynamic value.
+        (Some(p), Some(q)) if p == q => match named.and_then(|n| ctx.classes.get(n).copied()) {
+            Some(c) => Some(Some(c)),
+            None if class.extends_expr.is_some() => None,
+            None => Some(None),
+        },
+        (None, None) => Some(None),
+        _ => None,
+    }
+}
+
+/// `class`'s `extends` edge is proven to be the local class it names
+/// ([`static_heritage`]): an `extends <expression>` edge then constructs
+/// statically, not through the registered dynamic parent value.
+pub(crate) fn static_parent_edge(ctx: &FnCtx<'_>, class: &Class) -> bool {
+    matches!(static_heritage(ctx, class), Some(Some(_)))
+}
+
 /// A direct super body may skip default constructors only while every skipped
 /// constructor has a whole-program no-relink proof. An own body handles its
 /// next edge itself, so it terminates this walk.
@@ -72,14 +116,10 @@ pub(crate) fn requires_live(ctx: &FnCtx<'_>, class: &Class) -> bool {
         if web_stream_parent(owner) {
             return false;
         }
-        if !crate::proto_constants::heritage_is_unrelinked(ctx, lexical_class_id(ctx, owner)) {
+        let Some(parent) = static_heritage(ctx, owner) else {
             return true;
-        }
-        let Some(parent) = owner
-            .extends_name
-            .as_deref()
-            .and_then(|p| ctx.classes.get(p).copied())
-        else {
+        };
+        let Some(parent) = parent else {
             return false;
         };
         if parent.constructor.is_some()

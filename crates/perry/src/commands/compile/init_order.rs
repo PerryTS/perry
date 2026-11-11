@@ -34,6 +34,7 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    eager.extend(deferred_async_dependencies(ctx, entry_path));
     eager.extend(program_cjs_support(ctx));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
@@ -57,7 +58,11 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
                 .imports
                 .iter()
                 .filter(|i| {
-                    !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+                    !i.is_dynamic
+                        && !i.is_deferred
+                        && !i.type_only
+                        && !i.runtime_erased
+                        && !i.is_deferred_require
                 })
                 .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
                 .collect();
@@ -121,7 +126,7 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
         let mut next: Vec<PathBuf> = module
             .imports
             .iter()
-            .filter(|i| !i.is_dynamic && !i.type_only && !i.runtime_erased)
+            .filter(|i| !i.is_dynamic && !i.is_deferred && !i.type_only && !i.runtime_erased)
             .filter(|i| !i.is_deferred_require || edge_sources.contains(i.source.as_str()))
             .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
             .collect();
@@ -234,6 +239,7 @@ pub(super) fn topo_sort_non_entry_modules(
             // and the generated per-module init wrappers both exclude these
             // edges; the global order must use the same graph.
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -348,6 +354,7 @@ pub(super) fn topo_sort_non_entry_modules(
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -427,4 +434,104 @@ mod esm_request_order_tests {
             ]
         );
     }
+}
+
+/// Async modules reachable over static edges must run before a deferred
+/// namespace is exposed, without evaluating intervening synchronous modules.
+pub(super) fn requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    fn visit(
+        ctx: &mut CompilationContext,
+        path: &Path,
+        seen: &mut HashSet<PathBuf>,
+        result: &mut Vec<PathBuf>,
+    ) {
+        if !seen.insert(path.to_path_buf()) {
+            return;
+        }
+        if !ctx.native_modules.contains_key(path) {
+            return;
+        }
+        let targets = direct_requested_module_dependencies(ctx, path);
+        for target in targets {
+            visit(ctx, &target, seen, result);
+        }
+        result.push(path.to_path_buf());
+    }
+    let mut result = Vec::new();
+    visit(ctx, root, &mut HashSet::new(), &mut result);
+    result
+}
+
+/// Project only modules with asynchronous bodies from the requested graph.
+pub(super) fn deferred_async_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    requested_module_dependencies(ctx, root)
+        .into_iter()
+        .filter(|path| {
+            ctx.native_modules
+                .get(path)
+                .is_some_and(|m| m.has_top_level_await)
+        })
+        .collect()
+}
+
+/// Requested edges include defer and cycle back-edges; readiness does not evaluate them.
+pub(super) fn direct_requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    path: &Path,
+) -> Vec<PathBuf> {
+    static_requested_paths(ctx, path)
+}
+
+/// Runtime static edges in [[RequestedModules]] order, including SCC back-edges.
+pub(super) fn static_requested_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, true)
+}
+
+/// Evaluation edges only: a `defer` request keeps its target out of this
+/// module's evaluation list, so an asynchronous scheduler never runs a
+/// deferred provider before the importer's body. Readiness still walks it.
+pub(super) fn static_evaluation_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, false)
+}
+
+fn requested_paths(
+    ctx: &CompilationContext,
+    path: &Path,
+    include_deferred: bool,
+) -> Vec<PathBuf> {
+    let Some(module) = ctx.native_modules.get(path) else { return Vec::new(); };
+    let mut edges = Vec::new();
+    for import in &module.imports {
+        if import.is_dynamic || import.type_only || import.runtime_erased || import.is_deferred_require { continue; }
+        if import.is_deferred && !include_deferred { continue; }
+        if let Some(target) = &import.resolved_path { edges.push((PathBuf::from(target), import.source.as_str())); }
+    }
+    for export in &module.exports {
+        let source = match export {
+            perry_hir::Export::ExportAll { source } | perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::NamespaceReExport { source, .. } => source,
+            perry_hir::Export::Named { .. } => continue,
+        };
+        if let Some((target, _)) = resolve_import_with_context(source, path, ctx) { edges.push((target, source)); }
+    }
+    let mut ordered = esm_request_order(edges, &module.requested_modules);
+    let mut seen = HashSet::new();
+    ordered.retain(|p| ctx.native_modules.contains_key(p) && seen.insert(p.clone()));
+    ordered
+}
+
+/// Require rejects the graph by its executable static edges, never annotations.
+pub(super) fn graph_has_tla(ctx: &CompilationContext, path: &Path) -> bool {
+    fn visit(ctx: &CompilationContext, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
+        if !seen.insert(path.to_owned()) { return false; }
+        let Some(module) = ctx.native_modules.get(path) else { return false; };
+        module.has_top_level_await || static_requested_paths(ctx, path).iter().any(|dep| visit(ctx, dep, seen))
+    }
+    visit(ctx, path, &mut HashSet::new())
 }

@@ -27,9 +27,7 @@ fn throw_not_iterable(receiver: &str) -> ! {
         receiver
     );
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// Throw `TypeError: <value> is not a function` for a non-callable mapFn,
@@ -64,9 +62,7 @@ fn throw_map_fn_not_callable(map_fn: f64) -> ! {
     };
     let msg = format!("{} {} is not a function", type_name, value_str);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// `Array.from(source)` — the non-mapped form. Per ECMA-262 §23.1.2.1,
@@ -121,7 +117,7 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // indexed array-like operation, while other methods drive their protocol.
     // The layout-proven intrinsic dense walk shares spread's bulk element copy.
     if crate::value::addr_class::pointer_value_header(bits)
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
     {
         if super::flat_clone::dense_spread_source(boxed).is_some() {
             return super::flat_clone::dense_spread_copy(boxed);
@@ -548,9 +544,7 @@ pub(super) fn finish_length(result: &RuntimeHandle<'_>, len: usize, array_result
 fn throw_cannot_define_property(index: usize) -> ! {
     let msg = format!("Cannot define property {}, object is not extensible", index);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
 }
 
 /// Call `mapfn(value, index)` with `this_arg` bound. Restores the implicit
@@ -563,7 +557,7 @@ fn call_map_fn(mapfn: f64, this_arg: f64, value: f64, index: usize) -> f64 {
         &[value, index as f64],
     ) {
         Ok(v) => v,
-        Err(e) => crate::exception::js_throw(e),
+        Err(e) => crate::exception::rethrow_caught(e),
     }
 }
 
@@ -756,9 +750,15 @@ unsafe fn populate_from_iterable(
                 ),
                 None => crate::symbol::js_get_iterator(items.get_nanbox_f64()),
             });
+            let next = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(
+                iter.get_nanbox_f64(),
+            ));
             let mut k = 0usize;
             loop {
-                match crate::collection_iter::iterator_next_value(iter.get_nanbox_f64()) {
+                match crate::collection_iter::iterator_next_value(
+                    iter.get_nanbox_f64(),
+                    next.get_nanbox_f64(),
+                ) {
                     None => return finish_length(result, k, array_result),
                     Some(value) => {
                         let mapped = if mapping {
@@ -769,9 +769,9 @@ unsafe fn populate_from_iterable(
                             ) {
                                 Ok(v) => v,
                                 Err(e) => {
-                                    let e = scope.root_nanbox_f64(e);
+                                    let e = e.root(&scope);
                                     crate::collection_iter::iterator_close(iter.get_nanbox_f64());
-                                    crate::exception::js_throw(e.get_nanbox_f64());
+                                    crate::exception::rethrow_caught(e.caught());
                                 }
                             }
                         } else {
@@ -855,7 +855,7 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     // access, and only the intrinsic permits the live element walk.
     let (iterable, method) =
         if crate::value::addr_class::pointer_value_header(items.get_nanbox_u64())
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             let proto = crate::array::array_prototype_addr();
             let arr =
@@ -998,7 +998,7 @@ unsafe fn peek_plain_array_len(arr: *const ArrayHeader) -> Option<u32> {
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     Some((*arr).length)
@@ -1074,7 +1074,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     if crate::set::is_registered_set(raw)
@@ -1227,7 +1227,7 @@ unsafe fn try_append_spread_array_dense(
     // Only a genuine dense array: sets/maps/typed-arrays/buffers/lazy arrays
     // materialize element values through `js_array_clone` on the slow path.
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     if crate::set::is_registered_set(raw)
@@ -1347,7 +1347,7 @@ unsafe fn real_array_source(src: *const ArrayHeader, len: u32) -> Option<*const 
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*hdr).obj_type)
         || crate::set::is_registered_set(raw)
         || crate::map::is_registered_map(raw)
         || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()

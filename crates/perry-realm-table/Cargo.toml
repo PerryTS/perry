@@ -1,0 +1,18 @@
+[package]
+name = "perry-realm-table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The compiler realm table, generated from the runtime source realm declarations (read by codegen and wpfacts)"
+
+[lints]
+workspace = true
+
+[dependencies]
+perry-hir.workspace = true
+perry-runtime-manifest.workspace = true
+
+[build-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+perry-runtime-manifest.workspace = true

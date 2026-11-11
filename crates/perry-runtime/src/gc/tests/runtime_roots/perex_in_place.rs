@@ -238,9 +238,10 @@ fn perex_in_place_stateful_search_writes_last_index_without_a_trap() {
         Err(crate::regex::perex_runtime::EngineError::Abrupt(thrown)) => thrown,
         other => panic!("ordinary throwing Set must return its TypeError: {other:?}"),
     };
-    let thrown = scope.root_raw_mut_ptr(
-        crate::value::js_nanbox_get_pointer(thrown) as *mut crate::error::ErrorHeader
-    );
+    let thrown =
+        scope
+            .root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(thrown.value())
+                as *mut crate::error::ErrorHeader);
     let name = thrown.with_mut_ptr(|e| crate::error::js_error_get_name(e));
     assert_eq!(crate::regex::string_as_bytes(name), b"TypeError");
 }

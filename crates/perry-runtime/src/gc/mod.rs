@@ -242,7 +242,7 @@ mod cycle;
 /// `malloc_trim` maintenance, split out of `cycle.rs` for the 2000-line cap.
 mod cycle_malloc_trim;
 use cycle::*;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub(crate) use cycle_malloc_trim::purge_allocator_on_region_growth;
 #[cfg(test)]
 pub(crate) use cycle_malloc_trim::{
@@ -261,6 +261,7 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) mod image_cells;
 mod remembered;
 use remembered::*;
+mod restore_walk;
 mod rewrite;
 pub use rewrite::*;
 mod verify;
@@ -431,6 +432,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     escalation: FullEscalation,
     copying: CopyingFastPath,
 ) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
     // consumer of the scan decision (root scan, copying eligibility,
     // evacuation pinning, verifier) sees the same healed answer.
@@ -504,12 +506,13 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
-    // Not budgeted, so the low-pause veto does not apply and the policy is
-    // always allowed to run here (#7611 deleted the env veto that used to sit
-    // in this slot). The variable stays rather than being folded away: it is
-    // recorded in the cycle trace and read back by the evacuation-policy tests.
-    let evacuation_policy_allowed = true;
-    let force_evacuation = gc_force_evacuate_enabled();
+    // Not budgeted, so the low-pause veto does not apply here (#7611 deleted
+    // the env veto that used to sit in this slot); an imprecise point still
+    // vetoes every move. The allowance is recorded in the cycle trace and read
+    // back by the evacuation-policy tests.
+    let move_veto = evacuation_veto(false);
+    let evacuation_policy_allowed = move_veto.is_none();
+    let force_evacuation = evacuation_policy_allowed && gc_force_evacuate_enabled();
     // MARK_SEEDS persists across GC cycles. Clear before any try_mark
     // call so trace sees only this cycle's freshly-marked headers.
     clear_mark_seeds();
@@ -564,7 +567,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     // charged every ordinary minor an O(old pages) cost even though that path
     // cannot consume the selection. Defer both selection and source-block
     // expansion until the fast path has declined the collection.
-    let old_page_selection = if old_to_young_tracking_complete() {
+    let old_page_selection = if evacuation_policy_allowed && old_to_young_tracking_complete() {
         select_old_page_defrag_pages(force_evacuation)
     } else {
         OldPageDefragSelection::default()
@@ -581,7 +584,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
         current_rss_bytes,
         evacuation_policy_allowed,
         force_evacuation,
-        EVACUATION_POLICY_DISABLED_REASON,
+        move_veto.unwrap_or(EVACUATION_POLICY_DISABLED_REASON),
         old_page_selection,
         old_page_source_blocks,
     );
@@ -638,13 +641,14 @@ pub fn gen_gc_enabled() -> bool {
 // caveat rather than treating it as the defect it is. Deleting the knob deletes
 // the way to disarm the instrument by accident.
 //
-// **The branch it gated is NOT deleted with it, because the branch has another
-// controller that IS exercised.** `evacuation_policy_allowed` is still false on
+// **The branch it gated is NOT deleted with it, because the branch has other
+// controllers that ARE exercised.** `evacuation_policy_allowed` is still false on
 // every budgeted low-pause cycle (`low_pause_non_moving` in
 // `gc_start_budgeted_minor_fallback_cycle_with_snapshot`), and
 // `budgeted_low_pause_minor_does_not_evacuate` asserts that arm behaviourally —
 // nothing moved, no forwarding stub, old-page selection skipped, and
-// `trace.evacuation_policy.reason == "low_pause_non_moving"`. So the losing
+// `trace.evacuation_policy.reason == "low_pause_non_moving"`; an imprecise point
+// vetoes it too (`an_imprecise_point_moves_no_object`). So the losing
 // mode still compiles and still has a test; what stopped existing is the
 // untested *configuration*.
 //
@@ -801,7 +805,7 @@ thread_local! {
 ///    reallocation loop. The third disjunct does NOT rescue that case: under
 ///    `gc_incremental_enabled()` (the default) it reduces to "any COPY-ONLY
 ///    scanner", and a compiled program has none — the reasoning
-///    `test-parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
+///    `tests/parity/gc_matrix_inert_arms.txt` recorded for the `cons_scan_off`
 ///    arm, and the thing that made a first attempt at repairing
 ///    `generator_attach_prototype` fail for a third distinct reason.
 ///
@@ -899,6 +903,7 @@ pub(crate) fn test_collect_synchronous_full_trace() {
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here
     // allocation is still legal — the root scan itself must stay
@@ -1762,6 +1767,8 @@ pub extern "C" fn js_gc_stats(
     out_freed: *mut u64,
     out_pause_us: *mut u64,
 ) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.gc_stats", 0);
     GC_STATS.with(|stats| {
         let stats = stats.borrow();
         unsafe {
@@ -1895,3 +1902,6 @@ pub fn initialize_runtime_fixture() {
 static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
     *const crate::codegen_abi::PerryLayoutImageV1,
 ) = js_gc_init_with_layouts;
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use roots::for_each_global_root_slot;

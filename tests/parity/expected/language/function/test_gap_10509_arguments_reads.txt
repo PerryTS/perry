@@ -1,0 +1,42 @@
+merge () {"fresh":true} undefined 0
+merge (undefined) {"fresh":true} undefined 1
+merge ({a}) {"a":1} undefined 1
+merge ({a}, 2) {"a":1} 2 2
+merge spread {"s":1} d 3
+strict[0]: number 0
+strict[1]: string b
+strict[2]: string c
+strict[3]: undefined undefined
+strict[-0]: number 0
+strict[-1]: undefined undefined
+strict[1.5]: undefined undefined
+strict[NaN]: undefined undefined
+strict[Infinity]: undefined undefined
+strict["0"]: string 0
+strict["1"]: string b
+strict["01"]: undefined undefined
+strict["length"]: number 3
+strict["toString"]: function function:toString
+strict["hasOwnProperty"]: function function:hasOwnProperty
+strict["constructor"]: function function:Object
+strict["map"]: undefined undefined
+strict["callee"]: TypeError
+strict[@@toStringTag]: undefined undefined
+strict[@@unscopables]: undefined undefined
+arguments[@@unscopables].at: TypeError
+sumAll 20 0 20
+babelRest ["a",2,"b,c"] ["x",0,""]
+lastArg 3 undefined
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+inherited |own
+receiver [object Arguments] false 1
+delete index true|2||b
+delete length true|
+captured b
+defaulted from-args|2 own|1
+method: TypeError
+static st
+literal 3
+fn expr 42
+cold reads 48149
+async async-value

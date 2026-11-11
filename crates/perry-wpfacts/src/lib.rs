@@ -18,12 +18,19 @@
 
 pub mod bindings;
 mod builtins;
+pub mod canonical_numbers;
+mod const_arrays;
+mod const_numbers;
 mod ctor_phase;
 mod decl_units;
 pub mod delta;
+mod demand;
 pub mod derive;
 mod diagnostics;
 mod dump;
+mod element_floors;
+mod element_keys;
+pub mod field_read_calls;
 mod gen;
 mod gen_call;
 mod gen_cjs;
@@ -32,16 +39,29 @@ mod gen_expr;
 mod gen_rest;
 mod ledger;
 pub mod model;
+pub mod native_effects;
 pub mod pts;
+pub mod records;
+mod rest_elems;
+mod rest_fields;
+pub mod signatures;
 mod rooted;
 mod solve;
 mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
+mod zero_sign;
 
-pub use bindings::{BindingFacts, BodyRef, ModuleBindings};
-pub use derive::{FieldFacts, KindFact, SiteFacts, TemplateFacts, Verdict};
+pub use bindings::{
+    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
+};
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
+pub use signatures::Signature;
+pub use derive::{
+    ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
+    TemplateFacts, Verdict,
+};
 use perry_hir::Module;
 
 /// Reserved atom for computed-key accessors ("any key").
@@ -49,6 +69,10 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 
 #[derive(Clone, Debug, Default)]
 pub struct FactsConfig {
+    /// Export body classifications for the compiler diagnostic mode only.
+    pub verify_facts: bool,
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`).
+    pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.
     pub roots: Vec<String>,
@@ -56,6 +80,56 @@ pub struct FactsConfig {
     pub diagnostics: bool,
     /// Record the constraint relations for the independent recomputation.
     pub relations: bool,
+    /// No integer intervals (`model::range`): every Number is ⊤
+    /// (`PERRY_FACTS_INT_RANGES=0`).
+    pub no_int_ranges: bool,
+    /// No array length intervals: every Array `length` is ⊤
+    /// (`PERRY_FACTS_ARRAY_LENGTHS=0`).
+    pub no_array_lengths: bool,
+    /// No length floor: growth makes an Array's `length` ⊤ instead of
+    /// raising its upper bound (`solve::arr_len`; `PERRY_FACTS_ARRAY_FLOOR=0`).
+    pub no_array_floor: bool,
+    /// No plain Array births, fused-fill birth or `Rep::Arr`
+    /// (`PERRY_FACTS_ARRAY_REPS=0`, DESIGN-p4l1 PR-B).
+    pub no_array_reps: bool,
+    /// No immutable Arrays and no constant contents
+    /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
+    pub no_const_arrays: bool,
+    /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
+    /// set until VR-6): identity observations become `Cons::Identity`.
+    pub value_records: bool,
+    /// No record signature slots (`PERRY_FACTS_RECORD_SIGNATURES=0`,
+    /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
+    /// rejects its template.
+    pub no_record_signatures: bool,
+    /// No `Rep::Arr` for a field and no in-floor field read call
+    /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
+    pub no_array_fields: bool,
+    /// R1: a `Cons::Range` result widens like any node again, after
+    /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
+    /// `solve::grow_rule_range`).
+    pub no_exact_rules: bool,
+    /// −0 tolerance off (`PERRY_FACTS_ZERO_SIGN=0`, PR D, `zero_sign`): the
+    /// strict interval rules, a possible `-0` makes the result ⊤.
+    pub no_zero_sign: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves ends
+    /// the narrowed reads after the branch again (`PERRY_FACTS_LEAVING_WRITES=0`;
+    /// `gen::narrow`, "Writes on a leaving path").
+    pub no_leaving_writes: bool,
+    /// An element read's past-the-end `undefined` is unconditional again
+    /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
+    pub no_elem_undef: bool,
+    /// N6 off (`PERRY_FACTS_CONST_NUMBERS=0`): bitwise operators keep their
+    /// int32 hull and no module binding is exported as a constant Number
+    /// (`const_numbers`).
+    pub no_const_numbers: bool,
+    /// No guard narrowing, predicate summaries or String code intervals
+    /// (`gen::narrow` guards; `PERRY_FACTS_GUARD_RANGES=0`).
+    pub no_guard_ranges: bool,
+    /// No presence narrowing: a truthy or non-nullish guard leaves the
+    /// local's `null`/`undefined` (`gen::narrow` guards;
+    /// `PERRY_FACTS_GUARD_PRESENCE=0`).
+    pub no_guard_presence: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -106,6 +180,11 @@ pub struct FactsConfig {
     /// written to as each unit is captured at the fixpoint, instead of being
     /// held for the dump (`ProgramFacts::diag_stream`).
     pub diag_sidecar: Option<std::path::PathBuf>,
+    /// Dump only (with `diagnostics`): the birth census records (`birth-*`
+    /// lines: arrivals, escapes, the reads and writes of intrinsic keys and
+    /// the receiver of a missed intrinsic method call). The compiler sets it
+    /// from `PERRY_FACTS_BIRTH_CENSUS`. Facts do not depend on it.
+    pub birth_census: bool,
 }
 
 /// Module path → `export … from` source → the module path it resolves to.
@@ -136,6 +215,12 @@ pub struct Stats {
     pub work: u64,
     /// The solve hit its budget: no facts were claimed.
     pub aborted: bool,
+    /// The solve passed its work bound and finished widened
+    /// (`Model::widened`): the facts no later arrival touched.
+    pub widened: bool,
+    /// The widened solve stopped at `WIDENED_WORK` times the bound
+    /// (`aborted` is set too: no facts).
+    pub widened_stop: bool,
     /// Contract checks run after the solve (§11.2): none past the bound.
     pub checks: u64,
     pub top_calls: u64,
@@ -144,6 +229,42 @@ pub struct Stats {
     pub pts_entries: u64,
     /// The largest points-to sets: (node label, size, token-kind mix).
     pub big_nodes: Vec<(String, usize, String)>,
+    /// Rule R1: how many program fields of built-in objects, the largest
+    /// first (`holder.key`, set size), the sinks (`Model::r1_sinks`).
+    pub builtin_fields: (usize, Vec<(String, usize)>, [u64; 4]),
+}
+
+/// Stable body identity at the canonical HIR boundary: canonical module
+/// path, HIR function/body id, and the existing synthetic-context name.
+/// Ordinary bodies use an empty name; synthetic holding contexts preserve
+/// their existing name identity. No model node, frame or instance id enters
+/// this identity. Module indices are remapped to paths when exporting it.
+pub type BodyIdentity = (String, u32, String);
+
+/// The single exported reach projection: admitted/walked bodies together
+/// with synthetic contexts holding sites, produced by existing activation.
+/// An interrupted solve (including any bound or early stop) is incomplete.
+/// Consumers must treat an incomplete projection as everything active.
+/// Absence is useful only for actual bodies of the same canonical HIR;
+/// unknown or newly minted identities never establish inactivity.
+#[derive(Clone, Debug, Default)]
+pub struct BodyReach {
+    pub bodies: std::collections::BTreeSet<BodyIdentity>,
+    /// Every body the activation pass classified (active or not). Only an
+    /// identity in this set can be called inactive; a missing or new
+    /// identity is active.
+    pub seen: std::collections::BTreeSet<BodyIdentity>,
+    pub complete: bool,
+}
+
+impl BodyReach {
+    /// The one inactive predicate (the complement of the activate
+    /// predicate): the solve completed, the pass classified this body and
+    /// no path reaches it. Dead-body removal and the claim check read
+    /// only this.
+    pub fn inactive(&self, id: &BodyIdentity) -> bool {
+        self.complete && self.seen.contains(id) && !self.bodies.contains(id)
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -159,13 +280,20 @@ pub struct ProgramFacts {
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
-    /// DECISIONS 225: the bodies the whole program walked, the ones that
-    /// can run (module path, `SiteFacts::bodies` identity); `None`: every
-    /// body is walked.
-    pub active_bodies: Option<std::collections::BTreeSet<(String, u32, String)>>,
+    /// Diagnostic-only export of the activation pass's seen body classifications.
+    pub verification_bodies: Option<std::collections::BTreeMap<(String, u32, String), bool>>,
+    /// Completed whole-program reach, or an incomplete conservative view
+    /// when activation was unavailable or the solve stopped early.
+    pub body_reach: BodyReach,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
+    /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
+    /// the `records` ledger.
+    pub record_arrays: Vec<records::RecordArray>,
     pub sites: Vec<SiteFacts>,
+    /// Computed member sites in a whole-program solve. Per-unit facts do
+    /// not publish values whose token/template ids belong to separate solves.
+    pub elements: Vec<ElementFacts>,
     pub stats: Stats,
     /// Interpreted code can run (decision 150), and why. It is no kill: its
     /// data flow is the ⊤ summary node (everything it can receive already
@@ -191,13 +319,25 @@ pub struct ProgramFacts {
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
-    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation.
-    pub super_unrelinked: std::collections::BTreeSet<u32>,
+    /// Constructors whose live [[Prototype]] cannot be relinked by any reachable operation,
+    /// with the class their evaluated `extends` value is (DEC 251 B; `None`: no class parent,
+    /// a base class or a native one). A class whose `extends` value settle could not link
+    /// to one class is absent: its construction follows the live superclass.
+    pub super_unrelinked: std::collections::BTreeMap<u32, Option<u32>>,
     /// Compiled code may replace Function.prototype.call/apply; fail closed.
     pub fnproto_borrow_written: Option<String>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
+    /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
+    /// dump only.
+    pub rep_probe: Vec<String>,
+    /// −0 tolerance (PR D, `zero_sign`): Number nodes that keep an integer
+    /// interval although they may hold `-0`, which no use can observe.
+    /// Check mode's int32 witnesses admit `-0` when it is nonzero (a
+    /// tolerated value computed as a double is `-0`, and that is no false
+    /// proof); the sign witness is codegen's.
+    pub zero_sign_tolerated: u32,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
@@ -327,7 +467,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
-use program_facts::big_nodes;
+use program_facts::{big_nodes, builtin_fields};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -341,16 +481,74 @@ fn generate<'a>(
     t0: std::time::Instant,
 ) -> (gen::Gen<'a>, f64, std::time::Instant) {
     let loud = act.as_ref().is_none_or(|a| a.fixed);
-    let mut g = gen::Gen::new(sorted.to_vec(), cfg.relations && loud, cfg.explain && loud);
+    // Node IDs name the final observed model. Never apply its diagnostic
+    // suppression selector to intermediate liveness models with other IDs.
+    let birth_census = cfg.diagnostics && loud && cfg.birth_census;
+    let mut g = gen::Gen::new_observed(
+        sorted.to_vec(),
+        cfg.relations && loud,
+        cfg.explain && loud,
+        birth_census,
+    );
     // DECISIONS 225: a body is walked once its function can run.
     g.m.act = act;
     if cfg.diagnostics && loud {
         g.diagnostic = Some(Default::default());
-        g.m.diagnostic = Some(Default::default());
+        g.m.diagnostic.get_or_insert_with(Default::default);
+        if cfg.birth_census && g.m.diagnostic.as_ref().unwrap().census.is_none() {
+            g.m.diagnostic.as_mut().unwrap().census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+        }
     }
     g.export_sources = cfg.export_sources.clone();
     g.roots = cfg.roots.clone();
     g.dynimport_sabotage = cfg.sabotage.as_deref() == Some("dynimport");
+    g.m.range_sabotage = cfg.sabotage.as_deref() == Some("range");
+    g.m.arr_len_sabotage = cfg.sabotage.as_deref() == Some("arrlen");
+    g.m.elem_undef = !cfg.no_elem_undef;
+    g.m.elem_undef_sabotage = cfg.sabotage.as_deref() == Some("arrundef");
+    g.m.number_call_sabotage = cfg.sabotage.as_deref() == Some("numbercall");
+    g.m.const_numbers = !cfg.no_const_numbers;
+    g.m.const_number_sabotage = cfg.sabotage.as_deref() == Some("constnum");
+    g.m.arr_cap_sabotage = matches!(cfg.sabotage.as_deref(), Some("arrcap" | "densebirth"));
+    g.m.arr_floor_sabotage = cfg.sabotage.as_deref() == Some("arrfloor");
+    g.m.arr_append_sabotage = cfg.sabotage.as_deref() == Some("arrappend");
+    g.m.arr_fwd_sabotage = cfg.sabotage.as_deref() == Some("arrfwd");
+    g.m.arr_floor_off = cfg.no_array_floor;
+    g.m.array_reps = !cfg.no_array_reps;
+    g.m.arr_dense_sabotage = cfg.sabotage.as_deref() == Some("arrdense");
+    g.m.arr_elem_sabotage = cfg.sabotage.as_deref() == Some("arrelem");
+    g.m.arr_lazy_sabotage = cfg.sabotage.as_deref() == Some("arrlazy");
+    g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
+    g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
+    g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
+    g.m.value_records = cfg.value_records;
+    g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
+    g.m.array_fields = !cfg.no_array_fields;
+    g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
+    g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_capacity = rest_elems::capacity_enabled();
+    g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
+    g.m.rest_fields = rest_fields::enabled();
+    g.m.key_sign = element_keys::sign_enabled();
+    g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
+    g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
+    g.m.exact_rules = !cfg.no_exact_rules;
+    g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
+    g.m.zero_sign =
+        !cfg.no_zero_sign && !cfg.no_int_ranges && !cfg.unit && demand::at_rest_demand();
+    g.m.zero_sign_sabotage = cfg.sabotage.as_deref() == Some("zerosign");
+    g.leaving_writes = !cfg.no_leaving_writes;
+    g.leaving_write_sabotage = cfg.sabotage.as_deref() == Some("leavingwrite");
+    g.int_ranges = !cfg.no_int_ranges;
+    g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
+    g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
+    g.guard_presence = !cfg.no_guard_presence;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -370,6 +568,7 @@ fn generate<'a>(
     g.m.unit_mode = cfg.unit;
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
+    g.m.widen = !cfg.unit;
     g.m.max_nodes = cfg.max_pts.map(|p| (p / 8) as usize).unwrap_or(0);
     g.m.interp_free = cfg.dynamic_code.is_none()
         && !cfg.dynamic_code_reach.globals
@@ -441,6 +640,18 @@ fn generate<'a>(
             f.no_summary = true;
         }
     }
+    // An unwalked body is no evidence, even if its token reached a guard.
+    let pending: Vec<_> =
+        g.m.funcs
+            .iter()
+            .filter_map(|f| match f.own_test {
+                model::OwnTestBody::Pending(n) => Some(n),
+                _ => None,
+            })
+            .collect();
+    for n in pending {
+        g.m.refute_own_test(n);
+    }
     g.m.summarize_and_replay();
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
     if (cfg.profile || cfg.explain) && loud {
@@ -484,8 +695,11 @@ impl Activation {
     /// them, so no active key names them).
     fn over(self, sorted: &[(&str, &Module)]) -> Option<model::Act> {
         let mut act = self.act?;
-        let index: std::collections::HashMap<&str, u32> =
-            sorted.iter().enumerate().map(|(i, (p, _))| (*p, i as u32)).collect();
+        let index: std::collections::HashMap<&str, u32> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, (p, _))| (*p, i as u32))
+            .collect();
         let modules = &self.modules;
         let to = |s: crate::pts::FxHashSet<(u32, u32, String)>| {
             s.into_iter()
@@ -567,7 +781,9 @@ fn activation_pass<'a>(
     if g.m.aborted {
         return None;
     }
-    let seen = (0..g.m.funcs.len() as u32).map(|f| g.m.act_key(f)).collect();
+    let seen = (0..g.m.funcs.len() as u32)
+        .map(|f| g.m.act_key(f))
+        .collect();
     let mut a = g.m.act.take()?;
     a.fixed = true;
     a.queue.clear();
@@ -670,7 +886,7 @@ fn compute_act<'a>(
             .map(|((h, k), gr)| {
                 let ng = match k {
                     model::Key::Named(a) => m.accessors.get(&(*h, *a)).map_or(0, |x| x.0.len()),
-                    model::Key::Any => m.accessor_keys.get(h).map_or(0, |x| x.len()),
+                    model::Key::Any(_) => m.accessor_keys.get(h).map_or(0, |x| x.len()),
                 };
                 (
                     m.nodes[gr.ar as usize].pts.len(),
@@ -692,6 +908,12 @@ fn compute_act<'a>(
         }
     }
     g.m.dump_meta();
+    #[cfg(test)]
+    tests::delivery_boundaries::record(&g.m);
+    #[cfg(test)]
+    tests::computed_key_members::record(&g.m);
+    #[cfg(test)]
+    tests::box_computed_read::record(&g.m);
     if g.m.explain && !g.m.bf_mints.is_empty() {
         let mut v: Vec<(&str, u32)> = g.m.bf_mints.iter().map(|(k, n)| (*k, *n)).collect();
         v.sort_unstable_by(|a, b| b.1.cmp(&a.1));
@@ -728,16 +950,120 @@ fn compute_act<'a>(
     }
     let t2 = std::time::Instant::now();
     g.resolve_param_guards();
+    // I32 at rest (PR A): a field's representation (`FieldFacts::rep`, a
+    // Number field's I32 or an `Arr` field's `elem`) reads int demand, so
+    // demand is solved before the derive. It reads only the solved graph.
+    // −0 tolerance (PR D): settle every interval that may hold `-0` before
+    // anything reads one (demand, the derive, the bindings).
+    let zero_sign_tolerated = if g.m.aborted {
+        0
+    } else {
+        zero_sign::solve(&mut g.m)
+    };
+    let demand_first = demand::at_rest_demand();
+    if demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let (mut templates, mut sites) = if g.m.aborted {
         (Vec::new(), Vec::new())
     } else {
         derive::derive(&mut g)
     };
+    // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
+    // the templates and sites, before any representation reads them.
+    let record_arrays = records::derive(
+        &g,
+        &mut templates,
+        &sites,
+        interp_guard.as_deref(),
+        cfg.sabotage.as_deref(),
+    );
+    g.m.records = templates
+        .iter()
+        .filter(|t| t.record.is_ok())
+        .map(|t| t.id)
+        .collect();
+    if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
+        for l in records::ledger_lines(&templates, &record_arrays) {
+            eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));
+        }
+    }
+    let mut elements = if g.m.aborted {
+        Vec::new()
+    } else {
+        derive::element_facts(&g)
+    };
+    if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
+    // I32 at rest (PR B): the at-rest templates, which `ArrRep::at_rest`
+    // (`bindings::collect`) reads. After demand: an element rep reads it.
+    if !g.m.aborted {
+        let (rest, refused) = rest_elems::admit(&g, interp_guard.is_some());
+        (g.m.rest_tmpls, g.m.rest_refused) = (rest, refused);
+        rest_elems::mark_fields(&g.m, &mut templates);
+    }
     let mut bindings = bindings::collect(&g);
+    rest_elems::export(&g, &mut bindings);
+    // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
+    let rest_lanes = if g.m.aborted {
+        Vec::new()
+    } else {
+        rest_fields::admit(&g, &mut templates, interp_guard.is_some())
+    };
+    rest_fields::export_reads(&g, &templates, &mut bindings);
+    let mut rep_probe = if cfg.diagnostics && !g.m.aborted {
+        let mut p = bindings::rep_probe(&g);
+        p.extend(rest_lanes);
+        if g.m.zero_sign {
+            p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
+        }
+        p
+    } else {
+        Vec::new()
+    };
+    if !g.m.aborted && field_read_calls::enabled() {
+        field_read_calls::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref() == Some("fieldreadcall"),
+            cfg.sabotage.as_deref() == Some("arrb1"),
+        );
+    }
+    if canonical_numbers::enabled() {
+        canonical_numbers::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
+    }
+    if cfg.verify_facts {
+        element_floors::collect(&g, &mut bindings);
+    }
+    if g.m.const_numbers {
+        const_numbers::collect(&g, &mut bindings);
+    }
+    const_arrays::collect(&g, &mut bindings);
+    element_keys::collect(&g, &mut bindings);
+    element_keys::collect_signs(&g, &mut bindings);
+    if !g.m.aborted && signatures::enabled() {
+        signatures::collect(
+            &g,
+            &sites,
+            &mut bindings,
+            interp_guard.is_some(),
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
+    }
     if g.m.aborted {
         // Over budget: claim nothing (sound), keep the shapes for the dump.
         templates.clear();
         sites.clear();
+        elements.clear();
         bindings.clear();
     }
     if let Some(spec) = &cfg.sabotage {
@@ -772,11 +1098,14 @@ fn compute_act<'a>(
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
         contexts: g.m.sum.ctx_nodes.len() as u64,
-        work: g.m.work,
+        work: g.m.work.get(),
         aborted: g.m.aborted,
+        widened: g.m.widened,
+        widened_stop: g.m.widened_stop,
         checks,
         pts_entries: g.m.pts_entries,
         big_nodes: big_nodes(&g.m),
+        builtin_fields: builtin_fields(&g.m),
         top_calls: g.m.top_calls,
         profile: {
             let mut v: Vec<(String, u64, f64)> =
@@ -828,13 +1157,24 @@ fn compute_act<'a>(
                 let model::TmplKind::Class { class_id, .. } = g.m.tmpls[*tm as usize].kind else {
                     return None;
                 };
+                if g.m.parent_unsettled.contains(tm) {
+                    return None;
+                }
+                let parent =
+                    g.m.tmpls[*tm as usize]
+                        .parent
+                        .and_then(|p| match g.m.tmpls[p as usize].kind {
+                            model::TmplKind::Class { class_id, .. } => Some(class_id),
+                            _ => None,
+                        });
                 let origin = g.m.constructor_origin(*tm);
                 let owner =
                     g.m.tok_index
                         .get(&model::TokKind::ClassObj(origin))
                         .copied()
                         .unwrap_or(t as u32);
-                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner)).then_some(class_id)
+                (!g.m.is_escaped(owner) && !g.m.super_relink.contains(&owner))
+                    .then_some((class_id, parent))
             })
             .collect()
     };
@@ -1864,27 +2204,65 @@ fn compute_act<'a>(
     };
     // Every body the analysis walked, and every body holding a site (a
     // context generation enters without a walk of its own).
-    let active_bodies = g.m.act.as_ref().map(|a| {
-        let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
-        a.walked
-            .iter()
-            .cloned()
-            .chain(holding)
-            .filter_map(|(mi, id, name)| Some((sorted.get(mi as usize)?.0.to_owned(), id, name)))
-            .collect()
-    });
+    let bodies =
+        g.m.act
+            .as_ref()
+            .map(|a| {
+                let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+                // `on` is the activate predicate itself; a body it admits is
+                // reached even when generation walked it under no pending entry.
+                a.walked
+                    .iter()
+                    .cloned()
+                    .chain(a.on.iter().cloned())
+                    .chain(holding)
+                    .filter_map(|(mi, id, name)| {
+                        Some((sorted.get(mi as usize)?.0.to_owned(), id, name))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    let seen: std::collections::BTreeSet<BodyIdentity> =
+        g.m.act
+            .as_ref()
+            .map(|a| {
+                a.seen
+                    .iter()
+                    .filter_map(|(mi, id, name)| {
+                        Some((sorted.get(*mi as usize)?.0.to_owned(), *id, name.clone()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+    let body_reach = BodyReach {
+        bodies,
+        seen,
+        complete: g.m.act.is_some() && !stats.aborted,
+    };
     let fnproto_borrow_written = if stats.aborted {
         Some("solve aborted".to_string())
     } else {
         g.m.fnproto_borrow_write
             .map(|r| g.m.reasons[r as usize].clone())
     };
+    let verification_bodies = if (cfg.verify_facts || cfg.dce_bodies) && body_reach.complete {
+        Some(
+            body_reach
+                .seen
+                .iter()
+                .map(|k| (k.clone(), !body_reach.inactive(k)))
+                .collect(),
+        )
+    } else {
+        None
+    };
     let mut pf = ProgramFacts {
+        verification_bodies,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,
         activation,
-        active_bodies,
+        body_reach,
         super_unrelinked,
         fnproto_bind_written,
         array_iteration_written,
@@ -1892,12 +2270,16 @@ fn compute_act<'a>(
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
+        record_arrays,
         sites,
+        elements,
         stats,
         interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         relations: g.m.relations.take(),
+        rep_probe,
+        zero_sign_tolerated,
         tok_names,
         bindings,
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),

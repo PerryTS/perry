@@ -141,8 +141,21 @@ fn opt_index(v: Option<f64>, default: i32) -> Option<i32> {
 unsafe fn string_by_name(recv: f64, name: &[u8], args: &[f64]) -> f64 {
     // SAFETY: every name below is an ASCII literal.
     let name_str = std::str::from_utf8_unchecked(name);
-    if let Some(value) = super::string_native_method(recv, name_str, args) {
-        return value;
+    // Only a primitive string reads `String.prototype` by kind. A `String`
+    // wrapper object is an ordinary object: its own `[[Prototype]]` (which
+    // the program may have replaced) decides. `Get` first; the ordinary
+    // dispatch only answers while the method found is still the builtin.
+    if is_string(recv) {
+        if let Some(value) = super::string_native_method(recv, name_str, args) {
+            return value;
+        }
+    }
+    let mut recv = recv;
+    let mut args = args.to_vec();
+    if !is_string(recv) {
+        if let Some(value) = redirect_or_refresh(&mut recv, name, &mut args) {
+            return value;
+        }
     }
     super::js_native_call_method(
         recv,
@@ -567,7 +580,7 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
         Some(h)
             if matches!(
                 h.obj_type,
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
             ) =>
         {
             (h._reserved & ARRAY_NOT_DEFAULT == 0 && !array_has_named_layout(addr, h))
@@ -610,7 +623,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
         && header._reserved & ARRAY_NOT_DEFAULT == 0
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader))
@@ -623,7 +636,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
 /// head it forwards to.
 #[inline]
 unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
-    if h.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(h.obj_type) {
         return false;
     }
     let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);

@@ -214,7 +214,7 @@ mod platform_impl {
         let rows_i = pty_arg_i32(rows);
         if cols_i <= 0 || rows_i <= 0 || cols_i > u16::MAX as i32 || rows_i > u16::MAX as i32 {
             // node-pty's exact guard message.
-            crate::exception::js_throw(cp_make_error(
+            crate::exception::throw_open(cp_make_error(
                 "resizing must be done using positive cols and rows",
                 &[],
             ));
@@ -285,7 +285,7 @@ mod platform_impl {
     /// Best-effort i32 from a NaN-boxed numeric argument.
     fn pty_arg_i32(v: f64) -> i32 {
         let bits = v.to_bits();
-        if (bits >> 48) == 0x7FFE {
+        if crate::value::is_int32_bits(bits) {
             return (bits & 0xFFFF_FFFF) as u32 as i32;
         }
         if v.is_finite() {
@@ -405,7 +405,7 @@ mod platform_impl {
     pub extern "C" fn js_pty_spawn(file_bits: i64, args_bits: i64, opts_bits: i64) -> f64 {
         let file_val = f64::from_bits(file_bits as u64);
         let Some(file) = cp_value_to_string(file_val).filter(|s| !s.is_empty()) else {
-            crate::exception::js_throw(cp_make_error("spawn: file argument is required", &[]));
+            crate::exception::throw_open(cp_make_error("spawn: file argument is required", &[]));
         };
         let args = pty_args_from_value(f64::from_bits(args_bits as u64));
         let opts = f64::from_bits(opts_bits as u64);
@@ -433,7 +433,7 @@ mod platform_impl {
         }) {
             Ok(c) => c,
             Err(e) => {
-                crate::exception::js_throw(cp_make_error(
+                crate::exception::throw_open(cp_make_error(
                     &format!("spawn {file} failed: {e}"),
                     &[],
                 ));
@@ -624,7 +624,7 @@ mod platform_impl {
 #[cfg(not(any(unix, windows)))]
 #[no_mangle]
 pub extern "C" fn js_pty_spawn(_file_bits: i64, _args_bits: i64, _opts_bits: i64) -> f64 {
-    crate::exception::js_throw(crate::child_process::cp_make_error(
+    crate::exception::throw_open(crate::child_process::cp_make_error(
         "node-pty: this platform does not support native PTYs",
         &[],
     ));

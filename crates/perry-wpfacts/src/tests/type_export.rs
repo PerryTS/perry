@@ -94,3 +94,60 @@ fn a_merged_value_keeps_the_export() {
     assert!(!hir.is_type_only_export_binding("F"));
     assert!(!hir.is_type_only_export_binding("G"));
 }
+
+/// SEEDS1 TYPEONLY (tssrc server/protocol.ts:1-41): a LOCAL `export { X }` of
+/// a name bound only by a type-only import is erased like `export type`: no
+/// runtime export, no namespace key, no value. Modeled as an export of an
+/// unresolved scope name, it put ⊤ into the barrel's namespace.
+const ERASED_SRC: &str = "export interface I { v: number }\n\
+     export const enum H { A = 1 }\n\
+     export interface J { w: number }\n\
+     export class C { v = 1; w = 2; }\n";
+
+const ERASED_BARREL: &str = "import type { I, H } from './e';\n\
+     import { type J } from './e';\n\
+     import { C } from './e';\n\
+     export { I, H, J, C };\n";
+
+const ERASED_MAIN: &str = "import * as R from './r';\n\
+     const k = process.argv[2] ?? 'C';\n\
+     const K = (R as any)[k];\n\
+     const c = new K();\n\
+     console.log(c.v, c.w);\n";
+
+#[test]
+fn export_of_a_type_only_import_puts_no_top_into_the_namespace() {
+    let pf = whole(&[
+        ("e", ERASED_SRC),
+        ("r", ERASED_BARREL),
+        ("main", ERASED_MAIN),
+    ]);
+    let dump = pf.dump_text();
+    assert!(proven(&pf, "v"), "c.v unproven:\n{dump}");
+    assert!(proven(&pf, "w"), "c.w unproven:\n{dump}");
+}
+
+fn lowered(name: &str, src: &str) -> perry_hir::Module {
+    let path = format!("{name}.ts");
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    perry_hir::lower_module(&module, name, &path).expect("lowers")
+}
+
+/// The predicate on the barrel: the type-only imports are erased exports, the
+/// value import is not (control), and a merged value keeps the export.
+#[test]
+fn a_type_only_import_export_is_erased_and_a_value_import_is_not() {
+    let r = lowered("r", ERASED_BARREL);
+    for n in ["I", "H", "J"] {
+        assert!(
+            r.is_type_only_export_binding(n),
+            "{n} kept as a runtime export"
+        );
+    }
+    assert!(!r.is_type_only_export_binding("C"), "value import C erased");
+    let merged = lowered(
+        "m",
+        "import type { A } from './e';\nexport const A = 1;\nexport { A as B };\n",
+    );
+    assert!(!merged.is_type_only_export_binding("A"));
+}

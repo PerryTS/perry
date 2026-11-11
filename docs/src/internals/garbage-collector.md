@@ -56,6 +56,25 @@ ladder and fail on a mismatch (`crates/perry-runtime/src/gc/trigger_watermark.rs
 <!-- gc-symbol: repeated_gc_malloc_is_answered_by_the_fast_path in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 <!-- gc-symbol: a_watermark_the_ladder_disagrees_with_trips_the_verifier in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 
+**Batching young-leaf pressure.** Dedicated young pointer-free leaves can be
+collected without moving small cells, but deciding their liveness requires a
+census of young small cells. A leaf service is due only when Eden plus young
+leaves reaches the existing Eden allocation window and leaves occupy at least
+one quarter of that window. This prevents a nearly full Eden from buying a
+whole census for each small leaf birth. The small-cell copying cap remains
+independent: reaching it requires a tracing minor, even below the leaf floor.
+Suppressed allocation checks remain owed and run at the outermost scope exit.
+
+For small occupancy below cap `C`, survivor occupancy `S`, and Eden window `W`,
+a quiet young trigger bounds total young occupancy below
+`max(S + W, C + ceil(W / 4))`, before the existing allocation and safepoint
+slack. The first term is the survivor-credit policy's bound; the second bounds
+the additional batching allowance. Since `S <= small < C` and `W <= C`, quiet
+occupancy is below `2 * C`. The due answer and the inline allocation residual
+bound come from the same predicate; a leaf birth invalidates that bound.
+<!-- gc-symbol: near_full_eden_coalesces_repeated_leaf_censuses_from_owed_checks in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+<!-- gc-symbol: coalescing_cannot_grow_small_or_leaf_occupancy_past_the_bound in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+
 **Per-live-object cost of a synchronous full.** Three parts of a full scale
 with the live set, and each has a cheaper exact form:
 
@@ -78,6 +97,20 @@ with the live set, and each has a cheaper exact form:
   could zero it.
 <!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
+
+**The post-minor coverage restore is bounded by the dirty pages.** After a
+minor clears the remembered set it re-derives it from the pre-clear dirty
+snapshot. An owner the dirty scan visited completely is skipped; any other old
+parent is walked, and of its in-body slots only those on a page the snapshot
+names: an old parent's in-body slot is described by its page, so one on a
+clean page owes nothing. A Map store, Set store or array that spans many pages
+therefore costs a minor its dirty pages, not its size. Slots outside the
+parent's body and malloc parents are owner qualified and keep the whole-owner
+walk. `PERRY_GC_RESTORE_DIRTY_PAGES=0` selects the whole-owner walk for every
+parent, and `=verify` runs both and aborts if the whole-owner walk finds an
+entry the bounded one did not restore (test and debug builds always do).
+<!-- gc-symbol: the_bounded_restore_rebuilds_the_pages_the_whole_owner_restore_rebuilds in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+<!-- gc-symbol: the_witness_reports_an_unbarriered_edge in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
 
 **Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its
 growth baseline, so old-gen garbage that a minor promoted and that died after
@@ -402,6 +435,7 @@ These are the operational controls most useful outside collector development:
 | `PERRY_WRITE_BARRIERS=0` | compile/runtime barrier bisection; also forces full mark-sweep |
 | `PERRY_GC_SCAVENGE=0` | disable direct nursery scavenging for pacing comparison |
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
+| `PERRY_GC_RESTORE_DIRTY_PAGES=0` | walk whole owners in the post-minor coverage restore (`verify`: both walks, compared) |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |

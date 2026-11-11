@@ -320,19 +320,28 @@ fn regenerate_wpfacts_cjs_fixtures() {
     // `t6`'s entry requires by a computed specifier: a program that is not
     // closed, its wrappers keep the open arms.
     // `t7`'s `b.js` requires `module` (Node's `Module._cache`): not closed.
-    let sets: [(&str, &[&str], bool); 6] = [
-        ("t1", &["b.js", "a.js", "m.js"], false),
-        ("t2", &["r.js", "m.js"], false),
+    // `t8`'s entry is ESM (`cjs_t8/m.js`, not wrapped): its `createRequire`
+    // makes the program not closed, and no wrapped module is the entry.
+    let sets: [(&str, &[&str], bool, bool); 7] = [
+        ("t1", &["b.js", "a.js", "m.js"], false, true),
+        ("t2", &["r.js", "m.js"], false, true),
         (
             "t3",
             &["benchmark.js", "richards.js", "sa_Richards.js"],
             false,
+            true,
         ),
-        ("t5", &["b.js", "r.js", "m.js"], false),
-        ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"], true),
-        ("t7", &["a.js", "b.js", "m.js"], true),
+        ("t5", &["b.js", "r.js", "m.js"], false, true),
+        (
+            "t6",
+            &["benchmark.js", "som.js", "cd.js", "sa_CD.js"],
+            true,
+            true,
+        ),
+        ("t7", &["a.js", "b.js", "m.js"], true, true),
+        ("t8", &["l.js"], true, false),
     ];
-    for (t, files, open) in sets {
+    for (t, files, open, cjs_entry) in sets {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().expect("canonical tempdir");
         let root_text = root.to_string_lossy().into_owned();
@@ -347,13 +356,14 @@ fn regenerate_wpfacts_cjs_fixtures() {
         let out = fixtures.join(format!("cjs_{t}"));
         for (i, f) in files.iter().enumerate() {
             let src = std::fs::read_to_string(root.join(f)).expect("source");
-            let entry = i + 1 == files.len();
+            let entry = cjs_entry && i + 1 == files.len();
             let (wrapped, _) =
                 wrap_commonjs_with_body_offset(&src, &root.join(f), None, entry, None);
             let text = resolve_open(&wrapped, open).replace(&root_text, &short);
             std::fs::write(out.join(f), text).expect("write fixture");
         }
-        let support = resolve_open(&support::source(&keys, true), open).replace(&root_text, &short);
+        let support =
+            resolve_open(&support::source(&keys, cjs_entry), open).replace(&root_text, &short);
         std::fs::write(out.join("perry_cjs.js"), support).expect("write support fixture");
     }
 }

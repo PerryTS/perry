@@ -46,9 +46,7 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
+    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)

@@ -818,7 +818,10 @@ fn count_decl_sites(stmts: &[Stmt], out: &mut HashMap<LocalId, usize>) {
 /// These are exactly the bindings #6345 leaves collapsed: read-only captures are
 /// snapshotted, and bindings whose live range stays in one state keep their
 /// per-iteration declaration, so neither path covers a written binding that also
-/// outlives an `await`. Each returned id should be rewritten to a heap cell by
+/// outlives an `await`. The same holds for a binding a closure captures before
+/// its declaration with a suspend in between (its declaration is the write
+/// after capture; its live range starts at the prealloc that births it). Each
+/// returned id should be rewritten to a heap cell by
 /// [`rewrite_written_captures_to_cells`].
 pub(crate) fn collect_written_suspended_loop_captures(body: &[Stmt]) -> HashSet<LocalId> {
     // The union of every closure's `mutable_captures` (including nested
@@ -826,9 +829,6 @@ pub(crate) fn collect_written_suspended_loop_captures(body: &[Stmt]) -> HashSet<
     // captured, whether by a closure or by the enclosing scope after capture.
     let mut mutably_captured: HashSet<LocalId> = HashSet::new();
     collect_mutable_captures_stmts(body, &mut mutably_captured);
-    if mutably_captured.is_empty() {
-        return HashSet::new();
-    }
 
     let mut total: HashMap<LocalId, usize> = HashMap::new();
     count_local_refs_stmts(body, &mut total);
@@ -944,12 +944,51 @@ fn classify_written_block(
                 out.insert(*id);
             }
         }
+        // A binding born before its declaration (a forward-captured
+        // `let`/`const`: a closure or a hoisted function declaration captures
+        // it at the scope's entry, where HIR preallocates its box). The
+        // binding exists from that birth, and its declaration is a store into
+        // it that every earlier capture must observe. When a suspend lies
+        // between the birth and a later use or the declaration itself, the
+        // step-local box is gone by the time the declaration runs, and a value
+        // snapshot at capture time would hold the dead zone. The binding is
+        // therefore a cell born at the prealloc site: the cell reference is a
+        // per-iteration capture that crosses the suspend like every other
+        // read-only one, and the declaration fills the element.
+        if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = stmt {
+            for id in ids {
+                if block_scoped(*id) && live_across_suspend_from_birth(*id, &block[i + 1..]) {
+                    out.insert(*id);
+                }
+            }
+        }
         if !is_loop(stmt) {
             each_child_stmt_list(stmt, &mut |list| {
                 classify_written_block(list, block_scoped, mutably_captured, out)
             });
         }
     }
+}
+
+/// Is `id`, born by a prealloc just before `rest`, referenced or declared at
+/// or after a suspend in `rest`? Like [`used_after_suspend`], but the
+/// declaration counts: it is the store that ends the dead zone, and it must
+/// reach the box the earlier captures hold.
+fn live_across_suspend_from_birth(id: LocalId, rest: &[Stmt]) -> bool {
+    let mut suspended = false;
+    for stmt in rest {
+        let mut refs: HashMap<LocalId, usize> = HashMap::new();
+        count_local_refs_stmt(stmt, &mut refs);
+        let mut decls: HashMap<LocalId, usize> = HashMap::new();
+        count_decl_sites(std::slice::from_ref(stmt), &mut decls);
+        let touches = refs.get(&id).is_some_and(|n| *n > 0) || decls.contains_key(&id);
+        let yields = stmt_contains_suspend(stmt);
+        if touches && (suspended || yields) {
+            return true;
+        }
+        suspended |= yields;
+    }
+    false
 }
 
 /// Union every closure's `mutable_captures` in these statements, descending into
@@ -1142,6 +1181,7 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &Ho
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -1179,6 +1219,7 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &Ho
 /// `cell[slot]` for the cell bound to `id`.
 fn cell_slot(id: LocalId, slot: i64) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
@@ -1192,6 +1233,7 @@ fn cell_flag_set(id: LocalId) -> Expr {
         object: Box::new(Expr::LocalGet(id)),
         index: Box::new(Expr::Integer(1)),
         value: Box::new(Expr::Bool(true)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }
@@ -1308,6 +1350,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -1323,6 +1366,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                         object: Box::new(Expr::LocalGet(id)),
                         index: Box::new(Expr::Integer(0)),
                         value: Box::new(Expr::Undefined),
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                     };
@@ -1348,6 +1392,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                 op,
                 prefix,
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };

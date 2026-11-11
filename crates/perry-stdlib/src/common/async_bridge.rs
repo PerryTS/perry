@@ -581,7 +581,6 @@ type ActiveArm = fn() -> bool;
 
 static PUMP_TLS: Hook<PumpArm> = Hook::empty();
 static ACTIVE_TURNLOOP_HTTP: Hook<ActiveArm> = Hook::empty();
-static ACTIVE_TURNLOOP_SMTP: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_TLS: Hook<ActiveArm> = Hook::empty();
 
 #[cfg(all(
@@ -603,11 +602,6 @@ pub(crate) fn install_tls_pump() {
 #[cfg(feature = "turnloop-http-client")]
 pub(crate) fn install_turnloop_http_client_active() {
     ACTIVE_TURNLOOP_HTTP.set(crate::turnloop_client::has_pending_requests);
-}
-
-#[cfg(feature = "turnloop-smtp-client")]
-pub(crate) fn install_turnloop_smtp_active() {
-    ACTIVE_TURNLOOP_SMTP.set(crate::turnloop_smtp::has_pending);
 }
 
 /// Returns 1 if the stdlib has active event sources that need the event
@@ -637,9 +631,6 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
     // that took the turnloop path would have driven tokio to wait for work
     // tokio was not carrying. A separate predicate is the whole point.
     if ACTIVE_TURNLOOP_HTTP.get().is_some_and(|active| active()) {
-        return 1;
-    }
-    if ACTIVE_TURNLOOP_SMTP.get().is_some_and(|active| active()) {
         return 1;
     }
     // Active WebSocket / raw TCP handles keep the loop alive through the

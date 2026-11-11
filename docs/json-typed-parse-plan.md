@@ -98,7 +98,7 @@ Not enough to beat Bun alone — sets up infrastructure for Step 2.
 - `crates/perry-runtime/src/json.rs`: new `js_json_parse_typed`.
 - Types overlay: add `parse<T>(…): T` overload.
 
-**Tests:** new `test-files/test_json_typed_*.ts` — must not touch existing
+**Tests:** new `tests/fixtures/programs/test_json_typed_*.ts` — must not touch existing
 `test_json_*.ts` files. Parity test against Node's `JSON.parse(blob) as T`
 semantics (identical, since the type is erased).
 
@@ -162,7 +162,7 @@ time ≤150 ms (below Bun's 250 ms).
 - Every existing is_object/is_array consumer audited for taped-view
   semantics
 
-**Tests:** new `test-files/test_json_lazy_*.ts` exercising
+**Tests:** new `tests/fixtures/programs/test_json_lazy_*.ts` exercising
 pure-read, single-mutation, full-materialization paths. All existing
 `test_json_*.ts` must continue passing byte-for-byte against Node.
 
@@ -236,26 +236,26 @@ infrastructure is a prerequisite.
 
 **Step 1 tests** (all new files, no conflict with existing
 `test_json_*.ts`):
-- `test-files/test_json_typed_basic.ts` — `JSON.parse<{a: number, b: string}>`
+- `tests/fixtures/programs/test_json_typed_basic.ts` — `JSON.parse<{a: number, b: string}>`
   on exact-shape input
-- `test-files/test_json_typed_extra_fields.ts` — input has fields not
+- `tests/fixtures/programs/test_json_typed_extra_fields.ts` — input has fields not
   in T; should be tolerated (present in result)
-- `test-files/test_json_typed_missing_fields.ts` — T declares more
+- `tests/fixtures/programs/test_json_typed_missing_fields.ts` — T declares more
   fields than input; missing ones → undefined
-- `test-files/test_json_typed_nested.ts` — nested object and array shapes
-- `test-files/test_json_typed_array.ts` — `JSON.parse<Item[]>`
-- `test-files/test_json_typed_mismatch.ts` — wrong runtime type for a
+- `tests/fixtures/programs/test_json_typed_nested.ts` — nested object and array shapes
+- `tests/fixtures/programs/test_json_typed_array.ts` — `JSON.parse<Item[]>`
+- `tests/fixtures/programs/test_json_typed_mismatch.ts` — wrong runtime type for a
   field (e.g. string in number slot); must fall through to generic
   parser without crashing
 
 **Step 2 tests** (new):
-- `test-files/test_json_lazy_readonly.ts` — read one field, compare to
+- `tests/fixtures/programs/test_json_lazy_readonly.ts` — read one field, compare to
   Node byte-for-byte
-- `test-files/test_json_lazy_identity.ts` — `const a = p.x; const b = p.x;
+- `tests/fixtures/programs/test_json_lazy_identity.ts` — `const a = p.x; const b = p.x;
   assert a === b` (pointer identity on repeated access)
-- `test-files/test_json_lazy_mutate.ts` — mutate one field, then verify
+- `tests/fixtures/programs/test_json_lazy_mutate.ts` — mutate one field, then verify
   ancestor chain is materialized correctly
-- `test-files/test_json_lazy_stringify.ts` — parse then immediate
+- `tests/fixtures/programs/test_json_lazy_stringify.ts` — parse then immediate
   stringify must produce the same bytes (modulo JSON normalization)
 
 ## New benchmarks

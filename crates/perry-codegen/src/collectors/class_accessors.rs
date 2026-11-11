@@ -66,7 +66,7 @@ pub fn class_chain_has_field(
         }
         // A computed or dynamically-keyed member means the declared list is not
         // authoritative for this class.
-        if !class.computed_members.is_empty() || class.fields.iter().any(|f| f.key_expr.is_some()) {
+        if class.has_evaluated_members() || class.fields.iter().any(|f| f.key_expr.is_some()) {
             return true;
         }
         cur = class.extends_name.clone();

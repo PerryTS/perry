@@ -1,0 +1,31 @@
+chain: true
+chain via function*: true
+instanceof: true
+own keys: constructor,next,return,throw,Symbol(Symbol.toStringTag)
+own @@iterator: false
+inherited @@iterator: true
+@@iterator returns this: true
+map is inherited: true
+toStringTag: [object Generator]
+map: 10,20,30
+chain ops: 2,4
+for-of: 1,2,3
+take valueOf: 1,2
+drop valueOf: 2,3
+reduce literal init: 6
+reduce add: 106
+DEC 250: Cannot replace built-in member Iterator.prototype.map: built-in objects are read-only in a compiled program
+override: {}
+DEC 250: Cannot replace built-in member Iterator.prototype.map: built-in objects are read-only in a compiled program
+restored: 2,3,4
+shadow: own on h.prototype
+plain map: TypeError
+plain instanceof: false
+class gen chain: true
+class gen instanceof: true
+class gen map: 8,10,12
+async own keys: constructor,next,return,throw,Symbol(Symbol.toStringTag)
+async parent is Iterator.prototype: false
+async grandparent is Object.prototype: true
+async instanceof Iterator: false
+for await: 1

@@ -535,8 +535,7 @@ fn reverse_delete_index(obj: *mut crate::object::ObjectHeader, index: u64) {
 
 fn reverse_throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 /// EK §3.1 `fill(v, s, e)`: the slots `[s, e)` now hold `value`, so a range
 /// that starts inside the prefix extends it to `e` (descriptor clamp inside).
@@ -800,7 +799,7 @@ pub extern "C" fn js_array_fill_generic(
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 (*hdr).obj_type
             };
-            if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let arr = raw as *mut ArrayHeader;
                 let result = if has_start != 0 || has_end != 0 {
                     let start_value = if has_start != 0 { start } else { 0.0 };

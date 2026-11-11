@@ -153,7 +153,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
 // `is_integer_specializable` / `i64s_stmts` / `i64s_expr` used to live here.
 // They were the admission rule for the whole-function i64 specialization pass
 // (`codegen/i64_spec.rs`), removed in #7238 — see that issue and the module
-// header of `test-files/test_gap_7238_i64_specialization_exactness.ts` for why
+// header of `tests/parity/language/operators/test_gap_7238_i64_specialization_exactness.ts` for why
 // the rule could not be repaired: it admitted `number` parameters as integers
 // without proof and bounded no intermediate, and neither is statically
 // provable for the self-recursive bodies the pass existed to serve.
@@ -206,6 +206,10 @@ pub fn returns_int_stmts(ss: &[Stmt]) -> bool {
             Stmt::Return(Some(e)) if !returns_int_expr(e) => {
                 return false;
             }
+            // `return;` yields `undefined`, never an integer.
+            Stmt::Return(None) => {
+                return false;
+            }
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -244,6 +248,15 @@ pub fn returns_int_expr(e: &Expr) -> bool {
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
         ),
         Expr::MathImul(_, _) => true,
+        // `c ? 1 : -1`: one of two integers. `PERRY_UNBOXED_CLASS_FIELDS=0`
+        // keeps the selection out.
+        Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        } if !crate::stmt::this_field_fast_off() => {
+            returns_int_expr(then_expr) && returns_int_expr(else_expr)
+        }
         _ => false,
     }
 }

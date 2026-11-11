@@ -28,6 +28,11 @@ mod class_field_loop_tests;
 mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
+mod const_array_walk;
+#[cfg(test)]
+mod const_array_walk_tests;
+#[cfg(test)]
+mod contents_stable_ir_tests;
 mod counter_range;
 pub(crate) mod eh_actions;
 mod element_shape_carried;
@@ -35,8 +40,14 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod element_shape_native;
+pub(crate) mod field_base;
+#[cfg(test)]
+mod field_base_tests;
+pub(crate) mod fn_base;
+#[cfg(test)]
+mod fn_base_tests;
 mod if_stmt;
-mod indexed_owner_loop;
+pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
 mod let_object_facts;
 mod let_scalar_new;
@@ -45,6 +56,10 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
+pub(crate) use loops::this_field_fast_off;
+pub(crate) use crate::expr::index_get::descriptor_read;
+pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
+pub(crate) use loops::create_poll_refreshed_receiver_cache;
 mod masked_window_region;
 mod number_local_loop;
 pub(crate) use number_local_loop::numeric_callbacks;
@@ -68,7 +83,7 @@ mod stable_packed_loop_tests;
 mod stable_packed_typed_array;
 mod string_length_loop;
 mod switch_stmt;
-mod try_stmt;
+pub(crate) mod try_stmt;
 mod unused_expr;
 mod versioned_indexed_loop;
 mod wasm_eh;
@@ -77,7 +92,7 @@ pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
 pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
-pub(crate) use try_stmt::lower_try;
+pub(crate) use try_stmt::{emit_throw, lower_try};
 
 pub(crate) fn record_boxed_slot_js_value_bits(
     ctx: &mut FnCtx<'_>,
@@ -212,6 +227,9 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    // N2: a function-level base installed in this lowering of the list ends
+    // with it.
+    fn_base::end_list(ctx, stmts);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
     crate::expr::map_entry_fusion::close_list(ctx, stmts);
@@ -232,6 +250,8 @@ fn lower_stmts_list(
     // table (`closure_births::try_lower_let_run`).
     let mut born_until = 0;
     while i < stmts.len() {
+        // N2: the held suffix of a method body starts here.
+        fn_base::at_stmt(ctx, stmts, i)?;
         ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
         // and no run lowered as one unit may reach past the next statement
@@ -282,7 +302,11 @@ fn lower_stmts_list(
                 crate::expr::try_match_channel_reduction(&stmts[..limit], i, ctx.integer_locals)
             {
                 if ctx.buffer_data_slots.contains_key(&reduction.array_id) {
-                    crate::expr::lower_channel_reduction(ctx, &reduction)?;
+                    crate::expr::lower_channel_reduction(
+                        ctx,
+                        &reduction,
+                        &stmts[i..i + reduction.acc_ids.len()],
+                    )?;
                     let last_lowered_idx = i + reduction.acc_ids.len() - 1;
                     i += reduction.acc_ids.len();
                     if emit_shadow_clears && !ctx.block().is_terminated() {
@@ -301,7 +325,9 @@ fn lower_stmts_list(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) = (!born)
+        // I32 at rest: the region's fast copy reads element words raw.
+        let rest = crate::expr::rest_elems::in_loop(ctx, &[], &stmts[i..limit]);
+        if let Some(region) = (!born && !rest)
             .then(|| masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit]))
             .flatten()
         {
@@ -410,6 +436,20 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // A receiver run is straight-line code; it never enters or
+    // leaves a branch, a loop or a handler.
+    let straight = matches!(stmt, Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Return(_));
+    if !straight {
+        crate::expr::layout_read::end_run(ctx);
+    }
+    let lowered = lower_stmt_family(ctx, stmt);
+    if !straight {
+        crate::expr::layout_read::end_run(ctx);
+    }
+    lowered
+}
+
+fn lower_stmt_family(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     // Object model step 2c: a constructor body's run of family stores ends
     // at any statement that is not a `this.k = v` store
     // (`expr::layout_read::family_run_plan`), on both sides of it: a store
@@ -523,6 +563,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
+            // DESIGN-p4l4 VR-3b: a record `$sig` returns its result lanes.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
+            }
             let v = lower_return_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
@@ -549,6 +593,15 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             }
             crate::expr::private_resume_frame::write_out_kind(ctx)?;
             crate::expr::resume_locals::write_back(ctx)?;
+            if let Some(rep) = ctx.sig_return {
+                // P2: a typed entry returns in its signature's `ret`.
+                crate::codegen::signature_entry::witness_return(ctx, rep, &final_v);
+                if rep == crate::codegen::FactsRep::I32 {
+                    let raw = ctx.block().fptosi(DOUBLE, &final_v, crate::types::I32);
+                    ctx.block().ret(crate::types::I32, &raw);
+                    return Ok(());
+                }
+            }
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
@@ -566,6 +619,11 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 }
                 ctx.block().br(&target.after_label);
                 return Ok(());
+            }
+            // DESIGN-p4l4 VR-3b: `return;` of a record `$sig` is the absent
+            // record.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, None);
             }
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
@@ -596,6 +654,16 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                     ctx.block().call_void("js_derived_super_scope_pop", &[]);
                 }
                 crate::expr::resume_locals::write_back(ctx)?;
+                if ctx.sig_return == Some(crate::codegen::FactsRep::I32) {
+                    // The facts prove no `return;` completes an I32 entry.
+                    crate::codegen::signature_entry::witness_return(
+                        ctx,
+                        crate::codegen::FactsRep::I32,
+                        &undef,
+                    );
+                    ctx.block().unreachable();
+                    return Ok(());
+                }
                 ctx.block().ret(DOUBLE, &undef);
             }
             Ok(())
@@ -616,7 +684,21 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             {
                 ctx.typed_element_locals.insert(*id);
             }
-            lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
+            // A binding a later loop pushes into births its `[]` with the
+            // larger append reserve (`collectors::loop_pushed_arrays`). The
+            // flag is taken by that birth; clear it if another path bound
+            // the value without one.
+            ctx.pushed_array_birth = ctx.loop_pushed_arrays.reserve.contains(id)
+                && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
+            let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
+            let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
+            ctx.snap_lowering = snap_frame;
+            ctx.pushed_array_birth = false;
+            lowered?;
+            // A `const` the body uses as a bitwise operand: its ToInt32 once.
+            if !*mutable && init.is_some() {
+                crate::expr::int32_shadow::materialize(ctx, *id)?;
+            }
             // Object model step 1: a family prototype's birth.
             crate::layout_desc::create_families::lower_binding(ctx, *id)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);
@@ -842,8 +924,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 blk.ret(DOUBLE, &boxed);
             } else {
                 crate::expr::resume_locals::write_back(ctx)?;
-                ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
-                ctx.block().unreachable();
+                try_stmt::emit_throw(ctx, &val);
             }
             Ok(())
         }

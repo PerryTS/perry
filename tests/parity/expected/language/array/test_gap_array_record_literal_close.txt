@@ -1,0 +1,3 @@
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+late-close refused undefined
+rest 1 7 3,4 default

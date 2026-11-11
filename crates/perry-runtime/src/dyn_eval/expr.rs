@@ -812,7 +812,7 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     }
                     let callee_idx = (!ctx.strings_allowed
                         && (crate::object::js_value_is_heap_object(root_get(obj_idx))
-                            || crate::object::class_value::legacy_class_value_word(
+                            || crate::object::class_value::class_ref_word(
                                 root_get(obj_idx).to_bits(),
                             )
                             .is_some()))
@@ -858,7 +858,7 @@ fn eval_call(ctx: &Ctx, c: &ast::CallExpr, env_idx: usize) -> f64 {
                     let key_idx = root_push(key);
                     let callee_idx = (!ctx.strings_allowed
                         && (crate::object::js_value_is_heap_object(root_get(obj_idx))
-                            || crate::object::class_value::legacy_class_value_word(
+                            || crate::object::class_value::class_ref_word(
                                 root_get(obj_idx).to_bits(),
                             )
                             .is_some()))

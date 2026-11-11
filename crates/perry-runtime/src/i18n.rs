@@ -175,6 +175,66 @@ pub extern "C" fn perry_i18n_init(
 
 /// Detect the system locale from environment or platform APIs.
 fn detect_system_locale() -> Option<String> {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("locale.system", &format!("{:?}", ()), || {
+            crate::effect!(host_read, locale);
+            // 1. Explicit POSIX env overrides first: LANGUAGE (GNU extension,
+            //    colon-separated list), then LC_ALL > LC_MESSAGES > LANG. A user who
+            //    runs `LANG=de_DE.UTF-8 ./app` has stated a preference; platform
+            //    APIs like CFLocaleCopyCurrent would otherwise mask it on macOS,
+            //    which pinned every console binary to the Mac's system language no
+            //    matter what the environment said. GUI launches (Finder,
+            //    SpringBoard, …) don't set these vars, so apps still fall through
+            //    to the platform-native detection below.
+            if let Ok(lang) = std::env::var("LANGUAGE") {
+                if let Some(first) = lang.split(':').next() {
+                    if !first.is_empty() && first != "C" && first != "POSIX" {
+                        return Some(first.to_string());
+                    }
+                }
+            }
+            for var in &["LC_ALL", "LC_MESSAGES", "LANG"] {
+                if let Ok(val) = std::env::var(var) {
+                    if !val.is_empty() && val != "C" && val != "POSIX" {
+                        return Some(val);
+                    }
+                }
+            }
+
+            // 2. Platform-native APIs (GUI apps and env-less environments).
+            #[cfg(any(
+                target_os = "macos",
+                target_os = "ios",
+                target_os = "watchos",
+                target_os = "tvos",
+                target_os = "visionos"
+            ))]
+            {
+                if let Some(locale) = detect_apple_locale() {
+                    return Some(locale);
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(locale) = detect_windows_locale() {
+                    return Some(locale);
+                }
+            }
+
+            #[cfg(target_os = "android")]
+            {
+                if let Some(locale) = detect_android_locale() {
+                    return Some(locale);
+                }
+            }
+
+            None
+        });
+    }
+
+    crate::effect!(host_read, locale);
     // 1. Explicit POSIX env overrides first: LANGUAGE (GNU extension,
     //    colon-separated list), then LC_ALL > LC_MESSAGES > LANG. A user who
     //    runs `LANG=de_DE.UTF-8 ./app` has stated a preference; platform

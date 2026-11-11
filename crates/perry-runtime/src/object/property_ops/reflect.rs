@@ -160,8 +160,22 @@ pub extern "C" fn js_reflect_set(target: f64, key: f64, value: f64, receiver: f6
             r
         }
     };
+    set_resolved(target, property_key, value, receiver)
+}
+
+/// `[[Set]](target, property_key, value, receiver)` for an object `target`
+/// and a key that is already a property key (a Symbol or a heap string):
+/// the boolean result of the operation, never a throw for a refused write.
+/// Only what the operation itself runs (a setter, a proxy trap) can throw.
+/// Node-API's stores are this operation (V8 `Object::Set`).
+pub(crate) fn set_resolved(target: f64, property_key: f64, value: f64, receiver: f64) -> f64 {
     if lookup(target).is_some() {
         return super::proxy_set_with_receiver(target, property_key, value, receiver);
+    }
+    // DEC 250: a write the lock refuses is a failed [[Set]], reported, not
+    // thrown (the store funnels throw on the same decision).
+    if crate::object::builtin_proto::lock_refuses_write(receiver, property_key) {
+        return nanbox_bool(false);
     }
     // ES-module namespace imports use the namespace exotic [[Set]] operation:
     // their reflected data descriptors report writable=true, but writes still
@@ -269,6 +283,11 @@ pub extern "C" fn js_reflect_delete(target: f64, key: f64) -> f64 {
     let property_key = property_key_handle.get_nanbox_f64();
     if lookup(target).is_some() {
         return proxy_delete(target, property_key);
+    }
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if let Some(deleted) = unsafe { crate::object::nm_delete_member(target, property_key) } {
+        return nanbox_bool(deleted != 0);
     }
     reflect_ordinary_delete_property_key(target, property_key)
 }

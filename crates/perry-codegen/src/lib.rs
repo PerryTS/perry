@@ -12,6 +12,7 @@ mod call_entry;
 pub(crate) mod closure_births;
 pub mod codegen;
 pub(crate) mod collectors;
+pub use collectors::life_census::enabled as life_census_enabled;
 pub(crate) mod concat_site_cache;
 pub mod debug_info;
 #[cfg(feature = "llvm-inprocess")]
@@ -105,6 +106,8 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
+// DESIGN-p4l4 VR-3a: record bindings as their fields, before lowering.
+mod value_records;
 #[cfg(feature = "target-wasi")]
 pub mod wasi_toolchain;
 #[cfg(feature = "target-wasi")]
@@ -115,15 +118,16 @@ pub use codegen::{
     assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
-    resolve_target_triple, short_spread_method_capabilities, take_module_static_seeds,
-    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, CompileOptions,
-    ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
-    FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
-    ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
-    TARGET_NAMES,
+    resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
+    AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
+    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
+    FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
+    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
+    FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
+    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};
@@ -236,9 +240,8 @@ pub struct NativeMethodRef {
     /// param-count drift test (#512).
     pub arg_kinds: &'static [&'static str],
     /// Return-kind tag. Pointer-boxed results explicitly distinguish
-    /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"`, `"NR_HANDLE_ID"`,
-    /// and `"NR_JS_VALUE"`; the existing
-    /// `"NR_PROMISE"`, `"NR_STR"`, `"NR_BIGINT"`, `"NR_F64"`,
+    /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"` and `"NR_HANDLE_ID"`; the
+    /// existing `"NR_PROMISE"`, `"NR_STR"`, `"NR_F64"`,
     /// `"NR_I32"`, and `"NR_VOID"` tags are unchanged.
     pub ret_kind: &'static str,
 }
@@ -338,9 +341,9 @@ mod lower_array_record_length;
 /// Canonical linker symbol constructors for JavaScript names.
 pub mod symbol_names;
 
-/// Build-time runtime facts; WRT3a does not use them in emission.
+/// Build-time realm declarations and native namespace vtable symbols.
 pub mod realm_manifest {
-    include!(concat!(env!("OUT_DIR"), "/realm_table.rs"));
+    pub use perry_realm_table::{NATIVE_NAMESPACE_VTABLES, REALM, REALM_MANIFEST_VERSION};
 
     #[test]
     fn temporal_reach_closes_the_generated_family_without_selecting_top() {

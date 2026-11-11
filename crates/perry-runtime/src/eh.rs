@@ -459,3 +459,43 @@ pub(crate) fn raise_wasm_exception() -> ! {
     }
     EXC_OBJECT.with(|object| unsafe { perry_wasm_throw_header(object.get()) })
 }
+
+/// The wasm32-wasip2 unit-test binary links every `#[no_mangle]` symbol of
+/// the runtime, including [`perry_eh_personality`], which names the Itanium
+/// unwinder entry points. WASI has no unwinder (it throws with the wasm EH
+/// proposal; linking libunwind would define `__cpp_exception` a second time),
+/// and nothing calls the personality there, so the test binary gets
+/// definitions that abort if the premise ever fails.
+#[cfg(all(test, target_os = "wasi"))]
+mod wasi_test_unwinder_stubs {
+    use super::{c_int, UnwindContext};
+
+    fn never_called() -> ! {
+        std::process::abort()
+    }
+
+    #[no_mangle]
+    extern "C" fn _Unwind_GetLanguageSpecificData(_ctx: *mut UnwindContext) -> *const u8 {
+        never_called()
+    }
+    #[no_mangle]
+    extern "C" fn _Unwind_GetIPInfo(_ctx: *mut UnwindContext, _before: *mut c_int) -> usize {
+        never_called()
+    }
+    #[no_mangle]
+    extern "C" fn _Unwind_GetRegionStart(_ctx: *mut UnwindContext) -> usize {
+        never_called()
+    }
+    #[no_mangle]
+    extern "C" fn _Unwind_GetCFA(_ctx: *mut UnwindContext) -> usize {
+        never_called()
+    }
+    #[no_mangle]
+    extern "C" fn _Unwind_SetGR(_ctx: *mut UnwindContext, _reg: c_int, _value: usize) {
+        never_called()
+    }
+    #[no_mangle]
+    extern "C" fn _Unwind_SetIP(_ctx: *mut UnwindContext, _value: usize) {
+        never_called()
+    }
+}

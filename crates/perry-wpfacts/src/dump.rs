@@ -92,6 +92,16 @@ fn fact_lines(t: &TemplateFacts) -> Vec<String> {
             crate::model::esc_key(&f.key),
             b(f.ta_stable)
         ));
+        // DESIGN-p4l1 §3.1: a field the facts give `Arr` gets a line;
+        // I32 at rest: a Number field's F64/I32 gets one too.
+        if f.rep != crate::bindings::Rep::Boxed {
+            v.push(format!(
+                "FACT FR rep {}.{} = {}",
+                t.display,
+                crate::model::esc_key(&f.key),
+                f.rep.name()
+            ));
+        }
     }
     v
 }
@@ -119,6 +129,92 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             if let Some(o) = &b.indexed_owner {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
             }
+            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`;
+            // DESIGN-p4l4: each one they give `Record`.
+            if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
+                out.push_str(&format!(
+                    "# arr_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            if matches!(b.rep, crate::bindings::Rep::Record(_)) {
+                out.push_str(&format!(
+                    "# record_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            // Fact IM (`const_arrays`): a rooted `const` of immutable Arrays,
+            // and its constant contents.
+            if b.immutable_array {
+                out.push_str(&format!("# immutable_array module={mi} local={id}\n"));
+            }
+            if let Some(c) = &b.const_elems {
+                let v: Vec<String> = c
+                    .iter()
+                    .map(|b| format!("{}", f64::from_bits(*b)))
+                    .collect();
+                out.push_str(&format!(
+                    "# const_array module={mi} local={id} elems=[{}]\n",
+                    v.join(",")
+                ));
+            }
+        }
+    }
+    // DESIGN-p4l1 §5.6: each field read call (b1), its key's interval at
+    // the call, what the read reads from, and the in-floor verdict.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (offset, c) in &bindings.field_read_calls {
+            let key = bindings
+                .call_arg_ranges
+                .binary_search_by_key(offset, |(o, _)| *o)
+                .ok()
+                .and_then(|at| bindings.call_arg_ranges[at].1.get(c.index_arg as usize))
+                .copied()
+                .flatten()
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let rep = c
+                .array
+                .map_or("boxed".to_string(), |r| crate::bindings::Rep::Arr(r).name());
+            out.push_str(&format!(
+                "# field_read_call module={mi} call={offset} field={} key={key} rep={rep} in_floor={}\n",
+                c.field, c.in_floor as u8
+            ));
+        }
+    }
+    // N1: what decides each Number local's representation.
+    for l in &pf.rep_probe {
+        out.push_str(l);
+        out.push('\n');
+    }
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (func, s) in &bindings.signatures {
+            let params: Vec<String> = s
+                .params
+                .iter()
+                .zip(&s.ranges)
+                .map(|(r, iv)| match iv {
+                    Some((lo, hi)) => format!("{}[{lo},{hi}]", r.name()),
+                    None => r.name(),
+                })
+                .collect();
+            out.push_str(&format!(
+                "# signature module={mi} func={func} params=({}) ret={}\n",
+                params.join(","),
+                s.ret.name()
+            ));
+        }
+        for func in &bindings.record_demoted {
+            out.push_str(&format!(
+                "# record-signature module={mi} func={func} DEMOTED a source call is not a typed call of its module\n"
+            ));
+        }
+    }
+    // N6: each module binding the facts give one Number.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, value) in &bindings.const_numbers {
+            out.push_str(&format!(
+                "# const_number module={mi} local={id} value={value}\n"
+            ));
         }
     }
     out.push_str(&format!(
@@ -135,6 +231,11 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(l);
         out.push('\n');
     }
+    // DESIGN-p4l4 §7: the value-record ledger (empty with the switch off).
+    for l in crate::records::ledger_lines(&pf.templates, &pf.record_arrays) {
+        out.push_str(&l);
+        out.push('\n');
+    }
     out.push_str(&format!(
         "# interp_guard {}\n",
         pf.interp_guard.clone().unwrap_or_else(|| "none".into())
@@ -149,6 +250,15 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     out.push_str(&format!("# pts_entries {}\n", s.pts_entries));
     for (l, n, mix) in &s.big_nodes {
         out.push_str(&format!("# bignode {l} {n} {mix}\n"));
+    }
+    out.push_str(&format!("# r1fields {}\n", s.builtin_fields.0));
+    let k = s.builtin_fields.2;
+    out.push_str(&format!(
+        "# r1sinks ns={} ns_with_fields={} fn={} fn_with_fields={}\n",
+        k[0], k[1], k[2], k[3]
+    ));
+    for (l, n) in &s.builtin_fields.1 {
+        out.push_str(&format!("# r1field {l} {n}\n"));
     }
     out.push_str(&format!(
         "# sabotage {}\n",
@@ -227,7 +337,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         }
         // DECISIONS 225: the bodies the whole program can run, the
         // exemption of the per-unit <= whole residual (`dead_site`).
-        for (file, id, name) in pf.active_bodies.iter().flatten() {
+        for (file, id, name) in &pf.body_reach.bodies {
             out.push_str(&format!(
                 "D {{\"record\":\"active\",\"unit\":{},\"file\":{},\"fn\":{id},\"name\":{}}}\n",
                 crate::diagnostics::quote(unit),
@@ -476,4 +586,34 @@ pub fn apply_sabotage(ts: &mut [TemplateFacts], spec: &str) {
         }
         t.sabotaged = true;
     }
+}
+
+/// Complete bounded-test solver output, including primitive and activation state.
+#[cfg(test)]
+pub(crate) fn solver_state(m: &crate::model::Model) -> String {
+    use std::fmt::Write;
+    let mut out = format!("solve work={} aborted={}\n", m.work.get(), m.aborted);
+    for (i, n) in m.nodes.iter().enumerate() {
+        writeln!(
+            out,
+            "node {i} prim={} dropped={} pts={:?}",
+            n.prim,
+            n.dropped,
+            n.pts.to_sorted()
+        )
+        .unwrap();
+    }
+    if let Some(a) = &m.act {
+        let mut on: Vec<_> = a.on.iter().collect();
+        on.sort();
+        let mut walked: Vec<_> = a.walked.iter().collect();
+        walked.sort();
+        writeln!(
+            out,
+            "activation fixed={} on={on:?} walked={walked:?}",
+            a.fixed
+        )
+        .unwrap();
+    }
+    out
 }

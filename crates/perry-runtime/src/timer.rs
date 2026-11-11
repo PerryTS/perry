@@ -32,6 +32,8 @@ mod async_lifecycle;
 mod mock;
 mod phases;
 mod store;
+#[cfg(perry_gc_instruments)]
+pub(crate) use store::snap_pending_timers;
 
 use crate::promise::{js_promise_new, Promise};
 use async_lifecycle::enqueue_destroy_ids;
@@ -73,12 +75,11 @@ pub static PROFILE_PROMISE_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 pub static PROFILE_CALLBACK_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 pub static PROFILE_INTERVAL_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 
-/// Initialize the timer system (called once at startup)
-fn ensure_initialized() {
+/// Initialize the timer system (called once at startup). Returns the timer
+/// origin (the program start this clock counts from).
+fn ensure_initialized() -> Instant {
     let mut st = START_TIME.lock().unwrap();
-    if st.is_none() {
-        *st = Some(Instant::now());
-    }
+    *st.get_or_insert_with(Instant::now)
 }
 
 /// Get current time in milliseconds since program start
@@ -261,6 +262,12 @@ pub extern "C" fn js_interval_timer_has_pending() -> i32 {
 /// a check callback runs on the very next turn instead of after a park.
 #[no_mangle]
 pub extern "C" fn js_immediate_has_pending() -> i32 {
+    // A parked EOF is check-phase work too: it is delivered when the next
+    // check phase ends, so the loop must not park ahead of it.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::turnloop_net::eof_parked() {
+        return 1;
+    }
     i32::from(store::check_pending())
 }
 
@@ -301,7 +308,11 @@ fn whole_ms_until(at: Option<Instant>, now: Instant) -> f64 {
 /// Get the time until the next timer fires (in ms), or -1 if none.
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
-    whole_ms_until(next_timer_deadline(), Instant::now())
+    // The clock is read only when there is a deadline to measure against.
+    match next_timer_deadline() {
+        None => -1.0,
+        at => whole_ms_until(at, Instant::now()),
+    }
 }
 
 /// Same value as `js_timer_next_deadline`; kept so `js_wait_for_event` and
@@ -779,6 +790,7 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,
@@ -854,14 +866,23 @@ fn schedule_callback_timer_inner(
     {
         return mocked(id);
     }
-    ensure_initialized();
+    let origin = ensure_initialized();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay_ms = normalize_timer_delay(delay_ms);
-    let deadline = Instant::now() + Duration::from_millis(delay_ms);
+    // Only a timer has a start time: Node's `insert` reads the loop clock
+    // (`getLibuvNow`, which updates libuv's time) once per timer, and an
+    // Immediate has none. A check- or poll-phase entry runs in queue order and
+    // nothing reads its deadline (the heap and `refresh` are timer-only), so it
+    // carries the timer origin and scheduling it reads no clock.
+    let deadline = if class.is_timer() {
+        Instant::now() + Duration::from_millis(delay_ms)
+    } else {
+        origin
+    };
 
     let id = next_timer_id();
     // #10447: registering PINS this id in the handle registry — it marks the id
@@ -952,6 +973,7 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,

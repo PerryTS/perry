@@ -6,8 +6,8 @@ use crate::native_class_ids as ids;
 pub(super) fn throw_receiver(name: &str) -> ! {
     let message = format!("Value of \"this\" must be of type {name}");
     let text = key(message.as_bytes());
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(boxed_ptr(error))
+    let error = crate::error::CoreError::type_error(text);
+    crate::exception::throw_core(error)
 }
 
 fn receiver(this: crate::closure::JsThis, class: u32, name: &str) -> *mut ObjectHeader {
@@ -139,13 +139,16 @@ extern "C" fn get_reason(_: *const ClosureHeader, this: crate::closure::JsThis) 
     )
 }
 extern "C" fn get_onabort(_: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
-    let obj = receiver(this, ids::ABORT_SIGNAL, "AbortSignal");
+    event_handler_get(receiver(this, ids::ABORT_SIGNAL, "AbortSignal"), b"abort")
+}
+
+fn event_handler_get(obj: *mut ObjectHeader, event: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let handlers = scope.root_nanbox_f64(state::get(obj, state::HANDLERS));
     if is_undefined(handlers.get_nanbox_f64()) {
         return null_value();
     }
-    let name = string_value(b"abort");
+    let name = string_value(event);
     let handler = crate::map::js_map_get(
         value_as_ptr::<crate::map::MapHeader>(handlers.get_nanbox_f64()).unwrap(),
         name,
@@ -165,23 +168,28 @@ extern "C" fn get_onabort(_: *const ClosureHeader, this: crate::closure::JsThis)
         value
     }
 }
-extern "C" fn onabort_wrapper(
+extern "C" fn event_handler_wrapper(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
     event: f64,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
+    let receiver = scope.root_nanbox_f64(this.as_f64());
     let event = scope.root_nanbox_f64(event);
     let name = key(b"handler");
     let handler = closure
         .with_mut_ptr::<ClosureHeader, _>(|ptr| js_object_get_field_by_name_f64(ptr.cast(), name));
-    let bits = handler.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG
-        && crate::closure::is_closure_ptr((bits & crate::value::POINTER_MASK) as usize)
-    {
+    if crate::proxy::is_callable_function(handler) {
         let args = [event.get_nanbox_f64()];
-        unsafe { crate::closure::js_native_call_value(handler, this, args.as_ptr(), 1) }
+        unsafe {
+            crate::closure::js_native_call_value(
+                handler,
+                crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
+                args.as_ptr(),
+                1,
+            )
+        }
     } else {
         undefined_value()
     }
@@ -191,8 +199,17 @@ extern "C" fn set_onabort(
     this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    event_handler_set(
+        receiver(this, ids::ABORT_SIGNAL, "AbortSignal"),
+        b"abort",
+        value.get_nanbox_f64(),
+    )
+}
+
+fn event_handler_set(obj: *mut ObjectHeader, event: &[u8], value: f64) -> f64 {
     let _gc = crate::gc::GcSuppressScope::new();
-    let obj = receiver(this, ids::ABORT_SIGNAL, "AbortSignal");
     let handlers = state::get(obj, state::HANDLERS);
     let handlers = if is_undefined(handlers) {
         let map = crate::map::js_map_alloc(0);
@@ -201,18 +218,18 @@ extern "C" fn set_onabort(
     } else {
         value_as_ptr::<crate::map::MapHeader>(handlers).unwrap()
     };
-    let event_name = string_value(b"abort");
+    let event_name = string_value(event);
     let mut wrapped = crate::map::js_map_get(handlers, event_name);
     if is_undefined(wrapped) {
         let closure = crate::closure::js_closure_alloc(
-            crate::fn_info!(onabort_wrapper, 1; with_declared(1)),
+            crate::fn_info!(event_handler_wrapper, 1; with_declared(1)),
             0,
         );
         wrapped = boxed_ptr(closure);
         crate::object::set_bound_native_closure_name(closure, "eventHandler");
         crate::map::js_map_set(handlers, event_name, wrapped);
         unsafe {
-            js_event_target_add_event_listener(obj, key(b"abort"), closure as i64);
+            js_event_target_add_event_listener(obj, key(event), closure as i64);
         }
     }
     js_object_set_field_by_name(
@@ -222,6 +239,41 @@ extern "C" fn set_onabort(
     );
     undefined_value()
 }
+macro_rules! message_handler {
+    ($get:ident, $set:ident, $event:literal) => {
+        extern "C" fn $get(_: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+            event_handler_get(
+                unsafe { bound_event_target(std::ptr::null(), this) },
+                $event,
+            )
+        }
+        extern "C" fn $set(
+            _: *const ClosureHeader,
+            this: crate::closure::JsThis,
+            value: f64,
+        ) -> f64 {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let value = scope.root_nanbox_f64(value);
+            let target =
+                scope.root_raw_mut_ptr(unsafe { bound_event_target(std::ptr::null(), this) });
+            let _gc = crate::gc::GcSuppressScope::new();
+            target.with_mut_ptr(|target| {
+                event_handler_set(
+                    target,
+                    $event,
+                    if crate::proxy::is_callable_function(value.get_nanbox_f64()) {
+                        value.get_nanbox_f64()
+                    } else {
+                        null_value()
+                    },
+                )
+            })
+        }
+    };
+}
+message_handler!(get_onmessage, set_onmessage, b"message");
+message_handler!(get_onmessageerror, set_onmessageerror, b"messageerror");
+
 extern "C" fn abort(_: *const ClosureHeader, this: crate::closure::JsThis, reason: f64) -> f64 {
     crate::url::js_abort_controller_abort_reason(
         receiver(this, ids::ABORT_CONTROLLER, "AbortController"),
@@ -260,7 +312,7 @@ extern "C" fn get_dom_code(closure: *const ClosureHeader, this: crate::closure::
     dom_exception_code(&String::from_utf8_lossy(bytes))
 }
 
-pub(super) fn accessor(
+pub(crate) fn accessor(
     proto: *mut ObjectHeader,
     name: &str,
     getter: *const crate::closure::JsFunctionInfo,
@@ -311,6 +363,12 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
     };
     match name {
         "MessageEvent" => super::message_event::install(proto),
+        "BroadcastChannel" => {
+            accessor(proto, "onmessage", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessage.<get>")] export crate::event_target::prototype::get_onmessage, 0),
+                Some(crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessage.<set>")] export crate::event_target::prototype::set_onmessage, 1)), true);
+            accessor(proto, "onmessageerror", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessageerror.<get>")] export crate::event_target::prototype::get_onmessageerror, 0),
+                Some(crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessageerror.<set>")] export crate::event_target::prototype::set_onmessageerror, 1)), true);
+        }
         "EventTarget" => {
             method(
                 "addEventListener",
@@ -436,11 +494,11 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "AbortController" => {
             get(
                 "signal",
-                crate::fn_info!(#[realm("AbortController.prototype.signal.<get>")] export crate::event_target::prototype::get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortController.prototype.signal.<get>", effects = { returns(islot(this, signal)) })] export crate::event_target::prototype::get_signal, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             method(
                 "abort",
-                crate::fn_info!(#[realm(AbortController.prototype.abort, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype)]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 realm_abortcontroller_prototype_abort_metadata!(length),
                 true,
@@ -449,12 +507,12 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "AbortSignal" => {
             get(
                 "aborted",
-                crate::fn_info!(#[realm("AbortSignal.prototype.aborted.<get>")] export crate::event_target::prototype::get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.aborted.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_aborted, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             accessor(
                 proto,
                 "reason",
-                crate::fn_info!(#[realm("AbortSignal.prototype.reason.<get>")] export crate::event_target::prototype::get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("AbortSignal.prototype.reason.<get>", effects = { returns(islot(this, reason) | fresh(DOMException.prototype) | prim(undefined)) })] export crate::event_target::prototype::get_reason, 0; with_flags(crate::closure::FN_BUILTIN)),
                 None,
                 false,
             );
@@ -468,8 +526,8 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             accessor(
                 proto,
                 "onabort",
-                crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<get>")] export crate::event_target::prototype::get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
-                Some(crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<set>")] export crate::event_target::prototype::set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
+                crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<get>", effects = { returns(islot(this, onabort) | prim(null)) })] export crate::event_target::prototype::get_onabort, 0; with_flags(crate::closure::FN_BUILTIN)),
+                Some(crate::fn_info!(#[realm("AbortSignal.prototype.onabort.<set>", effects = { stores(arg(0) -> islot(this, onabort)); returns(prim(undefined)) })] export crate::event_target::prototype::set_onabort, 1; with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
         }

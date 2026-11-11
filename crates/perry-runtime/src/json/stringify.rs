@@ -28,8 +28,7 @@ pub(crate) fn check_stringify_nesting_depth(depth: usize) {
     if depth > MAX_STRINGIFY_NESTING_DEPTH {
         let message = "JSON.stringify: value nested deeper than 1000 levels";
         let message_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let error = crate::error::js_rangeerror_new(message_ptr);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::range_error(message_ptr));
     }
 }
 
@@ -90,7 +89,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         && (potential_keys_ptr & 0x7) == 0
         && crate::value::addr_class::try_read_tracked_gc_header_of_type(
             potential_keys_ptr as usize,
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         )
         .is_some();
 
@@ -154,7 +153,7 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // keys array itself to be a tracked allocation before loading its length.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         keys as usize,
-        crate::gc::GC_TYPE_ARRAY,
+        crate::gc_array_type_pat!(),
     )
     .is_none()
     {
@@ -185,7 +184,7 @@ pub(super) unsafe fn tracked_keys(
     if keys.is_null()
         || crate::value::addr_class::try_read_tracked_gc_header_of_type(
             keys as usize,
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         )
         .is_none()
     {
@@ -407,7 +406,7 @@ pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
     }
     if let Some(res_ptr) = extract_pointer(result.to_bits()) {
         let ty = gc_obj_type(res_ptr);
-        if (crate::gc_type_is_object!(ty) || ty == crate::gc::GC_TYPE_ARRAY)
+        if (crate::gc_type_is_object!(ty) || crate::gc_type_is_array!(ty))
             && !crate::buffer::is_registered_buffer(res_ptr as usize)
         {
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
@@ -635,7 +634,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             return stringify_array(elements as *const u8, buf);
         }
         match gc_obj_type(ptr) {
-            crate::gc::GC_TYPE_ARRAY => stringify_array(ptr, buf),
+            crate::gc_array_type_pat!() => stringify_array(ptr, buf),
             // A function has no ordinary object/array/string/error/map/set
             // layout; without this arm it falls into the untagged-pointer
             // fallback below and its ClosureHeader bytes get misread as an
@@ -917,7 +916,7 @@ pub(crate) unsafe fn stringify_value_depth(
         }
         match gc_obj_type(ptr) {
             crate::gc_object_type_pat!() => stringify_object_inner(ptr, buf, depth),
-            crate::gc::GC_TYPE_ARRAY => stringify_array_depth(ptr, buf, depth),
+            crate::gc_array_type_pat!() => stringify_array_depth(ptr, buf, depth),
             // A function — see the matching branch in `stringify_value`.
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
             crate::gc::GC_TYPE_STRING => {
@@ -1022,6 +1021,8 @@ pub(crate) unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
 /// Depth-aware variant of stringify_array for recursive calls.
 pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, depth: u32) {
     check_stringify_nesting_depth(depth as usize);
+    // I32 at rest: no at-rest Array reaches a generic reader (check mode).
+    crate::layout_slot::generic_reader(crate::array::clean_arr_ptr(ptr as *const _));
     // Issue #2021: an array that has grown past its initial inline capacity
     // (16) was reallocated to a new block, leaving a GC_FLAG_FORWARDED stub
     // at the old address. Callers (and element decoders) hand us whatever
@@ -1068,10 +1069,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(arr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(arr as usize));
     let len = (*arr).length;
@@ -1295,7 +1293,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             }
             match gc_obj_type(elem_ptr) {
                 crate::gc_object_type_pat!() => stringify_object_inner(elem_ptr, buf, depth + 1),
-                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
+                crate::gc_array_type_pat!() => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
                     if let Some(s) = str_from_header(str_ptr) {
@@ -1387,7 +1385,7 @@ pub(crate) unsafe fn estimate_json_size(value: f64, _type_hint: u32) -> usize {
         // A compiler hint is not permission to read a different layout. In
         // particular, an image string is a readable GC header, not an array.
         match header.as_ref().obj_type {
-            crate::gc::GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 let len = (*(ptr as *const crate::ArrayHeader)).length as usize;
                 return len.saturating_mul(300).max(256);
             }

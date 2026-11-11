@@ -4,8 +4,8 @@ use super::*;
 
 /// Attach a payload to an existing ordinary object. This is the `super()`
 /// half of the pattern: a source-compiled subclass keeps its own class id and
-/// prototype, while its traced `native_state` owns the same typed cell as a
-/// direct instance.
+/// prototype, while its payload slot owns the same typed cell as a direct
+/// instance.
 pub fn attach_to_object<T: 'static>(
     value: f64,
     family: &'static NativePayloadFamily,
@@ -36,42 +36,12 @@ pub(super) fn attach_to_object_with<T: 'static>(
     let Some(obj) = any_object(value) else {
         return false;
     };
+    // SAFETY: a live ordinary object (checked by `any_object`).
+    if let Some(cell) = unsafe { payload_cell_of_object(obj) } {
+        return attach_cell(value, cell, family, payload, vtable, external_bytes).is_ok();
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    let meta = obj
-        // A1_UNPROVEN: any_object(value): a JS value (record-first: the receiver layout word; kind-A/B question for S0f).
-        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            crate::object::object_meta_ensure(
-                crate::meta_obj_runtime_born!(obj),
-                crate::object::MetaReason::NativePayload,
-            )
-        });
-    if meta.is_null() {
-        return false;
-    }
-    let previous = unsafe { (*meta).native_state };
-    if is_payload_state_word(previous) {
-        match payload_cell_of_word(previous) {
-            Some(cell) => {
-                return attach_cell(
-                    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
-                        crate::value::js_nanbox_pointer(obj as i64)
-                    }),
-                    cell,
-                    family,
-                    payload,
-                    vtable,
-                    external_bytes,
-                )
-                .is_ok();
-            }
-            // A stream's state record without a payload takes the new cell
-            // (`attach_external_rooted`); a weak collection's storage is not
-            // a place for one.
-            None if crate::stream_hooks::is_stream_record_word(previous) => {}
-            None => return false,
-        }
-    }
     attach_rooted(&obj, family, Some(payload), vtable, external_bytes);
     true
 }
@@ -114,17 +84,44 @@ pub(crate) fn attach_external_rooted(
     links_owner: bool,
     external_bytes: usize,
 ) {
-    let meta = obj
-        // A1_UNPROVEN: obj handle parameter, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
-        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            crate::object::object_meta_ensure(
-                crate::meta_obj_runtime_born!(obj),
-                crate::object::MetaReason::NativePayload,
-            )
-        });
-    if meta.is_null() {
-        return;
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cell = new_external_cell(resource, type_id, vtable, name, links_owner);
+    let cell = scope.root_nanbox_u64(cell.word);
+    store_payload_word(obj, cell.get_nanbox_u64());
+    link_cell(obj, cell.get_nanbox_u64(), external_bytes);
+}
+
+/// A fresh payload cell, not yet reachable from any object: the caller roots
+/// `word` until [`store_payload_word`] makes it the object's payload slot.
+pub(super) struct NewCell {
+    pub(super) word: u64,
+}
+
+/// [`new_external_cell`] for an in-tree family's Rust payload (`None`: a
+/// closed cell, whose first attach establishes `T`).
+pub(super) fn new_cell<T: 'static>(
+    family: &'static NativePayloadFamily,
+    payload: Option<T>,
+    vtable: &'static PayloadVTable,
+) -> NewCell {
+    let type_id = if payload.is_some() {
+        type_tag::<T>(family.class_id)
+    } else {
+        family.class_id as u64
+    };
+    let resource = payload.map_or(std::ptr::null_mut(), |p| {
+        Box::into_raw(Box::new(p)) as *mut c_void
+    });
+    new_external_cell(resource, type_id, vtable, family.name, family.links_owner)
+}
+
+fn new_external_cell(
+    resource: *mut c_void,
+    type_id: u64,
+    vtable: &'static PayloadVTable,
+    name: &str,
+    links_owner: bool,
+) -> NewCell {
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(
             resource,
@@ -136,21 +133,48 @@ pub(crate) fn attach_external_rooted(
     };
     #[cfg(feature = "native-payload-test-census")]
     super::test_census::created(unsafe { (*cell).type_id });
-    let word = crate::value::JSValue::pointer(cell as *const u8).bits();
-    obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-        // A1_UNPROVEN: record-first: attach target layout word (kind-A/B question for S0f).
-        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-        debug_assert!(!meta.is_null(), "object_meta_ensure ran above");
-        if crate::stream_hooks::store_record_payload_cell((*meta).native_state, word) {
-            return;
-        }
-        (*meta).native_state = word;
-        crate::gc::runtime_write_barrier_slot(
-            meta as usize,
-            &(*meta).native_state as *const _ as usize,
-            word,
-        );
+    NewCell { word: crate::value::JSValue::pointer(cell as *const u8).bits() }
+}
+
+/// Make the cell `word` names `obj`'s payload slot: an own data property
+/// under the private [`payload_key`]. A layout that lists the key holds its
+/// slot as a hole, and the attach is one store into it (the object stays on
+/// its layout); otherwise the key is defined (the first key of a born
+/// instance, so slot 0; a later attach takes the canonical key-add
+/// transition).
+pub(super) fn store_payload_word(obj: &crate::gc::RuntimeHandle<'_>, word: u64) {
+    #[cfg(test)]
+    if callback_sabotage("payload_slot") {
+        return;
+    }
+    let key = payload_key();
+    let stored = obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+        (!listed_slot_sabotage()
+            && crate::object::shaped_symbols::fill_listed_hole(obj, key, word, PAYLOAD_ENTRY))
+            || crate::object::shaped_symbols::define(obj as usize, key, word, PAYLOAD_ENTRY)
     });
+    debug_assert!(stored, "an ordinary object takes its payload slot");
+}
+
+#[inline(always)]
+fn listed_slot_sabotage() -> bool {
+    #[cfg(test)]
+    {
+        callback_sabotage("payload_listed_slot")
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
+/// The owner half of an attach, once the cell is `obj`'s payload slot: the
+/// cell's traced owner edge and callback storage, then the native bytes it
+/// retains.
+pub(super) fn link_cell(obj: &crate::gc::RuntimeHandle<'_>, word: u64, external_bytes: usize) {
+    let cell = (word & crate::value::POINTER_MASK) as *mut crate::native_handle::NativeHandleHeader;
+    let links_owner =
+        unsafe { (*cell).flags } & crate::native_payload::CALLBACK_STORAGE != 0;
     if links_owner {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             let owner = crate::value::js_nanbox_pointer(obj as i64).to_bits();

@@ -25,6 +25,7 @@ use crate::nanbox::double_literal;
 use crate::rooting::{self, open_rooted_group, Repr, RootedGroup};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+pub(super) mod birth_image;
 mod instance;
 use instance::{
     adopt_constructor_args, construction_runs_user_code, refresh_rooted_args, reload_instance,
@@ -122,6 +123,19 @@ fn lower_declared_keys_birth(ctx: &mut FnCtx<'_>, class_name: &str, null_proto: 
 }
 
 fn lower_new_impl(
+    ctx: &mut FnCtx<'_>,
+    class_name: &str,
+    args: &[Expr],
+    cap_args_appended: usize,
+    heritage_checked: bool,
+) -> Result<String> {
+    let born = lower_new_birth(ctx, class_name, args, cap_args_appended, heritage_checked)?;
+    // Value records' check mode (DESIGN-p4l4 B7): claim an admitted record.
+    crate::expr::record_witness::claim(ctx, class_name, &born);
+    Ok(born)
+}
+
+fn lower_new_birth(
     ctx: &mut FnCtx<'_>,
     class_name: &str,
     args: &[Expr],
@@ -429,12 +443,32 @@ fn lower_new_impl_inner<'a>(
     // forwards `undefined` instead of throwing the ReferenceError.
     let first_cap_arg = args.len().saturating_sub(cap_args_appended);
     let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+    // I32 at rest (PR C): an object-literal class's argument for an I32 lane
+    // is lowered as the lane's word (a NaN-box of the INT32 band, which no
+    // collector takes for a pointer and the store funnel keeps as it is): a
+    // proven lane read copies its word, any other value is encoded once.
+    let lane_args = if class.is_literal_shape() {
+        crate::expr::rest_fields::lanes_of(ctx, class_name)
+    } else {
+        0
+    };
     for (i, a) in args.iter().enumerate() {
         let is_cap_forward = i >= first_cap_arg;
         if is_cap_forward {
             ctx.block().call_void("js_tdz_suppress_begin", &[]);
         }
-        let value = lower_constructor_arg(ctx, a)?;
+        let value = if i < 32 && lane_args & (1 << i) != 0 && !is_cap_forward {
+            let word = match crate::expr::rest_fields::try_lower_word(ctx, a)? {
+                Some(word) => word,
+                None => {
+                    let v = lower_constructor_arg(ctx, a)?;
+                    crate::expr::rest_fields::encode_birth(ctx, &v, class_name, i)
+                }
+            };
+            ctx.block().bitcast_i64_to_double(&word)
+        } else {
+            lower_constructor_arg(ctx, a)?
+        };
         if is_cap_forward {
             ctx.block().call_void("js_tdz_suppress_end", &[]);
         }
@@ -505,16 +539,20 @@ fn lower_new_impl_inner<'a>(
     // ran, and `g()` can collect. That collection rewrote only the group's
     // roots, so the stored values must be the group's re-reads, as for every
     // other consumer after a collection point (#12462).
-    let birth_args = if birth_plan
-        .as_ref()
-        .is_some_and(|plan| plan.iter().all(|store| !store.requires_raw_f64))
-    {
+    // A store whose value needs the plain-finite-number test cannot be
+    // written in the birth: the test decides between this plan and the
+    // constructor, so it runs after the allocation (`ctor_prologue.fast`).
+    let birth_unchecked = birth_plan.as_ref().is_some_and(|plan| {
+        plan.iter()
+            .all(|store| !store.requires_number_check(ctx, args))
+    });
+    let birth_args = if birth_unchecked {
         refresh_rooted_args(ctx, group)?
     } else {
         lowered_args.clone()
     };
     let constructor_birth = birth_plan.as_ref().map(|plan| {
-        let fields = plan.iter().all(|store| !store.requires_raw_f64).then(|| {
+        let fields = birth_unchecked.then(|| {
             plan.iter()
                 .map(|store| {
                     let value = store.numeric_addend.map_or_else(
@@ -528,8 +566,35 @@ fn lower_new_impl_inner<'a>(
                 })
                 .collect()
         });
-        super::new_alloc::ConstructorBirth { fields }
+        super::new_alloc::ConstructorBirth {
+            fields,
+            image: None,
+        }
     });
+    // Birth cost: a complete plan the compact birth does not write is born
+    // as its image (`new/birth_image.rs`), decided with the one plan the
+    // post-birth diamond then consumes.
+    let mut constructor_birth = constructor_birth;
+    let mut image_plan = if constructor_birth
+        .as_ref()
+        .is_some_and(|birth| birth.fields.is_some())
+        && crate::expr::rest_fields::lanes_of(ctx, class_name) == 0
+    {
+        None
+    } else {
+        let ready = declared_layout || literal_constant_image;
+        birth_image::plan(ctx, class_name, class, args, lowered_args.len(), ready)
+    };
+    if let Some(plan) = image_plan.as_ref() {
+        let cid = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+        let image = birth_image::values(ctx, group, class_name, class, plan, args, cid)?;
+        constructor_birth
+            .get_or_insert(super::new_alloc::ConstructorBirth {
+                fields: None,
+                image: None,
+            })
+            .image = Some(image);
+    }
     let alloc =
         super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
     let fresh_prologue = super::new_alloc::prove_fresh_prologue(&alloc);
@@ -575,8 +640,13 @@ fn lower_new_impl_inner<'a>(
     };
     let obj_box = nanbox_pointer_inline(ctx.block(), &obj_handle);
     // #6969: the instance allocation has run, so refresh every argument before
-    // the constructor consumes them.
-    lowered_args = refresh_rooted_args(ctx, group)?;
+    // the constructor consumes them. An image birth's arguments are consumed
+    // by its constructor arm alone, which re-reads them there: a re-read here
+    // would keep every argument live through the image's path.
+    let image_written = fields_written.is_some() && image_plan.is_some();
+    if !image_written {
+        lowered_args = refresh_rooted_args(ctx, group)?;
+    }
 
     // Constructor bodies may contain terminating recursive construction
     // shapes such as `if (typeof opts === "function") return new C(...)`.
@@ -624,6 +694,10 @@ fn lower_new_impl_inner<'a>(
             .extends_name
             .as_deref()
             .is_some_and(crate::expr::is_other_builtin_constructor_name);
+    assert!(
+        !image_written || force_ctor_call,
+        "an image birth runs its constructor through the local symbol"
+    );
     if ctx.class_stack.iter().any(|active| active == class_name)
         || ctor_alias_collision
         || force_ctor_call
@@ -642,8 +716,8 @@ fn lower_new_impl_inner<'a>(
         // #2768/new.target: the standalone `<class>_constructor` symbol is a
         // separate compiled function, so its only `new.target` source is the
         // runtime cell — which this path never set, leaving `new.target ===
-        // undefined` for a base class. Set the cell to this class's ref (the
-        // `INT32_TAG | class_id` value `Expr::ClassRef` produces) around the
+        // undefined` for a base class. Set the cell to this class's function
+        // object (the value `Expr::ClassRef` produces) around the
         // call and restore it after, but ONLY when the ctor actually reads
         // `new.target`, so the common ctor keeps the zero-overhead fast path.
         // The gate spans the WHOLE super(...) chain, not just the leaf's own
@@ -685,18 +759,21 @@ fn lower_new_impl_inner<'a>(
         // neither of which requires it — and the diamond's slow arm IS the call,
         // so emitting it when the call cannot be emitted would leave the fast
         // arm branching into a block nothing terminates.
-        let prologue_plan =
-            if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
-                super::ctor_prologue_stores::prologue_store_plan(
-                    ctx,
-                    class_name,
-                    class,
-                    lowered_args.len(),
-                    constructor_layout_ready,
-                )
-            } else {
-                None
-            };
+        // An image birth wrote its plan's stores: that plan, not a second
+        // derivation, drives the diamond below.
+        let prologue_plan = if image_written {
+            image_plan.take()
+        } else if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
+            super::ctor_prologue_stores::prologue_store_plan(
+                ctx,
+                class_name,
+                class,
+                lowered_args.len(),
+                constructor_layout_ready,
+            )
+        } else {
+            None
+        };
         assert!(
             fields_written.is_none() || prologue_plan.is_some(),
             "a complete compact birth must retain its constructor-store plan"
@@ -714,7 +791,18 @@ fn lower_new_impl_inner<'a>(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
-            ctx.block().cond_br(written, &fast_label, &slow_label);
+            // An image's other arm is the shared birth and the constructor:
+            // the unlikely one (`new_alloc.rs`).
+            let written = if image_written {
+                ctx.block().call(
+                    crate::types::I1,
+                    "llvm.expect.i1",
+                    &[(crate::types::I1, written), (crate::types::I1, "true")],
+                )
+            } else {
+                written.clone()
+            };
+            ctx.block().cond_br(&written, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
             for store in prologue_plan.iter().flatten() {
                 if let Some(key) = &store.family_key {
@@ -729,6 +817,9 @@ fn lower_new_impl_inner<'a>(
             ctx.block().br(&merge_label);
             prologue_merge = Some((merge_idx, fast_label));
             ctx.current_block = slow_idx;
+            if image_written {
+                lowered_args = refresh_rooted_args(ctx, group)?;
+            }
         } else if let Some(plan) = prologue_plan.as_ref() {
             // Pure derived values are safe to compute before the diamond. A
             // non-finite result selects the ordinary constructor below, which
@@ -749,14 +840,21 @@ fn lower_new_impl_inner<'a>(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
+            let checked: Vec<bool> = plan
+                .iter()
+                .map(|store| store.requires_number_check(ctx, args))
+                .collect();
             {
                 let blk = ctx.block();
                 let mut acc = "true".to_string();
                 // Charter step 5: a plain finite double is valid in an `F64` lane
                 // and in an `Any` lane alike, so the per-store number test
                 // below is the whole proof; no header layout bit is read.
-                for (store_index, store) in plan.iter().enumerate() {
-                    if !store.requires_raw_f64 {
+                // A `<param> + <literal>` store is tested too: its `fadd` is
+                // JS `+` only for a Number argument
+                // (`PrologueStore::requires_number_check`).
+                for (store_index, &needs_check) in checked.iter().enumerate() {
+                    if !needs_check {
                         continue;
                     }
                     let bits = blk.bitcast_double_to_i64(&prologue_values[store_index]);
@@ -784,6 +882,8 @@ fn lower_new_impl_inner<'a>(
                 blk.gep(crate::types::I8, &obj_ptr, &[(I64, &header_skip)])
             };
             let parent_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+            // I32 at rest (PR C): an I32 lane stores the value's I32 word.
+            let i32_lanes = crate::expr::rest_fields::lanes_of(ctx, class_name);
             for (store_index, store) in plan.iter().enumerate() {
                 if crate::expr::literal_chunks::is_fill(args.get(store.arg_index)) {
                     continue;
@@ -795,6 +895,21 @@ fn lower_new_impl_inner<'a>(
                         key,
                         store.slot,
                     );
+                }
+                if store.slot < 32 && i32_lanes & (1 << store.slot) != 0 {
+                    // An object-literal class's lane argument is its word
+                    // already (above); any other class's value is encoded.
+                    let word = if class.is_literal_shape() {
+                        ctx.block().bitcast_double_to_i64(&prologue_values[store_index])
+                    } else {
+                        crate::expr::rest_fields::encode(ctx, &prologue_values[store_index])
+                    };
+                    let blk = ctx.block();
+                    let field_ptr =
+                        blk.gep(DOUBLE, &fields_base, &[(I64, &store.slot.to_string())]);
+                    // GC_STORE_AUDIT(INIT): an I32 word (0x7FFE band) into a fresh, unpublished object's I32 lane; never a pointer, so no barrier.
+                    blk.store(I64, &word, &field_ptr);
+                    continue;
                 }
                 let (field_addr, child_bits) = {
                     let blk = ctx.block();
@@ -960,8 +1075,8 @@ fn lower_new_impl_inner<'a>(
     // class's ref via a `new_target_stack` slot. Using the codegen slot
     // rather than the runtime cell keeps a non-constructor method called from
     // the ctor body — compiled as a separate function whose `new_target_stack`
-    // is empty — correctly reading `undefined`. A class ref is
-    // `INT32_TAG | class_id`, the same value `Expr::ClassRef` produces, so
+    // is empty — correctly reading `undefined`. The class's function object
+    // is the same value `Expr::ClassRef` produces, so
     // `new.target === C`, `new.target.name`, and `new.target.prototype` all
     // work. Falls back to `undefined` if the class id is somehow unresolved.
     let new_target_value = match ctx.class_ids.get(class_name).copied() {
@@ -1109,7 +1224,9 @@ fn lower_new_impl_inner<'a>(
                     found = Some(pname.to_string());
                     break;
                 }
-                if parent_class.extends_expr.is_some() {
+                if parent_class.extends_expr.is_some()
+                    && !crate::expr::super_constructor::static_parent_edge(ctx, parent_class)
+                {
                     break;
                 }
                 walker = parent_class.extends_name.as_deref();
@@ -1220,6 +1337,7 @@ fn lower_new_impl_inner<'a>(
             // active and still receives every throwing invoke.
             let caller_try_depth = ctx.try_depth;
             ctx.try_depth = 0;
+            crate::verify_facts::body_entry(ctx, class.constructor.as_ref().unwrap().id, "");
             let lower_result =
                 crate::stmt::lower_stmts(ctx, &class.constructor.as_ref().unwrap().body);
             ctx.try_depth = caller_try_depth;
@@ -1314,6 +1432,7 @@ fn lower_new_impl_inner<'a>(
                     }
                     let caller_try_depth = ctx.try_depth;
                     ctx.try_depth = 0;
+                    crate::verify_facts::body_entry(ctx, parent_ctor.id, "");
                     let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                     ctx.try_depth = caller_try_depth;
                     lower_result?;

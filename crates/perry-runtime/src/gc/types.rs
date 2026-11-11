@@ -61,6 +61,7 @@ fn gc_header_size_overflow(total: usize) -> ! {
 
 // Object type constants
 pub const GC_TYPE_ARRAY: u8 = 1;
+const _: () = assert!(GC_TYPE_ARRAY == perry_abi::GC_TYPE_ARRAY);
 pub const GC_TYPE_OBJECT: u8 = perry_abi::GC_TYPE_OBJECT;
 // The object-type predicates (`gc_type_is_object!`, `object_has_meta_word!`,
 // `gc_type_is_not_object!`, `object_lacks_meta_word!`, `gc_object_type_pat!`)
@@ -355,7 +356,7 @@ pub fn json_wide_birth_permits(total_size: usize, obj_type: u8) -> bool {
     }
     let mask = JSON_WIDE_BIRTH_MASK.with(|c| c.get());
     (mask == json_wide_birth::OBJECTS && obj_type == GC_TYPE_OBJECT)
-        || (mask == json_wide_birth::KEYS_ARRAY && obj_type == GC_TYPE_ARRAY)
+        || (mask == json_wide_birth::KEYS_ARRAY && crate::gc_type_is_array!(obj_type))
 }
 
 #[inline]
@@ -1295,7 +1296,7 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return Some(&GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize]);
@@ -1317,7 +1318,7 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
 #[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;
@@ -1681,6 +1682,7 @@ pub use perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO;
 /// `JSValue` slots. This is only meaningful for `GC_TYPE_ARRAY`; object
 /// flags share the same `_reserved` word but never inspect this bit.
 pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+const _: () = assert!(GC_ARRAY_RAW_F64_LAYOUT == perry_abi::GC_ARRAY_RAW_F64_LAYOUT);
 /// #10593: a per-array flag, read as "THIS array's
 /// `[[Prototype]]` was retargeted". Arrays are never meta-capable, so every
 /// `Object.setPrototypeOf(arr, p)` records in its property bag and sets
@@ -1698,6 +1700,7 @@ pub(crate) const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
 /// JSON array (whose materialized storage is a separate allocation that does
 /// not carry this bit).
 pub(crate) const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;
+const _: () = assert!(GC_ARRAY_CUSTOM_PROTO == perry_abi::GC_ARRAY_CUSTOM_PROTO);
 /// The `_reserved` bits a lazy JSON array keeps when it becomes the ordinary
 /// array in place (`json_tape::flip_to_array`): the copy age every kind
 /// carries, the integrity level, and `GC_ARRAY_CUSTOM_PROTO`. Everything else
@@ -1755,6 +1758,12 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = perry_abi::OBJ_FLAG_PLAIN_ORDINARY;
 /// Bit 12 is disjoint from object initialization state (14..15). Array
 /// numeric-hole layout uses bit 12 only after its array kind guard.
 pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
+/// Check mode only (`PERRY_VERIFY_FACTS=1` with value records, DESIGN-p4l4
+/// B7): this OBJECT is an instance of a template the whole-program facts
+/// admit as a value record. Every identity route aborts on it
+/// (`wpfacts_check::records`). Bit 6 of OBJECT, free (see the bit map); a
+/// release program never sets it.
+pub(crate) const OBJ_FLAG_RECORD_CLAIM: u16 = 0x0040;
 /// # `GcHeader::_reserved` bit map by GC kind
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
@@ -1769,7 +1778,7 @@ pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
 /// | 0..2 | FROZEN / SEALED / NO_EXTEND | no proxy-specific writer | integrity flags |
 /// | 3..4 | survival age | survival age | GC_COPY_SURVIVAL_AGE_MASK, all kinds |
 /// | 5 | GC_OBJECT_CALLABLE | GC_OBJECT_CALLABLE | unused |
-/// | 6 | free (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
+/// | 6 | RECORD_CLAIM, check mode only (was NULL_PROTO; a null [[Prototype]] is the shape identity `PROTO_ID_NULL`) | unused | array: CUSTOM_PROTO |
 /// | 7 | NEVER_MOVE | unused | array: RAW_F64_LAYOUT; closure: NON_CONSTRUCTABLE; byte owner: FOREIGN_DATA; byte view: LENGTH_TRACKING |
 /// | 8 | TYPED_ARRAY_PROTO | unused | array: KEY_ATTRS; byte owner: RESIZABLE |
 /// | 9 | PLAIN_ORDINARY | unused | array: ARGUMENTS_OBJECT |

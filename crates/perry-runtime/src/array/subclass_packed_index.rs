@@ -65,7 +65,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                         return byte;
                     }
                 }
-                if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                if crate::gc_type_is_array!(header.obj_type)
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let arr = raw as *const crate::array::ArrayHeader;
@@ -78,7 +78,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                 }
                 if matches!(
                     header.obj_type,
-                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                    crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
                 ) {
                     return crate::array::js_array_get_f64(
                         raw as *const crate::array::ArrayHeader,

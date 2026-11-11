@@ -29,9 +29,7 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> String {
     let exe = dir.join(if whole { "main_w" } else { "main_u" });
     let mut cmd = Command::new(perry_bin());
     clean(&mut cmd).current_dir(dir).env("PERRY_NO_CACHE", "1");
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
+    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)

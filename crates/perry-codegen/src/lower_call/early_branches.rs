@@ -763,7 +763,6 @@ pub fn try_lower_closure_typed_local_call(
     Ok(None)
 }
 
-
 /// The call of the known closure body `func_id` (symbol `closure_fn`) with
 /// the closure `closure_handle`, `this` = `this_bits` and the lowered
 /// arguments `lowered_args` (`args` their HIR): the body's typed entry
@@ -783,9 +782,7 @@ pub(crate) fn emit_known_closure_body_call(
     let typed_f64_param_reps = if ctx.typed_f64_closures.contains(&func_id) {
         ctx.typed_i1_closure_param_reps
             .get(&func_id)
-            .filter(|reps| {
-                crate::codegen::typed_param_reps_match_args(ctx, reps, args)
-            })
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -793,9 +790,7 @@ pub(crate) fn emit_known_closure_body_call(
     let typed_i32_param_reps = if ctx.typed_i32_closures.contains(&func_id) {
         ctx.typed_i1_closure_param_reps
             .get(&func_id)
-            .filter(|reps| {
-                crate::codegen::typed_param_reps_match_args(ctx, reps, args)
-            })
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -803,9 +798,7 @@ pub(crate) fn emit_known_closure_body_call(
     let typed_string_param_reps = if ctx.typed_string_closures.contains(&func_id) {
         ctx.typed_i1_closure_param_reps
             .get(&func_id)
-            .filter(|reps| {
-                crate::codegen::typed_param_reps_match_args(ctx, reps, args)
-            })
+            .filter(|reps| crate::codegen::typed_param_reps_match_args(ctx, reps, args))
             .cloned()
     } else {
         None
@@ -813,9 +806,10 @@ pub(crate) fn emit_known_closure_body_call(
     let typed_i1_param_reps = if ctx.typed_i1_closures.contains(&func_id) {
         if let Some(reps) = ctx.typed_i1_closure_param_reps.get(&func_id) {
             let matches_args = reps.len() == args.len()
-                && args.iter().zip(reps.iter()).all(|(arg, rep)| {
-                    crate::codegen::typed_arg_is_guard_candidate(ctx, *rep, arg)
-                });
+                && args
+                    .iter()
+                    .zip(reps.iter())
+                    .all(|(arg, rep)| crate::codegen::typed_arg_is_guard_candidate(ctx, *rep, arg));
             matches_args.then(|| reps.clone())
         } else {
             None
@@ -830,8 +824,7 @@ pub(crate) fn emit_known_closure_body_call(
         .unwrap_or_default();
     if let Some(typed_param_reps) = typed_f64_param_reps {
         let typed_fn = crate::codegen::typed_f64_closure_name(&closure_fn);
-        let generic_closure_fn =
-            crate::codegen::generic_closure_body_name(&closure_fn);
+        let generic_closure_fn = crate::codegen::generic_closure_body_name(&closure_fn);
         // The body's entry contract, the tiers its public entry runs
         // (`codegen::typed_entry::emit_tiered_entry_dispatch`), here at the
         // call: tier 1 admits an ordered double as it is (one compare);
@@ -859,7 +852,6 @@ pub(crate) fn emit_known_closure_body_call(
         let typed_label = ctx.block_label(typed_idx);
         let generic_label = ctx.block_label(generic_idx);
         let typed_merge_label = ctx.block_label(typed_merge_idx);
-        let entry_label = ctx.block().label.clone();
         let mut tier1 = Vec::new();
         for (value, guard) in lowered_args.iter().zip(&guards) {
             if guard.number {
@@ -872,24 +864,16 @@ pub(crate) fn emit_known_closure_body_call(
         if let Some(c) = &capture_guard {
             tier1.push(c.clone());
         }
-        let converted: Option<(String, Vec<Option<String>>)> = if any_number {
-            let int32_idx = ctx.new_block("closure_direct.int32");
-            let convert_idx = ctx.new_block("closure_direct.int32_convert");
-            let int32_label = ctx.block_label(int32_idx);
-            let convert_label = ctx.block_label(convert_idx);
+        if any_number {
+            let nan_idx = ctx.new_block("closure_direct.nan");
+            let nan_label = ctx.block_label(nan_idx);
             let tier1 = and_all(ctx.block(), tier1).expect("a number lane has a tier-1 test");
-            ctx.block().cond_br(&tier1, &typed_label, &int32_label);
-            ctx.current_block = int32_idx;
+            ctx.block().cond_br(&tier1, &typed_label, &nan_label);
+            ctx.current_block = nan_idx;
             let mut tier2 = Vec::new();
-            let mut int32_tests = Vec::with_capacity(guards.len());
             for (value, guard) in lowered_args.iter().zip(&guards) {
                 if guard.number {
-                    let plain = crate::codegen::emit_plain_number_test(ctx.block(), value);
-                    let int32 = crate::codegen::emit_int32_box_test(ctx.block(), value);
-                    tier2.push(ctx.block().or(I1, &plain, &int32));
-                    int32_tests.push(Some(int32));
-                } else {
-                    int32_tests.push(None);
+                    tier2.push(crate::codegen::emit_plain_number_test(ctx.block(), value));
                 }
                 if let Some(exact) = &guard.exact {
                     tier2.push(exact.clone());
@@ -899,45 +883,22 @@ pub(crate) fn emit_known_closure_body_call(
                 tier2.push(c.clone());
             }
             let ok = and_all(ctx.block(), tier2).expect("tier 2 has a number lane");
-            ctx.block().cond_br(&ok, &convert_label, &generic_label);
-            ctx.current_block = convert_idx;
-            let values = lowered_args
-                .iter()
-                .zip(&int32_tests)
-                .map(|(value, int32)| {
-                    int32.as_ref().map(|is_int32| {
-                        let blk = ctx.block();
-                        let bits = blk.bitcast_double_to_i64(value);
-                        let low = blk.trunc(I64, &bits, I32);
-                        let conv = blk.sitofp(I32, &low, DOUBLE);
-                        blk.select(I1, is_int32, DOUBLE, &conv, value)
-                    })
-                })
-                .collect();
-            ctx.block().br(&typed_label);
-            Some((convert_label, values))
+            ctx.block().cond_br(&ok, &typed_label, &generic_label);
         } else {
             match and_all(ctx.block(), tier1) {
                 Some(g) => ctx.block().cond_br(&g, &typed_label, &generic_label),
                 None => ctx.block().br(&typed_label),
             }
-            None
-        };
+        }
 
         ctx.current_block = typed_idx;
         let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered_args.len());
-        for (k, (value, rep)) in lowered_args.iter().zip(typed_param_reps.iter()).enumerate() {
-            let raw = match &converted {
-                Some((convert_label, values)) if guards[k].number => {
-                    let conv = values[k].as_ref().expect("a number lane converts");
-                    ctx.block().phi(
-                        DOUBLE,
-                        &[(value.as_str(), entry_label.as_str()), (conv.as_str(), convert_label.as_str())],
-                    )
-                }
-                _ => crate::codegen::emit_typed_arg_to_raw(ctx.block(), *rep, value),
-            };
-            typed_args_storage.push(raw);
+        for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
+            typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
+                ctx.block(),
+                *rep,
+                value,
+            ));
         }
         let mut typed_args: Vec<(crate::types::LlvmType, &str)> =
             Vec::with_capacity(typed_args_storage.len() + 1);
@@ -995,8 +956,7 @@ pub(crate) fn emit_known_closure_body_call(
         result
     } else if let Some(typed_param_reps) = typed_i32_param_reps {
         let typed_fn = crate::codegen::typed_i32_closure_name(&closure_fn);
-        let generic_closure_fn =
-            crate::codegen::generic_closure_body_name(&closure_fn);
+        let generic_closure_fn = crate::codegen::generic_closure_body_name(&closure_fn);
         let mut typed_guard: Option<String> = None;
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
             let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
@@ -1030,8 +990,7 @@ pub(crate) fn emit_known_closure_body_call(
         }
 
         ctx.current_block = typed_idx;
-        let mut typed_args_storage: Vec<String> =
-            Vec::with_capacity(lowered_args.len());
+        let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered_args.len());
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
             typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
                 ctx.block(),
@@ -1097,8 +1056,7 @@ pub(crate) fn emit_known_closure_body_call(
         result
     } else if let Some(typed_param_reps) = typed_string_param_reps {
         let typed_fn = crate::codegen::typed_string_closure_name(&closure_fn);
-        let generic_closure_fn =
-            crate::codegen::generic_closure_body_name(&closure_fn);
+        let generic_closure_fn = crate::codegen::generic_closure_body_name(&closure_fn);
         let mut typed_guard: Option<String> = None;
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
             let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value);
@@ -1132,8 +1090,7 @@ pub(crate) fn emit_known_closure_body_call(
         }
 
         ctx.current_block = typed_idx;
-        let mut typed_args_storage: Vec<String> =
-            Vec::with_capacity(lowered_args.len());
+        let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered_args.len());
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
             typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
                 ctx.block(),
@@ -1151,9 +1108,9 @@ pub(crate) fn emit_known_closure_body_call(
                 .map(|(s, rep)| (rep.llvm_ty(), s.as_str())),
         );
         let raw_string = ctx.block().call(I64, &typed_fn, &typed_args);
-        let typed_value =
-            ctx.block()
-                .call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)]);
+        let typed_value = ctx
+            .block()
+            .call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)]);
         let after_typed = ctx.block().label.clone();
         if !ctx.block().is_terminated() {
             ctx.block().br(&typed_merge_label);
@@ -1201,15 +1158,10 @@ pub(crate) fn emit_known_closure_body_call(
         result
     } else if let Some(typed_param_reps) = typed_i1_param_reps {
         let typed_fn = crate::codegen::typed_i1_closure_name(&closure_fn);
-        let generic_closure_fn =
-            crate::codegen::generic_closure_body_name(&closure_fn);
+        let generic_closure_fn = crate::codegen::generic_closure_body_name(&closure_fn);
         let mut typed_guard: Option<String> = None;
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
-            let ok = crate::codegen::emit_typed_arg_guard(
-                ctx.block(),
-                *rep,
-                value.as_str(),
-            );
+            let ok = crate::codegen::emit_typed_arg_guard(ctx.block(), *rep, value.as_str());
             typed_guard = Some(match typed_guard {
                 Some(prev) => ctx.block().and(I1, &prev, &ok),
                 None => ok,
@@ -1240,8 +1192,7 @@ pub(crate) fn emit_known_closure_body_call(
         }
 
         ctx.current_block = typed_idx;
-        let mut typed_args_storage: Vec<String> =
-            Vec::with_capacity(lowered_args.len());
+        let mut typed_args_storage: Vec<String> = Vec::with_capacity(lowered_args.len());
         for (value, rep) in lowered_args.iter().zip(typed_param_reps.iter()) {
             typed_args_storage.push(crate::codegen::emit_typed_arg_to_raw(
                 ctx.block(),

@@ -259,7 +259,7 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
 /// unconditionally. The registries remain the layout proof for everything else.
 #[inline]
 fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(crate::array::array_receiver_gc_tag(arr).0) {
         return arr;
     }
     let addr = arr as usize;
@@ -297,10 +297,7 @@ unsafe fn throw_non_coercible_this(method: &str) -> ! {
     let _ = method;
     let msg = "Cannot convert undefined or null to object";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ));
+    crate::exception::throw_core(crate::error::CoreError::type_error(s));
 }
 
 #[inline]
@@ -315,10 +312,7 @@ unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
     if crate::object::is_typed_array_prototype(arr as usize) {
         let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(f64::from_bits(
-            crate::value::JSValue::pointer(err as *const u8).bits(),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
 }
 

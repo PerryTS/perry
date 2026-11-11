@@ -172,7 +172,7 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
     match bits & crate::value::TAG_MASK {
         STRING_TAG | crate::value::SHORT_STRING_TAG => return string_piece(bits),
         POINTER_TAG | BIGINT_TAG | crate::value::HANDLE_TAG => return None,
-        INT32_TAG => {
+        INT32_TAG if crate::value::is_int32_bits(bits) => {
             let mut digits = itoa::Buffer::new();
             return Some(Piece::inline(
                 digits.format((bits & INT32_MASK) as u32 as i32).as_bytes(),
@@ -509,7 +509,7 @@ pub(super) unsafe fn bounded_keys_are_dense(
     let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && header.size as usize
             >= crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>() + fields * 8

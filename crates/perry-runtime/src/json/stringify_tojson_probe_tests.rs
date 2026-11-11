@@ -89,7 +89,7 @@ fn json_tojson_key_probe_rejects_inline_and_nonstring_values_without_allocation(
         for value in [
             JSValue::null(),
             JSValue::undefined(),
-            JSValue::int32(42),
+            JSValue::number(f64::from(42)),
             JSValue::bool(true),
             JSValue::from_bits(crate::value::TAG_HOLE),
             JSValue::string_ptr(std::ptr::null_mut()),
@@ -199,10 +199,10 @@ fn probe_test_class_id(n: u32) -> u32 {
     0x7EEE_0000 | n
 }
 
-/// A non-pointer JS value: enough to make the ordinary prototype read answer
+/// A canonical JS Number: enough to make the ordinary prototype read answer
 /// `Some`, and safe for the root store's write barrier.
 fn probe_test_method_bits() -> u64 {
-    JSValue::int32(1).bits()
+    JSValue::number(1.0).bits()
 }
 
 #[test]
@@ -757,4 +757,71 @@ fn to_json_index_key_is_the_decimal_index() {
         assert_eq!(bytes, index.to_string().as_bytes());
     }
     super::reset_to_json_key();
+}
+
+extern "C" fn declared_test_method(_this: f64) -> f64 {
+    1.0
+}
+
+/// A declared class with one compiled method, as codegen registers it, and
+/// its declared prototype object built.
+fn declared_class_with_prototype(class_id: u32, method: &str, parent: Option<u32>) {
+    unsafe {
+        crate::object::js_register_class_name(class_id, b"Declared".as_ptr(), 8);
+        crate::object::js_register_class_method_with_entry(
+            class_id as i64,
+            method.as_ptr(),
+            method.len() as i64,
+            declared_test_method as *const () as usize as i64,
+            0,
+            0,
+            0,
+            0,
+        );
+    }
+    if let Some(parent) = parent {
+        crate::object::js_register_class_parent(class_id, parent);
+    }
+    let _ = crate::object::class_decl_prototype_value(class_id);
+}
+
+/// JSTR1 A: a declared class instance whose holders (its class's and its
+/// parent's declared prototypes, then `%Object.prototype%`) list no `toJSON`
+/// is answered "absent" from those shapes, by both the rooted probe and the
+/// walk's allocation-free one; a `toJSON` on either prototype keeps the
+/// generic read. Before, every class with a prototype holder declined to the
+/// generic `toJSON` read once per serialized instance.
+#[test]
+fn a_declared_class_instance_without_to_json_is_answered_from_its_holders() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let _ = crate::object::builtin_prototype_value("Object");
+    let (base, derived) = (0x7D60, 0x7D61);
+    declared_class_with_prototype(base, "m", None);
+    declared_class_with_prototype(derived, "n", Some(base));
+    let instance = crate::object::js_object_alloc(derived, 0);
+    crate::object::js_object_set_field_by_name(
+        instance,
+        crate::string::canonical_key(b"a"),
+        1.0,
+    );
+    let ptr = instance as *const u8;
+    unsafe {
+        assert!(super::class_chain_may_have_to_json((*instance).class_id));
+        assert!(super::class_holders_lack_to_json(ptr));
+        assert!(to_json_definitely_absent(ptr));
+        assert!(!inherited_to_json_possible_without_gc(ptr, false));
+    }
+
+    // `toJSON` on the parent's declared prototype: the generic read stays.
+    let (with_base, with_derived) = (0x7D62, 0x7D63);
+    declared_class_with_prototype(with_base, "toJSON", None);
+    declared_class_with_prototype(with_derived, "n", Some(with_base));
+    let inherits = crate::object::js_object_alloc(with_derived, 0);
+    let ptr = inherits as *const u8;
+    unsafe {
+        assert!(!super::class_holders_lack_to_json(ptr));
+        assert!(!to_json_definitely_absent(ptr));
+        assert!(inherited_to_json_possible_without_gc(ptr, false));
+    }
+    assert!(unsafe { super::object_get_to_json(ptr) }.is_some());
 }

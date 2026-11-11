@@ -1,0 +1,18 @@
+plain 4 [1,2,3,4]
+grown 44 39 [1,2,3,4,0]
+mixed 6 [1,2,3,"s",{"o":1},null] string
+frozen-throw TypeError
+frozen 3 [1,2,3]
+sealed-throw TypeError
+sealed 3 [1,2,3]
+noextend 3 [1,2,3]
+fixedlen-throw TypeError
+fixedlen 3 [1,2,3]
+accessor null acc 5
+sparse 4 false [1,null,3,4]
+subclass 4 true [1,2,3,4]
+proxy 4 [1,2,3,4]
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+proto-setter null 42 8
+u8-push-typeof undefined
+buffer-len 3

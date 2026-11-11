@@ -25,8 +25,6 @@ crate::realm_decl! {
 
 crate::realm_decl! {
     namespace NM_PERF_HOOKS = "perf_hooks" {
-        cell = "performance";
-        extends = (Performance.prototype);
         default = NM_PERF_HOOKS_DEFAULT;
         members = {
             Performance = (ref(Performance));
@@ -36,13 +34,13 @@ crate::realm_decl! {
             PerformanceObserver = (ref(PerformanceObserver));
             PerformanceObserverEntryList = (ref(PerformanceObserverEntryList));
             PerformanceResourceTiming = (ref(PerformanceResourceTiming));
-            monitorEventLoopDelay;
-            eventLoopUtilization;
-            timerify;
-            createHistogram;
+            monitorEventLoopDelay = (ref(performance.monitorEventLoopDelay));
+            eventLoopUtilization = (ref(performance.eventLoopUtilization));
+            timerify = (ref(performance.timerify));
+            createHistogram = (ref(performance.createHistogram));
             performance = (ref(performance));
-            constants;
-            default;
+            constants = (ref("node:perf_hooks.constants"));
+            default = (ref(performance.default));
         }
     }
 }
@@ -65,5 +63,11 @@ crate::realm_decl! {
             performance = (ref(performance));
             constants;
         }
+    }
+}
+
+crate::realm_decl! {
+    namespace NM_PERF_OBSERVER_LIST = "perf_observer_list" {
+        members = {}
     }
 }

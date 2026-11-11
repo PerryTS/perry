@@ -14,12 +14,7 @@ fn negative_key_proof_requires_an_ordinary_array_without_own_named_properties() 
     let mut arr = js_array_alloc(4);
     arr = js_array_push_f64(arr, 19.0);
     assert!(negative_integer_key_is_absent(arr));
-    for key in [
-        -1.0,
-        -4294967296.0,
-        -1e21,
-        f64::from_bits(crate::JSValue::int32(-1).bits()),
-    ] {
+    for key in [-1.0, -4294967296.0, -1e21, f64::from(-1)] {
         assert_eq!(read(arr, key).to_bits(), TAG_UNDEFINED);
     }
     assert_eq!(read(arr, -0.0), 19.0);
@@ -89,9 +84,28 @@ fn negative_key_proof_rechecks_array_prototype_named_writes() {
     intrinsic_named_write_withdraws_proof(BuiltinProto::Array);
 }
 
+/// DEC 250 Q2: `%Object.prototype%` is add-locked, so the program's named
+/// write of `"-1"` there is a TypeError and the absence proof survives it.
 #[test]
-fn negative_key_proof_rechecks_object_prototype_named_writes() {
-    intrinsic_named_write_withdraws_proof(BuiltinProto::Object);
+fn negative_key_proof_survives_a_refused_object_prototype_named_add() {
+    let arr = js_array_alloc(4);
+    struct RestoreIntrinsic(*const crate::object::ObjectHeader);
+    impl Drop for RestoreIntrinsic {
+        fn drop(&mut self) {
+            crate::agent_ptrs::publish_intrinsic_proto(BuiltinProto::Object as usize, self.0.cast_mut());
+        }
+    }
+    let _restore =
+        RestoreIntrinsic(crate::agent_ptrs::intrinsic_proto(BuiltinProto::Object as usize));
+    let proto = crate::object::js_object_alloc(0, 0);
+    unsafe { builtin_proto::seal_object(proto, BuiltinProto::Object) };
+    crate::agent_ptrs::publish_intrinsic_proto(BuiltinProto::Object as usize, proto);
+    assert!(negative_integer_key_is_absent(arr));
+    let key = crate::string::js_string_from_bytes(b"-1".as_ptr(), 2);
+    crate::exception::catch_js_throw(|| crate::object::js_object_set_field_by_name(proto, key, 47.0))
+        .expect_err("a program add on Object.prototype is refused");
+    assert!(builtin_proto::pristine(BuiltinProto::Object));
+    assert!(negative_integer_key_is_absent(arr));
 }
 
 #[test]

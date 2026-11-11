@@ -45,6 +45,22 @@ impl<'a> Gen<'a> {
         self.mcall(recv, Key::Named(a), args, vec![])
     }
 
+    /// A folded builtin-method node: `receiver.method(...args)`, resolved
+    /// through the receiver like any method call.
+    pub(super) fn folded_call(
+        &mut self,
+        fx: &Fx,
+        call: &perry_hir::folded_call::FoldedCall<'_>,
+    ) -> NodeId {
+        let recv = match call.receiver {
+            perry_hir::folded_call::Receiver::Expr(x) => self.expr(fx, x),
+            perry_hir::folded_call::Receiver::Local(id) => self.local(fx.module, id),
+        };
+        let args = call.args.iter().map(|x| self.expr(fx, x)).collect();
+        let a = self.m.atom(call.method);
+        self.mcall(recv, Key::Named(a), args, vec![])
+    }
+
     pub(super) fn prim_kids(
         &mut self,
         fx: &Fx,
@@ -69,7 +85,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let s = self.expr(fx, string);
         crate::builtins::string_methods::to_prim(&mut self.m, s, "string method receiver ToString");
-        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        // The method classifies its operands (`zero_sign`, `with_native`).
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr_zs(fx, o)).collect();
         let recv = self.prim_node(prim::STR);
         let a = self.m.atom(name);
         self.mcall(recv, Key::Named(a), args, vec![])
@@ -94,7 +111,17 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
-        let tm = self.new_arr_template(mi, what);
+        self.new_arr_of(mi, what, elems, false)
+    }
+
+    /// `new_arr_from` of an array whose birth fills each index below its
+    /// length in order (ArrayCreate + CreateDataProperty): it has no hole.
+    pub(crate) fn new_dense_arr_from(&mut self, mi: u32, what: &str, elems: &[NodeId]) -> NodeId {
+        self.new_arr_of(mi, what, elems, true)
+    }
+
+    fn new_arr_of(&mut self, mi: u32, what: &str, elems: &[NodeId], dense: bool) -> NodeId {
+        let tm = self.new_arr_birth(mi, what, dense, false);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let fa = self.m.field_any(t);
         for &e in elems {
@@ -103,29 +130,11 @@ impl<'a> Gen<'a> {
         self.tok_node(t)
     }
 
-    /// An array a builtin makes from `src`'s arrays with ArraySpeciesCreate
-    /// (`builtins::array_species`).
-    pub(crate) fn new_species_arr(
-        &mut self,
-        mi: u32,
-        what: &str,
-        elems: &[NodeId],
-        src: NodeId,
-    ) -> NodeId {
-        let tm = self.new_arr_template(mi, what);
-        crate::builtins::array_species(&mut self.m, tm, src);
-        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let fa = self.m.field_any(t);
-        for &e in elems {
-            self.m.edge(e, fa);
-        }
-        self.tok_node(t)
-    }
-
-    /// A builtin iterator object (`arr.values()`, `entries()`, `keys()`)
-    /// yielding `vals` through `next().value` (`builtins::iterator_method`).
-    pub(crate) fn new_iter_from(&mut self, mi: u32, vals: &[NodeId]) -> NodeId {
-        let (t, n) = self.bobj(mi, "Iterator");
+    /// A builtin iterator object of kind `what` yielding `vals` through
+    /// `next().value`
+    /// (`builtins::iterator_method`).
+    pub(crate) fn new_iter_from(&mut self, mi: u32, what: &'static str, vals: &[NodeId]) -> NodeId {
+        let (t, n) = self.bobj(mi, what);
         let a = self.m.atom("#elems");
         let e = self.m.field(t, a);
         for &v in vals {
@@ -140,6 +149,23 @@ impl<'a> Gen<'a> {
         self.store(fx, recv, ek, v, what.to_string(), None, false);
     }
 
+    /// An operation without a rule of its own runs code on `n` once ⊤ is
+    /// there (DESIGN SEEDE section 8): ⊤ into the current throw region.
+    pub(crate) fn raise_on(&mut self, n: NodeId) {
+        let region = self.region();
+        self.m.cons(n, Cons::Raise { region });
+    }
+
+    /// An async step closure's call: what its body throws settles the
+    /// promise, so it runs in the shared cell (rejections; DESIGN SEEDE
+    /// section 8), not the caller's region.
+    pub(super) fn async_callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
+        let region = std::mem::replace(&mut self.m.gen_region, Some(self.thrown));
+        let r = self.callback(cb, args);
+        self.m.gen_region = region;
+        r
+    }
+
     /// Call `cb` with `args` (this = undefined); returns the result node.
     pub(super) fn callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
         self.call_value(cb, ThisArg::Undef, args, vec![])
@@ -150,20 +176,5 @@ impl<'a> Gen<'a> {
     pub(super) fn elem_load(&mut self, recv: NodeId) -> NodeId {
         let key = self.m.elem_key();
         self.load(recv, key)
-    }
-
-    pub(super) fn array_cb(
-        &mut self,
-        fx: &Fx,
-        array: &Expr,
-        callback: &Expr,
-    ) -> (NodeId, NodeId, NodeId) {
-        let a = self.expr(fx, array);
-        let cb = self.expr(fx, callback);
-        let ek = self.m.elem_key();
-        let elems = self.load(a, ek);
-        let num = self.prim_node(prim::NUM);
-        let ret = self.callback(cb, vec![elems, num, a]);
-        (a, elems, ret)
     }
 }

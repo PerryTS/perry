@@ -52,6 +52,11 @@ pub(crate) fn any_prototype_marked() -> bool {
 /// re-reading through a pointer the allocation may have moved.
 #[inline]
 pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
         ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit in the meta
@@ -172,6 +177,11 @@ pub(crate) fn next_prototype_serial() -> u64 {
 /// As [`mark_object_as_prototype`]: allocates, and may move the owner.
 pub(crate) unsafe fn mark_object_as_prototype_with_serial(obj: usize, serial: u64) -> Option<u64> {
     debug_assert!(serial >= FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+    // SNAP census: the whole prototype mark (the record, its flag, the
+    // serial, the private lineage, never-move) is representation (design
+    // §2.10.11); the image re-applies it lazily on first use.
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let meta = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE)?;
     ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
     // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
@@ -298,6 +308,11 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
     if !meta.is_null() && (*meta).flags & flag != 0 {
         return Some(meta);
     }
+    // SNAP census: the mark (an empty record, its flag, the private shape
+    // lineage) classifies an object the program already holds; no program
+    // operation observes it (design §2.10.11).
+    #[cfg(perry_gc_instruments)]
+    let _census = crate::snap_census::representation();
     let scope = crate::gc::RuntimeHandleScope::new();
     let handle = scope.root_raw_mut_ptr(object);
     let (meta, object) = handle
@@ -330,8 +345,17 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         // the meta record is reached through the owner again afterwards.
         // A prototype mark changes no slot and no descriptor, so the new
         // shape keeps the ConstFn lanes the object still satisfies.
+        //
+        // A runtime intrinsic prototype holder born on the born-prototype
+        // lineage (`shapes::stamp_born_prototype_root`) already carries a
+        // shape no ordinary object carries, and nothing has seen it yet: the
+        // private lineage the transition would mint is the one it has.
+        let born = flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE
+            && crate::object::shapes::object_on_born_prototype_lineage(object);
         let (_, object) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-            if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
+            if born {
+                crate::object::shapes::object_shape_stamp(object)
+            } else if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
                 crate::object::shapes::transition_object_shape_semantics_keeping_constfn(object)
             } else {
                 crate::object::shapes::transition_object_shape_semantics(object)
@@ -432,15 +456,73 @@ pub(crate) unsafe fn note_object_shape_stamped(obj: usize, previous: u32, publis
         return;
     }
     if object_is_marked_prototype(obj) {
-        crate::dyn_eval_hooks::note_proto_write();
-        // #11915: a sealed builtin prototype is always marked, so its
-        // structural mutations (key add, delete, descriptor and attribute
-        // changes, `[[Prototype]]` relinks) all reach this branch.
-        crate::object::builtin_proto::note_write(
-            obj as *const crate::object::ObjectHeader,
-            "shape publication",
-        );
+        note_marked_object_shape_stamped(obj);
     }
+}
+
+/// [`note_object_shape_stamped`]'s first half, run BEFORE the stamp
+/// (`shapes::stamp_object_shape_id_with_carrier_note_impl`): is `obj` a
+/// marked prototype whose word is about to change? A sealed builtin prototype
+/// is always marked, so its structural mutations (key add, delete, descriptor
+/// and attribute changes, `[[Prototype]]` relinks) all reach this report
+/// while its layout is still in place, which is where DEC 250 refuses an
+/// image write (`builtin_proto::note_write`). `added_key` is the key a
+/// key-add stamp appends. The caller publishes the second half after the
+/// stamp when this returns true.
+///
+/// # Safety
+/// `obj` is the receiver the funnel is about to stamp, so its `GcHeader`
+/// precedes it.
+#[inline(always)]
+pub(crate) unsafe fn note_object_shape_stamping(
+    obj: usize,
+    previous: u32,
+    published: u32,
+    added_key: Option<*const crate::StringHeader>,
+) -> bool {
+    if previous == published || !any_prototype_marked() {
+        return false;
+    }
+    if !object_is_marked_prototype(obj) {
+        return false;
+    }
+    note_marked_object_shape_stamping(obj, published, added_key);
+    true
+}
+
+// The marked-object report stays outside the inlined admission guards.
+#[cold]
+#[inline(never)]
+unsafe fn note_marked_object_shape_stamping(
+    obj: usize,
+    published: u32,
+    added_key: Option<*const crate::StringHeader>,
+) {
+    use crate::object::builtin_proto::{Key, Mutation};
+    crate::object::builtin_proto::note_write(
+        obj as *const crate::object::ObjectHeader,
+        match added_key {
+            Some(key) => Mutation::Add(Key::Str(key)),
+            None => Mutation::Stamp(published),
+        },
+        "shape stamp",
+    );
+}
+
+/// [`note_object_shape_stamped`]'s second half for a marked prototype, run
+/// AFTER the stamp: the interpreter hook and the shadow bit (which must
+/// follow the stamp: the publication carries it from the previous word).
+///
+/// # Safety
+/// `obj` is a live object with a `GcHeader`.
+#[inline]
+pub(crate) unsafe fn note_marked_object_shape_stamped(obj: usize) {
+    crate::dyn_eval_hooks::note_proto_write();
+    crate::object::builtin_proto::note_write(
+        obj as *const crate::object::ObjectHeader,
+        crate::object::builtin_proto::Mutation::Publication,
+        "shape publication",
+    );
 }
 
 /// An own-key change that publishes no new layout word: an overflow entry
@@ -456,6 +538,7 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
         crate::dyn_eval_hooks::note_proto_write();
         crate::object::builtin_proto::note_write(
             obj as *const crate::object::ObjectHeader,
+            crate::object::builtin_proto::Mutation::Publication,
             "overflow key change",
         );
     }

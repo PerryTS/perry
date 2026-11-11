@@ -63,7 +63,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -97,11 +96,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -471,6 +473,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(local(object_id)),
@@ -541,6 +544,7 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

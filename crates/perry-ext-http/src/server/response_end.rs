@@ -58,6 +58,7 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
     let scope = perry_ffi::TransientRootScope::enter();
     let tail = EndTail::root(
         &scope,
+        response_root.get(),
         &write_cbs,
         callback,
         &finish_listeners,
@@ -90,7 +91,14 @@ pub extern "C" fn js_node_http_res_end(handle: i64, chunk: f64) {
     {
         // #8163: the `'close'` snapshot crosses the `'finish'` emits.
         let scope = perry_ffi::TransientRootScope::enter();
-        let tail = EndTail::root(&scope, &[], 0, &finish_listeners, &close_listeners);
+        let tail = EndTail::root(
+            &scope,
+            response_root.get(),
+            &[],
+            0,
+            &finish_listeners,
+            &close_listeners,
+        );
         tail.emit_finish();
         tail.emit_close();
     }
@@ -128,6 +136,7 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
     let scope = perry_ffi::TransientRootScope::enter();
     let tail = EndTail::root(
         &scope,
+        response_root.get(),
         &write_cbs,
         callback_root.get(),
         &finish_listeners,
@@ -294,6 +303,7 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
     let close = scope.root_addrs(&response_event_listeners(response_root.get(), "close"));
     let tail = EndTail::root(
         &scope,
+        0,
         &EndTail::current(&write_cbs),
         end_callback.get(),
         &EndTail::current(&finish),
@@ -332,6 +342,9 @@ unsafe fn standalone_end(handle: i64, chunk: f64, callback: i64) {
 /// #4909), the standalone path fires it before.
 struct EndTail<'a> {
     _scope: &'a perry_ffi::TransientRootScope,
+    /// A heap response emits its own events through its `emit` (node's
+    /// `this.emit('finish')`); a legacy one fires the snapshot lists.
+    owner: perry_ffi::TransientRootedAddr,
     write_cbs: Vec<perry_ffi::TransientRootedAddr>,
     callback: perry_ffi::TransientRootedAddr,
     finish: Vec<perry_ffi::TransientRootedAddr>,
@@ -343,6 +356,7 @@ impl<'a> EndTail<'a> {
     /// call — i.e. immediately after they are taken out of the handle.
     fn root(
         scope: &'a perry_ffi::TransientRootScope,
+        owner: i64,
         write_cbs: &[i64],
         callback: i64,
         finish: &[i64],
@@ -350,6 +364,7 @@ impl<'a> EndTail<'a> {
     ) -> Self {
         Self {
             _scope: scope,
+            owner: scope.root_addr(owner),
             write_cbs: scope.root_addrs(write_cbs),
             callback: scope.root_addr(callback),
             finish: scope.root_addrs(finish),
@@ -368,11 +383,20 @@ impl<'a> EndTail<'a> {
     }
 
     fn emit_finish(&self) {
-        emit_no_arg_to_listeners(&Self::current(&self.finish));
+        self.emit("finish", &self.finish);
     }
 
     fn emit_close(&self) {
-        emit_no_arg_to_listeners(&Self::current(&self.close));
+        self.emit("close", &self.close);
+    }
+
+    fn emit(&self, event: &str, listeners: &[perry_ffi::TransientRootedAddr]) {
+        let owner = self.owner.get();
+        if owner != 0 && super::response_payload::is_response(owner) {
+            super::response_payload::emit(owner, event);
+        } else {
+            emit_no_arg_to_listeners(&Self::current(listeners));
+        }
     }
 
     /// The post-collection addresses, read at the moment of use.
@@ -386,22 +410,28 @@ impl<'a> EndTail<'a> {
 /// have reached the OS (Node's `'finish'`).
 pub(crate) fn flush_callback(handle: i64, end_callback: i64) -> f64 {
     let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_nanbox(if super::response_payload::is_response(handle) {
+        crate::server::request::handle_to_pointer_f64(handle)
+    } else {
+        f64::from_bits(TAG_UNDEFINED)
+    });
     let write_cbs = scope.root_addrs(&take_write_callbacks(handle));
     let finish = scope.root_addrs(&response_event_listeners(handle, "finish"));
     let close = scope.root_addrs(&response_event_listeners(handle, "close"));
     let end_callback = scope.root_addr(end_callback);
     let closure = scope
         .root_addr(
-            perry_ffi::alloc_closure(perry_ffi::js_function_info!(tail_after_flush, 1), 4) as i64,
+            perry_ffi::alloc_closure(perry_ffi::js_function_info!(tail_after_flush, 1), 5) as i64,
         );
     let captures = [
         closure_array(&scope, &write_cbs),
         closure_value(&scope, &end_callback),
         closure_array(&scope, &finish),
         closure_array(&scope, &close),
+        owner,
     ];
     for (index, capture) in captures.iter().enumerate() {
-        // SAFETY: the closure was allocated with four capture slots and is rooted.
+        // SAFETY: the closure was allocated with five capture slots and is rooted.
         unsafe {
             perry_ffi::set_closure_capture_f64(
                 closure.get() as *mut RawClosureHeader,
@@ -460,13 +490,14 @@ fn array_addrs(array: f64) -> Vec<i64> {
 /// socket closed first never finished the response, so only `'close'` fires.
 extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, error: f64) -> f64 {
     let scope = perry_ffi::TransientRootScope::enter();
-    // SAFETY: the closure was allocated with four capture slots.
+    // SAFETY: the closure was allocated with five capture slots.
     let capture =
         |index| scope.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, index) });
     let write_cbs = capture(0);
     let end_callback = capture(1);
     let finish = capture(2);
     let close = capture(3);
+    let owner = capture(4);
     let failed = JsValue::from_bits(error.to_bits()).is_pointer();
     let end_callback_bits = end_callback.get().to_bits();
     let end_callback = if JsValue::from_bits(end_callback_bits).is_pointer() {
@@ -474,8 +505,15 @@ extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, 
     } else {
         0
     };
+    let owner_bits = owner.get().to_bits();
+    let owner = if JsValue::from_bits(owner_bits).is_pointer() {
+        (owner_bits & PTR_MASK) as i64
+    } else {
+        0
+    };
     let tail = EndTail::root(
         &scope,
+        owner,
         &array_addrs(write_cbs.get()),
         end_callback,
         &array_addrs(finish.get()),

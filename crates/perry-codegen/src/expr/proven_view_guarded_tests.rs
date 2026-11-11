@@ -1,7 +1,7 @@
 //! Emission pins for the guarded proven-view tier
 //! (`expr/proven_view_guarded.rs`) and for `new TA(n)` ownership through a
 //! non-Object length. The behavioural half is
-//! `test-files/test_gap_typed_array_guarded_view_keys.ts` and
+//! `tests/parity/language/typed-array/test_gap_typed_array_guarded_view_keys.ts` and
 //! `test_gap_typed_array_length_ownership.ts`, compared against node.
 
 use super::class_field_barrier_tests::block_body;
@@ -95,6 +95,7 @@ fn int32_new(len: Expr) -> Expr {
 
 fn get(view: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(view)),
@@ -122,6 +123,7 @@ fn swap_body(view_init: Expr, extra: Vec<Stmt>) -> Vec<Stmt> {
             object: Box::new(Expr::LocalGet(10)),
             index: Box::new(Expr::LocalGet(11)),
             value: Box::new(get(10, sub1(Expr::LocalGet(11)))),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

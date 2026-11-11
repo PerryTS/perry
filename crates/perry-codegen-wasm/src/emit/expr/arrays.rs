@@ -221,7 +221,8 @@ impl<'a> FuncEmitCtx<'a> {
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
-                self.emit_frame_begin(func, 3);
+                let arg_count = 3 + items.len() as u32;
+                self.emit_frame_begin(func, arg_count);
                 func.instruction(&Instruction::LocalSet(self.temp_local));
                 self.emit_slot_addr(func, 2);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -246,10 +247,12 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                self.emit_memcall(func, "array_splice", 3);
-                // Returns removed elements array handle
-                // TODO: insert items if present
-                let _ = items;
+                // Stage every argument before splice mutates the receiver. Nested
+                // calls reserve their own frames, preserving earlier item values.
+                for (index, item) in items.iter().enumerate() {
+                    self.emit_store_arg(func, 3 + index as u32, item);
+                }
+                self.emit_memcall(func, "array_splice", arg_count);
             }
             Expr::ArrayJoin { array, separator } => {
                 self.emit_expr(func, array);
@@ -358,7 +361,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, callback);
-                self.emit_memcall_void(func, "array_for_each", 2);
+                self.emit_memcall_void(func, "array_forEach", 2);
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::ArrayFind { array, callback } => {

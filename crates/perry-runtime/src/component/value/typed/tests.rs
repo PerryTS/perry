@@ -10,7 +10,7 @@ extern "C-unwind" fn getter(
     let throws = crate::closure::js_closure_get_capture_f64(closure, 1) == 1.0;
     crate::gc::gc_collect_minor();
     if throws {
-        crate::exception::js_throw(value.get_nanbox_f64());
+        crate::exception::test_throw(value.get_nanbox_f64());
     }
     value.get_nanbox_f64()
 }

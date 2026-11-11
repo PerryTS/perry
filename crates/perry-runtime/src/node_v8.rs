@@ -382,7 +382,7 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
     match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {
-            crate::exception::js_throw(crate::fs::build_fs_error_value(&err, "open", &path))
+            crate::exception::throw_core(crate::io_error::fs_error(&err, "open", &path))
         },
     }
 }

@@ -264,7 +264,7 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
 fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     unsafe {
         let header = gc_header(value)?;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header).obj_type) {
             return None;
         }
         Some(JSValue::from_bits(value.to_bits()).as_pointer::<ArrayHeader>() as *mut ArrayHeader)
@@ -899,8 +899,8 @@ fn looks_like_cert_pem(s: &str) -> bool {
 fn throw_error_with_code(code: &'static str, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_name_message(b"Error", msg);
-    crate::exception::js_throw(ptr_value(err))
+    let err = crate::error::CoreError::named(b"Error", msg);
+    crate::exception::throw_core(err)
 }
 
 #[no_mangle]
@@ -994,8 +994,8 @@ fn validate_protocol_version(value: f64, field: &str) {
 
 fn throw_plain_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"Error", msg);
-    crate::exception::js_throw(ptr_value(err))
+    let err = crate::error::CoreError::named(b"Error", msg);
+    crate::exception::throw_core(err)
 }
 
 fn validate_material_property(obj: *mut ObjectHeader, field: &str, allow_key_object: bool) {
@@ -1250,8 +1250,8 @@ fn validate_alpn_option(value: f64) {
     if value_to_bytes(value).is_none() {
         let msg = "The \"options.ALPNProtocols\" property must be an Array or ArrayBufferView";
         let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let error = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(ptr_value(error));
+        let error = crate::error::CoreError::type_error(msg);
+        crate::exception::throw_core(error);
     }
 }
 

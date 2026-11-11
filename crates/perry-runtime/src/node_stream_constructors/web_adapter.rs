@@ -43,6 +43,32 @@ static WEB_WRITER_WRITE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut()
 static WEB_WRITER_CLOSE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 static WEB_WRITER_ABORT_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
 
+type WebReadableFromSourceFn = unsafe extern "C" fn(f64, f64) -> f64;
+type WebWritableFromSinkFn = unsafe extern "C" fn(f64, f64) -> f64;
+type WebTransformFromTransformerFn = unsafe extern "C" fn(f64, f64, f64) -> f64;
+
+static WEB_READABLE_FROM_SOURCE_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WEB_WRITABLE_FROM_SINK_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+static WEB_TRANSFORM_FROM_TRANSFORMER_PTR: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());
+
+/// The Web Streams constructors' `[[Construct]]` bodies (perry-stdlib's
+/// `js_*_stream_new_from_*_object`), registered during stdlib init. They are
+/// what `new C(...)` runs when `C` is the `ReadableStream` /
+/// `WritableStream` / `TransformStream` constructor VALUE, however the
+/// program reached it: a renamed or const-aliased import, a re-export, a
+/// `globalThis` read, an object member or a parameter.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_web_stream_constructors(
+    readable_from_source: WebReadableFromSourceFn,
+    writable_from_sink: WebWritableFromSinkFn,
+    transform_from_transformer: WebTransformFromTransformerFn,
+) {
+    WEB_READABLE_FROM_SOURCE_PTR.store(readable_from_source as *mut (), Ordering::Release);
+    WEB_WRITABLE_FROM_SINK_PTR.store(writable_from_sink as *mut (), Ordering::Release);
+    WEB_TRANSFORM_FROM_TRANSFORMER_PTR
+        .store(transform_from_transformer as *mut (), Ordering::Release);
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_register_node_stream_web_adapter_callbacks(
     readable_new: WebReadableNewFn,
@@ -79,6 +105,46 @@ macro_rules! load_web_callback {
             Some(unsafe { std::mem::transmute::<*mut (), $ty>(p) })
         }
     }};
+}
+
+/// `new ReadableStream(source, strategy)`, `new WritableStream(sink,
+/// strategy)` and `new TransformStream(transformer, writableStrategy,
+/// readableStrategy)` for a constructor reached as a value. The defaults are
+/// the ones the direct `new ReadableStream(...)` lowering passes
+/// (`lower_call/builtin.rs`). `None` when no Web Streams implementation is
+/// linked.
+pub(crate) unsafe fn construct_web_stream(
+    identity: crate::object::BuiltinConstructorIdentity,
+    args: &[f64],
+) -> Option<f64> {
+    use crate::object::BuiltinConstructorIdentity as Id;
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let arg = |index: usize, default: f64| args.get(index).copied().unwrap_or(default);
+    match identity {
+        Id::ReadableStream => {
+            let construct =
+                load_web_callback!(WEB_READABLE_FROM_SOURCE_PTR, WebReadableFromSourceFn)?;
+            Some(construct(arg(0, undefined), arg(1, undefined)))
+        }
+        Id::WritableStream => {
+            let construct = load_web_callback!(WEB_WRITABLE_FROM_SINK_PTR, WebWritableFromSinkFn)?;
+            if JSValue::from_bits(arg(0, undefined).to_bits()).is_null() {
+                crate::fs::validate::throw_type_error_with_code(
+                    "The \"sink\" argument must be of type object",
+                    "ERR_INVALID_ARG_TYPE",
+                );
+            }
+            Some(construct(arg(0, undefined), arg(1, 1.0)))
+        }
+        Id::TransformStream => {
+            let construct = load_web_callback!(
+                WEB_TRANSFORM_FROM_TRANSFORMER_PTR,
+                WebTransformFromTransformerFn
+            )?;
+            Some(construct(arg(0, undefined), arg(1, 1.0), arg(2, 0.0)))
+        }
+        _ => None,
+    }
 }
 
 fn web_readable_new() -> Option<WebReadableNewFn> {

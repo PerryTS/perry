@@ -159,7 +159,7 @@ pub(crate) unsafe fn reflect_symbol_getter_closure_bits(obj_f64: f64, sym_f64: f
 
 pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);
@@ -348,13 +348,15 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // #10481: an INHERITED symbol accessor's setter runs even on a
     // non-extensible receiver — [[Set]] through an inherited accessor never
     // creates a new own property, so OBJ_FLAG_NO_EXTEND (checked below) must
-    // not block it. Checked first, ahead of the extensibility gate, using
-    // the same pointer-object condition the class-setter/accessor fallback
-    // below uses.
+    // not block it. Resolve the actual prototype descriptor before the
+    // extensibility gate; declaration metadata cannot supply a setter.
     if !has_own_data {
         let bits = obj_f64.to_bits();
-        if crate::object::class_value::legacy_class_value_word(bits).is_none() {
-            let jsval = crate::value::JSValue::from_bits(bits);
+        {
+            let lookup = crate::object::class_value::class_ref_word(bits)
+                .map(crate::object::class_value::class_value)
+                .unwrap_or(obj_f64);
+            let jsval = crate::value::JSValue::from_bits(lookup.to_bits());
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
                 // `is_valid_obj_ptr` is only a floor check and deliberately does
@@ -368,7 +370,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                     && accessors::symbol_may_have_accessor(sym_key)
                 {
                     if let Some((_, set_bits)) =
-                        super::get::inherited_symbol_accessor(obj_f64, sym_f64)
+                        super::get::inherited_symbol_accessor(lookup, sym_f64)
                     {
                         return accessors::invoke_symbol_accessor_setter(
                             set_bits, obj_f64, value_f64,
@@ -402,35 +404,6 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                 }
             } else if flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
                 return value_f64;
-            }
-        }
-    }
-    if !has_own_data {
-        let bits = obj_f64.to_bits();
-        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
-            if crate::object::class_symbol_setter_apply(class_id, sym_key, obj_f64, value_f64, true)
-            {
-                return value_f64;
-            }
-        } else {
-            let jsval = crate::value::JSValue::from_bits(bits);
-            if jsval.is_pointer() {
-                let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
-                if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
-                    let class_id = crate::object::js_object_get_class_id(ptr);
-                    if class_id != 0
-                        && crate::object::class_symbol_setter_apply(
-                            class_id, sym_key, obj_f64, value_f64, false,
-                        )
-                    {
-                        return value_f64;
-                    }
-                    // #10481: an inherited accessor (installed by
-                    // `Object.defineProperty(Fn.prototype, sym, …)`, an object
-                    // literal `set [sym](v)` reached through `Object.create`, or a
-                    // declared class prototype) is checked ABOVE, before the
-                    // extensibility gate, so it is never reached from here.
-                }
             }
         }
     }
@@ -610,10 +583,7 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
         if name == "prototype" {
             let msg = "Classes may not have a static property named 'prototype'";
             let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_typeerror_new(s);
-            crate::exception::js_throw(f64::from_bits(
-                crate::value::JSValue::pointer(err as *const u8).bits(),
-            ));
+            crate::exception::throw_core(crate::error::CoreError::type_error(s));
         }
         crate::object::class_dynamic_prop_root_store(class_id, name, value);
         return;
@@ -663,7 +633,7 @@ pub fn class_static_symbol_lookup_in_chain(class_id: u32, sym_f64: f64) -> Optio
     None
 }
 
-/// A class's own static symbol data keys, in creation order.
+/// A class's own static symbol keys, including accessors, in creation order.
 pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
     if class_id == 0 {
         return Vec::new();
@@ -671,7 +641,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
     let Some(owner) = crate::object::class_value::class_value_if_minted(class_id) else {
         return Vec::new();
     };
-    clone_symbol_entries_for_obj_ptr(owner as usize)
+    unsafe { crate::object::shaped_symbols::entries(owner as usize, false) }
         .into_iter()
         .map(|(sym_key, _)| sym_key)
         .collect()
@@ -685,7 +655,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
 #[no_mangle]
 pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);

@@ -33,8 +33,9 @@
 //!
 //! [`bundle_args_rooted`] is the whole fix. It is `with_rooted_accumulator`
 //! with the two fold steps this lowering needs (`js_array_push_f64` for a
-//! regular argument, `js_array_concat` for a spread source), so the accumulator
-//! never exists as a register the loop holds across an emission.
+//! regular argument, `js_array_spread_append` — the one spread drain — for a
+//! spread source; it was `js_array_like_to_array` + `js_array_concat`), so the
+//! accumulator never exists as a register the loop holds across an emission.
 
 use anyhow::Result;
 use perry_hir::{CallArg, Expr};
@@ -100,16 +101,10 @@ pub(crate) fn bundle_args_rooted<'f, R>(
                         acc.advance(ctx, "js_array_push_f64", &[Arg::Plain(DOUBLE, &v)]);
                     }
                     CallArg::Spread(e) => {
+                        // The one spread drain appends in place; `advance`
+                        // re-reads the accumulator below it (#7192's shape).
                         let part_box = lower_expr(ctx, e)?;
-                        // `js_array_like_to_array` allocates, so the re-read
-                        // `advance` fuses to the `concat` has to sit BELOW it.
-                        // That ordering is the fix; a re-read above this call
-                        // would root an already-stale pointer, which is #7192's
-                        // shape.
-                        let part =
-                            ctx.block()
-                                .call(I64, "js_array_like_to_array", &[(DOUBLE, &part_box)]);
-                        acc.advance(ctx, "js_array_concat", &[Arg::Plain(I64, &part)]);
+                        emit_spread_append(ctx, acc, e, &part_box);
                     }
                 }
             }
@@ -119,9 +114,61 @@ pub(crate) fn bundle_args_rooted<'f, R>(
     )
 }
 
+/// Append spread operand `operand` (its value `part_box`) to the rooted
+/// argument accumulator: `js_array_spread_append`, the complete drain. When
+/// the operand is an instance of a known class whose `[Symbol.iterator]` is a
+/// declared generator member (`proto_constants::iterator_member_site`), the
+/// site first proves the member from the receiver's family layout and the
+/// static prototype shapes, calls the generator body's entry itself and drains
+/// that iterator (`js_array_spread_append_iterator`); a miss takes the
+/// complete drain.
+pub(crate) fn emit_spread_append(
+    ctx: &mut FnCtx<'_>,
+    acc: &mut rooting::RootedAcc,
+    operand: &Expr,
+    part_box: &str,
+) {
+    let site = acc
+        .is_rooted()
+        .then(|| crate::proto_constants::iterator_member_site(ctx, operand))
+        .flatten();
+    let Some(site) = site else {
+        acc.advance(
+            ctx,
+            "js_array_spread_append",
+            &[Arg::Plain(DOUBLE, part_box)],
+        );
+        return;
+    };
+    let slow = ctx.new_block("spreaditer.generic");
+    let merge = ctx.new_block("spreaditer.merge");
+    let slow_l = ctx.block_label(slow);
+    let merge_l = ctx.block_label(merge);
+    let iter = crate::proto_constants::emit_iterator_call(ctx, part_box, &site, &slow_l);
+    acc.advance(
+        ctx,
+        "js_array_spread_append_iterator",
+        &[Arg::Plain(DOUBLE, &iter)],
+    );
+    ctx.block().br(&merge_l);
+    ctx.current_block = slow;
+    acc.advance(
+        ctx,
+        "js_array_spread_append",
+        &[Arg::Plain(DOUBLE, part_box)],
+    );
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
+}
+
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::CallSpread { callee, args, .. } => {
+        Expr::CallSpread {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => {
             if let Expr::ObjectSuperPropertyGet { receiver, .. } = callee.as_ref() {
                 return rooting::with_rooted_group(ctx, 2, |ctx, group| {
                     let recv = group.lower(ctx, receiver, true)?;
@@ -222,6 +269,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         "log" | "info" | "warn" | "error" | "debug"
                     )
                 {
+                    if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                        // The real call: `globalThis.console.<m>(...args)`.
+                        let real = Expr::CallSpread {
+                            byte_offset: 0,
+                            byte_end: 0,
+                            callee: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
+                                byte_offset: 0,
+                                object: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
+                                    byte_offset: 0,
+                                    object: Box::new(Expr::GlobalThisExpr),
+                                    property: "console".to_string(),
+                                }),
+                                property: property.clone(),
+                            }),
+                            args: args.to_vec(),
+                            type_args: Vec::new(),
+                        };
+                        return lower_expr(ctx, &real);
+                    }
                     let runtime_fn = match property.as_str() {
                         "info" => "js_console_info_spread",
                         "debug" => "js_console_debug_spread",
@@ -236,91 +304,32 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 }
             }
 
+            // THR2: `f(...args)` on a module function is the plain call with
+            // the spread argument producer (`dynamic_dispatch_spread.rs`): the
+            // parameters come from the admitted source or from the drain's
+            // fresh vector, and a rest or `arguments` array is never the
+            // caller's source.
             if let Expr::FuncRef(fid) = callee.as_ref() {
-                if spread_count == 1 && regular_count == 0 {
-                    if let (Some(fname), Some(sig)) = (
-                        ctx.func_names.get(fid).cloned(),
-                        ctx.func_signatures.get(fid).copied(),
-                    ) {
-                        let (declared_count, has_rest, _, synthetic_is_rest) = sig;
-
-                        // Find the spread source expression.
-                        let spread_expr = args
-                            .iter()
-                            .find_map(|a| match a {
-                                CallArg::Spread(e) => Some(e),
-                                _ => None,
-                            })
-                            .expect("spread_count == 1 guarantees one Spread");
-
-                        // Issue #653 followup: rest-bearing function. The
-                        // declared "param count" includes the rest param,
-                        // which from the callee's perspective IS the array.
-                        // Spreading `...arr` into `f(...arr)` where `f`
-                        // has shape `(...rest)` should pass `arr` directly
-                        // as the single rest-array param — NOT extract
-                        // element[0] and pass that as a primitive (which
-                        // would set `rest` to a string and `rest.length`
-                        // to that string's char count). The element-extract
-                        // fast path stays correct for non-rest fixed-arity
-                        // callees.
-                        if ctx.func_synthetic_arguments.contains(fid) && synthetic_is_rest {
-                            let arr_box = lower_expr(ctx, spread_expr)?;
-                            let blk = ctx.block();
-                            let arr_handle =
-                                blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
-                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
-                            let fixed_count = declared_count.saturating_sub(1);
-                            let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-                            for i in 0..fixed_count {
-                                let idx = format!("{}", i);
-                                let blk = ctx.block();
-                                let elem = blk.call(
-                                    DOUBLE,
-                                    "js_array_get_f64",
-                                    &[(I64, &arr_handle), (I32, &idx)],
-                                );
-                                lowered.push(elem);
-                            }
-                            lowered.push(arr_value);
-                            let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                                lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                            return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
+                if let (Some(fname), Some((declared, has_rest, _, synthetic_is_rest))) = (
+                    ctx.func_names.get(fid).cloned(),
+                    ctx.func_signatures.get(fid).copied(),
+                ) {
+                    // `(fixed, rest, arguments)`, the plain call's ABI
+                    // (`lower_call/func_ref.rs`): the fixed parameters, then
+                    // the `...rest` array, then the synthetic `arguments`.
+                    let abi = match (ctx.func_synthetic_arguments.contains(fid), has_rest) {
+                        (false, false) => Some((declared, false, false)),
+                        (false, true) => Some((declared.saturating_sub(1), true, false)),
+                        (true, true) if synthetic_is_rest => {
+                            Some((declared.saturating_sub(1), false, true))
                         }
-
-                        if has_rest && declared_count == 1 {
-                            let arr_box = lower_expr(ctx, spread_expr)?;
-                            let arr_handle = ctx.block().call(
-                                I64,
-                                "js_array_like_to_array",
-                                &[(DOUBLE, &arr_box)],
-                            );
-                            let arr_value = nanbox_pointer_inline(ctx.block(), &arr_handle);
-                            return Ok(ctx.block().call(DOUBLE, &fname, &[(DOUBLE, &arr_value)]));
-                        }
-
-                        // Lower the spread source as an array.
-                        let arr_box = lower_expr(ctx, spread_expr)?;
-                        let blk = ctx.block();
-                        let arr_handle =
-                            blk.call(I64, "js_array_like_to_array", &[(DOUBLE, &arr_box)]);
-
-                        // Extract `declared_count` elements from the array.
-                        let mut lowered: Vec<String> = Vec::with_capacity(declared_count);
-                        for i in 0..declared_count {
-                            let idx = format!("{}", i);
-                            let blk = ctx.block();
-                            let elem = blk.call(
-                                DOUBLE,
-                                "js_array_get_f64",
-                                &[(I64, &arr_handle), (I32, &idx)],
-                            );
-                            lowered.push(elem);
-                        }
-
-                        let arg_slices: Vec<(crate::types::LlvmType, &str)> =
-                            lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-                        return Ok(ctx.block().call(DOUBLE, &fname, &arg_slices));
+                        (true, true) => Some((declared.saturating_sub(2), true, true)),
+                        (true, false) => None,
+                    };
+                    if let Some((fixed, rest, arguments)) = abi {
+                        return crate::lower_call::property_get::lower_function_spread_call(
+                            ctx, &fname, args, fixed, rest, arguments,
+                        );
                     }
                 }
             }
@@ -395,19 +404,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
                 if !skip {
+                    // THR2: the plain call's dispatch, method selected before
+                    // the arguments, with the spread argument producer.
+                    if let Some(result) =
+                        crate::lower_call::property_get::try_lower_instance_method_spread_call(
+                            ctx,
+                            object,
+                            property,
+                            args,
+                            *byte_offset,
+                        )?
+                    {
+                        return Ok(result);
+                    }
                     // #11910: the method is read before arguments that can
-                    // observe it. The short-spread form (#8772) evaluates the
-                    // spread before its class guard, so it serves only
-                    // order-free spreads.
+                    // observe it.
                     let observes =
                         crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args);
-                    if !observes {
-                        if let Some(result) =
-                            super::call_spread_short::try_lower(ctx, object, property, args)?
-                        {
-                            return Ok(result);
-                        }
-                    }
                     if observes {
                         use crate::lower_call::lookup_first::{lower, Args, Key};
                         return lower(
@@ -744,3 +757,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "call_spread_iterator_tests.rs"]
+mod call_spread_iterator_tests;

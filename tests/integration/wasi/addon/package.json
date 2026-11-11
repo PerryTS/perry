@@ -1,0 +1,12 @@
+{
+  "name": "wasi-addon-fixture",
+  "private": true,
+  "type": "module",
+  "dependencies": { "hello-addon": "1.0.0", "second-addon": "1.0.0" },
+  "perry": {
+    "nativeAddons": [
+      { "name": "hello-addon", "wasm": { "build/Release/hello.node": ["build/hello.a"] } },
+      { "name": "second-addon", "wasm": { "build/Release/second.node": ["build/second.a"] } }
+    ]
+  }
+}

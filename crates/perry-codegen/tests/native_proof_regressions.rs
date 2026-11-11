@@ -71,7 +71,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -105,11 +104,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -165,6 +167,7 @@ fn module_with_classes_and_params(
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -364,6 +367,21 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
     });
+    class
+}
+
+/// A class with an instance getter whose key is evaluated at run time
+/// (`get ["dyn" + "amicKey"]()`): the compiler cannot name it, so it may be
+/// the accessor of any key and intercepts a named read or store.
+fn class_with_evaluated_accessor(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
+    let mut class = class_with_computed_member(id, name, fields);
+    let member = &mut class.computed_members[0];
+    member.key_expr = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::String("dyn".to_string())),
+        right: Box::new(Expr::String("amicKey".to_string())),
+    };
+    member.kind = ClassComputedMemberKind::Getter;
     class
 }
 
@@ -722,12 +740,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 }
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
-    Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(local(object_id)),
-        index: Box::new(index),
-    }
+    Expr::synthetic_index_get(Box::new(local(object_id)), Box::new(index))
 }
 
 fn call(callee: Expr, args: Vec<Expr>) -> Expr {
@@ -796,13 +809,11 @@ fn native_library_opts_typed(
 }
 
 fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
-    Stmt::Expr(Expr::IndexSet {
-        object: Box::new(local(array_id)),
-        index: Box::new(index),
-        value: Box::new(value),
-        byte_offset: 0,
-        byte_end: 0,
-    })
+    Stmt::Expr(Expr::synthetic_index_set(
+        Box::new(local(array_id)),
+        Box::new(index),
+        Box::new(value),
+    ))
 }
 
 fn increment(id: u32) -> Expr {
@@ -1268,10 +1279,9 @@ fn guards_number_arg(ir: impl AsRef<str>) -> bool {
         && ir_line_with(ir, &["icmp ule i64 %", ", 9221401712017801215"])
 }
 
-/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number || is_int32`
-/// decided by the sign-closed magnitude compare
-/// `(bits & 0x7FFF_FFFF_FFFF_FFFF) <u 0x7FF9_0000_0000_0000` plus the INT32
-/// identity. Two-tiering is a PUBLIC ENTRY transform, so a direct call site
+/// The one-tier Number guard (`emit_typed_f64_guard`): `is_number`, decided
+/// by the sign-closed magnitude compare
+/// `(bits & 0x7FFF_FFFF_FFFF_FFFF) <u 0x7FF9_0000_0000_0000`. Two-tiering is a PUBLIC ENTRY transform, so a direct call site
 /// still proves its arguments this way; the strict `<u` form distinguishes it
 /// from the public entry's tier-1 `<=u` compare, with the neighbouring opcode
 /// so the constant alone cannot satisfy it.
@@ -1279,15 +1289,14 @@ fn guards_number_arg_banded(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
     ir_line_with(ir, &["and i64 %", ", 9223372036854775807"])
         && ir_line_with(ir, &["icmp ult i64 %", ", 9221401712017801216"])
-        && ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
-/// Number lane, tier 2: the INT32 identity test and the `sitofp` that converts
-/// the box to the double the clone wants. Replaces
-/// `call double @js_typed_f64_arg_to_raw`.
-fn unboxes_number_arg(ir: impl AsRef<str>) -> bool {
-    let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"]) && ir.contains("sitofp i32 %")
+/// A test of the 0x7FFE word. A Number has one encoding, the plain double, so
+/// a Number lane passes its guarded argument as it is: no INT32 identity test
+/// and no decode. Replaces the assertions of
+/// `call double @js_typed_f64_arg_to_raw` and of the inline INT32 decode.
+fn tests_int32_tag(ir: impl AsRef<str>) -> bool {
+    ir_line_with(ir.as_ref(), &["icmp eq i64 %", ", 9222809086901354496"])
 }
 
 /// Boolean lane (`emit_typed_i1_guard`): `bits - TAG_FALSE <u 2`, the adjacent
@@ -1305,7 +1314,7 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
     ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
 }
 
-/// Int32 lane (`emit_typed_i32_guard_and_raw`): the INT32 identity test plus
+/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`): the INT32 identity test plus
 /// the plain-double range bounds that admit an integral double.
 /// Replaces `call i32 @js_typed_i32_arg_guard`.
 fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
@@ -1345,7 +1354,7 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     for (name, matched) in [
         ("number", guards_number_arg(unguarded)),
         ("number_banded", guards_number_arg_banded(unguarded)),
-        ("number_unbox", unboxes_number_arg(unguarded)),
+        ("int32_tag", tests_int32_tag(unguarded)),
         ("bool", guards_bool_arg(unguarded)),
         ("bool_unbox", unboxes_bool_arg(unguarded)),
         ("i32", guards_i32_arg(unguarded)),
@@ -1942,12 +1951,7 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
         Type::Number,
         vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
-            Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(local(1)),
-                index: Box::new(int(0)),
-            },
+            Expr::synthetic_index_get(Box::new(local(1)), Box::new(int(0))),
         ))))],
     );
 
@@ -1976,13 +1980,11 @@ fn typed_array_f64_store_coerces_annotation_only_numeric_value() {
                 int(0),
                 int(8),
             ),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(2)),
-                index: Box::new(int(0)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(2)),
+                Box::new(int(0)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -2027,12 +2029,10 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
-                value: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(local(3)),
-                    index: Box::new(int(0)),
-                }),
+                value: Box::new(Expr::synthetic_index_get(
+                    Box::new(local(3)),
+                    Box::new(int(0)),
+                )),
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -2635,7 +2635,8 @@ fn a_native_namespace_birth_names_its_vtable() {
     ];
     let ir = compile_ir("native_namespace_birth_vtable.ts", body);
     assert_eq!(
-        ir.matches("@js_create_native_module_namespace(").count(),
+        ir.matches(concat!("@js_create_native_module_namespace", "("))
+            .count(),
         0,
         "no by-name birth:\n{ir}"
     );
@@ -2666,7 +2667,7 @@ fn a_program_without_a_dynamic_require_has_no_by_name_birth() {
     ];
     let ir = compile_ir("no_by_name_birth.ts", body);
     for by_name in [
-        "@js_create_native_module_namespace(",
+        concat!("@js_create_native_module_namespace", "("),
         "@js_native_module_esm_export_value(",
         "@js_native_module_named_esm_export_value(",
         "@perry_native_modules",
@@ -3017,21 +3018,14 @@ fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp:
     vec![
         alias(base_temp, "__cmpd_base_5", local(array_id)),
         alias(key_temp, "__cmpd_key_6", local(counter_id)),
-        Stmt::Expr(Expr::IndexSet {
-            object: Box::new(local(base_temp)),
-            index: Box::new(local(key_temp)),
-            value: Box::new(add(
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(local(base_temp)),
-                    index: Box::new(local(key_temp)),
-                },
+        Stmt::Expr(Expr::synthetic_index_set(
+            Box::new(local(base_temp)),
+            Box::new(local(key_temp)),
+            Box::new(add(
+                Expr::synthetic_index_get(Box::new(local(base_temp)), Box::new(local(key_temp))),
                 int(1),
             )),
-            byte_offset: 0,
-            byte_end: 0,
-        }),
+        )),
     ]
 }
 
@@ -7588,13 +7582,11 @@ fn artifact_records_dynamic_index_set_value_bits_before_helper() {
         ],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7627,13 +7619,11 @@ fn artifact_records_array_runtime_key_index_set_value_bits_before_helper() {
         Type::Number,
         vec![
             number_let(2, "key", false, number(1.5)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7663,13 +7653,11 @@ fn artifact_records_direct_f64_to_js_value_bits_for_write_barrier() {
         vec![
             string_let(2, "key", "key"),
             number_let(3, "value", false, number(1.5)),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7713,13 +7701,11 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
                 mutable: false,
                 init: Some(Expr::Bool(true)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(local(3)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(local(3)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -7756,13 +7742,11 @@ fn artifact_records_static_write_barrier_elision_for_primitive_array_store() {
         Type::Number,
         vec![
             string_let(2, "key", "key"),
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(local(1)),
-                index: Box::new(local(2)),
-                value: Box::new(Expr::Bool(true)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(local(1)),
+                Box::new(local(2)),
+                Box::new(Expr::Bool(true)),
+            )),
             Stmt::Return(Some(int(0))),
         ],
     );
@@ -9091,6 +9075,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9276,6 +9261,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9377,6 +9363,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9500,6 +9487,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9586,6 +9574,7 @@ fn typed_i1_i32_predicate_module() -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -9721,6 +9710,7 @@ fn typed_i32_return_module(case: &str) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -11791,12 +11781,10 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
         "dynamic_property" => {
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
-                left: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::This),
-                    index: Box::new(Expr::String("x".to_string())),
-                }),
+                left: Box::new(Expr::synthetic_index_get(
+                    Box::new(Expr::This),
+                    Box::new(Expr::String("x".to_string())),
+                )),
                 right: Box::new(local(12)),
             }))];
         }
@@ -11942,7 +11930,7 @@ fn typed_f64_function_clone_emits_internal_clone_and_guarded_call() {
     // converts an INT32 box. `, 32761` alone no longer says that — the string
     // and i32 lanes carry the same constant.
     assert!(guards_number_arg(&ir), "{ir}");
-    assert!(unboxes_number_arg(&ir), "{ir}");
+    assert!(!tests_int32_tag(&ir), "{ir}");
     assert!(ir.contains(&format!("call double @{typed}")), "{ir}");
     assert!(
         ir.contains(&format!("call double @{generic_body}(")),
@@ -11966,7 +11954,7 @@ fn typed_f64_public_trampoline_dispatches_before_generic_body() {
         "typed function should keep a separate generic body:\n{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -12186,7 +12174,7 @@ fn typed_f64_function_clone_accepts_mixed_raw_signature_and_direct_call() {
     assert!(
         typed_ir.contains("sitofp i32 %arg2 to double")
             && typed_ir.contains("fadd double")
-            && !unboxes_number_arg(&typed_ir)
+            && !tests_int32_tag(&typed_ir)
             && !typed_ir.contains("js_nanbox"),
         "typed clone body should avoid JSValue traffic on the hot path:\n{typed_ir}"
     );
@@ -12683,7 +12671,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
     );
     assert!(
         guards_number_arg(&wrapper_ir)
-            && unboxes_number_arg(&wrapper_ir)
+            && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
@@ -12692,7 +12680,7 @@ fn typed_i1_numeric_predicate_function_uses_f64_params_and_public_wrapper() {
         "public wrapper should retain a generic JSValue fallback:\n{wrapper_ir}"
     );
     assert!(
-        guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
+        guards_number_arg_banded(&caller_ir) && !tests_int32_tag(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "direct FuncRef lowering should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -13456,13 +13444,13 @@ fn typed_i1_numeric_predicate_method_uses_f64_params_and_guarded_direct_call() {
     );
     assert!(
         guards_number_arg(&wrapper_ir)
-            && unboxes_number_arg(&wrapper_ir)
+            && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(double ")),
         "public method wrapper should guard/unbox f64 args before the i1 clone:\n{wrapper_ir}"
     );
     assert!(
         contains_inline_direct_method_shape_guard(caller_ir)
-            && guards_number_arg_banded(&caller_ir) && unboxes_number_arg(&caller_ir)
+            && guards_number_arg_banded(&caller_ir) && !tests_int32_tag(&caller_ir)
             && caller_ir.contains(&format!("call i1 @{typed}(double ")),
         "exact direct method call should use the mixed-signature typed-i1 clone after f64 guards:\n{caller_ir}"
     );
@@ -13582,7 +13570,7 @@ fn typed_f64_method_clone_emits_internal_clone_and_guarded_direct_call() {
     // converts an INT32 box. `, 32761` alone no longer says that — the string
     // and i32 lanes carry the same constant.
     assert!(guards_number_arg(&ir), "{ir}");
-    assert!(unboxes_number_arg(&ir), "{ir}");
+    assert!(!tests_int32_tag(&ir), "{ir}");
     assert!(
         ir.contains(&format!("call double @{typed}(double ")),
         "typed direct call should target the clone:\n{ir}"
@@ -13616,7 +13604,7 @@ fn typed_f64_method_public_trampoline_dispatches_before_generic_body() {
     let wrapper_ir = function_ir_section(&ir, public);
 
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public method wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     let typed_call = wrapper_ir
@@ -13961,7 +13949,7 @@ fn typed_f64_closure_clone_emits_internal_clone_and_guarded_direct_call() {
         "{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir),
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir),
         "public closure wrapper should guard and unbox numeric JSValue args:\n{wrapper_ir}"
     );
     assert!(
@@ -14048,7 +14036,7 @@ fn typed_f64_closure_clone_accepts_immutable_numeric_capture() {
     assert!(
         loads_entry_capture_word(typed_ir, 0)
             && typed_ir.contains("bitcast i64")
-            && unboxes_number_arg(&typed_ir),
+            && !tests_int32_tag(&typed_ir),
         "typed-f64 captured closure should load immutable numeric capture as JSValue bits inline from the closure handle:\n{typed_ir}"
     );
     assert!(
@@ -14394,7 +14382,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
         "numeric-predicate typed closure clone should use f64 params and i1 return:\n{ir}"
     );
     assert!(
-        guards_number_arg(&wrapper_ir) && unboxes_number_arg(&wrapper_ir)
+        guards_number_arg(&wrapper_ir) && !tests_int32_tag(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i1 @{typed}(i64 %this_closure")),
         "public closure wrapper should guard/unbox numeric JSValue args and call the typed clone:\n{wrapper_ir}"
     );
@@ -14405,7 +14393,7 @@ fn typed_i1_numeric_predicate_closure_uses_f64_params_and_guarded_direct_call() 
     assert!(
         ir.contains(&format!("call i1 @{typed}(i64 "))
             && guards_number_arg_banded(&ir)
-            && unboxes_number_arg(&ir),
+            && !tests_int32_tag(&ir),
         "direct local closure call should guard/unbox numeric args and call the typed clone:\n{ir}"
     );
     assert!(
@@ -15160,8 +15148,8 @@ fn scalar_method_boolean_predicate_guards_public_numeric_arguments() {
             ir.contains("scalar_method_arg_guard.fast")
                 && ir.contains("scalar_method_arg_guard.fallback")
                 && guards_number_arg(&ir)
-                && ir.contains("sitofp i32 %"),
-            "{case} public numeric arg should guard/unbox before scalar inline:\n{ir}"
+                && !tests_int32_tag(&ir),
+            "{case} public numeric arg should guard before scalar inline:\n{ir}"
         );
         assert!(
             ir.contains("call double @js_native_call_method_by_id"),
@@ -15242,10 +15230,10 @@ fn scalar_method_boolean_predicate_guards_public_numeric_argument_expressions() 
         ir.contains("scalar_method_arg_guard.fast")
             && ir.contains("scalar_method_arg_guard.fallback")
             && ir.matches(", 9221401712017801215").count() >= 2
-            && ir.matches("sitofp i32 %").count() >= 2
+            && !tests_int32_tag(&ir)
             && ir.contains("fmul double")
             && ir.contains("fadd double"),
-        "public numeric arg expression should guard/unbox locals and rebuild arithmetic as raw f64 before scalar inline:\n{ir}"
+        "public numeric arg expression should guard locals and rebuild arithmetic as raw f64 before scalar inline:\n{ir}"
     );
     assert!(
         ir.contains("call double @js_native_call_method_by_id"),
@@ -15510,7 +15498,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
     // rejects a non-writable slot by throwing, which is correct only for a
     // strict `PutValue`; the sloppy tail is asserted by the twin below. The
     // READ side is strictness-independent and is asserted in both.
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = strict_module_with_classes_and_params(
         "property_id_static_access.ts",
         vec![dynamic],
@@ -15557,7 +15545,7 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
 /// test from passing on an empty program.
 #[test]
 fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
-    let dynamic = class_with_computed_member(141, "DynamicShape", vec![]);
+    let dynamic = class_with_evaluated_accessor(141, "DynamicShape", vec![]);
     let module = module_with_classes_and_params(
         "property_id_static_access_sloppy.ts",
         vec![dynamic],
@@ -15594,10 +15582,10 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
     // the assignment's own strictness (sloppy here: Throw = 0), reached only
     // after `perry_probe_set` declines.
     assert!(
-        ir.contains("call i32 @perry_probe_set(")
+        ir.contains("call double @perry_store_or_put(")
             && ir
                 .lines()
-                .any(|l| l.contains("call double @js_put_value_set(") && l.ends_with(", i32 0)")),
+                .any(|l| l.contains("call double @perry_store_or_put(") && l.ends_with(", i32 0)")),
         "a sloppy store should reach the strictness-aware [[Set]]:\n{ir}"
     );
     assert!(
@@ -15910,12 +15898,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     // with `arr: number[]` written through the generic PutValue form.
     let arr = 1u32;
     let i = 2u32;
-    let read_arr_i = Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(Expr::LocalGet(arr)),
-        index: Box::new(Expr::LocalGet(i)),
-    };
+    let read_arr_i =
+        Expr::synthetic_index_get(Box::new(Expr::LocalGet(arr)), Box::new(Expr::LocalGet(i)));
     let body = vec![
         Stmt::Let {
             id: arr,
@@ -15972,6 +15956,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 }),
                 receiver: Box::new(Expr::LocalGet(arr)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],
@@ -15999,23 +15984,20 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     );
 }
 
-/// A static-key `PutValue` is ONE `perry_probe_set` over the receiver's layout
-/// (an own plain writable slot is stored by the runtime, which owns the
-/// barrier) and, only when the probe declines, the complete receiver-aware
-/// `[[Set]]` (`js_put_value_set`). A key the compiler cannot prove constant
-/// never reaches the probe (`js_put_value_set_dynamic`).
+/// A static-key `PutValue` is ONE `perry_store_or_put` call over the
+/// receiver's layout: the store probe (an own plain writable slot is stored
+/// by the runtime, which owns the barrier) and, only when the probe declines,
+/// the complete receiver-aware `[[Set]]`, both out of line. A key the
+/// compiler cannot prove constant never reaches the probe
+/// (`js_put_value_set_dynamic`).
 fn assert_static_key_store_site(ir: &str, what: &str) {
     assert!(
-        ir.contains("call i32 @perry_probe_set("),
+        ir.contains("call double @perry_store_or_put("),
         "{what} must be the layout store probe:\n{ir}"
     );
     assert!(
-        ir.contains("call double @js_put_value_set("),
-        "{what} must keep the complete [[Set]] as its one miss entry:\n{ir}"
-    );
-    assert!(
-        ir.contains("put.pic.set") && ir.contains("put.pic.merge"),
-        "{what} must branch a declined probe to the semantic miss and merge:\n{ir}"
+        !ir.contains("call i32 @perry_probe_set(") && !ir.contains("put.pic.merge"),
+        "{what}: the probe and its miss are one out-of-line call, not an inline branch:\n{ir}"
     );
     assert!(
         !ir.contains("call double @js_put_value_set_dynamic(")
@@ -16047,6 +16029,7 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
                 }),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16102,6 +16085,7 @@ fn immutable_string_key_reuses_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16146,6 +16130,7 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
             value: Box::new(Expr::Integer(1)),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -16185,6 +16170,7 @@ fn mutable_string_key_rejects_static_write_pic() {
                 value: Box::new(Expr::LocalGet(value)),
                 receiver: Box::new(Expr::LocalGet(object)),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),
@@ -16193,7 +16179,7 @@ fn mutable_string_key_rejects_static_write_pic() {
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(
-        !ir.contains("call i32 @perry_probe_set("),
+        !ir.contains("call double @perry_store_or_put("),
         "a mutable key must retain dynamic PropertyKey semantics, not a constant-key probe:\n{ir}"
     );
     assert!(
@@ -16220,6 +16206,7 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
             value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }))],
@@ -16236,7 +16223,7 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
 
-/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
+/// The static-key store-site entries (`perry_store_or_put`) of `module`'s IR, counted per
 /// literal key `0..keys` (the key operand traced back to the load of
 /// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
 /// fails the test.
@@ -16261,12 +16248,9 @@ fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
             traced(rest.split(' ').next())
         } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
             traced(rest.split(',').next())
-        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set(") {
-            match traced(
-                args.split(", ")
-                    .nth(1)
-                    .and_then(|a| a.strip_prefix("double ")),
-            ) {
+        } else if let Some(args) = rhs.strip_prefix("call double @perry_store_or_put(") {
+            // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`
+            match traced(args.split(", ").nth(2).and_then(|a| a.strip_prefix("i64 "))) {
                 Some(k) if k < keys => counts[k] += 1,
                 _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
             }
@@ -16298,6 +16282,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             }),
             receiver: Box::new(Expr::LocalGet(object)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -16309,12 +16294,10 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             name: "object".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(objects)),
-                index: Box::new(Expr::LocalGet(inner)),
-            }),
+            init: Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(objects)),
+                Box::new(Expr::LocalGet(inner)),
+            )),
         }];
         for (index, property) in ["a", "b", "c", "d", "e"]
             .into_iter()
@@ -16446,7 +16429,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             "the fast clone should contain {field_count} direct numeric field stores:\n{fast_body}"
         );
         assert!(
-            ir.matches("call double @js_put_value_set(").count() >= field_count,
+            ir.matches("call double @perry_store_or_put(").count() >= field_count,
             "a failed whole-array proof must retain every original PutValue site:\n{ir}"
         );
         if field_count == 4 {
@@ -16497,7 +16480,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     assert!(
         nonzero_start.contains("object_array_write.loop.slow.preheader")
             && nonzero_start
-                .matches("call double @js_put_value_set(")
+                .matches("call double @perry_store_or_put(")
                 .count()
                 >= 2,
         "guard failure must retain both original semantic PutValue sites:\n{nonzero_start}"
@@ -16543,7 +16526,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         "a runtime bound below the start has distinct final-counter semantics and must remain on the semantic loop:\n{nonzero_dynamic_bound}"
     );
     assert!(
-        nonzero_dynamic_bound.contains("call double @js_put_value_set("),
+        nonzero_dynamic_bound.contains("call double @perry_store_or_put("),
         "the rejected dynamic-bound form must retain its original PutValue site:\n{nonzero_dynamic_bound}"
     );
 
@@ -16587,7 +16570,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let nonfinite = compile_ir("nested_object_write_nonfinite_loop", nonfinite_body);
     assert!(
         !nonfinite.contains("call i64 @js_object_array_numeric_write_guard")
-            && nonfinite.contains("call double @js_put_value_set("),
+            && nonfinite.contains("call double @perry_store_or_put("),
         "a potentially infinite/NaN result must retain ordinary boxed-number semantics:\n{nonfinite}"
     );
 }
@@ -16727,6 +16710,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
                     value: Box::new(Expr::Number(7.0)),
                     receiver: Box::new(local(1)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),
@@ -16745,7 +16729,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call i32 @perry_probe_set("),
+            body.contains("call double @perry_store_or_put("),
             "strict={strict}: a number-field store must reach the store probe;              the #6542 `!strict` bail was wider than the hazard it guarded              (#7288):\n{body}"
         );
         assert!(
@@ -16755,7 +16739,7 @@ fn sloppy_class_field_number_store_takes_the_inline_raw_store() {
         // Matched on the CALL, not the module's extern `declare` line.
         let miss_call = body
             .lines()
-            .find(|line| line.contains("call double @js_put_value_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
         let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
@@ -16820,6 +16804,7 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
                     value: Box::new(local(2)),
                     receiver: Box::new(local(1)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),
@@ -16833,13 +16818,14 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         let module = ir_for(strict);
         let body = probe_body(&module);
         assert!(
-            body.contains("call i32 @perry_probe_set(") && !body.contains("class_field_sloppy_set"),
+            body.contains("call double @perry_store_or_put(")
+                && !body.contains("class_field_sloppy_set"),
             "strict={strict}: a pointer-field store must reach the store probe \
              (#5094 P1, #12483):\n{body}"
         );
         let miss_call = body
             .lines()
-            .find(|line| line.contains("call double @js_put_value_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap_or_else(|| panic!("strict={strict}: the store must CALL its miss:\n{body}"));
         let flag = if strict { "i32 1)" } else { "i32 0)" };
         assert!(
@@ -16849,12 +16835,12 @@ fn sloppy_class_field_pointer_store_takes_the_inline_boxed_store() {
         // The GC half. An opaque parameter can carry a heap pointer, so the
         // pointer-tested bookkeeping (write barrier into the remembered set)
         // must happen for it. Under the probe design that bookkeeping is the
-        // runtime's, inside `perry_probe_set` (and the `[[Set]]` miss); the
+        // runtime's, inside `perry_store_or_put` (the probe and the `[[Set]]` miss); the
         // site must therefore pass the VALUE to the probe and must not store
         // it into the slot itself, or a barrier-free store would be possible.
         let probe = body
             .lines()
-            .find(|line| line.contains("call i32 @perry_probe_set("))
+            .find(|line| line.contains("call double @perry_store_or_put("))
             .unwrap();
         assert!(
             probe.ends_with(", double %arg2)") || probe.contains(", double %"),

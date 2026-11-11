@@ -8,6 +8,28 @@ pub(super) fn install_bound_instance_function(
 ) -> *mut ClosureHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
+    let closure = obj.with_mut_ptr(|obj| bound_instance_function(obj, name, info, arity));
+    if closure.is_null() {
+        return closure;
+    }
+    let closure = scope.root_raw_mut_ptr(closure);
+    let closure_value =
+        closure.with_mut_ptr(|closure: *mut ClosureHeader| js_nanbox_pointer(closure as i64));
+    obj.with_mut_ptr(|obj| set_field(obj, name, closure_value));
+    obj.with_mut_ptr(|obj| set_builtin_attrs(obj, name, PropertyAttrs::new(true, false, true)));
+    closure.with_mut_ptr(|closure| closure)
+}
+
+/// A built-in function bound to the Intl instance `obj` (its capture 0),
+/// named `name`, with `length` `arity`. Not installed anywhere.
+pub(super) fn bound_instance_function(
+    obj: *mut ObjectHeader,
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+) -> *mut ClosureHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
     let closure = crate::closure::js_closure_alloc(info, 1);
     if closure.is_null() {
         return closure;
@@ -45,10 +67,6 @@ pub(super) fn install_bound_instance_function(
             PropertyAttrs::new(false, false, true),
         )
     });
-    let closure_value =
-        closure.with_mut_ptr(|closure: *mut ClosureHeader| js_nanbox_pointer(closure as i64));
-    obj.with_mut_ptr(|obj| set_field(obj, name, closure_value));
-    obj.with_mut_ptr(|obj| set_builtin_attrs(obj, name, PropertyAttrs::new(true, false, true)));
     closure.with_mut_ptr(|closure| closure)
 }
 

@@ -7,7 +7,10 @@ use crate::value::JSValue;
 // Shape-id band kept clear of node_stream (0x7FFF_FE60+), fs streams
 // (0x7FFF_FE40), and weakref (0x7FFF_FE10+).
 pub(crate) const CP_SHAPE_ID: u32 = 0x7FFF_FD00;
+// The pre-socket stdio objects (unix pipe slots are net sockets).
+#[cfg(not(unix))]
 pub(crate) const CP_READABLE_SHAPE_ID: u32 = 0x7FFF_FD40;
+#[cfg(not(unix))]
 pub(crate) const CP_WRITABLE_SHAPE_ID: u32 = 0x7FFF_FD80;
 
 // ----- object construction -----
@@ -71,7 +74,88 @@ pub(crate) fn cp_install_dispose(cp: f64) {
     }
 }
 
+/// A pipe slot's parent end as a `net.Socket` that owns it, as Node's
+/// `createSocket(pipe, readable)`: `readable` is false for stdin (slot 0).
+/// The descriptor is consumed. Throws when the program links no net provider,
+/// since the pipe has no other representation.
+#[cfg(unix)]
+pub(crate) fn cp_pipe_socket(readable: bool, pipe: std::os::fd::OwnedFd) -> f64 {
+    use std::os::fd::IntoRawFd;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let options =
+        scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 1) as *const u8));
+    cp_set_field(
+        options.get_nanbox_f64(),
+        b"readable",
+        if readable {
+            TAG_TRUE_F64
+        } else {
+            TAG_FALSE_F64
+        },
+    );
+    let fd = pipe.into_raw_fd();
+    let args = [options.get_nanbox_f64(), fd as f64];
+    cp_install_net_provider();
+    match unsafe { crate::object::net_provider_call("Socket.adoptPipe", &args) } {
+        Some(socket) => socket,
+        None => {
+            // SAFETY: the provider never saw `fd`; it is still ours to close.
+            unsafe { libc::close(fd) };
+            crate::fs::validate::throw_type_error_with_code(
+                "child_process stdio pipes need node:net, which this program does not link",
+                "ERR_FEATURE_UNAVAILABLE_ON_PLATFORM",
+            )
+        }
+    }
+}
+
+// ELF: the lazy hook reference below is a hidden undefined weak symbol, so it
+// resolves at link time (to the hook or to null) and adds no dynamic
+// relocation to every startup.
+#[cfg(all(
+    unix,
+    not(target_vendor = "apple"),
+    not(any(test, feature = "test-layout-descriptors"))
+))]
+core::arch::global_asm!(".weak js_ext_net_nm_install\n.hidden js_ext_net_nm_install");
+
+/// Register node:net's provider at the first pipe socket. A `child_process`
+/// program links perry-ext-net without running its install hook at startup
+/// (the driver leaves it out of the entry prologue), so the hook runs here,
+/// once: the dispatcher it registers is the "installed" state. The reference
+/// is weak: a program without perry-ext-net resolves it to null and
+/// [`cp_pipe_socket`] reports the missing provider.
+#[cfg(unix)]
+fn cp_install_net_provider() {
+    if !crate::value::JS_NATIVE_NET_DISPATCH
+        .load(std::sync::atomic::Ordering::SeqCst)
+        .is_null()
+    {
+        return;
+    }
+    // Test harnesses link no program driver (Darwin's `-U` admission comes
+    // from it, `link/wrapper_hooks.rs`); a crate test registers the provider
+    // itself, as with the runtime layouts.
+    #[cfg(not(any(test, feature = "test-layout-descriptors")))]
+    let hook = {
+        extern "C" {
+            #[linkage = "extern_weak"]
+            static js_ext_net_nm_install: *const u8;
+        }
+        // SAFETY: an extern_weak static reads as the symbol's address, or null.
+        unsafe { js_ext_net_nm_install }
+    };
+    #[cfg(any(test, feature = "test-layout-descriptors"))]
+    let hook: *const u8 = std::ptr::null();
+    if !hook.is_null() {
+        // SAFETY: the symbol is perry-ext-net's `extern "C" fn()` install hook.
+        let hook: unsafe extern "C" fn() = unsafe { std::mem::transmute(hook) };
+        unsafe { hook() };
+    }
+}
+
 /// Build a stdout/stderr Readable-shaped EventEmitter.
+#[cfg(not(unix))]
 pub(crate) fn cp_build_readable() -> f64 {
     let methods: [(&str, CpFn); 13] = [
         ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),
@@ -135,6 +219,7 @@ pub(crate) fn cp_build_readable() -> f64 {
 }
 
 /// Build a stdin Writable-shaped EventEmitter.
+#[cfg(not(unix))]
 pub(crate) fn cp_build_writable() -> f64 {
     let methods: [(&str, CpFn); 11] = [
         ("on", crate::fn_info!(cp_method_on, 2; with_declared(2))),

@@ -42,12 +42,13 @@ pub(crate) fn cp_apply_uid_gid(command: &mut Command, opts_val: f64) {
 
 /// Apply shared command options to `command`. `cwd` and `env` are portable;
 /// `uid` and `gid` are applied on Unix targets. `opts_val` is a NaN-boxed
-/// options object (or undefined/null/non-object — then a no-op). Node
+/// options object (or undefined/null/non-object for inherited defaults). Node
 /// semantics: `env` *replaces* the child's environment wholesale, so when an
 /// `env` object is provided we `env_clear()` first and skip keys whose value is
 /// `undefined`. #1780.
 pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
     if cp_object_ptr(opts_val).is_none() {
+        cp_apply_default_environment(command);
         return;
     }
 
@@ -80,9 +81,17 @@ pub(crate) fn cp_apply_options(command: &mut Command, opts_val: f64) {
                 command.env(&key, value);
             }
         }
+    } else {
+        cp_apply_default_environment(command);
     }
 
     cp_apply_uid_gid(command, opts_val);
+}
+
+fn cp_apply_default_environment(command: &mut Command) {
+    if let Some(entries) = crate::process::private_environment_snapshot() {
+        command.env_clear().envs(entries);
+    }
 }
 
 pub(crate) fn cp_read_argv0(opts_val: f64) -> Option<String> {
@@ -256,6 +265,7 @@ pub(crate) fn cp_read_stdio(opts_val: f64, fds: usize) -> Vec<CpStdio> {
     out
 }
 
+#[cfg(not(unix))]
 pub(crate) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     match kind {
         CpStdio::Pipe => pipe_obj,
@@ -263,74 +273,101 @@ pub(crate) fn cp_stdio_js_value(kind: CpStdio, pipe_obj: f64) -> f64 {
     }
 }
 
-/// Apply stdio 0-2 and honor explicit descriptors beyond fd 2.
+/// The parent end of a child's stdio pipe slot.
+#[cfg(unix)]
+pub(crate) type CpParentPipe = std::os::fd::OwnedFd;
+#[cfg(not(unix))]
+pub(crate) type CpParentPipe = std::fs::File;
+
+/// A connected `AF_UNIX` stream pair, both ends close-on-exec: Node's pipe
+/// slots are sockets in the child too (`fstat` on fd 0/1/3 reports a socket).
+#[cfg(unix)]
+pub(crate) fn cp_socketpair() -> std::io::Result<(std::os::fd::OwnedFd, std::os::fd::OwnedFd)> {
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    use std::os::fd::AsRawFd;
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut pair = [0; 2];
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let kind = libc::SOCK_STREAM;
+    // SAFETY: `pair` has room for the two descriptors socketpair writes.
+    if unsafe { libc::socketpair(libc::AF_UNIX, kind, 0, pair.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: socketpair succeeded, so both descriptors are open and ours.
+    let (parent, child) = unsafe { (OwnedFd::from_raw_fd(pair[0]), OwnedFd::from_raw_fd(pair[1])) };
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    for end in [&parent, &child] {
+        // SAFETY: `end` is an open descriptor owned above.
+        if unsafe { libc::fcntl(end.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok((parent, child))
+}
+
+/// Apply every stdio slot to `command`. Unix: each `'pipe'` slot is a
+/// socketpair whose child end becomes the slot's descriptor; the parent ends
+/// come back as `(slot, end)` for every pipe slot, for the caller to wrap in
+/// `net.Socket`s once the spawn succeeded. Elsewhere 0-2 are `Stdio::piped()`
+/// and only the parent ends of pipe slots beyond fd 2 come back.
 pub(crate) fn cp_apply_live_stdio(
     command: &mut Command,
     stdio: &[CpStdio],
-) -> std::io::Result<Vec<(usize, std::fs::File)>> {
-    let to_stdio = |kind: CpStdio| match kind {
-        CpStdio::Pipe => Stdio::piped(),
-        CpStdio::Ignore => Stdio::null(),
-        CpStdio::Inherit => Stdio::inherit(),
-        CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
-    };
-    command.stdin(to_stdio(stdio.first().copied().unwrap_or(CpStdio::Pipe)));
-    command.stdout(to_stdio(stdio.get(1).copied().unwrap_or(CpStdio::Pipe)));
-    command.stderr(to_stdio(stdio.get(2).copied().unwrap_or(CpStdio::Pipe)));
+) -> std::io::Result<Vec<(usize, CpParentPipe)>> {
+    let slot = |fd: usize| stdio.get(fd).copied().unwrap_or(CpStdio::Pipe);
 
     #[cfg(unix)]
     {
-        use std::os::fd::{AsRawFd, FromRawFd};
+        use std::os::fd::AsRawFd;
         use std::os::unix::process::CommandExt;
 
-        let mut readers = Vec::new();
-        for (fd, kind) in stdio.iter().copied().enumerate().skip(3) {
-            match kind {
+        let mut parents = Vec::new();
+        for fd in 0..stdio.len().max(3) {
+            let kind = slot(fd);
+            if fd < 3 {
+                let child_stdio = match kind {
+                    CpStdio::Pipe => {
+                        let (parent, child) = cp_socketpair()?;
+                        parents.push((fd, parent));
+                        Stdio::from(child)
+                    }
+                    CpStdio::Ignore => Stdio::null(),
+                    CpStdio::Inherit => Stdio::inherit(),
+                    CpStdio::Fd(source) => cp_stdio_from_fd(source),
+                };
+                match fd {
+                    0 => command.stdin(child_stdio),
+                    1 => command.stdout(child_stdio),
+                    _ => command.stderr(child_stdio),
+                };
+                continue;
+            }
+            // The source descriptor dup2'd onto `fd` in the child. Owned ones
+            // move into the hook, so the parent's copy closes with `command`.
+            let source: Option<(i32, Option<std::os::fd::OwnedFd>)> = match kind {
                 CpStdio::Pipe => {
-                    let mut pipe = [0; 2];
-                    if unsafe { libc::pipe(pipe.as_mut_ptr()) } != 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let read = unsafe { std::fs::File::from_raw_fd(pipe[0]) };
-                    let write = unsafe { std::fs::File::from_raw_fd(pipe[1]) };
-                    if unsafe { libc::fcntl(read.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    let write_fd = write.as_raw_fd();
-                    if unsafe { libc::fcntl(write_fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    unsafe {
-                        command.pre_exec(move || {
-                            if libc::dup2(write.as_raw_fd(), fd as i32) < 0
-                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
-                            {
-                                return Err(std::io::Error::last_os_error());
-                            }
-                            Ok(())
-                        });
-                    }
-                    readers.push((fd, read));
+                    let (parent, child) = cp_socketpair()?;
+                    parents.push((fd, parent));
+                    Some((child.as_raw_fd(), Some(child)))
                 }
                 CpStdio::Ignore => {
                     let null = std::fs::OpenOptions::new()
                         .read(true)
                         .write(true)
                         .open("/dev/null")?;
-                    unsafe {
-                        command.pre_exec(move || {
-                            if libc::dup2(null.as_raw_fd(), fd as i32) < 0
-                                || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
-                            {
-                                return Err(std::io::Error::last_os_error());
-                            }
-                            Ok(())
-                        });
-                    }
+                    let null = std::os::fd::OwnedFd::from(null);
+                    Some((null.as_raw_fd(), Some(null)))
                 }
-                CpStdio::Fd(source) => unsafe {
+                CpStdio::Fd(source) => Some((source, None)),
+                CpStdio::Inherit => None,
+            };
+            if let Some((source, owned)) = source {
+                // SAFETY: the hook only calls async-signal-safe dup2/fcntl.
+                unsafe {
                     command.pre_exec(move || {
+                        let _ = &owned;
                         if libc::dup2(source, fd as i32) < 0
                             || libc::fcntl(fd as i32, libc::F_SETFD, 0) < 0
                         {
@@ -338,11 +375,23 @@ pub(crate) fn cp_apply_live_stdio(
                         }
                         Ok(())
                     });
-                },
-                CpStdio::Inherit => {}
+                }
             }
         }
-        return Ok(readers);
+        return Ok(parents);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let to_stdio = |kind: CpStdio| match kind {
+            CpStdio::Pipe => Stdio::piped(),
+            CpStdio::Ignore => Stdio::null(),
+            CpStdio::Inherit => Stdio::inherit(),
+            CpStdio::Fd(fd) => cp_stdio_from_fd(fd),
+        };
+        command.stdin(to_stdio(slot(0)));
+        command.stdout(to_stdio(slot(1)));
+        command.stderr(to_stdio(slot(2)));
     }
 
     #[cfg(not(unix))]
@@ -406,7 +455,7 @@ fn cp_effective_path(opts_val: f64) -> String {
             return CP_DEFAULT_PATH.to_string();
         }
     }
-    std::env::var("PATH").unwrap_or_else(|_| CP_DEFAULT_PATH.to_string())
+    crate::process::effective_environment_var("PATH").unwrap_or_else(|| CP_DEFAULT_PATH.to_string())
 }
 
 /// Whether `path` names an executable regular file (following symlinks).
@@ -636,6 +685,58 @@ mod posix_spawn_tests {
 mod tests {
     use super::cp_should_use_node_interpreter;
 
+    #[cfg(unix)]
+    #[test]
+    fn a_pipe_slot_is_a_close_on_exec_socket_pair() {
+        use std::io::{Read, Write};
+        use std::os::fd::AsRawFd;
+        let (parent, child) = super::cp_socketpair().expect("socketpair");
+        for end in [&parent, &child] {
+            // SAFETY: `end` is an open descriptor and `stat` is plain old data.
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            assert_eq!(unsafe { libc::fstat(end.as_raw_fd(), &mut stat) }, 0);
+            assert_eq!(stat.st_mode & libc::S_IFMT, libc::S_IFSOCK);
+            // SAFETY: F_GETFD on an open descriptor.
+            let flags = unsafe { libc::fcntl(end.as_raw_fd(), libc::F_GETFD) };
+            assert_ne!(flags & libc::FD_CLOEXEC, 0, "both ends close on exec");
+        }
+        let mut parent = std::fs::File::from(parent);
+        let mut child = std::fs::File::from(child);
+        child.write_all(b"up").unwrap();
+        parent.write_all(b"down").unwrap();
+        let mut buf = [0; 4];
+        parent.read_exact(&mut buf[..2]).unwrap();
+        assert_eq!(&buf[..2], b"up");
+        child.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"down");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_pipe_slot_reaches_the_child_as_a_socket() {
+        use super::{cp_apply_live_stdio, CpStdio};
+        use std::io::Read;
+        let mut command = std::process::Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "for fd in 0 1 2 3; do [ -S /dev/fd/$fd ] || exit $((10 + fd)); done; printf ok >&3",
+        ]);
+        let parents = cp_apply_live_stdio(&mut command, &[CpStdio::Pipe; 4]).expect("stdio");
+        assert_eq!(
+            parents.iter().map(|(fd, _)| *fd).collect::<Vec<_>>(),
+            [0, 1, 2, 3],
+            "one parent end per pipe slot, stdio included"
+        );
+        let mut child = command.spawn().expect("spawn");
+        // The child ends live in `command`; drop them so slot 3 reads to EOF.
+        drop(command);
+        let mut out = String::new();
+        let slot3 = parents.into_iter().find(|(fd, _)| *fd == 3).unwrap().1;
+        std::fs::File::from(slot3).read_to_string(&mut out).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(0));
+        assert_eq!(out, "ok");
+    }
+
     #[test]
     fn self_exec_node_cli_eval_modes_use_node_interpreter() {
         let current = std::env::current_exe().expect("current executable");
@@ -675,5 +776,146 @@ mod tests {
             "some-other-program",
             &["-e".to_string(), "console.log(45)".to_string()],
         ));
+    }
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    use crate::process::WorkerProcessState;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn private_worker_default_child_environment_uses_native_backing() {
+        let state =
+            WorkerProcessState::capture(Some(&[("PERRY_CHILD_PRIVATE".into(), "private".into())]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options =
+                scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+            for options in [cp_undefined(), options.get_nanbox_f64()] {
+                let command = cp_build_command("/usr/bin/env", &[], options);
+                assert_eq!(
+                    command.get_envs().collect::<Vec<_>>(),
+                    [(
+                        OsStr::new("PERRY_CHILD_PRIVATE"),
+                        Some(OsStr::new("private"))
+                    )]
+                );
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn main_child_defaults_preserve_raw_os_inheritance() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let options =
+            scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        for options in [cp_undefined(), options.get_nanbox_f64()] {
+            let command = cp_build_command("native-child", &[], options);
+            assert_eq!(
+                command.get_envs().count(),
+                0,
+                "OS defaults must not become a lossy string replacement"
+            );
+        }
+    }
+
+    fn explicit_options(scope: &crate::gc::RuntimeHandleScope) -> f64 {
+        let env = scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        let value = cp_box_string("explicit");
+        cp_set_field(env.get_nanbox_f64(), b"ONLY", value);
+        cp_set_field(env.get_nanbox_f64(), b"OMITTED", cp_undefined());
+        cp_set_field(env.get_nanbox_f64(), b"BOOL", TAG_FALSE_F64);
+        let options =
+            scope.root_nanbox_f64(cp_box_ptr(crate::object::js_object_alloc(0, 0).cast()));
+        cp_set_field(options.get_nanbox_f64(), b"env", env.get_nanbox_f64());
+        options.get_nanbox_f64()
+    }
+
+    #[test]
+    fn explicit_child_environment_replaces_private_defaults() {
+        let state = WorkerProcessState::capture(Some(&[("PRIVATE".into(), "parent".into())]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(explicit_options(&scope));
+            let command = cp_build_command("native-child", &[], options.get_nanbox_f64());
+            assert_eq!(
+                command.get_envs().collect::<Vec<_>>(),
+                [
+                    (OsStr::new("BOOL"), Some(OsStr::new("false"))),
+                    (OsStr::new("ONLY"), Some(OsStr::new("explicit"))),
+                ]
+            );
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn fork_bootstrap_fields_overlay_the_selected_environment() {
+        let state = WorkerProcessState::capture(Some(&[
+            ("PRIVATE".into(), "parent".into()),
+            ("NODE_CHANNEL_FD".into(), "old".into()),
+        ]));
+        std::thread::spawn(move || {
+            state.install();
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let options = scope.root_nanbox_f64(explicit_options(&scope));
+            for (options, base_key) in [
+                (cp_undefined(), "PRIVATE"),
+                (options.get_nanbox_f64(), "ONLY"),
+            ] {
+                let mut command = Command::new("native-child");
+                crate::child_process::fork::cp_apply_fork_environment(
+                    &mut command,
+                    options,
+                    7,
+                    true,
+                    Some("[]"),
+                );
+                let environment: std::collections::BTreeMap<_, _> = command.get_envs().collect();
+                assert!(environment.contains_key(OsStr::new(base_key)));
+                assert_eq!(
+                    environment.get(OsStr::new("NODE_CHANNEL_FD")),
+                    Some(&Some(OsStr::new("7")))
+                );
+                assert_eq!(
+                    environment.get(OsStr::new("NODE_CHANNEL_SERIALIZATION_MODE")),
+                    Some(&Some(OsStr::new("advanced")))
+                );
+                assert_eq!(
+                    environment.get(OsStr::new("PERRY_PROCESS_EXEC_ARGV")),
+                    Some(&Some(OsStr::new("[]")))
+                );
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_worker_default_path_resolves_its_own_executable() {
+        let directory =
+            std::env::temp_dir().join(format!("perry-child-private-path-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("perry-private-shell");
+        std::os::unix::fs::symlink("/bin/sh", &executable).unwrap();
+        let state = WorkerProcessState::capture(Some(&[(
+            "PATH".into(),
+            directory.to_str().unwrap().into(),
+        )]));
+        std::thread::spawn(move || {
+            state.install();
+            let command = cp_command_for_program("perry-private-shell", cp_undefined());
+            assert_eq!(command.get_program(), executable.as_os_str());
+        })
+        .join()
+        .unwrap();
     }
 }

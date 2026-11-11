@@ -140,6 +140,9 @@ const PINNED_LEAF: &[&str] = &[
     // generic, JS-capable `js_array_length`).
     "js_array_length_leaf",
     "perry_probe_set",
+    // The inline slot store's out-of-line obligations (string alias demotion,
+    // the gated slot barrier): its call site carries no statepoint.
+    "js_slot_store_obligations",
     // #9480's own-field dispatch probe; it walks a shape's keys array the
     // same way.
     "js_object_get_own_field_or_undef",
@@ -415,4 +418,32 @@ fn literal_layout_birth_keeps_generic_registration_effect() {
     assert!(t.get(name).is_some(), "the new ABI entry must be present");
     assert_eq!(class(&t, name), Class::Reenters);
     assert!(throws(&t, name));
+}
+
+/// Each witness is an exported runtime body, checked in the generated table.
+#[test]
+#[ignore = "requires freshly built runtime sidecars"]
+fn native_throw_classes_in_generated_sidecar() {
+    use perry_gc_effects::ThrowClass;
+    let t = table();
+    for (symbol, expected) in [
+        ("js_is_truthy", ThrowClass::None),
+        ("js_assert_fail", ThrowClass::Open),
+    ] {
+        let row = t
+            .get(symbol)
+            .unwrap_or_else(|| panic!("missing seeded runtime body {symbol}"));
+        assert_eq!(row.throw_class, expected, "{symbol}");
+    }
+    for symbol in ["js_number_coerce", "js_proxy_get"] {
+        assert_ne!(
+            t[symbol].throw_class,
+            ThrowClass::None,
+            "native validation throws survive the program-call edge: {symbol}"
+        );
+    }
+    assert_eq!(
+        t["js_assert_fail"].passes.iter().next().unwrap().argument,
+        0
+    );
 }

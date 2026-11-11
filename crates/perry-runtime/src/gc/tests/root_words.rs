@@ -336,6 +336,7 @@ fn precise_global_root_survives_a_real_collection() {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The decoder is the single place that knows the word forms; assert the two
 /// forms it distinguishes round-trip through `encode` without changing
 /// representation.

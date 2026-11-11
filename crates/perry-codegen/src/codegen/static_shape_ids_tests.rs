@@ -335,6 +335,29 @@ fn constfn_body_symbols_are_seedable_final_static_content() {
     );
 }
 
+/// A `11` lane without a body is an I32 lane (I32 at rest), not a ConstFn
+/// lane missing its body: the sidecar line of `{ j: 1, text: "" }` must
+/// decode to the shape the cold build seeded, or every warm build of such a
+/// literal loses its cache entry.
+#[test]
+fn i32_lane_seed_round_trips_through_the_sidecar_line() {
+    let shape = BirthShape {
+        keys: b"j\0text\0".to_vec(),
+        key_count: 2,
+        live: 2,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep: 0b11,
+        constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
+        attrs: Vec::new(),
+    };
+    let line = encode_static_seed(0x8000_0058, &shape);
+    assert_eq!(line, "2147483736 2 2 6a007465787400 0x3 -");
+    assert_eq!(decode_static_seed(&line), Some((0x8000_0058, shape)));
+}
+
 #[test]
 fn constfn_birth_cannot_publish_a_static_guard_or_seed() {
     let shape = BirthShape {
@@ -938,4 +961,79 @@ fn the_births_pre_pass_requests_no_identity() {
         requested_shape_id_for_keys_global("perry_class_keys_probe_pre__C"),
         None
     );
+}
+
+fn birth_with_bodies(slots: &[u32]) -> BirthShape {
+    let keys: Vec<u8> = (0..=*slots.last().unwrap())
+        .flat_map(|i| format!("k{i}\0").into_bytes())
+        .collect();
+    let n = slots.last().unwrap() + 1;
+    BirthShape {
+        keys,
+        key_count: n,
+        live: n,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep: slots
+            .iter()
+            .filter(|s| **s < 32)
+            .fold(0, |rep, s| rep | (3u64 << (2 * s))),
+        constfn: slots
+            .iter()
+            .map(|&slot| ConstFnBirth {
+                slot,
+                symbol: format!("body_{slot}"),
+            })
+            .collect(),
+        private: Vec::new(),
+        brands: Vec::new(),
+        attrs: Vec::new(),
+    }
+}
+
+#[test]
+fn constfn_slots_past_word_zero_hash_apart_round_trip_and_keep_old_hashes() {
+    // A slot is hashed as one byte below 255, so every existing content keeps
+    // its hash; a larger slot escapes and does not collide with its low byte.
+    let low = birth_with_bodies(&[1, 5]);
+    let mut moved = low.clone();
+    moved.constfn[1].slot = 5 + 256;
+    assert_ne!(low.content_hash(), moved.content_hash());
+    let one_byte: u64 = {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut eat = |bytes: &[u8]| {
+            for &b in bytes {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        };
+        let s = &low;
+        eat(&(s.keys.len() as u64).to_le_bytes());
+        eat(&s.keys);
+        eat(&s.key_count.to_le_bytes());
+        eat(&s.live.to_le_bytes());
+        eat(&[0]);
+        eat(&[3]);
+        eat(&s.rep.to_le_bytes());
+        eat(&[4]);
+        eat(&2u32.to_le_bytes());
+        for e in &s.constfn {
+            eat(&[e.slot as u8]);
+            eat(&(e.symbol.len() as u32).to_le_bytes());
+            eat(e.symbol.as_bytes());
+        }
+        h
+    };
+    assert_eq!(
+        low.content_hash(),
+        one_byte,
+        "slots below 255 hash as one byte"
+    );
+    // Seed sidecar round trip with bodies at slots 3, 40 and 300.
+    let shape = birth_with_bodies(&[3, 40, 300]);
+    let line = encode_static_seed(7, &shape);
+    let (id, back) = decode_static_seed(&line).expect("seed with tail bodies decodes");
+    assert_eq!(id, 7);
+    assert_eq!(back.constfn, shape.constfn);
+    assert_eq!(back.rep, shape.rep);
 }

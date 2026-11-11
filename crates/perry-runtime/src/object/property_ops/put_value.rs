@@ -325,7 +325,11 @@ pub extern "C" fn js_put_value_set(
         stored
     };
     if !ok && strict != 0 {
-        let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
+        // `ordinary_set_with_receiver` above may have evaluated a deferred
+        // namespace and moved the heap; read the key back through its handle
+        // rather than the pre-set local.
+        let key_name = key_to_rust_string(property_key_handle.get_nanbox_f64())
+            .unwrap_or_else(|| "property".to_string());
         let receiver = receiver_handle.get_nanbox_f64();
         if let Some(class_name) = getter_only_accessor_owner_name(receiver, &key_name) {
             crate::collection_iter::throw_type_error(&format!(
@@ -414,6 +418,17 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    // A Number key on a typed array is its numeric index, answered before
+    // the ordinary-object probes below read the receiver as an ObjectHeader.
+    if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
+        && crate::typedarray_props::typed_array_set_number_key(
+            (target.to_bits() & POINTER_MASK) as usize,
+            key,
+            value,
+        )
+    {
+        return value;
+    }
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
         Err(key) => key,
@@ -618,7 +633,7 @@ fn object_array_numeric_write_slots(
         unsafe { crate::value::addr_class::try_read_gc_header(array_addr) },
         "array header is unavailable",
     )?;
-    if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(array_gc.obj_type)
         || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || crate::array::array_has_element_descriptors(
             array_addr as *const crate::array::ArrayHeader,
@@ -716,7 +731,7 @@ fn object_array_numeric_write_slots(
             return None;
         }
         let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_gc.obj_type)
             || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -759,7 +774,6 @@ fn object_array_numeric_write_slots(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
         )?;
-    let shared_rep = crate::object::field_rep_store::shape_rep(LayoutWord(shared_shape_id));
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every
@@ -771,7 +785,7 @@ fn object_array_numeric_write_slots(
         // A finite Number preserves Any/F64, but contradicts a ConstFn body
         // fact. The clone writes without the checked slot funnel, so SPECIAL
         // targets must take the ordinary loop before any slot is published.
-        if crate::object::field_rep::slot_rep(shared_rep, slot)
+        if crate::object::field_rep_store::object_slot_rep_of(LayoutWord(shared_shape_id), slot as u32)
             == crate::object::field_rep::REP_SPECIAL
         {
             trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
@@ -808,7 +822,7 @@ fn object_array_numeric_write_slots(
         let Some(gc) = crate::value::addr_class::try_read_gc_header(spill as usize) else {
             return false;
         };
-        if gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(gc.obj_type)
             || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -904,7 +918,7 @@ pub extern "C" fn js_object_array_keytable_write_guard(
     let Some(kt_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(kt_addr) }) else {
         return 0;
     };
-    if kt_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(kt_gc.obj_type)
         || kt_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return 0;

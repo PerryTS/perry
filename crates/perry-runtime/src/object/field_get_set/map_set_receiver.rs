@@ -9,11 +9,19 @@ use super::*;
 /// `SetHeader` — NOT an `ObjectHeader`, so the generic object walk must never
 /// see it).
 ///
-/// Order: built-in `size` → own expando keys (`cache.custom = x`, stored in
-/// the exotic side table under `ExoticKind::Map`/`Set` — own props win over
-/// inherited members) → builtin-prototype data fields (`m.set`,
-/// `m.constructor`, … — what makes `m.set.call(m, k, v)` reflective dispatch
-/// and `(new Map()).constructor === Map` work) → undefined.
+/// Order: the ordinary [[Get]]: own expando keys (`cache.custom = x`, stored
+/// in the exotic side table under `ExoticKind::Map`/`Set` — own props win over
+/// inherited members) → the receiver's [[Prototype]] chain (`m.set`,
+/// `m.constructor`, a subclass's `get size`, … — what makes
+/// `m.set.call(m, k, v)` reflective dispatch and `(new Map()).constructor ===
+/// Map` work) → undefined.
+///
+/// `size` reads the storage directly only when that IS what the chain would
+/// answer: no own `size`, the receiver's [[Prototype]] is the intrinsic
+/// `%Map.prototype%` / `%Set.prototype%`, and that prototype is unwritten (so
+/// its `size` is still the builtin getter). Any other receiver (a subclass
+/// instance, a relinked prototype, a redefined `size`) takes the chain, which
+/// finds the user's accessor or the real builtin getter.
 pub(crate) unsafe fn map_set_instance_property(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -23,13 +31,7 @@ pub(crate) unsafe fn map_set_instance_property(
         let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
         let key_len = (*key).byte_len as usize;
         let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-        if key_bytes == b"size" {
-            return if is_map {
-                JSValue::number(crate::map::js_map_size(obj as *const crate::map::MapHeader) as f64)
-            } else {
-                JSValue::number(crate::set::js_set_size(obj as *const crate::set::SetHeader) as f64)
-            };
-        }
+        let is_size = key_bytes == b"size";
         if let Ok(name) = std::str::from_utf8(key_bytes) {
             let kind = if is_map {
                 crate::object::exotic_expando::ExoticKind::Map
@@ -55,9 +57,28 @@ pub(crate) unsafe fn map_set_instance_property(
         let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64));
         let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
         let recorded = crate::object::prototype_chain::object_static_prototype(obj as usize);
-        let proto = recorded.unwrap_or_else(|| {
-            crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" }).to_bits()
-        });
+        let builtin =
+            crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" }).to_bits();
+        if is_size && recorded.is_none_or(|bits| bits == builtin) {
+            let family = if is_map {
+                crate::object::builtin_proto::BuiltinProto::Map
+            } else {
+                crate::object::builtin_proto::BuiltinProto::Set
+            };
+            if crate::object::builtin_proto::prototype_unwritten(family) {
+                let cell = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+                return if is_map {
+                    JSValue::number(
+                        crate::map::js_map_size(cell as *const crate::map::MapHeader) as f64,
+                    )
+                } else {
+                    JSValue::number(
+                        crate::set::js_set_size(cell as *const crate::set::SetHeader) as f64,
+                    )
+                };
+            }
+        }
+        let proto = recorded.unwrap_or(builtin);
         let obj = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
         let key =
             crate::value::js_nanbox_get_pointer(key.get_nanbox_f64()) as *const crate::StringHeader;

@@ -9,7 +9,7 @@ use crate::object::{
     ObjectHeader,
 };
 use crate::string::{js_string_from_bytes, js_string_materialize_to_heap, StringHeader};
-use crate::value::{js_nanbox_pointer, JSValue, TAG_FALSE, TAG_TRUE, TAG_UNDEFINED};
+use crate::value::{JSValue, TAG_FALSE, TAG_TRUE, TAG_UNDEFINED};
 
 const TAG_UNDEFINED_F64: f64 = f64::from_bits(TAG_UNDEFINED);
 
@@ -791,7 +791,7 @@ fn heap_ptr_object(value: f64) -> Option<*const u8> {
 }
 
 fn array_ptr(value: f64) -> Option<*const crate::array::ArrayHeader> {
-    let ptr = heap_ptr_with_gc_type(value, crate::gc::GC_TYPE_ARRAY)?;
+    let ptr = heap_ptr_with_gc_type(value, crate::gc_array_type_pat!())?;
     Some(ptr as *const crate::array::ArrayHeader)
 }
 
@@ -865,8 +865,7 @@ fn throw_invalid_option_value(raw_name: &str) -> ! {
 fn throw_parse_args_error(code: &'static str, message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 trait JSValueBits {

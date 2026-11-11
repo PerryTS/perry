@@ -680,14 +680,18 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TARGET");
 
     // Runtime catches (`exception::trap`). Native targets catch through the
-    // landing-pad shim `perry_trap.ll`; WASI keeps the setjmp trampoline
-    // (#9305: it must be compiled by a C compiler, rustc cannot express
-    // `returns_twice`), which the wasm SjLj pass lowers to wasm EH.
+    // landing-pad shim `perry_trap.ll`; WASI catches through the wasm
+    // catchpad shim `perry_wasm_trap.ll` (#13337), with no setjmp.
     println!("cargo:rerun-if-changed=src/ffi/perry_trap.ll");
-    // WASI uses the standardized wasm EH proposal for SjLj, paired with
-    // wasi-libc's libsetjmp and the generated-code lowering (#11378).
+    // WASI uses the standardized wasm EH proposal (try_table/throw_ref), the
+    // same lowering as generated code.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {
         println!("cargo:rerun-if-changed=src/ffi/perry_wasi_net.c");
+        // Linear memory starts at 0. The runtime's own test link places the
+        // stack first at perry's size (`link/wasi.rs` `STACK_SIZE`), so static
+        // data, like every heap address, lies above the small-handle band.
+        println!("cargo:rustc-link-arg=-z");
+        println!("cargo:rustc-link-arg=stack-size=8388608");
         println!("cargo:rerun-if-changed=src/ffi/perry_wasm_throw.c");
         println!("cargo:rerun-if-changed=src/ffi/perry_wasm_trap.ll");
         let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());

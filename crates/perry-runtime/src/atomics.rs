@@ -23,14 +23,12 @@ fn object_key(bytes: &[u8]) -> *const crate::StringHeader {
 
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 fn numeric_integer_kind(kind: u8) -> bool {
@@ -781,11 +779,11 @@ pub extern "C" fn js_atomics_wait_async(
             view.get_numeric(idx) == expected_i32
         }
     };
-    // The waiter below is a background thread, and wasm32-wasip1 cannot spawn
+    // The waiter below is a background thread, and WASI cannot spawn
     // one. Fail loudly before any waiter is enqueued rather than panic in the
     // spawn.
-    if cfg!(all(target_os = "wasi", target_env = "p1")) {
-        throw_type_error(b"Atomics.waitAsync is not supported on wasip1");
+    if cfg!(target_os = "wasi") {
+        throw_type_error(b"Atomics.waitAsync is not supported on WASI");
     }
     let addr = view.slot_addr(idx);
     let handle = if addr == 0 {

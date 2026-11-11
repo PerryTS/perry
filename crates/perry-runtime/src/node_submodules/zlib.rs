@@ -325,6 +325,26 @@ pub extern "C" fn js_zlib_brotli_quality(opts: f64) -> i32 {
     ) as i32
 }
 
+/// Whether a Brotli decoder accepts large-window streams (window up to 1 GiB).
+/// RFC 7932 caps the window at 16 MiB; like Node, only an explicit nonzero
+/// `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]` (parameter 1) opts out of that cap.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_large_window(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
+    let value = crate::value::JSValue::from_bits(
+        gzip_read_option(params.get_nanbox_f64(), b"1").to_bits(),
+    );
+    let enabled = if value.is_number() {
+        let n = value.as_number();
+        n != 0.0 && !n.is_nan()
+    } else {
+        value.is_bool() && value.as_bool()
+    };
+    i32::from(enabled)
+}
+
 fn validate_dictionary_value(value: f64) {
     if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
         return;

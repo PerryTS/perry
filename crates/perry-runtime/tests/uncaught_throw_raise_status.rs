@@ -44,7 +44,7 @@ pub unsafe extern "C-unwind" fn _Unwind_RaiseException(exception: *mut c_void) -
 
 extern "C-unwind" fn throw_on_a_bare_thread(_arg: *mut c_void) -> *mut c_void {
     perry_runtime::gc::initialize_runtime_fixture();
-    perry_runtime::exception::js_throw(7.0)
+    perry_runtime::exception::throw_program_value(7.0)
 }
 
 fn throw_with_no_handler_anywhere() -> ! {

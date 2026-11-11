@@ -49,7 +49,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    shutil.copyfile(root / 'test-wasi/components/p3-command/host.ts', out / 'host.ts')
+    shutil.copyfile(root / 'tests/integration/wasi/components/p3-command/host.ts', out / 'host.ts')
     env = os.environ | {'PERRY_RUNTIME_DIR': str(args.runtime_dir.resolve()),
                         'PERRY_NO_AUTO_OPTIMIZE': '1', 'PERRY_CODEGEN_CPU_SLOTS': '4'}
     rows = []

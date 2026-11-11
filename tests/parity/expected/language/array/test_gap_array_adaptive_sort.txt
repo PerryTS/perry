@@ -1,0 +1,13 @@
+stable objects and run boundaries
+mixed pointers and numbers
+strings ["","a","a","aa","z","😀","￿"]
+comparator coercion
+sparse and copying sorts
+mutating and reentrant comparators
+receiver changes during sort
+strict sorted suffix deletion
+allocating setter write-back
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.1: built-in objects are read-only in a compiled program
+indexed prototype sorting
+throwing comparators and recovery

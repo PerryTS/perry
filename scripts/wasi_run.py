@@ -20,6 +20,7 @@ import sys
 import tempfile
 
 import wasi_imports_check
+from gc_corpus_sources import SourceResolutionError, resolve_sources
 
 ROOT = Path(__file__).resolve().parent.parent
 GAP_SAMPLES = [
@@ -34,6 +35,27 @@ CORE_ACCEPTANCE = {"bytes", "date", "filesystem", "gc", "tagged_values", "timer"
 # needs wasmtime's exception-handling proposal switched on.
 TARGETS = {"p2": "wasi", "p1": "wasip1"}
 WASMTIME_FLAGS = {"p2": [], "p1": ["-W", "exceptions=y"]}
+
+
+def gap_sources(root: Path, filters: list[str] | tuple[str, ...] = (), *,
+                samples: list[str] | tuple[str, ...] | None = None) -> list[Path]:
+    """Resolve filtered sample IDs, retaining legacy locators and precedence."""
+    names = [name for name in (GAP_SAMPLES if samples is None else samples)
+             if not filters or any(f in name for f in filters)]
+    sources = {name: root / "tests/fixtures/programs" / f"{name}.ts" for name in names}
+    pending = [name for name in names if not sources[name].exists()]
+    if pending:
+        try:
+            sources.update(resolve_sources(root, pending))
+        except SourceResolutionError as exc:
+            if any(issue.kind != "unknown" for issue in exc.issues):
+                raise
+            # Missing samples keep reaching the oracle through the legacy path.
+            missing = {issue.case_id for issue in exc.issues}
+            remaining = [name for name in pending if name not in missing]
+            if remaining:
+                sources.update(resolve_sources(root, remaining))
+    return [sources[name] for name in names]
 
 
 def check_imports(wasm: Path, allow_perry_net: bool = False,
@@ -96,12 +118,26 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
                 result["detail"] = imports_report[-4000:]
                 return result
         result["stage"] = "run"
-        executed = subprocess.run(
-            [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
-             *config.get("program_args", [])],
-            cwd=output, capture_output=True, timeout=timeout,
-            # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
-            **({"input": config["stdin"].encode()} if "stdin" in config else {}))
+        # `peer` names a host-side helper in the fixtures' _helpers directory that
+        # runs beside the guest; the words of its first output line (the ports it
+        # bound) are appended to the program arguments.
+        peer = None
+        peer_args: list[str] = []
+        if "peer" in config:
+            peer = subprocess.Popen([sys.executable, str(source.parent / "_helpers" / config["peer"])],
+                                    stdout=subprocess.PIPE, text=True)
+            peer_args = peer.stdout.readline().split()
+        try:
+            executed = subprocess.run(
+                [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
+                 *config.get("program_args", []), *peer_args],
+                cwd=output, capture_output=True, timeout=timeout,
+                # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
+                **({"input": config["stdin"].encode()} if "stdin" in config else {}))
+        finally:
+            if peer is not None:
+                peer.kill()
+                peer.wait()
         (output / f"{name}.stderr").write_bytes(executed.stderr)
         actual = normalized(executed.stdout) + f"exit {executed.returncode}\n"
         (output / f"{name}.stdout").write_text(actual, encoding="utf-8")
@@ -140,11 +176,14 @@ def main() -> int:
         parser.error("--keep-intermediates requires --output")
     if args.flavour == "p1" and args.suite == "core":
         parser.error("--suite core is a P2 set; use smoke, acceptance or gap with --flavour p1")
-    fixtures = ROOT / "scripts" / ("wasi_smoke" if args.suite == "smoke" else "wasi_acceptance")
+    fixtures = ROOT / "tests/integration/wasi" / ("smoke" if args.suite == "smoke" else "acceptance")
     if args.flavour == "p1" and args.suite == "acceptance":
         fixtures /= "p1"
-    sources = ([ROOT / "test-files" / f"{name}.ts" for name in GAP_SAMPLES]
-               if args.suite == "gap" else sorted(fixtures.glob("*.ts")))
+    try:
+        sources = (gap_sources(ROOT, args.filter) if args.suite == "gap"
+                   else sorted(fixtures.glob("*.ts")))
+    except SourceResolutionError as exc:
+        parser.error(str(exc))
     if args.suite == "core":
         missing = CORE_ACCEPTANCE - {p.stem for p in sources}
         if missing:

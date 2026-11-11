@@ -140,38 +140,38 @@ echo "Using version: $LATEST"
 
 URL="https://github.com/$REPO/releases/download/$LATEST/$ARTIFACT"
 
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+PERRY_INSTALL_TMP=$(mktemp -d)
+trap 'rm -rf "$PERRY_INSTALL_TMP"' EXIT
 
 echo "Downloading $ARTIFACT..."
 START=$(date +%s 2>/dev/null || echo 0)
-curl -fL $CURL_PROGRESS -o "$TMPDIR/perry.tar.gz" "$URL"
+curl -fL $CURL_PROGRESS -o "$PERRY_INSTALL_TMP/perry.tar.gz" "$URL"
 END=$(date +%s 2>/dev/null || echo 0)
 
 if [ "$END" -gt "$START" ] && [ "$START" -gt 0 ]; then
-  echo "  Done in $((END - START))s ($(ls -lh "$TMPDIR/perry.tar.gz" | awk '{print $5}'))"
+  echo "  Done in $((END - START))s ($(ls -lh "$PERRY_INSTALL_TMP/perry.tar.gz" | awk '{print $5}'))"
 fi
 
 echo "Extracting..."
 if [ -n "$PV" ]; then
-  pv "$TMPDIR/perry.tar.gz" | tar xz -C "$TMPDIR"
+  pv "$PERRY_INSTALL_TMP/perry.tar.gz" | tar xz -C "$PERRY_INSTALL_TMP"
 else
-  tar xzf "$TMPDIR/perry.tar.gz" -C "$TMPDIR"
+  tar xzf "$PERRY_INSTALL_TMP/perry.tar.gz" -C "$PERRY_INSTALL_TMP"
 fi
 
 # Install binary
 if [ -w "$INSTALL_DIR" ]; then
-  cp "$TMPDIR/perry" "$INSTALL_DIR/perry"
+  cp "$PERRY_INSTALL_TMP/perry" "$INSTALL_DIR/perry"
   chmod 755 "$INSTALL_DIR/perry"
   # Install libraries alongside binary
-  for lib in "$TMPDIR"/libperry_*.a; do
+  for lib in "$PERRY_INSTALL_TMP"/libperry_*.a "$PERRY_INSTALL_TMP"/libperry_*.a.gc-effects; do
     [ -f "$lib" ] && cp "$lib" "$LIB_DIR/"
   done
 else
   echo "Installing to $INSTALL_DIR (requires sudo)..."
-  sudo cp "$TMPDIR/perry" "$INSTALL_DIR/perry"
+  sudo cp "$PERRY_INSTALL_TMP/perry" "$INSTALL_DIR/perry"
   sudo chmod 755 "$INSTALL_DIR/perry"
-  for lib in "$TMPDIR"/libperry_*.a; do
+  for lib in "$PERRY_INSTALL_TMP"/libperry_*.a "$PERRY_INSTALL_TMP"/libperry_*.a.gc-effects; do
     [ -f "$lib" ] && sudo cp "$lib" "$LIB_DIR/"
   done
 fi

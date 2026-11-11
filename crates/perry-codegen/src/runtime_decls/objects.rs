@@ -407,6 +407,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     for hook in crate::ext_registry::wrapper_install_hooks() {
         module.declare_function(hook, VOID, &[]);
     }
+    // perry-ext-net's `tls.connect` provider, beside `net`'s hook for a `tls`
+    // import (perry `run_pipeline`).
+    module.declare_function("js_ext_net_tls_install", VOID, &[]);
     module.declare_function("js_nm_install_node_pty", VOID, &[]);
     module.declare_function("js_nm_install_os", VOID, &[]);
     module.declare_function("js_nm_install_path", VOID, &[]);
@@ -470,6 +473,13 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
+    // The static-key store site (`expr/put_value_store_ic.rs`): the store
+    // probe, else the complete `[[Set]]`; returns the assignment's value.
+    module.declare_function(
+        "perry_store_or_put",
+        DOUBLE,
+        &[PTR, I64, I64, I64, DOUBLE, I32],
+    );
     module.declare_function(
         "perry_family_run_admits",
         I32,
@@ -507,6 +517,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_run_module_init_guarded", VOID, &[I64, I64]);
+    module.declare_function("js_create_deferred_namespace", DOUBLE, &[I64]);
+    module.declare_function("js_deferred_namespace_not_ready", DOUBLE, &[]);
+    module.declare_function("js_deferred_module_ready", I32, &[I64, I64, I32]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).

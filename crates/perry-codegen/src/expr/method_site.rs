@@ -63,14 +63,17 @@ fn site_target_enabled(ctx: &FnCtx<'_>) -> bool {
     if *OFF.get_or_init(|| std::env::var("PERRY_METHOD_SITE").as_deref() == Ok("0")) {
         return false;
     }
-    // 64-bit targets only: the site addresses 8-byte slots behind a 16-byte
-    // header and compares an 8-byte receiver word.
+    // The site addresses 8-byte slots behind the 16-byte object header and
+    // compares an 8-byte receiver word. Both are the same on the LP64 targets
+    // and on wasm32 (NaN-boxed words; `target_layout` pads the ILP32 header
+    // to 16), and every pointer-width-dependent offset the site reads comes
+    // from `target_layout`. Other 32-bit targets have no lowering yet.
     let triple = ctx.target_triple;
-    if !(triple.starts_with("x86_64")
+    let lp64 = (triple.starts_with("x86_64")
         || triple.starts_with("aarch64")
         || triple.starts_with("arm64"))
-        || triple.contains("32")
-    {
+        && !triple.contains("32");
+    if !(lp64 || crate::target_layout::wasm32_lowering(triple)) {
         return false;
     }
     // A typed-feedback (profiling) build records every method call in the
@@ -259,7 +262,8 @@ fn emit_function_value_call(
     let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
     let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
     let closure_kind = crate::runtime_abi::GC_TYPE_CLOSURE.to_string();
-    let info_offset = crate::runtime_abi::CLOSURE_INFO_OFFSET as i64;
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple) as i64;
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
     let this_flag = (crate::runtime_abi::CLOSURE_CAPTURES_THIS_FLAG as i32).to_string();
     let kind_idx = ctx.new_block("msite.kind");
     let call_idx = ctx.new_block("msite.call");
@@ -296,7 +300,14 @@ fn emit_function_value_call(
             let blk = ctx.block();
             let ip = emit_field_ptr(blk, &u, info_offset);
             let info = blk.load(PTR, &ip);
-            blk.load(I64, &info)
+            // `JsFunctionInfo.code` is a pointer: 4 bytes (a table index) on
+            // wasm32, so it is read at its own width there.
+            if ilp32 {
+                let code = blk.load(PTR, &info);
+                blk.ptrtoint(&code, I64)
+            } else {
+                blk.load(I64, &info)
+            }
         };
         for lane in lanes {
             if seen.contains(&lane.body.as_str()) {

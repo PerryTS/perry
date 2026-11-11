@@ -183,6 +183,9 @@ pub(super) fn prove_fresh_prologue(alloc: &InstanceAlloc) -> bool {
 pub(super) struct ConstructorBirth {
     /// None keeps the existing finite-number guard and constructor stores.
     pub(super) fields: Option<Vec<(u32, String)>>,
+    /// An image birth (`new/birth_image.rs`): the nursery arm writes these
+    /// words instead of calling the shared birth.
+    pub(super) image: Option<super::new::birth_image::ImageValues>,
 }
 
 /// The number of distinct static keys the constructor chain of `class` stores
@@ -602,8 +605,9 @@ fn emit_instance_alloc_inner(
             field_count,
         ) && image_size_agrees)
             || wide_birth_image;
-        // ILP32 (wasm32 WASI, #11378): the inline bump below reads
-        // `InlineArenaState` at LP64 offsets; take the outlined call.
+        // The inline bump below reads `InlineArenaState` at the target's
+        // offsets (`target_layout::inline_arena_layout`); ILP32 targets other
+        // than the wasm32 WASI lowering take the outlined call.
         // Small, exactly described births use the same emitted Eden bump
         // regardless of the caller's lexical loop visibility. The runtime's
         // small-birth cutoff is 16 KiB; retain the old admission for larger
@@ -617,7 +621,7 @@ fn emit_instance_alloc_inner(
             );
         if !descriptor_facts_exact
             || (!small_birth && !force_inline_new && !new_site_is_in_loop(ctx))
-            || crate::codegen::helpers::ilp32_target()
+            || !crate::target_layout::inline_births_admitted(ctx.target_triple)
         {
             let (keys_ptr, shape_id) = if deferred_keys {
                 let image_global = ctx.class_header_image_globals[class_name].0.clone();
@@ -682,6 +686,7 @@ fn emit_instance_alloc_inner(
             let total_size_str = total_size.to_string();
 
             // Inline bump-allocator IR.
+            let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
             let state_ptr = load_inline_arena_state(ctx);
             let blk = ctx.block();
 
@@ -693,16 +698,16 @@ fn emit_instance_alloc_inner(
             // state to `block.offset` which is also always 8-aligned. So we
             // skip the `(offset + 7) & -8` align-up step entirely — saves
             // 2 instructions per iter on the hot path.
-            let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-            let offset_val = blk.load(I64, &offset_field_ptr);
+            let (offset_field_ptr, offset_val) =
+                crate::expr::inline_birth::arena_load(blk, &arena, &state_ptr, arena.offset);
             let aligned_off = offset_val.clone();
 
             // new_offset = aligned + total_size
             let new_offset = blk.add(I64, &aligned_off, &total_size_str);
 
             // size = state.size (at byte offset 16)
-            let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-            let size_val = blk.load(I64, &size_field_ptr);
+            let (_, size_val) =
+                crate::expr::inline_birth::arena_load(blk, &arena, &state_ptr, arena.limit);
 
             // fits = new_offset <= size
             let fits = blk.icmp_ule(I64, &new_offset, &size_val);
@@ -793,8 +798,14 @@ fn emit_instance_alloc_inner(
                 crate::expr::HeaderImageSource::EntryValue(value) => value,
             };
             let complete_birth = constructor_birth.filter(|_| !deferred_keys);
-            let compact_slots =
-                complete_birth.and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
+            // I32 at rest (PR C): a compact birth stores its constructor's
+            // values as words of their own; a class with I32 lanes takes the
+            // shared birth and its constructor stores encode (`rest_fields`).
+            let i32_lanes = crate::expr::rest_fields::lanes_of_rep(birth_rep);
+            let image = complete_birth.and_then(|birth| birth.image.as_ref());
+            let compact_slots = complete_birth
+                .filter(|_| i32_lanes == 0 && image.is_none())
+                .and_then(|_| crate::expr::inline_birth::compact_slots(total_size));
             // The canonical bound also excludes births requiring color/seed work.
             let fast_idx = ctx.new_block("alloc.fast");
             let slow_idx = ctx.new_block("alloc.slow");
@@ -802,14 +813,52 @@ fn emit_instance_alloc_inner(
             let fast_label = ctx.block_label(fast_idx);
             let slow_label = ctx.block_label(slow_idx);
             let merge_label = ctx.block_label(merge_idx);
+            // An image site's only birth call is the shared one behind these
+            // two tests; say which arm is the likely one, so values live
+            // across that call are saved next to it and not on the image's
+            // path (`inprocess/cold_paths.rs` on why a call site must say so).
+            let expect = |ctx: &mut FnCtx<'_>, test: &str| {
+                ctx.block().call(
+                    crate::types::I1,
+                    "llvm.expect.i1",
+                    &[(crate::types::I1, test), (crate::types::I1, "true")],
+                )
+            };
+            let fits = if image.is_some() {
+                expect(ctx, &fits)
+            } else {
+                fits
+            };
+            let entry_pred = ctx.block().label.clone();
             ctx.block().cond_br(&fits, &fast_label, &slow_label);
             ctx.current_block = fast_idx;
             let blk = ctx.block();
-            // GC_STORE_AUDIT(INIT): arena allocator metadata, not a JS edge.
-            blk.store(I64, &new_offset, &offset_field_ptr);
+            // Arena allocator metadata, not a JS edge.
+            crate::expr::inline_birth::arena_store(blk, &arena, &new_offset, &offset_field_ptr);
             let data_ptr = blk.load(PTR, &state_ptr);
             let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
-            let fast_handle = if let Some(slots) = compact_slots {
+            // Birth cost: an image birth writes the header and every slot's
+            // final word here. A construction whose values fail the number
+            // test hands its committed bump to the one shared birth below.
+            let mut unadmitted_pred: Option<String> = None;
+            let fast_handle = if let Some(image) = image {
+                if let Some(admit) = &image.admit {
+                    let write_idx = ctx.new_block("birth_image.write");
+                    let write_label = ctx.block_label(write_idx);
+                    let admit = expect(ctx, admit);
+                    unadmitted_pred = Some(ctx.block().label.clone());
+                    ctx.block().cond_br(&admit, &write_label, &slow_label);
+                    ctx.current_block = write_idx;
+                }
+                super::new::birth_image::emit(
+                    ctx,
+                    image,
+                    &raw_fast,
+                    &header_image,
+                    birth_rep,
+                    total_size,
+                )
+            } else if let Some(slots) = compact_slots {
                 crate::expr::inline_birth::fixed_class(
                     ctx,
                     &raw_fast,
@@ -831,27 +880,46 @@ fn emit_instance_alloc_inner(
             let fast_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = slow_idx;
+            let slow_raw = match &unadmitted_pred {
+                Some(pred) => ctx
+                    .block()
+                    .phi(PTR, &[("null", &entry_pred), (&raw_fast, pred)]),
+                None => "null".to_string(),
+            };
             let slow_handle = crate::expr::inline_birth::class(
                 ctx,
-                "null",
+                &slow_raw,
                 &state_ptr,
                 &header_image,
                 birth_rep,
                 false,
             );
+            if image.is_some() {
+                // I32 at rest (PR C): the constructor this arm runs stores
+                // into lanes that start as the word of 0; the image arm
+                // wrote its lanes' final words.
+                crate::expr::rest_fields::emit_birth_fill(ctx, class_name, &slow_handle, i32_lanes);
+            }
             let slow_pred = ctx.block().label.clone();
             ctx.block().br(&merge_label);
             ctx.current_block = merge_idx;
-            if compact_slots.is_some() && complete_birth.unwrap().fields.is_some() {
+            if image.is_some()
+                || compact_slots.is_some() && complete_birth.unwrap().fields.is_some()
+            {
                 *fields_written = Some(ctx.block().phi(
                     crate::types::I1,
                     &[("true", &fast_pred), ("false", &slow_pred)],
                 ));
             }
-            ctx.block().phi(
+            let handle = ctx.block().phi(
                 I64,
                 &[(&fast_handle, &fast_pred), (&slow_handle, &slow_pred)],
-            )
+            );
+            // I32 at rest (PR C): each I32 lane starts as the word of 0.
+            if image.is_none() {
+                crate::expr::rest_fields::emit_birth_fill(ctx, class_name, &handle, i32_lanes);
+            }
+            handle
         }
     } else {
         // Fallback: build the packed-keys string at this site and

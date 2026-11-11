@@ -107,13 +107,17 @@ const customOneKeys: string[] = [];
 for (const key in customOne) customOneKeys.push(key);
 console.log("custom-one:", customOneKeys.join(","));
 
-// The cached Object.prototype verdict is shape-generation keyed.  Installing
-// an enumerable property after the hot arm was warmed must invalidate it.
-(Object.prototype as any).lateEnumerable = 3;
+// The cached Object.prototype verdict is shape-generation keyed.  Making an
+// Object.prototype member enumerable after the hot arm was warmed must
+// invalidate it.  DEC 250 (Q2): the program adds no key there; `constructor`
+// is the one image member it may redefine.
+Object.defineProperty(Object.prototype, "constructor", { enumerable: true });
 const latePrototypeKeys: string[] = [];
 for (const key in { own: 1 }) latePrototypeKeys.push(key);
-delete (Object.prototype as any).lateEnumerable;
-console.log("late-prototype:", latePrototypeKeys.join(","));
+Object.defineProperty(Object.prototype, "constructor", { enumerable: false });
+const restoredKeys: string[] = [];
+for (const key in { own: 1 }) restoredKeys.push(key);
+console.log("late-prototype:", latePrototypeKeys.join(","), "restored:", restoredKeys.join(","));
 
 const deleting: any = { a: 1, b: 2 };
 const deletionKeys: string[] = [];
@@ -174,7 +178,7 @@ try {
 snapshot: only next: only,added\n\
 ordered: 2,10,word,inherited\n\
 custom-one: own,base\n\
-late-prototype: own,lateEnumerable\n\
+late-prototype: own,constructor restored: own\n\
 mutation: a\n\
 proxy: target\n\
 exception: x\n";

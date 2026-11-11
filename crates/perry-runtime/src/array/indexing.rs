@@ -10,6 +10,7 @@ mod keyed;
 mod proto_chain;
 #[path = "indexing_read_cold.rs"]
 mod read_cold;
+pub(crate) use read_cold::perry_array_read_cold_shared;
 pub(crate) use keyed::js_array_set_index_or_string_with_strictness;
 pub use keyed::{
     js_array_get_index_or_string, js_array_set_index_or_string,
@@ -73,7 +74,9 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
 /// the array element-write paths; cheap (two relaxed atomic loads + compare).
 #[inline]
 pub(crate) fn note_array_index_write(arr: usize) {
-    if !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) && arr != 0 && arr == array_prototype_addr() {
+    if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
+        // DEC 250 (i): the program never adds an index to %Array.prototype%.
+        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -525,7 +528,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // path below would otherwise re-derive three times.
     if let Some(header) = crate::value::addr_class::pointer_value_header(arr as u64) {
         let raw = ((arr as u64) & crate::value::POINTER_MASK) as *const ArrayHeader;
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && unsafe { (*raw).length <= (*raw).capacity }
         {
@@ -1078,7 +1081,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let mut raw = raw;
     let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return None;
     }
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
@@ -1097,7 +1100,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
             return None;
         }
         let target_header = (target - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*target_header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*target_header).obj_type)
             || (*target_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -1206,7 +1209,7 @@ pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     }
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -1397,7 +1400,7 @@ pub(crate) fn try_strict_dense_index_set(
     if number.is_some() {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
         {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && header._reserved & crate::gc::OBJ_FLAG_FROZEN == 0
                 && !unsafe { array_has_element_descriptors_resolved(arr) }
@@ -1530,6 +1533,17 @@ pub extern "C" fn js_array_set_f64_extend(
     crate::string::js_string_addref_if_heap_string(value);
     let cleaned = clean_arr_ptr_mut(arr);
     if cleaned.is_null() {
+        // An integer-indexed receiver (a typed array or a Uint8Array buffer)
+        // behind a `T[]` site: its numeric [[Set]]. The clean rejects every
+        // non-`GC_TYPE_ARRAY` header (`typed_array_receiver`), so this is
+        // where the receiver's header is asked.
+        if crate::typedarray_props::typed_array_set_number_key(
+            super::header::array_receiver_addr(arr),
+            index as f64,
+            value,
+        ) {
+            return arr;
+        }
         // #7574: `a[i] = v` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Pre-fix this stored the value into
         // `ObjectHeader.keys_array` / `.meta`. Run the object `[[Set]]` plus
@@ -1545,30 +1559,8 @@ pub extern "C" fn js_array_set_f64_extend(
         return js_array_alloc(0);
     }
     let arr = cleaned;
-    // #10694: skip both registry probes for a `GC_TYPE_ARRAY` header, which
-    // can never be a registered buffer or typed array.
-    if super::header::receiver_may_be_registered_exotic(arr) {
-        // Check if this is actually a buffer (Uint8Array) — write individual bytes
-        if crate::buffer::is_registered_buffer(arr as usize) {
-            crate::buffer::js_buffer_set(
-                arr as *mut crate::buffer::BufferHeader,
-                index as i32,
-                value as i32,
-            );
-            return arr;
-        }
-        // Check if this is a typed array — route through per-kind store (no extension).
-        if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
-            crate::typedarray_hook_slots::js_typed_array_set(
-                arr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
-                index as i32,
-                value,
-            );
-            return arr;
-        }
-    }
     // SAFETY: the clean above resolved this live plain-array head, and the
-    // compatible Buffer/TypedArray receivers have exited.
+    // integer-indexed receivers have exited before it.
     let flags = unsafe { array_object_flags_resolved(arr) };
     unsafe { js_array_set_f64_extend_resolved(arr, index, value, flags) }
 }

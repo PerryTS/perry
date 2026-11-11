@@ -116,49 +116,50 @@ fn rest_first_arg(rest: f64) -> f64 {
     crate::array::js_array_get_f64(arr, 0)
 }
 
-fn dataview_get(this: crate::closure::JsThis, suffix: &str, offset: f64, rest: f64) -> f64 {
+// One shared body per direction: a thunk only names its kind, so the accessor
+// code is not specialized into every member.
+#[inline(never)]
+fn dataview_get(
+    this: crate::closure::JsThis,
+    kind: crate::buffer::DataViewKind,
+    offset: f64,
+    rest: f64,
+) -> f64 {
     let addr = require_dataview_receiver(this);
-    let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
-        Some(k) => k,
-        None => return undef(),
-    };
     let little = crate::value::js_is_truthy(rest_first_arg(rest)) != 0;
     let buf_f64 = f64::from_bits(crate::value::JSValue::pointer(addr as *mut u8).bits());
     crate::buffer::js_data_view_get(buf_f64, offset, kind, little)
 }
 
+#[inline(never)]
 fn dataview_set(
     this: crate::closure::JsThis,
-    suffix: &str,
+    kind: crate::buffer::DataViewKind,
     offset: f64,
     value: f64,
     rest: f64,
 ) -> f64 {
     let addr = require_dataview_receiver(this);
-    let kind = match crate::buffer::DataViewKind::from_method_suffix(suffix) {
-        Some(k) => k,
-        None => return undef(),
-    };
     let little = crate::value::js_is_truthy(rest_first_arg(rest)) != 0;
     let buf_f64 = f64::from_bits(crate::value::JSValue::pointer(addr as *mut u8).bits());
     crate::buffer::js_data_view_set(buf_f64, offset, value, kind, little)
 }
 
 macro_rules! dataview_get_thunk {
-    ($name:ident, $suffix:literal) => {
+    ($name:ident, $kind:ident) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
             offset: f64,
             rest: f64,
         ) -> f64 {
-            dataview_get(this, $suffix, offset, rest)
+            dataview_get(this, crate::buffer::DataViewKind::$kind, offset, rest)
         }
     };
 }
 
 macro_rules! dataview_set_thunk {
-    ($name:ident, $suffix:literal) => {
+    ($name:ident, $kind:ident) => {
         extern "C" fn $name(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
@@ -166,32 +167,40 @@ macro_rules! dataview_set_thunk {
             value: f64,
             rest: f64,
         ) -> f64 {
-            dataview_set(this, $suffix, offset, value, rest)
+            dataview_set(
+                this,
+                crate::buffer::DataViewKind::$kind,
+                offset,
+                value,
+                rest,
+            )
         }
     };
 }
 
-dataview_get_thunk!(dv_get_int8, "Int8");
-dataview_get_thunk!(dv_get_uint8, "Uint8");
-dataview_get_thunk!(dv_get_int16, "Int16");
-dataview_get_thunk!(dv_get_uint16, "Uint16");
-dataview_get_thunk!(dv_get_int32, "Int32");
-dataview_get_thunk!(dv_get_uint32, "Uint32");
-dataview_get_thunk!(dv_get_float32, "Float32");
-dataview_get_thunk!(dv_get_float64, "Float64");
-dataview_get_thunk!(dv_get_bigint64, "BigInt64");
-dataview_get_thunk!(dv_get_biguint64, "BigUint64");
+dataview_get_thunk!(dv_get_int8, Int8);
+dataview_get_thunk!(dv_get_uint8, Uint8);
+dataview_get_thunk!(dv_get_int16, Int16);
+dataview_get_thunk!(dv_get_uint16, Uint16);
+dataview_get_thunk!(dv_get_int32, Int32);
+dataview_get_thunk!(dv_get_uint32, Uint32);
+dataview_get_thunk!(dv_get_float32, Float32);
+dataview_get_thunk!(dv_get_float64, Float64);
+dataview_get_thunk!(dv_get_bigint64, BigInt64);
+dataview_get_thunk!(dv_get_biguint64, BigUint64);
+dataview_get_thunk!(dv_get_float16, Float16);
 
-dataview_set_thunk!(dv_set_int8, "Int8");
-dataview_set_thunk!(dv_set_uint8, "Uint8");
-dataview_set_thunk!(dv_set_int16, "Int16");
-dataview_set_thunk!(dv_set_uint16, "Uint16");
-dataview_set_thunk!(dv_set_int32, "Int32");
-dataview_set_thunk!(dv_set_uint32, "Uint32");
-dataview_set_thunk!(dv_set_float32, "Float32");
-dataview_set_thunk!(dv_set_float64, "Float64");
-dataview_set_thunk!(dv_set_bigint64, "BigInt64");
-dataview_set_thunk!(dv_set_biguint64, "BigUint64");
+dataview_set_thunk!(dv_set_int8, Int8);
+dataview_set_thunk!(dv_set_uint8, Uint8);
+dataview_set_thunk!(dv_set_int16, Int16);
+dataview_set_thunk!(dv_set_uint16, Uint16);
+dataview_set_thunk!(dv_set_int32, Int32);
+dataview_set_thunk!(dv_set_uint32, Uint32);
+dataview_set_thunk!(dv_set_float32, Float32);
+dataview_set_thunk!(dv_set_float64, Float64);
+dataview_set_thunk!(dv_set_bigint64, BigInt64);
+dataview_set_thunk!(dv_set_biguint64, BigUint64);
+dataview_set_thunk!(dv_set_float16, Float16);
 
 /// Install the `DataView.prototype` accessors + numeric methods. Called from
 /// `global_this::populate_builtin_prototype_methods`'s `"DataView"` arm.
@@ -212,114 +221,142 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
                 crate::value::js_nanbox_pointer(c as i64).to_bits()
             }
         };
-        let bl = mk(crate::fn_info!(#[realm("DataView.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_length_getter_thunk, 0; with_declared(0)));
-        if bl != 0 {
-            super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
-        }
-        let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
-        if bo != 0 {
-            super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
-        }
         let bf = mk(crate::fn_info!(#[realm("DataView.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_buffer_getter_thunk, 0; with_declared(0)));
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
+            let bl = mk(crate::fn_info!(#[realm("DataView.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_length_getter_thunk, 0; with_declared(0)));
+            if bl != 0 {
+                super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
+            }
+            let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
+            if bo != 0 {
+                super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
+            }
         }
     }
 
     // get* methods: spec `.length === 1`, fixed call arity 1 (`byteOffset`),
     // the optional `littleEndian` flag is collected into `rest`.
-    let gets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
+    // node's own-key order: each get<Kind> beside its set<Kind>, Float16 last.
+    // A getter takes (offset, ...rest) and has length 1; a setter takes
+    // (offset, value, ...rest) and has length 2.
+    let methods: &[(&str, *const crate::closure::JsFunctionInfo, u32)] = &[
         (
             "getInt8",
             crate::fn_info!(#[realm(DataView.prototype.getInt8)] export crate::object::dataview_proto_thunks::dv_get_int8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "setInt8",
+            crate::fn_info!(#[realm(DataView.prototype.setInt8)] export crate::object::dataview_proto_thunks::dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
         ),
         (
             "getUint8",
             crate::fn_info!(#[realm(DataView.prototype.getUint8)] export crate::object::dataview_proto_thunks::dv_get_uint8, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getInt16",
-            crate::fn_info!(#[realm(DataView.prototype.getInt16)] export crate::object::dataview_proto_thunks::dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getUint16",
-            crate::fn_info!(#[realm(DataView.prototype.getUint16)] export crate::object::dataview_proto_thunks::dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getInt32",
-            crate::fn_info!(#[realm(DataView.prototype.getInt32)] export crate::object::dataview_proto_thunks::dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getUint32",
-            crate::fn_info!(#[realm(DataView.prototype.getUint32)] export crate::object::dataview_proto_thunks::dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getFloat32",
-            crate::fn_info!(#[realm(DataView.prototype.getFloat32)] export crate::object::dataview_proto_thunks::dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getFloat64",
-            crate::fn_info!(#[realm(DataView.prototype.getFloat64)] export crate::object::dataview_proto_thunks::dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getBigInt64",
-            crate::fn_info!(#[realm(DataView.prototype.getBigInt64)] export crate::object::dataview_proto_thunks::dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-        (
-            "getBigUint64",
-            crate::fn_info!(#[realm(DataView.prototype.getBigUint64)] export crate::object::dataview_proto_thunks::dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-        ),
-    ];
-    for (name, ptr) in gets.iter().copied() {
-        install_proto_method_rest_with_length(proto_obj, name, ptr, 1);
-    }
-
-    // set* methods: spec `.length === 2`, fixed call arity 2
-    // (`byteOffset`, `value`), the optional `littleEndian` flag → `rest`.
-    let sets: &[(&str, *const crate::closure::JsFunctionInfo)] = &[
-        (
-            "setInt8",
-            crate::fn_info!(#[realm(DataView.prototype.setInt8)] export crate::object::dataview_proto_thunks::dv_set_int8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setUint8",
             crate::fn_info!(#[realm(DataView.prototype.setUint8)] export crate::object::dataview_proto_thunks::dv_set_uint8, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getInt16",
+            crate::fn_info!(#[realm(DataView.prototype.getInt16)] export crate::object::dataview_proto_thunks::dv_get_int16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setInt16",
             crate::fn_info!(#[realm(DataView.prototype.setInt16)] export crate::object::dataview_proto_thunks::dv_set_int16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getUint16",
+            crate::fn_info!(#[realm(DataView.prototype.getUint16)] export crate::object::dataview_proto_thunks::dv_get_uint16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setUint16",
             crate::fn_info!(#[realm(DataView.prototype.setUint16)] export crate::object::dataview_proto_thunks::dv_set_uint16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getInt32",
+            crate::fn_info!(#[realm(DataView.prototype.getInt32)] export crate::object::dataview_proto_thunks::dv_get_int32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setInt32",
             crate::fn_info!(#[realm(DataView.prototype.setInt32)] export crate::object::dataview_proto_thunks::dv_set_int32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getUint32",
+            crate::fn_info!(#[realm(DataView.prototype.getUint32)] export crate::object::dataview_proto_thunks::dv_get_uint32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setUint32",
             crate::fn_info!(#[realm(DataView.prototype.setUint32)] export crate::object::dataview_proto_thunks::dv_set_uint32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getFloat32",
+            crate::fn_info!(#[realm(DataView.prototype.getFloat32)] export crate::object::dataview_proto_thunks::dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setFloat32",
             crate::fn_info!(#[realm(DataView.prototype.setFloat32)] export crate::object::dataview_proto_thunks::dv_set_float32, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getFloat64",
+            crate::fn_info!(#[realm(DataView.prototype.getFloat64)] export crate::object::dataview_proto_thunks::dv_get_float64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setFloat64",
             crate::fn_info!(#[realm(DataView.prototype.setFloat64)] export crate::object::dataview_proto_thunks::dv_set_float64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getBigInt64",
+            crate::fn_info!(#[realm(DataView.prototype.getBigInt64)] export crate::object::dataview_proto_thunks::dv_get_bigint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setBigInt64",
             crate::fn_info!(#[realm(DataView.prototype.setBigInt64)] export crate::object::dataview_proto_thunks::dv_set_bigint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getBigUint64",
+            crate::fn_info!(#[realm(DataView.prototype.getBigUint64)] export crate::object::dataview_proto_thunks::dv_get_biguint64, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
         ),
         (
             "setBigUint64",
             crate::fn_info!(#[realm(DataView.prototype.setBigUint64)] export crate::object::dataview_proto_thunks::dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
+            "getFloat16",
+            crate::fn_info!(#[realm(DataView.prototype.getFloat16)] export crate::object::dataview_proto_thunks::dv_get_float16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "setFloat16",
+            crate::fn_info!(#[realm(DataView.prototype.setFloat16)] export crate::object::dataview_proto_thunks::dv_set_float16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
         ),
     ];
-    for (name, ptr) in sets.iter().copied() {
-        // `.length` == the fixed arity (`install_proto_method_rest`).
-        install_proto_method_rest(proto_obj, name, ptr, 2);
+    for (name, ptr, len) in methods.iter().copied() {
+        if len == 1 {
+            install_proto_method_rest_with_length(proto_obj, name, ptr, 1);
+        } else {
+            install_proto_method_rest(proto_obj, name, ptr, 2);
+        }
     }
 }

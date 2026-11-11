@@ -73,7 +73,7 @@ export PERRY_RUNTIME_DIR="${PERRY_RUNTIME_DIR:-$(dirname "$PERRY_BIN")}"
 # just built. Pin it explicitly rather than rely on that being harmless.
 export PERRY_NO_AUTO_OPTIMIZE=1
 
-FIXTURE="$REPO_ROOT/scripts/fixtures/gc_parse_churn_layout_state.ts"
+FIXTURE="$REPO_ROOT/tests/fixtures/scripts/gc_parse_churn_layout_state.ts"
 if [[ ! -f "$FIXTURE" ]]; then
   echo "FAIL: fixture not found at $FIXTURE" >&2
   exit 1

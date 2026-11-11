@@ -23,7 +23,7 @@ pub(super) fn try_set(target: f64, key: f64, value: f64, receiver: f64) -> bool 
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return false;

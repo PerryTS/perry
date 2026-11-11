@@ -24,91 +24,10 @@ use super::typed_abi::{
     typed_string_closure_capture_reps, typed_string_closure_name, TypedFunctionTrampolineKind,
     TypedParamRep,
 };
-use super::typed_entry::{
-    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
-    EntryArgGuard,
-};
+use super::typed_entry::{emit_tiered_entry_dispatch, typed_entry_arg_guard, EntryArgGuard};
 
-fn emit_typed_closure_trampoline_fast_value(
-    blk: &mut crate::block::LlBlock,
-    kind: TypedFunctionTrampolineKind,
-    typed_name: &str,
-    arg_names: &[String],
-    arg_reps: &[TypedParamRep],
-    capture_values: &[String],
-) -> String {
-    match kind {
-        TypedFunctionTrampolineKind::F64 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            typed_args.extend(capture_values.iter().map(|v| (DOUBLE, v.as_str())));
-            blk.call(DOUBLE, typed_name, &typed_args)
-        }
-        TypedFunctionTrampolineKind::I32 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_i32 = blk.call(I32, typed_name, &typed_args);
-            crate::expr::i32_to_nanbox(blk, &raw_i32)
-        }
-        TypedFunctionTrampolineKind::I1 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let typed_i1 = blk.call(I1, typed_name, &typed_args);
-            let typed_i32 = blk.zext(I1, &typed_i1, I32);
-            crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
-        }
-        TypedFunctionTrampolineKind::StringRef => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_string = blk.call(I64, typed_name, &typed_args);
-            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
-        }
-    }
-}
+mod trampoline;
+use trampoline::emit_typed_closure_trampoline_fast_value;
 
 fn emit_public_typed_closure_trampoline(
     llmod: &mut LlModule,
@@ -266,6 +185,8 @@ pub(super) fn compile_typed_string_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -318,6 +239,8 @@ pub(super) fn compile_typed_f64_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -364,6 +287,8 @@ pub(super) fn compile_typed_i1_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -410,6 +335,8 @@ pub(super) fn compile_typed_i32_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -710,6 +637,8 @@ pub(super) fn compile_closure(
     };
 
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
         let scratch_param = params
@@ -769,17 +698,6 @@ pub(super) fn compile_closure(
                 private_resume_frame,
                 private_async_resume_frame,
             );
-            // A closure region's Number parameter: an int32 box becomes the
-            // equal plain double once, here (`split_regions`).
-            let arg_name = if region_number_params.contains(&p.id) {
-                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
-                let bits = blk.bitcast_double_to_i64(&arg_name);
-                let low = blk.trunc(I64, &bits, I32);
-                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
-            } else {
-                arg_name
-            };
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map
                 .get(&p.id)
@@ -998,6 +916,7 @@ pub(super) fn compile_closure(
         &cross_module.module_dispatch,
         // #9363: a closure body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     if !versioned_loop_callback {
         if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
@@ -1195,6 +1114,7 @@ pub(super) fn compile_closure(
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -1220,6 +1140,7 @@ pub(super) fn compile_closure(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -1237,6 +1158,8 @@ pub(super) fn compile_closure(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -1257,6 +1180,7 @@ pub(super) fn compile_closure(
         // separately from #9369, whose fixture family is the static body
         // itself.
         in_static_member: false,
+        method_home_local: None,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         // Only an arrow written inside the derived CONSTRUCTOR (directly or
@@ -1287,6 +1211,8 @@ pub(super) fn compile_closure(
             })
             .map(|name| class_ids.get(name.as_str()).copied().unwrap_or(0)),
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1330,6 +1256,9 @@ pub(super) fn compile_closure(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: false,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1353,6 +1282,7 @@ pub(super) fn compile_closure(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -1387,6 +1317,8 @@ pub(super) fn compile_closure(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -1412,6 +1344,7 @@ pub(super) fn compile_closure(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -1429,9 +1362,18 @@ pub(super) fn compile_closure(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(func_id),
+        ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return: None,
+        sig_record_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -1448,7 +1390,6 @@ pub(super) fn compile_closure(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -1532,6 +1473,8 @@ pub(super) fn compile_closure(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: std::collections::HashSet::new(),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -1615,7 +1558,7 @@ pub(super) fn compile_closure(
 
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
@@ -1651,6 +1594,7 @@ pub(super) fn compile_closure(
         && !is_generator)
         .then(|| returned_capture(&ctx, body))
         .flatten();
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
@@ -1692,8 +1636,11 @@ pub(super) fn compile_closure(
         && !is_generator
         && super::static_shape_ids::body_has_constfn_lane(&llvm_name)
     {
+        let callable_worker = llmod.callable_worker;
         if let Some(lowered) = llmod.function_mut(closure_function_index) {
-            if super::helpers::guarded_specialization_admits_preinline(
+            if callable_worker {
+                lowered.defer_self_preinline(body.len());
+            } else if super::helpers::guarded_specialization_admits_preinline(
                 lowered.estimated_ir_bytes(),
                 body.len(),
             ) {

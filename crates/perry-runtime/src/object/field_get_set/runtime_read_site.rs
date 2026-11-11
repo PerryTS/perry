@@ -212,6 +212,22 @@ pub(crate) unsafe fn get_with_memo(
     }
 }
 
+/// [`get`] for a key already in hand as its property atom: the probe on the
+/// key word, else the complete read. Nothing is looked up by text. It can
+/// run a getter, collect and throw.
+///
+/// # Safety
+/// As [`probe`]; `atom` is a live property atom.
+pub(crate) unsafe fn get_atom(obj: *mut ObjectHeader, atom: *const crate::StringHeader) -> f64 {
+    debug_assert!(crate::string::is_property_atom(atom));
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let v = probe_word(obj, key_bits, crate::string::property_atom_hash(atom));
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return v;
+    }
+    super::js_object_get_field_slow(obj as i64, atom)
+}
+
 /// The integer a Number property key names, when its canonical text is a
 /// plain decimal integer: an INT32-tagged key, or an integral double of
 /// magnitude at most 2^53 (`-0` names `"0"`). Every other Number keeps the
@@ -219,7 +235,7 @@ pub(crate) unsafe fn get_with_memo(
 #[inline]
 pub(crate) fn integer_key(key: f64) -> Option<i64> {
     let bits = key.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
+    if crate::value::is_int32_bits(bits) {
         return Some(i64::from(crate::value::JSValue::from_bits(bits).as_int32()));
     }
     (key.is_finite() && key.fract() == 0.0 && key.abs() <= 9_007_199_254_740_992.0)

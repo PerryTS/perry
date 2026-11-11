@@ -1,0 +1,17 @@
+1 throw TypeError Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1b next is the built-in: 1,2
+2 throw TypeError Cannot delete built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
+3 throw TypeError Cannot redefine built-in member %GeneratorPrototype%.throw: built-in objects are read-only in a compiled program (adding a new member is allowed)
+3b throw TypeError Cannot redefine built-in member %GeneratorPrototype%[Symbol(Symbol.toStringTag)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+4 throw TypeError Cannot change the prototype of built-in %GeneratorPrototype%: built-in objects are read-only in a compiled program
+4b chain intact: true 1,2
+5 no throw helper 1,2
+5b no throw second
+6 no throw 7 true
+7 no throw mine
+7b no throw 1,2
+7c no throw replaced
+8 throw TypeError Cannot replace built-in member %AsyncGeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+8b throw TypeError Cannot delete built-in member %AsyncGeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
+8c no throw 3
+8d async next is the built-in: 1 false

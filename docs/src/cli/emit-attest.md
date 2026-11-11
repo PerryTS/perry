@@ -95,5 +95,5 @@ under the same issue.
 ## See also
 
 - [`#504`](https://github.com/PerryTS/perry/issues/504) — design discussion.
-- [`#505`](./sandbox-buildrs.md) — companion build-time sandbox.
-- [`#506`](./emit-sandbox.md) — companion runtime sandbox profile.
+- [`#505`](sandbox-buildrs.md) — companion build-time sandbox.
+- [`#506`](emit-sandbox.md) — companion runtime sandbox profile.

@@ -48,47 +48,8 @@ fn call_line<'a>(ir: &'a str, signature: &str) -> &'a str {
 }
 
 #[test]
-fn native_abi_predicates_use_integer_registers_and_box_booleans() {
-    for (module, class, method, signature, comparison) in [
-        (
-            "cheerio",
-            None,
-            "hasClass",
-            "i1 @js_cheerio_selection_has_class",
-            "icmp ne i1",
-        ),
-        (
-            "ws",
-            Some("Server"),
-            "emit",
-            "i32 @js_ws_server_emit",
-            "icmp ne i32",
-        ),
-    ] {
-        let ir = native_call(module, class, method, true);
-        call_line(&ir, signature);
-        assert!(
-            ir.contains(comparison),
-            "predicate must test its integer result:\n{ir}"
-        );
-        assert!(
-            ir.contains("select i1"),
-            "predicate must select JS boolean tags:\n{ir}"
-        );
-    }
-}
-
-#[test]
 fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
     for (module, class, method, receiver, signature, params) in [
-        (
-            "cheerio",
-            None,
-            "children",
-            true,
-            "i64 @js_cheerio_selection_children",
-            vec!["i64", "i64"],
-        ),
         (
             "dgram",
             Some("Socket"),
@@ -112,14 +73,6 @@ fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
             false,
             "double @js_module_find_package_json",
             vec!["double", "double", "double"],
-        ),
-        (
-            "nodemailer",
-            None,
-            "createTransport",
-            false,
-            "double @js_nodemailer_create_transport",
-            vec!["double"],
         ),
         (
             "process",
@@ -163,37 +116,6 @@ fn native_abi_missing_arguments_are_padded_with_the_runtime_types() {
 }
 
 #[test]
-fn nodemailer_handle_abi_preserves_tagged_return_and_integer_receivers() {
-    let create = native_call("nodemailer", None, "createTransport", false);
-    call_line(&create, "double @js_nodemailer_create_transport");
-
-    for (method, signature, params) in [
-        (
-            "sendMail",
-            "i64 @js_nodemailer_send_mail",
-            vec!["i64", "i64"],
-        ),
-        ("verify", "i64 @js_nodemailer_verify", vec!["i64"]),
-    ] {
-        let ir = native_call("nodemailer", None, method, true);
-        let call = call_line(&ir, signature);
-        assert!(
-            ir.contains("and i64"),
-            "{method} receiver should be unboxed from a tagged JS value:\n{ir}"
-        );
-        for (ty, argument) in params
-            .iter()
-            .zip(call.split('(').nth(1).unwrap_or_default().split(','))
-        {
-            assert!(
-                argument.trim_start().starts_with(ty),
-                "{method} native ABI should pass {ty} receiver/argument, got {call}"
-            );
-        }
-    }
-}
-
-#[test]
 fn native_abi_agent_accessors_and_websocket_on_use_the_runtime_return_type() {
     for method in ["sockets", "freeSockets", "requests"] {
         let ir = native_call("http", Some("Agent"), method, true);
@@ -204,7 +126,7 @@ fn native_abi_agent_accessors_and_websocket_on_use_the_runtime_return_type() {
         };
         call_line(&ir, &format!("double @js_http_agent_{symbol}"));
     }
-    let ir = native_call("ws", None, "on", true);
+    let ir = native_call("__websocket__", None, "on", true);
     call_line(&ir, "i64 @js_ws_on");
 }
 
@@ -242,6 +164,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     key: Box::new(Expr::LocalGet(2)),
                     value: Box::new(Expr::Number(42.0)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),

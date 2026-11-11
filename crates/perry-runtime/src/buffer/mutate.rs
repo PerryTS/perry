@@ -1,26 +1,8 @@
-fn throw_invalid_buffer_size() -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-    });
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    {
-        let set = |key: &[u8], value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        let str_val = |s: &[u8]| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-        };
-        set(b"name", str_val(b"RangeError"));
-        set(b"code", str_val(b"ERR_INVALID_BUFFER_SIZE"));
-        set(
-            b"message",
-            str_val(b"Buffer size must be a multiple of the requested word size"),
-        );
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+pub(super) fn throw_invalid_buffer_size() -> ! {
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        b"Buffer size must be a multiple of the requested word size",
+        b"ERR_INVALID_BUFFER_SIZE",
+    ))
 }
 
 /// Reverse each word without holding a byte borrow across error construction.

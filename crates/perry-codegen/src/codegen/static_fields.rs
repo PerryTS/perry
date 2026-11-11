@@ -94,9 +94,9 @@ pub(super) fn init_static_fields_early(
             }
         }
     }
-    // Well-known symbol class hooks: HIR lifts `static [Symbol.hasInstance]`
-    // and `get [Symbol.toStringTag]` to top-level functions with the
-    // prefixes `__perry_wk_hasinstance_<class>` / `__perry_wk_tostringtag_<class>`.
+    // Well-known symbol class hooks: a top-level function
+    // `__perry_wk_hasinstance_<class>` is a class hook (`get
+    // [Symbol.toStringTag]` is an ordinary symbol-keyed member).
     // Scan `hir.functions`, compute the LLVM symbol via `scoped_fn_name`,
     // and emit `js_register_class_<hook>(class_id, ptrtoint(@func, i64))`
     // at module init so the runtime's `js_instanceof` / `js_object_to_string`
@@ -106,8 +106,6 @@ pub(super) fn init_static_fields_early(
         let (registrar, class_name): (&str, &str) =
             if let Some(rest) = f.name.strip_prefix("__perry_wk_hasinstance_") {
                 ("js_register_class_has_instance", rest)
-            } else if let Some(rest) = f.name.strip_prefix("__perry_wk_tostringtag_") {
-                ("js_register_class_to_string_tag", rest)
             } else {
                 continue;
             };
@@ -245,6 +243,18 @@ pub(super) fn init_static_fields_late(
             continue;
         }
         for sf in &c.static_fields {
+            if let Some(async_id) = hir.async_init_function {
+                let mut inline = false;
+                if let Some(body) = hir.functions.iter().find(|f| f.id == async_id) {
+                    perry_hir::tdz_check::for_each_function_expr(body, &mut |expr| {
+                        if matches!(expr, perry_hir::Expr::StaticFieldSet { class_name, field_name, .. }
+                            if *class_name == c.name && *field_name == sf.name) {
+                            inline = true;
+                        }
+                    });
+                }
+                if inline { continue; }
+            }
             // Computed-key static fields go through the class-static-symbol
             // side table. Refs #420 — drizzle's `static [entityKind] =
             // "Table"` is consulted by `Object.prototype.hasOwnProperty.call(

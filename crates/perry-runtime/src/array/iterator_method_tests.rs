@@ -258,7 +258,7 @@ fn array_next_shape_read_honours_replacement_accessor_own_and_foreign_edge() {
         let key = crate::string::intern_ascii_literal(b"next");
         let key_value = f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits());
         let original = super::super::js_iterator_next_method(iter);
-        crate::object::js_object_set_field_by_name(owner, key, 17.0);
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(owner, key, 17.0));
         assert_eq!(
             super::super::js_iterator_next_method(iter),
             17.0,
@@ -266,37 +266,37 @@ fn array_next_shape_read_honours_replacement_accessor_own_and_foreign_edge() {
         );
         let get = crate::closure::js_closure_alloc(crate::fn_info!(next_getter, 0), 1);
         crate::closure::js_closure_set_capture_f64(get, 0, 19.0);
-        crate::object::js_object_define_accessor(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_define_accessor(
             owner_value,
             key_value,
             crate::value::js_nanbox_pointer(get as i64),
             f64::from_bits(TAG_UNDEFINED),
-        );
+        ));
         assert_eq!(super::super::js_iterator_next_method(iter), 19.0);
         assert_eq!(NEXT_GETS.with(std::cell::Cell::get), 1);
         let own_descriptor = crate::object::js_object_alloc_null_proto(0, 0);
-        crate::object::js_object_set_field_by_name(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
             own_descriptor,
             crate::string::intern_ascii_literal(b"value"),
             23.0,
-        );
-        crate::object::js_object_define_property(
+        ));
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_define_property(
             iter,
             key_value,
             crate::value::js_nanbox_pointer(own_descriptor as i64),
-        );
+        ));
         assert_eq!(
             super::super::js_iterator_next_method(iter),
             23.0,
             "own next must shadow the family's accessor"
         );
         let foreign = crate::object::js_object_alloc_null_proto(0, 0);
-        crate::object::js_object_set_field_by_name(foreign, key, 31.0);
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(foreign, key, 31.0));
         let other = super::super::array_values_iter(value);
-        crate::object::js_object_set_prototype_of(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_prototype_of(
             other,
             crate::value::js_nanbox_pointer(foreign as i64),
-        );
+        ));
         assert_eq!(
             super::super::js_iterator_next_method(other),
             31.0,
@@ -314,17 +314,17 @@ fn array_next_shape_read_honours_replacement_accessor_own_and_foreign_edge() {
                 f64::from_bits(crate::value::TAG_TRUE),
             ),
         ] {
-            crate::object::js_object_set_field_by_name(
+            crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
                 descriptor,
                 crate::string::intern_ascii_literal(name),
                 value,
-            );
+            ));
         }
-        crate::object::js_object_define_property(
+        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_define_property(
             owner_value,
             key_value,
             crate::value::js_nanbox_pointer(descriptor as i64),
-        );
+        ));
     }
 }
 

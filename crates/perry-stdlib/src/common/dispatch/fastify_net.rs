@@ -107,12 +107,6 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             js_ext_net_socket_method_connect(handle, args[0], arg2, arg3);
             nanbox_handle(handle)
         }
-        "upgradeToTLS" if !args.is_empty() => {
-            let servername_ptr = str_arg(args[0]);
-            let verify = if args.len() >= 2 { args[1] } else { 1.0 };
-            let promise = js_net_socket_upgrade_tls(handle, servername_ptr, verify);
-            perry_runtime::value::js_nanbox_pointer(promise as i64)
-        }
         // Issue #2131 — EventEmitter surface on any-typed receivers
         // (the accepted-socket arg of `server.on('connection', s => …)`
         // is the dominant case; the static class info is lost between

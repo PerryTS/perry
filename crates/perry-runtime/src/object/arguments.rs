@@ -602,7 +602,7 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
     // Forwarded or descriptor-bearing inputs keep the complete getter below.
     unsafe {
         if let Some(header) = crate::value::addr_class::try_read_gc_header(raw as usize) {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && !crate::array::array_has_element_descriptors_resolved(raw)
                 && (*raw).length <= (*raw).capacity
@@ -1248,58 +1248,24 @@ pub(crate) unsafe fn arguments_object_to_array(
     Some(out.with_mut_ptr(|arr: *mut ArrayHeader| arr))
 }
 
+/// The call-argument drain of `f(...x)`: the one spread path
+/// ([`crate::array::spread_values`], GetIterator semantics: a non-iterable
+/// operand throws). A proven dense array is returned as is (its readers copy
+/// the elements).
 #[no_mangle]
 pub extern "C" fn js_array_like_to_array(value: f64) -> *mut ArrayHeader {
     let jsv = JSValue::from_bits(value.to_bits());
-    if !jsv.is_pointer() {
-        return std::ptr::null_mut();
+    if jsv.is_pointer()
+        && crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE
+    {
+        if let Some(arr) = crate::array::plain_call_spread_source(value) {
+            return arr as *mut ArrayHeader;
+        }
+        if let Some(arr) = crate::array::dense_spread_source(value) {
+            return arr as *mut ArrayHeader;
+        }
     }
-    let raw = jsv.as_pointer::<u8>();
-    unsafe {
-        if let Some(arr) = arguments_object_to_array(raw as *const ObjectHeader) {
-            return arr;
-        }
-        let addr = raw as usize;
-        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
-            return crate::typedarray_hook_slots::typed_array_to_array(
-                raw as *const crate::typedarray_hook_slots::TypedArrayHeader,
-            );
-        }
-        if crate::buffer::is_registered_buffer(addr) {
-            return crate::buffer::buffer_to_array(raw as *const crate::buffer::BufferHeader);
-        }
-        // A real Array → the dominant plain shape needs only the sticky
-        // iterator-protocol check and one receiver-shape compare. An own key
-        // (including Symbol.iterator) or a custom prototype leaves that shape;
-        // only then pay the complete dense-spread proof (#11772).
-        if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
-            if let Some(arr) = crate::array::plain_call_spread_source(value) {
-                return arr as *mut ArrayHeader;
-            }
-            if let Some(arr) = crate::array::dense_spread_source(value) {
-                return arr as *mut ArrayHeader;
-            }
-            return crate::array::js_array_clone_for_spread(value);
-        }
-        // Generic iterable with a user `[Symbol.iterator]` (Map/Set, generator
-        // objects, hand-rolled iterables, …): spread uses the ITERATOR protocol
-        // (GetIterator → IteratorStep → IteratorValue), NOT array-like
-        // length/index access. Drive `.next()` to collect the yielded values so
-        // `f(...iterable)` / `new C(...iterable)` / `[...iterable]` spread see
-        // them, and so errors thrown by `[Symbol.iterator]` / `.next()` /
-        // accessing `value`/`done` propagate (test262 spread-err-*). Plain
-        // array-like objects (a `{length, 0, 1}` bag with no `@@iterator`) keep
-        // the legacy reinterpret fallback below.
-        if crate::collection_iter::is_iterable(value) {
-            let iter = crate::symbol::js_get_iterator(value);
-            let mut out = crate::array::js_array_alloc(0);
-            while let Some(v) = crate::collection_iter::iterator_next_value(iter) {
-                out = crate::array::js_array_push_f64(out, f64::from_bits(v.to_bits()));
-            }
-            return out;
-        }
-        crate::array::clean_arr_ptr(raw as *const ArrayHeader) as *mut ArrayHeader
-    }
+    crate::array::spread_values(value)
 }
 
 unsafe fn read_ordinary_own_value(
@@ -1309,10 +1275,7 @@ unsafe fn read_ordinary_own_value(
     let keys_view = crate::object::object_keys(obj);
     let keys = keys_view.arr();
     let key_count = keys_view.count() as usize;
-    let alloc_limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    ) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {
@@ -1336,10 +1299,7 @@ unsafe fn write_ordinary_own_value(
     let keys_view = crate::object::object_keys(obj);
     let keys = keys_view.arr();
     let key_count = keys_view.count() as usize;
-    let alloc_limit = std::cmp::max(
-        crate::object::object_live_slot_count(obj),
-        crate::object::INLINE_SLOT_FLOOR as u32,
-    ) as usize;
+    let alloc_limit = crate::object::object_inline_capacity(obj) as usize;
     for i in 0..key_count {
         let key_val = crate::array::js_array_get(keys, i as u32);
         if crate::string::js_string_key_matches(key_val, key) {

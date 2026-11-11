@@ -142,6 +142,23 @@ pub(crate) fn is_builtin_hook(value: f64) -> bool {
         .any(|hook| std::ptr::eq(*hook, info))
 }
 
+/// Identify the exact stream/emitter body, not its mutable name property.
+pub(crate) fn is_builtin_stream_method(value: f64, name: &str) -> bool {
+    if !is_callable_value(value) {
+        return false;
+    }
+    let raw = raw_ptr_from_value(value);
+    if !crate::closure::is_closure_ptr(raw) {
+        return false;
+    }
+    let info = unsafe { (*(raw as *const ClosureHeader)).info };
+    super::readwrite::readable_methods()
+        .into_iter()
+        .chain(super::readwrite::emitter_methods())
+        .chain(super::readwrite::writable_methods())
+        .any(|(key, intrinsic)| key == name && std::ptr::eq(intrinsic, info))
+}
+
 /// `value` when it is a callable that is not one of node's prototype hooks.
 pub(crate) fn user_hook_value(value: f64) -> Option<f64> {
     (is_callable_value(value) && !is_builtin_hook(value)).then_some(value)

@@ -1,0 +1,8 @@
+continue-growth 24
+continue-protocol 23 4 0
+continue-close 6 1
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+continue-getter 0 0
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+continue-captured-next 123

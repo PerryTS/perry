@@ -234,6 +234,5 @@ fn validate_async_resource_name(options: f64) {
 pub extern "C" fn js_event_emitter_async_resource_call(_options: f64) -> f64 {
     let message = b"Class constructor EventEmitterAsyncResource cannot be invoked without 'new'";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }

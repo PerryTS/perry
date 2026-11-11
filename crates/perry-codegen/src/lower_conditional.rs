@@ -222,6 +222,10 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
     }
+    // N1: a test of two exact int32 chains is one integer compare.
+    if let Some(bit) = crate::expr::i32_temps::try_lower_compare(ctx, expr)? {
+        return Ok(bit);
+    }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
         return Ok(bit);
     }
@@ -446,6 +450,13 @@ pub(crate) fn lower_logical(
     // value is "nullish" and we return the right side; otherwise return
     // the left.
     if matches!(op, LogicalOp::Coalesce) {
+        // An element read below a dense floor that is a proven Number is
+        // never nullish (`proven_array`, PR-C2): the right side never runs.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_expr(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
         let l = lower_expr(ctx, left)?;
         let l_block_label = ctx.block().label.clone();
         let blk = ctx.block();

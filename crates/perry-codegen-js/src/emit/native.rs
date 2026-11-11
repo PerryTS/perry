@@ -240,7 +240,7 @@ impl JsEmitter {
                     .push_str("(console.warn('spawnBackground not available in browser'), 0)");
             }
             // --- Fastify/HTTP (throw in browser) ---
-            "fastify" | "ws" | "net" | "worker_threads" => {
+            "fastify" | "__websocket__" | "net" | "worker_threads" => {
                 let _ = write!(
                     self.output,
                     "((() => {{ throw new Error('{} not available in browser'); }})())",

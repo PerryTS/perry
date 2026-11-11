@@ -20,8 +20,7 @@ use super::*;
 fn throw_object_assign_nullish_target() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -396,7 +395,11 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
         return PositionalPlan::Refused;
     }
     let meta = crate::meta_read!(crate::meta_obj_from_type!(src as *mut _, header.obj_type));
-    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
+    if !meta.is_null()
+        && (*meta).flags
+            & (super::OBJECT_META_FLAG_IS_PROTOTYPE | super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
+            != 0
+    {
         return PositionalPlan::Refused;
     }
     let Some(shape) = super::shapes::object_shape_descriptor(src) else {
@@ -712,7 +715,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let target_is_array = {
         let gc_header =
             (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!((*gc_header).obj_type)
     };
 
     let source = JSValue::from_bits(source_f64.to_bits());
@@ -886,7 +889,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         Some(h) => h.obj_type,
         None => return target_f64,
     };
-    let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
+    let source_is_array = crate::gc_type_is_array!(source_obj_type);
 
     // #7341: a RegExp source has no ObjectHeader keys array and must not enter
     // the plain-object copy arm. Its dedicated GC kind makes that decision
@@ -913,7 +916,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!()
         )
     {
         // Assign's [[Set]] can run a setter even for a plain data source, so
@@ -1023,6 +1026,19 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         // Every own string key was an enumerable data property of the
         // source shape, copied by position (`copy_positional_source`).
     } else if crate::gc_type_is_object!(source_obj_type) {
+        // Virtual reads decline the positional plan. Environment copies take
+        // the descriptor-driven own-key snapshot, which refreshes their backing.
+        if crate::process::is_process_env_object(source_h.get_nanbox_f64()) {
+            object_assign_enumerated_source(
+                define,
+                tgt_h.get_raw_mut_ptr::<ObjectHeader>(),
+                target_is_array,
+                source_h.get_nanbox_f64(),
+            );
+            return tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
+                crate::value::js_nanbox_pointer(target as i64)
+            });
+        }
         let src_keys = if super::string_wrapper::length(src as usize).is_some() {
             let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
                 js_object_get_own_property_names(crate::value::js_nanbox_pointer(src as i64))

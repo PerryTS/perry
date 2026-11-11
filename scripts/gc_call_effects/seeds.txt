@@ -77,11 +77,23 @@ js exact js_to_primitive -- runs valueOf / toString / Symbol.toPrimitive
 js exact js_number_coerce -- ToNumber: runs valueOf / Symbol.toPrimitive (#11522)
 js exact js_promise_run_microtasks -- drains the microtask queue, running reactions
 
+# ------------------------------------------------------------------ barrier
+# The GC write barrier: a function reaching one may keep a heap value. Used
+# only by the effect-declaration check (`perry-gc-effects effects`), never by
+# the classes. Layered like the other seeds: the exported entries AND the
+# out-of-line parts of the inlined runtime barrier, so inlining cannot erase
+# every name on a store path. Collections are cut in that solve.
+barrier regex ^js_write_barrier(_slot|_slot_validated_parent|_birth_slots)?$ -- exported heap-slot barrier entries (root-word barriers write handles, not heap slots: not seeds)
+barrier regex ^perry_runtime::gc::barrier_store::runtime_write_barrier_ -- the runtime's slot-store barrier wrappers
+barrier regex ^perry_runtime::gc::barrier::(incremental_mark_barrier_value|gc_note_black_birth|(REMEMBERED_SET|DIRTY_OLD_PAGES|EVER_DIRTY_OLD_PAGES|EXTERNAL_DIRTY_SLOT_PAGES)::resolve) -- out-of-line parts of the inlined barrier (marking, remembered set, dirty pages)
+barrier regex (replay_array_growth_write_barriers|rebuild_closure_layout_and_barriers)$ -- barrier replays after array growth and closure relayout
+
 # ------------------------------------------------------------------- throw
 # The throw funnel. ThrowOnly cuts it: a call that reaches JS only by throwing
 # leaves no suspended frame to resume without unwinding (RFC section 4.6). The
 # fatal path runs exit listeners on an intact stack that never resumes.
-throw exact js_throw -- the single throw funnel every js_throw_* helper ends in
+throw exact js_throw -- the entry of compiled code (a program `throw` statement); it calls raise_thrown
+throw regex ^perry_runtime::exception::raise_thrown$ -- the single raise behind js_throw and the four typed leaves (throw_core, rethrow_caught, throw_program_value, throw_open)
 throw contains perry_runtime::exception::print_uncaught -- fatal uncaught-exception report: runs exit listeners, then the process exits
 
 # ------------------------------------------------------------------- panic
@@ -234,10 +246,14 @@ indirect regex ^js_jsvalue_(equals|loose_equals)$ => exact js_bigint_eq -- equal
 indirect regex ^js_jsvalue_compare$ => regex ^js_bigint_(cmp|to_f64)$ -- numeric comparison reads only JS_BIGINT_CMP and JS_BIGINT_TO_F64 from bigint_hooks::install; both callbacks stay graph callees rather than being declared noncollecting here
 indirect regex ^perry_runtime::map::jsvalue_eq$ => exact js_bigint_eq -- SameValueZero for a BigInt key reads only the private JS_BIGINT_EQ slot; its sole writer bigint_hooks::install supplies js_bigint_eq, and ordinary Map keys invoke no callbacks
 indirect regex ^perry_runtime::bigint_hooks::(bigint_cmp_f64|js_bigint_(cmp|eq|is_zero|is_negative|to_f64|to_buffer))$ => regex ^js_bigint_(cmp|eq|is_zero|is_negative|to_f64|to_buffer)$|^perry_runtime::bigint::compare::bigint_cmp_f64$ -- these private typed slots have only the corresponding targets assigned in bigint_hooks::install; their union conservatively lets every actual callback determine the wrapper effect
-# Stream-carrier reads inline into these public payload/layout probes. The
-# only indirect operation is RECORD_PAYLOAD_CELL; registration is private.
-indirect regex ^js_perry_payload_(external_bytes|has_attached|lifecycle|owner_link|project|receiver_link|reopen)$|^js_node_http_response_layout_receiver$ => regex ^perry_runtime::node_stream::state_record::record_payload_cell$ -- payload_cell_of_word follows a stream record through the private RECORD_PAYLOAD_CELL slot; stream_hooks::install is its sole writer and installs node_stream::record_payload_cell, a graph callee here
-indirect regex ^perry_runtime::stream_hooks::record_payload_cell$|^perry_runtime::native_payload_abi::family_cell$ => regex ^perry_runtime::node_stream::state_record::record_payload_cell$ -- this private carrier slot is assigned only node_stream::record_payload_cell in stream_hooks::install; retaining its real graph edge preserves the callback effect
+# Native payloads (#13972): the payload cell is the object's own [[NativePayload]]
+# slot, read by native_payload::payload_cell_of_object and written by
+# store_payload_word through ordinary shaped-symbol code. No hook slot is left on
+# the js_perry_payload_* probes, js_node_http_response_layout_receiver or
+# attach_external_rooted (RECORD_PAYLOAD_CELL / STORE_RECORD_PAYLOAD_CELL are gone),
+# so they carry no exemption: their only remaining indirect calls are thread-local
+# accesses on x86_64 Mach-O (`callq *(%rdi)` through the TLVP descriptor) and
+# aarch64 ELF (the TLSDESC `blr`), which stay ordinary indirect-call seeds.
 indirect regex ^js_perry_agent_post_available$|^perry_runtime::event_pump::loop_hooks::has_route$ => regex ^perry_runtime::event_pump::agent_loop::has_route$ -- the private HAS_ROUTE slot is assigned only agent_loop::has_route by loop_hooks::install; availability reads the route without running a turn, and its exact callback determines the effect
 forbid exact js_runtime_register_feature_installer -- the run_feature_installer delegation assumes the generated link-step object is the only registrant
 
@@ -325,8 +341,6 @@ indirect exact perry_runtime::proxy_hooks::proxy_target => exact js_proxy_target
 indirect exact perry_runtime::proxy_hooks::proxy_handler => exact js_proxy_handler -- the private JS_PROXY_HANDLER slot is assigned only crate::proxy::js_proxy_handler by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
 indirect exact perry_runtime::proxy_hooks::proxy_apply => exact js_proxy_apply -- the private JS_PROXY_APPLY slot is assigned only crate::proxy::apply_construct::js_proxy_apply by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
 indirect exact perry_runtime::proxy_hooks::proxy_construct => exact js_proxy_construct -- the private JS_PROXY_CONSTRUCT slot is assigned only crate::proxy::apply_construct::js_proxy_construct by proxy_hooks::install; this is a graph edge to the implementation, not a Leaf exemption
-
-indirect exact perry_runtime::native_payload::attach::attach_external_rooted => exact perry_runtime::node_stream::state_record::store_record_payload_cell -- the only indirect operation in shared attachment is the private STORE_RECORD_PAYLOAD_CELL slot, assigned only by stream_hooks::install; following its real array-store callback preserves AllocOnly without claiming Leaf
 
 indirect exact js_fetch_input_ptr => exact js_url_href_if_url -- the inlined URL probe follows the engine callback; absence returns the original input pointer
 
@@ -714,3 +728,6 @@ indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => e
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
 
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+# interpreted program throw: counted with dynamic code
+program exact perry_runtime::dyn_eval::interp::exec_stmt -- the statement evaluator executes interpreted program text (interp_entry is inlined); exclude its program throws from the native throw class

@@ -106,7 +106,7 @@ fn raw_i64_receiver_is_managed(addr: usize) -> bool {
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if is_int32_bits(bits) {
         let index = JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index);
     }
@@ -119,7 +119,7 @@ fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
     let bits = index.to_bits();
-    if (bits & TAG_MASK) == INT32_TAG {
+    if is_int32_bits(bits) {
         let index = JSValue::from_bits(bits).as_int32();
         return (index >= 0).then_some(index as u32);
     }
@@ -270,7 +270,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // CLASS_DYNAMIC_PROPS tables; the computed form must do the same instead of
     // falling through to the not-a-pointer `undefined` path below. (test262
     // class/elements propertyHelper `isWritable(C, "m")` does `C[name] = v`.)
-    if crate::object::class_value::legacy_class_value_word(bits).is_some() {
+    if crate::object::class_value::class_ref_word(bits).is_some() {
         let idx_top16 = index.to_bits() >> 48;
         let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
             js_get_string_pointer_unified(index) as *const crate::StringHeader
@@ -541,7 +541,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         // on `function f() { arguments[0] }; f()` printed `0` instead of
         // `undefined`. The narrow gate (GC_TYPE_ARRAY) keeps object
         // numeric-key fast path unchanged.
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             if idx_i32 < 0 {
                 return f64::from_bits(TAG_UNDEFINED);
             }
@@ -615,15 +615,15 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // (`array/named_props.rs`), keeps dead or reserved slack in front of it.
     // `array_elements_ptr` derives the base from `GcHeader.size` and
     // `capacity`, the same two words codegen's inline loads use.
-    let elem_addr =
-        if receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_ARRAY) {
-            unsafe {
-                crate::array::array_elements_ptr(raw_ptr as *const crate::array::ArrayHeader)
-                    .add(idx_i32 as usize) as usize
-            }
-        } else {
-            raw_ptr.wrapping_add(8 + (idx_i32 as usize) * 8)
-        };
+    let elem_addr = if receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type))
+    {
+        unsafe {
+            crate::array::array_elements_ptr(raw_ptr as *const crate::array::ArrayHeader)
+                .add(idx_i32 as usize) as usize
+        }
+    } else {
+        raw_ptr.wrapping_add(8 + (idx_i32 as usize) * 8)
+    };
     let v = unsafe { *(elem_addr as *const f64) };
     if v.to_bits() == crate::value::TAG_HOLE {
         return f64::from_bits(TAG_UNDEFINED);
@@ -719,7 +719,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // form (`C.key = v`). Without this the write was silently dropped, so
     // propertyHelper's `isWritable(C, name)` (`C[name] = v`) reported a static
     // method as non-writable. (Mirrors the get arm above.)
-    if crate::object::class_value::legacy_class_value_word(bits).is_some() {
+    if crate::object::class_value::class_ref_word(bits).is_some() {
         let idx_top16 = index.to_bits() >> 48;
         if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
             let key_ptr = js_get_string_pointer_unified(index) as *const crate::StringHeader;
@@ -926,7 +926,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
             return value;
         }
     }
-    let is_array = receiver_tag.is_some_and(|(obj_type, _)| obj_type == crate::gc::GC_TYPE_ARRAY);
+    let is_array = receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type));
     if is_array {
         // #9394: this entry already carries the assignment's own `Throw`
         // flag (`js_dyn_index_set` passes 0 for the sloppy runtime callers);

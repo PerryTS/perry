@@ -7,7 +7,7 @@ provenance=json.loads((work/'provenance.json').read_text())
 for p in ['target/release/perry','target/release/libperry_runtime.a','target/release/libperry_stdlib.a']:
     assert hashlib.sha256(Path(p).read_bytes()).hexdigest()==provenance['files'][p]
 clean={k:v for k,v in os.environ.items() if not k.startswith('PERRY_')}
-source=root/'test-files/test_json_tape_depth_admission.ts'
+source=root/'tests/fixtures/programs/test_json_tape_depth_admission.ts'
 binary=work/'depth-admission'
 compile_cmd=[str(root/'target/release/perry'),'compile',str(source),'--no-cache','-o',str(binary)]
 with (work/'depth-compile.log').open('wb') as log:

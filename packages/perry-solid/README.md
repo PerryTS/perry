@@ -162,7 +162,7 @@ npm ci --ignore-scripts
 npm test
 npm run test:jsx:oracle
 npm run typecheck
-PERRY_BIN=/absolute/path/to/perry ../../tests/release/packages/_harness.sh --filter perry-solid
+PERRY_BIN=/absolute/path/to/perry ../../tests/integration/release/packages/_harness.sh --filter perry-solid
 ```
 
 The release fixture copies the actual package sources and pinned dependencies,

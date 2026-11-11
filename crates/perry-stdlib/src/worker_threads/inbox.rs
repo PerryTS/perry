@@ -54,9 +54,6 @@ extern "C" fn deliver_waiting_messages() -> i32 {
         // runs this pump again.
         let command = INBOX.with(|inbox| inbox.borrow().as_ref().map(Receiver::try_recv));
         match command {
-            Some(Ok(WorkerCommand::Message(message))) => {
-                worker_pump::deliver_parent_port_message(message);
-            }
             Some(Ok(WorkerCommand::DirectMessage {
                 message,
                 source_thread_id,
@@ -83,7 +80,7 @@ extern "C" fn expects_messages() -> i32 {
     i32::from(
         worker
             && ((!parent_port::is_closed()
-                && (message_port::port_is_refed(PARENT_PORT_HANDLE as u64)
+                && (message_port::port_is_refed(parent_port::id())
                     || worker_surface::web_worker_global_handler("onmessage").is_some()))
                 || HELD.with(|held| !held.borrow().is_empty())),
     )

@@ -1499,19 +1499,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
         ctx.exit_scope(scope_mark);
 
-        // Capture analysis — identical to the computed-key IIFE below.
-        let mut all_refs = Vec::new();
-        let mut visited_closures = std::collections::HashSet::new();
-        for stmt in &body {
-            collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
-        }
-        let mut captures: Vec<LocalId> = all_refs
-            .into_iter()
-            .filter(|id| !inner_local_ids.contains(id))
-            .collect();
-        captures.sort();
-        captures.dedup();
-        captures = ctx.filter_module_level_captures(captures);
+        let captures = iife_captures(ctx, &body, &inner_local_ids);
         let body_uses_this = body.iter().any(uses_this_stmt);
         let closure = Expr::Closure {
             func_id: iife_func_id,
@@ -1719,20 +1707,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     }
     body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
     ctx.exit_scope(scope_mark);
-    // Capture analysis: any LocalIds referenced inside the body that
-    // weren't defined here (i.e. the symbol locals from the outer scope).
-    let mut all_refs = Vec::new();
-    let mut visited_closures = std::collections::HashSet::new();
-    for stmt in &body {
-        collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
-    }
-    let mut captures: Vec<LocalId> = all_refs
-        .into_iter()
-        .filter(|id| !inner_local_ids.contains(id))
-        .collect();
-    captures.sort();
-    captures.dedup();
-    captures = ctx.filter_module_level_captures(captures);
+    let captures = iife_captures(ctx, &body, &inner_local_ids);
     // Refs #488 drizzle-sqlite: when a computed-key object literal
     // contains `[this.X]: ...` (drizzle's `{ [this.tableName]: true }`
     // shape from SQLiteSelectQueryBuilderBase ctor), the IIFE wrapper's
@@ -1767,4 +1742,26 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         type_args: vec![],
         byte_offset: 0,
     })
+}
+
+/// The captures of an object-literal IIFE wrapper whose scope is popped:
+/// the locals its body references that are bindings of the enclosing scope
+/// (as `compute_closure_captures` takes them for any closure), never one of
+/// its own temporaries. A function value inside the literal references its
+/// own parameters and locals; they are that function's bindings, not free
+/// in the wrapper.
+fn iife_captures(ctx: &LoweringContext, body: &[Stmt], inner: &[LocalId]) -> Vec<LocalId> {
+    let mut all_refs = Vec::new();
+    let mut visited_closures = std::collections::HashSet::new();
+    for stmt in body {
+        collect_local_refs_stmt(stmt, &mut all_refs, &mut visited_closures);
+    }
+    let outer = ctx.locals.id_set();
+    let mut captures: Vec<LocalId> = all_refs
+        .into_iter()
+        .filter(|id| outer.contains(id) && !inner.contains(id))
+        .collect();
+    captures.sort();
+    captures.dedup();
+    ctx.filter_module_level_captures(captures)
 }

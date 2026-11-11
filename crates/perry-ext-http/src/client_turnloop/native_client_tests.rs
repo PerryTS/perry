@@ -10,9 +10,9 @@ use std::net::TcpListener;
 use std::time::{Duration, Instant};
 
 const CERT: &[u8] =
-    include_bytes!("../../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+    include_bytes!("../../../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
 const KEY: &[u8] =
-    include_bytes!("../../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
+    include_bytes!("../../../../tests/parity/node-suite/tls/fixtures/localhost-key.pem");
 thread_local! {
     static RESPONSE: Cell<bool> = const { Cell::new(false) };
     static INCOMING: Cell<i64> = const { Cell::new(0) };
@@ -274,6 +274,15 @@ fn diagnostics(owner: f64) -> (usize, String, String, u8, usize) {
         refs as usize,
     )
 }
+/// A write the kernel took whole still owes its completion (and holds its
+/// ref) until the loop dispatches it, after `queued_bytes` is already 0.
+fn write_owed(owner: f64) -> bool {
+    let core = unsafe {
+        &*(net::core(owner).unwrap()
+            as *const perry_runtime::turnloop_net::transport::TransportCore)
+    };
+    core.write_owed()
+}
 unsafe extern "C" fn closed(_: *const RawClosureHeader, _: JsThis, _: f64) -> f64 {
     CLOSED.with(|seen| seen.set(true));
     undefined()
@@ -386,7 +395,7 @@ fn n8_https_client_upgrade_preserves_socket_cell_tls_read_head_and_tail() {
         let callback = scope.root_addr(perry_ffi::alloc_closure(perry_ffi::js_function_info!(upgrade, 3; with_flags(perry_ffi::FN_BUILTIN)), 2) as i64);
         unsafe { perry_ffi::set_closure_capture_f64(callback.get() as *mut RawClosureHeader, 0, socket.get()); perry_ffi::set_closure_capture_f64(callback.get() as *mut RawClosureHeader, 1, holder.get()); }
         let out = request(socket.get(), Mode::Upgrade, port, true, callback.get()); let handshakes = super::super::tls_handshakes_total(); start_on_socket(socket.get(), out, None, false).unwrap();
-        drive_until(|| super::super::tls_handshakes_total() == handshakes + 1 && net::queued_bytes(socket.get()) == 0);
+        drive_until(|| super::super::tls_handshakes_total() == handshakes + 1 && net::queued_bytes(socket.get()) == 0 && !write_owed(socket.get()));
         let (cell, read, handle, route, refs) = diagnostics(socket.get()); assert_eq!(route, SUBSYSTEM); assert_ne!(read, "None"); net::own_set(holder.get(), "cell", cell as f64); net::own_set(holder.get(), "refs", refs as f64);
         for (key, text) in [("read", read), ("handle", handle)] { let text = scope.root_nanbox(f64::from_bits(JsValue::from_string_ptr(perry_ffi::alloc_string(&text).as_raw()).bits())); net::own_set(holder.get(), key, text.get()); }
         go.send(()).unwrap(); drive_until(|| UPGRADE.with(Cell::get) && CLOSED.with(Cell::get)); assert_eq!(crate::js_ext_http_client_inflight(), 0); peer.join().unwrap(); perry_runtime::agent::retire_agent(agent);

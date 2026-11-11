@@ -81,6 +81,12 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
         None => return f64::from_bits(TAG_UNDEFINED),
     };
 
+    f64::from_bits(POINTER_TAG | (symbol_for_text(&key) as u64 & POINTER_MASK))
+}
+
+/// `Symbol.for(key)` for key text: the well-known symbol a `@@__perry_wk_`
+/// sentinel names, else the registry's symbol (created on first use).
+pub(crate) fn symbol_for_text(key: &str) -> usize {
     // Well-known symbol sentinel: HIR lowers `Symbol.toPrimitive` etc. to
     // `SymbolFor(String("@@__perry_wk_toPrimitive"))`. Detect the prefix
     // and delegate to the well-known cache instead of polluting the
@@ -88,7 +94,7 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // `Symbol.keyFor()` returns undefined for them.
     if let Some(short_name) = key.strip_prefix(WK_PREFIX) {
         let wk_ptr = well_known_symbol(short_name);
-        return f64::from_bits(POINTER_TAG | (wk_ptr as u64 & POINTER_MASK));
+        return wk_ptr as usize;
     }
 
     let mut guard = SYMBOL_REGISTRY.lock().unwrap();
@@ -96,8 +102,8 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
         *guard = Some(HashMap::new());
     }
     let registry = guard.as_mut().unwrap();
-    if let Some(&ptr_usize) = registry.get(&key) {
-        return f64::from_bits(POINTER_TAG | (ptr_usize as u64 & POINTER_MASK));
+    if let Some(&ptr_usize) = registry.get(key) {
+        return ptr_usize;
     }
 
     // Not found — allocate a persistent SymbolHeader. We use Box::leak so the
@@ -126,10 +132,10 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // sym.description / sym.toString() / Symbol.keyFor(). Lock order is
     // SYMBOL_REGISTRY owns the symbol and its native text;
     // no reader takes them in the reverse order.
-    record_registered_symbol_description(sym_ptr as usize, &key);
-    registry.insert(key.clone(), sym_ptr as usize);
+    record_registered_symbol_description(sym_ptr as usize, key);
+    registry.insert(key.to_string(), sym_ptr as usize);
     drop(guard);
-    f64::from_bits(POINTER_TAG | (sym_ptr as u64 & POINTER_MASK))
+    sym_ptr as usize
 }
 
 /// #6676: a *computed* read of a well-known symbol off the `Symbol`

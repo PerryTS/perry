@@ -248,9 +248,9 @@ pub(crate) fn cluster_default_value() -> f64 {
             "cluster.default",
         ),
     );
-    let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        &crate::object::native_module::namespaces::events::NM_EVENTS,
-        "events",
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
         "EventEmitter",
     ));
     if let Some(event_emitter_proto) =
@@ -761,11 +761,9 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         );
     }
 
-    let event_emitter = crate::object::bound_native_callable_export_value(
-        &crate::object::native_module::namespaces::events::NM_EVENTS,
-        "events",
-        "EventEmitter",
-    );
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
@@ -1638,7 +1636,9 @@ fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(raw as *mut ArrayHeader),
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            Some(raw as *mut ArrayHeader)
+        }
         _ => None,
     }
 }

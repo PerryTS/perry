@@ -245,6 +245,21 @@ fn concat_string_part(
 /// [`js_dynamic_string_or_number_add`]: crate::value::js_dynamic_string_or_number_add
 #[no_mangle]
 pub extern "C" fn js_string_concat_box(l_value: f64, r_value: f64) -> f64 {
+    // Two short ASCII strings whose join fits inline: built from the bits,
+    // the same value the general path would build (see `short_pair`). The
+    // general path sits behind a call so this arm pays none of its frame.
+    if super::short_pair::short_pairs_enabled() {
+        if let Some(joined) = super::short_pair::concat_short_pair(l_value, r_value) {
+            return joined;
+        }
+    }
+    concat_box_general(l_value, r_value)
+}
+
+/// The general pairwise concat of [`js_string_concat_box`]: any operand pair,
+/// including the annotation-lie arm.
+#[inline(never)]
+fn concat_box_general(l_value: f64, r_value: f64) -> f64 {
     let mut scratch_l = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let mut scratch_r = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     // A PLAIN-F64 small-integer operand next to a string operand is the
@@ -1604,10 +1619,9 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
             continue;
         }
 
-        // INT32_TAG = 0x7FFE — extract int from lower 32 bits. A registered
-        // class id (Expr::ClassRef) stringifies via the slow path so it
-        // renders as function source, not its numeric id.
-        if tag == 0x7FFE && !crate::object::is_class_id_registered((bits & 0xFFFF_FFFF) as u32) {
+        // An INT32 number: digits from the lower 32 bits (a `C.prototype`
+        // ref word, bit 32 set, is not one and takes the slow path).
+        if (bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
             let v = (bits & 0xFFFF_FFFF) as u32 as i32;
             let len = {
                 let buf = num_bufs[i].write([0u8; 32]);

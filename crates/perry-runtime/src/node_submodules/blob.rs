@@ -339,20 +339,29 @@ fn captured_blob_bytes(closure: *const ClosureHeader) -> Vec<u8> {
 }
 
 fn set_named_value(obj: *mut ObjectHeader, name: &[u8], value: f64) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_set_field_by_name(obj, key, value);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj.cast()).bits()));
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ) as i64));
+    let obj_ptr = JSValue::from_bits(obj.get_nanbox_f64().to_bits())
+        .as_pointer::<ObjectHeader>()
+        .cast_mut();
+    let key_ptr = JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr();
+    js_object_set_field_by_name(obj_ptr, key_ptr, value.get_nanbox_f64());
 }
 
 fn object_value(obj: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
 
-fn blob_method_value(
-    info: *const crate::closure::JsFunctionInfo,
-    backing: *mut crate::buffer::BufferHeader,
-) -> f64 {
+fn blob_method_value(info: *const crate::closure::JsFunctionInfo, backing: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let backing = scope.root_nanbox_f64(backing);
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, backing as i64);
+    js_closure_set_capture_ptr(closure, 0, backing_ptr(backing.get_nanbox_f64()) as i64);
     f64::from_bits(JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -377,52 +386,53 @@ pub(crate) fn blob_value_from_bytes(bytes: &[u8]) -> f64 {
     blob_value_from_bytes_and_type(bytes, "")
 }
 
-fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
-    let backing = buffer_from_bytes(bytes, false, false);
+pub(crate) fn blob_value_from_bytes_and_type(bytes: &[u8], content_type: &str) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let backing = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::pointer(buffer_from_bytes(bytes, false, false).cast()).bits(),
+    ));
+    let content_type = scope.root_nanbox_f64(bytes_to_text_value(content_type.as_bytes()));
     let obj = js_object_alloc(CLASS_ID_BLOB, 7);
-    set_named_value(obj, b"size", bytes.len() as f64);
-    set_named_value(obj, b"type", bytes_to_text_value(content_type.as_bytes()));
-    set_named_value(
-        obj,
-        b"text",
-        blob_method_value(
-            crate::fn_info!(blob_text_method, 0; with_declared(0)),
-            backing,
-        ),
-    );
-    set_named_value(
-        obj,
-        b"arrayBuffer",
-        blob_method_value(
-            crate::fn_info!(blob_array_buffer_method, 0; with_declared(0)),
-            backing,
-        ),
-    );
-    set_named_value(
-        obj,
-        b"bytes",
-        blob_method_value(
-            crate::fn_info!(blob_bytes_method, 0; with_declared(0)),
-            backing,
-        ),
-    );
-    set_named_value(
-        obj,
-        b"slice",
-        blob_method_value(
-            crate::fn_info!(blob_slice_method, 3; with_declared(3)),
-            backing,
-        ),
-    );
-    set_named_value(
-        obj,
-        b"stream",
-        blob_method_value(
-            crate::fn_info!(blob_stream_method, 0; with_declared(0)),
-            backing,
-        ),
-    );
-    f64::from_bits(JSValue::pointer(obj as *const u8).bits())
+    let obj = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj.cast()).bits()));
+    let obj_ptr = || {
+        JSValue::from_bits(obj.get_nanbox_f64().to_bits())
+            .as_pointer::<ObjectHeader>()
+            .cast_mut()
+    };
+    set_named_value(obj_ptr(), b"size", bytes.len() as f64);
+    set_named_value(obj_ptr(), b"type", content_type.get_nanbox_f64());
+    let text = scope.root_nanbox_f64(blob_method_value(
+        crate::fn_info!(blob_text_method, 0; with_declared(0)),
+        backing.get_nanbox_f64(),
+    ));
+    set_named_value(obj_ptr(), b"text", text.get_nanbox_f64());
+    let array_buffer = scope.root_nanbox_f64(blob_method_value(
+        crate::fn_info!(blob_array_buffer_method, 0; with_declared(0)),
+        backing.get_nanbox_f64(),
+    ));
+    set_named_value(obj_ptr(), b"arrayBuffer", array_buffer.get_nanbox_f64());
+    let bytes_method = scope.root_nanbox_f64(blob_method_value(
+        crate::fn_info!(blob_bytes_method, 0; with_declared(0)),
+        backing.get_nanbox_f64(),
+    ));
+    set_named_value(obj_ptr(), b"bytes", bytes_method.get_nanbox_f64());
+    let slice = scope.root_nanbox_f64(blob_method_value(
+        crate::fn_info!(blob_slice_method, 3; with_declared(3)),
+        backing.get_nanbox_f64(),
+    ));
+    set_named_value(obj_ptr(), b"slice", slice.get_nanbox_f64());
+    let stream = scope.root_nanbox_f64(blob_method_value(
+        crate::fn_info!(blob_stream_method, 0; with_declared(0)),
+        backing.get_nanbox_f64(),
+    ));
+    set_named_value(obj_ptr(), b"stream", stream.get_nanbox_f64());
+    obj.get_nanbox_f64()
+}
+
+fn backing_ptr(value: f64) -> *mut crate::buffer::BufferHeader {
+    JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
 }
 
 pub(crate) fn blob_value_from_file_path(

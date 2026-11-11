@@ -22,12 +22,12 @@
 //! - `PERRY_FACTS_EXPLAIN=1`: diagnostics — each ⊤ site verdict names
 //!   where ⊤ first entered (the precision report groups by it);
 //! - `PERRY_FACTS_ONLY=1`: stop after writing the dump (analysis-only runs);
-//! - `PERRY_FACTS_UNITS=0`: whole-program facts, the reference mode (one
-//!   solve over every module). The default is per-unit facts (decision 151):
-//!   one solve per module, the other modules unknown code
-//!   (`perry_wpfacts::compute_units`), the bounds per unit. Per-unit is the
-//!   default because whole-program exact points-to does not scale (fastify
-//!   does not converge); owner decision 2026-10-23.
+//! - `PERRY_FACTS_UNITS=1`: the retiring per-unit solve (decision 151: one
+//!   solve per module, the other modules unknown code,
+//!   `perry_wpfacts::compute_units`), kept for its tests until it is
+//!   deleted. The facts are solved over the whole program (decision 251:
+//!   one solve over every module, where a body contributes once the program
+//!   can run it, decision 225); owner decision 2026-11-03.
 //!
 //! Interpreted code (`new Function`, `eval`, `vm`) is no program-wide kill
 //! (decision 150): the analysis models it as the ⊤ summary node, and when it
@@ -125,9 +125,70 @@ pub(crate) fn run(
     let relations =
         dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
     let cfg = perry_wpfacts::FactsConfig {
+        verify_facts: perry_codegen::verify_facts::enabled(),
+        dce_bodies: perry_codegen::verify_facts::dce_enabled(),
         roots,
         diagnostics: dump.is_some(),
+        birth_census: std::env::var_os("PERRY_FACTS_BIRTH_CENSUS").is_some(),
         relations,
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_reps: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_const_arrays: matches!(
+            std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_fields: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_exact_rules: matches!(
+            std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_zero_sign: matches!(
+            std::env::var("PERRY_FACTS_ZERO_SIGN").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_leaving_writes: matches!(
+            std::env::var("PERRY_FACTS_LEAVING_WRITES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_elem_undef: matches!(
+            std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_const_numbers: matches!(
+            std::env::var("PERRY_FACTS_CONST_NUMBERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_ranges: matches!(
+            std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -191,6 +252,9 @@ pub(crate) fn run(
         perry_wpfacts::compute_with(&list, &cfg, activation.filter(|_| !check))
     };
     let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+    if perry_codegen::verify_facts::enabled() {
+        perry_codegen::verify_facts::register_site_claims(verification_sites(&pf, None));
+    }
     if let Some(path) = &dump {
         let synthetic = synthetic_module_dirs(cache_dir);
         let mut text = pf.dump_text();
@@ -270,8 +334,12 @@ pub(crate) fn run(
             s.solve_ms,
             s.pops,
             s.work,
-            if s.aborted {
+            if s.widened_stop {
+                ", widened past the work bound, then OVER 1000 times it: no facts"
+            } else if s.aborted {
                 ", OVER the work/time bound: no facts"
+            } else if s.widened {
+                ", past the work bound: widened"
             } else {
                 ""
             },
@@ -316,10 +384,23 @@ pub(crate) fn view_for(
         Vec::new()
     };
     let elision = elision_for(pf, &key);
+    // The bodies this module's code is removed for: its object depends on
+    // them, so they join the digest (only with removal on and some inactive).
+    let inactive: Vec<(u32, &str)> = if perry_codegen::verify_facts::dce_enabled() {
+        pf.verification_bodies
+            .iter()
+            .flatten()
+            .filter(|((path, _, _), active)| path == &key && !**active)
+            .map(|((_, id, name), _)| (*id, name.as_str()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     let digest = if elision.is_empty()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
         && !elision.fnproto_borrow_unwritten
+        && inactive.is_empty()
     {
         pf.digest_for(&key)
     } else {
@@ -327,10 +408,30 @@ pub(crate) fn view_for(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         pf.digest_for(&key).hash(&mut h);
         elision.hash(&mut h);
+        inactive.hash(&mut h);
         h.finish()
     };
     perry_codegen::ProgramFactsView {
         fallback: super::fallback_diag::facts_for(pf, &key),
+        verification_bodies: if perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled()
+        {
+            pf.verification_bodies.as_ref().map(|b| {
+                Arc::new(
+                    b.iter()
+                        .filter(|((path, _, _), _)| path == &key)
+                        .map(|((_, id, name), active)| ((*id, name.clone()), *active))
+                        .collect(),
+                )
+            })
+        } else {
+            None
+        },
+        verification_module: (perry_codegen::verify_facts::enabled()
+            || perry_codegen::verify_facts::dce_enabled())
+        .then(|| key.clone()),
+        verification_sites: perry_codegen::verify_facts::enabled()
+            .then(|| Arc::new(verification_sites(pf, Some(&key)))),
         digest,
         dynamic_code_reach: pf.dynamic_code_reach.clone(),
         // Set on the entry module by the driver, once R is closed.
@@ -376,7 +477,16 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
+    // DESIGN-p4l4 VR-2: the admitted value records' classes, for check mode
+    // only (`expr/record_witness.rs`); empty with the switch off.
+    out.record_classes = pf
+        .templates
+        .iter()
+        .filter(|t| t.record.is_ok())
+        .filter_map(|t| t.class_id)
+        .collect();
     out.super_unrelinked = pf.super_unrelinked.clone();
+    out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
@@ -391,6 +501,24 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     out.array_iterator_close_unwritten = iteration_sabotage
         || (pf.interp_guard.is_none() && pf.array_iterator_close_written.is_none());
     out.fnproto_borrow_unwritten = pf.fnproto_borrow_written.is_none() || unchecked;
+    // The method calls proven to read their intrinsic member. Interpreted
+    // code may store into any member it can name: then no site is proven and
+    // each reads its property (a guarded namespace call has tested the
+    // namespace shadow bit instead).
+    if !out.interp_guard {
+        if let Some(module) = pf.module_paths.iter().position(|p| p == path) {
+            out.native_member_calls = pf
+                .sites
+                .iter()
+                .filter(|s| {
+                    s.module as usize == module
+                        && s.is_call
+                        && matches!(s.verdict, perry_wpfacts::Verdict::NativeMember)
+                })
+                .map(|s| s.byte_offset)
+                .collect();
+        }
+    }
     let Some(mb) = pf.bindings_for(path) else {
         return out;
     };
@@ -450,6 +578,107 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             })
             .collect()
     };
+    if !interp {
+        for (offset, iv) in &mb.call_arg_ranges {
+            out.call_arg_ranges.insert(*offset, iv.clone());
+        }
+        out.number_calls.extend(mb.number_calls.iter().copied());
+        out.number_element_reads
+            .extend(mb.number_element_reads.iter().copied());
+        out.int32_element_reads
+            .extend(mb.int32_element_reads.iter().copied());
+        out.element_floors.extend(mb.element_floors.iter().copied());
+        out.const_numbers.extend(mb.const_numbers.iter().copied());
+        out.element_keys.extend(mb.element_keys.iter().copied());
+        out.key_signs.extend(mb.key_signs.iter().copied());
+        out.rest_reads.extend(mb.rest_reads.iter().copied());
+        out.rest_writes.extend(mb.rest_writes.iter().copied());
+        out.rest_births.extend(mb.rest_births.iter().copied());
+        out.rest_reserves.extend(mb.rest_reserves.iter().copied());
+        out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
+        let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
+        for (id, sig) in &mb.signatures {
+            // DESIGN-p4l4 VR-3b: a Record slot whose layout this module
+            // lowers (`record_layout`: the literal is born here).
+            let mut record = |r: &perry_wpfacts::Rep| match r {
+                perry_wpfacts::Rep::Record(r) => {
+                    let layout = record_layout(pf, path, r.tmpl)?;
+                    out.record_layouts.insert(r.tmpl, layout);
+                    Some(perry_codegen::FactsRecRep {
+                        tmpl: r.tmpl,
+                        opt: r.opt,
+                    })
+                }
+                _ => None,
+            };
+            let mut record_params: Vec<_> = sig.params.iter().map(&mut record).collect();
+            if record_params.iter().all(Option::is_none) {
+                record_params.clear();
+            }
+            let record_ret = record(&sig.ret);
+            let sig = perry_codegen::FactsSignature {
+                params: sig.params.iter().map(rep).collect(),
+                ranges: sig.ranges.clone(),
+                ret: rep(&sig.ret),
+                this_class: sig.this_class,
+                zero_ok: pf.zero_sign_tolerated > 0,
+                record_params,
+                record_ret,
+            };
+            // A signature whose every slot is Boxed here (a record this
+            // module does not lower) is none.
+            if sig.record_ret.is_none()
+                && sig.record_params.is_empty()
+                && sig.this_class.is_none()
+                && sig.ret.encoding() == perry_codegen::FactsEnc::Boxed
+                && sig
+                    .params
+                    .iter()
+                    .all(|r| r.encoding() == perry_codegen::FactsEnc::Boxed)
+            {
+                continue;
+            }
+            out.signatures.insert(*id, sig);
+        }
+        // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
+        let module_index = pf.module_paths.iter().position(|p| p == path);
+        for (offset, (callee_module, func_id)) in &mb.typed_calls {
+            if Some(*callee_module as usize) == module_index {
+                out.typed_calls.insert(*offset, *func_id);
+            }
+        }
+        for (offset, c) in &mb.field_read_calls {
+            let default = match &c.default {
+                None => None,
+                Some(perry_wpfacts::FieldReadDefault::Number(bits)) => Some(*bits),
+                // Codegen applies a Number default only.
+                Some(_) => continue,
+            };
+            out.field_read_calls.insert(
+                *offset,
+                perry_codegen::FactsFieldReadCall {
+                    field: c.field.clone(),
+                    index_arg: c.index_arg,
+                    default,
+                    element_offset: c.element_offset,
+                    field_offset: c.field_offset,
+                    in_floor: c.array.filter(|_| c.in_floor).map(|r| r.floor),
+                    rest: c.rest,
+                },
+            );
+        }
+        if element_reads_enabled() {
+            for (offset, r) in &mb.element_reads {
+                out.element_reads.insert(
+                    *offset,
+                    perry_codegen::FactsElementRead {
+                        len: r.len,
+                        key_in_bounds: r.key_in_bounds,
+                    },
+                );
+            }
+        }
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {
@@ -463,8 +692,61 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     },
                 );
             }
+            // A Number or `undefined` and nothing else (the negative control
+            // `undefnum` claims it for anything that may be a Number).
+            if b.prims & prim::NUM != 0
+                && (!b.other && b.class_ids.is_empty() && b.prims & !(prim::NUM | prim::UNDEF) == 0
+                    || std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("undefnum"))
+            {
+                out.undef_number_inputs.insert(*id);
+            }
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
+                // A Number binding whose interval proof lies in the int32
+                // range: every value it holds is an int32 (never -0).
+                if b.int_range
+                    .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
+                {
+                    out.int32_inputs.insert(*id);
+                    if let Some(range) = b.int_range {
+                        out.int32_ranges.insert(*id, range);
+                    }
+                    if b.zero_tol {
+                        out.zero_tolerant_locals.insert(*id);
+                    }
+                    if b.int_range.is_some_and(|(lo, _)| lo >= 0) {
+                        out.nonneg_int32_inputs.insert(*id);
+                    }
+                }
+            }
+            out.local_reps.insert(*id, facts_rep(b.rep));
+            // DESIGN-p4l4 VR-3a: a binding of one admitted value record is
+            // its fields by value (`perry_codegen::value_records`). The
+            // template's literal must be born in this module (its class is
+            // this module's, or it stays an `Expr::Object`).
+            if let perry_wpfacts::Rep::Record(r) = b.rep {
+                if let Some(layout) = record_layout(pf, path, r.tmpl) {
+                    out.record_layouts.insert(r.tmpl, layout);
+                    out.record_locals.insert(
+                        *id,
+                        perry_codegen::FactsRecRep {
+                            tmpl: r.tmpl,
+                            opt: r.opt,
+                        },
+                    );
+                }
+            }
+            if b.length_number {
+                out.length_number_inputs.insert(*id);
+            }
+            if let Some(n) = b.const_length {
+                out.const_length_inputs.insert(*id, n);
+            }
+            if b.immutable_array {
+                out.immutable_arrays.insert(*id);
+            }
+            if let Some(c) = &b.const_elems {
+                out.const_arrays.insert(*id, c.clone());
             }
         }
         if let Some(r) = recv(b) {
@@ -532,6 +814,12 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             .filter(|f| (f.definite || f.declared || f.reserved) && f.data_field && !f.private)
             .filter_map(|f| {
                 let (classes, nullable) = holder_classes(f).unwrap_or_default();
+                if f.zero_tol {
+                    out.zero_tolerant_fields.insert((cid, f.key.clone()));
+                }
+                if f.rest {
+                    out.rest_keys.insert(f.key.clone());
+                }
                 Some(FactsField {
                     classes,
                     nullable,
@@ -544,6 +832,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     ta_kind: f.ta_kind,
                     declared: f.declared,
                     reserved: f.reserved,
+                    rep: facts_rep(f.rep),
+                    rest: f.rest,
                 })
             })
             .collect();
@@ -559,12 +849,13 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     out
 }
 
-/// Per-unit is the default facts mode: whole-program exact points-to does not
-/// scale (fastify exceeds the work bound and does not converge unbounded);
-/// owner decision 2026-10-23. `PERRY_FACTS_UNITS=0` opts into the
-/// whole-program reference mode.
+/// The facts are solved over the whole program (decision 251, owner
+/// 2026-11-03): one solve over every module, where a body contributes once
+/// the program can run it (decision 225). `PERRY_FACTS_UNITS=1` selects the
+/// retiring per-unit solve, kept for its tests until it is deleted; no other
+/// value selects anything.
 fn per_unit_facts(env: Option<&str>) -> bool {
-    env != Some("0")
+    env == Some("1")
 }
 
 /// The directories compiler-generated modules (the CommonJS support module,
@@ -654,20 +945,19 @@ mod facts_mode_tests {
     use super::per_unit_facts;
 
     #[test]
-    fn per_unit_is_the_default_mode() {
-        // per-unit is the default: whole-program exact points-to does not
-        // scale; owner 2026-10-23.
+    fn whole_program_is_the_default_mode() {
+        // decision 251: the whole solve is the one codegen reads.
         assert!(
-            per_unit_facts(None),
-            "the default facts mode must be per-unit"
+            !per_unit_facts(None),
+            "the default facts mode must be whole-program"
         );
-        assert!(per_unit_facts(Some("1")));
-        assert!(per_unit_facts(Some("")));
+        assert!(!per_unit_facts(Some("0")));
+        assert!(!per_unit_facts(Some("")));
     }
 
     #[test]
-    fn whole_program_is_an_explicit_opt_in() {
-        assert!(!per_unit_facts(Some("0")));
+    fn per_unit_is_an_explicit_opt_in() {
+        assert!(per_unit_facts(Some("1")));
     }
 }
 
@@ -701,6 +991,64 @@ pub(crate) fn activation(
     let cfg = perry_wpfacts::FactsConfig {
         roots,
         // The facts' negative controls act on this pass (it is theirs).
+        no_int_ranges: matches!(
+            std::env::var("PERRY_FACTS_INT_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_lengths: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_LENGTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_floor: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FLOOR").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_reps: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_REPS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_const_arrays: matches!(
+            std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_array_fields: matches!(
+            std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_exact_rules: matches!(
+            std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_zero_sign: matches!(
+            std::env::var("PERRY_FACTS_ZERO_SIGN").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_leaving_writes: matches!(
+            std::env::var("PERRY_FACTS_LEAVING_WRITES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_elem_undef: matches!(
+            std::env::var("PERRY_FACTS_ELEM_UNDEF").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_const_numbers: matches!(
+            std::env::var("PERRY_FACTS_CONST_NUMBERS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_ranges: matches!(
+            std::env::var("PERRY_FACTS_GUARD_RANGES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_guard_presence: matches!(
+            std::env::var("PERRY_FACTS_GUARD_PRESENCE").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -761,3 +1109,117 @@ fn facts_inputs(
 #[cfg(test)]
 #[path = "program_facts/worker_roots_tests.rs"]
 mod worker_roots_tests;
+
+#[cfg(test)]
+#[path = "program_facts/native_addon_tests.rs"]
+mod native_addon_tests;
+
+#[cfg(test)]
+#[path = "program_facts/element_tests.rs"]
+mod element_tests;
+
+fn verification_sites(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: Option<&str>,
+) -> Vec<perry_codegen::verify_facts::SiteClaim> {
+    use perry_codegen::verify_facts::{SiteClaim, SiteVerdict};
+    pf.sites
+        .iter()
+        .enumerate()
+        .filter_map(|(ordinal, site)| {
+            let module = pf.module_paths.get(site.module as usize)?;
+            if path.is_some_and(|path| path != module) {
+                return None;
+            }
+            let verdict = match site.verdict {
+                perry_wpfacts::Verdict::OwnLength => SiteVerdict::OwnLength,
+                perry_wpfacts::Verdict::NativeMember => SiteVerdict::NativeMember,
+                perry_wpfacts::Verdict::T0Mono => SiteVerdict::T0Mono,
+                perry_wpfacts::Verdict::T0Set => SiteVerdict::T0Set,
+                perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
+                perry_wpfacts::Verdict::No(_) => return None,
+            };
+            Some(SiteClaim {
+                ordinal,
+                module: module.clone(),
+                byte_offset: site.byte_offset.checked_sub(1),
+                key: site.key.clone(),
+                is_call: site.is_call,
+                bodies: site.bodies.clone(),
+                verdict,
+            })
+        })
+        .collect()
+}
+
+/// `PERRY_WP_ELEMENT_READS=0` withholds wpfacts' proven element reads
+/// (`ModuleBindings::element_reads`): every element read keeps its guarded
+/// tier (representation RFC §10.7, P4).
+fn element_reads_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The layout codegen lowers an admitted value record of template `tmpl`
+/// with, when its literal is born in module `path` (DESIGN-p4l4 VR-3a).
+fn record_layout(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: &str,
+    tmpl: u32,
+) -> Option<perry_codegen::FactsRecordLayout> {
+    let t = match pf.templates.get(tmpl as usize) {
+        Some(t) if t.id == tmpl => t,
+        _ => pf.templates.iter().find(|t| t.id == tmpl)?,
+    };
+    let layout = t.record.as_ref().ok()?;
+    let module = pf.module_paths.iter().position(|p| p == path)?;
+    if t.module != Some(module as u32) {
+        return None;
+    }
+    Some(perry_codegen::FactsRecordLayout {
+        class_id: t.class_id,
+        keys: layout.fields.iter().map(|(k, _)| k.clone()).collect(),
+        numeric: layout
+            .fields
+            .iter()
+            .map(|(_, r)| {
+                matches!(
+                    r,
+                    perry_wpfacts::records::FieldRep::F64 | perry_wpfacts::records::FieldRep::I32
+                )
+            })
+            .collect(),
+    })
+}
+
+/// wpfacts `Rep` as codegen's `FactsRep`, one to one.
+fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
+    use perry_codegen::{FactsArrRep, FactsElemRep, FactsRep};
+    use perry_wpfacts::{ElemRep, Rep};
+    match r {
+        Rep::Boxed => FactsRep::Boxed,
+        Rep::F64 => FactsRep::F64,
+        Rep::I32 => FactsRep::I32,
+        Rep::Arr(a) => FactsRep::Arr(FactsArrRep {
+            elem: match a.elem {
+                ElemRep::Boxed => FactsElemRep::Boxed,
+                ElemRep::F64 => FactsElemRep::F64,
+                ElemRep::I32 => FactsElemRep::I32,
+            },
+            floor: a.floor,
+            dense: a.dense,
+            fixed: a.fixed,
+            im: a.im,
+            // Negative control `restrep` (I32 at rest B2): every int Array
+            // is claimed at rest, so a rep-keyed load decodes a double word.
+            at_rest: a.at_rest
+                || (a.elem == ElemRep::I32
+                    && std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("restrep")),
+        }),
+        // DESIGN-p4l4 VR-2: codegen lowers records from VR-3; until then a
+        // record is the Boxed word it is today.
+        Rep::Record(_) => FactsRep::Boxed,
+    }
+}

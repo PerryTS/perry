@@ -82,9 +82,7 @@ macro_rules! thunk {
             let msg: &'static str = $msg;
             let bytes = msg.as_bytes();
             let header = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            let err = crate::error::js_error_new_with_message(header);
-            let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-            crate::exception::js_throw(f64::from_bits(bits))
+            crate::exception::throw_core(crate::error::CoreError::error(header))
         }
     };
 }
@@ -1053,7 +1051,7 @@ pub fn scan_node_submodule_singleton_roots(mark: &mut dyn FnMut(f64)) {
 pub fn scan_node_submodule_singleton_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     DIAG_PENDING_UNCAUGHT.with(|pending| {
         for (err, _) in pending.borrow_mut().iter_mut() {
-            visitor.visit_nanbox_f64_slot(err);
+            err.scan_roots(visitor);
         }
     });
     // Symbol keys duplicate the structurally rooted DIAG_CHANNELS names.
@@ -1138,7 +1136,9 @@ pub(crate) fn test_seed_node_submodule_roots(
         let mut pending = pending.borrow_mut();
         pending.clear();
         pending.push((
-            f64::from_bits(JSValue::pointer(namespace as *const u8).bits()),
+            UncaughtError::Caught(crate::exception::test_caught(f64::from_bits(
+                JSValue::pointer(namespace as *const u8).bits(),
+            ))),
             None,
         ));
     });
@@ -1155,7 +1155,7 @@ pub(crate) fn test_node_submodule_roots() -> (usize, usize, usize, u64) {
         pending
             .borrow_mut()
             .pop()
-            .map(|(value, _)| value.to_bits())
+            .map(|(value, _)| value.value().to_bits())
             .unwrap_or(0)
     });
     (closure, namespace, diag, pending)
@@ -1373,34 +1373,3 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 #[cfg(test)]
 mod tests;
 
-/// Install the provider's ReadableStream.from on the actual constructor
-/// shapes, with no property-read dispatch or provider side table.
-/// # Safety
-/// `info` must have static lifetime and describe a one-argument JS method.
-#[no_mangle]
-pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunctionInfo) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let method = scope.root_raw_mut_ptr(js_closure_alloc(&*info, 0));
-    method.with_mut_ptr(|p| crate::object::set_bound_native_closure_name(p, "from"));
-    method.with_mut_ptr(|p: *mut ClosureHeader| {
-        crate::object::set_builtin_closure_length(p as usize, 1);
-        crate::object::set_builtin_closure_non_constructable(p as usize);
-    });
-    // The module export aliases the global constructor. Decorate that one
-    // shape without arming an unimported submodule or allocating a namespace.
-    let ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-        b"ReadableStream".as_ptr(),
-        14,
-    ));
-    let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
-    crate::closure::closure_set_dynamic_prop(
-        addr,
-        "from",
-        method.with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64)),
-    );
-    crate::object::set_builtin_property_attrs(
-        addr,
-        "from".to_string(),
-        crate::object::PropertyAttrs::new(true, true, true),
-    );
-}

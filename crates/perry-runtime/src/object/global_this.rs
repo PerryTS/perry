@@ -86,8 +86,7 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
 pub(crate) use array_error::{
     function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
     generic_array_like_to_vec, global_this_rest_array_values, is_native_error_subclass_constructor,
-    object_prototype_has_own_property_thunk, object_prototype_is_prototype_of_thunk,
-    object_prototype_property_is_enumerable_thunk, object_prototype_to_string_thunk,
+    object_prototype_to_string_thunk, object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
@@ -113,6 +112,8 @@ pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 pub(crate) use fetch_globals::init_fetch_backed_receiver;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
+#[cfg(perry_gc_instruments)]
+pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
@@ -133,8 +134,7 @@ pub(crate) use generator::{
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
-    install_evaluation_generator_symbols, STEP_DONE, STEP_INNER_RESULT,
+    fixed_generator_state, install_class_symbol_method, STEP_DONE, STEP_INNER_RESULT,
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,
@@ -163,11 +163,11 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
-    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
+    populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_error_prototype_data_properties, populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
@@ -185,9 +185,7 @@ pub(crate) use global_this_webassembly::owned_wrappers as test_wasm_wrapper_stat
 // Existing unit fixtures invoke these bodies directly; production installers
 // now name their owning module in the exported info declaration.
 #[cfg(test)]
-pub(crate) use array_error::{
-    object_prototype_to_locale_string_thunk, object_prototype_value_of_thunk,
-};
+pub(crate) use array_error::object_prototype_to_locale_string_thunk;
 #[cfg(test)]
 pub(crate) use typed_array::array_buffer_is_view_thunk;
 

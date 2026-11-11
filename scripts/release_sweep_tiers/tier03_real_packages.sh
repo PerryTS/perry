@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tier 3 — real_packages
 #
-# Wraps tests/release/packages/_harness.sh, which iterates every fixture/
+# Wraps tests/integration/release/packages/_harness.sh, which iterates every fixture/
 # subdirectory and runs its fixture.sh. The harness emits a flat JSON
 # summary that sweep_tier_run_summary parses for the tier result.
 #
@@ -27,4 +27,4 @@ if [[ ! -x "$REPO_ROOT/target/release/perry" ]]; then
 fi
 
 sweep_tier_run_summary "$OUT" 3 "real_packages" \
-    "$REPO_ROOT/tests/release/packages/_harness.sh"
+    "$REPO_ROOT/tests/integration/release/packages/_harness.sh"

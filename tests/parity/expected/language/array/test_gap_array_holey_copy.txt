@@ -1,0 +1,184 @@
+pristine from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+pristine from(empty) 4:[undefined,undefined,undefined,undefined]
+pristine from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+pristine from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+pristine spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+pristine slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+pristine slice(1,5) 4:[<hole>,3,<hole>,5]
+pristine slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+pristine slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+pristine concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+pristine concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+pristine splice 5:[1,<hole>,3,<hole>,5]
+pristine fill 7:[1,7,7,7,5,<hole>,<hole>]
+pristine fill all 5:[0,0,0,0,0]
+pristine Array.apply 3:[undefined,undefined,undefined]
+pristine own keys of from 4
+pristine own keys of slice 3
+pristine own keys of concat 6
+pristine big from(holey) 301 300000
+pristine big from(length) 301
+pristine big slice 0 300000
+pristine big concat 0 600000
+pristine big spread 301 300000
+pristine big fill 300000 301
+pristine again from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+pristine again from(empty) 4:[undefined,undefined,undefined,undefined]
+pristine again from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+pristine again from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+pristine again spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+pristine again slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+pristine again slice(1,5) 4:[<hole>,3,<hole>,5]
+pristine again slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+pristine again slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+pristine again concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+pristine again concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+pristine again splice 5:[1,<hole>,3,<hole>,5]
+pristine again fill 7:[1,7,7,7,5,<hole>,<hole>]
+pristine again fill all 5:[0,0,0,0,0]
+pristine again Array.apply 3:[undefined,undefined,undefined]
+pristine again own keys of from 4
+pristine again own keys of slice 3
+pristine again own keys of concat 6
+pristine again big from(holey) 301 300000
+pristine again big from(length) 301
+pristine again big slice 0 300000
+pristine again big concat 0 600000
+pristine again big spread 301 300000
+pristine again big fill 300000 301
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+array-proto from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+array-proto from(empty) 4:[undefined,undefined,undefined,undefined]
+array-proto from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+array-proto from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+array-proto spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+array-proto slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+array-proto slice(1,5) 4:[<hole>,3,<hole>,5]
+array-proto slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+array-proto slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+array-proto concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+array-proto concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+array-proto splice 5:[1,<hole>,3,<hole>,5]
+array-proto fill 7:[1,7,7,7,5,<hole>,<hole>]
+array-proto Array.apply 3:[undefined,undefined,undefined]
+array-proto own keys of from 4
+array-proto own keys of slice 3
+array-proto own keys of concat 6
+array-proto big from(holey) 301 300000
+array-proto big from(length) 301
+array-proto big slice 0 300000
+array-proto big concat 0 600000
+array-proto big spread 301 300000
+getter calls false
+array-proto removed from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+array-proto removed from(empty) 4:[undefined,undefined,undefined,undefined]
+array-proto removed from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+array-proto removed from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+array-proto removed spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+array-proto removed slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+array-proto removed slice(1,5) 4:[<hole>,3,<hole>,5]
+array-proto removed slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+array-proto removed slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+array-proto removed concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+array-proto removed concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+array-proto removed splice 5:[1,<hole>,3,<hole>,5]
+array-proto removed fill 7:[1,7,7,7,5,<hole>,<hole>]
+array-proto removed fill all 5:[0,0,0,0,0]
+array-proto removed Array.apply 3:[undefined,undefined,undefined]
+array-proto removed own keys of from 4
+array-proto removed own keys of slice 3
+array-proto removed own keys of concat 6
+array-proto removed big from(holey) 301 300000
+array-proto removed big from(length) 301
+array-proto removed big slice 0 300000
+array-proto removed big concat 0 600000
+array-proto removed big spread 301 300000
+array-proto removed big fill 300000 301
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.4: built-in objects are read-only in a compiled program
+object-proto from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+object-proto from(empty) 4:[undefined,undefined,undefined,undefined]
+object-proto from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+object-proto from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+object-proto spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+object-proto slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+object-proto slice(1,5) 4:[<hole>,3,<hole>,5]
+object-proto slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+object-proto slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+object-proto concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+object-proto concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+object-proto splice 5:[1,<hole>,3,<hole>,5]
+object-proto fill 7:[1,7,7,7,5,<hole>,<hole>]
+object-proto Array.apply 3:[undefined,undefined,undefined]
+object-proto own keys of from 4
+object-proto own keys of slice 3
+object-proto own keys of concat 6
+object-proto big from(holey) 301 300000
+object-proto big from(length) 301
+object-proto big slice 0 300000
+object-proto big concat 0 600000
+object-proto big spread 301 300000
+object-proto removed from(arrayLike) 6:[undefined,b,undefined,undefined,e,undefined]
+object-proto removed from(empty) 4:[undefined,undefined,undefined,undefined]
+object-proto removed from(holey) 7:[1,undefined,3,undefined,5,undefined,undefined]
+object-proto removed from(holey,map) 7:[0:1,1:undefined,2:3,3:undefined,4:5,5:undefined,6:undefined]
+object-proto removed spread 7:[1,undefined,3,undefined,5,undefined,undefined]
+object-proto removed slice 7:[1,<hole>,3,<hole>,5,<hole>,<hole>]
+object-proto removed slice(1,5) 4:[<hole>,3,<hole>,5]
+object-proto removed slice.call(arrayLike) 6:[<hole>,b,<hole>,<hole>,e,<hole>]
+object-proto removed slice.call(empty) 4:[<hole>,<hole>,<hole>,<hole>]
+object-proto removed concat self 14:[1,<hole>,3,<hole>,5,<hole>,<hole>,1,<hole>,3,<hole>,5,<hole>,<hole>]
+object-proto removed concat lead 9:[0,1,<hole>,3,<hole>,5,<hole>,<hole>,9]
+object-proto removed splice 5:[1,<hole>,3,<hole>,5]
+object-proto removed fill 7:[1,7,7,7,5,<hole>,<hole>]
+object-proto removed fill all 5:[0,0,0,0,0]
+object-proto removed Array.apply 3:[undefined,undefined,undefined]
+object-proto removed own keys of from 4
+object-proto removed own keys of slice 3
+object-proto removed own keys of concat 6
+object-proto removed big from(holey) 301 300000
+object-proto removed big from(length) 301
+object-proto removed big slice 0 300000
+object-proto removed big concat 0 600000
+object-proto removed big spread 301 300000
+object-proto removed big fill 300000 301
+late before 3:[undefined,undefined,undefined]
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+late after 3:[undefined,undefined,undefined]
+late removed 3:[undefined,undefined,undefined]
+own 3:[a,undefined,c]
+null proto 3:[undefined,n,undefined]
+class 3:[undefined,boxed,undefined]
+custom proto 2:[p0,undefined]
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+length getter 2:[undefined,undefined]
+swap data from(arrayLike) 4:[undefined,p1,undefined,undefined]
+swap data slice.call(arrayLike) 4:[<hole>,p1,<hole>,<hole>]
+swap data concat(arrayLike) 1:[[object Object]]
+swap data from(holey) 5:[1,p1,3,undefined,5]
+swap data slice(holey) 5:[1,p1,3,<hole>,5]
+swap data spread(holey) 5:[1,p1,3,undefined,5]
+swap data concat(holey) 6:[0,1,p1,3,<hole>,5]
+swap getter from(arrayLike) 4:[undefined,g1,undefined,undefined]
+swap getter slice.call(arrayLike) 4:[<hole>,g1,<hole>,<hole>]
+swap getter concat(arrayLike) 1:[[object Object]]
+swap getter from(holey) 5:[1,g1,3,undefined,5]
+swap getter slice(holey) 5:[1,g1,3,<hole>,5]
+swap getter spread(holey) 5:[1,g1,3,undefined,5]
+swap getter concat(holey) 6:[0,1,g1,3,<hole>,5]
+swap before 3:[undefined,undefined,undefined] 3:[<hole>,<hole>,<hole>]
+swap after 3:[undefined,undefined,p2] 3:[<hole>,<hole>,p2]
+subclass before slice 4:[a0,<hole>,<hole>,<hole>]
+subclass before from 4:[a0,undefined,undefined,undefined]
+subclass before spread 4:[a0,undefined,undefined,undefined]
+subclass before concat 5:[9,a0,<hole>,<hole>,<hole>]
+subclass after slice 4:[a0,<hole>,a2,<hole>]
+subclass after from 4:[a0,undefined,a2,undefined]
+subclass after spread 4:[a0,undefined,a2,undefined]
+subclass after concat 5:[9,a0,<hole>,a2,<hole>]
+subclass after plain slice.call 4:[a0,<hole>,a2,<hole>]
+subclass getter slice 4:[a0,<hole>,a2,getter3]
+subclass getter from 4:[a0,undefined,a2,getter3]
+subclass getter concat 5:[9,a0,<hole>,a2,getter3]
+subclass removed slice 4:[a0,<hole>,<hole>,<hole>]

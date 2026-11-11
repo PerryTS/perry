@@ -8,6 +8,20 @@ For the dated source of truth on shipped collection paths, target-specific
 root lowerings, memory pressure, block pooling, supported knobs, and CI, see
 [Garbage collector: current architecture and operations](garbage-collector.md).
 
+## Class evaluation ownership
+
+A computed symbol method or accessor belongs to the prototype or constructor
+created by that class evaluation. Its key, callable, accessor halves and property
+attributes live on that object's shape. Evaluating a class expression again
+creates an independent surface; deleting a configurable symbol property removes
+it from reflection and calls alike.
+
+Immutable class declarations supply method bodies and compile-time symbol keys
+for prototype birth. Runtime keys are retained by their evaluation's existing
+traced computed-member slots until that prototype is materialized. Static symbol
+members are installed directly on the actual constructor. Property reads and
+calls use those objects rather than dispatch data indexed by a declaration id.
+
 ## Value representation: NaN-boxing
 
 The generic JavaScript value ABI is a 64-bit NaN-boxed word. Proven native values and specialized storage can use other representations; boxing is required when crossing a generic value boundary.
@@ -47,6 +61,23 @@ Three consequences worth noting:
 1. **Numbers are free.** A plain `f64` value is its own representation — no boxing, no header, no allocation. Numeric hot loops cost nothing in memory traffic.
 2. **The GC can identify pointer values from the tag alone.** When tracing a value, the collector masks the high bits, checks for `0x7FFA`/`0x7FFD`/`0x7FFF`, and either follows the low-48-bit pointer or skips. There is no per-value runtime type lookup.
 3. **Type checks are bitwise.** `typeof` and many fast paths in the runtime are register-level mask-and-compare operations.
+
+## Property atoms during realm bootstrap
+
+A program property key has one atom per text. Literal property probes compare
+these atoms by identity, so runtime bootstrap must not create a second program
+atom before the executable registers its literal images. Builtin global names
+have shared static image atoms; constructor statics use ordinary keys in the
+constructor's complete attributed property bag.
+
+A provider can initialize the realm before source literals register. For example,
+the streams provider installs `ReadableStream.from` during startup. Error's
+`isError`, `captureStackTrace`, `prepareStackTrace` and `stackTraceLimit` are
+installed together through `ConstructorStatics`, so that early bootstrap keeps
+the same statics and inherited identities as later bootstrap. Debug builds assert
+that registration cannot encounter another program atom for the same text.
+`scripts/check_error_statics.py` compares the Error-family statics with Node across
+stream and fetch global references.
 
 ## Heap layout: per-thread arena, nursery + old-gen
 

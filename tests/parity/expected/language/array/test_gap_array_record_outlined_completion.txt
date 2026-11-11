@@ -1,0 +1,21 @@
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+array 0 body1|finally|body2|finally
+array 1 body1|finally
+array 2 body1|finally|caught:body-error
+array 3 body1
+array 4 body1|finally|body2|finally
+custom 0 body1|finally|body2|finally
+protocol close
+custom 1 body1|finally
+protocol close
+custom 2 body1|finally|caught:body-error
+protocol close
+custom 3 body1
+custom 4 body1|finally|body2|finally
+step caught:step-error
+protocol close
+throw-close body1|finally|caught:body-error
+protocol close
+break-close body1|finally|caught:close-error
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+get caught:get-error

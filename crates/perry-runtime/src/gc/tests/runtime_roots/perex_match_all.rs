@@ -147,7 +147,7 @@ extern "C" fn throw_getter(
     _: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(941.0)
+    crate::exception::test_throw(941.0)
 }
 extern "C" fn throw_exec(
     _: *const crate::closure::ClosureHeader,
@@ -155,7 +155,7 @@ extern "C" fn throw_exec(
     _: f64,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(942.0)
+    crate::exception::test_throw(942.0)
 }
 extern "C" fn no_match(
     _: *const crate::closure::ClosureHeader,

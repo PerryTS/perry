@@ -6,19 +6,26 @@
 //! constructor itself, reached through `.constructor` of a function value,
 //! passed to a function that calls it, read under a computed key, or given
 //! to unknown code (then a ⊤ callee may be it).
-//! Once it may run, it catches what compiled code throws: a thrown `Thr`
-//! escapes, and `t.code` is unproven.
+//! Once it may run, it reads the program's fields of built-in objects by
+//! name (rule R1; DECISIONS 150: it is one summary node over the escaped
+//! values): `Math.thr` escapes, so interpreted code may call `thr` and catch
+//! the `Thr` it throws (node: `try { Math.thr(2) } catch (e) { leak(e) }`).
+//! An escaped function's throw region feeds the escape sink (ESCRAISE,
+//! DESIGN SEEDE section 8): `Thr` escapes, and `t.code` is unproven. With
+//! that edge dropped, `t.code` stays proven: each test below that expects
+//! it unproven turns red.
 
 use super::*;
 
-/// The interpreter is linked; `{body}` runs after `thr` may throw.
+/// The interpreter is linked; `thr` throws a `Thr` and is a program field
+/// of `Math`, which interpreted code reads once it may run; then `{body}`.
 fn verdict(body: &str, sources: bool) -> Verdict {
     let src = format!(
         r#"
         const SymbolFlags = {{ Function: 16, Class: 32 }};
         class Thr {{ code = 4; }}
         function thr(n: number) {{ if (n > 1) throw new Thr(); return n; }}
-        try {{ thr(SymbolFlags.Function); }} catch {{}}
+        (Math as any).thr = thr;
         {body}
         const t = new Thr();
         console.log(SymbolFlags.Function, t.code);
@@ -103,7 +110,8 @@ fn a_computed_constructor_key_on_a_function_may_be_the_constructor() {
 #[test]
 fn the_constructor_given_to_unknown_code_runs_interpreted_code() {
     let v = verdict(
-        r#"const sink: any = (globalThis as any).hostSink; if (sink) sink(Function);"#,
+        r#"import "unseen-host";
+const sink: any = (globalThis as any).hostSink; if (sink) sink(Function);"#,
         false,
     );
     assert!(!proven(&v), "{v:?}");

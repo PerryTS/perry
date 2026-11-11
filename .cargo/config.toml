@@ -40,6 +40,24 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 # repeating the `[build]` flags in it: cargo uses the target list INSTEAD of
 # the build list, and a runtime without unwind tables strands every throw.
 
+# Android: real thread-locals. Rust's Android target spec has no
+# `has-thread-local`, so std's `thread_local!` falls back to one pthread key
+# per declaration, and bionic gives a process about 128 (shared with libc and
+# ART). The runtime's raw `thread_local!`s (the cold allowlist in
+# scripts/check_thread_locals.py) and its dependencies' exhausted them in a
+# real program: std aborts in `LazyKey::lazy_init` the first time one more is
+# touched (a Bloom app on a Pixel 4a, inside the collector). With
+# `has-thread-local`, std (built from source below, so it takes the flag too)
+# uses `#[thread_local]` statics in the emulated model rustc's Android target
+# already selects: one emutls key for every thread-local in the process.
+# `perry_thread_local!`'s Android pool (tls_os_pool.rs) is unaffected. The
+# `[build]` flags are repeated, as above requires.
+[target.aarch64-linux-android]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes"]
+
 # std built from source without its optional backtrace support, for every
 # cargo build of this workspace: release, dev, test, check/clippy, every
 # target. std is compiled from the toolchain's rust-src (rust-toolchain.toml
@@ -110,16 +128,12 @@ build-perry = [
     "-p", "perry-ext-argon2",
     "-p", "perry-ext-bcrypt",
     "-p", "perry-ext-better-sqlite3",
-    "-p", "perry-ext-cheerio",
-    "-p", "perry-ext-ethers",
     "-p", "perry-ext-http",
     "-p", "perry-ext-net",
-    "-p", "perry-ext-nodemailer",
     "-p", "perry-ext-parcel-watcher",
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
-    "-p", "perry-ext-typescript",
-    "-p", "perry-ext-undici",
+    "-p", "perry-ext-bun",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]
@@ -136,16 +150,12 @@ build-perry-instr = [
     "-p", "perry-ext-argon2",
     "-p", "perry-ext-bcrypt",
     "-p", "perry-ext-better-sqlite3",
-    "-p", "perry-ext-cheerio",
-    "-p", "perry-ext-ethers",
     "-p", "perry-ext-http",
     "-p", "perry-ext-net",
-    "-p", "perry-ext-nodemailer",
     "-p", "perry-ext-parcel-watcher",
     "-p", "perry-ext-pdf",
     "-p", "perry-ext-sharp",
-    "-p", "perry-ext-typescript",
-    "-p", "perry-ext-undici",
+    "-p", "perry-ext-bun",
     "-p", "perry-ext-ws",
     "-p", "perry-ext-zlib",
 ]

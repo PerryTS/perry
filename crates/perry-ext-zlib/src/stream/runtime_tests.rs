@@ -177,7 +177,7 @@ extern "C" fn throwing_settled_one_shot(
     output: f64,
 ) -> f64 {
     settled_one_shot(c, this, err, output);
-    perry_runtime::exception::js_throw(73.0)
+    perry_runtime::exception::throw_program_value(73.0)
 }
 extern "C" fn caught_one_shot(_: *const RawClosureHeader, _: JsThis, err: f64) -> f64 {
     assert_eq!(err, 73.0);
@@ -363,8 +363,8 @@ fn native_bytes(owner: f64) -> usize {
     let ptr =
         JsValue::from_bits(owner.to_bits()).as_pointer::<perry_runtime::object::ObjectHeader>();
     unsafe {
-        // `native_state` -> the stream's state record -> its payload cell.
-        let cell = perry_runtime::native_payload::payload_cell_of_word((*(*ptr).meta).native_state)
+        // The stream's payload slot -> its payload cell.
+        let cell = perry_runtime::native_payload::payload_cell_of_object(ptr)
             .expect("a zlib stream has a payload cell");
         (*cell).external_bytes as usize
     }
@@ -658,7 +658,8 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     let opts = roots.root_nanbox(options());
     // Generated in a separate Node process. A 100 MB producer allocation
     // retained by the allocator would mask the decompressor's RSS growth.
-    let compressed = include_bytes!("../../../../test-files/fixtures/zlib-bomb-100mb.gz");
+    let compressed =
+        include_bytes!("../../../../tests/fixtures/programs/fixtures/zlib-bomb-100mb.gz");
     let expected = 2229916188;
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
     listen(owner.get(), 3.0);

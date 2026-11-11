@@ -112,6 +112,8 @@ pub struct Import {
     /// but do NOT pin the target as eager — if no static edge reaches it
     /// the target is `Deferred`. `specifiers` is empty for these.
     pub is_dynamic: bool,
+    /// Static `import defer` binds a namespace without evaluating its module.
+    pub is_deferred: bool,
     /// Issue #1672: this source is the target of at least one dynamic
     /// `import()` site in the module, but the edge could NOT be a
     /// dedicated `is_dynamic` synthetic edge because a *static* import of
@@ -323,6 +325,45 @@ pub fn is_cjs_record_export(name: &str) -> bool {
 }
 
 impl Class {
+    /// The class has heritage and no constructor of its own: it runs the
+    /// default derived constructor `constructor(...a) { super(...a) }`, and
+    /// its field initializers are the registered `<class>_default_fields`
+    /// body. A `new` of such a class may be constructed through the class
+    /// value as written (`new` of a specialization constructs the class it
+    /// was specialized from; codegen `super_constructor::new`).
+    pub fn is_default_derived(&self) -> bool {
+        self.constructor.is_none()
+            && (self.extends_name.is_some()
+                || self.extends_expr.is_some()
+                || self.extends.is_some()
+                || self.native_extends.is_some())
+    }
+
+    /// Accessor `f` of `getters` / `setters` is `static`: an own property of
+    /// the class constructor, not of its prototype (`static_accessor_fn_ids`).
+    pub fn is_static_accessor(&self, f: &Function) -> bool {
+        self.static_accessor_fn_ids.contains(&f.id)
+    }
+
+    /// Some member's key is evaluated by ClassDefinitionEvaluation: the one
+    /// question "does this class have keys the compiler cannot name". A member
+    /// keyed by a known symbol is an ordinary member and does not count.
+    pub fn has_evaluated_members(&self) -> bool {
+        self.computed_members
+            .iter()
+            .any(ClassComputedMember::is_evaluated)
+    }
+
+    /// Some instance getter or setter has an evaluated key: the only member
+    /// that can intercept a `this.x` read or store by a name the compiler
+    /// does not see (an evaluated-key method is a writable data property, so
+    /// an own field shadows it and an add over it defines an own property).
+    pub fn has_evaluated_accessor(&self) -> bool {
+        self.computed_members.iter().any(|m| {
+            m.is_evaluated() && !m.is_static && !matches!(m.kind, ClassComputedMemberKind::Method)
+        })
+    }
+
     /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
     /// a null prototype whose keys are exactly the declared ones, each absent
     /// until stored (`ClassFieldOrigin::Declared`). It has no constructor and
@@ -481,6 +522,28 @@ pub struct ClassComputedMember {
     /// Zero-based position in the source ClassBody. Computed field and member
     /// names share this ordering during ClassDefinitionEvaluation.
     pub source_order: usize,
+}
+
+impl ClassComputedMember {
+    /// The member's key when it is known at compile time: a well-known symbol
+    /// (`SymbolFor("@@__perry_wk_<name>")`) or a registered `Symbol.for("lit")`.
+    /// The key expression IS the key's identity, so a known member is named
+    /// by it exactly as a string member is named by its text. String and
+    /// number literal keys never reach here: the lowering names those members.
+    pub fn known_symbol(&self) -> Option<&str> {
+        match &self.key_expr {
+            Expr::SymbolFor(inner) => match inner.as_ref() {
+                Expr::String(s) => Some(s.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The key is evaluated by ClassDefinitionEvaluation (not known here).
+    pub fn is_evaluated(&self) -> bool {
+        self.known_symbol().is_none()
+    }
 }
 
 /// A class field

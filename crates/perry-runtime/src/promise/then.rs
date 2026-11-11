@@ -1062,9 +1062,7 @@ fn throw_promise_prototype_incompatible_receiver(method: &str, receiver: f64) ->
     };
     let msg = format!("Method Promise.prototype.{method} called on incompatible receiver {label}");
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// ECMA-262 Invoke(receiver, "then", args): read the `then` property and call it.
@@ -1089,9 +1087,7 @@ fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
     if !super::spec_combinators::is_callable_value(then_fn) {
         let msg = b"receiver.then is not a function";
         let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_str);
-        let err_val = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(err_val));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
     }
     unsafe {
         crate::closure::native_call_value_this(
@@ -1106,16 +1102,12 @@ fn call_receiver_then(receiver: f64, args: &[f64]) -> f64 {
 fn throw_promise_finally_non_object() -> ! {
     let msg = b"Promise.prototype.finally called on non-object";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 fn throw_type_error_thunk(msg: &str) -> ! {
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    let v = f64::from_bits(crate::value::JSValue::pointer(err as *const u8).bits());
-    crate::exception::js_throw(v)
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 // True iff `value` is a JavaScript Object (heap-pointer tagged, not a Symbol or
@@ -1456,7 +1448,8 @@ extern "C" fn spec_reason_thrower_fn(
     _arg: f64,
 ) -> f64 {
     let reason = crate::closure::js_closure_get_capture_f64(closure, 0);
-    crate::exception::js_throw(reason)
+    // The rejection slot has program, caught and runtime-built error writers.
+    crate::exception::throw_open(reason)
 }
 
 // thenFinally: captures [C_f64, on_finally_f64], called with fulfilled value.

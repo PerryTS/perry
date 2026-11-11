@@ -109,6 +109,7 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "collector",
             "poll",
             "js",
+            "program",
             "throw",
             "panic",
             "teardown",
@@ -122,6 +123,7 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "idiom",
             "closures",
             "target",
+            "barrier",
         ]
         .contains(&kind)
         {

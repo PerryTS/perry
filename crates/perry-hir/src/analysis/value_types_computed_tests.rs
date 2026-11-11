@@ -7,6 +7,7 @@ fn assignment_keys_evaluate_to_the_assigned_value() {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::String("a".into())),
         value: Box::new(Expr::Integer(0)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     };
@@ -15,6 +16,7 @@ fn assignment_keys_evaluate_to_the_assigned_value() {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(inner),
         value: Box::new(Expr::String("a".into())),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     };
@@ -33,6 +35,7 @@ fn enum_image_computed_reads_use_the_existing_member_shape() {
         strict: true,
     };
     let named = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(image.clone()),
@@ -40,6 +43,7 @@ fn enum_image_computed_reads_use_the_existing_member_shape() {
     };
     assert_eq!(infer_expr_type(&named, &env), Type::Number);
     let indexed = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(image),

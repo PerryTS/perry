@@ -6,6 +6,7 @@
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
 mod all_pointer_arrays;
+pub(crate) mod life_census;
 pub(crate) mod anon_key_adds;
 mod byte_read_key;
 #[cfg(test)]
@@ -14,11 +15,17 @@ mod cjs_scaffolding;
 mod clamp_detect;
 mod class_accessors;
 mod closures;
+pub(crate) mod contents_stable;
+#[cfg(test)]
+mod contents_stable_tests;
 pub(crate) mod definite_init;
 mod escape_arrays;
 mod escape_check;
 mod escape_news;
 mod escape_objects;
+pub(crate) mod exact_i32_range;
+#[cfg(test)]
+mod exact_i32_range_source_tests;
 mod hir_facts;
 mod hoisted_callback_calls;
 mod hot_callees;
@@ -30,6 +37,10 @@ mod integer_locals;
 mod literal_method_home;
 mod local_refs;
 mod loop_bounded_i32;
+pub(crate) use loop_bounded_i32::collect_written_locals;
+mod loop_pushed_arrays;
+#[cfg(test)]
+mod loop_pushed_arrays_tests;
 mod mutation;
 mod not_bigint_locals;
 mod number_by_construction;
@@ -81,6 +92,7 @@ pub use clamp_detect::{detect_clamp3, detect_clamp_u8, returns_i32_identity_arg,
 pub(crate) use byte_read_key::{collect_numeric_typed_locals, uint8array_get_reads_a_byte};
 pub(crate) use class_accessors::{is_class_getter, is_class_setter};
 pub(crate) use closures::{collect_closures_in_expr, collect_closures_in_stmts};
+pub(crate) use contents_stable::contents_stable_bindings;
 pub(crate) use definite_init::DefiniteInit;
 pub(crate) use escape_arrays::{const_index, MAX_SCALAR_OBJECT_FIELDS};
 pub(crate) use escape_check::{check_escapes_in_stmts, find_new_candidates};
@@ -107,9 +119,9 @@ pub(crate) use integer_locals::{
 };
 pub(crate) use literal_method_home::literal_method_home_classes;
 pub(crate) use local_refs::{expr_contains_local_get, mark_all_candidate_refs_in_expr};
+pub(crate) use loop_pushed_arrays::{loop_pushed_arrays, PushedArrays};
 pub(crate) use mutation::{
-    body_contains_call, body_contains_closure, flat_const_array_uses_are_read_only,
-    has_any_mutation,
+    body_contains_closure, flat_const_array_uses_are_read_only, has_any_mutation,
 };
 pub(crate) use number_by_construction::collect_number_by_construction_locals;
 pub(crate) use object_create_proto::{object_create_protos, ObjectCreateProtos};
@@ -136,13 +148,14 @@ pub(crate) use ptr_shape::{
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, FamilyProof, PtrShapeLocal};
 pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
+pub(crate) use receiver_regions::{region_enders_in_expr, region_enders_in_stmts_classified};
 pub(crate) use receiver_regions::{
-    region_enders_in_stmts_with_trusted_operations, ByteViewParamAccess,
+    region_enders_in_stmts_with_trusted_operations, ByteViewParamAccess, FieldBase,
     ReceiverArrayValidationKind, ReceiverDescriptorTable, RegionEnder,
 };
 pub(crate) use refs::{
-    collect_free_ref_ids_in_stmts, collect_let_ids, collect_ref_ids_in_expr,
-    collect_ref_ids_in_stmts, is_clamp_call,
+    collect_free_ref_ids_in_stmts, collect_let_ids, collect_own_binding_ids,
+    collect_ref_ids_in_expr, collect_ref_ids_in_stmts, is_clamp_call,
 };
 pub(crate) use safepoint_sites::{count_body_nodes, count_safepoint_sites};
 pub(crate) use scalar_method_dispatch::{
@@ -154,7 +167,7 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    callee_demoted_params, collect_spec_abi_facts, guarded_number_array_param_eligible,
+    callee_demoted_params, collect_spec_abi_facts_with, guarded_number_array_param_eligible,
     reassigned_locals, reassigned_locals_in_module, rebound_locals, string_accumulator_locals,
     SpecParamRep, SpecTaBinding,
 };

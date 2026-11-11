@@ -246,7 +246,6 @@ runtime_layout!(ARRAY_PROTOTYPE_NAMED, kind = LAYOUT_KIND_UNMARKED, 0x5254_000C,
     BP_ATOM_AT => BUILTIN_METHOD,
     BP_ATOM_JOIN => BUILTIN_METHOD,
     BP_ATOM_CONCAT => BUILTIN_METHOD,
-    BP_ATOM_VALUE_OF => BUILTIN_METHOD,
 ], realm = ["Array.prototype"]);
 /// The fixed slot of `Symbol.iterator` in [`ARRAY_PROTOTYPE_NAMED`].
 pub(crate) const ARRAY_PROTOTYPE_ITERATOR_SLOT: u32 = 0;

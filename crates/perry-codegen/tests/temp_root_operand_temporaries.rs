@@ -92,7 +92,6 @@ fn entry_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -124,11 +123,14 @@ fn entry_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -159,6 +161,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -1654,6 +1657,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
                 value: Box::new(Expr::Object(Vec::new())),
                 receiver: Box::new(Expr::LocalGet(0)),
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),

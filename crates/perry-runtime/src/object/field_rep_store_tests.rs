@@ -371,20 +371,28 @@ fn a_cached_f64_edge_refuses_a_non_number() {
 }
 
 #[test]
-fn an_int32_key_add_is_stored_as_its_double_on_both_paths() {
+fn numeric_key_adds_and_legacy_int32_slot_stores_use_doubles_on_both_paths() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
         let boxed = f64::from_bits(crate::value::INT32_TAG | 5);
         for _ in 0..2 {
             let obj = crate::object::js_object_alloc(0, 4);
             add(obj, "p2b_i_a", 1.0);
-            let id = add(obj, "p2b_i_b", boxed);
+            // Public setters receive canonical Numbers on both the cold
+            // key-add path and its cached transition.
+            let id = add(obj, "p2b_i_b", 5.0);
             assert_eq!(slot_rep(rep_of(LayoutWord(id)), 1), REP_F64);
+            assert_eq!(slot_bits(obj, 1), 5.0f64.to_bits());
+
+            // The shape slot funnel also admits legacy INT32 words: its
+            // representation check must canonicalize them before publication.
+            crate::object::store_object_field_slot(obj, 1, boxed.to_bits());
             assert_eq!(
                 slot_bits(obj, 1),
                 5.0f64.to_bits(),
                 "canonical double in an F64 lane"
             );
+            assert_eq!(object_shape_stamp(obj), LayoutWord(id));
         }
     }
 }
@@ -655,5 +663,53 @@ fn constfn_verifier_valid_stale_deprecated_and_lifecycle() {
             super::shapes::object_shape_record(obj),
             1,
         );
+    }
+}
+
+/// THR4: a ConstFn lane is not capped at the 32 lanes of the `rep` word. A
+/// 41-slot object learns a lane at slot 40 (`learn_object_constfn_lanes`), the
+/// verifier checks its body, and a store of another closure into slot 40
+/// generalizes exactly that lane while keeping the others.
+#[test]
+fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let a = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_a, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let b = crate::closure::js_closure_alloc(
+            crate::fn_info!(constfn_body_b, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            0,
+        );
+        let bits = |c: *mut crate::closure::ClosureHeader| {
+            f64::from_bits(crate::JSValue::object_ptr(c.cast()).bits())
+        };
+        let obj = crate::object::js_object_alloc(0, 64);
+        for i in 0..41 {
+            crate::object::js_object_set_field_by_name(obj, key(&format!("m{i}")), bits(a));
+        }
+        assert!(super::shapes::learn_object_constfn_lanes(obj, |_, _| true));
+        let record = super::shapes::object_shape_record(obj).unwrap();
+        assert!(record.constfn_info(40).is_some(), "slot 40 earns a ConstFn lane");
+        assert!(record.constfn_info(32).is_some());
+        assert!(record.constfn_info(3).is_some());
+        assert!(record.constfn_info(41).is_none());
+        super::field_rep_store::assert_field_rep_lanes(obj, Some(record), 41);
+        // A store of another body into slot 40 drops that lane and no other.
+        crate::object::js_object_set_field_by_name(obj, key("m40"), bits(b));
+        let after = super::shapes::object_shape_record(obj).unwrap();
+        assert!(after.constfn_info(40).is_none(), "the stored-over lane is gone");
+        assert!(after.constfn_info(39).is_some());
+        assert!(after.constfn_info(32).is_some());
+        assert!(after.constfn_info(3).is_some());
+        super::field_rep_store::assert_field_rep_lanes(obj, Some(after), 41);
+        // A same-body store keeps the lane.
+        crate::object::js_object_set_field_by_name(obj, key("m39"), bits(a));
+        assert!(super::shapes::object_shape_record(obj)
+            .unwrap()
+            .constfn_info(39)
+            .is_some());
     }
 }

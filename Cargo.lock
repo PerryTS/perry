@@ -766,24 +766,13 @@ dependencies = [
 
 [[package]]
 name = "brotli"
-version = "8.0.4"
+version = "9.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cc91aac060a7a1e25823bdccbfb6af1875b88f17c6daac97894eed8207166b3"
-dependencies = [
- "alloc-no-stdlib 2.0.4",
- "alloc-stdlib 0.2.4",
- "brotli-decompressor 5.0.3",
-]
-
-[[package]]
-name = "brotli"
-version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8b851b75c23ca7873623d612fe49bd1989aeb03d08fb9432187eb253d3d4c6b"
+checksum = "627b7cfb0578f0eafce087a90fcd40add1231900b69e4d4de2d456260a4f5d81"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
- "brotli-decompressor 6.0.1",
+ "brotli-decompressor 6.2.0",
 ]
 
 [[package]]
@@ -798,9 +787,9 @@ dependencies = [
 
 [[package]]
 name = "brotli-decompressor"
-version = "6.0.1"
+version = "6.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "941cd9bd4ddab83cb46fa5a2d428f1c857b24ac78cb876cf7beb710840934bd7"
+checksum = "34c6783f42c21c952ad7112b354f0ba2f10760e9decea5b1b60523d6e270faaf"
 dependencies = [
  "alloc-no-stdlib 3.0.0",
  "alloc-stdlib 0.3.0",
@@ -1577,29 +1566,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cssparser"
-version = "0.37.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c9cdaae01d5ed7882b04d795e7f752f46ff52d2fa3b50a20d28c464510bba98"
-dependencies = [
- "cssparser-macros",
- "dtoa-short",
- "itoa",
- "phf 0.13.1",
- "smallvec",
-]
-
-[[package]]
-name = "cssparser-macros"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
-dependencies = [
- "quote",
- "syn 3.0.3",
-]
-
-[[package]]
 name = "ctr"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1744,27 +1710,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
-name = "derive_more"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
-dependencies = [
- "derive_more-impl",
-]
-
-[[package]]
-name = "derive_more-impl"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustc_version",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "des"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1899,21 +1844,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dtoa"
-version = "1.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
-
-[[package]]
-name = "dtoa-short"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd1511a7b6a56299bd043a9c167a6d2bfb37bf84a6dfceaba651168adfb43c87"
-dependencies = [
- "dtoa",
-]
-
-[[package]]
 name = "ecb"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1987,12 +1917,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ego-tree"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b04dc5a38e4f151a79d9f2451ae6037fb6eaf5cba34771f44781f80e508498e3"
-
-[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2019,22 +1943,6 @@ dependencies = [
  "subtle",
  "zeroize",
 ]
-
-[[package]]
-name = "email-encoding"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "420b9da095f052ea597503e39073b5b3c522f7db933fbac202d91d24492693fd"
-dependencies = [
- "base64 0.23.1",
- "memchr",
-]
-
-[[package]]
-name = "email_address"
-version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
 
 [[package]]
 name = "embedded-io"
@@ -2553,15 +2461,6 @@ checksum = "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
 dependencies = [
  "typenum",
  "version_check",
-]
-
-[[package]]
-name = "getopts"
-version = "0.2.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
-dependencies = [
- "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -3107,16 +3006,6 @@ dependencies = [
  "rustc-hash",
  "serde",
  "triomphe",
-]
-
-[[package]]
-name = "html5ever"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46a1761807faccc9a19e86944bbf40610014066306f96edcdedc2fb714bcb7b8"
-dependencies = [
- "log",
- "markup5ever",
 ]
 
 [[package]]
@@ -3911,22 +3800,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
-name = "lettre"
-version = "0.11.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2c646bd5cc763b1087b15493e29a64be6147ba8f19342004fa52048ee596eae"
-dependencies = [
- "email-encoding",
- "email_address",
- "fastrand",
- "httpdate",
- "idna",
- "mime",
- "nom 8.0.0",
- "quoted_printable",
-]
-
-[[package]]
 name = "libbz2-rs-sys"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4161,17 +4034,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
-name = "markup5ever"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7122d987ec5f704ee56f6e5b41a7d93722e9aae27ae07cafa4036c4d3f9757de"
-dependencies = [
- "log",
- "tendril",
- "web_atoms",
-]
-
-[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4260,12 +4122,6 @@ checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
 dependencies = [
  "libmimalloc-sys",
 ]
-
-[[package]]
-name = "mime"
-version = "0.3.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "minimal-lexical"
@@ -5000,16 +4856,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
 
 [[package]]
-name = "parking_lot"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
-dependencies = [
- "lock_api",
- "parking_lot_core",
-]
-
-[[package]]
 name = "parking_lot_core"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5252,7 +5098,8 @@ dependencies = [
  "perry-gc-effects",
  "perry-hir",
  "perry-parser",
- "perry-runtime-manifest",
+ "perry-realm-table",
+ "perry-transform",
  "serde",
  "serde_json",
  "sha2 0.11.1",
@@ -5464,19 +5311,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-cheerio"
+name = "perry-ext-bun"
 version = "0.5.1663"
 dependencies = [
+ "anyhow",
  "perry-ffi",
- "scraper",
-]
-
-[[package]]
-name = "perry-ext-ethers"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "swc_bundler",
+ "swc_common",
+ "swc_ecma_ast",
+ "swc_ecma_codegen",
+ "swc_ecma_loader",
+ "swc_ecma_parser",
+ "swc_ecma_transforms_base",
+ "swc_ecma_transforms_react",
+ "swc_ecma_transforms_typescript",
+ "swc_ecma_visit",
 ]
 
 [[package]]
@@ -5520,15 +5371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-nodemailer"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-uuid",
- "turnloop-smtp",
-]
-
-[[package]]
 name = "perry-ext-parcel-watcher"
 version = "0.5.1663"
 dependencies = [
@@ -5561,35 +5403,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-ext-typescript"
-version = "0.5.1663"
-dependencies = [
- "anyhow",
- "perry-ffi",
- "serde",
- "serde_json",
- "swc_bundler",
- "swc_common",
- "swc_ecma_ast",
- "swc_ecma_codegen",
- "swc_ecma_loader",
- "swc_ecma_parser",
- "swc_ecma_transforms_base",
- "swc_ecma_transforms_react",
- "swc_ecma_transforms_typescript",
- "swc_ecma_visit",
-]
-
-[[package]]
-name = "perry-ext-undici"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-runtime",
- "serde_json",
-]
-
-[[package]]
 name = "perry-ext-ws"
 version = "0.5.1663"
 dependencies = [
@@ -5609,7 +5422,7 @@ name = "perry-ext-zlib"
 version = "0.5.1663"
 dependencies = [
  "adler2",
- "brotli 9.0.0",
+ "brotli",
  "flate2",
  "libz-ng-sys",
  "libz-rs-sys",
@@ -5637,9 +5450,12 @@ dependencies = [
  "clap",
  "llvm-sys",
  "object 0.37.3",
+ "perry-abi",
  "perry-perex",
+ "perry-runtime-manifest",
  "regex",
  "rustc-demangle",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
@@ -5718,6 +5534,16 @@ version = "0.5.1663"
 dependencies = [
  "perex",
  "regex",
+]
+
+[[package]]
+name = "perry-realm-table"
+version = "0.5.1663"
+dependencies = [
+ "perry-hir",
+ "perry-runtime-manifest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5802,7 +5628,6 @@ version = "0.5.1663"
 dependencies = [
  "perry-ext-http",
  "perry-ext-net",
- "perry-ext-undici",
  "perry-ext-ws",
  "perry-ext-zlib",
  "perry-http-server",
@@ -5820,7 +5645,7 @@ dependencies = [
  "aes-kw",
  "argon2",
  "bcrypt",
- "brotli 9.0.0",
+ "brotli",
  "bytes",
  "cbc 0.2.1",
  "chacha20poly1305",
@@ -5860,7 +5685,6 @@ dependencies = [
  "rusqlite",
  "rustls",
  "rustls-pemfile",
- "scraper",
  "scrypt 0.11.0",
  "serde",
  "serde_json",
@@ -5872,7 +5696,6 @@ dependencies = [
  "sha3-utils",
  "shake",
  "turnloop-http",
- "turnloop-smtp",
  "turnloop-tls",
  "url",
  "windows-sys 0.61.2",
@@ -5920,6 +5743,7 @@ dependencies = [
  "perry-ffi",
  "perry-ui-model",
  "tempfile",
+ "url",
 ]
 
 [[package]]
@@ -6200,8 +6024,10 @@ dependencies = [
 name = "perry-wpfacts"
 version = "0.5.1663"
 dependencies = [
+ "perry-abi",
  "perry-hir",
  "perry-parser",
+ "perry-realm-table",
  "perry-transform",
 ]
 
@@ -6231,29 +6057,8 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
 dependencies = [
- "phf_macros 0.11.3",
- "phf_shared 0.11.3",
-]
-
-[[package]]
-name = "phf"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1562dc717473dbaa4c1f85a36410e03c047b2e7df7f45ee938fbef64ae7fadf"
-dependencies = [
- "phf_macros 0.13.1",
- "phf_shared 0.13.1",
- "serde",
-]
-
-[[package]]
-name = "phf_codegen"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49aa7f9d80421bca176ca8dbfebe668cc7a2684708594ec9f3c0db0805d5d6e1"
-dependencies = [
- "phf_generator 0.13.1",
- "phf_shared 0.13.1",
+ "phf_macros",
+ "phf_shared",
 ]
 
 [[package]]
@@ -6262,18 +6067,8 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
 dependencies = [
- "phf_shared 0.11.3",
+ "phf_shared",
  "rand 0.8.7",
-]
-
-[[package]]
-name = "phf_generator"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "135ace3a761e564ec88c03a77317a7c6b80bb7f7135ef2544dbe054243b89737"
-dependencies = [
- "fastrand",
- "phf_shared 0.13.1",
 ]
 
 [[package]]
@@ -6282,21 +6077,8 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
 dependencies = [
- "phf_generator 0.11.3",
- "phf_shared 0.11.3",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "phf_macros"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "812f032b54b1e759ccd5f8b6677695d5268c588701effba24601f6932f8269ef"
-dependencies = [
- "phf_generator 0.13.1",
- "phf_shared 0.13.1",
+ "phf_generator",
+ "phf_shared",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -6307,15 +6089,6 @@ name = "phf_shared"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
-dependencies = [
- "siphasher 1.0.4",
-]
-
-[[package]]
-name = "phf_shared"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e57fef6bc5981e38c2ce2d63bfa546861309f875b8a75f092d1d54ae2d64f266"
 dependencies = [
  "siphasher 1.0.4",
 ]
@@ -6517,12 +6290,6 @@ checksum = "85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9"
 dependencies = [
  "zerocopy",
 ]
-
-[[package]]
-name = "precomputed-hash"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "primefield"
@@ -6737,12 +6504,6 @@ checksum = "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
 dependencies = [
  "proc-macro2",
 ]
-
-[[package]]
-name = "quoted_printable"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "478e0585659a122aa407eb7e3c0e1fa51b1d8a870038bd29f0cf4a8551eea972"
 
 [[package]]
 name = "r-efi"
@@ -7295,21 +7056,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
-name = "scraper"
-version = "0.27.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd0be4d296f048bfb06dd01bbc80ef789ddd2e55583e8d2e6b804942abfabc2"
-dependencies = [
- "cssparser",
- "ego-tree",
- "getopts",
- "html5ever",
- "precomputed-hash",
- "selectors",
- "tendril",
-]
-
-[[package]]
 name = "scrypt"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7368,25 +7114,6 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
-]
-
-[[package]]
-name = "selectors"
-version = "0.38.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8adfa1c298912827b8a28b223b3b874357397ae706e6190acd9bf28cee99114d"
-dependencies = [
- "bitflags",
- "cssparser",
- "derive_more",
- "log",
- "new_debug_unreachable",
- "phf 0.13.1",
- "phf_codegen",
- "precomputed-hash",
- "rustc-hash",
- "servo_arc",
- "smallvec",
 ]
 
 [[package]]
@@ -7489,15 +7216,6 @@ checksum = "66cf8fedced2fcf12406bcb34223dffb92eaf34908ede12fed414c82b7f00b3e"
 dependencies = [
  "base16ct",
  "serde",
-]
-
-[[package]]
-name = "servo_arc"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "170fb83ab34de17dc69aa7c67482b22218ddb85da56546f9bd6b929e32a05930"
-dependencies = [
- "stable_deref_trait",
 ]
 
 [[package]]
@@ -7823,30 +7541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
-name = "string_cache"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a18596f8c785a729f2819c0f6a7eae6ebeebdfffbfe4214ae6b087f690e31901"
-dependencies = [
- "new_debug_unreachable",
- "parking_lot",
- "phf_shared 0.13.1",
- "precomputed-hash",
-]
-
-[[package]]
-name = "string_cache_codegen"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "585635e46db231059f76c5849798146164652513eb9e8ab2685939dd90f29b69"
-dependencies = [
- "phf_generator 0.13.1",
- "phf_shared 0.13.1",
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "string_enum"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7993,7 +7687,7 @@ dependencies = [
  "is-macro",
  "num-bigint 0.4.8",
  "once_cell",
- "phf 0.11.3",
+ "phf",
  "rustc-hash",
  "string_enum",
  "swc_atoms",
@@ -8074,7 +7768,7 @@ dependencies = [
  "compact_str",
  "either",
  "num-bigint 0.4.8",
- "phf 0.11.3",
+ "phf",
  "rustc-hash",
  "seq-macro",
  "serde",
@@ -8095,7 +7789,7 @@ dependencies = [
  "indexmap",
  "once_cell",
  "par-core",
- "phf 0.11.3",
+ "phf",
  "rustc-hash",
  "serde",
  "swc_atoms",
@@ -8395,15 +8089,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tendril"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
-dependencies = [
- "new_debug_unreachable",
-]
-
-[[package]]
 name = "termcolor"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8698,7 +8383,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop"
-version = "0.1.0-alpha.10"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49e2f1ca53e1247f717acf892f0f36d25b962f865e4e9d6b3c579ddc93d1b40f"
 dependencies = [
  "futures-io",
  "js-sys",
@@ -8712,10 +8399,12 @@ dependencies = [
 
 [[package]]
 name = "turnloop-http"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a57a11136eddf56f1d52ce07af559dfe1717497199abdce67364db4e69675da2"
 dependencies = [
  "base64 0.22.1",
- "brotli 8.0.4",
+ "brotli-decompressor 6.2.0",
  "bytes",
  "flate2",
  "http",
@@ -8729,9 +8418,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-io"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "381c4502cdcb2a813ae95948a5e06d7091d35298d7d1d73eb6e1f41e941d9056"
+checksum = "cb6044aef41d0fc2af39648c9d7ea3ab1abe57994c09f701804759f1654f3770"
 dependencies = [
  "futures-io",
  "turnloop",
@@ -8739,21 +8428,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "turnloop-smtp"
-version = "0.1.0-alpha.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80f27404f276cf22d7b622eda17adb9390cf3eca60633b06c19200b342dab47f"
-dependencies = [
- "base64 0.22.1",
- "email-encoding",
- "lettre",
-]
-
-[[package]]
 name = "turnloop-tls"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5eaf0347a3e2f9bb6b41d279c81008c206c155bb28e489913f1e81c7d167a72f"
+checksum = "0c6308700a76da125d8b53576026c370ebe7a671dedbbfd946b8a8e45e517d5a"
 dependencies = [
  "ring",
  "rustls",
@@ -8764,9 +8442,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-wasi-random"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d8c3ed99aa6b0a51deeb5d84343429b9345d7d9b6f242a6548aa3449ebf1c28"
+checksum = "0d3e6fa029884eef57a4e24faa1ae21e5657c77d020dcfdde7f4f6e68d3d71dd"
 dependencies = [
  "getrandom 0.3.4",
  "getrandom 0.4.3",
@@ -8774,9 +8452,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-websocket"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3515aca297ec16b09c45be8912dd2da689e54f18b5773924fac8c30acea41ab5"
+checksum = "e1f630fae8dd2c1660982661d39521c498a02ea5ffd1f3352984e7bf13dea7fe"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -8789,9 +8467,9 @@ dependencies = [
 
 [[package]]
 name = "turnloop-zstd-decoder"
-version = "0.1.0-alpha.9"
+version = "0.1.0-beta.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7e01a0da61b511c891847364765aa2fd9d4fe4b1ae3738d6c3afe3f1c0dce8c"
+checksum = "f57a70f62c361a4fc8bf539a90b0ab6dd7a2e9420411cf2c3f09af30d5ffdb19"
 dependencies = [
  "twox-hash",
 ]
@@ -9587,18 +9265,6 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "web_atoms"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba8b815c1b593dc0baf78dd0f4fc8fdb2de53198fb1163738093e9a311c33fb3"
-dependencies = [
- "phf 0.13.1",
- "phf_codegen",
- "string_cache",
- "string_cache_codegen",
 ]
 
 [[package]]

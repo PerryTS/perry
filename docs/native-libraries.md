@@ -37,16 +37,12 @@ implementations, organized by category:
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
 | `node-fetch` | [reqwest](https://crates.io/crates/reqwest) | Fetch API implementation |
-| `ws` | [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) | WebSocket client |
-| `nodemailer` | [lettre](https://crates.io/crates/lettre) | SMTP email sending |
 
 ### Data Processing
 | npm Package | Rust Backend | Description |
 |-------------|--------------|-------------|
-| `cheerio` | [scraper](https://crates.io/crates/scraper) | HTML parsing with jQuery-like API |
 | `sharp` | [image](https://crates.io/crates/image) | Image processing (resize, convert, transform) |
 | `zlib` | [flate2](https://crates.io/crates/flate2) | Gzip/deflate compression |
-| `lodash` | Native Rust | Utility functions for arrays/strings |
 
 ### Date & Time
 | npm Package | Rust Backend | Description |
@@ -115,22 +111,18 @@ Click any library name to jump to its documentation:
 | argon2 | Security | [docs](#argon2) |
 | bcrypt | Security | [docs](#bcrypt) |
 | better-sqlite3 | Database | [docs](#better-sqlite3) |
-| cheerio | HTML Parsing | [docs](#cheerio) |
 | crypto | Security | [docs](#crypto) |
 | dotenv | Config | [docs](#dotenv) |
 | jsonwebtoken | Security | [docs](#jsonwebtoken) |
-| lodash | Utilities | [docs](#lodash) |
 | moment | Date/Time | [docs](#moment) |
 | mysql2 | Database | [docs](#mysql2) |
 | nanoid | Utilities | [docs](#nanoid) |
 | node-fetch | HTTP Client | [docs](#node-fetch) |
-| nodemailer | Email | [docs](#nodemailer) |
 | pg | Database | [docs](#pg) |
 | sharp | Image Processing | [docs](#sharp) |
 | slugify | Utilities | [docs](#slugify) |
 | uuid | Utilities | [docs](#uuid) |
 | validator | Validation | [docs](#validator) |
-| ws | WebSocket | [docs](#ws) |
 | zlib | Compression | [docs](#zlib) |
 
 ---
@@ -451,44 +443,6 @@ const text2 = await fetch.fetchText('https://jsonplaceholder.typicode.com/posts/
 
 ---
 
-## ws
-
-**npm package:** [ws](https://www.npmjs.com/package/ws)
-**Rust backend:** [tokio-tungstenite](https://crates.io/crates/tokio-tungstenite) v0.24
-
-### Supported API
-
-```typescript
-import WebSocket from 'ws';
-
-// Connect to WebSocket server
-const ws = await WebSocket.connect('wss://echo.websocket.org');
-
-// Check connection status
-if (ws.isOpen()) {
-  // Send a message
-  ws.send('Hello, server!');
-}
-
-// Receive messages
-const message = ws.receive();          // Get next message (null if none)
-const count = ws.messageCount();       // Number of pending messages
-
-// Wait for message with timeout
-const msg = await ws.waitForMessage(5000);  // 5 second timeout, null if timeout
-
-// Close connection
-ws.close();
-```
-
-### Notes
-- WebSocket Secure (wss://) supported via rustls
-- Messages are queued and can be polled with `receive()`
-- Text messages only (binary messages not yet supported)
-- Connection events (onopen, onclose, onerror) not yet supported - use polling pattern
-
----
-
 ## dotenv
 
 **npm package:** [dotenv](https://www.npmjs.com/package/dotenv)
@@ -659,65 +613,6 @@ validator.isLength('hello', 1, 10);         // true (min 1, max 10)
 
 ---
 
-## nodemailer
-
-**npm package:** [nodemailer](https://www.npmjs.com/package/nodemailer)
-**Rust backend:** [lettre](https://crates.io/crates/lettre) v0.11
-
-### Supported API
-
-```typescript
-import nodemailer from 'nodemailer';
-
-// Create transporter with SMTP config
-const transporter = nodemailer.createTransport({
-  host: 'smtp.example.com',
-  port: 587,
-  secure: false,  // true for 465, false for other ports
-  auth: {
-    user: 'username',
-    pass: 'password'
-  }
-});
-
-// Send email
-const info = await transporter.sendMail({
-  from: 'sender@example.com',
-  to: 'recipient@example.com',
-  subject: 'Hello',
-  text: 'Plain text body',
-  html: '<p>HTML body</p>'  // optional, overrides text
-});
-
-console.log('Message sent:', info.messageId);
-
-// Verify connection
-const isValid = await transporter.verify();
-```
-
-### Configuration Options
-
-- `host` - SMTP server hostname
-- `port` - SMTP port (default: 587)
-- `secure` - Use TLS (true for port 465)
-- `auth.user` - SMTP username
-- `auth.pass` - SMTP password
-
-### Mail Options
-
-- `from` - Sender email address
-- `to` - Recipient email address
-- `subject` - Email subject line
-- `text` - Plain text body
-- `html` - HTML body (optional)
-
-### Notes
-- Uses STARTTLS for non-secure connections
-- Returns `{ messageId, response }` on success
-- `verify()` tests SMTP connection without sending
-
----
-
 ## argon2
 
 **npm package:** [argon2](https://www.npmjs.com/package/argon2)
@@ -858,129 +753,6 @@ const meta = image.metadata();
 - Supported formats: JPEG, PNG, WebP, GIF
 - Blur sigma: 0.3-1000 (higher = more blur)
 - Quality only affects JPEG and WebP
-
----
-
-## cheerio
-
-**npm package:** [cheerio](https://www.npmjs.com/package/cheerio)
-**Rust backend:** [scraper](https://crates.io/crates/scraper) v0.19
-
-### Supported API
-
-```typescript
-import cheerio from 'cheerio';
-
-// Load HTML
-const $ = cheerio.load('<html><body><h1>Hello</h1><p class="intro">World</p></body></html>');
-
-// Load fragment (no <html>/<body> wrapper)
-const $frag = cheerio.loadFragment('<div><p>Hello</p></div>');
-
-// Select elements
-const selection = $.select('p.intro');
-
-// Get text content
-const text = selection.text();           // 'World'
-
-// Get HTML content
-const html = selection.html();           // Inner HTML
-
-// Get attributes
-const className = selection.attr('class'); // 'intro'
-
-// Get length
-const count = selection.length;          // 1
-
-// Navigation
-const first = selection.first();
-const last = selection.last();
-const nth = selection.eq(0);
-const parent = selection.parent();
-const children = selection.children();
-const found = selection.find('span');
-
-// Predicates
-const hasClass = selection.hasClass('intro');  // true
-const matches = selection.is('.intro');        // true
-
-// Iteration
-const textArray = selection.texts();     // Array of text contents
-const htmlArray = selection.toArray();   // Array of HTML strings
-const attrs = selection.attrs('href');   // Array of attribute values
-```
-
-### Notes
-- CSS selectors supported (class, id, tag, attribute, combinators)
-- Immutable API (methods return new selections)
-- No DOM manipulation (read-only parsing)
-
----
-
-## lodash
-
-**npm package:** [lodash](https://www.npmjs.com/package/lodash)
-**Rust backend:** Native Rust implementation
-
-### Supported API
-
-```typescript
-import _ from 'lodash';
-
-// Array functions
-_.chunk([1, 2, 3, 4], 2);           // [[1, 2], [3, 4]]
-_.compact([0, 1, false, 2, '', 3]); // [1, 2, 3]
-_.concat([1], [2], [3]);            // [1, 2, 3]
-_.difference([1, 2, 3], [2, 3]);    // [1]
-_.drop([1, 2, 3], 2);               // [3]
-_.dropRight([1, 2, 3], 2);          // [1]
-_.first([1, 2, 3]);                 // 1 (alias: head)
-_.last([1, 2, 3]);                  // 3
-_.flatten([[1], [2, [3]]]);         // [1, 2, [3]]
-_.initial([1, 2, 3]);               // [1, 2]
-_.tail([1, 2, 3]);                  // [2, 3]
-_.take([1, 2, 3], 2);               // [1, 2]
-_.takeRight([1, 2, 3], 2);          // [2, 3]
-_.uniq([1, 2, 1, 3, 2]);            // [1, 2, 3]
-_.reverse([1, 2, 3]);               // [3, 2, 1]
-_.size([1, 2, 3]);                  // 3
-
-// String functions
-_.camelCase('foo bar');             // 'fooBar'
-_.capitalize('hello');              // 'Hello'
-_.kebabCase('foo bar');             // 'foo-bar'
-_.lowerCase('FOO BAR');             // 'foo bar'
-_.snakeCase('foo bar');             // 'foo_bar'
-_.startCase('foo bar');             // 'Foo Bar'
-_.upperCase('foo bar');             // 'FOO BAR'
-_.upperFirst('hello');              // 'Hello'
-_.lowerFirst('Hello');              // 'hello'
-_.trim('  hello  ');                // 'hello'
-_.trimStart('  hello');             // 'hello'
-_.trimEnd('hello  ');               // 'hello'
-_.pad('hi', 6);                     // '  hi  '
-_.padStart('hi', 6);                // '    hi'
-_.padEnd('hi', 6);                  // 'hi    '
-_.repeat('ab', 3);                  // 'ababab'
-_.truncate('hello world', 8);       // 'hello...'
-_.startsWith('hello', 'he');        // true
-_.endsWith('hello', 'lo');          // true
-_.includes('hello', 'ell');         // true
-_.split('a,b,c', ',');              // ['a', 'b', 'c']
-_.replace('hello', 'l', 'L');       // 'heLlo'
-_.escape('<div>');                  // '&lt;div&gt;'
-_.unescape('&lt;div&gt;');          // '<div>'
-
-// Number functions
-_.clamp(5, 0, 3);                   // 3
-_.inRange(3, 2, 4);                 // true
-_.random(0, 10);                    // Random number 0-10
-```
-
-### Notes
-- Subset of full lodash API implemented
-- Functions work on primitive arrays
-- All functions are pure (no mutation)
 
 ---
 

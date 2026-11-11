@@ -87,6 +87,49 @@ pub fn wasm32_lowering(target_triple: &str) -> bool {
         && target_triple.contains("wasi")
 }
 
+/// Emitted Eden births (`expr::inline_birth`, the class and array bumps) run
+/// on the LP64 triples and on the wasm32 WASI lowering: they read the arena
+/// cell and write the header words at [`inline_arena_layout`] and the
+/// target's header offsets. Other ILP32 targets keep the runtime allocators
+/// with the rest of their codegen.
+pub fn inline_births_admitted(target_triple: &str) -> bool {
+    !target_is_ilp32(target_triple) || wasm32_lowering(target_triple)
+}
+
+/// `perry_runtime::arena::InlineArenaState` for the target: `repr(C)`
+/// `{data: ptr, offset: usize, size: usize, birth_flags: ptr, birth_seeds:
+/// ptr}`, so its words are pointer-sized. The runtime const-asserts both
+/// widths' offsets next to the struct (`INLINE_*_LP64` / `INLINE_*_ILP32`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InlineArenaLayout {
+    /// The LLVM type of the `offset` and `size` words.
+    pub word: &'static str,
+    pub offset: u64,
+    pub limit: u64,
+    pub flags: u64,
+    pub seeds: u64,
+}
+
+pub fn inline_arena_layout(target_triple: &str) -> InlineArenaLayout {
+    if target_is_ilp32(target_triple) {
+        InlineArenaLayout {
+            word: crate::types::I32,
+            offset: 4,
+            limit: 8,
+            flags: 12,
+            seeds: 16,
+        }
+    } else {
+        InlineArenaLayout {
+            word: crate::types::I64,
+            offset: 8,
+            limit: 16,
+            flags: 24,
+            seeds: 32,
+        }
+    }
+}
+
 /// Exclusive upper bound accepted by the runtime's `is_valid_obj_ptr` for a
 /// candidate GC address. Linux-family AArch64 can use the full low 48-bit VA
 /// range; every other target keeps the canonical low-half 47-bit ceiling.
@@ -209,6 +252,27 @@ pub(crate) fn emit_gc_type_is_object(
     blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
 }
 
+/// "Is an ordinary array head" on a loaded `obj_type` (or the header word
+/// masked to its low byte). Emits the compare against the array type the
+/// runtime's `gc_type_is_array!` names.
+pub(crate) fn emit_gc_type_is_array(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_ARRAY.to_string())
+}
+
+/// The negation of [`emit_gc_type_is_array`] (the runtime's
+/// `gc_type_is_not_array!`).
+pub(crate) fn emit_gc_type_is_not_array(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_ne(ty, value, &crate::runtime_abi::GC_TYPE_ARRAY.to_string())
+}
+
 /// Kind B test on a loaded `obj_type`: "might this object carry the meta
 /// word" (the runtime's `object_has_meta_word!`); the object at the site has
 /// meta, or the no-branch is the answer for an object without it.
@@ -277,6 +341,16 @@ pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
 /// ShapeId precede it).
 pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
     crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
+}
+
+/// Byte offset of `ClosureHeader::props`, the pointer after `info`: 16 on
+/// LP64, 12 on ILP32.
+pub fn closure_props_offset_bytes(target_triple: &str) -> u64 {
+    if target_is_ilp32(target_triple) {
+        12
+    } else {
+        crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
+    }
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY
@@ -350,25 +424,35 @@ pub(crate) fn inline_alloc_gc_packed(
 /// append reserve (`js_array_alloc(0)`).
 pub(crate) const INLINE_EMPTY_ARRAY_SLOTS: u64 = 4;
 
-/// Total bytes of an inline empty array birth: GcHeader + ArrayHeader +
-/// the append reserve.
-pub(crate) const INLINE_EMPTY_ARRAY_TOTAL_BYTES: u64 = GC_HEADER_SIZE_BYTES
-    + ARRAY_HEADER_SIZE_BYTES
-    + INLINE_EMPTY_ARRAY_SLOTS * FIELD_SLOT_SIZE_BYTES;
+/// Slots an empty literal reserves when a later loop pushes into its binding
+/// (`collectors::loop_pushed_arrays`): sixteen pushes need no regrowth.
+pub(crate) const INLINE_PUSHED_ARRAY_SLOTS: u64 = 16;
 
-/// The packed `GcHeader` word an inline empty array birth stores: an arena
-/// array whose layout state is pointer-free (every slot is a hole). The
-/// runtime admits an arena-page address only when the header carries
-/// `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the word is derived
-/// here from the named constants, never hand-typed.
+/// Total bytes of an inline empty array birth reserving `slots` slots:
+/// GcHeader + ArrayHeader + the append reserve.
+pub(crate) const fn inline_array_birth_total_bytes(slots: u64) -> u64 {
+    GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES + slots * FIELD_SLOT_SIZE_BYTES
+}
+
+/// The four-slot empty birth's header word.
+#[cfg(test)]
 pub(crate) const fn inline_empty_array_gc_packed() -> u64 {
+    inline_array_birth_gc_packed(INLINE_EMPTY_ARRAY_SLOTS)
+}
+
+/// The packed `GcHeader` word an inline empty array birth reserving `slots`
+/// slots stores: an arena array whose layout state is pointer-free (every
+/// slot is a hole). The runtime admits an arena-page address only when the
+/// header carries `GC_FLAG_ARENA` (`tracked_gc_header_admitting`), so the
+/// word is derived here from the named constants, never hand-typed.
+pub(crate) const fn inline_array_birth_gc_packed(slots: u64) -> u64 {
     const GC_TYPE_ARRAY: u64 = 1;
     const GC_FLAG_ARENA: u64 = 0x02;
     const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
     GC_TYPE_ARRAY
         | (GC_FLAG_ARENA << 8)
         | (GC_LAYOUT_POINTER_FREE << 16)
-        | (INLINE_EMPTY_ARRAY_TOTAL_BYTES << 32)
+        | (inline_array_birth_total_bytes(slots) << 32)
 }
 
 #[cfg(test)]
@@ -386,6 +470,15 @@ mod tests {
         assert_ne!((word >> 8) & 0x02, 0, "GC_FLAG_ARENA");
         assert_eq!((word >> 16) & 0xffff, 0x4000, "pointer-free layout state");
         assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 4 * 8);
+    }
+
+    /// The pushed-binding birth differs from the empty one only in its size.
+    #[test]
+    fn pushed_array_word_differs_only_in_size() {
+        let word = inline_array_birth_gc_packed(INLINE_PUSHED_ARRAY_SLOTS);
+        let empty = inline_empty_array_gc_packed();
+        assert_eq!(word & 0xffff_ffff, empty & 0xffff_ffff);
+        assert_eq!(word >> 32, 8 + ARRAY_HEADER_SIZE_BYTES + 16 * 8);
     }
 
     /// Paired with `inline_slot_floor_matches_codegen` in

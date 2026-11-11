@@ -41,6 +41,8 @@ export const PLATFORM_PACKAGES = [
 interface PackagedTriples {
   targets: string[]
   ext: string[]
+  ui: string[]
+  "wasm-host": string[]
 }
 const PACKAGED_TRIPLES = JSON.parse(
   readFileSync(path.join(REPO_ROOT, 'npm', 'packaged-triples.json'), 'utf8'),
@@ -56,13 +58,19 @@ export const TARGET_TRIPLES: readonly string[] = Object.freeze([...PACKAGED_TRIP
 
 /**
  * Hosts whose native-extension archives (`libperry_ext_*.a`, ~140-166 MB
- * packed) ship as `@perryts/perry-ext-<triple>`: too big for the host
- * package, and not a dependency of the wrapper (most programs never link
- * one). perry fetches the matching one from the GitHub release the first
+ * packed) ship as
+ * `@perryts/perry-ext-<triple>`: too big for the host package, and not a
+ * dependency of the wrapper (most programs never link one). perry fetches the matching one from the GitHub release the first
  * time a compile needs it, or finds it npm-installed beside itself. Each is
  * staged by stage-npm.sh from that host's release archive.
  */
 export const EXT_TRIPLES: readonly string[] = Object.freeze([...PACKAGED_TRIPLES.ext])
+
+export const UI_TRIPLES = Object.freeze([...PACKAGED_TRIPLES.ui])
+export const WASM_HOST_TRIPLES = Object.freeze([...PACKAGED_TRIPLES['wasm-host']])
+export const kindPackageName = (kind: string, triple: string): string => `@perryts/perry-${kind}-${triple}`
+export const UI_PACKAGES = UI_TRIPLES.map(triple => kindPackageName('ui', triple))
+export const WASM_HOST_PACKAGES = WASM_HOST_TRIPLES.map(triple => kindPackageName('wasm-host', triple))
 
 /** `@perryts/perry-target-<triple>`: the name is derived, never tabulated. */
 export function targetPackageName(triple: string): string {
@@ -84,8 +92,8 @@ export const EXT_PACKAGES: readonly string[] = EXT_TRIPLES.map(extPackageName)
 export const WRAPPER_PACKAGE = '@perryts/perry'
 
 /**
- * Every package, in publish order: platforms, then ext packages, then
- * targets, then the wrapper. The wrapper depends on neither ext nor target
+ * Every package, in publish order: platforms, then the independent host
+ * kinds, then targets, then the wrapper. The wrapper depends on neither ext nor target
  * packages, but it must not become visible before them: platform-visibility.mjs
  * waits on every non-wrapper entry of the publish manifest before the
  * wrapper is published.
@@ -93,6 +101,8 @@ export const WRAPPER_PACKAGE = '@perryts/perry'
 export const ALL_PACKAGES: readonly string[] = [
   ...PLATFORM_PACKAGES,
   ...EXT_PACKAGES,
+  ...UI_PACKAGES,
+  ...WASM_HOST_PACKAGES,
   ...TARGET_PACKAGES,
   WRAPPER_PACKAGE,
 ]
@@ -163,7 +173,7 @@ export const LONG_LIVED_NPM_TOKEN_ENV_VARS = [
 export const NPM_MIN_VERSION = '11.17.0'
 
 // --- CLI entry: `node scripts/publish/constants.mts --print-targets|--print-ext`
-// One triple per line, for scripts/stage-npm.sh.
+// One entry per line: triples for staging, package names for publish/launcher checks.
 import { fileURLToPath } from 'node:url'
 
 // Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
@@ -174,13 +184,16 @@ const isMainModule =
 
 if (isMainModule) {
   const lists: Record<string, readonly string[]> = {
+    '--print-packages': ALL_PACKAGES,
     '--print-targets': TARGET_TRIPLES,
     '--print-ext': EXT_TRIPLES,
+    '--print-ui': UI_TRIPLES,
+    '--print-wasm-host': WASM_HOST_TRIPLES,
   }
   const list = lists[process.argv[2] ?? '']
   if (!list || process.argv.length !== 3) {
-    console.error('usage: constants.mts --print-targets | --print-ext')
+    console.error(`usage: constants.mts ${Object.keys(lists).join(' | ')}`)
     process.exit(2)
   }
-  for (const triple of list) console.log(triple)
+  for (const entry of list) console.log(entry)
 }

@@ -48,13 +48,86 @@
 //!
 //! The runtime's own definitions (`own_override::as_builtin_definition`, the
 //! lazy populations) do not count: they install the builtin itself.
+//!
+//! # Locked built-ins (DEC 250)
+//!
+//! A member the image gives a built-in prototype, constructor or namespace is
+//! never written by the program: replacing, deleting or redefining it, or
+//! relinking the object, is a `TypeError` at the store; adding a member works
+//! and is modelled as before. Every funnel reports WHAT it is about to do
+//! ([`Mutation`]); [`note_sealed_write`] decides once, for the sealed
+//! families [`locked_family`] names (the `BuiltinProto` families only; not
+//! namespace holders or constructor statics, `console`, the realm global or a
+//! runtime prototype; and not a prototype's `constructor`: owner ruling
+//! 2026-11-03). "Existing" is a position below the image
+//! key count the meta record keeps ([`image_key_count`]): the shape is the
+//! authority, there is no list of names.
 
 use super::ObjectHeader;
 
 /// Number of [`BuiltinProto`] families.
 pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
+use perry_abi::lock::{refuses, LockHolder, LockKey, LockMutation};
 pub use perry_abi::BuiltinProto;
+
+/// What a mutation funnel is about to do to the object it reports (DEC 250).
+/// Each funnel knows its kind by construction: a value store writes an
+/// existing storage slot, a key-add transition appends a key that is not own,
+/// the delete, descriptor and `[[Prototype]]` funnels name their key or edge.
+#[derive(Clone, Copy)]
+pub(crate) enum Mutation<'a> {
+    /// A value store into the existing own storage slot `slot` (inline or
+    /// spill index, as the store funnels address it).
+    Replace(usize),
+    /// `delete obj[key]`.
+    Delete(Key<'a>),
+    /// `Object.defineProperty(obj, key, …)`: a data or accessor definition, an
+    /// attribute change, or clearing one.
+    Redefine(Key<'a>),
+    /// `Object.setPrototypeOf(obj, …)` / `obj.__proto__ = …`.
+    Relink,
+    /// A key-add transition appending `key`: never an own key of the image.
+    Add(Key<'a>),
+    /// A report BEFORE a structural change whose own funnel already decided,
+    /// or a stamp that does not carry its key: the layout is still in place,
+    /// so the image key count can be recorded; nothing is decided.
+    Restructure,
+    /// A shape stamp about to publish the layout word `published` without
+    /// naming the key it changes (the slow key-add path): the layout is still
+    /// in place, so comparing the published key list with the own one tells
+    /// an add from a restructure.
+    Stamp(u32),
+    /// A report AFTER a change (`shape publication`, `overflow key change`,
+    /// `function own state`): the modelling runs; nothing is decided or
+    /// recorded, the layout may already differ from the image.
+    Publication,
+}
+
+/// A property key as the funnels hold it.
+#[derive(Clone, Copy)]
+pub(crate) enum Key<'a> {
+    /// A property string or a symbol header.
+    Str(*const crate::StringHeader),
+    /// The bytes of a property string.
+    Bytes(&'a [u8]),
+    /// A dynamic key (string, symbol or number), as the funnel received it.
+    Value(f64),
+}
+
+/// The write a locked built-in refuses: the member (as `.name` or
+/// `[Symbol(description)]`) and how it was about to be written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Violation {
+    Replace(String),
+    Delete(String),
+    Redefine(String),
+    Relink,
+    /// A key that is not own on an add-locked prototype (DEC 250 (i)).
+    Add(String),
+    /// An array-index key on `%Array.prototype%` or `%Object.prototype%`.
+    AddIndex,
+}
 
 /// `Pristine(family)`: neither `family`'s prototype nor `%Object.prototype%`
 /// has been modified: the shadow bit of this agent's intrinsic prototype.
@@ -181,6 +254,150 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
 /// builds, such as `%URL.prototype%` or a timer prototype; not a
 /// [`BuiltinProto`]). A write marks only that prototype.
 pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+/// The meta family field of `%IteratorPrototype%` and of
+/// `%ArrayIteratorPrototype%`: built-in prototypes that are not a
+/// [`BuiltinProto`] family, sealed by `iterator_prototypes` (DEC 250 (i)).
+pub(crate) const ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 1;
+pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
+/// The meta family field of `%GeneratorPrototype%` and of
+/// `%AsyncGeneratorPrototype%` (DEC 250 as narrowed 2026-11-03): their image
+/// members (`next`, `return`, `throw`, `@@toStringTag`; not `constructor`)
+/// are locked, adds stay open. Sealed by `seal_generator_prototype` when
+/// `build_generator_tower` completes them.
+pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
+pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
+/// The meta family fields of `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
+/// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
+/// the generator prototypes): their image members (`next`,
+/// `@@toStringTag`) are locked, adds stay open. Sealed by
+/// `seal_iterator_prototypes` with the shared and array ones.
+pub(crate) const MAP_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 5;
+pub(crate) const SET_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 6;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 7;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 8;
+const _: () = assert!(
+    REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    "the meta family field holds every sealed family"
+);
+
+/// Does the realm seal the prototype the constructor loop
+/// (`global_this::populate`) births for `declaration`? A family prototype is
+/// sealed by [`seal_realm`] before any program code can reach it, so it is
+/// born on the born-prototype lineage (`shapes::stamp_born_prototype_root`)
+/// and that seal's mark mints no shape. Every other one keeps the ordinary
+/// lineage until something marks it (a runtime prototype with a declared
+/// class or layout word is restamped onto that word's lineage first).
+pub(crate) fn realm_seals_constructor_prototype(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> bool {
+    BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
+}
+
+/// Seal the built-in iterator prototypes the moment `iterator_prototypes`
+/// completes them, before any program code can reach them: `shared`
+/// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.
+///
+/// # Safety
+/// Every one is a live, fully built ordinary object (or null).
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn seal_iterator_prototypes(
+    shared: *mut ObjectHeader,
+    families: [*mut ObjectHeader; 5],
+) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::own_override::as_builtin_definition(|| unsafe {
+        seal_object_family(shared, ITERATOR_FAMILY);
+        for (proto, family) in families.into_iter().zip(ITERATOR_FAMILIES) {
+            seal_object_family(proto, family);
+        }
+    });
+}
+
+/// The family of each built-in iterator prototype `seal_iterator_prototypes`
+/// seals past `%IteratorPrototype%`: Array, Map, Set, String, RegExp String.
+const ITERATOR_FAMILIES: [usize; 5] = [
+    ARRAY_ITERATOR_FAMILY,
+    MAP_ITERATOR_FAMILY,
+    SET_ITERATOR_FAMILY,
+    STRING_ITERATOR_FAMILY,
+    REGEXP_STRING_ITERATOR_FAMILY,
+];
+
+/// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
+/// its tower is built, before any program code can reach it.
+///
+/// # Safety
+/// `proto` is the live, fully built generator prototype (or null).
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn seal_generator_prototype(proto: *mut ObjectHeader, is_async: bool) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let family = if is_async {
+        ASYNC_GENERATOR_FAMILY
+    } else {
+        GENERATOR_FAMILY
+    };
+    super::own_override::as_builtin_definition(|| unsafe { seal_object_family(proto, family) });
+}
+
+/// DEC 250 (i): the prototypes on which the program adds no key: compiled code
+/// relies on keys being absent there (own-key misses, "a plain object is not
+/// iterable", `IteratorClose` finding no `return`).
+#[inline(always)]
+pub(crate) fn add_locked(family: usize) -> bool {
+    lock_holder(family).is_some_and(LockHolder::add_locked)
+}
+
+/// The locked holder (`perry_abi::lock`) sealed family `family` is, if the
+/// lock covers it ([`locked_family`]).
+#[inline(always)]
+pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
+    if family < super::builtin_namespace::FIRST {
+        BuiltinProto::from_index(family).map(LockHolder::Proto)
+    } else if family == ITERATOR_FAMILY {
+        Some(LockHolder::Iterator)
+    } else if family == ARRAY_ITERATOR_FAMILY {
+        Some(LockHolder::ArrayIterator)
+    } else if family == GENERATOR_FAMILY {
+        Some(LockHolder::Generator)
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        Some(LockHolder::AsyncGenerator)
+    } else if family == MAP_ITERATOR_FAMILY {
+        Some(LockHolder::MapIterator)
+    } else if family == SET_ITERATOR_FAMILY {
+        Some(LockHolder::SetIterator)
+    } else if family == STRING_ITERATOR_FAMILY {
+        Some(LockHolder::StringIterator)
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        Some(LockHolder::RegExpStringIterator)
+    } else {
+        None
+    }
+}
+
+/// DEC 250 (i): an array-index store reached `%Array.prototype%` or
+/// `%Object.prototype%` (`family`), which never carry an index key: always an
+/// add. The runtime's own definitions pass.
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+pub(crate) fn refuse_index_add(family: BuiltinProto) {
+    if refuses(LockHolder::Proto(family), LockKey::Index, LockMutation::Add) && index_add_refused()
+    {
+        throw_locked(family as usize, &Violation::AddIndex);
+    }
+}
+
+/// DEC 250 (i): an index add on `%Array.prototype%` / `%Object.prototype%` is
+/// refused, unless it is the runtime's own definition. The decision only: the
+/// store funnels throw on it ([`refuse_index_add`]), `Reflect.set` and
+/// `Reflect.defineProperty` report it as `false` ([`lock_refuses_write`]).
+#[inline]
+fn index_add_refused() -> bool {
+    !super::own_override::in_builtin_definition()
+}
 const _: () = assert!(
     RUNTIME_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
@@ -274,10 +491,16 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 // now so every later named write reaches a sealed object, and
                 // recognise the array itself by its memoized address
                 // ([`note_array_prototype_write`]).
-                crate::gc::GC_TYPE_ARRAY => {
-                    let bag = crate::array::array_property_bag_ensure(
-                        proto as *mut crate::array::ArrayHeader,
-                    );
+                crate::gc_array_type_pat!() => {
+                    // DEC 250 (i): it never holds an element, so it keeps no
+                    // element room: every element it could gain must then
+                    // grow it, and `js_array_grow` refuses that. Its length is
+                    // 0 (nothing wrote it before the seal); the allocation's
+                    // size lives in its GC header, not in `capacity`.
+                    let arr = proto as *mut crate::array::ArrayHeader;
+                    debug_assert_eq!((*arr).length, 0);
+                    (*arr).capacity = 0;
+                    let bag = crate::array::array_property_bag_ensure(arr);
                     seal_object(bag, family);
                     if !bag.is_null() {
                         trace_seal(family, (*bag).parent_class_id);
@@ -338,7 +561,11 @@ unsafe fn constructor_prototype_addr(global: *mut ObjectHeader, name: &str) -> u
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
 #[inline(always)]
-pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
+pub(crate) unsafe fn note_write(
+    obj: *const ObjectHeader,
+    mutation: Mutation<'_>,
+    site: &'static str,
+) {
     if obj.is_null() {
         return;
     }
@@ -347,9 +574,8 @@ pub(crate) unsafe fn note_write(obj: *const ObjectHeader, site: &'static str) {
     if meta.is_null() {
         return;
     }
-    let flags = (*meta).flags;
-    if flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
-        note_sealed_write(obj, flags, None, site);
+    if (*meta).flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
+        note_sealed_write(obj, meta, mutation, site);
     }
 }
 
@@ -376,27 +602,368 @@ pub(crate) fn on_static_layout(flags: u64) -> bool {
 
 /// A write reached a sealed intrinsic: a prototype family's own bit, a
 /// runtime prototype's own shadow bit, or a namespace holder or the realm
-/// global (`builtin_namespace`). `field` is the inline or spill slot a value
-/// store is about to write, when known.
+/// global (`builtin_namespace`). DEC 250 decides first: on a locked family
+/// the program's write of an image member throws before anything changes;
+/// what the decision admits is then modelled as before (the shadow bit, the
+/// array-methods epoch, the namespace withdraw).
 #[cold]
 #[inline(never)]
 #[optimize(size)]
 unsafe fn note_sealed_write(
     obj: *const ObjectHeader,
-    flags: u64,
-    field: Option<usize>,
+    meta: *mut super::ObjectMeta,
+    mutation: Mutation<'_>,
     site: &'static str,
 ) {
-    let family = sealed_family(flags);
+    let family = sealed_family((*meta).flags);
+    let definition = super::own_override::in_builtin_definition();
+    if locked_family(family) && !definition {
+        if let Some(violation) = locked_violation(obj, meta, mutation) {
+            throw_locked(family, &violation);
+        }
+    }
     if family < FAMILIES {
-        note_family_write(family, site);
+        // A runtime definition that ADDS a key to an add-locked prototype
+        // after its seal changes what an absent-key answer (a pristine-guarded
+        // miss, the lock's "never gains a key") already said: it withdraws
+        // like the program's write would. Any other definition (the image's
+        // own population, a value refresh) is the builtin itself.
+        if definition && add_locked(family) && adds_key(obj, mutation) {
+            withdraw_family(family, site);
+        } else {
+            note_family_write(family, site);
+        }
     } else if family == RUNTIME_FAMILY {
         if !super::own_override::in_builtin_definition() {
             super::shadow::set_bit(obj.cast_mut());
         }
+    } else if (GENERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY).contains(&family) {
+        // The generator and the Map/Set/String/RegExp String iterator
+        // prototypes: locked above (image members only); an add is the
+        // program's own member and nothing in the runtime answers from its
+        // absence.
+    } else if family == ITERATOR_FAMILY || family == ARRAY_ITERATOR_FAMILY {
+        // Locked above (adds included); nothing else models them, so a
+        // definition add after the seal has no answer to withdraw: it aborts.
+        if definition {
+            if let Some(message) = iterator_definition_add(family, obj, mutation) {
+                abort_runtime_bug(&message);
+            }
+        }
     } else {
+        let field = match mutation {
+            Mutation::Replace(slot) => Some(slot),
+            _ => None,
+        };
         super::builtin_namespace::note_write(obj as *mut ObjectHeader, family, field, site);
     }
+}
+
+/// DEC 250's lock set: the sealed families whose image members the program
+/// never writes. A pure function of the family the meta record already
+/// carries: the `BuiltinProto` families; not the namespace holders and
+/// constructor statics (owner ruling 2026-11-03), not `console`, not the realm
+/// global, not a runtime prototype (URL, timers, …).
+#[inline(always)]
+pub(crate) fn locked_family(family: usize) -> bool {
+    lock_holder(family).is_some()
+}
+
+/// The image member `mutation` would write on the locked intrinsic `obj`, if
+/// any. Reached by pre-mutation reports only (a `Publication` decides
+/// nothing): the first one records the image key count, so it must still see
+/// the image layout.
+unsafe fn locked_violation(
+    obj: *const ObjectHeader,
+    meta: *mut super::ObjectMeta,
+    mutation: Mutation<'_>,
+) -> Option<Violation> {
+    if matches!(mutation, Mutation::Publication) {
+        return None;
+    }
+    let keys = own_keys(obj);
+    let image = image_key_count(meta, keys);
+    let Some(holder) = lock_holder(sealed_family((*meta).flags)) else {
+        return None;
+    };
+    // The one decision (`perry_abi::lock::refuses`) with the key's class: an
+    // image position is `Image`, a key that is not own `Absent`, and
+    // `constructor` `Constructor` in either case (owner ruling 2026-11-03).
+    // The key text is built only when the class alone would be refused.
+    let decide = |class: LockKey,
+                  m: LockMutation,
+                  text: &dyn Fn() -> String,
+                  wrap: fn(String) -> Violation| {
+        if !refuses(holder, class, m) {
+            return None;
+        }
+        let k = text();
+        let class = if k == ".constructor" {
+            LockKey::Constructor
+        } else {
+            class
+        };
+        refuses(holder, class, m).then(|| wrap(k))
+    };
+    match mutation {
+        Mutation::Relink => {
+            refuses(holder, LockKey::Absent, LockMutation::Relink).then_some(Violation::Relink)
+        }
+        Mutation::Replace(slot) => {
+            let pos = image_position_of_slot(keys, image, slot)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Replace,
+                &|| key_display(keys, pos),
+                Violation::Replace,
+            )
+        }
+        Mutation::Delete(key) => {
+            let pos = image_position_of_key(keys, image, key)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Delete,
+                &|| key_display(keys, pos),
+                Violation::Delete,
+            )
+        }
+        Mutation::Redefine(key) => match image_position_of_key(keys, image, key) {
+            Some(pos) => decide(
+                LockKey::Image,
+                LockMutation::Redefine,
+                &|| key_display(keys, pos),
+                Violation::Redefine,
+            ),
+            // Defining a key that is not own adds it.
+            None if image_position_of_key(keys, keys.count(), key).is_none() => decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| key_text(key),
+                Violation::Add,
+            ),
+            None => None,
+        },
+        Mutation::Add(key) => decide(
+            LockKey::Absent,
+            LockMutation::Add,
+            &|| key_text(key),
+            Violation::Add,
+        ),
+        Mutation::Stamp(published) if refuses(holder, LockKey::Absent, LockMutation::Add) => {
+            let k = stamped_add(obj, keys, published)?;
+            decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| k.clone(),
+                Violation::Add,
+            )
+        }
+        Mutation::Stamp(_) | Mutation::Restructure | Mutation::Publication => None,
+    }
+}
+
+/// The number of own keys the realm image gave `meta`'s object. Recorded at
+/// the program's first mutation (the layout is still the image's: the
+/// runtime's own installs returned before reaching this), read back after.
+/// Image keys are never deleted, so they stay the prefix of every later key
+/// list; a program-added key is a later position.
+unsafe fn image_key_count(meta: *mut super::ObjectMeta, keys: super::ObjectKeys) -> u32 {
+    use super::meta_flags::{
+        OBJECT_META_IMAGE_KEYS_MASK as MASK, OBJECT_META_IMAGE_KEYS_SHIFT as SHIFT,
+    };
+    let recorded = ((*meta).flags >> SHIFT) & MASK;
+    if recorded != 0 {
+        return (recorded - 1) as u32;
+    }
+    let count = keys.count().min(MASK as u32 - 1);
+    // GC_STORE_AUDIT(POINTER_FREE): a scalar count, never a reference.
+    (*meta).flags |= (u64::from(count) + 1) << SHIFT;
+    count
+}
+
+/// The object's own keys in position order: its overflow table when it has
+/// one, else its layout's key list.
+unsafe fn own_keys(obj: *const ObjectHeader) -> super::ObjectKeys {
+    let overflow = super::overflow::keys_array(obj);
+    if !overflow.is_null() {
+        return super::ObjectKeys::owned(overflow);
+    }
+    let id = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
+    match super::shapes::shape_record_for_word(crate::codegen_abi::LayoutWord(id)) {
+        Some(record) => super::object_keys_from_shape_record(obj, record),
+        None => super::ObjectKeys::NONE,
+    }
+}
+
+/// The image position whose storage slot is `slot`, if any. A position whose
+/// entry is no key (a deleted key's tombstone in an overflow table keeps its
+/// storage slot) is no member: a store into its slot re-adds the key.
+unsafe fn image_position_of_slot(keys: super::ObjectKeys, image: u32, slot: usize) -> Option<u32> {
+    if keys.is_null() {
+        return None;
+    }
+    (0..image.min(keys.count())).find(|&pos| {
+        super::key_attrs::key_storage_slot(keys.arr(), pos) as usize == slot
+            && entry_key(keys, pos).is_some()
+    })
+}
+
+/// Key `pos` of `keys` as a key value: a string key is its string-tagged
+/// header, a symbol key its pointer-tagged symbol. Anything else (a deleted
+/// key's tombstone reads as `undefined`) names no key.
+unsafe fn entry_key(keys: super::ObjectKeys, pos: u32) -> Option<f64> {
+    let value = keys.get(pos);
+    let bits = value.bits();
+    if value.is_string()
+        || (value.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0)
+    {
+        Some(f64::from_bits(bits))
+    } else {
+        None
+    }
+}
+
+/// The image position of `key`, if `key` is an own key below the image count.
+/// Nothing here allocates: the funnels report before the key may be coerced
+/// (and the object moved).
+unsafe fn image_position_of_key(keys: super::ObjectKeys, image: u32, key: Key<'_>) -> Option<u32> {
+    if keys.is_null() || image == 0 {
+        return None;
+    }
+    let count = keys.count();
+    let pos = match key {
+        Key::Str(ptr) => super::keys_find_property_slot_by_key_ptr(keys, count, ptr)?,
+        Key::Bytes(bytes) => super::keys_find_property_slot_by_bytes(keys, count, bytes)?,
+        Key::Value(value) => {
+            // A string or symbol key is its header; a number is never an
+            // image member (no intrinsic owns an index key).
+            let is_symbol = crate::symbol::js_is_symbol(value) != 0;
+            if !is_symbol && !crate::JSValue::from_bits(value.to_bits()).is_string() {
+                return None;
+            }
+            if is_symbol {
+                // A symbol key is stored as its tagged header in the key list.
+                super::shaped_symbols::position_in(
+                    keys,
+                    (value.to_bits() & crate::value::POINTER_MASK) as usize,
+                )?
+            } else {
+                let ptr = crate::value::js_nanbox_get_pointer(value) as *const crate::StringHeader;
+                super::keys_find_property_slot_by_key_ptr(keys, count, ptr)?
+            }
+        }
+    };
+    (pos < image).then_some(pos)
+}
+
+/// The key a stamp to `published` appends to `obj`, if it appends one: the
+/// published key list is longer than the own one. Nothing allocates a GC
+/// object (the message text is Rust).
+unsafe fn stamped_add(
+    obj: *const ObjectHeader,
+    keys: super::ObjectKeys,
+    published: u32,
+) -> Option<String> {
+    let id = super::layout_desc::layout_id_of_word(published);
+    let record = super::shapes::shape_record_for_word(crate::codegen_abi::LayoutWord(id))?;
+    let next = super::object_keys_from_shape_record(obj, record);
+    let had = if keys.is_null() { 0 } else { keys.count() };
+    (!next.is_null() && next.count() > had).then(|| key_display(next, had))
+}
+
+/// A funnel key for a message: `.name`, `[Symbol(description)]` or `[n]`.
+unsafe fn key_text(key: Key<'_>) -> String {
+    let value = match key {
+        Key::Bytes(bytes) => return format!(".{}", String::from_utf8_lossy(bytes)),
+        Key::Str(ptr) if crate::symbol::may_be_symbol_header(ptr as *const u8) => {
+            crate::value::js_nanbox_pointer(ptr as i64)
+        }
+        Key::Str(ptr) => crate::value::js_nanbox_string(ptr as i64),
+        Key::Value(value) => value,
+    };
+    if crate::symbol::js_is_symbol(value) != 0 {
+        let description = crate::symbol::symbol_description_text(
+            crate::value::js_nanbox_get_pointer(value) as *const _,
+        )
+        .map(|text| String::from_utf8_lossy(&text).into_owned())
+        .unwrap_or_default();
+        return format!("[Symbol({description})]");
+    }
+    if crate::JSValue::from_bits(value.to_bits()).is_number() {
+        return format!("[{value}]");
+    }
+    match super::property_ops::set::key_to_rust_string(value) {
+        Some(name) => format!(".{name}"),
+        None => String::from(".?"),
+    }
+}
+
+/// Key `pos` of `keys` for a message: `.name`, or `[Symbol(description)]`.
+unsafe fn key_display(keys: super::ObjectKeys, pos: u32) -> String {
+    match entry_key(keys, pos) {
+        Some(key) => key_text(Key::Value(key)),
+        None => String::from(".?"),
+    }
+}
+
+/// The name of the locked intrinsic of `family` as a program spells it.
+fn locked_object_name(family: usize) -> String {
+    if family < FAMILIES {
+        format!("{}.prototype", BuiltinProto::ALL[family].1)
+    } else if family == ITERATOR_FAMILY {
+        String::from("Iterator.prototype")
+    } else if family == ARRAY_ITERATOR_FAMILY {
+        String::from("%ArrayIteratorPrototype%")
+    } else if family == GENERATOR_FAMILY {
+        String::from("%GeneratorPrototype%")
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        String::from("%AsyncGeneratorPrototype%")
+    } else if family == MAP_ITERATOR_FAMILY {
+        String::from("%MapIteratorPrototype%")
+    } else if family == SET_ITERATOR_FAMILY {
+        String::from("%SetIteratorPrototype%")
+    } else if family == STRING_ITERATOR_FAMILY {
+        String::from("%StringIteratorPrototype%")
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        String::from("%RegExpStringIteratorPrototype%")
+    } else {
+        crate::codegen_abi::BUILTIN_NAMESPACES[family - super::builtin_namespace::FIRST].to_string()
+    }
+}
+
+/// DEC 250: the `TypeError` a program meets when it writes a built-in member
+/// (CWN Q1: explanatory, so a polyfill or test shim learns what works).
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+fn throw_locked(family: usize, violation: &Violation) -> ! {
+    const WHY: &str = "built-in objects are read-only in a compiled program";
+    // The hint names what still works: on an add-locked prototype nothing does.
+    let add = if add_locked(family) {
+        ""
+    } else {
+        " (adding a new member is allowed)"
+    };
+    let object = locked_object_name(family);
+    let message = match violation {
+        Violation::Replace(member) => {
+            format!("Cannot replace built-in member {object}{member}: {WHY}{add}")
+        }
+        Violation::Delete(member) => {
+            format!("Cannot delete built-in member {object}{member}: {WHY}{add}")
+        }
+        Violation::Redefine(member) => {
+            format!("Cannot redefine built-in member {object}{member}: {WHY}{add}")
+        }
+        Violation::Relink => format!("Cannot change the prototype of built-in {object}: {WHY}"),
+        Violation::Add(member) => format!("Cannot add member {object}{member}: {WHY}"),
+        Violation::AddIndex if family == BuiltinProto::Array as usize => format!(
+            "Cannot add an array index to built-in {object}: {WHY} (named members may be added)"
+        ),
+        Violation::AddIndex => format!("Cannot add an array index to built-in {object}: {WHY}"),
+    };
+    let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 /// The value-store hook (slot and spill stores): [`note_write`] for a sealed
@@ -432,10 +999,10 @@ unsafe fn note_prototype_value_store(
     spill: bool,
     site: &'static str,
 ) {
-    let flags = (*meta).flags;
     crate::dyn_eval_hooks::note_proto_write();
-    if flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
-        note_sealed_write(obj, flags, Some(field_index), site);
+    if (*meta).flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC != 0 {
+        // A value store writes an existing storage slot by construction.
+        note_sealed_write(obj, meta.cast_mut(), Mutation::Replace(field_index), site);
     }
     // A method body replaced in place publishes no layout (§3.6).
     super::shadow::note_prototype_slot_store(obj as *mut ObjectHeader, field_index, spill);
@@ -447,7 +1014,7 @@ unsafe fn note_prototype_value_store(
 /// address. Anything else is not a sealed prototype.
 #[inline(never)]
 #[optimize(size)]
-pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
+pub(crate) fn note_write_addr(addr: usize, mutation: Mutation<'_>, site: &'static str) {
     if addr == 0 || !crate::value::addr_class::is_above_handle_band(addr) {
         return;
     }
@@ -455,11 +1022,14 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
         return;
     };
     match header.obj_type {
-        crate::gc_object_type_pat!() => unsafe { note_write(addr as *const ObjectHeader, site) },
-        crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, site),
+        crate::gc_object_type_pat!() => unsafe {
+            note_write(addr as *const ObjectHeader, mutation, site)
+        },
+        crate::gc_array_type_pat!() => note_array_prototype_write(addr, mutation, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
             note_write(
                 (*(addr as *const crate::closure::ClosureHeader)).props,
+                mutation,
                 site,
             );
         },
@@ -472,7 +1042,7 @@ pub(crate) fn note_write_addr(addr: usize, site: &'static str) {
 /// be its (sealed) bag yet. Cold: arrays rarely take named properties.
 #[inline(never)]
 #[optimize(size)]
-pub(crate) fn note_array_prototype_write(arr: usize, site: &'static str) {
+pub(crate) fn note_array_prototype_write(arr: usize, mutation: Mutation<'_>, site: &'static str) {
     if arr == 0 {
         return;
     }
@@ -484,9 +1054,98 @@ pub(crate) fn note_array_prototype_write(arr: usize, site: &'static str) {
     unsafe {
         let live = crate::array::clean_arr_ptr(arr as *const crate::array::ArrayHeader);
         if !live.is_null() {
-            note_write(crate::array::array_property_bag(live), site);
+            note_write(crate::array::array_property_bag(live), mutation, site);
         }
     }
+}
+
+/// DEC 250: would the lock refuse the program's write of property `key` (a
+/// property key: string, symbol or number) on `receiver`? The same decision
+/// the store funnels take before they throw ([`note_sealed_write`],
+/// [`refuse_index_add`]); here it is only answered, for `Reflect.set` and
+/// `Reflect.defineProperty`, which report a refused `[[Set]]` /
+/// `[[DefineOwnProperty]]` as `false` and never throw for it (ECMA-262
+/// 28.1.12, 28.1.13). A write the lock admits goes on to the ordinary
+/// operation, which still answers everything else (non-writable,
+/// non-extensible, setters). Allocation-free: the operands stay where they are.
+pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
+    let bits = receiver.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return false;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if addr == 0 || !crate::value::addr_class::is_above_handle_band(addr) {
+        return false;
+    }
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    // SAFETY: `addr` is a live tracked object of the matched type.
+    unsafe {
+        match header.obj_type {
+            crate::gc_object_type_pat!() => {
+                if property_key_is_index(key) && addr == crate::array::object_prototype_addr() {
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Object),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
+                }
+                sealed_write_refused(addr as *const ObjectHeader, key)
+            }
+            crate::gc_array_type_pat!() => {
+                let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+                if live.is_null() {
+                    return false;
+                }
+                if property_key_is_index(key)
+                    && live as usize == crate::array::array_prototype_addr_if_resolved()
+                {
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Array),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
+                }
+                sealed_write_refused(crate::array::array_property_bag(live), key)
+            }
+            crate::gc::GC_TYPE_CLOSURE => {
+                sealed_write_refused((*(addr as *const crate::closure::ClosureHeader)).props, key)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// [`note_sealed_write`]'s decision for a definition of `key` on `obj` (a
+/// sealed intrinsic's holder, or any other object, which no lock covers).
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`, or null.
+unsafe fn sealed_write_refused(obj: *const ObjectHeader, key: f64) -> bool {
+    if obj.is_null() || super::own_override::in_builtin_definition() {
+        return false;
+    }
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC == 0 {
+        return false;
+    }
+    locked_family(sealed_family((*meta).flags))
+        && locked_violation(obj, meta, Mutation::Redefine(Key::Value(key))).is_some()
+}
+
+/// Is the property key `key` an array index (a canonical decimal in
+/// `0..=2^32-2`, as a string or as the number itself)?
+fn property_key_is_index(key: f64) -> bool {
+    let value = crate::JSValue::from_bits(key.to_bits());
+    if value.is_number() {
+        let n = value.as_number();
+        return n >= 0.0 && n <= 4_294_967_294.0 && n.fract() == 0.0;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    // SAFETY: `value` is a live property key (string, symbol or number).
+    unsafe { crate::string::js_string_key_bytes(value, &mut sso) }
+        .is_some_and(|bytes| super::canonical_array_index_bytes(bytes).is_some())
 }
 
 /// Mark the written intrinsic's own shadow bit. A site's chain proof reads
@@ -498,6 +1157,63 @@ fn note_family_write(family: usize, site: &'static str) {
     if super::own_override::in_builtin_definition() {
         return;
     }
+    withdraw_family(family, site);
+}
+
+/// Does `mutation` give the sealed `obj` a key it does not own?
+unsafe fn adds_key(obj: *const ObjectHeader, mutation: Mutation<'_>) -> bool {
+    added_key(obj, mutation).is_some()
+}
+
+/// The key `mutation` gives the sealed `obj` that it does not own, for a
+/// message. A pure read of its own keys: it records no image key count (a
+/// runtime definition must not fix the image prefix the program's first write
+/// records).
+unsafe fn added_key(obj: *const ObjectHeader, mutation: Mutation<'_>) -> Option<String> {
+    match mutation {
+        Mutation::Add(key) => Some(key_text(key)),
+        Mutation::Redefine(key) => {
+            let keys = own_keys(obj);
+            let count = if keys.is_null() { 0 } else { keys.count() };
+            image_position_of_key(keys, count, key)
+                .is_none()
+                .then(|| key_text(key))
+        }
+        Mutation::Stamp(published) => stamped_add(obj, own_keys(obj), published),
+        _ => None,
+    }
+}
+
+/// A runtime definition that adds a key to an iterator prototype after its
+/// seal: no fact models those prototypes, so nothing could withdraw an answer
+/// a compiled read already took. Such an install is a runtime bug, never a
+/// program behaviour (DEC 250 Q2: the program cannot add there); the message
+/// names the prototype and the key.
+unsafe fn iterator_definition_add(
+    family: usize,
+    obj: *const ObjectHeader,
+    mutation: Mutation<'_>,
+) -> Option<String> {
+    let key = added_key(obj, mutation)?;
+    Some(format!(
+        "perry runtime bug: a runtime definition adds {}{key} after the prototype was sealed",
+        locked_object_name(family)
+    ))
+}
+
+#[cold]
+#[inline(never)]
+fn abort_runtime_bug(message: &str) -> ! {
+    eprintln!("{message}");
+    std::process::abort()
+}
+
+/// Withdraw `family`: the written intrinsic's shadow bit and every derived
+/// answer that keys on it (the invalidation funnel of [`note_family_write`]).
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+fn withdraw_family(family: usize, site: &'static str) {
     crate::dyn_eval_hooks::note_proto_write();
     let set = |k: usize| -> bool {
         let p = crate::agent_ptrs::intrinsic_proto(k) as *mut ObjectHeader;
@@ -586,7 +1302,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
     if matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
@@ -599,17 +1315,23 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     }
     let family = match header.obj_type {
         crate::gc::GC_TYPE_PROXY => return Some(ReceiverFact::Proxy),
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
         crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
         crate::gc::GC_TYPE_SET => BuiltinProto::Set,
         crate::gc::GC_TYPE_DATE_CELL => BuiltinProto::Date,
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some(ReceiverFact::Builtin(
-        family,
-        family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
-    ))
+    // The receiver's own link: an array's header bit; a Map, Set or Date
+    // cell's meta record (its own `[[Prototype]]` or an own key lives there).
+    let own = if family == BuiltinProto::Array {
+        header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    } else {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        // SAFETY: `header` is this live cell's validated header.
+        unsafe { super::cell_meta::builtin_cell_has_meta(addr, header.obj_type) }
+    };
+    Some(ReceiverFact::Builtin(family, own))
 }
 
 /// The intrinsic's shadow bit and the receiver's own prototype link are
@@ -946,27 +1668,19 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the
 /// spec call, `Call(Get(recv, name), recv, args)` — `m.isPrototypeOf(x)`,
-/// `m.foo()` on a relinked `Map.prototype`, or the TypeError for a missing
-/// method — instead of the old silent `undefined`. A builtin closure found
-/// here is called as a value; one level only, so a builtin body that
-/// dispatches the same name by name again answers `undefined` as before
-/// rather than recursing.
+/// `m.toLocaleString()` (whose body invokes `toString`, an ordinary nested
+/// call here), `m.foo()` on a relinked `Map.prototype`, or the TypeError for
+/// a missing method.
+///
+/// A method reached here that dispatches by name back into this lookup can
+/// form a cycle of runtime frames only, which no compiled prologue's stack
+/// check sees; the same check at this entry bounds it, so a runaway
+/// recursion through this path throws node's `RangeError` instead of running
+/// into the guard page. No state of its own: the agent's stack limit is the
+/// one every prologue reads.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
-    thread_local! {
-        static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if ACTIVE.with(|a| a.get()) {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(false));
-        }
-    }
-    ACTIVE.with(|a| a.set(true));
-    let _reset = Reset;
+    crate::stack_guard::check_native_stack();
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }

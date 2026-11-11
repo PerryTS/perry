@@ -159,10 +159,16 @@ pub(crate) fn throw_invalid_path_arg(arg_name: &str, value: f64) -> ! {
 
 /// Throw `Error [EBADF]` for a numeric fd that is not an open descriptor.
 fn throw_ebadf(syscall: &'static str) -> ! {
-    crate::exception::js_throw(build_ebadf_error_value(syscall))
+    crate::exception::throw_core(ebadf_error(syscall))
 }
 
 pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
+    ebadf_error(syscall).value()
+}
+
+/// `EBADF: bad file descriptor, <syscall>`, typed (see
+/// [`build_ebadf_error_value`]).
+pub(crate) fn ebadf_error(syscall: &'static str) -> crate::error::CoreError {
     let message = format!("EBADF: bad file descriptor, {}", syscall);
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "EBADF");
@@ -171,8 +177,7 @@ pub(crate) fn build_ebadf_error_value(syscall: &'static str) -> f64 {
     crate::node_submodules::register_error_errno(msg, -libc::EBADF);
     #[cfg(not(unix))]
     crate::node_submodules::register_error_errno(msg, -9);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::error(msg)
 }
 
 /// Throw Node's null-byte path error. Node uses `ERR_INVALID_ARG_VALUE`
@@ -200,6 +205,7 @@ static KEEP_JS_VALIDATE_EVENT_LISTENER: unsafe extern "C" fn(i64, *const u8, u32
 /// `readdirSync`, `unlinkSync`, …). Throws `ERR_INVALID_ARG_TYPE` on any
 /// non path-like value (including numbers). No-op when the value is valid.
 pub(crate) fn validate_path(arg_name: &str, value: f64) {
+    crate::effect!(host_read, fs);
     if !validate_path_like_value(arg_name, value) {
         throw_invalid_path_arg(arg_name, value);
     }
@@ -211,6 +217,7 @@ pub(crate) fn validate_path(arg_name: &str, value: f64) {
 /// throws `EBADF` (matching `fs.readFileSync(123)`); anything else throws
 /// `ERR_INVALID_ARG_TYPE`. `syscall` names the operation for the EBADF error.
 pub(crate) fn validate_path_or_fd(arg_name: &str, value: f64, syscall: &'static str) {
+    crate::effect!(host_read, fs);
     if validate_path_like_value(arg_name, value) {
         return;
     }
@@ -360,19 +367,26 @@ pub(crate) fn validate_string_or_object_options(arg_name: &str, value: f64) {
 /// accepts an omitted value but rejects `null`, arrays, functions, and
 /// primitives with `ERR_INVALID_ARG_TYPE`.
 pub(crate) fn object_options_type_error_value(arg_name: &str, value: f64) -> Option<f64> {
+    object_options_type_error(arg_name, value).map(|error| error.value())
+}
+
+pub(crate) fn object_options_type_error(
+    arg_name: &str,
+    value: f64,
+) -> Option<crate::error::CoreError> {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || is_plain_options_object(value) {
         return None;
     }
-    Some(build_received_type_error(
+    Some(crate::validators::received::received_type_error(
         &format!("The \"{arg_name}\" argument must be of type object. Received "),
         value,
     ))
 }
 
 pub(crate) fn validate_object_options(arg_name: &str, value: f64) {
-    if let Some(err) = object_options_type_error_value(arg_name, value) {
-        crate::exception::js_throw(err);
+    if let Some(err) = object_options_type_error(arg_name, value) {
+        crate::exception::throw_core(err);
     }
 }
 
@@ -460,8 +474,8 @@ pub(crate) fn validate_function(arg_name: &str, value: f64) {
 mod received_diagnostic_tests;
 
 pub(crate) use crate::validators::received::{
-    build_received_type_error, build_type_error_with_code_value, describe_received_js, is_nullish,
-    throw_received_type_error,
+    build_type_error_with_code_value, describe_received_js, is_nullish, throw_received_type_error,
+    type_error_with_registered_code,
 };
 pub use crate::validators::received::{
     describe_received, format_received_number, is_numeric, js_validate_event_listener,

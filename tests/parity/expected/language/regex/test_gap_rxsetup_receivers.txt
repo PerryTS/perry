@@ -1,0 +1,14 @@
+own exec ["abc",["own exec abc"]]
+own symbol replace ["own",["own replace abc"]]
+own getter flags ["abc",["get flags"]]
+own getter global ["abc",["get global"]]
+own getter unicode ["abc",["get unicode"]]
+own getter sticky ["abc",["get sticky"]]
+own expando ["abc",0]
+subclass ["abc",0,false]
+subclass exec ["abc",["abc"],["subclass exec abc","subclass exec abc","subclass exec abc","subclass exec abc"]]
+subclass flags ["abc",["subclass flags"]]
+relinked "relinked abc"
+relinked back ["abc",0]
+DEC 250: Cannot add member Object.prototype.exec: built-in objects are read-only in a compiled program
+object prototype ["abc",false]

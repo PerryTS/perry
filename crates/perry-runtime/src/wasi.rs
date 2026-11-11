@@ -88,7 +88,7 @@ fn is_array_value(value: f64) -> bool {
     unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }.is_some_and(|header| {
         matches!(
             header.obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     })
 }
@@ -622,8 +622,7 @@ pub(crate) fn is_wasi_import_object(obj: *const ObjectHeader) -> bool {
 pub extern "C" fn js_wasi_constructor_call(_options: f64) -> f64 {
     let message = "Class constructor WASI cannot be invoked without 'new'";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -789,7 +788,7 @@ pub extern "C" fn js_wasi_start(
         invalid_undefined_property("instance.exports._initialize", initialize)
     }
     let previous_exit = WASI_EXIT_CODE.with(|slot| slot.replace(None));
-    let outcome = crate::exception::catch_js_throw(|| unsafe {
+    let outcome = crate::exception::catch_thrown(|| unsafe {
         crate::closure::js_native_call_value(
             start.get_nanbox_f64(),
             crate::closure::plain_call_receiver(),
@@ -799,12 +798,12 @@ pub extern "C" fn js_wasi_start(
     });
     let exit = WASI_EXIT_CODE.with(|slot| slot.replace(previous_exit));
     if let Err(error) = outcome {
-        if host::is_exit_marker(error) {
+        if host::is_exit_marker(error.value()) {
             if let Some(code) = exit {
                 return code as u32 as f64;
             }
         }
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
     if let Some(code) = exit {
         return code as u32 as f64;
@@ -1086,7 +1085,7 @@ pub extern "C" fn js_wasi_import_call(
     let result = host::call(import.get_nanbox_f64(), syscall, &args);
     if result == perry_abi::wasi::IMPORT_EXIT {
         drop(args);
-        crate::exception::js_throw(host::exit_marker(import.get_nanbox_f64()))
+        crate::exception::throw_open(host::exit_marker(import.get_nanbox_f64()))
     } else {
         result as f64
     }

@@ -54,7 +54,7 @@ impl Model {
         let hits = match key {
             // A computed store's key is decided when the solve is done (its
             // site may record the key node only after this store applied).
-            Some(Key::Any) if site.is_some() => {
+            Some(Key::Any(_)) if site.is_some() => {
                 let s = site.unwrap();
                 if !self.array_keyed_stores.iter().any(|&(x, _)| x == s) {
                     let on = self.tok_name(t);
@@ -63,7 +63,7 @@ impl Model {
                 }
                 false
             }
-            None | Some(Key::Any) => true,
+            None | Some(Key::Any(_)) => true,
             Some(Key::Named(a)) => matches!(
                 self.atoms[a as usize].as_str(),
                 crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
@@ -194,6 +194,20 @@ impl Model {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ITER_ELEM)
     }
 
+    /// The protocol value key: what an iteration consumer (a for-of step,
+    /// spread, `Array.from`, a collection constructor) reads from a `next()`
+    /// result it has seen is not done. Such a consumer never reads the done
+    /// result's value. On a builtin iterator's `IterResult` it is the
+    /// yielded values (`#yield`, without the done result's `undefined`); on
+    /// any other object it is `value`.
+    pub fn yield_key(&mut self) -> Key {
+        Key::Named(self.atom(YIELD_VALUE))
+    }
+
+    pub fn is_yield_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == YIELD_VALUE)
+    }
+
     pub fn atom(&mut self, s: &str) -> Atom {
         if let Some(&a) = self.atom_index.get(s) {
             return a;
@@ -257,6 +271,7 @@ impl Model {
     }
 
     pub fn tok(&mut self, k: TokKind) -> Tok {
+        let k = crate::builtins::canonical_native(k, !self.unit_mode);
         if let Some(&t) = self.tok_index.get(&k) {
             return t;
         }
@@ -266,8 +281,10 @@ impl Model {
                 self.site_toks.entry(tm).or_default().push(t);
             }
         }
-        self.toks.push(k.clone());
+        let shape = self.declarations.resolve(&k, self);
+        self.toks.push(k.clone(), shape);
         self.tok_index.insert(k, t);
+        self.builtin_token_created(t);
         t
     }
 
@@ -298,6 +315,10 @@ impl Model {
             self.aborted = true;
         }
         self.nodes.push(Node::default());
+        #[cfg(test)]
+        if let Some(b) = &self.packet_scope {
+            self.nodes[id as usize].packet_owner = Some(b.packet.header.identity.clone());
+        }
         self.node_fn.push(NO_FN);
         self.labels.push(label);
         if self.relations.is_some() {
@@ -319,7 +340,7 @@ impl Model {
     pub fn key_name(&self, k: Key) -> String {
         match k {
             Key::Named(a) => esc_key(&self.atoms[a as usize]),
-            Key::Any => "*".to_string(),
+            Key::Any(_) => "*".to_string(),
         }
     }
 
@@ -341,7 +362,11 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn => "builtin-fn".into(),
+            TokKind::BuiltinFn(crate::model::Native::Member { identity, holder }) => match holder {
+                None => format!("builtin-fn:{identity}"),
+                Some(h) => format!("builtin-fn:{identity}@{h}"),
+            },
+            TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
             TokKind::NativeProto(n) => format!("native:{n}"),
         }
@@ -350,13 +375,13 @@ impl Model {
     /// What this solve can observe of the shared objects ([`SharedReads`]).
     pub fn shared_reads(&self) -> SharedReads {
         let mut r = SharedReads::default();
-        // An object's writes reach this solve through its field nodes, by
-        // key (its any-key field: every key); a builtin function value has
-        // none: through its property reads, any of which a write of any
-        // builtin function value turns opaque (`write_builtin_fns`).
-        for (k, &t) in &self.tok_index {
+        // Shared objects expose their writes through ordinary field nodes.
+        for (k, &t) in self.tok_index.iter() {
             let read = match k {
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_) => {
+                TokKind::ObjectProto
+                | TokKind::Builtin(_)
+                | TokKind::BuiltinFn(_)
+                | TokKind::NativeProto(_) => {
                     if self.field_any.contains_key(&t) {
                         Some(None)
                     } else {
@@ -365,7 +390,6 @@ impl Model {
                         })
                     }
                 }
-                TokKind::BuiltinFn => (!self.bf_reads.is_empty()).then_some(None),
                 _ => None,
             };
             if let (Some(s), Some(keys)) = (self.shared_of(t), read) {
@@ -437,7 +461,7 @@ impl Model {
                 TokKind::Proto(t) => format!("proto {t}"),
                 TokKind::ObjectProto => "objectproto -".into(),
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
-                TokKind::BuiltinFn => "builtinfn -".into(),
+                TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
                 TokKind::NativeProto(n) => format!("nativeproto {n}"),
             };
@@ -613,11 +637,18 @@ impl Model {
     /// DECISIONS 225: `f` can run: a transfer of an active body solved to
     /// it, or it escaped.
     pub fn activate(&mut self, f: FnIdx, path: &str) {
-        if self
-            .act
-            .as_ref()
-            .is_none_or(|a| a.fixed || a.sabotage.as_deref() == Some(path))
-            || f as usize >= self.funcs.len()
+        #[cfg(test)]
+        if self.packet_scope.is_some()
+            && self.packet_emit(crate::summary::packet::Emission::Activate(f, path.into()))
+        {
+            return;
+        }
+        if self.act.as_ref().is_none_or(|a| {
+            a.fixed
+                || a.sabotage
+                    .as_deref()
+                    .is_some_and(|s| s.split('+').any(|p| p == path))
+        }) || f as usize >= self.funcs.len()
         {
             return;
         }
@@ -700,7 +731,7 @@ impl Model {
             let mut st = vec![(t, bits)];
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
-                self.work += 1;
+                self.charge_work(1);
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -958,7 +989,7 @@ impl Model {
         let mut st = vec![(t, bits)];
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
-            self.work += 1;
+            self.charge_work(1);
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;
@@ -1684,6 +1715,114 @@ impl Model {
         v
     }
 
+    /// Per key of `process` the realm declares as a host array of strings
+    /// (`value = dynamic, elements = string`): the property's node, holding
+    /// the array the runtime makes once, its elements strings.
+    pub(crate) fn process_string_arrays(&mut self) -> Vec<(Atom, NodeId, Tok)> {
+        let declared: Vec<(&'static str, &'static str)> = self
+            .declarations
+            .namespace(BuiltinNs::Process, self)
+            .map(|s| {
+                self.declarations
+                    .shape(s)
+                    .properties
+                    .iter()
+                    .filter_map(|p| Some((p.key, p.strings?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        declared
+            .into_iter()
+            .map(|(key, display)| {
+                let t = self.host_string_array(display);
+                let n = self.node_l(display);
+                self.add_tok(n, t);
+                (self.atom(key), n, t)
+            })
+            .collect()
+    }
+
+    fn host_string_array(&mut self, display: &str) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 1,
+                what: "arraybox",
+            },
+            display: display.into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::STR);
+        t
+    }
+
+    /// The object a failed runtime operation throws (`exception::throw_core`:
+    /// TypeError, RangeError, SyntaxError, ReferenceError, URIError, the fs
+    /// errors): a fresh realm `Error` (family Error, as `new Error()`), one
+    /// for every kind. Its own `message`, `stack` and `name` are strings;
+    /// any other own key the runtime writes on it (`code`, `errno`,
+    /// `syscall`, `path`, ...: `set_error_user_prop`) holds a primitive.
+    pub(crate) fn runtime_error(&mut self) -> Tok {
+        let tm = self.tmpls.len() as TmplId;
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: u32::MAX,
+                site: u32::MAX - 2,
+                what: "Error",
+            },
+            display: "runtime:Error".into(),
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let t = self.tok(TokKind::Obj(tm, NO_CTX));
+        for k in ["message", "stack", "name"] {
+            let a = self.atom(k);
+            let f = self.field(t, a);
+            self.add_prim(f, prim::STR);
+        }
+        let fa = self.field_any(t);
+        self.add_prim(fa, prim::ALL);
+        t
+    }
+
     pub(super) fn marker_template(&mut self, display: String) -> TmplId {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
@@ -1708,7 +1847,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
@@ -1746,7 +1888,10 @@ impl Model {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         let t = self.tok(TokKind::Obj(tm, NO_CTX));
         // What the argument reaches has its own marker (fields of fields

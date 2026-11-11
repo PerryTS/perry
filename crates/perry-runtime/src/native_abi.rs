@@ -15,15 +15,13 @@ const MIN_SAFE_INTEGER: f64 = -9_007_199_254_740_991.0;
 #[cold]
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[cold]
 fn throw_range_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 fn strict_number(value: f64, message: &str) -> f64 {
@@ -249,17 +247,6 @@ static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
 #[used(compiler)]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
     crate::object::js_native_call_method_apply_by_id;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SPREAD_TAIL_FALLBACK_ARGS: unsafe extern "C-unwind" fn(
-    *const f64,
-    usize,
-    f64,
-) -> i64 = crate::object::js_spread_tail_fallback_args;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_SHORT_PACKED_SPREAD_VALUES: unsafe extern "C" fn(f64, *mut f64) -> i32 =
-    crate::array::js_short_packed_spread_values;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ARRAY_DESTRUCTURE_NEEDS_ITERATOR: extern "C" fn(f64) -> i32 =
@@ -537,7 +524,7 @@ mod tests {
         assert_eq!(js_typed_f64_arg_guard(12.5), 1);
         assert_eq!(js_typed_f64_arg_to_raw(12.5), 12.5);
 
-        let int32 = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let int32 = f64::from(-7);
         assert_eq!(js_typed_f64_arg_guard(int32), 1);
         assert_eq!(js_typed_f64_arg_to_raw(int32), -7.0);
 
@@ -548,7 +535,7 @@ mod tests {
 
     #[test]
     fn typed_i32_arg_guard_is_non_throwing_and_int32_only() {
-        let tagged = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let tagged = f64::from(-7);
         assert_eq!(js_typed_i32_arg_guard(tagged), 1);
         assert_eq!(js_typed_i32_arg_to_raw(tagged), -7);
 
@@ -587,10 +574,7 @@ mod tests {
         assert_eq!(js_typed_i1_arg_to_raw(f), 0);
 
         assert_eq!(js_typed_i1_arg_guard(1.0), 0);
-        assert_eq!(
-            js_typed_i1_arg_guard(f64::from_bits(JSValue::int32(1).bits())),
-            0
-        );
+        assert_eq!(js_typed_i1_arg_guard(f64::from(1)), 0);
         let s = crate::string::js_string_from_bytes(b"yes".as_ptr(), 3);
         let string = f64::from_bits(JSValue::string_ptr(s).bits());
         assert_eq!(js_typed_i1_arg_guard(string), 0);
@@ -608,10 +592,7 @@ mod tests {
         assert_ne!(js_typed_string_arg_to_raw(short), 0);
 
         assert_eq!(js_typed_string_arg_guard(42.0), 0);
-        assert_eq!(
-            js_typed_string_arg_guard(f64::from_bits(JSValue::int32(7).bits())),
-            0
-        );
+        assert_eq!(js_typed_string_arg_guard(f64::from(7)), 0);
         assert_eq!(js_typed_string_arg_guard(f64::from_bits(TAG_TRUE)), 0);
     }
 

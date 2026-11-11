@@ -61,8 +61,8 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
     }
 }
 
-/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: an INT32
-/// `ClassRef` (the payload IS the class_id, verified registered) or a
+/// Resolve a class_id from an arbitrary NaN-boxed runtime VALUE: a class
+/// constructor function object or a
 /// POINTER-tagged object (its `ObjectHeader.class_id`, falling back to the
 /// synthetic class id a plain closure's reassigned `.prototype` was given).
 /// `0` for anything else (primitives, an unregistered closure, `undefined`,
@@ -75,23 +75,9 @@ pub extern "C" fn js_register_class_parent(class_id: u32, parent_class_id: u32) 
 /// this value denote" answer.
 pub(crate) fn dynamic_value_class_id(value: f64) -> u32 {
     let bits = value.to_bits();
-    const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     let tag = bits & 0xFFFF_0000_0000_0000;
-    if tag == INT32_TAG {
-        // ClassRef: lower 32 bits are the class id. Verify it's
-        // actually a registered class id before trusting it.
-        let payload = bits as u32;
-        if payload == 0 {
-            0
-        } else {
-            let guard = REGISTERED_CLASS_IDS.read().unwrap();
-            match guard.as_ref() {
-                Some(set) if set.contains(&payload) => payload,
-                _ => 0,
-            }
-        }
-    } else if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
+    if let Some(class_id) = crate::object::class_value::class_value_id_bits(bits) {
         // A class function object names its class.
         class_id
     } else if tag == POINTER_TAG {
@@ -767,35 +753,16 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     if class_id == 0 || func_ptr == 0 {
         return;
     }
-    let property_key = crate::object::js_to_property_key(key);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let property_key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
     let class_id = class_id as u32;
-    if crate::symbol::js_is_symbol(property_key) != 0 {
-        let sym_key = crate::symbol::sym_key_from_f64(property_key);
+    if crate::symbol::js_is_symbol(property_key.get_nanbox_f64()) != 0 {
+        let sym_key = crate::symbol::sym_key_from_f64(property_key.get_nanbox_f64());
         if sym_key == 0 {
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
-        super::registration::record_class_symbol_member_order(
-            class_id,
-            sym_key,
-            is_static != 0,
-            definition_order as u32,
-        );
-        CLASS_SYMBOL_METHODS.with(|table| {
-            let mut guard = table.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(HashMap::new());
-            }
-            guard.as_mut().unwrap().insert(
-                (class_id, sym_key, is_static != 0),
-                (
-                    func_ptr as usize,
-                    param_count as u32,
-                    has_rest != 0,
-                    entry as usize,
-                ),
-            );
-        });
         // A computed key that evaluates to a WELL-KNOWN symbol names the
         // member's synthetic slot (`member_name_of_symbol`); without it,
         // `for await (… of instance)` threw `TypeError: value is not
@@ -804,33 +771,48 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             // The member's declaration carries its body; this evaluation
             // names it (the alias, or no string name at all).
             name_computed_instance_member(
-                owner,
+                owner.get_nanbox_f64(),
                 class_id,
                 definition_order,
                 super::declarations::member_name_of_symbol(sym_key),
-                property_key,
+                property_key.get_nanbox_f64(),
             );
         }
         // Every static symbol method is an own callable property of its
         // actual class evaluation, including ordinary captured methods.
-        if is_static != 0 && entry != 0 {
+        if is_static != 0 {
             crate::object::install_class_symbol_method(
                 class_id,
-                owner,
-                property_key,
+                owner.get_nanbox_f64(),
+                property_key.get_nanbox_f64(),
                 func_ptr as usize,
                 param_count as u32,
                 has_rest != 0,
                 entry as usize,
             );
         }
-        let proto = super::state::class_decl_prototype_object(class_id);
-        if is_static == 0 && !proto.is_null() {
-            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
+        if is_static == 0 {
+            let proto = super::state::class_decl_prototype_object(class_id);
+            if !is_class_object_value(owner.get_nanbox_f64())
+                && !proto.is_null()
+                && super::declarations::class_declaration(class_id).is_none()
+            {
+                install_symbol_method(
+                    proto,
+                    class_id,
+                    owner.get_nanbox_f64(),
+                    property_key.get_nanbox_f64(),
+                    func_ptr as usize,
+                    param_count as u32,
+                    false,
+                    has_rest != 0,
+                    entry as usize,
+                );
+            }
         }
         return;
     }
-    let name = match property_key_bytes(property_key) {
+    let name = match property_key_bytes(property_key.get_nanbox_f64()) {
         Some(name) => name,
         None => return,
     };
@@ -845,8 +827,8 @@ pub unsafe extern "C" fn js_register_class_computed_method(
     }
     if is_static != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let home = if is_class_object_value(owner) {
-            owner
+        let home = if is_class_object_value(owner.get_nanbox_f64()) {
+            owner.get_nanbox_f64()
         } else {
             super::super::class_value::class_value(class_id)
         };
@@ -862,7 +844,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
             true,
         );
         let function = scope.root_nanbox_f64(function);
-        let key = scope.root_nanbox_f64(property_key);
+        let key = scope.root_nanbox_f64(property_key.get_nanbox_f64());
         // A computed method is an ordinary own property. Its exact key lives
         // on the holder's shape, without a string-keyed dispatch registration.
         let target = home.get_nanbox_f64();
@@ -895,11 +877,11 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         // it, which also installs it when the decl prototype is waiting for
         // it (`declarations.rs`).
         name_computed_instance_member(
-            owner,
+            owner.get_nanbox_f64(),
             class_id,
             definition_order,
             super::declarations::MemberName::Str(name),
-            property_key,
+            property_key.get_nanbox_f64(),
         );
     }
 }
@@ -917,62 +899,55 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
     if class_id == 0 || (getter_ptr == 0 && setter_ptr == 0) {
         return;
     }
-    let property_key = crate::object::js_to_property_key(key);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let property_key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
     let class_id = class_id as u32;
-    if crate::symbol::js_is_symbol(property_key) != 0 {
-        let sym_key = crate::symbol::sym_key_from_f64(property_key);
+    if crate::symbol::js_is_symbol(property_key.get_nanbox_f64()) != 0 {
+        let sym_key = crate::symbol::sym_key_from_f64(property_key.get_nanbox_f64());
         if sym_key == 0 {
             return;
         }
         crate::symbol::note_symbol_key_installed(sym_key);
-        super::registration::record_class_symbol_member_order(
-            class_id,
-            sym_key,
-            is_static != 0,
-            definition_order as u32,
-        );
-        CLASS_SYMBOL_ACCESSORS.with(|table| {
-            let mut guard = table.write().unwrap();
-            if guard.is_none() {
-                *guard = Some(HashMap::new());
-            }
-            let entry = guard
-                .as_mut()
-                .unwrap()
-                .entry((class_id, sym_key, is_static != 0))
-                .or_insert((0, 0));
-            if getter_ptr != 0 {
-                entry.0 = getter_ptr as usize;
-            }
-            if setter_ptr != 0 {
-                entry.1 = setter_ptr as usize;
-            }
-        });
         if is_static != 0 {
-            crate::object::class_value::install_declared_static_symbol_accessor(
+            install_symbol_accessor(
                 class_id,
-                sym_key,
+                owner.get_nanbox_f64(),
+                property_key.get_nanbox_f64(),
                 getter_ptr as usize,
                 setter_ptr as usize,
+                true,
             );
         }
         if is_static == 0 {
             // The declared accessor half has no string name on this class.
             name_computed_instance_member(
-                owner,
+                owner.get_nanbox_f64(),
                 class_id,
                 definition_order,
                 super::declarations::MemberName::NotAString,
-                property_key,
+                property_key.get_nanbox_f64(),
             );
         }
-        let proto = super::state::class_decl_prototype_object(class_id);
-        if is_static == 0 && !proto.is_null() {
-            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
+        if is_static == 0 {
+            let proto = super::state::class_decl_prototype_object(class_id);
+            if !is_class_object_value(owner.get_nanbox_f64())
+                && !proto.is_null()
+                && super::declarations::class_declaration(class_id).is_none()
+            {
+                install_symbol_accessor(
+                    class_id,
+                    crate::value::js_nanbox_pointer(proto as i64),
+                    property_key.get_nanbox_f64(),
+                    getter_ptr as usize,
+                    setter_ptr as usize,
+                    false,
+                );
+            }
         }
         return;
     }
-    if let Some(name) = property_key_bytes(property_key) {
+    if let Some(name) = property_key_bytes(property_key.get_nanbox_f64()) {
         super::registration::record_class_string_member_order(
             class_id,
             name.clone(),
@@ -986,11 +961,11 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             // As for a computed method: the evaluation names the declared
             // accessor half.
             name_computed_instance_member(
-                owner,
+                owner.get_nanbox_f64(),
                 class_id,
                 definition_order,
                 super::declarations::MemberName::Str(name),
-                property_key,
+                property_key.get_nanbox_f64(),
             );
         } else {
             {
@@ -1415,7 +1390,7 @@ pub unsafe extern "C" fn js_class_static_method_call(
     let bits = receiver.to_bits();
     let top16 = bits >> 48;
     let _ = top16;
-    let class_id = if let Some(cid) = crate::object::class_value::legacy_class_value_word(bits) {
+    let class_id = if let Some(cid) = crate::object::class_value::class_ref_word(bits) {
         cid
     } else if is_class_object_value(receiver) {
         let obj = crate::value::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
@@ -1824,6 +1799,6 @@ include!("parent_static/static_accessor_call.rs");
 
 mod symbol_members;
 pub(crate) use symbol_members::{
-    class_has_symbol_member_in_chain, class_own_symbol_member_keys, class_symbol_getter_value,
-    class_symbol_setter_apply, lookup_class_symbol_method_in_chain,
+    class_has_own_symbol_member, class_has_symbol_member_in_chain, install_prototype_symbol_member,
+    install_prototype_symbol_members, install_symbol_accessor, install_symbol_method,
 };

@@ -1064,7 +1064,7 @@ fn is_array_value(jv: JSValue) -> bool {
         return false;
     }
     let header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
 }
 
 fn display_value(value: f64) -> String {
@@ -1170,8 +1170,7 @@ fn throw_kill_error_code(code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, "kill");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 #[cfg(unix)]

@@ -254,7 +254,7 @@ pub(crate) fn native_module_has_enumerable_key(
     module_name: &str,
     key: &str,
 ) -> bool {
-    if crate::process::worker_restrictions::worker_process_member_hidden(module_name, key) {
+    if super::native_namespace_member_absent(module_name, key) {
         return false;
     }
     if matches!(

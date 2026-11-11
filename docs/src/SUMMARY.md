@@ -16,6 +16,7 @@
 # Language
 
 - [Supported Features](language/supported-features.md)
+- [Iterator Helpers](language/iterator-helpers.md)
 - [Type System](language/type-system.md)
 - [Native Layout Values](language/native-values.md)
 - [Decorators](language/decorators.md)
@@ -192,6 +193,8 @@
 # Internals
 
 - [Memory Model](internals/memory-model.md)
+- [Module evaluation](internals/module-evaluation.md)
+- [JSON PropertyList reads](internals/json-property-list.md)
 - [Retained function source](internals/retained-function-source.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
 - [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
@@ -199,11 +202,13 @@
 - [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
+  - [Runtime claim diagnostics](internals/runtime-claim-checks.md)
 - [Program facts](internals/program-facts.md)
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
 - [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)
 - [RFC: rooting by construction](internals/rfc-rooting-by-construction.md)
+- [Runtime throw provenance](internals/typed-throws.md)
 - [Node-API host design](internals/node-api-host.md)
 - [Generic fallback diagnostics](internals/fallback-diagnostics.md)
 

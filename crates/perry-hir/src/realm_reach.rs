@@ -168,8 +168,47 @@ fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmRe
             *context = SyntaxContext::empty();
         }
     }
+    // An ambient declaration that HIR lowering erases binds nothing: references
+    // to its names resolve exactly as if the line were absent (`declare
+    // function require` keeps `require` the loader; `declare var x` reads the
+    // global). The resolver must not see it as a binding.
+    struct Ambient;
+    fn erased(decl: &ast::Decl) -> bool {
+        match decl {
+            ast::Decl::Fn(f) => crate::lower::ambient::fn_decl_types_the_loader(f),
+            ast::Decl::Var(var) => var.declare && var.decls.is_empty(),
+            _ => false,
+        }
+    }
+    impl VisitMut for Ambient {
+        fn visit_mut_var_decl(&mut self, var: &mut ast::VarDecl) {
+            let erased: Vec<bool> = var
+                .decls
+                .iter()
+                .map(|d| crate::lower::ambient::declarator_binds_nothing(var, d))
+                .collect();
+            let mut erased = erased.into_iter();
+            var.decls.retain(|_| !erased.next().unwrap_or(false));
+            var.visit_mut_children_with(self);
+        }
+        fn visit_mut_module_items(&mut self, items: &mut Vec<ast::ModuleItem>) {
+            items.visit_mut_children_with(self);
+            items.retain(|item| match item {
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(decl)) => !erased(decl),
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => {
+                    !erased(&export.decl)
+                }
+                _ => true,
+            });
+        }
+        fn visit_mut_stmts(&mut self, stmts: &mut Vec<ast::Stmt>) {
+            stmts.visit_mut_children_with(self);
+            stmts.retain(|stmt| !matches!(stmt, ast::Stmt::Decl(decl) if erased(decl)));
+        }
+    }
     let mut resolved = module.clone();
     resolved.visit_mut_with(&mut Clear);
+    resolved.visit_mut_with(&mut Ambient);
     GLOBALS.set(&Globals::new(), || {
         let unresolved = Mark::new();
         resolved.visit_mut_with(&mut swc_ecma_transforms_base::resolver(

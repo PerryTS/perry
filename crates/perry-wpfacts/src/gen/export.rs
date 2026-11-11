@@ -38,7 +38,8 @@ impl<'a> Gen<'a> {
             for e in self.exports_of(mi) {
                 match e {
                     // An erased type export binds nothing and shadows nothing.
-                    Export::Named { local, .. } if modules[mi].1.is_type_only_export_binding(local) => {}
+                    Export::Named { local, .. }
+                        if modules[mi].1.is_type_only_export_binding(local) => {}
                     Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
                         names.push(exported)
                     }
@@ -445,6 +446,10 @@ impl<'a> Gen<'a> {
         // through the cell's contract, what the others throw is seeded into
         // what its `catch` reads (beside the runtime's errors, ⊤).
         let thrown = self.thrown;
+        // Another unit is unknown compiled code: it may throw anything.
+        self.m
+            .add_top(thrown, |_| "thrown value (runtime errors)".into());
+        self.m.add_prim(thrown, prim::ALL);
         if cells {
             self.seed_cell("thrown", thrown);
             self.cells.push(("thrown".to_string(), thrown));
@@ -461,7 +466,7 @@ impl<'a> Gen<'a> {
             // `builtins::global_field`). The global object itself is no value
             // of another unit: every unit reads it, none publishes it.
             let mut keys: Vec<(String, Atom)> = (0..self.m.atoms.len() as Atom)
-                .filter(|&a| crate::builtins::global_user_key(&self.m.atoms[a as usize]))
+                .filter(|&a| crate::builtins::global_user_key(&self.m, &self.m.atoms[a as usize]))
                 .map(|a| (self.m.atoms[a as usize].clone(), a))
                 .collect();
             keys.sort_unstable();
@@ -484,7 +489,7 @@ impl<'a> Gen<'a> {
         self.m.cons(
             holder,
             Cons::Store {
-                key: Key::Any,
+                key: Key::any(),
                 src,
                 site: 0,
             },
@@ -1274,7 +1279,7 @@ impl<'a> Gen<'a> {
                     let src = self.effect_src(tm, a, c);
                     // `*`: a store under a computed key (DECISIONS 188).
                     let key = match self.m.atoms[a as usize] == crate::STAR_KEY {
-                        true => crate::model::Key::Any,
+                        true => crate::model::Key::any(),
                         false => crate::model::Key::Named(a),
                     };
                     self.m.store_into(t, key, src, site);
@@ -1370,6 +1375,8 @@ impl<'a> Gen<'a> {
         let named = self.m.node_named("cell", || format!("cell({key}#named)"));
         self.seed_cell(&format!("{key}#named"), named);
         self.m.cell_arrs.insert(t, named);
+        // Other units' stores into it are not this unit's to see (`hole`).
+        self.m.mark_hole(t);
         // Its named fields so far see the seed; what was stored under a
         // named key escapes (`store_into` does it for later stores).
         if let Some(fs) = self.m.field_keys.get(&t).cloned() {

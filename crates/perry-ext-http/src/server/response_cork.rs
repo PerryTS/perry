@@ -34,7 +34,7 @@ pub(crate) fn throw_unknown_chunked_encoding(handle: i64, chunk: f64, encoding_b
     let Some((conn, seq)) = response_state(handle).and_then(|sr| sr.turnloop) else {
         return;
     };
-    if crate::server::turnloop_route::http1_chunked(&conn.root(), seq) == Some(true) {
+    if crate::server::turnloop_route::http1_chunked(&conn.root(crate::server::response::response_socket(handle)), seq) == Some(true) {
         perry_ffi::throw_with_code(
             &format!("Unknown encoding: {name}"),
             "ERR_UNKNOWN_ENCODING",
@@ -77,7 +77,7 @@ pub(crate) fn writable_length(handle: i64) -> usize {
     if !sr.chunked_buffer.is_empty() {
         len += chunked_buffer_wire_len(sr.chunked_buffer.len());
         if let Some((conn, seq)) = sr.turnloop {
-            len += crate::server::turnloop_route::unsent_head_len(&conn.root(), seq);
+            len += crate::server::turnloop_route::unsent_head_len(&conn.root(crate::server::response::response_socket(handle)), seq);
         }
     }
     len
@@ -108,7 +108,7 @@ pub(crate) fn flush_chunked_buffer(handle: i64) {
     let Some((conn, seq)) = sr.turnloop else {
         return;
     };
-    let _ = crate::server::turnloop_route::send_body(&conn.root(), seq, &bytes);
+    let _ = crate::server::turnloop_route::send_body(&conn.root(crate::server::response::response_socket(response_root.get())), seq, &bytes);
 }
 
 extern "C" {

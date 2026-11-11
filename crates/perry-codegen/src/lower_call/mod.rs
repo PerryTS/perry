@@ -34,6 +34,7 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
+pub(crate) mod field_read_call;
 pub(crate) mod birth_lanes;
 #[cfg(test)]
 mod birth_lanes_tests;
@@ -55,6 +56,9 @@ pub(crate) use console_promise::{
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
 mod console_rooting_tests;
+/// A console call binds the intrinsic only at a facts-proven native site.
+#[cfg(test)]
+mod console_site_facts_tests;
 #[cfg(test)]
 mod ctor_prologue_store_tests;
 mod ctor_prologue_stores;
@@ -68,6 +72,7 @@ mod extern_func;
 mod extern_timers;
 mod field_init;
 mod func_ref;
+pub(crate) mod index_split;
 #[cfg(test)]
 mod pipeline_call_tests;
 mod proven_call;
@@ -591,6 +596,29 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // b1: a call the facts prove a field element read is that read.
+    if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // DESIGN-p4l4 VR-3b: a typed call of a record `$sig` (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_lower_value_call(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).
+    if let Some(value) =
+        crate::codegen::signature_entry::try_lower_typed_method_call(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
+    // The call's site offset, for every route that consults the call-site
+    // argument intervals (`index_split::with_call_site`).
+    let value = index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))?;
+    // Check mode: a call the facts prove a Number returns a canonical double.
+    crate::codegen::facts_rep::witness_number_call(ctx, callee, &value);
+    Ok(value)
+}
+
+fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
     let _callee_cause = crate::fallback_diag::callee_cause(ctx, callee);
     // A static field used as a callee remains a property Reference:
     // P.f() binds P. Read-only StaticFieldGet lowering otherwise loses it.

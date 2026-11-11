@@ -27,6 +27,8 @@ pub(crate) use job_queue::eligible_guest_jobs_pending;
 use job_queue::EnqueuePromiseJob;
 #[cfg(test)]
 mod cross_thread_pin_tests;
+#[cfg(test)]
+mod iter_result_number_tests;
 pub mod microtasks;
 pub mod native_async;
 pub(crate) mod operation_owner;
@@ -39,6 +41,10 @@ mod rejection_gc_tests;
 mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
+#[cfg(all(test, perry_gc_instruments))]
+mod snap_pending_job_tests;
+#[cfg(all(test, perry_gc_instruments))]
+mod snap_pending_queue_tests;
 pub mod scanners;
 mod settled_step;
 pub use settled_step::js_async_step_resume_now;
@@ -427,7 +433,9 @@ pub extern "C" fn js_iter_result_set_i1(value: i32, done: i32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_iter_result_get_value() -> f64 {
     ITER_RESULT.with(|c| match c.kind.get() {
-        ITER_KIND_RAW_I32 => f64::from_bits(crate::value::JSValue::int32(c.value_i32.get()).bits()),
+        // Publish raw Int32 results in canonical f64 number form. Constructor
+        // identity is independent of either numeric representation.
+        ITER_KIND_RAW_I32 => c.value_i32.get() as f64,
         ITER_KIND_RAW_I1 => {
             f64::from_bits(crate::value::JSValue::bool(c.value_i32.get() != 0).bits())
         }
@@ -725,6 +733,91 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
 
 }
 
+/// SNAPK2b census: the promise jobs queued and not yet run (None while the
+/// queue is being changed).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_pending_jobs() -> Option<usize> {
+    TASK_QUEUE.with(|q| q.try_borrow().ok().map(|q| q.len()))
+}
+
+/// SNAPK3c census: one queued job as the census names it, read from the job
+/// itself: its kind, its callback's code address (`JsFunctionInfo::code`; 0
+/// for a reaction with no callback, which only settles its `next`) and the
+/// init that queued it (`AsyncContextSnapshot::snap_init`, set at enqueue).
+#[cfg(perry_gc_instruments)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SnapPendingJob {
+    pub kind: &'static str,
+    pub code: usize,
+    pub owner: u32,
+}
+
+/// SNAPK3c census: the queued jobs in queue order (None while the queue is
+/// being changed).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_pending_job_list() -> Option<Vec<SnapPendingJob>> {
+    TASK_QUEUE.with(|q| {
+        q.try_borrow()
+            .ok()
+            .map(|q| q.iter().map(snap_pending_job).collect())
+    })
+}
+
+/// SNAPK3c/K4 census: a callback's code address (`JsFunctionInfo::code`), 0
+/// for no callback.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_closure_code(callback: ClosurePtr) -> usize {
+    if callback.is_null() {
+        return 0;
+    }
+    let info = unsafe { (*callback).info };
+    if info.is_null() {
+        0
+    } else {
+        unsafe { (*info).code as usize }
+    }
+}
+
+/// SNAPK4 census: the scheduled resolutions in queue order, one
+/// `(owner, code)` per entry: the init that queued it and 0 (a resolution runs
+/// no callback; it settles its promise). None while the queue is borrowed.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn snap_scheduled_resolves() -> Option<Vec<(u32, usize)>> {
+    combinators::SCHEDULED_RESOLVES.with(|q| {
+        q.try_borrow()
+            .ok()
+            .map(|q| q.iter().map(|r| (r.2, 0)).collect())
+    })
+}
+
+#[cfg(perry_gc_instruments)]
+fn snap_pending_job(task: &Task) -> SnapPendingJob {
+    let code = snap_closure_code;
+    let (kind, callback, owner) = match task {
+        Task::Promise(promise, _, is_fulfilled, context) => {
+            let callback = if promise.is_null() {
+                ptr::null()
+            } else if *is_fulfilled {
+                unsafe { (**promise).on_fulfilled }
+            } else {
+                unsafe { (**promise).on_rejected }
+            };
+            ("promise", callback, context.snap_init)
+        }
+        Task::PromiseAll(_, _, _, context) => ("all", ptr::null(), context.snap_init),
+        Task::Inline(callback, _, _, _, context) => ("inline", *callback, context.snap_init),
+        Task::AsyncStep(callback, _, _, _, context, ..) => ("step", *callback, context.snap_init),
+        Task::Microtask {
+            callback, context, ..
+        } => ("microtask", *callback, context.snap_init),
+    };
+    SnapPendingJob {
+        kind,
+        code: code(callback),
+        owner,
+    }
+}
+
 pub(crate) fn enqueue_queue_microtask(callback: i64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
@@ -817,6 +910,8 @@ pub(crate) fn clear_promise_context_for_gc(promise: *mut Promise) {
 }
 
 pub(crate) fn enter_microtask_context(snapshot: AsyncContextSnapshot) {
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::job_enter(snapshot.snap_init);
     let previous = crate::async_context::enter_owned_context(snapshot);
     MICROTASK_PREV_CONTEXTS.with(|stack| stack.borrow_mut().push(previous));
 }
@@ -825,6 +920,7 @@ pub(crate) fn restore_microtask_context() {
     MICROTASK_PREV_CONTEXTS.with(|stack| {
         if let Some(previous) = stack.borrow_mut().pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }
@@ -834,6 +930,7 @@ pub(crate) fn restore_all_microtask_contexts() {
         let mut stack = stack.borrow_mut();
         while let Some(previous) = stack.pop() {
             restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }

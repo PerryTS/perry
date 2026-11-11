@@ -42,30 +42,20 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // umbrella for compatibility.
         "node-fetch" => &["http-client"],
 
-        // `undici` (#466) has no perry-stdlib copy to strip — the wrapper
-        // crate (perry-ext-undici) is thin glue over the native Web Fetch
-        // stack. The wrapper's `setGlobalDispatcher` writes proxy state
-        // through `js_fetch_set_global_proxy`, which lives in stdlib's
-        // `web-fetch` module; the well-known flip re-asserts `web-fetch`
-        // for undici imports (see optimized_libs/driver.rs) rather than
-        // naming it here, because everything named here gets STRIPPED by
-        // the flip loop.
-        "undici" => &[],
-
         // ── WebSocket ─────────────────────────────────────────────────
-        // `websocket` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-ws` (v0.5.571) so the
-        // well-known flip can route to perry-ext-ws.
-        "ws" => &["bundled-ws"],
+        // perry-ext-ws, Perry's own WebSocket engine (the global
+        // `WebSocket` client), under its Perry-owned well-known key. npm
+        // `ws` has no arm: it compiles from source over `net` / `http`.
+        // `bundled-ws` is what the flip loop keys `external-ws-pump` on.
+        "perry/websocket" => &["bundled-ws"],
 
         // ── Raw TCP sockets (net.Socket) ──────────────────────────────
-        // `upgradeToTLS` is a method on net.Socket, so any program using
-        // `net` must link the TLS runtime too — otherwise `sock.upgradeToTLS`
-        // fails at link time with `_js_net_socket_upgrade_tls` undefined.
-        // The binary-size cost is small; programs that explicitly want
-        // zero TLS bytes can still opt in via the lower-level feature flags.
-        // Per-binding gate is `bundled-net` (v0.5.571) so the well-known
-        // flip can route to perry-ext-net.
+        // `upgradeToTLS` and the TLSSocket members live on net.Socket's
+        // prototype only in programs that reach TLS (perry-ext-net's
+        // `js_ext_net_tls_install`, pushed by run_pipeline when
+        // `optimized_libs::reaches_tls` holds); a net-only program's link
+        // keeps no rustls. Per-binding gate is `bundled-net` (v0.5.571) so
+        // the well-known flip can route to perry-ext-net.
         "net" => &["bundled-net", "tls"],
 
         // ── TLS (tls.connect, socket.upgradeToTLS) ───────────────────
@@ -107,13 +97,6 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // umbrella worthwhile.
         "bcrypt" => &["bundled-bcrypt"],
         "crypto" => &["crypto"],
-        // ethers ships utility functions (formatUnits, parseUnits,
-        // getAddress, keccak256, …). The keccak256 implementation is
-        // hand-rolled inside `bundled-ethers`, so we no longer need
-        // the broader `crypto` umbrella to satisfy ethers imports —
-        // the well-known flip routes ethers calls to
-        // perry-ext-ethers and strips the perry-stdlib copy.
-        "ethers" => &["bundled-ethers"],
         // perry/updater's signature verification routes through
         // js_crypto_ed25519_verify in perry-stdlib::crypto, so importing
         // perry/updater pulls in the crypto feature transitively.
@@ -133,22 +116,11 @@ pub fn module_to_features(module: &str) -> &'static [&'static str] {
         // backwards-compat `--features compression` callers.
         "zlib" => &["compression-gzip"],
 
-        // ── Email (lettre) ────────────────────────────────────────────
-        // `email` umbrella retained for backwards-compat; per-binding
-        // gate is `bundled-nodemailer` (v0.5.558).
-        "nodemailer" => &["bundled-nodemailer"],
-
         // ── Image processing (sharp) ──────────────────────────────────
         // `image` umbrella retained for backwards-compat;
         // per-binding gate is `bundled-sharp` (v0.5.551) so the
         // well-known flip can route to perry-ext-sharp.
         "sharp" => &["bundled-sharp"],
-
-        // ── HTML parsing (cheerio / scraper) ──────────────────────────
-        // `html-parser` umbrella retained for backwards-compat;
-        // per-binding gate is `bundled-cheerio` (v0.5.550) so the
-        // well-known flip can route to perry-ext-cheerio.
-        "cheerio" => &["bundled-cheerio"],
 
         // ── Scheduler (cron) ──────────────────────────────────────────
         // `scheduler` umbrella retained for backwards-compat;
@@ -309,14 +281,5 @@ mod tests {
         // and the bundled module stays.
         assert_eq!(module_to_features("better-sqlite3"), &["database-sqlite"]);
         assert_eq!(module_to_features("node:sqlite"), &["database-sqlite"]);
-    }
-
-    #[test]
-    fn undici_maps_to_no_stdlib_features() {
-        // perry-ext-undici owns the whole undici surface; there's no
-        // stdlib copy for the well-known flip to strip. The `web-fetch`
-        // dependency of its setGlobalDispatcher glue is re-asserted by
-        // the flip loop in optimized_libs/driver.rs, not named here.
-        assert_eq!(module_to_features("undici"), &[] as &[&str]);
     }
 }

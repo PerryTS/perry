@@ -1,6 +1,7 @@
 //! The optional runtime/stdlib features a program installs from the prebuilt
 //! archives, and the compile-time instrument requests.
 
+use perry_runtime_manifest::NodeApiReach;
 use std::collections::BTreeSet;
 
 use super::super::CompilationContext;
@@ -207,11 +208,12 @@ pub(crate) fn auto_optimized_cross_features(
     let needs_dyn_eval = perry_hir::has_deferred_dynamic_code_sites()
         || ctx.native_module_imports.contains("vm")
         || ctx.uses_data_url_dynamic_import;
-    if ctx.uses_temporal
-        || ctx.uses_get_builtin_module
-        || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
-    {
+    // A native addon reaches what its Node-API imports reach: an open one
+    // every global subsystem, a closed one the subsystems of the values it
+    // creates (`node_api_host_symbols.txt`). The Node-API host itself is
+    // installed for any addon (above).
+    let addon_world = ctx.native_addons_reach(NodeApiReach::World);
+    if ctx.uses_temporal || ctx.uses_get_builtin_module || needs_dyn_eval || addon_world {
         cross_features.push("perry-runtime/temporal".to_string());
     }
     if ctx.uses_url
@@ -220,7 +222,7 @@ pub(crate) fn auto_optimized_cross_features(
             .native_module_imports
             .iter()
             .any(|module| matches!(module.as_str(), "url" | "module"))
-        || !ctx.native_addons.is_empty()
+        || addon_world
     {
         cross_features.push("perry-runtime/url-engine".to_string());
     }
@@ -263,13 +265,12 @@ pub(crate) fn auto_optimized_cross_features(
     // must keep the generic BigInt operators and formatting paths installed.
     if features.contains("crypto")
         || features.contains("database-sqlite")
-        || features.contains("bundled-ethers")
         || ctx.uses_bigint
         || ctx.uses_proc_ipc
         || ctx.uses_get_builtin_module
         || ctx.uses_temporal
         || ctx.needs_wasm_runtime
-        || !ctx.native_addons.is_empty()
+        || ctx.native_addons_reach(NodeApiReach::Bigint)
         || needs_dyn_eval
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
@@ -283,7 +284,6 @@ pub(crate) fn auto_optimized_cross_features(
                     | "bun"
                     | "bun:ffi"
                     | "crypto"
-                    | "ethers"
                     | "sqlite"
                     | "bun:sqlite"
             )
@@ -295,7 +295,7 @@ pub(crate) fn auto_optimized_cross_features(
         || ctx.uses_get_builtin_module
         || ctx.uses_proc_ipc
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || ctx.native_addons_reach(NodeApiReach::Date)
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
                 m.as_str(),
@@ -314,7 +314,7 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_perf_hooks
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
         || ctx.native_module_imports.contains("perf_hooks")
     {
         cross_features.push("perry-runtime/perf-hooks".to_string());
@@ -323,7 +323,7 @@ pub(crate) fn auto_optimized_cross_features(
         || ctx.uses_get_builtin_module
         || ctx.uses_proc_ipc
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
                 m.as_str(),
@@ -343,7 +343,7 @@ pub(crate) fn auto_optimized_cross_features(
     if ctx.uses_messaging
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
         || ctx.native_module_imports.contains("worker_threads")
     {
         cross_features.push("perry-runtime/messaging".to_string());
@@ -358,7 +358,7 @@ pub(crate) fn auto_optimized_cross_features(
         || ctx.uses_global_webcrypto
         || ctx.uses_global_websocket
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
                 m.as_str(),
@@ -367,6 +367,9 @@ pub(crate) fn auto_optimized_cross_features(
         })
     {
         cross_features.push("perry-runtime/event-target".to_string());
+    }
+    if ctx.uses_navigator || ctx.uses_get_builtin_module || needs_dyn_eval || addon_world {
+        cross_features.push("perry-runtime/navigator".to_string());
     }
     if ctx.uses_typedarray
         || ctx.uses_proc_ipc
@@ -377,7 +380,7 @@ pub(crate) fn auto_optimized_cross_features(
         || ctx.uses_global_webcrypto
         || ctx.uses_global_websocket
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || ctx.native_addons_reach(NodeApiReach::Typedarray)
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
                 m.as_str(),
@@ -413,7 +416,7 @@ pub(crate) fn auto_optimized_cross_features(
         || ctx.uses_global_atomics
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
         || ctx.native_module_imports.iter().any(|m| {
             matches!(
                 m.as_str(),
@@ -436,15 +439,11 @@ pub(crate) fn auto_optimized_cross_features(
         .any(|m| matches!(m.as_str(), "async_hooks" | "events"))
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
     {
         cross_features.push("perry-runtime/async-hooks".to_string());
     }
-    if ctx.uses_proxy
-        || ctx.uses_get_builtin_module
-        || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
-    {
+    if ctx.uses_proxy || ctx.uses_get_builtin_module || needs_dyn_eval || addon_world {
         cross_features.push("perry-runtime/proxy".to_string());
     }
     if ctx.uses_turnloop
@@ -460,8 +459,7 @@ pub(crate) fn auto_optimized_cross_features(
     // A formatter-only program can reach stringify, without creating a global
     // namespace or constructing parser/tape values. The full JSON installer
     // also fills formatting slots when the JSON API itself is reachable.
-    let json_namespace =
-        ctx.uses_global_json || (ctx.uses_json_format && !ctx.native_addons.is_empty());
+    let json_namespace = ctx.uses_global_json || (ctx.uses_json_format && addon_world);
     if ctx.uses_json_engine && !json_namespace && !needs_dyn_eval {
         cross_features.push("perry-runtime/json-engine".to_string());
     }
@@ -487,7 +485,7 @@ pub(crate) fn auto_optimized_cross_features(
                 || ctx.uses_get_builtin_module
                 || ctx.native_module_imports.contains("cluster")
                 || needs_dyn_eval
-                || !ctx.native_addons.is_empty(),
+                || addon_world,
             "proc-ipc",
         ),
     ] {
@@ -512,7 +510,7 @@ pub(crate) fn auto_optimized_cross_features(
         || gc_diagnostics_requested()
         || ctx.uses_get_builtin_module
         || needs_dyn_eval
-        || !ctx.native_addons.is_empty()
+        || addon_world
     {
         cross_features.push("perry-runtime/diagnostics".to_string());
     }

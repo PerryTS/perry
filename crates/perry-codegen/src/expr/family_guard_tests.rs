@@ -90,6 +90,8 @@ fn tm1_facts(m: &Module) -> crate::codegen::ProgramFactsView {
         fns: Vec::new(),
         classes: Vec::new(),
         nullable: false,
+        rep: crate::codegen::FactsRep::Boxed,
+        rest: false,
     };
     let mut elision = ElisionFacts::default();
     elision.locals.insert(
@@ -377,4 +379,16 @@ console.log(String(new C().a));
         leaking.0 <= 1,
         "keys defined after the parent handed out the receiver are no initialization: {leaking:?}"
     );
+}
+
+/// THR14 rule 0a: a checked read whose key the layout record serves tries the
+/// record arm first; the class-id arm sits only on the record arm's miss edge.
+#[test]
+fn checked_read_tries_the_record_arm_before_the_class_id_arm() {
+    let m = module(TM1);
+    let ir = ir_with_facts(&m, tm1_facts(&m));
+    let at = |p: &str| ir.lines().position(|l| l.starts_with(p));
+    let cid = at("wpf.gget.cid").unwrap_or_else(|| panic!("no checked field read:\n{ir}"));
+    let word = at("l2c.word").unwrap_or_else(|| panic!("no record arm:\n{ir}"));
+    assert!(word < cid, "the record arm must come first:\n{ir}");
 }

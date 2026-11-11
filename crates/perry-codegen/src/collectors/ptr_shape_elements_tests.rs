@@ -219,6 +219,7 @@ fn let_elem_ty(id: u32, name: &str, arr: u32, idx: u32, ty: Type) -> Stmt {
         ty,
         mutable: false,
         init: Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(arr)),
@@ -404,6 +405,7 @@ fn bounded_direct_field_read_preserves_the_arrays_exact_class() {
             vec![Stmt::Expr(Expr::PropertyGet {
                 byte_end: 0,
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
@@ -438,6 +440,7 @@ fn bounded_direct_non_field_read_denies_exactness() {
             vec![Stmt::Expr(Expr::PropertyGet {
                 byte_end: 0,
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
@@ -735,6 +738,7 @@ fn an_indexed_store_denies_the_array() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Number(9.0)),
             value: Box::new(Expr::Number(1.0)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -1116,6 +1120,7 @@ fn an_element_passed_to_a_callee_denies_the_array() {
                     byte_end: 0,
                     callee: Box::new(Expr::FuncRef(9)),
                     args: vec![Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
@@ -1156,6 +1161,7 @@ fn an_unlicensed_element_binding_denies_the_array() {
             ty: Type::Named("C".to_string()),
             mutable: false,
             init: Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -1375,6 +1381,7 @@ fn a_property_store_through_an_element_denies_the_array() {
             1,
             vec![Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
@@ -1414,6 +1421,7 @@ fn a_property_update_through_an_element_denies_the_array() {
             1,
             vec![Stmt::Expr(Expr::PropertyUpdate {
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
@@ -1513,6 +1521,7 @@ fn an_array_pushed_into_another_array_is_disqualified() {
         // expression neither walk tracks.
         Stmt::Expr(Expr::IndexSet {
             object: Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(2)),
@@ -1520,6 +1529,7 @@ fn an_array_pushed_into_another_array_is_disqualified() {
             }),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(new_of("D")),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

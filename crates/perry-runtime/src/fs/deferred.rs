@@ -1,43 +1,6 @@
-//! #9442 / #9574 — deferred async fs mutations.
-//!
-//! Node's `fs.writeFile` / `fs.appendFile` — both the callback form and the
-//! `fs/promises` form — hand the work to the libuv thread pool and return.
-//! Nothing has touched the file when the call returns, and `process.exit()`
-//! does not drain that pool: an exit in the same tick abandons the write.
-//!
-//! Perry did the write SYNCHRONOUSLY inside the call and returned an
-//! already-settled promise (or a deferred callback over an already-committed
-//! write). There was no in-flight work left for `process.exit()` to abandon, so
-//! five fire-and-forget `appendFile` calls followed by `process.exit(0)` landed
-//! five records where Node lands none — perry committed state a program had
-//! deliberately walked away from.
-//!
-//! The fix keeps the work synchronous but moves it OFF the calling turn: the
-//! operation is parked on a zero-delay callback timer, the same mechanism
-//! `fs::stream`'s `schedule_drain` uses. That buys three properties at once,
-//! all of them already load-bearing elsewhere in the runtime, none of them
-//! newly invented here:
-//!
-//!   * the timer queue GC-roots the closure and therefore its captured path /
-//!     data / options / sink values, so they survive the turn;
-//!   * a pending callback timer is a live event source
-//!     (`js_callback_timer_has_pending`), so a program that ends by draining
-//!     its loop still lands every record, and an `await` on the returned
-//!     promise still resolves;
-//!   * `process.exit()` terminates through `libc::_exit` without ticking the
-//!     timer queues, so the parked write is dropped exactly as Node drops it.
-//!
-//! Argument validation that THROWS stays on the calling turn (see the
-//! `validate::*` calls in the schedulers below), so a bad path or a bad options
-//! object still raises where it did before rather than turning into an uncaught
-//! exception inside a timer.
-//!
-//! #9574 adds one ordering rule: an async unlink of a path with an already
-//! parked write waits behind that write. Without it, `fs.promises.unlink`
-//! performed synchronously while the earlier `writeFile` was still parked,
-//! observed `ENOENT`, and the later write recreated the file. Claude Code hit
-//! exactly that race when its graceful-shutdown cleanup tried to remove its
-//! concurrent-session registration file.
+//! File mutations leave the calling turn before touching the destination.
+//! Iterable writes resume from promise reactions so native source callbacks
+//! can run; a pending path stays owned until terminal completion.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -289,6 +252,25 @@ extern "C" fn perform_deferred_fs_op(
         None
     };
 
+    if (mode == MODE_UNLINK_PROMISE || mode == MODE_UNLINK_CALLBACK)
+        && has_pending_path_write(path_handle.get_nanbox_f64())
+    {
+        let provider = if is_promise_mode(mode) {
+            "FSREQPROMISE"
+        } else {
+            "FSREQCALLBACK"
+        };
+        park(
+            path_handle.get_nanbox_f64(),
+            data_handle.get_nanbox_f64(),
+            options_handle.get_nanbox_f64(),
+            sink_handle.get_nanbox_f64(),
+            mode,
+            provider,
+        );
+        return undefined();
+    }
+
     // A throw from inside a timer callback would terminate the process; every
     // path that used to throw synchronously has already run on the calling
     // turn, so anything caught here is routed to the operation's own sink.
@@ -296,55 +278,73 @@ extern "C" fn perform_deferred_fs_op(
         let path = path_handle.get_nanbox_f64();
         let data = data_handle.get_nanbox_f64();
         let options = options_handle.get_nanbox_f64();
+        if mode == MODE_WRITE_PROMISE || mode == MODE_WRITE_CALLBACK {
+            if super::try_start_deferred_write_file(
+                path,
+                data,
+                options,
+                sink_handle.get_nanbox_f64(),
+                mode,
+                pending_path.clone(),
+            )? {
+                return Ok(true);
+            }
+        }
         let result = if mode == MODE_APPEND_PROMISE || mode == MODE_APPEND_CALLBACK {
-            // Matches the pre-#9442 behaviour of both append entry points: the
-            // sync helper's 0/1 status was discarded, so an I/O failure settles
-            // as success. Deferral must not quietly change that contract.
+            // Append retains its existing error contract; only writeFile owns this consumer.
             let _ = super::js_fs_append_file_sync_options(path, data, options);
             Ok(())
         } else if mode == MODE_UNLINK_PROMISE || mode == MODE_UNLINK_CALLBACK {
-            unsafe { super::js_fs_unlink_result(path) }
+            unsafe { super::js_fs_unlink_result(path).map_err(|error| error.value()) }
         } else {
             unsafe { super::write_file_path_or_fd_result(path, data, options) }
         };
-        match result {
-            Ok(()) => undefined(),
-            Err(err) => err,
-        }
+        result.map(|()| false)
     });
+    let error = match outcome {
+        Ok(Ok(true)) => return undefined(),
+        Ok(Ok(false)) => None,
+        Ok(Err(error)) | Err(error) => Some(error),
+    };
+    complete_deferred_write(
+        sink_handle.get_nanbox_f64(),
+        mode,
+        pending_path.as_deref(),
+        error,
+    );
+    undefined()
+}
 
-    if let Some(path) = pending_path.as_deref() {
+pub(crate) fn complete_deferred_write(
+    sink: f64,
+    mode: f64,
+    pending_path: Option<&str>,
+    error: Option<f64>,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let sink = scope.root_nanbox_f64(sink);
+    let error = error.map(|error| scope.root_nanbox_f64(error));
+    if let Some(path) = pending_path {
         finish_pending_path_write(path);
     }
-
-    let error_value = match outcome {
-        Ok(value) => {
-            if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-                None
-            } else {
-                Some(value)
-            }
-        }
-        Err(thrown) => Some(thrown),
-    };
-
-    let sink = sink_handle.get_nanbox_f64();
     if is_promise_mode(mode) {
-        let promise = crate::value::js_nanbox_get_pointer(sink) as *mut crate::promise::Promise;
+        let promise = crate::value::js_nanbox_get_pointer(sink.get_nanbox_f64())
+            as *mut crate::promise::Promise;
         if !promise.is_null() {
-            match error_value {
+            match error {
                 None => crate::promise::js_promise_resolve(promise, undefined()),
-                Some(err) => crate::promise::js_promise_reject(promise, err),
+                Some(error) => crate::promise::js_promise_reject(promise, error.get_nanbox_f64()),
             }
         }
     } else {
-        let callback = callback_from_sink(sink);
+        let callback = callback_from_sink(sink.get_nanbox_f64());
         if !callback.is_null() {
-            match error_value {
+            match error {
                 None => super::callbacks::call_cb0(callback),
-                Some(err) => unsafe { super::callbacks::call_cb_err1(callback, err) },
+                Some(error) => unsafe {
+                    super::callbacks::call_cb_err1(callback, error.get_nanbox_f64())
+                },
             }
         }
     }
-    undefined()
 }

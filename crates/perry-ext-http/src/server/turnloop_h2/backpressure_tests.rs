@@ -154,10 +154,11 @@ fn http2_drain_waits_for_stream_outbox_not_just_socket_queue() {
 fn http2_compat_pump_keeps_unfinished_response_alive() {
     let f = Fixture::new();
     let request = register_handle(String::from("request fixture"));
+    let server_handle = register_handle(server::HttpServer::with_handler(0));
     let pending = server::HttpPendingRequest {
-        server_handle: 0,
+        server_handle,
         request_handle: request,
-        response_handle: f.response,
+        response: crate::server::request::handle_to_pointer_f64(f.response),
         skip_default_response: false,
         h2_stream_handle: 0,
         h2_stream_headers: Vec::new(),
@@ -176,4 +177,5 @@ fn http2_compat_pump_keeps_unfinished_response_alive() {
     server::reap_in_flight_requests();
     assert!(get_handle::<response::ServerResponse>(f.response).is_none());
     assert!(get_handle::<String>(request).is_none());
+    perry_ffi::drop_handle(server_handle);
 }

@@ -310,7 +310,6 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             }
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
-                "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
                 // Web Fetch API: Request / Response / Headers passed as
                 // function parameters need the same native-instance
                 // registration the `new Request()`/`new Response()`/

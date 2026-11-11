@@ -16,14 +16,19 @@ pub(super) fn try_set(target: f64, key: f64, value: f64, receiver: f64) -> bool 
     let Some(index) = crate::array::value_bits_to_number(key.to_bits()) else {
         return false;
     };
-    if !(index >= 0.0 && index < u32::MAX as f64 && index.fract() == 0.0) {
-        return false;
-    }
     let addr = (bits & POINTER_MASK) as usize;
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type) {
+        // An integer-indexed exotic object (a typed array or a Uint8Array
+        // buffer) answers every Number key itself, including -0, 1.5 and
+        // NaN, which are dropped: its numeric [[Set]] precedes ToPropertyKey.
+        return (crate::gc::is_typed_array_type(header.obj_type)
+            || crate::gc::is_uint8array_buffer_type(header.obj_type))
+            && crate::typedarray_props::typed_array_set_number_key(addr, key, value);
+    }
+    if !(index >= 0.0 && index < u32::MAX as f64 && index.fract() == 0.0)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return false;

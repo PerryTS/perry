@@ -8,6 +8,7 @@ mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;
+mod block_persist_precise_point;
 mod block_persist_scan_window;
 mod block_pool_pressure;
 mod block_skip;
@@ -106,6 +107,7 @@ mod promoted_cohort;
 mod proxy_registry;
 mod residual_prototype_relocation;
 mod restore_coverage;
+mod restore_walk;
 mod retention_9628_9629;
 mod retired_handle_carrier;
 mod root_words;
@@ -212,3 +214,7 @@ mod young_dynamic_growth;
 mod object_descriptor_walk;
 
 mod inline_birth_bound;
+
+mod leaf_census_coalescing;
+
+mod stamp_guard_tests;

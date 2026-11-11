@@ -52,3 +52,28 @@ fn noncollecting_writers_and_unknown_calls_still_invalidate_receiver_proofs() {
     block.call_indirect(DOUBLE, "%callee", &[]);
     assert!(block.to_ir().contains("store i8 0, ptr %byte_state"));
 }
+
+/// b2 (REVIEW-b2-code R3): a cold-arm descriptor's valid slot is cleared
+/// right before every call that may run code or collect: the read's own cold
+/// call, the back-edge poll, a coercion, an indirect call. Each clear
+/// precedes its call in the block.
+#[test]
+fn every_collecting_call_clears_the_cold_arm_valid_slot_first() {
+    for callee in [
+        "perry_array_read_cold_shared",
+        "js_gc_loop_safepoint",
+        "js_number_coerce",
+        "js_dyn_index_get",
+    ] {
+        let counter = Rc::new(RegCounter::new());
+        counter.push_byte_access_dirty_slot("%cold_valid".into());
+        let mut block = LlBlock::new("entry", counter);
+        block.call(DOUBLE, callee, &[(DOUBLE, "%value")]);
+        let text = block.to_ir();
+        let clear = text
+            .find("store i8 0, ptr %cold_valid")
+            .unwrap_or_else(|| panic!("{callee} leaves the cold-arm proof valid: {text}"));
+        let call = text.find(&format!("@{callee}(")).expect("the call is emitted");
+        assert!(clear < call, "{callee}: the clear must precede the call: {text}");
+    }
+}

@@ -33,7 +33,7 @@ pub(crate) use helpers::{
     peel_new_callee,
 };
 pub(crate) use member::lower_new_member_native;
-pub(crate) use non_ident::{lower_new_non_ident, register_stream_controller_params};
+pub(crate) use non_ident::lower_new_non_ident;
 
 pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> Result<Expr> {
     let callee_expr = peel_new_callee(new_expr.callee.as_ref());
@@ -338,7 +338,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
     // `new ReadableStream({...})` / `new TransformStream({...})` as a native
     // instance so `controller.enqueue(...)` etc. dispatch through the streams
     // arms in lower_call.rs.
-    register_stream_controller_params(ctx, new_expr);
 
     // Try to extract class name from callee
     match callee_expr {
@@ -606,21 +605,20 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            let inspector_session_module = ctx.lookup_native_module(&class_name).and_then(
-                |(module_name, export_name)| match (module_name, export_name) {
-                    ("inspector" | "inspector/promises", Some("Session")) => {
-                        Some(module_name.to_string())
-                    }
-                    _ => None,
-                },
-            );
-            if let Some(module_name) = inspector_session_module {
+            let construct_fold =
+                ctx.lookup_native_module(&class_name)
+                    .and_then(|(module_name, export_name)| {
+                        let export_name = export_name?;
+                        crate::folded_call::native_construct_fold(module_name, export_name)
+                            .then(|| (module_name.to_string(), export_name.to_string()))
+                    });
+            if let Some((module_name, export_name)) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NativeMethodCall {
                     module: module_name,
                     class_name: None,
                     object: None,
-                    method: "Session".to_string(),
+                    method: export_name,
                     args,
                 });
             }
@@ -698,32 +696,6 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     class_name: None,
                     object: None,
                     method: "Agent".to_string(),
-                    args,
-                });
-            }
-
-            // #466: `new ProxyAgent(...)` / `new Agent(...)` imported from
-            // `undici`. Same shape as the http/https Agent arm above: a
-            // receiver-less NativeMethodCall whose method is the exported
-            // class name, dispatched through the `undici` rows in
-            // NATIVE_MODULE_TABLE (perry-ext-undici's
-            // `js_undici_proxy_agent_new` / `js_undici_agent_new`). The
-            // var-decl machinery then tags the local as an
-            // ("undici", "ProxyAgent"|"Agent") native instance so
-            // `.close()` / `.destroy()` dispatch by class filter.
-            let undici_ctor = ctx
-                .lookup_native_module(&class_name)
-                .and_then(|(module, export)| match (module, export) {
-                    ("undici", Some(ctor @ ("ProxyAgent" | "Agent"))) => Some(ctor.to_string()),
-                    _ => None,
-                });
-            if let Some(ctor) = undici_ctor {
-                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Expr::NativeMethodCall {
-                    module: "undici".to_string(),
-                    class_name: None,
-                    object: None,
-                    method: ctor,
                     args,
                 });
             }

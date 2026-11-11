@@ -54,14 +54,28 @@ fn with_census<R>(f: impl FnOnce(&perry_hir::ProtoCensus) -> R) -> Option<R> {
 /// and can no object gain an own property of that name except through a
 /// write that sets its shadow bit?
 pub fn method_is_constant(name: &str) -> bool {
-    with_census(|c| c.method_is_constant(name)).unwrap_or(false)
+    let proved = with_census(|c| c.method_is_constant(name)).unwrap_or(false);
+    if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::ProtoHolder,
+            || serde_json::json!({"key":name}),
+        );
+    }
+    proved
 }
 
 /// Object model step 1: is a key add of `name` on an object whose
 /// prototype is a closed literal never intercepted (`ProtoCensus::
 /// create_add_free`)? False with no census installed.
 pub(crate) fn create_add_free(name: &str) -> bool {
-    with_census(|c| c.create_add_free(name)).unwrap_or(false)
+    let proved = with_census(|c| c.create_add_free(name)).unwrap_or(false);
+    if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::ProtoAdd,
+            || serde_json::json!({"key":name}),
+        );
+    }
+    proved
 }
 
 /// Is `name` a prototype name (`ProtoCensus::prototype_names`, the list the
@@ -82,7 +96,11 @@ pub(crate) fn shadow_tests() -> bool {
 /// No compiled or interpreted operation can relink a constructor's heritage.
 /// Missing facts decline the proof; no program-wide dynamic-code veto.
 pub(crate) fn heritage_is_unrelinked(ctx: &crate::expr::FnCtx<'_>, class_id: u32) -> bool {
-    if ctx.wpfacts.super_unrelinked.contains(&class_id) {
+    if ctx.wpfacts.super_unrelinked.contains_key(&class_id) {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Super,
+            || serde_json::json!({"class":class_id,"parent":ctx.wpfacts.super_unrelinked[&class_id]}),
+        );
         return true;
     }
     // Unit tests install a complete synthetic program census. Production
@@ -180,49 +198,175 @@ fn emit_value_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, value: &str) -> Strin
 /// `(class_id, ShapeId)` (which refuses a shadowed receiver word): an `i1`
 /// that the holders of `class`'s static chain for `method` carry no shadow
 /// bit. `"false"` when the compiler names no chain; `"true"` for a constant
-/// method in a program with no dynamic write or relink. The select path
-/// (`dynamic_dispatch_select`), which proves only the receiver's class,
-/// still requires a constant name.
+/// method in a program with no dynamic write or relink ([`case_chain`]).
 pub(crate) fn holder_constant(
     ctx: &mut crate::expr::FnCtx<'_>,
     class: &str,
     method: &str,
 ) -> String {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
-        return "false".into();
+    match case_chain(ctx, class, method) {
+        Some(chain) => case_holders_unshadowed(ctx, &chain),
+        None => "false".into(),
     }
-    let Some(chain) = crate::codegen::static_prototype::chain(ctx, class, method) else {
-        return "false".into();
-    };
-    if method_is_constant(method) && !shadow_tests() {
-        return "true".into();
-    }
-    // A name the program writes (or any name, once a dynamic write exists):
-    // a clear bit on each holder proves its slots still hold what the class
-    // definition stored (a prototype's bit is set by any write after its
-    // creation, static or dynamic).
-    holders_unshadowed(ctx, &chain)
 }
 
-/// `i1`: every prototype of `chain` (class ids, holder last) carries no
-/// shadow bit. A class prototype is materialized lazily, on first demand
-/// through the agent's class-value directory; one that was never
-/// materialized was never reachable by any write, so it is unshadowed.
-fn holders_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, chain: &[(u32, u32)]) -> String {
-    let dir = crate::expr::agent_ptr::emit_agent_ptr(
+/// `i1`: the prototypes of `chain` (a static chain the compiler names for
+/// `method`, holder last) still hold what their class definitions stored:
+/// the same proof as [`case_chain`] for a chain the caller already has.
+pub(crate) fn chain_constant(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    method: &str,
+    chain: &[(u32, u32)],
+) -> String {
+    case_holders_unshadowed(ctx, &chain_proof(method, chain))
+}
+
+/// The prototypes (class ids, holder last) whose shadow bits prove `class`'s
+/// static chain for `method`: `None` when the compiler names no chain (or
+/// ILP32 other than wasm32), empty for a constant method in a program with no dynamic write or
+/// relink. A name the program writes (or any name, once a dynamic write
+/// exists): a clear bit on each holder proves its slots still hold what the
+/// class definition stored (a prototype's bit is set by any write after its
+/// creation, static or dynamic).
+pub(crate) fn case_chain(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    class: &str,
+    method: &str,
+) -> Option<Vec<u32>> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple)
+    {
+        return None;
+    }
+    let chain = crate::codegen::static_prototype::chain(ctx, class, method)?;
+    Some(chain_proof(method, &chain))
+}
+
+/// The holders of `chain` whose shadow bits a proof reads: none for a
+/// constant method in a program with no dynamic write or relink.
+fn chain_proof(method: &str, chain: &[(u32, u32)]) -> Vec<u32> {
+    if method_is_constant(method) && !shadow_tests() {
+        return Vec::new();
+    }
+    chain.iter().map(|&(id, _)| id).collect()
+}
+
+fn class_value_dir(ctx: &mut crate::expr::FnCtx<'_>) -> String {
+    crate::expr::agent_ptr::emit_agent_ptr(
         ctx,
         crate::runtime_abi::AGENT_PTR_CLASS_VALUES,
         "perry_class_value_dir_cell",
-    );
+    )
+}
+
+/// The holder proof of a class-id switch (`dynamic_dispatch_select`): one
+/// proof for all cases instead of one per case. `cid` is the receiver's class
+/// id (`i32`, the value the switch dispatches on) and `cases` each cased
+/// class's `(class id, class name)`. Returns the `i1` that holds for every
+/// case (the receiver's own prototype, read by its runtime id, and the chain
+/// suffix all cases share) and per case the chain classes still to prove
+/// (those between the class and the shared suffix); a case with no named
+/// chain gets `None` (its proof is `false`). `None` overall when the
+/// per-case form applies (no shadow tests, ILP32 other than wasm32).
+pub(crate) fn shared_holder_proof(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    cid: &str,
+    cases: &[(u32, String)],
+    method: &str,
+) -> Option<(String, Vec<Option<Vec<u32>>>)> {
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
+        || !shadow_tests()
+    {
+        return None;
+    }
+    let chains: Vec<Option<Vec<u32>>> = cases
+        .iter()
+        .map(|(_, class)| {
+            crate::codegen::static_prototype::chain(ctx, class, method)
+                .map(|c| c.iter().map(|&(id, _)| id).collect())
+        })
+        .collect();
+    let named: Vec<&Vec<u32>> = chains.iter().flatten().collect();
+    let mut suffix: Vec<u32> = Vec::new();
+    if let Some(first) = named.first() {
+        let mut n = 0;
+        while n < first.len()
+            && named
+                .iter()
+                .all(|c| c.len() > n && c[c.len() - 1 - n] == first[first.len() - 1 - n])
+        {
+            suffix.push(first[first.len() - 1 - n]);
+            n += 1;
+        }
+    }
+    let dir = class_value_dir(ctx);
+    let wide = ctx.block().zext(I32, cid, I64);
+    let page = ctx.block().lshr(I64, &wide, "8");
+    let slot = ctx.block().and(I64, &wide, "255");
+    let mut shared = holder_unshadowed(ctx, &dir, &page, &slot);
+    for &id in &suffix {
+        let ok = holder_unshadowed(ctx, &dir, &(id >> 8).to_string(), &(id & 255).to_string());
+        shared = ctx.block().and(I1, &shared, &ok);
+    }
+    let extras = chains
+        .into_iter()
+        .zip(cases)
+        .map(|(chain, (own, _))| {
+            chain.map(|c| {
+                c.into_iter()
+                    .filter(|id| id != own && !suffix.contains(id))
+                    .collect()
+            })
+        })
+        .collect();
+    Some((shared, extras))
+}
+
+/// `i1`: every prototype of `extras` (class ids) carries no shadow bit. A
+/// class prototype is materialized lazily, on first demand through the
+/// agent's class-value directory; one that was never materialized was never
+/// reachable by any write, so it is unshadowed.
+pub(crate) fn case_holders_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, extras: &[u32]) -> String {
+    if extras.is_empty() {
+        return "true".to_string();
+    }
+    let dir = class_value_dir(ctx);
     let mut result = "true".to_string();
-    for &(cid, _) in chain {
-        let ok = holder_unshadowed(ctx, &dir, cid);
+    for &id in extras {
+        let ok = holder_unshadowed(ctx, &dir, &(id >> 8).to_string(), &(id & 255).to_string());
         result = ctx.block().and(I1, &result, &ok);
     }
     result
 }
 
-fn holder_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: u32) -> String {
+/// `i64`: the page count of the class-value directory at `dir`
+/// (`ClassValueDir { pages: *mut _, len: usize }`: pointer-sized words).
+fn emit_class_value_dir_len(ctx: &mut crate::expr::FnCtx<'_>, dir: &str) -> String {
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
+    let blk = ctx.block();
+    let at = blk.gep(I8, dir, &[(I64, if ilp32 { "4" } else { "8" })]);
+    if ilp32 {
+        let len = blk.load(I32, &at);
+        blk.zext(I32, &len, I64)
+    } else {
+        blk.load(I64, &at)
+    }
+}
+
+/// Byte offset of a class constructor's prototype-link capture: the target's
+/// closure header, then 8-byte capture slots.
+fn class_prototype_capture_offset(target_triple: &str) -> u64 {
+    crate::target_layout::closure_header_size_bytes(target_triple)
+        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE as u64 * 8
+}
+
+fn holder_unshadowed(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    dir: &str,
+    page_idx: &str,
+    ctor_idx: &str,
+) -> String {
     let page = ctx.new_block("holder.page");
     let ctor = ctx.new_block("holder.constructor");
     let link = ctx.new_block("holder.link");
@@ -235,25 +379,21 @@ fn holder_unshadowed(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: u32) -> S
     let ml = ctx.block_label(merge);
     let start = ctx.block().label.clone();
     let pages = ctx.block().load(PTR, dir);
-    let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
-    let len = ctx.block().load(I64, &at);
-    let present = ctx.block().icmp_ult(I64, &(cid >> 8).to_string(), &len);
+    let len = emit_class_value_dir_len(ctx, dir);
+    let present = ctx.block().icmp_ult(I64, page_idx, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
-    let at = ctx
-        .block()
-        .gep(PTR, &pages, &[(I64, &(cid >> 8).to_string())]);
+    let at = ctx.block().gep(PTR, &pages, &[(I64, page_idx)]);
     let p = ctx.block().load(PTR, &at);
     let present = ctx.block().icmp_ne(PTR, &p, "null");
     ctx.block().cond_br(&present, &cl, &ml);
     ctx.current_block = ctor;
-    let at = ctx.block().gep(PTR, &p, &[(I64, &(cid & 255).to_string())]);
+    let at = ctx.block().gep(PTR, &p, &[(I64, ctor_idx)]);
     let c = ctx.block().load(PTR, &at);
     let present = ctx.block().icmp_ne(PTR, &c, "null");
     ctx.block().cond_br(&present, &ll, &ml);
     ctx.current_block = link;
-    let off = crate::runtime_abi::CLOSURE_HEADER_SIZE
-        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE * 8;
+    let off = class_prototype_capture_offset(ctx.target_triple);
     let at = ctx.block().gep(I8, &c, &[(I64, &off.to_string())]);
     let bits = ctx.block().load(I64, &at);
     let tag = ctx.block().lshr(I64, &bits, "48");
@@ -288,7 +428,7 @@ pub(crate) fn emit_selected_contract(
     ctx: &mut crate::expr::FnCtx<'_>,
     recv: &str,
     answer: &str,
-    class_id: u32,
+    class_id: &str,
     property: &str,
     function: &str,
 ) {
@@ -339,7 +479,7 @@ fn emit_shadow_contract(ctx: &mut crate::expr::FnCtx<'_>, recv: &str, ok: &str, 
 pub(crate) fn emit_contract(
     ctx: &mut crate::expr::FnCtx<'_>,
     recv: &str,
-    class_id: u32,
+    class_id: &str,
     property: &str,
     function: &str,
 ) {
@@ -353,7 +493,7 @@ pub(crate) fn emit_contract(
         &[
             (DOUBLE, recv),
             (I64, &method_id),
-            (I32, &class_id.to_string()),
+            (I32, class_id),
             (I64, &info),
         ],
     );
@@ -368,7 +508,7 @@ pub(crate) fn emit_exact_family_contract(
     function: &str,
 ) {
     let class_id = ctx.class_ids.get(class).copied().unwrap_or(0);
-    emit_contract(ctx, recv, class_id, property, function);
+    emit_contract(ctx, recv, &class_id.to_string(), property, function);
 }
 
 /// Inherited data through a known prototype (§3.6): `o.k` where `o`'s family
@@ -415,6 +555,10 @@ pub(crate) fn lower_known_holder_read(
         property: property.to_string(),
         byte_offset: *byte_offset,
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::ProtoHolder,
+        || serde_json::json!({"holder":holder,"key":property}),
+    );
     Some((|| {
         let tests = shadow_tests();
         if !tests && !crate::codegen::helpers::check_contracts() {
@@ -582,8 +726,7 @@ fn emit_class_prototype_ptr(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: &s
     };
     let start = ctx.block().label.clone();
     let pages = ctx.block().load(PTR, dir);
-    let at = ctx.block().gep(I8, dir, &[(I64, "8")]);
-    let len = ctx.block().load(I64, &at);
+    let len = emit_class_value_dir_len(ctx, dir);
     let present = ctx.block().icmp_ult(I64, &page_index, &len);
     ctx.block().cond_br(&present, &pl, &ml);
     ctx.current_block = page;
@@ -597,8 +740,7 @@ fn emit_class_prototype_ptr(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, cid: &s
     let present = ctx.block().icmp_ne(PTR, &c, "null");
     ctx.block().cond_br(&present, &ll, &ml);
     ctx.current_block = link;
-    let off = crate::runtime_abi::CLOSURE_HEADER_SIZE
-        + crate::runtime_abi::CLASS_PROTOTYPE_LINK_CAPTURE * 8;
+    let off = class_prototype_capture_offset(ctx.target_triple);
     let at = ctx.block().gep(I8, &c, &[(I64, &off.to_string())]);
     let bits = ctx.block().load(I64, &at);
     let tag = ctx.block().lshr(I64, &bits, "48");
@@ -651,8 +793,8 @@ pub(crate) fn lower_class_holder_read(
     property: &str,
     read: &perry_hir::Expr,
 ) -> Option<anyhow::Result<String>> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple)
-        || ctx.target_triple.contains("wasm")
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
         || property == "__proto__"
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
     {
@@ -670,6 +812,10 @@ pub(crate) fn lower_class_holder_read(
     }
     Some((|| {
         let header = crate::target_layout::object_slot_base_bytes(
+            ctx.target_triple,
+            crate::target_layout::HeaderForm::Meta,
+        ) as i64;
+        let meta_at = crate::target_layout::object_meta_slot_offset_bytes(
             ctx.target_triple,
             crate::target_layout::HeaderForm::Meta,
         ) as i64;
@@ -695,7 +841,7 @@ pub(crate) fn lower_class_holder_read(
             let blk = ctx.block();
             let wp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
             let word = blk.load(I32, &wp);
-            let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, header - 8);
+            let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, meta_at);
             let meta = blk.load(PTR, &mp);
             let no_meta = blk.icmp_eq(PTR, &meta, "null");
             blk.cond_br(&no_meta, &first_l, &slow_l);
@@ -855,6 +1001,146 @@ pub(crate) fn lower_class_holder_read(
             hits.iter().map(|(v, l)| (v.as_str(), l.as_str())).collect();
         Ok(ctx.block().phi(DOUBLE, &incoming))
     })())
+}
+
+/// A typed spread site's `[Symbol.iterator]` member ([`emit_iterator_call`]):
+/// the operand's class family, the static prototype chain to the holder of
+/// the key, the holder's slot, and the member body's own entry.
+pub(crate) struct IteratorMemberSite {
+    cid: u32,
+    chain: Vec<(u32, u32)>,
+    holder_slot: i64,
+    entry: String,
+}
+
+/// `object` (a spread operand) is typed as an instance of one class whose `[Symbol.iterator]` is a declared synchronous generator method held
+/// in a ConstFn lane of a prototype on the class's static chain. `None` when
+/// the site is not one (an untyped operand, an own key of the family, a
+/// getter or a non-generator member, a class off the static layouts).
+pub(crate) fn iterator_member_site(
+    ctx: &crate::expr::FnCtx<'_>,
+    object: &perry_hir::Expr,
+) -> Option<IteratorMemberSite> {
+    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+        || ctx.target_triple.contains("wasm")
+        || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+    {
+        return None;
+    }
+    // The class is the candidate only: [`emit_iterator_call`] proves the
+    // receiver's family and every prototype shape at run time, so a declared
+    // or inferred class type serves as well as an exact `new C` binding (the
+    // guarded ConstFn method call picks its candidate the same way).
+    let class = ctx
+        .exact_receiver_class(object)
+        .or_else(|| crate::type_analysis::receiver_class_name(ctx, object))
+        .or_else(|| match object {
+            perry_hir::Expr::LocalGet(id) => match ctx.local_type_hint(id)? {
+                perry_hir::types::Type::Named(name) => Some(name.clone()),
+                _ => None,
+            },
+            _ => None,
+        })?;
+    let spelling = crate::codegen::static_prototype::symbol_key_spelling("@@__perry_wk_iterator")?;
+    let holder = holder_class(ctx, &class, &spelling)?;
+    if holder.own_slot.is_some() {
+        return None;
+    }
+    // The holder's class: the class on the chain whose prototype is last.
+    let &(holder_cid, _) = holder.chain.last()?;
+    let (holder_name, member) = ctx.classes.iter().find_map(|(name, c)| {
+        (ctx.class_ids.get(name) == Some(&holder_cid) && c.specialized_from.is_none())
+            .then(|| crate::codegen::static_prototype::declared_symbol_method(c, &spelling))
+            .flatten()
+            .map(|m| (name.clone(), m))
+    })?;
+    // A lowered synchronous generator (its body returns the generator record
+    // birth; the generator transform has run) with no parameters: its entry
+    // is `(callee, this)`, which is `Call(method, recv)` with no arguments.
+    if member.function.is_async
+        || !member.function.params.is_empty()
+        || perry_hir::fn_proto::body_generator_record_kind(&member.function.body)
+            != Some(perry_hir::fn_proto::GeneratorRecordKind::Sync)
+    {
+        return None;
+    }
+    let body = ctx
+        .methods
+        .get(&(holder_name, member.function.name.clone()))?;
+    Some(IteratorMemberSite {
+        cid: holder.cid,
+        chain: holder.chain,
+        holder_slot: holder.holder_slot,
+        entry: format!("{body}__eclo"),
+    })
+}
+
+/// `GetIterator(recv)` for an [`iterator_member_site`]: the receiver (a boxed
+/// `double`) is a family object of the site's class with no meta record, each
+/// prototype of the class's static chain is materialized and on its static
+/// shape (so the holder's ConstFn lane holds the declared generator body, and
+/// no prototype before it holds the key). Then the body's own entry is called
+/// with the slot's function object as the callee and the receiver as `this`:
+/// `Call(method, recv)`, the generator object. Any miss branches to `slow_l`
+/// (which must not use a value defined here); the returned `double` is the
+/// iterator, in the current block.
+pub(crate) fn emit_iterator_call(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    recv: &str,
+    site: &IteratorMemberSite,
+    slow_l: &str,
+) -> String {
+    let header = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    ) as i64;
+    let check = ctx.new_block("spreaditer.layout");
+    let check_l = ctx.block_label(check);
+    let (bits, biased) = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv);
+        let fused = crate::expr::receiver_range::emit_fused_receiver_test(blk, &bits);
+        blk.cond_br(&fused.is_object_pointer, &check_l, slow_l);
+        (bits, fused.biased)
+    };
+    ctx.current_block = check;
+    let family = ctx.new_block("spreaditer.family");
+    let family_l = ctx.block_label(family);
+    let word = {
+        let blk = ctx.block();
+        let wp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, 4);
+        let word = blk.load(I32, &wp);
+        let mp = crate::expr::receiver_range::emit_field_ptr(blk, &biased, header - 8);
+        let meta = blk.load(PTR, &mp);
+        let no_meta = blk.icmp_eq(PTR, &meta, "null");
+        blk.cond_br(&no_meta, &family_l, slow_l);
+        word
+    };
+    ctx.current_block = family;
+    let chain_b = ctx.new_block("spreaditer.chain");
+    let chain_l = ctx.block_label(chain_b);
+    let ok = emit_family_word_is(ctx, &word, site.cid);
+    ctx.block().cond_br(&ok, &chain_l, slow_l);
+    ctx.current_block = chain_b;
+    let dir = emit_class_value_dir(ctx);
+    let mut holder = String::new();
+    for &(pcid, shape_id) in &site.chain {
+        holder = emit_prototype_on_shape(
+            ctx,
+            &dir,
+            &pcid.to_string(),
+            &(shape_id as i32).to_string(),
+            slow_l,
+        );
+    }
+    ctx.pending_declares
+        .push((site.entry.clone(), DOUBLE, vec![I64, I64]));
+    let blk = ctx.block();
+    let at = blk.add(I64, &holder, &(header + 8 * site.holder_slot).to_string());
+    let sp = blk.inttoptr(I64, &at);
+    let method = blk.load(I64, &sp);
+    let callee = blk.and(I64, &method, crate::nanbox::POINTER_MASK_I64);
+    blk.call(DOUBLE, &site.entry, &[(I64, &callee), (I64, &bits)])
 }
 
 /// `i1`: the layout word `word` is class `cid`'s family layout (its
@@ -1427,4 +1713,13 @@ fn emit_object_prototype_unwritten(ctx: &mut crate::expr::FnCtx<'_>, dir: &str, 
     let unshadowed = emit_word_unshadowed(blk, &word);
     blk.cond_br(&unshadowed, &done_l, refused_l);
     ctx.current_block = done;
+}
+
+#[cfg(test)]
+pub(crate) fn callable_test_census() -> Option<perry_hir::ProtoCensus> {
+    TEST_CENSUS.with(|s| s.borrow().clone())
+}
+#[cfg(test)]
+pub(crate) fn install_callable_test_census(census: Option<perry_hir::ProtoCensus>) {
+    TEST_CENSUS.with(|s| *s.borrow_mut() = census);
 }

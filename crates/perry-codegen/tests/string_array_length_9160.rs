@@ -20,6 +20,7 @@ fn string_array_param() -> Param {
 
 fn sum_lengths() -> Function {
     let indexed_string = Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(STRINGS)),

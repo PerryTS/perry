@@ -5,14 +5,15 @@ use std::os::raw::c_int;
 use std::sync::Mutex;
 
 use perry_ffi::{
-    alloc_null_proto_object, alloc_string, get_handle, get_handle_mut, register_handle, ErrorKind,
+    alloc_null_proto_object, alloc_string, get_handle, register_handle, ErrorKind,
     GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader, TransientRootScope,
 };
 
 use crate::server::request::{handle_to_pointer_f64, IncomingMessage};
-use crate::server::response::ServerResponse;
+use crate::server::response::{response_state, response_state_mut};
 use crate::server::server::{
-    finalize_or_park_request, synthesize_default_response_if_needed, HttpPendingRequest, HttpServer,
+    finalize_or_park_request, synthesize_default_response_if_needed, with_base_server,
+    with_base_server_mut, HttpPendingRequest, HttpServer,
 };
 use crate::server::types::{
     js_handle_clear_side_tables, js_promise_run_microtasks, js_value_is_closure,
@@ -75,13 +76,22 @@ enum PromiseStage {
     Error,
 }
 
-struct PendingPromise {
-    server_handle: i64,
+/// A fetch/error promise still settling, parked on its server
+/// (`HttpServer::bun_promises`), whose scanner visits the response word and
+/// the promise.
+pub(crate) struct PendingPromise {
     request_handle: i64,
-    response_handle: i64,
+    response: f64,
     fetch_request: f64,
     promise: i64,
     stage: PromiseStage,
+}
+
+impl PendingPromise {
+    pub(crate) fn scan(&mut self, visitor: &mut GcRootVisitor<'_>) {
+        visitor.visit_nanbox_f64_slot(&mut self.response);
+        visitor.visit_i64_slot(&mut self.promise);
+    }
 }
 
 struct ResponseSnapshot {
@@ -123,8 +133,6 @@ impl ResponseSnapshot {
     }
 }
 
-static PENDING_PROMISES: std::sync::LazyLock<Mutex<Vec<PendingPromise>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
 static REQUEST_IPS: std::sync::LazyLock<Mutex<HashMap<usize, (usize, String, u16)>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -178,14 +186,6 @@ unsafe fn call_catching(f: impl FnOnce() -> f64) -> ClosureCallResult {
                 value: f64::from_bits(TAG_UNDEFINED),
                 thrown: Some(exception),
             }
-        }
-    }
-}
-
-pub(crate) fn scan_pending_roots(visitor: &mut GcRootVisitor<'_>) {
-    if let Ok(mut pending) = PENDING_PROMISES.lock() {
-        for entry in pending.iter_mut() {
-            visitor.visit_i64_slot(&mut entry.promise);
         }
     }
 }
@@ -400,6 +400,8 @@ fn invoke_error(server_handle: i64, reason: f64) -> Option<ClosureCallResult> {
 }
 
 fn apply_response(response_handle: i64, value: f64) -> bool {
+    let roots = TransientRootScope::enter();
+    let response_root = roots.root_addr(response_handle);
     let snapshot_ptr = unsafe { js_bun_http_response_snapshot_json(value) };
     let Some(snapshot_json) = read_string_header(snapshot_ptr) else {
         return false;
@@ -407,7 +409,8 @@ fn apply_response(response_handle: i64, value: f64) -> bool {
     let Some(snapshot) = ResponseSnapshot::from_json(&snapshot_json) else {
         return false;
     };
-    let Some(response) = get_handle_mut::<ServerResponse>(response_handle) else {
+    let response_handle = response_root.get();
+    let Some(response) = response_state_mut(response_handle) else {
         return false;
     };
     response.status_code = snapshot.status;
@@ -449,8 +452,11 @@ fn error_message(reason: f64) -> String {
 }
 
 fn apply_default_error(response_handle: i64, reason: f64) {
+    let roots = TransientRootScope::enter();
+    let response_root = roots.root_addr(response_handle);
     let message = error_message(reason);
-    if let Some(response) = get_handle_mut::<ServerResponse>(response_handle) {
+    let response_handle = response_root.get();
+    if let Some(response) = response_state_mut(response_handle) {
         response.status_code = 500;
         response.native_headers.insert(
             "content-type".to_string(),
@@ -472,16 +478,15 @@ fn queue_promise(
     stage: PromiseStage,
 ) {
     let entry = PendingPromise {
-        server_handle: context.server_handle,
         request_handle: context.request_handle,
-        response_handle: context.response_handle,
+        response: context.response,
         fetch_request,
         promise: promise as i64,
         stage,
     };
-    match PENDING_PROMISES.lock() {
-        Ok(mut pending) => pending.push(entry),
-        Err(_) => {
+    match with_base_server_mut(context.server_handle, move |s| s.bun_promises.push(entry)) {
+        Some(()) => {}
+        None => {
             let reason = f64::from_bits(
                 perry_ffi::error_value_with_code(
                     "Bun.serve promise queue is unavailable",
@@ -490,13 +495,13 @@ fn queue_promise(
                 )
                 .bits(),
             );
-            apply_default_error(context.response_handle, reason);
+            apply_default_error(context.response_handle(), reason);
             remove_request_ip(fetch_request);
         }
     }
 }
 
-fn settle_value(context: &HttpPendingRequest, fetch_request: f64, value: f64, stage: PromiseStage) {
+fn settle_value(context: &mut HttpPendingRequest, fetch_request: f64, value: f64, stage: PromiseStage) {
     let js_value = JsValue::from_bits(value.to_bits());
     if js_value.is_pointer() && unsafe { js_value_is_promise(value) } != 0 {
         let promise = js_value.as_pointer::<Promise>();
@@ -516,7 +521,7 @@ fn settle_value(context: &HttpPendingRequest, fetch_request: f64, value: f64, st
         }
     }
 
-    if apply_response(context.response_handle, value) {
+    if apply_response(context.response_handle(), value) {
         remove_request_ip(fetch_request);
     } else {
         let reason = f64::from_bits(
@@ -532,39 +537,49 @@ fn settle_value(context: &HttpPendingRequest, fetch_request: f64, value: f64, st
 }
 
 fn settle_failure(
-    context: &HttpPendingRequest,
+    context: &mut HttpPendingRequest,
     fetch_request: f64,
     reason: f64,
     stage: PromiseStage,
 ) {
     if matches!(stage, PromiseStage::Error) {
-        apply_default_error(context.response_handle, reason);
+        apply_default_error(context.response_handle(), reason);
         remove_request_ip(fetch_request);
         return;
     }
-    match invoke_error(context.server_handle, reason) {
+    let roots = TransientRootScope::enter();
+    let response = roots.root_nanbox(context.response);
+    let call = invoke_error(context.server_handle, reason);
+    context.response = response.get();
+    match call {
         Some(call) => {
             if let Some(thrown) = call.thrown {
-                apply_default_error(context.response_handle, thrown);
+                apply_default_error(context.response_handle(), thrown);
                 remove_request_ip(fetch_request);
             } else {
                 settle_value(context, fetch_request, call.value, PromiseStage::Error);
             }
         }
         None => {
-            apply_default_error(context.response_handle, reason);
+            apply_default_error(context.response_handle(), reason);
             remove_request_ip(fetch_request);
         }
     }
 }
 
-pub(crate) fn process_request(pending: HttpPendingRequest) {
+pub(crate) fn process_request(mut pending: HttpPendingRequest) {
     unsafe {
         js_handle_clear_side_tables(pending.request_handle);
-        js_handle_clear_side_tables(pending.response_handle);
+        if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
+            js_handle_clear_side_tables(pending.response_handle());
+        }
     }
-    let Some(fetch_request) = make_fetch_request(pending.server_handle, pending.request_handle)
-    else {
+    // Rooted for the dispatch; each JS step below writes the fresh word back.
+    let exchange_roots = TransientRootScope::enter();
+    let res_root = exchange_roots.root_nanbox(pending.response);
+    let fetch_request = make_fetch_request(pending.server_handle, pending.request_handle);
+    pending.response = res_root.get();
+    let Some(fetch_request) = fetch_request else {
         let reason = f64::from_bits(
             perry_ffi::error_value_with_code(
                 "Bun.serve could not construct the Request",
@@ -573,47 +588,65 @@ pub(crate) fn process_request(pending: HttpPendingRequest) {
             )
             .bits(),
         );
+        pending.response = res_root.get();
         settle_failure(
-            &pending,
+            &mut pending,
             f64::from_bits(TAG_UNDEFINED),
             reason,
             PromiseStage::Fetch,
         );
+        pending.response = res_root.get();
         finalize_or_park_request(&pending);
         return;
     };
 
     let call = invoke_fetch(pending.server_handle, fetch_request);
+    pending.response = res_root.get();
     if let Some(reason) = call.thrown {
-        settle_failure(&pending, fetch_request, reason, PromiseStage::Fetch);
+        settle_failure(&mut pending, fetch_request, reason, PromiseStage::Fetch);
     } else {
         let scope = TransientRootScope::enter();
         let result = scope.root_nanbox(call.value);
         unsafe {
             js_promise_run_microtasks();
         }
-        settle_value(&pending, fetch_request, result.get(), PromiseStage::Fetch);
+        pending.response = res_root.get();
+        settle_value(&mut pending, fetch_request, result.get(), PromiseStage::Fetch);
     }
+    pending.response = res_root.get();
     finalize_or_park_request(&pending);
 }
 
 /// Poll promise-returning fetch/error handlers without blocking the JS thread.
 pub(crate) fn process_pending_promises() -> i32 {
+    let roots = TransientRootScope::enter();
     let mut settled = Vec::new();
-    if let Ok(mut pending) = PENDING_PROMISES.lock() {
+    for server in crate::server::server::owned_server_handles() {
         let mut index = 0;
-        while index < pending.len() {
-            let promise = pending[index].promise as *mut Promise;
-            let state = if promise.is_null() {
+        loop {
+            let Some((request, response, promise)) = with_base_server(server, |s| {
+                s.bun_promises
+                    .get(index)
+                    .map(|e| (e.request_handle, e.response, e.promise))
+            })
+            .flatten() else {
+                break;
+            };
+            let promise_ptr = promise as *mut Promise;
+            let state = if promise_ptr.is_null() {
                 2
             } else {
-                unsafe { js_promise_state(promise) }
+                unsafe { js_promise_state(promise_ptr) }
             };
-            let handles_alive = get_handle::<IncomingMessage>(pending[index].request_handle)
-                .is_some()
-                && get_handle::<ServerResponse>(pending[index].response_handle).is_some();
+            let handles_alive = get_handle::<IncomingMessage>(request).is_some()
+                && response_state(crate::server::server::object_handle(response)).is_some();
             if state != 0 || !handles_alive {
-                settled.push((pending.remove(index), state, handles_alive));
+                if let Some(Some(entry)) =
+                    with_base_server_mut(server, |s| (index < s.bun_promises.len()).then(|| s.bun_promises.remove(index)))
+                {
+                    let response = roots.root_nanbox(entry.response);
+                    settled.push((server, entry, response, state, handles_alive));
+                }
             } else {
                 index += 1;
             }
@@ -621,15 +654,15 @@ pub(crate) fn process_pending_promises() -> i32 {
     }
 
     let count = settled.len() as i32;
-    for (entry, state, handles_alive) in settled {
+    for (server_handle, entry, response, state, handles_alive) in settled {
         if !handles_alive {
             remove_request_ip(entry.fetch_request);
             continue;
         }
-        let context = HttpPendingRequest {
-            server_handle: entry.server_handle,
+        let mut context = HttpPendingRequest {
+            server_handle,
             request_handle: entry.request_handle,
-            response_handle: entry.response_handle,
+            response: response.get(),
             skip_default_response: false,
             h2_stream_handle: 0,
             h2_stream_headers: Vec::new(),
@@ -638,7 +671,7 @@ pub(crate) fn process_pending_promises() -> i32 {
         let promise = entry.promise as *mut Promise;
         if state == 1 {
             settle_value(
-                &context,
+                &mut context,
                 entry.fetch_request,
                 unsafe { js_promise_value(promise) },
                 entry.stage,
@@ -656,7 +689,8 @@ pub(crate) fn process_pending_promises() -> i32 {
             } else {
                 unsafe { js_promise_reason(promise) }
             };
-            settle_failure(&context, entry.fetch_request, reason, entry.stage);
+            context.response = response.get();
+            settle_failure(&mut context, entry.fetch_request, reason, entry.stage);
         }
     }
     count
@@ -695,17 +729,12 @@ pub extern "C" fn js_bun_server_request_ip(server_handle: i64, request: f64) -> 
 }
 
 fn cancel_pending_for_server(server_handle: i64) {
-    let mut requests = Vec::new();
-    if let Ok(mut pending) = PENDING_PROMISES.lock() {
-        pending.retain(|entry| {
-            if entry.server_handle == server_handle {
-                requests.push(entry.fetch_request);
-                false
-            } else {
-                true
-            }
-        });
-    }
+    let requests: Vec<f64> =
+        with_base_server_mut(server_handle, |s| std::mem::take(&mut s.bun_promises))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|entry| entry.fetch_request)
+            .collect();
     for request in requests {
         remove_request_ip(request);
     }

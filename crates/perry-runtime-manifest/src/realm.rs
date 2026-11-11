@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[path = "realm_layout_facts.rs"]
 mod realm_layout_facts;
 pub use realm_layout_facts::*;
+#[path = "realm_effect.rs"]
+mod realm_effect;
+pub use realm_effect::*;
 
 pub use perry_runtime_manifest::realm_source::REALM_MANIFEST_VERSION;
 
@@ -184,6 +187,11 @@ pub struct RealmDeclaration {
     pub captures: Vec<RealmValue>,
     #[serde(default)]
     pub header: Option<RealmHeaderFacts>,
+    /// What a dynamic host array declares its elements to be
+    /// (`value = dynamic, elements = string`): the runtime puts only such
+    /// values in the array it makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements: Option<String>,
     /// The object's other names (references to this declaration, never
     /// cells of their own).
     #[serde(default)]
@@ -194,6 +202,32 @@ pub struct RealmDeclaration {
     pub constructor: Option<ConstructorFacts>,
     #[serde(default)]
     pub storage: Option<RealmStorageFacts>,
+    /// What the body does to its inputs; empty = undeclared (unknown code).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<RealmEffect>,
+    /// The body `effects` describe when it is not `body`: the function a
+    /// `provider = bound_method` member's native_module_dispatch arm calls
+    /// (source symbol, from the effects-only `realm_decl!` above it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects_body: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub throws: Vec<RealmThrowOperand>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmThrowOperand {
+    pub source: Option<String>,
+    pub argument: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmThrowDeclaration {
+    pub symbol: String,
+    pub source: String,
+    pub line: usize,
+    pub operands: Vec<RealmThrowOperand>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -201,6 +235,8 @@ pub struct RealmDeclaration {
 pub struct RealmManifest {
     pub version: u32,
     pub declarations: Vec<RealmDeclaration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub throw_declarations: Vec<RealmThrowDeclaration>,
 }
 
 /// Borrowed projection in the generated compiler table. `facts` preserves
@@ -212,6 +248,75 @@ pub struct RealmEntry {
     pub births: &'static [&'static str],
     pub module: Option<&'static str>,
     pub facts: &'static str,
+    /// The declared effects of the body (empty: undeclared, unknown code).
+    pub effects: &'static [RealmEffect],
+    /// Its own properties (`RealmDeclaration::properties`), key and value
+    /// kind, so a reader of the table needs no JSON.
+    pub own: &'static [RealmOwn],
+    /// Its [[Prototype]] (`RealmDeclaration::prototype`): the declaration a
+    /// lookup past `own` continues on; `None` ends the chain (`null`).
+    pub proto: Option<&'static str>,
+}
+
+/// An own property of a declaration in the generated compiler table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RealmOwn {
+    /// Ordinary spelling, or `@@species` for a symbol key.
+    pub key: &'static str,
+    pub symbol: bool,
+    pub value: RealmOwnValue,
+}
+
+/// What an own property holds (`RealmProperty`): a primitive of a kind,
+/// another declaration, or an accessor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmOwnValue {
+    Undefined,
+    Null,
+    Boolean,
+    Number,
+    String,
+    Symbol,
+    /// The declaration it holds (`Date.now`, `Date.prototype`).
+    Reference(&'static str),
+    /// Its getter and setter declarations.
+    Accessor {
+        get: Option<&'static str>,
+        set: Option<&'static str>,
+    },
+    /// A value the runtime computes or a raw word.
+    Other,
+}
+
+impl RealmProperty {
+    /// Const Rust for this property's `RealmOwn` in the generated table;
+    /// `p` is the path prefix of the schema module.
+    pub fn emit_own(&self, p: &str) -> String {
+        let value = match (&self.get, &self.set, &self.value) {
+            (None, None, Some(v)) => match v {
+                RealmValue::Undefined => "Undefined".into(),
+                RealmValue::Null => "Null".into(),
+                RealmValue::Boolean(_) => "Boolean".into(),
+                RealmValue::NumberBits(_) => "Number".into(),
+                RealmValue::String(_) => "String".into(),
+                RealmValue::Symbol(_) => "Symbol".into(),
+                RealmValue::Reference(r) => format!("Reference({r:?})"),
+                // A constructor identity capture (`realm_facts.rs`): a
+                // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
+                RealmValue::Int32(_)
+                | RealmValue::RawReference(_)
+                | RealmValue::Bytes(_)
+                | RealmValue::RawWord(_)
+                | RealmValue::Dynamic(_) => "Other".into(),
+            },
+            (None, None, None) => "Undefined".into(),
+            (get, set, _) => format!("Accessor {{ get: {get:?}, set: {set:?} }}"),
+        };
+        format!(
+            "{p}RealmOwn {{ key: {:?}, symbol: {}, value: {p}RealmOwnValue::{value} }}",
+            self.key, self.symbol
+        )
+    }
 }
 
 impl RealmManifest {
@@ -273,6 +378,15 @@ impl RealmManifest {
             }
         }
         for d in &self.declarations {
+            if !d.effects.is_empty() {
+                if d.body.is_none() {
+                    return Err(format!(
+                        "{}: effects on a declaration without a body",
+                        d.name
+                    ));
+                }
+                validate_effects(&d.name, &d.effects, &|name| names.contains(name))?;
+            }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &d.storage {
                 for owner in &layout.owners {
                     let birth = self

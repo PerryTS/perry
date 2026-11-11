@@ -557,7 +557,7 @@ extern "C" fn read_throws(
     _this: crate::closure::JsThis,
     _size: f64,
 ) -> f64 {
-    crate::exception::js_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
+    crate::exception::test_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
 }
 
 extern "C" fn transform_upper_callback(

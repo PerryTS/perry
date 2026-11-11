@@ -1,0 +1,21 @@
+generator true true true true true false
+async-generator true true true true true false
+ordinary true true true true true false
+arrow true true true true true false
+bound true true true true true false
+async true true true true true false
+generator-parents true true
+generator-parents true true
+DEC 250: Cannot add member Function.prototype.absent10366: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Function.prototype.getter10366: built-in objects are read-only in a compiled program
+inherited false false 0
+own true true 0
+restored true true true true true false
+null false false false false true false
+custom true true false 0
+function-parent true true
+mixed-parent true true
+has-trap trap10366
+has-trap call
+proxy true false
+poisoned true true

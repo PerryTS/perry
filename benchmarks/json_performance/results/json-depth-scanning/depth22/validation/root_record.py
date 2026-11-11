@@ -2,7 +2,7 @@ from pathlib import Path
 import os,subprocess,json,re,hashlib
 art=Path('/Users/amlug/projects/perry/codex-json-fastpaths-artifacts')
 root=Path('/Users/amlug/projects/perry/codex-json-gc-deferral')
-source=root/'test-files/test_gap_json_root_record.ts'
+source=root/'tests/fixtures/programs/test_gap_json_root_record.ts'
 binary=art/'depth22-root-record';obj=art/'test_gap_json_root_record.o'
 with (art/'depth22-root-record-link.log').open('w') as log:
  subprocess.run(['cc',str(obj),str(art/'depth22-runtime/libperry_runtime.a'),'-lc','-Wl,-dead_strip','-Wl,-no_exported_symbols','-o',str(binary)],check=True,stdout=log,stderr=subprocess.STDOUT)

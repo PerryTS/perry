@@ -91,6 +91,7 @@ impl SH for Expr {
             Expr::PrivateLexicalBrand(value) => { tag(h, 12403); value.hash(h); }
             Expr::PrivateLexicalBrandPush(value) => { tag(h, 12404); value.hash(h); }
             Expr::PrivateLexicalBrandPop => { tag(h, 12405); }
+            Expr::ThisProvenClass(class) => { tag(h, 12406); class.hash(h); }
             Expr::NewTarget => { tag(h, 12301); }
             Expr::LiteralChunks(calls) => { tag(h, 12515); calls.hash(h); }
             Expr::LiteralChunkObject => { tag(h, 12516); }
@@ -686,7 +687,7 @@ impl SH for Expr {
             Expr::WebAssemblyModuleCustomSections { module, name } => { tag(h, 12054); module.as_ref().hash(h); name.as_ref().hash(h); }
             Expr::WebAssemblyInstantiate { bytes, imports } => { tag(h, 12028); bytes.as_ref().hash(h); imports.hash(h); }
             Expr::WebAssemblyCallExport { instance, name, args, } => { tag(h, 12029); instance.as_ref().hash(h); name.as_ref().hash(h); args.hash(h); }
-            Expr::DynamicImport { paths, arg, options, byte_offset, deferred_error, synchronous } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); options.hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); }
+            Expr::DynamicImport { paths, arg, options, byte_offset, deferred_error, synchronous, deferred } => { tag(h, 12030); for p in paths { p.hash(h); } arg.as_ref().hash(h); options.hash(h); byte_offset.hash(h); deferred_error.hash(h); synchronous.hash(h); if *deferred { tag(h, 0x4446); } }
             Expr::WorkerNew { paths, filename, options, is_eval, partial } => {
                 tag(h, 12055);
                 for p in paths { p.hash(h); }

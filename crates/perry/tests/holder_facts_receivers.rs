@@ -75,9 +75,7 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> Built {
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll)
         .env("PERRY_FACTS_DUMP", &dump);
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
+    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(dir.join(files[0].0))

@@ -63,7 +63,7 @@ fn is_plain_object(value: f64) -> bool {
         return false;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    gc_header.obj_type != crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_not_array!(gc_header.obj_type)
 }
 
 fn options_ref(options: f64) -> Result<bool, f64> {
@@ -433,6 +433,6 @@ pub(crate) extern "C" fn timers_promises_scheduler(
 ) -> f64 {
     let msg = b"scheduler is not a function";
     let msg = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(boxed_ptr(err as *const u8))
+    let err = crate::error::CoreError::type_error(msg);
+    crate::exception::throw_core(err)
 }

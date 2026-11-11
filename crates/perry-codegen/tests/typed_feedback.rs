@@ -133,7 +133,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -167,11 +166,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -300,6 +302,7 @@ fn module_with_classes(
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -483,12 +486,13 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
 /// order. Matches the call, never the `declare` line, and reads the flag off
 /// the call's last operand so a test can pin WHICH mode reached the entry.
 fn put_value_set_strict_flags(ir: &str) -> Vec<&str> {
-    // The static-key store IC's one miss entry is `js_put_value_set` plus the
-    // site's publication: `(double target, i64 key, double value, i32 strict,
-    // ptr ways, ptr word)`. Its only `i32` argument is the Throw flag.
+    // The static-key store site is one `perry_store_or_put` call
+    // `(ptr dir, i64 target, i64 key, i64 hash, double value, i32 strict)`;
+    // the generic `[[Set]]` entries end in their Throw flag too.
     ir.lines()
         .filter(|line| {
             line.contains("call double @js_put_value_set(")
+                || line.contains("call double @perry_store_or_put(")
                 || line.contains("call double @js_put_value_set_packed_miss(")
         })
         .map(|line| {
@@ -672,7 +676,7 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
          (method call):\n{ir}"
     );
     assert!(
-        ir.contains("call i32 @perry_probe_set(") && ir.contains("call double @js_put_value_set("),
+        ir.contains("call double @perry_store_or_put("),
         "the by-name store itself must still be lowered in a default build:\n{ir}"
     );
 }
@@ -717,9 +721,8 @@ fn typed_feedback_guards_direct_class_field_specialization() {
     // receiver-aware `[[Set]]` behind it; one value probe with the complete
     // `[[Get]]` behind it. No class-field guard, no inline slot access.
     assert!(ir.contains("@perry_typed_shape_raw_f64_mask_"));
-    assert!(ir.contains("call i32 @perry_probe_set("));
-    assert!(ir.contains("call double @js_put_value_set("));
-    assert!(ir.contains("put.pic.set") && ir.contains("put.pic.merge"));
+    assert!(ir.contains("call double @perry_store_or_put("));
+    assert!(!ir.contains("put.pic.set") && !ir.contains("put.pic.merge"));
     for gone in [
         "class_field_set_guard",
         "js_typed_feedback_class_field_set_guard",
@@ -804,21 +807,21 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
 
     let _lock = env_lock();
 
-    // The store site is ALREADY the collapsed form in both modes: one GC-leaf
-    // `perry_probe_set` (the hit) and a cold collecting `js_put_value_set` (the
-    // miss), with no per-site cache state or class guard to outline. Forcing the
-    // full outline therefore changes nothing for it.
+    // The store site is ALREADY the collapsed form in both modes: one
+    // `perry_store_or_put` call (the probe, and on a decline the complete
+    // `[[Set]]`), with no per-site cache state or class guard to outline.
+    // Forcing the full outline therefore changes nothing for it.
     for mode in ["1", "0"] {
         let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some(mode));
         let ir = ir_for(build());
         assert_eq!(
-            ir.matches("call i32 @perry_probe_set(").count(),
+            ir.matches("call double @perry_store_or_put(").count(),
             1,
             "full-outline={mode}: one store probe:\n{ir}"
         );
         assert!(
-            ir.contains("call double @js_put_value_set("),
-            "full-outline={mode}: the cold miss is the complete [[Set]]:\n{ir}"
+            !ir.contains("call i32 @perry_probe_set("),
+            "full-outline={mode}: the probe and the complete [[Set]] are one call:\n{ir}"
         );
         assert!(!ir.contains("@js_put_value_set_packed_fast("), "{mode}");
         assert!(!ir.contains("put.pic.hit.store"), "{mode}");
@@ -1037,9 +1040,8 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
         (Expr::String("hi".to_string()), "heap pointer"),
     ] {
         let ir = ir_for(build(val));
-        assert!(ir.contains("call i32 @perry_probe_set("), "{what}:\n{ir}");
         assert!(
-            ir.contains("call double @js_put_value_set("),
+            ir.contains("call double @perry_store_or_put("),
             "{what}:\n{ir}"
         );
         assert!(!ir.contains("class_field_set.fast"), "{what}:\n{ir}");
@@ -1316,19 +1318,15 @@ fn typed_feedback_guards_array_index_specialization() {
         vec![param(1, "xs", array_ty)],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Number(0.0)),
-                value: Box::new(Expr::Number(7.0)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
-            Stmt::Return(Some(Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Number(0.0)),
-            })),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Number(0.0)),
+                Box::new(Expr::Number(7.0)),
+            )),
+            Stmt::Return(Some(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Number(0.0)),
+            ))),
         ],
     ));
 
@@ -1438,13 +1436,11 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::Number(0.0)),
-                value: Box::new(Expr::String("not-number".to_string())),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::Number(0.0)),
+                Box::new(Expr::String("not-number".to_string())),
+            )),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
                 value: Box::new(Expr::String("still-not-number".to_string())),
@@ -1467,16 +1463,14 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         "typed_feedback_computed_array.ts",
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Binary {
                 op: BinaryOp::BitAnd,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::Integer(63)),
             }),
-        }))],
+        )))],
     ));
 
     // The default lowering of a number[] read is the inline guard (receiver
@@ -1505,12 +1499,10 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         "replay.ts",
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Number(0.0)),
-        }))],
+        vec![Stmt::Return(Some(Expr::synthetic_index_get(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Number(0.0)),
+        )))],
     );
     let identity = ModuleIdentity {
         module: source.name.clone(),

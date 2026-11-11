@@ -36,7 +36,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -70,11 +69,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -143,6 +145,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -241,6 +244,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -594,17 +598,15 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                 // `js_array_fill_f64_iota_len_extend` — covered by
                 // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
                 // below.
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::Binary {
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
@@ -682,13 +684,11 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::LocalGet(2)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::LocalGet(2)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
@@ -832,13 +832,11 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(0.0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::Integer(0)),
-                value: Box::new(Expr::LocalGet(1)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::Integer(0)),
+                Box::new(Expr::LocalGet(1)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],
         Vec::new(),

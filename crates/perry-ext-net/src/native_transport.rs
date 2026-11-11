@@ -609,7 +609,13 @@ pub unsafe fn dispatch_common(event: &tl::NetCompletion) -> bool {
             if crate::payload_tls::installed(link) {
                 crate::payload_tls::wrote(owner.get(), event.len);
             } else {
-                io::wrote(owner.get(), event.user, event.len, event.queued);
+                io::wrote(
+                    owner.get(),
+                    event.user,
+                    event.len,
+                    event.queued,
+                    event.flags & tl::NET_FLAG_SYNC_WRITE != 0,
+                );
             }
         }
         tl::NET_SHUTDOWN => io::shutdown(owner.get(), event.user),

@@ -31,16 +31,21 @@ pub(crate) fn try_recv_pending_h2_nonblocking(server_handle: i64) -> Option<Http
 /// Dispatch one HTTP/2 pending request. Per the issue #604
 /// architectural change, we no longer block on the handler-returned
 /// Promise.
-pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
+pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
     let req_f64 = handle_to_pointer_f64(pending.request_handle);
-    let res_f64 = handle_to_pointer_f64(pending.response_handle);
+    // The response is rooted for the dispatch: every callback below can run
+    // a moving collection. The fresh word goes back before parking.
+    let exchange_roots = perry_ffi::TransientRootScope::enter();
+    let res_root = exchange_roots.root_nanbox(pending.response);
     // #6710 — clear a possibly-recycled handle id's per-handle JS side tables
     // before the handler observes req/res (see process_pending in server.rs).
     // The HTTP/2 stream handle is recycled from the same pool, so clear it too
     // (no-op when `h2_stream_handle == 0`).
     unsafe {
         crate::server::types::js_handle_clear_side_tables(pending.request_handle);
-        crate::server::types::js_handle_clear_side_tables(pending.response_handle);
+        if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
+            crate::server::types::js_handle_clear_side_tables(pending.response_handle());
+        }
         crate::server::types::js_handle_clear_side_tables(pending.h2_stream_handle);
     }
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
@@ -62,7 +67,7 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
             let raw = handler.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -76,7 +81,7 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
             let raw = callback as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_f64);
+                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
             }
             js_promise_run_microtasks();
         }
@@ -110,10 +115,11 @@ pub(crate) fn process_pending_h2(pending: HttpPendingRequest) {
     }
     if pending.skip_default_response {
         perry_ffi::drop_handle(pending.request_handle);
-        perry_ffi::drop_handle(pending.response_handle);
+        crate::server::server::retire_response(pending.response_handle(), None);
     } else {
         // A compat handler may resume after `drain`, a timer, or an await.
         // Keep its handles alive and let the shared pump deliver drain events.
+        pending.response = res_root.get();
         finalize_or_park_request(&pending);
     }
 }

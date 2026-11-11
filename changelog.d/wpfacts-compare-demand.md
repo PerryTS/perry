@@ -1,0 +1,1 @@
+Whole-program facts treat a strict equality test or a `switch` case against an int32 constant as an int consumer (RFC §10.3 int demand), so integer locals that are only compared, such as a ray distance, take the I32 representation (`PERRY_FACTS_COMPARE_DEMAND=0` restores the previous demand); the facts dump lists each Number local's representation inputs and each typed signature.

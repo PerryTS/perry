@@ -333,7 +333,7 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         // wrong answer, not a slow one, and it is what a poisoned name buys
         // back. A genuine proxy keeps working through the ordinary dynamic
         // property path (asserted in
-        // `test-files/test_gap_proxy_local_name_collision_7775.ts`).
+        // `tests/parity/language/object/test_gap_proxy_local_name_collision_7775.ts`).
         //
         // This subtraction is now a second line of defence, not the fix: the
         // set it edits is only the `is_proxy_local` fallback for receivers that

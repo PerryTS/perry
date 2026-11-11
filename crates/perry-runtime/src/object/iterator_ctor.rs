@@ -49,20 +49,6 @@ pub(crate) fn note_birth_keys(proto: *mut ObjectHeader) {
     }
 }
 
-/// Does `%Iterator.prototype%`'s shape lack `next`/`return`/`throw`? Keys are
-/// appended in insertion order and a delete moves the owner to an overflow
-/// (which the step proof rejects first), so only keys past the birth count can
-/// be a user addition: the pristine prototype costs one compare.
-#[inline]
-pub(crate) unsafe fn protocol_free(shape: super::shapes::ShapeRecordRef) -> bool {
-    let birth = BIRTH_KEY_COUNT.load(Ordering::Relaxed);
-    if shape.logical_key_count() <= birth {
-        return true;
-    }
-    let (slots, count) = shape_keys(shape);
-    (birth..count).all(|i| !is_protocol_key(JSValue::from_bits(*slots.add(i as usize))))
-}
-
 /// `%Iterator.prototype%`, building the iterator prototype tower on first use.
 pub(crate) fn iterator_prototype_object() -> *mut ObjectHeader {
     ensure_iterator_prototypes();

@@ -147,7 +147,7 @@ thread; test-profile overrides are `DEBUG=0`, `OPT_LEVEL=1`, `CODEGEN_UNITS=16`.
   `PERRY_GC_FORCE_EVACUATE=1`, `PERRY_GC_VERIFY_EVACUATION=1`,
   `PERRY_GC_FROMSPACE_SCAN_ABORT=1`, and `PERRY_GC_DIAG=1`: **12 copying minors**,
   with actual copied objects and no stale-pointer diagnostic. It is registered
-  in `test-parity/gc_repsel_corpus.txt`.
+  in `tests/parity/gc_repsel_corpus.txt`.
 - Seven existing array/JSON fixtures match Node: array splice spread/dispatch,
   proxy array mutators, short JSON array storage, primitive JSON arrays, JSON
   array-element overflow fields, and grown-array stringify. The queue covers

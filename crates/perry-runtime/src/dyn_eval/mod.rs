@@ -311,15 +311,15 @@ pub(crate) fn interp_restore(savepoint: u64) {
 pub(crate) fn interp_entry<R>(f: impl FnOnce() -> R) -> R {
     let saved = interp_savepoint();
     crate::dyn_eval_hooks::interp_active_enter();
-    let r = crate::exception::catch_js_throw(f);
+    let r = crate::exception::catch_thrown(f);
     crate::dyn_eval_hooks::interp_active_leave();
     match r {
         Ok(r) => r,
         Err(err) => {
-            // The exception value is a plain f64 here; nothing below
-            // allocates before `js_throw` roots it again.
+            // The caught value is unrooted here; nothing below
+            // allocates before the rethrow roots it again.
             interp_restore(saved);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }
@@ -456,6 +456,7 @@ pub(crate) fn function_from_strings_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    crate::snap_census::dyn_code(0);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     let base = roots_len();
@@ -509,6 +510,7 @@ pub(crate) fn eval_script_in_with_codegen(
     strings_allowed: bool,
     wasm_allowed: bool,
 ) -> f64 {
+    crate::snap_census::dyn_code(1);
     // Interpreted code reaches `process`/`console` by name.
     crate::object::js_install_global_value_surfaces();
     interp_entry(|| {
@@ -686,6 +688,7 @@ fn script_statements(script: &InterpFn) -> &[ast::Stmt] {
 }
 
 fn parse_script_statements(source: &str) -> Vec<ast::Stmt> {
+    crate::snap_funnel!(Parse);
     let mut cache = perry_diagnostics_cache();
     let parsed =
         perry_parser::parse_typescript_with_cache(source, "perry-vm-script.cjs", &mut cache)
@@ -776,6 +779,7 @@ fn prepare_source(source: &str) -> f64 {
     // on sloppy semantics (find-my-way assigns the undeclared `value`), and
     // module auto-detection must not kick in on `import(`-looking substrings.
     let mut cache = perry_diagnostics_cache();
+    crate::snap_funnel!(Parse);
     let parsed =
         match perry_parser::parse_typescript_with_cache(source, "perry-dyn-fn.cjs", &mut cache) {
             Ok(p) => p,

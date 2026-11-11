@@ -21,7 +21,7 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
         if !crate::proxy::is_callable_function(method.get_nanbox_f64()) {
             throw_type_error(b"Symbol(Symbol.hasInstance) is not a function");
         }
-        let called = crate::exception::catch_js_throw(|| unsafe {
+        let called = crate::exception::catch_thrown(|| unsafe {
             let args = [value.get_nanbox_f64()];
             if crate::proxy_hooks::proxy_is_proxy(method.get_nanbox_f64()) != 0 {
                 crate::proxy_hooks::call_proxy_value_with_this(
@@ -40,7 +40,7 @@ pub(super) fn proxy_instanceof(value: f64, constructor: f64) -> f64 {
         });
         match called {
             Ok(result) => crate::value::js_is_truthy(result) != 0,
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::rethrow_caught(error),
         }
     };
     f64::from_bits(if result {
@@ -67,7 +67,6 @@ pub(super) fn ordinary_proxy_has_instance(constructor: f64, value: f64) -> bool 
     ));
     if !rhs_is_object_value(prototype.get_nanbox_f64())
         && class_ref_id(prototype.get_nanbox_f64()).is_none()
-        && class_prototype_ref_id(prototype.get_nanbox_f64()).is_none()
     {
         throw_type_error(b"Function has non-object prototype in instanceof check");
     }
@@ -103,7 +102,7 @@ mod tests {
             object.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));
-        assert!(crate::exception::catch_js_throw(|| {
+        assert!(crate::exception::catch_thrown(|| {
             js_instanceof_dynamic(object.get_nanbox_f64(), noncallable.get_nanbox_f64())
         })
         .is_err());
@@ -135,7 +134,7 @@ mod tests {
             crate::value::TAG_FALSE
         );
         crate::proxy_hooks::proxy_revoke(callable.get_nanbox_f64());
-        assert!(crate::exception::catch_js_throw(|| {
+        assert!(crate::exception::catch_thrown(|| {
             js_instanceof_dynamic(instance.get_nanbox_f64(), callable.get_nanbox_f64())
         })
         .is_err());
@@ -155,7 +154,7 @@ mod tests {
             bound.get_nanbox_f64(),
             handler.get_nanbox_f64(),
         ));
-        assert!(crate::exception::catch_js_throw(|| {
+        assert!(crate::exception::catch_thrown(|| {
             js_instanceof_dynamic(instance.get_nanbox_f64(), wrapped_bound.get_nanbox_f64())
         })
         .is_err());

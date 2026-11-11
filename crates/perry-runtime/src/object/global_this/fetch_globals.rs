@@ -86,6 +86,13 @@ pub(crate) fn global_this_is_materialized() -> bool {
     THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }
 
+/// This thread's realm global's address, 0 before it exists: the census's
+/// key-granular container (design §2.10.13). Census builds only.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn thread_realm_global_addr() -> usize {
+    (THREAD_GLOBAL_THIS.with(|c| c.get()) & crate::value::POINTER_MASK) as usize
+}
+
 /// Whether `obj` is THIS thread's realm global, as opposed to the global of a
 /// `vm` context or an eval realm that `populate_global_this_builtins` also
 /// fills (each of those gets its own intrinsics).
@@ -117,9 +124,12 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // The birth joins population's no-move window (`populate_global_this_builtins`):
     // the static layout's record is one allocation that can cross an arena
     // block, and no collection may run anywhere in the bootstrap.
+    // The realm global is the runtime's, whichever init first asks for it:
+    // its own birth as well as its population (SNAP census, design §2.10.20).
+    let _realm = crate::snap_census::realm_build();
     let bootstrap_window = crate::gc::GcSuppressScope::new();
     let new_ptr = unsafe {
-        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
     } as i64;
     // Born on its static layout: every builtin key is declared, and
     // population fills the declared slots (each starts undefined).
@@ -1117,22 +1127,8 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // Request` — Next.js middleware's NextRequestHint lost the parent's
     // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
     // threw on every request.
-    let parent_is_user_ctor = {
-        let bits = parent_val.to_bits();
-        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        match bits & TAG_MASK {
-            INT32_TAG => true, // ClassRef
-            POINTER_TAG => {
-                let p = (bits & PTR_MASK) as usize;
-                crate::closure::is_closure_ptr(p)
-                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
-            }
-            _ => false,
-        }
-    };
+    let parent_is_user_ctor = crate::closure::is_closure_bits(parent_val.to_bits())
+        || super::super::class_registry::is_class_object_value(parent_val);
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
             if parent_is_user_ctor || !parent_missing {
@@ -1250,23 +1246,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             let mut callee = parent_val;
             let bits = parent_val.to_bits();
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            let usable = if bits & TAG_MASK == POINTER_TAG {
-                let p = (bits & PTR_MASK) as usize;
-                // A real callability test for the remaining pointer values.
-                // The prior `class_id != 0` accepted any
-                // pointer-tagged object with a class id — including non-callable
-                // instances — so a stale captured slot holding one of those
-                // skipped the `parent_closure_in_chain` recovery below and
-                // dispatched `js_native_call_value` on a non-function.
-                crate::closure::is_closure_ptr(p)
-            } else {
-                // INT32-tagged ClassRefs route through the static super paths
-                // before reaching here; anything else (undefined / a stale
-                // numeric slot) is not a constructor.
-                bits & TAG_MASK == 0x7FFE_0000_0000_0000
-            };
+            let usable = crate::closure::is_closure_bits(bits);
             if !usable && parent_missing {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     let cid = crate::object::js_object_get_class_id(obj);

@@ -410,17 +410,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Fresh closures can install boxed and ordinary captures in bulk.
             // The runtime roots and refreshes every word on its collecting arm.
             let bulk_fresh_init = !no_capture_singleton && !captured_singleton && total_caps > 0;
-            // An `async function(){}` *expression* closure (one with no
-            // `await` — bodies that await are rewritten to a state machine
-            // upstream and arrive with `is_async: false`) is async in its
-            // info, so `IsConstructor`/`util.types.isAsyncFunction` recognize
-            // it and its ShapeId names %AsyncFunction.prototype% at birth.
-            // Generators are hoisted to top-level and described elsewhere.
-            // (Test262 subclass/superclass-async-function.)
-            if *is_async {
-                ctx.block()
-                    .note_fn_info(&func_name, |facts| facts.set_async());
-            }
+            // The function object's kind (`%AsyncFunction.prototype%` and the
+            // generator kinds) is in its info from `artifacts.rs`, which reads
+            // `perry_hir::fn_proto::FnProtoKind` for every closure body.
             // A small fresh birth passes the complete header image and its
             // capture words in registers. The shared helper stores directly in
             // the final payload; there is no per-site bump path or stack copy.

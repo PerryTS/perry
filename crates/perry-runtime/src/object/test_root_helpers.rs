@@ -107,6 +107,8 @@ pub(crate) fn test_materialize_realm_owned_roots() {
         "globalThis bootstrap did not run"
     );
     iterator_prototypes::ensure_iterator_prototypes();
+    // The storage areas are made by the first read of their globals.
+    crate::web_storage::test_read_storage_globals();
     unsafe {
         let _ = http_methods_array();
         let _ = create_fs_constants_object();

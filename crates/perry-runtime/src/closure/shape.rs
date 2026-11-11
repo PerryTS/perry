@@ -30,8 +30,9 @@ use crate::object::shapes::{self, ShapeObjectKind};
 pub(crate) use perry_abi::intrinsic_serials::{
     INTRINSIC_SERIAL_ARRAY_PROTOTYPE, INTRINSIC_SERIAL_ASYNC_FUNCTION,
     INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION, INTRINSIC_SERIAL_CLASS_CONSTRUCTOR_MARKER,
-    INTRINSIC_SERIAL_DUPLEX_PROTOTYPE, INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE,
-    INTRINSIC_SERIAL_FUNCTION, INTRINSIC_SERIAL_GENERATOR_FUNCTION, INTRINSIC_SERIAL_IMMEDIATE,
+    INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE, INTRINSIC_SERIAL_DUPLEX_PROTOTYPE,
+    INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE, INTRINSIC_SERIAL_FUNCTION,
+    INTRINSIC_SERIAL_GENERATOR_FUNCTION, INTRINSIC_SERIAL_IMMEDIATE,
     INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE, INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
     INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER, INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE,
     INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE, INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH,
@@ -269,7 +270,11 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
     // A sealed native constructor's own bag also describes its parent
     // link. Accessors, symbols, deletes and relinks all reach this funnel,
     // including constructors already on FunctionDictionary.
-    crate::object::builtin_proto::note_write((*closure).props, "function own state");
+    crate::object::builtin_proto::note_write(
+        (*closure).props,
+        crate::object::builtin_proto::Mutation::Publication,
+        "function own state",
+    );
     let dict = function_dictionary_shape();
     let id = (*closure).shape_id;
     // A class function object keeps its (sticky, dictionary-kind) class shape.
@@ -398,7 +403,11 @@ pub(crate) unsafe fn closure_link_on_shape(ptr: usize, proto_bits: u64) -> bool 
         return false;
     };
     shapes::write_identity_word(proto_id, proto_bits);
-    crate::object::builtin_proto::note_write((*closure).props, "function own state");
+    crate::object::builtin_proto::note_write(
+        (*closure).props,
+        crate::object::builtin_proto::Mutation::Relink,
+        "function own state",
+    );
     refresh_closure_shape_as(ptr, Some(proto_id));
     true
 }

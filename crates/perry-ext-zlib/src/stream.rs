@@ -22,6 +22,7 @@ extern "C" {
     fn js_zlib_brotli_max_output_length(opts: f64) -> usize;
     fn js_zlib_brotli_dictionary(opts: f64) -> f64;
     fn js_zlib_brotli_quality(opts: f64) -> i32;
+    fn js_zlib_brotli_large_window(opts: f64) -> i32;
     fn js_zlib_gzip_codec_options(opts: f64) -> f64;
     fn js_zlib_gzip_base_options(opts: f64) -> f64;
     fn js_zlib_gzip_transform_options(opts: f64, phase: i32) -> f64;
@@ -272,9 +273,10 @@ pub unsafe extern "C" fn js_zlib_brotli_decompress_sync(data_bits: i64, options:
     let options = roots.root_nanbox(options);
     let dictionary = copy_dictionary(js_zlib_brotli_dictionary(options.get()));
     let limit = js_zlib_brotli_max_output_length(options.get());
+    let large_window = js_zlib_brotli_large_window(options.get()) != 0;
     js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
     match read_input_from_bits(data.get().to_bits() as i64)
-        .map(|d| brotli_codec::decompress(&d, dictionary, limit))
+        .map(|d| brotli_codec::decompress(&d, dictionary, limit, large_window))
     {
         Some(Ok(out)) => value_bytes(&out),
         Some(Err(brotli_codec::DecodeError::OutputLimit)) => perry_ffi::throw_with_code(
@@ -818,11 +820,14 @@ unsafe fn create_stream(
         }
         None => driver::Payload::new(codec, level, chunk_size),
     };
-    let codec_payload = if zstd {
+    let mut codec_payload = if zstd {
         codec_payload.unwrap_or_else(|err| throw_zstd_error(&err))
     } else {
         codec_payload.unwrap()
     };
+    if matches!(codec, Codec::BrotliDecompress) && js_zlib_brotli_large_window(opts.get()) != 0 {
+        codec_payload.allow_brotli_large_window();
+    }
     let native_bytes = codec_payload.external_bytes();
     let owner = if let Some(owner) = existing {
         assert!(np::attach(owner.get(), family, codec_payload, native_bytes));

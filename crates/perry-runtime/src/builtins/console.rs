@@ -484,15 +484,13 @@ fn console_undefined() -> f64 {
 
 fn throw_plain_console_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 fn throw_console_symbol_to_string_type_error() -> ! {
     let message = b"Cannot convert a Symbol value to a string";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn console_is_callable(value: f64) -> bool {
@@ -800,6 +798,8 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     // Capture wall-clock start before any string decoding or TLS overhead
     // so the stored Instant reflects the call site, not the bookkeeping cost.
     let start = Instant::now();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.console_time", 0);
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(
         #[inline(never)]
@@ -820,9 +820,7 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
 fn console_type_error_for_symbol_label() -> ! {
     let msg = "Cannot convert a Symbol value to a string";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 fn console_label_from_value(value: f64) -> *const StringHeader {
@@ -891,8 +889,7 @@ fn throw_console_writable_stream(stream_name: &str) -> ! {
     let bytes = msg.as_bytes();
     let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_CONSOLE_WRITABLE_STREAM");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// True when `value` is callable, matching Node's `typeof x === "function"`.

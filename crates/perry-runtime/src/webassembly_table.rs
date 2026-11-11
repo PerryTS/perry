@@ -54,7 +54,7 @@ fn table_context<'scope>(
 }
 
 fn table_receiver_error(api: &str) -> ! {
-    crate::exception::js_throw(wasm_type_error_value(&format!(
+    crate::exception::throw_core(wasm_type_error(&format!(
         "WebAssembly.Table.{api}(): Receiver is not a WebAssembly.Table"
     )))
 }
@@ -209,7 +209,7 @@ pub(super) extern "C" fn js_webassembly_table_set(this: f64, index: f64, value: 
             crate::array::js_array_set_f64(values_ptr, index as u32, value);
         }
     } else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table.set(): value is not a WebAssembly function",
         ));
     }
@@ -353,7 +353,8 @@ fn publish_table_state(table: f64, values: f64, inst: *mut c_void, name: f64) {
     let name = scope.root_nanbox_f64(name);
     let state = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc_with_length(3)));
     let state_ptr = JSValue::from_bits(state.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
+        .as_pointer::<crate::array::ArrayHeader>()
+        as *mut crate::array::ArrayHeader;
     crate::array::js_array_set_f64(state_ptr, STATE_VALUES, values.get_nanbox_f64());
     crate::array::js_array_set_f64(state_ptr, STATE_INST, inst as usize as f64);
     crate::array::js_array_set_f64(state_ptr, STATE_NAME, name.get_nanbox_f64());

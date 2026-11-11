@@ -1,0 +1,6 @@
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+break 1,2
+ret 2 closes 0
+DEC 250: Cannot add member Object.prototype.return: built-in objects are read-only in a compiled program
+objproto 1,2
+closes 0

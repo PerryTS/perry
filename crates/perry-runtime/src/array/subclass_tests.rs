@@ -434,7 +434,7 @@ fn dense_array_subclass_numeric_tail_store_preserves_tagged_fallbacks() {
     js_array_push_f64(obj as *mut ArrayHeader, 11.0);
     assert_eq!(array_subclass_fast_pop(receiver), Some(11.0));
 
-    let tagged_i32 = f64::from_bits(crate::value::JSValue::int32(123).bits());
+    let tagged_i32 = f64::from(123);
     assert_eq!(
         array_subclass_fast_push_one(receiver, tagged_i32),
         Some(1.0)
@@ -462,15 +462,15 @@ fn dense_array_subclass_numeric_tail_store_preserves_tagged_fallbacks() {
         Some(sso.to_bits())
     );
 
-    // Class references deliberately share INT32_TAG with small integers. The
-    // class registry is the disambiguating guard used by value_bits_to_number.
+    // A constructor is its function object and must retain its pointer bits
+    // through the barriered array path.
     unsafe { crate::object::js_register_class_id(class_id) };
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | u64::from(class_id));
+    let class_ref = crate::object::class_value::class_value(class_id);
     assert_eq!(array_subclass_fast_push_one(receiver, class_ref), Some(1.0));
     assert_eq!(
         array_subclass_fast_index_get(receiver, 0).map(f64::to_bits),
         Some(class_ref.to_bits()),
-        "a ClassRef must keep its tag for downstream property dispatch"
+        "a class function object must keep its pointer for property dispatch"
     );
     assert_eq!(
         array_subclass_fast_pop(receiver).map(f64::to_bits),
@@ -960,6 +960,14 @@ fn fused_ecs_guard_requires_distinct_owning_u32_columns_and_exact_entity_ids() {
     );
     assert_eq!(facts[7], left as u64);
     assert_eq!(facts[8], right as u64);
+    // Admission validates the entity ids; it never re-encodes them. A Number
+    // element stays the raw f64 (one encoding), never an INT32 word.
+    for (index, expected) in [3.0f64, 12.0, 7.0].into_iter().enumerate() {
+        let word = array_subclass_fast_index_get(receiver_h.get_nanbox_f64(), index as u32)
+            .expect("dense element")
+            .to_bits();
+        assert_eq!(word, expected.to_bits(), "element {index} after mode-2 admission");
+    }
     assert_eq!(
         js_packed_ecs_u32_loop_guard(
             receiver_h.get_nanbox_f64(),

@@ -80,7 +80,10 @@ mod de {
         )
     }
     pub(super) fn validate_module_source(source: &str) -> bool {
-        perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_ok()
+        {
+            crate::snap_funnel!(Parse);
+            perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_ok()
+        }
     }
 }
 
@@ -429,14 +432,12 @@ fn throw_vm_type(message: &str) -> f64 {
 
 fn throw_type_error_no_code(message: &str) -> f64 {
     let msg = string_ptr(message);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_reference_error_no_code(message: &str) -> f64 {
     let msg = string_ptr(message);
-    let err = crate::error::js_referenceerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg))
 }
 
 fn throw_vm_module_cached_data_rejected() -> f64 {
@@ -727,14 +728,12 @@ fn build_import_env(module: *mut ObjectHeader) -> HashMap<String, f64> {
 
 fn throw_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_syntax(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 fn rust_string_from_header(ptr: *const StringHeader) -> Option<String> {
@@ -853,11 +852,11 @@ fn with_source_location(options: &SourceOptions, f: impl FnOnce() -> f64) -> f64
         (options.line_offset as i64 + 1).max(1) as u32,
         (options.column_offset as i64 + 1).max(1) as u32,
     )));
-    let result = crate::exception::js_call_catching(f);
+    let result = crate::exception::catch_thrown(f);
     crate::error::replace_runtime_source_location(old);
     match result {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 

@@ -200,11 +200,21 @@ pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
 /// `getPrototypeOf(socket)` can run before user code has ever read
 /// `net.Socket.prototype`.
 fn net_socket_prototype_value() -> f64 {
-    let ctor = crate::object::bound_native_callable_export_value(
+    native_export_prototype_value(
         &crate::object::native_module::namespaces::net::NM_NET,
         "net",
         "Socket",
-    );
+    )
+}
+
+/// `<module>.<export>.prototype`, read the same way as
+/// [`net_socket_prototype_value`] so it is the object user code sees.
+pub(crate) fn native_export_prototype_value(
+    vt: &'static crate::object::native_module::NativeModuleVtable,
+    module: &str,
+    export: &str,
+) -> f64 {
+    let ctor = crate::object::bound_native_callable_export_value(vt, module, export);
     if !crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -368,12 +378,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // null (15.2.3.2-1*).
     {
         let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
-        // An INT32-tagged value may be a class ref (same 0x7FFE tag as small
-        // integers) — those must keep flowing to the class resolution below.
-        let is_class_ref = super::super::class_ref_id(obj_value).is_some();
-        let wrapper = if is_class_ref {
-            None
-        } else if jv.is_number() {
+        let wrapper = if jv.is_number() {
             Some("Number")
         } else if jv.is_any_string() {
             Some("String")
@@ -437,6 +442,12 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
                     return proto;
                 }
+            }
+            // Registry-backed HTTP messages inherit their Node prototype unless
+            // user code recorded a replacement (including null).
+            if let Some(proto) = crate::object::http_handle_prototype::of_handle(raw_addr as usize)
+            {
+                return proto;
             }
             if let Some(dispatch) = super::super::class_registry::handle_prototype_dispatch() {
                 let proto = unsafe { dispatch(raw_addr as i64) };
@@ -582,67 +593,6 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             crate::value::js_nanbox_pointer(parent as i64)
         };
     }
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
-        // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
-        // derived answer below — it IS the constructor's [[Prototype]].
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            let static_proto = super::super::class_registry::class_static_prototype(class_id);
-            if !static_proto.is_null() {
-                return f64::from_bits(
-                    crate::value::js_nanbox_pointer(static_proto as i64).to_bits(),
-                );
-            }
-            if super::super::class_registry::class_static_prototype_is_nulled(class_id) {
-                return f64::from_bits(TAG_NULL);
-            }
-        }
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            // A class whose heritage is a runtime function value has no Perry
-            // parent class id. Its constructor's [[Prototype]] is that exact
-            // function object (not Function.prototype), as observed by
-            // Object.getPrototypeOf(D) and static `super` lookup.
-            let dynamic_parent = super::super::js_get_dynamic_parent_value(class_id);
-            let parent_value = crate::value::JSValue::from_bits(dynamic_parent.to_bits());
-            if !parent_value.is_undefined() && !parent_value.is_null() {
-                return dynamic_parent;
-            }
-        }
-        if let Some(parent_id) = get_parent_class_id(class_id) {
-            // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
-            // sentinel, not a real class. A prior `Object.create(proto)` whose
-            // `proto` was a native-module namespace object registered it as a
-            // synthetic class's parent. Returning the raw sentinel as an
-            // INT32-tagged class ref (`-2`) trips `Object.create` with
-            // `TypeError: Object prototype may only be an Object or null: -2`.
-            // Treat it as a root: a native-module namespace's [[Prototype]] is
-            // %Object.prototype%, so the synthetic class whose proto was that
-            // namespace inherits Object.prototype too.
-            // A builtin parent id (`extends Error`) is not a compiled class
-            // and never gets a class function object: its constructor is the
-            // dynamic parent value above, and without one this is a root.
-            if parent_id != 0
-                && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
-                && crate::object::is_class_id_registered(parent_id)
-            {
-                return crate::object::class_value::class_value(parent_id);
-            }
-        }
-        // Root of the class hierarchy. In JS `Object.getPrototypeOf` of a base
-        // class *constructor* is `Function.prototype`, and of a base class's
-        // `.prototype` object is `Object.prototype` — NOT null. class-transformer
-        // walks `Object.getPrototypeOf(target.prototype.constructor)` and then
-        // dereferences `.prototype` on the result; the old `null` made that
-        // `null.prototype` throw, blocking class-transformer/class-validator on
-        // any flat (no-`extends`) DTO. (#420 followup)
-        if super::super::class_prototype_ref_id(obj_value).is_some() {
-            let proto = crate::object::builtin_prototype_value("Object");
-            if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                return proto;
-            }
-            return f64::from_bits(TAG_NULL);
-        }
-        return function_prototype_or_null();
-    }
     // Heap-pointer receiver — return the input value itself. For
     // class-id-tagged instances, `.constructor` then returns the class
     // ref (via the constructor intercept in js_object_get_field_by_name,
@@ -737,7 +687,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                         return proto;
                     }
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_array!((*gc).obj_type) {
                     if let Some(proto) =
                         super::super::array_get_prototype_of_addr(raw_addr as usize)
                     {
@@ -999,7 +949,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
             }
-            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc).obj_type) {
                 if let Some(proto) = super::super::array_get_prototype_of_addr(bits as usize) {
                     return proto;
                 }

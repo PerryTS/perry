@@ -115,7 +115,7 @@ const OBJECT_PROTOTYPE_KEYS: &[&str] = &[
 
 /// The module's prototype facts, derived once from its HIR, and the
 /// layouts its lowered code used (the emission's input).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModuleCreateFamilies {
     prefix: String,
     /// Prototype bindings the compiler follows.
@@ -785,11 +785,20 @@ fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
         Expr::Object(props) => props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         _ => return None,
     };
+    literal_descriptor_attrs(&fields)
+}
+
+/// The attribute entry a literal property descriptor with these fields
+/// (name, value) gives a NEW key: getter and setter presence, and literal
+/// booleans (absent ones default to false). `None` when a field is not one
+/// the compiler reads. Shared by prototype images and class families
+/// (`layout_families`: a constructor's `Object.defineProperty(this, ...)`).
+pub(crate) fn literal_descriptor_attrs(fields: &[(&str, &Expr)]) -> Option<u8> {
     let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
     let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
     let mut accessor = 0u8;
     let mut data = false;
-    for (name, value) in fields {
+    for &(name, value) in fields {
         let flag = match value {
             Expr::Bool(b) => Some(*b),
             _ => None,
@@ -1063,4 +1072,23 @@ fn static_store(e: &Expr) -> Option<(u32, &str)> {
         },
         _ => None,
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState(ModuleCreateFamilies);
+pub(crate) fn callable_state() -> CallableState {
+    let mut state = MODULE_CREATE_FAMILIES.with(|s| s.borrow().clone());
+    state.used.clear();
+    CallableState(state)
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CREATE_FAMILIES.with(|s| *s.borrow_mut() = self.0.clone());
+    }
+}
+pub(crate) fn take_callable_effects() -> BTreeMap<String, Site> {
+    MODULE_CREATE_FAMILIES.with(|s| std::mem::take(&mut s.borrow_mut().used))
+}
+pub(crate) fn merge_callable_effects(uses: BTreeMap<String, Site>) {
+    MODULE_CREATE_FAMILIES.with(|s| s.borrow_mut().used.extend(uses));
 }

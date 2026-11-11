@@ -26,11 +26,12 @@ pub(crate) unsafe fn write_number(buf: &mut String, value: f64) {
     }
     // An int32 is NaN-boxed (INT32_TAG = 0x7FFE); its bits ARE an IEEE NaN, so it
     // would otherwise fall into the `is_nan()` → "null" arm below and silently
-    // drop the value. Decode and emit the signed integer. Integer columns from
-    // the sqlite binding (and other int32-tagged numbers) funnel here; numeric
-    // literals are stored as plain f64 doubles by codegen and never take this
-    // branch. Mirrors the BigInt funnel above.
-    if (value.to_bits() & 0xFFFF_0000_0000_0000) == INT32_TAG {
+    // drop the value. Decode and emit the signed integer. No Number producer
+    // makes such a word today: sqlite integer columns are raw doubles
+    // (`perry-stdlib` sqlite `bind.rs` tests, #6561), and so are codegen's
+    // numbers (P3 B1 audit, perry-wpfacts/NUM_SEEDS.md). The arm stays until
+    // P3 B4b deletes the INT32 consumers. Mirrors the BigInt funnel above.
+    if crate::value::is_int32_bits(value.to_bits()) {
         let n = (value.to_bits() & INT32_MASK) as u32 as i32;
         let mut itoa_buf = itoa::Buffer::new();
         super::stringify_copy::push_str(buf, itoa_buf.format(n));
@@ -231,10 +232,7 @@ pub(crate) unsafe fn serialize_bigint(value: f64, buf: &mut String) {
 pub(crate) fn throw_bigint_serialize() -> ! {
     let msg = "Do not know how to serialize a BigInt";
     let msg_ptr = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-    crate::exception::js_throw(f64::from_bits(
-        POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr))
 }
 
 #[cfg(test)]

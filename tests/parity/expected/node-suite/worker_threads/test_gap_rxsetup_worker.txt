@@ -1,0 +1,6 @@
+main before ["abc",0,"a_b","a_b"]
+plain: before [abc] ["abc",0,"abc",[]] ## before [a+b+c] ["a_b_c",0,"a_b+c",[]]; exit 0
+main between ["abc",0,"a_b","a_b"]
+patched: error DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed); exit 1
+main after ["abc",0,"a_b","a_b"]
+plain: before [abc] ["abc",0,"abc",[]] ## before [a+b+c] ["a_b_c",0,"a_b+c",[]]; exit 0

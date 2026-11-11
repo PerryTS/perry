@@ -127,11 +127,8 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     // reinstall the parent's stronger lane claim without checking that value.
     let fields =
         (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64;
-    for slot in 0..(*parent)
-        .live_inline_slot_count
-        .min(crate::object::field_rep::REP_SLOTS)
-    {
-        let rep = crate::object::field_rep::slot_rep((*parent).rep, slot);
+    for slot in 0..(*parent).live_inline_slot_count {
+        let rep = (*parent).lane(slot);
         let bits = *fields.add(slot as usize);
         match rep {
             crate::object::field_rep::REP_ANY => {}

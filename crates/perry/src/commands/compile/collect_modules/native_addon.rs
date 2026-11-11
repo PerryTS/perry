@@ -181,7 +181,17 @@ fn forbidden_node_import(name: &str) -> bool {
         || name.contains("Nan::")
 }
 
-fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
+/// Validate an approved addon binary and read its reach and Node-API imports.
+///
+/// Perry C host functions are exported for every linked addon because dynamic
+/// dependencies can reference them without listing them in this binary's
+/// imports.
+fn validate_node_api_binary(
+    path: &std::path::Path,
+) -> Result<(
+    std::collections::BTreeSet<perry_runtime_manifest::NodeApiReach>,
+    std::collections::BTreeSet<String>,
+)> {
     let bytes = fs::read(path)?;
     let file = object::File::parse(&*bytes).map_err(|error| {
         anyhow::anyhow!(
@@ -201,7 +211,13 @@ fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
             );
         }
     }
-    Ok(())
+    let inspect = |error: anyhow::Error| {
+        anyhow::anyhow!("cannot inspect imports for `{}`: {error}", path.display())
+    };
+    Ok((
+        imports::addon_reach(&file).map_err(inspect)?,
+        imports::node_api_imports(&file).map_err(inspect)?,
+    ))
 }
 
 fn path_is_inside_node_modules(path: &std::path::Path) -> bool {
@@ -224,7 +240,7 @@ pub(super) fn collect_node_addon_request(
         // Keep project entries in a namespace that cannot collide with the
         // existing `<package>/<entry>` logical-id scheme.
         let logical_id = format!("$project/{project_path}");
-        validate_node_api_binary(canonical)?;
+        let (reach, node_api_imports) = validate_node_api_binary(canonical)?;
         let package_dir = canonical
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -243,6 +259,10 @@ pub(super) fn collect_node_addon_request(
                 package_dir,
                 entry_relative,
                 ship_package_payload: false,
+                reach,
+                node_api_imports,
+                #[cfg(feature = "target-wasi")]
+                wasm_archives: Vec::new(),
             });
         return Ok(Some(logical_id));
     }
@@ -271,7 +291,7 @@ pub(super) fn collect_node_addon_request(
             actual_package,
         );
     };
-    validate_node_api_binary(canonical)?;
+    let (reach, node_api_imports) = validate_node_api_binary(canonical)?;
     let entry_relative = canonical
         .strip_prefix(&package_root)
         .unwrap_or(canonical)
@@ -291,8 +311,52 @@ pub(super) fn collect_node_addon_request(
             package_dir: package_root,
             entry_relative,
             ship_package_payload: true,
+            reach,
+            node_api_imports,
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
         });
     Ok(Some(logical_id))
+}
+
+/// WASI: record the addon at `entry` (a `.node` path inside the approved
+/// package at `package_root`) that the program links from its declared wasm32
+/// archives. Its logical id is the native one, `<package>/<entry>`, so the same
+/// requests resolve to it; no `.node` file needs to exist.
+pub(super) fn collect_linked_wasm_addon(
+    ctx: &mut CompilationContext,
+    package_root: &std::path::Path,
+    entry: &str,
+    _archives: Vec<PathBuf>,
+) -> Result<()> {
+    let (actual_package, version) = package_identity_from_package_json(package_root)
+        .unwrap_or_else(|| (package_root.display().to_string(), "0.0.0".to_string()));
+    let Some(owner_package) = approved_owner_package(ctx, package_root, &actual_package) else {
+        return Ok(());
+    };
+    let entry_relative = PathBuf::from(entry);
+    let logical_id = format!(
+        "{}/{}",
+        actual_package,
+        normalized_relative(&entry_relative)
+    );
+    ctx.native_addons
+        .entry(logical_id.clone())
+        .or_insert_with(|| NativeAddonModule {
+            logical_id,
+            package: owner_package,
+            version,
+            source_path: package_root.join(&entry_relative),
+            package_dir: package_root.to_path_buf(),
+            entry_relative,
+            ship_package_payload: false,
+            // The wasm32 archives' imports are not read: open.
+            reach: [perry_runtime_manifest::NodeApiReach::World].into(),
+            node_api_imports: Default::default(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: _archives,
+        });
+    Ok(())
 }
 
 /// Returns true exactly for `.node` inputs handled as sidecar graph members so

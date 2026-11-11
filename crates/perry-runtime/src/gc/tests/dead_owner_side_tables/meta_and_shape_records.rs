@@ -368,6 +368,7 @@ fn test_descriptor_meta_summary_survives_copied_minor_move() {
     js_shadow_slot_set(0, 0);
 }
 
+#[cfg(target_pointer_width = "64")]
 /// #8067: an owned keys array's append-reallocation may migrate its validated
 /// slot-index accelerator, but must neither repoint nor eagerly delete the old
 /// immutable descriptor. A sibling naming it remains valid; otherwise weak
@@ -630,6 +631,7 @@ fn test_forwarded_keys_capacity_cannot_disturb_the_descriptor_rewrite() {
     crate::object::shapes::test_clear_shape_table();
 }
 
+#[cfg(target_pointer_width = "64")]
 /// DirtyHeaderSlotScan retains enumerated raw slot pointers between budgeted
 /// work units, and descriptor-table growth in that mutator window must not
 /// invalidate any saved pointer. #8067 answered that by refusing to enumerate

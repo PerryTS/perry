@@ -15,12 +15,16 @@ use std::sync::OnceLock;
 mod attributes;
 mod credentials;
 mod env_misc;
+mod environment;
+#[cfg(test)]
+mod environment_tests;
 mod exec_env;
 mod metadata_values;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
-    run_process_exit_sequence, scan_process_env_cache_roots_mut, schedule_warning,
+    refresh_process_env, run_process_exit_sequence, scan_process_env_cache_roots_mut,
+    schedule_warning,
 };
 mod finalization;
 pub(crate) mod ipc;
@@ -38,6 +42,19 @@ pub use credentials::{
 };
 pub(crate) use ipc::*;
 pub use worker_restrictions::WorkerProcessState;
+
+/// Native child launches retain raw OS inheritance unless the agent owns a
+/// private backing. Cloning releases its lock before option coercion or GC.
+pub(crate) fn private_environment_snapshot() -> Option<Vec<(String, String)>> {
+    match environment::current() {
+        environment::Environment::Os => None,
+        private => Some(private.entries()),
+    }
+}
+
+pub(crate) fn effective_environment_var(name: &str) -> Option<String> {
+    environment::get(name)
+}
 
 // ── env_misc re-exports (preserve `crate::process::*` paths) ────────────────
 pub use env_misc::{
@@ -406,6 +423,8 @@ pub(crate) fn module_builtin_modules_array() -> f64 {
 }
 
 fn process_exec_argv_value() -> f64 {
+    crate::effect!(host_read, argv);
+    crate::snap_funnel!(ExecArgv);
     static EXEC_ARGV: OnceLock<Vec<String>> = OnceLock::new();
     let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
@@ -452,6 +471,7 @@ pub(crate) fn process_argv0_string() -> String {
 /// example, after unlinking the executable). Windows already supplies an
 /// absolute path, and canonicalize would introduce a verbatim-path prefix.
 pub(crate) fn process_exec_path_string() -> String {
+    crate::snap_funnel!(ExecPath);
     std::env::current_exe()
         .map(|exe| {
             #[cfg(unix)]
@@ -733,15 +753,13 @@ pub(crate) fn module_get_named_field(obj: *const crate::object::ObjectHeader, na
 
 pub(crate) fn module_throw_plain_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(crate) fn module_throw_syntax_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_syntaxerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg))
 }
 
 pub(crate) fn module_validate_bool_property(value: f64, name: &str) -> Option<bool> {
@@ -772,7 +790,7 @@ pub(crate) fn is_array_value(jv: JSValue) -> bool {
         return false;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(gc_header.obj_type)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -853,7 +871,10 @@ pub fn process_metadata_property(property: &str) -> Option<f64> {
         "stdin" | "stdout" | "stderr" => process_stdio_property(property)?,
         "allowedNodeEnvironmentFlags" => report::process_allowed_flags_value(),
         "argv0" => module_string_value(&process_argv0_string()),
-        "execPath" => module_string_value(&process_exec_path_string()),
+        "execPath" => {
+            crate::snap_host_value!(2);
+            module_string_value(&process_exec_path_string())
+        }
         "config" => report::process_config_value(),
         "debugPort" => 9229.0,
         "execArgv" => process_exec_argv_value(),

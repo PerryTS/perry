@@ -245,6 +245,7 @@ unsafe fn install(obj: *mut ObjectHeader, t: *mut Table) {
     );
     (*obj).parent_class_id |= SHADOW_BIT;
     super::proto_validity::note_object_own_keys_changed(obj as usize);
+    crate::snap_census::attached(obj as usize, &[meta as usize, t as usize]);
 }
 
 /// Establish order authority once, copying keys and recording slot references.
@@ -438,6 +439,17 @@ pub(crate) unsafe fn insert_key_bits(
     };
     let slot = hit.unwrap_or((*t).length);
     if slot == (*t).length {
+        // DEC 250: an appended entry is a key add (also the re-add of a
+        // deleted layout key, whose fixed slot this entry re-attaches),
+        // reported while nothing has changed; an add-locked intrinsic refuses it.
+        crate::object::builtin_proto::note_write(
+            owner.get_raw_mut_ptr::<ObjectHeader>(),
+            crate::object::builtin_proto::Mutation::Add(crate::object::builtin_proto::Key::Value(
+                f64::from_bits(key),
+            )),
+            "overflow key add",
+        );
+        let t = table(owner.get_raw_mut_ptr::<ObjectHeader>());
         *key_at(t, slot) = key;
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;

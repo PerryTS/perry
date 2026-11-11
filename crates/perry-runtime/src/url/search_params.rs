@@ -177,10 +177,7 @@ fn throw_invalid_query_pair_tuple() -> ! {
     let msg = b"Each query pair must be an iterable [name, value] tuple";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_TUPLE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn throw_missing_args(name_and_value: bool) -> ! {
@@ -191,8 +188,7 @@ fn throw_missing_args(name_and_value: bool) -> ! {
     };
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -224,7 +220,7 @@ fn known_iterable_to_array(raw_ptr: i64) -> Option<*mut ArrayHeader> {
     }
     let raw = raw_ptr as *const u8;
     match gc_object_type(raw) {
-        Some(t) if t == crate::gc::GC_TYPE_ARRAY => Some(raw as *mut ArrayHeader),
+        Some(t) if crate::gc_type_is_array!(t) => Some(raw as *mut ArrayHeader),
         _ => None,
     }
 }
@@ -984,7 +980,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         // share that layout, so reject it (a real URLSearchParams shape never
         // has a lazy keys_array; returning false is correct).
         match crate::value::addr_class::try_read_gc_header(keys_arr as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
             _ => return false,
         }
         if keys_arr_view.count() == 0 {
@@ -1026,8 +1022,7 @@ fn search_params_of(object: f64) -> Option<*mut ObjectHeader> {
 fn throw_invalid_search_params_this() -> ! {
     let message = "Value of \"this\" must be of type URLSearchParams";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 fn search_params_proto_call(name: &str, this: crate::closure::JsThis, args: &[f64]) -> f64 {

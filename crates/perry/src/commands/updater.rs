@@ -141,6 +141,12 @@ pub struct SignTargetManifestArgs {
     /// The tarball is the triple's ext package (`@perryts/perry-ext-<triple>`).
     #[arg(long)]
     pub ext: bool,
+    /// Sign a UI package.
+    #[arg(long, conflicts_with_all = ["ext", "wasm_host"])]
+    pub ui: bool,
+    /// Sign a WebAssembly host package.
+    #[arg(long, conflicts_with_all = ["ext", "ui"])]
+    pub wasm_host: bool,
     /// The Rust triple the package holds libraries for.
     #[arg(long)]
     pub triple: String,
@@ -344,6 +350,10 @@ fn run_sign_target_manifest(args: SignTargetManifestArgs) -> Result<()> {
         manifest_signing_inputs(&args.url, &args.secret_key_b64, &args.artifact)?;
     let kind = if args.ext {
         crate::commands::compile::target_packages::PackageKind::Ext
+    } else if args.ui {
+        crate::commands::compile::target_packages::PackageKind::Ui
+    } else if args.wasm_host {
+        crate::commands::compile::target_packages::PackageKind::WasmHost
     } else {
         crate::commands::compile::target_packages::PackageKind::Target
     };

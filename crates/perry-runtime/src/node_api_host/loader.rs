@@ -1,16 +1,44 @@
 use super::*;
 use crate::value::JSValue;
 use serde::Deserialize;
+#[cfg(not(target_os = "wasi"))]
 use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 #[cfg(unix)]
 use std::ffi::CStr;
-use std::ffi::{c_char, c_void, CString};
+#[cfg(any(unix, windows))]
+use std::ffi::CString;
+use std::ffi::{c_char, c_void};
+#[cfg(not(target_os = "wasi"))]
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MANIFEST_SCHEMA: u32 = 1;
+/// Native: the payloads ship next to the executable and load with the
+/// platform loader. WASI: the compiler links each addon into the program and
+/// embeds this manifest (`js_node_api_static_addons`).
+#[cfg(not(target_os = "wasi"))]
 const SHIPPING_MODEL: &str = "sidecar-v1";
+#[cfg(target_os = "wasi")]
+const SHIPPING_MODEL: &str = "static-v1";
+
+type VersionFn = unsafe extern "C" fn() -> i32;
+type RegisterFn = unsafe extern "C" fn(NapiEnv, NapiValue) -> NapiValue;
+
+/// The program's addon manifest and, for sidecar payloads, their root.
+struct ProgramManifest {
+    #[cfg_attr(target_os = "wasi", allow(dead_code))]
+    root: PathBuf,
+    data: SidecarManifest,
+}
+
+/// An addon's entry points, from the platform loader (native) or linked into
+/// the program (WASI). `handle` is the loader's library handle, 0 when linked.
+struct AddonEntries {
+    handle: usize,
+    register: RegisterFn,
+    version: Option<VersionFn>,
+}
 
 #[derive(Deserialize)]
 struct SidecarManifest {
@@ -90,6 +118,7 @@ mod legacy_storage {
 }
 use legacy_storage::KEY as LEGACY_CAPTURE;
 
+#[cfg(not(target_os = "wasi"))]
 fn sidecar_root() -> Result<PathBuf, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("cannot locate the Perry executable: {error}"))?;
@@ -115,7 +144,9 @@ fn sidecar_root() -> Result<PathBuf, String> {
     Ok(executable.with_file_name(format!("{file_name}.perry-native")))
 }
 
-fn load_manifest(root: &Path) -> Result<SidecarManifest, String> {
+#[cfg(not(target_os = "wasi"))]
+fn program_manifest() -> Result<ProgramManifest, String> {
+    let root = sidecar_root()?;
     let path = root.join("manifest.json");
     let bytes = std::fs::read(&path).map_err(|error| {
         format!(
@@ -123,7 +154,67 @@ fn load_manifest(root: &Path) -> Result<SidecarManifest, String> {
             path.display()
         )
     })?;
-    let manifest: SidecarManifest = serde_json::from_slice(&bytes).map_err(|error| {
+    let data = parse_manifest(&bytes, &path)?;
+    Ok(ProgramManifest { root, data })
+}
+
+/// The manifest and entry points the compiler linked into this program,
+/// recorded at startup by the generated constructor.
+#[cfg(target_os = "wasi")]
+mod linked {
+    use super::{RegisterFn, VersionFn};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub(super) struct Entry {
+        pub(super) register: Option<RegisterFn>,
+        pub(super) version: Option<VersionFn>,
+    }
+
+    pub(super) struct Linked {
+        pub(super) manifest: &'static [u8],
+        pub(super) entries: &'static [Entry],
+    }
+
+    pub(super) static LINKED: std::sync::OnceLock<Linked> = std::sync::OnceLock::new();
+}
+
+/// Called once, before `main`, by the registration object the compiler
+/// generates for a WASI program that links Node-API addons: `manifest` is the
+/// compile-time manifest (JSON) and `entries` holds each addon's
+/// `{register, version}` pair in manifest order. Both live in static data.
+#[cfg(target_os = "wasi")]
+#[no_mangle]
+pub unsafe extern "C" fn js_node_api_static_addons(
+    manifest: *const u8,
+    manifest_len: usize,
+    entries: *const c_void,
+    count: usize,
+) {
+    let linked = linked::Linked {
+        manifest: std::slice::from_raw_parts(manifest, manifest_len),
+        entries: std::slice::from_raw_parts(entries as *const linked::Entry, count),
+    };
+    let _ = linked::LINKED.set(linked);
+}
+
+#[cfg(target_os = "wasi")]
+fn program_manifest() -> Result<ProgramManifest, String> {
+    let linked = linked::LINKED
+        .get()
+        .ok_or_else(|| "this program links no Node-API addons".to_string())?;
+    let data = parse_manifest(linked.manifest, Path::new("<linked manifest>"))?;
+    if data.addons.len() != linked.entries.len() {
+        return Err("the linked Node-API manifest does not match its entry points".to_string());
+    }
+    Ok(ProgramManifest {
+        root: PathBuf::new(),
+        data,
+    })
+}
+
+fn parse_manifest(bytes: &[u8], path: &Path) -> Result<SidecarManifest, String> {
+    let manifest: SidecarManifest = serde_json::from_slice(bytes).map_err(|error| {
         format!(
             "Node-API sidecar manifest {} is invalid: {error}",
             path.display()
@@ -219,12 +310,24 @@ fn manifest_entry_for<'a>(
 /// Resolve only manifest-listed addons, including requests whose original
 /// source tree no longer exists. Loading still authenticates every payload.
 pub fn resolve_addon_request(request: &str) -> Result<PathBuf, String> {
-    let root = sidecar_root()?;
-    let manifest = load_manifest(&root)?;
-    let addon = manifest_entry_for(&manifest, request)?;
-    safe_payload_path(&root, &addon.entry)
+    let manifest = program_manifest()?;
+    let addon = manifest_entry_for(&manifest.data, request)?;
+    payload_path(&manifest, addon)
 }
 
+/// The module filename of an addon: its verified sidecar file, or (linked
+/// into a WASI program, where no file exists) its logical id as a path.
+#[cfg(not(target_os = "wasi"))]
+fn payload_path(manifest: &ProgramManifest, addon: &ManifestAddon) -> Result<PathBuf, String> {
+    safe_payload_path(&manifest.root, &addon.entry)
+}
+
+#[cfg(target_os = "wasi")]
+fn payload_path(_manifest: &ProgramManifest, addon: &ManifestAddon) -> Result<PathBuf, String> {
+    Ok(PathBuf::from(format!("/{}", addon.logical_id)))
+}
+
+#[cfg(not(target_os = "wasi"))]
 fn safe_payload_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     let candidate = root.join(relative);
     let root = root.canonicalize().map_err(|error| {
@@ -248,6 +351,7 @@ fn safe_payload_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, String> {
     if addon.files.is_empty() {
         return Err(format!(
@@ -322,12 +426,16 @@ fn verify_addon_payload(root: &Path, addon: &ManifestAddon) -> Result<PathBuf, S
 }
 
 #[cfg(unix)]
-unsafe fn open_library(path: &Path) -> Result<usize, String> {
+unsafe fn open_library(path: &Path, binding: SymbolBinding) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| "Node-API addon path contains a NUL byte".to_string())?;
+    let binding = match binding {
+        SymbolBinding::Lazy => libc::RTLD_LAZY,
+        SymbolBinding::Now => libc::RTLD_NOW,
+    };
     libc::dlerror();
-    let handle = libc::dlopen(path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+    let handle = libc::dlopen(path.as_ptr(), binding | libc::RTLD_LOCAL);
     if handle.is_null() {
         let error = libc::dlerror();
         let detail = if error.is_null() {
@@ -354,7 +462,7 @@ unsafe fn close_library(handle: usize) {
 }
 
 #[cfg(windows)]
-unsafe fn open_library(path: &Path) -> Result<usize, String> {
+unsafe fn open_library(path: &Path, _binding: SymbolBinding) -> Result<usize, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::System::LibraryLoader::{
         LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
@@ -387,17 +495,18 @@ unsafe fn close_library(handle: usize) {
     windows_sys::Win32::Foundation::FreeLibrary(handle as *mut c_void);
 }
 
-#[cfg(not(any(unix, windows)))]
-unsafe fn open_library(_path: &Path) -> Result<usize, String> {
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
+unsafe fn open_library(_path: &Path, _binding: SymbolBinding) -> Result<usize, String> {
     Err("Node-API addons are supported only on desktop/server targets".to_string())
 }
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(any(unix, windows, target_os = "wasi")))]
 unsafe fn find_symbol(_handle: usize, _name: &[u8]) -> Option<usize> {
     None
 }
 #[cfg(not(any(unix, windows)))]
 unsafe fn close_library(_handle: usize) {}
 
+#[cfg(not(target_os = "wasi"))]
 fn begin_legacy_capture(path: &Path) -> Result<(), String> {
     LEGACY_CAPTURE.with(|capture| {
         let mut capture = capture.borrow_mut();
@@ -412,6 +521,7 @@ fn begin_legacy_capture(path: &Path) -> Result<(), String> {
     })
 }
 
+#[cfg(not(target_os = "wasi"))]
 fn end_legacy_capture() -> Result<Option<usize>, String> {
     LEGACY_CAPTURE.with(|capture| {
         let mut capture = capture.borrow_mut();
@@ -443,44 +553,118 @@ pub unsafe extern "C" fn napi_module_register(module: *mut NapiModule) {
     });
 }
 
+/// Open a verified sidecar payload and find its entry points: the
+/// `napi_register_module_v1` export, or the descriptor a legacy addon hands to
+/// `napi_module_register` while it loads.
+#[cfg(not(target_os = "wasi"))]
+unsafe fn open_addon(
+    _manifest: &ProgramManifest,
+    _addon: &ManifestAddon,
+    path: &Path,
+    binding: SymbolBinding,
+) -> Result<AddonEntries, String> {
+    begin_legacy_capture(path)?;
+    // Platform dynamic loaders accept a pathname, not the bytes or a
+    // portable file handle retained by verification. A local writer can
+    // therefore race this open after hashing; the accepted trust boundary
+    // and deployment mitigation are documented in node-api-host.md.
+    let handle = match open_library(path, binding) {
+        Ok(handle) => handle,
+        Err(error) => {
+            let _ = end_legacy_capture();
+            return Err(format!(
+                "failed to load Node-API addon {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let entries = (|| {
+        let legacy = end_legacy_capture()?;
+        let version = find_symbol(handle, b"node_api_module_get_api_version_v1")
+            .map(|version| std::mem::transmute::<usize, VersionFn>(version));
+        let register: RegisterFn =
+            if let Some(register) = find_symbol(handle, b"napi_register_module_v1") {
+                std::mem::transmute(register)
+            } else if let Some(legacy) = legacy {
+                let descriptor = &*(legacy as *const NapiModule);
+                if descriptor.nm_version != 1 {
+                    return Err(format!(
+                        "unsupported legacy Node module ABI version {}",
+                        descriptor.nm_version
+                    ));
+                }
+                descriptor
+                    .nm_register_func
+                    .ok_or_else(|| "legacy Node-API descriptor has no initializer".to_string())?
+            } else {
+                return Err(
+                "addon exports neither napi_register_module_v1 nor a legacy napi_module descriptor"
+                    .to_string(),
+            );
+            };
+        Ok(AddonEntries {
+            handle,
+            register,
+            version,
+        })
+    })();
+    if entries.is_err() {
+        close_library(handle);
+    }
+    entries.map_err(|error| {
+        format!(
+            "failed to initialize Node-API addon {}: {error}",
+            path.display()
+        )
+    })
+}
+
+/// The entry points the compiler linked in for `addon`: the generated
+/// registration object lists them in manifest order.
+#[cfg(target_os = "wasi")]
+unsafe fn open_addon(
+    manifest: &ProgramManifest,
+    addon: &ManifestAddon,
+    _path: &Path,
+    _binding: SymbolBinding,
+) -> Result<AddonEntries, String> {
+    let index = manifest
+        .data
+        .addons
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, addon))
+        .ok_or_else(|| "Node-API addon is not in the linked manifest".to_string())?;
+    let entry = linked::LINKED
+        .get()
+        .and_then(|linked| linked.entries.get(index).copied())
+        .ok_or_else(|| "this program links no Node-API addons".to_string())?;
+    let register = entry.register.ok_or_else(|| {
+        format!(
+            "Node-API addon `{}` was linked without napi_register_wasm_v1",
+            addon.logical_id
+        )
+    })?;
+    Ok(AddonEntries {
+        handle: 0,
+        register,
+        version: entry.version,
+    })
+}
+
+/// Run an addon's initializer, the same for loaded and linked addons.
 unsafe fn initialize_addon(
     env: NapiEnv,
     path: &Path,
-    handle: usize,
-    legacy: Option<usize>,
+    entries: &AddonEntries,
 ) -> Result<u64, String> {
-    type VersionFn = unsafe extern "C" fn() -> i32;
-    type RegisterFn = unsafe extern "C" fn(NapiEnv, NapiValue) -> NapiValue;
-    let declared = find_symbol(handle, b"node_api_module_get_api_version_v1").map(|version| {
-        let version: VersionFn = std::mem::transmute(version);
-        version()
-    });
+    let declared = entries.version.map(|version| version());
     let api_version = effective_module_version(declared)?;
     let mut exports = std::ptr::null_mut();
     let status = napi_create_object(env, &mut exports);
     if status != NapiStatus::Ok {
         return Err("could not create the addon exports object".to_string());
     }
-    let register: RegisterFn =
-        if let Some(register) = find_symbol(handle, b"napi_register_module_v1") {
-            std::mem::transmute(register)
-        } else if let Some(legacy) = legacy {
-            let descriptor = &*(legacy as *const NapiModule);
-            if descriptor.nm_version != 1 {
-                return Err(format!(
-                    "unsupported legacy Node module ABI version {}",
-                    descriptor.nm_version
-                ));
-            }
-            descriptor
-                .nm_register_func
-                .ok_or_else(|| "legacy Node-API descriptor has no initializer".to_string())?
-        } else {
-            return Err(
-                "addon exports neither napi_register_module_v1 nor a legacy napi_module descriptor"
-                    .to_string(),
-            );
-        };
+    let register = entries.register;
     let module = register_module(env, path, api_version);
     let returned = with_active_module(env, module, || register(env, exports));
     if pending_exception(env).is_some() {
@@ -495,11 +679,50 @@ unsafe fn initialize_addon(
         .map_err(|_| "addon initializer returned an invalid napi_value".to_string())
 }
 
+/// When the dynamic loader resolves an addon's undefined symbols. Node's
+/// `process.dlopen` (and so `require` of a `.node` file) defaults to
+/// `RTLD_LAZY`: a prebuilt addon may reference symbols the host does not
+/// export (for example a different ICU major) on paths it never calls, and
+/// it loads as long as those paths stay unused. An explicit
+/// `os.constants.dlopen.RTLD_NOW` resolves everything at load, as under Node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SymbolBinding {
+    Lazy,
+    Now,
+}
+
+impl SymbolBinding {
+    /// The binding `os.constants.dlopen` flags ask for; without `RTLD_NOW`
+    /// the loader binds lazily, as Node does.
+    fn from_dlopen_flags(flags: i64) -> Self {
+        #[cfg(unix)]
+        if flags & libc::RTLD_NOW as i64 != 0 {
+            return Self::Now;
+        }
+        let _ = flags;
+        Self::Lazy
+    }
+}
+
+#[cfg(not(target_os = "wasi"))]
+fn verified_payload(manifest: &ProgramManifest, addon: &ManifestAddon) -> Result<PathBuf, String> {
+    verify_addon_payload(&manifest.root, addon)
+}
+
+/// A linked addon has no file to verify: it is part of the program.
+#[cfg(target_os = "wasi")]
+fn verified_payload(manifest: &ProgramManifest, addon: &ManifestAddon) -> Result<PathBuf, String> {
+    payload_path(manifest, addon)
+}
+
 pub fn load_addon(request: &str) -> Result<f64, String> {
+    load_addon_with_binding(request, SymbolBinding::Lazy)
+}
+
+fn load_addon_with_binding(request: &str, binding: SymbolBinding) -> Result<f64, String> {
     let env = current_env();
-    let root = sidecar_root()?;
-    let manifest = load_manifest(&root)?;
-    let addon = manifest_entry_for(&manifest, request)?;
+    let manifest = program_manifest()?;
+    let addon = manifest_entry_for(&manifest.data, request)?;
     let _identity = (&addon.package, &addon.version);
     if let Some(bits) = with_env(env, |env| {
         env.loaded_addons
@@ -511,7 +734,7 @@ pub fn load_addon(request: &str) -> Result<f64, String> {
     {
         return Ok(f64::from_bits(bits));
     }
-    let path = verify_addon_payload(&root, addon)?;
+    let path = verified_payload(&manifest, addon)?;
     let entered = with_env_mut(env, |env| {
         if env.currently_loading_filename.is_some() {
             return false;
@@ -523,32 +746,11 @@ pub fn load_addon(request: &str) -> Result<f64, String> {
         return Err("nested Node-API addon initialization is not supported".to_string());
     }
     let load_result = (|| {
-        begin_legacy_capture(&path)?;
-        // Platform dynamic loaders accept a pathname, not the bytes or a
-        // portable file handle retained by verification. A local writer can
-        // therefore race this open after hashing; the accepted trust boundary
-        // and deployment mitigation are documented in node-api-host.md.
-        let handle = match unsafe { open_library(&path) } {
-            Ok(handle) => handle,
+        let entries = unsafe { open_addon(&manifest, addon, &path, binding) }?;
+        match unsafe { initialize_addon(env, &path, &entries) } {
+            Ok(bits) => Ok((entries.handle, bits)),
             Err(error) => {
-                let _ = end_legacy_capture();
-                return Err(format!(
-                    "failed to load Node-API addon {}: {error}",
-                    path.display()
-                ));
-            }
-        };
-        let legacy = match end_legacy_capture() {
-            Ok(legacy) => legacy,
-            Err(error) => {
-                unsafe { close_library(handle) };
-                return Err(error);
-            }
-        };
-        match unsafe { initialize_addon(env, &path, handle, legacy) } {
-            Ok(bits) => Ok((handle, bits)),
-            Err(error) => {
-                unsafe { close_library(handle) };
+                unsafe { close_library(entries.handle) };
                 Err(format!(
                     "failed to initialize Node-API addon {}: {error}",
                     path.display()
@@ -579,7 +781,11 @@ pub(crate) fn close_loaded_addons(env: NapiEnv) {
 }
 
 pub fn load_addon_or_throw(request: &str) -> f64 {
-    match load_addon(request) {
+    load_addon_with_binding_or_throw(request, SymbolBinding::Lazy)
+}
+
+fn load_addon_with_binding_or_throw(request: &str, binding: SymbolBinding) -> f64 {
+    match load_addon_with_binding(request, binding) {
         Ok(exports) => exports,
         Err(error) => crate::fs::validate::throw_error_with_code(&error, "ERR_DLOPEN_FAILED"),
     }
@@ -657,6 +863,7 @@ mod request_tests {
         }
     }
 
+    #[cfg(not(target_os = "wasi"))]
     #[test]
     fn streaming_verification_checks_complete_payload_and_size() {
         let root = std::env::temp_dir().join(format!(
@@ -727,6 +934,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
             );
         };
         let flags_value = JSValue::from_bits(flags.to_bits());
+        let mut binding = SymbolBinding::Lazy;
         if !flags_value.is_undefined() && !flags_value.is_null() {
             if !flags_value.is_number() || !matches!(flags_value.as_number() as i64, 0 | 1 | 2) {
                 crate::fs::validate::throw_error_with_code(
@@ -734,6 +942,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
                     "ERR_DLOPEN_FAILED",
                 );
             }
+            binding = SymbolBinding::from_dlopen_flags(flags_value.as_number() as i64);
         }
         let module_value = JSValue::from_bits(module.to_bits());
         if !crate::object::object_ops::value_is_object_like(module) {
@@ -746,7 +955,7 @@ pub(crate) fn process_dlopen(module: f64, filename: f64, flags: f64) -> f64 {
         let module = scope
             .root_raw_mut_ptr(module_value.as_pointer::<crate::object::ObjectHeader>()
                 as *mut crate::object::ObjectHeader);
-        let exports = scope.root_nanbox_f64(load_addon_or_throw(&filename));
+        let exports = scope.root_nanbox_f64(load_addon_with_binding_or_throw(&filename, binding));
         let key = scope.root_string_ptr(js_string_from_bytes(b"exports".as_ptr(), 7));
         module.with_mut_ptr(|module| {
             key.with_const_ptr(|key| {

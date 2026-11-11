@@ -161,16 +161,113 @@ fn reads_and_ordinary_objects_are_not_patches() {
         o.log = () => {};
         Math.max(1, 2);
         process.stdout.write = (() => true) as any;
-        const k = "x";
-        (globalThis as any)[k] = 1;
+        (globalThis as any)["x"] = 1;
         Object.assign(globalThis, { foo: 1 });
         "#,
     );
-    assert_array_iteration_facts(&s, &["elements", "proto", "write"]);
+    assert_array_iteration_facts(&s, &["write"]);
     assert_eq!(
         s.len(),
-        3,
+        1,
         "ordinary writes add no namespace/prototype patch: {s:?}"
+    );
+}
+
+/// DEC 255: a store into the global object under a key the scan cannot read
+/// may rebind any namespace. It records the global pseudo-namespace (not
+/// "every namespace replaced"), and every direct namespace call is GUARDED on
+/// `Pristine(ns)`: the intrinsic stays behind the runtime's bit.
+#[test]
+fn non_static_global_store_guards_namespace_calls() {
+    for src in [
+        "const k: any = process.argv[2]; (globalThis as any)[k] = {};",
+        "Object.assign(globalThis, (process as any).shims);",
+        "const k: any = process.argv[2]; Object.defineProperty(globalThis, k, { value: 1 });",
+        "const k: any = process.argv[2]; Reflect.set(globalThis, k, 1);",
+        "const k: any = process.argv[2]; [(globalThis as any)[k]] = [1];",
+    ] {
+        let s = scan(src);
+        assert!(
+            s.contains(&pair(GLOBAL_ANY_KEY, ANY_MEMBER)),
+            "{src}: {s:?}"
+        );
+        let m = lower_with_patches(&format!(
+            "{src}\nconst r = Object.keys({{ a: 1 }});\nconst t = Math.max(1, 2);"
+        ));
+        // `r` and `t` are the program's last two declarations.
+        let lets = m
+            .init
+            .iter()
+            .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+            .count();
+        let r = init_of(&m, lets - 2);
+        assert!(
+            r.starts_with("Conditional { condition: NamespacePatched(\"Object\")"),
+            "{src}: {r}"
+        );
+        assert!(r.contains("property: \"keys\""), "generic arm: {r}");
+        let t = init_of(&m, lets - 1);
+        assert!(
+            t.contains("NamespacePatched(\"Math\")") && t.contains("MathMax"),
+            "{src}: {t}"
+        );
+    }
+    // A static non-namespace key names no namespace: no guard.
+    let m = lower_with_patches(
+        "(globalThis as any).foo = 1; Object.assign(globalThis, { bar: 2 });\nconst r = Object.keys({ a: 1 });",
+    );
+    assert!(
+        !init_of(&m, 0).contains("NamespacePatched"),
+        "{}",
+        init_of(&m, 0)
+    );
+}
+
+/// DEC 255 hunk 3: a parenthesized or TS-typed target that names a namespace
+/// (`(Object as any) = w`) is the store `Object = w` is. The lowering peels
+/// the target to the ident, so the scan does too, and the namespace call
+/// reads the binding.
+#[test]
+fn parenthesized_and_ts_as_global_targets_rebind_the_namespace() {
+    for src in [
+        "(Object as any) = w;",
+        "(Object) = w;",
+        "Object! = w;",
+        "(<any>Object) = w;",
+        "(Object satisfies any) = w;",
+    ] {
+        let s = scan(&format!("const w: any = {{}};\n{src}"));
+        assert!(s.contains(&pair("Object", ANY_MEMBER)), "{src}: {s:?}");
+        let m = lower_with_patches(&format!(
+            "const w: any = {{}};\n{src}\nconst r = Object.keys({{ a: 1 }});"
+        ));
+        // `r` is the program's last declaration.
+        let lets = m
+            .init
+            .iter()
+            .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+            .count();
+        let r = init_of(&m, lets - 1);
+        assert!(is_dynamic_member_call(&r, "keys"), "{src}: {r}");
+    }
+    // The same wrapped target inside a destructuring assignment is the same
+    // store. (The lowering rejects this form today, so only the scan is read.)
+    let s = scan("const w: any = {};\n[(Object as any)] = [w];");
+    assert!(s.contains(&pair("Object", ANY_MEMBER)), "{s:?}");
+    // A wrapped target that names a local is no store into the global object:
+    // the call keeps its intrinsic.
+    let m = lower_with_patches(
+        "let x: any = 1;\nconst w: any = {};\n(x as any) = w;\n(x) = w;\nconst r = Object.keys({ a: 1 });",
+    );
+    let lets = m
+        .init
+        .iter()
+        .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+        .count();
+    let r = init_of(&m, lets - 1);
+    assert!(
+        !is_dynamic_member_call(&r, "keys") && !r.contains("NamespacePatched"),
+        "{r}"
     );
 }
 

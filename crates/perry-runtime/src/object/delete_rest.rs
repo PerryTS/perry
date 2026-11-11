@@ -16,8 +16,7 @@ pub extern "C" fn js_delete_result(deleted: i32, strict: i32) -> f64 {
         if strict != 0 {
             let message = "Cannot delete property";
             let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-            let err = crate::error::js_typeerror_new(msg);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg));
         }
         return f64::from_bits(crate::value::TAG_FALSE);
     }
@@ -31,6 +30,25 @@ pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
+    if !key.is_null() {
+        if let Some(result) = super::deferred_namespace::with_key_target(
+            crate::value::js_nanbox_pointer(obj as i64),
+            crate::value::js_nanbox_string(key as i64),
+            |target, key| {
+                js_object_delete_field_ordinary(
+                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>()
+                        as *mut ObjectHeader,
+                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader,
+                )
+            },
+        ) {
+            return result;
+        }
+    }
+    js_object_delete_field_ordinary(obj, key)
+}
+
+fn js_object_delete_field_ordinary(obj: *mut ObjectHeader, key: *const crate::StringHeader) -> i32 {
     #[cfg(perry_contract_checks)]
     crate::contracts::hard_ptr(obj, "delete");
     if obj.is_null() || key.is_null() {
@@ -38,6 +56,7 @@ pub extern "C" fn js_object_delete_field(
     }
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Str(key)),
         "delete",
     );
     if !key.is_null() {
@@ -179,7 +198,7 @@ pub extern "C" fn js_object_delete_field(
                 }
                 return js_object_delete_field(arr as *mut ObjectHeader, key);
             }
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                     // An Array's `length` is a non-configurable exotic own
@@ -855,23 +874,6 @@ fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
     1
 }
 
-fn delete_class_prototype_key(class_id: u32, name: &str) -> i32 {
-    // The members are real properties of the class's prototype object
-    // (materialized first): the delete happens there.
-    let proto = super::class_registry::class_decl_prototype_value(class_id);
-    let js = crate::JSValue::from_bits(proto.to_bits());
-    if !js.is_pointer() {
-        return 1;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(proto);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    js_object_delete_field(
-        (proto.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader,
-        key,
-    )
-}
-
 /// `delete prim.field` (static key): once RequireObjectCoercible has rejected
 /// null/undefined, a primitive receiver (number/boolean/…) has no deletable own
 /// property, so `delete` is a no-op that evaluates to `true` (spec ToObject of a
@@ -885,16 +887,6 @@ pub extern "C" fn js_object_delete_field_value(
 ) -> i32 {
     #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "delete");
-    if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
-        if key.is_null() {
-            return 1;
-        }
-        return unsafe {
-            super::has_own_helpers::str_from_string_header(key)
-                .map(|name| delete_class_prototype_key(class_id, name))
-                .unwrap_or(1)
-        };
-    }
     // A class reference (`delete C.m` for a `static m()`) is INT32-tagged, so
     // `is_pointer` is false and the guard below would no-op it. But a static
     // member delete must still unregister the method/field. `js_object_delete_field`
@@ -909,6 +901,14 @@ pub extern "C" fn js_object_delete_field_value(
     if !delete_receiver_is_pointer(obj_value) {
         return 1;
     }
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if !key.is_null() {
+        let key_value = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+        if let Some(result) = unsafe { super::nm_delete_member(obj_value, key_value) } {
+            return result;
+        }
+    }
     let obj = crate::value::js_nanbox_get_pointer(obj_value) as *mut ObjectHeader;
     js_object_delete_field(obj, key)
 }
@@ -917,19 +917,20 @@ pub extern "C" fn js_object_delete_field_value(
 /// `js_object_delete_field_value`, delegating real objects to the dynamic path.
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
+    // A native namespace's members live in its module tables and the
+    // override table, not in its keys.
+    if let Some(result) = unsafe { super::nm_delete_member(obj_value, key) } {
+        return result;
+    }
+    delete_dynamic_value(obj_value, key)
+}
+
+/// `js_object_delete_dynamic_value` for the runtime's own deletes, which never
+/// name a namespace member (the program-level entry adds that arm).
+#[inline(never)]
+pub(crate) fn delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
     #[cfg(perry_contract_checks)]
     crate::contracts::hard_value(obj_value, "delete");
-    if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
-        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-            let proto = super::class_registry::class_decl_prototype_value(class_id);
-            return unsafe { crate::symbol::js_object_delete_symbol_property(proto, key) };
-        }
-        return unsafe {
-            super::native_module::metadata_key_to_string(key)
-                .map(|name| delete_class_prototype_key(class_id, &name))
-                .unwrap_or(1)
-        };
-    }
     // Class-ref receiver (`delete C["m"]`): see `js_object_delete_field_value`.
     if let Some(class_id) = super::native_module::class_ref_id(obj_value) {
         // A symbol key is an own symbol property of the class function object.
@@ -998,7 +999,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     }
     super::key_attrs::debug_assert_positional(keys, shape.logical_key_count);
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0
     {
         return None;
@@ -1140,6 +1141,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
 pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> i32 {
     super::builtin_proto::note_write_addr(
         (obj as u64 & crate::value::POINTER_MASK) as usize,
+        super::builtin_proto::Mutation::Delete(super::builtin_proto::Key::Value(key)),
         "delete",
     );
     #[cfg(perry_contract_checks)]

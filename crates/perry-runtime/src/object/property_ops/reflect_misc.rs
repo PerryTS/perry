@@ -131,6 +131,15 @@ pub extern "C" fn js_reflect_define_property(obj: f64, key: f64, bag: f64) -> f6
             scope.root_nanbox_f64(crate::object::object_ops::normalize_descriptor_operand(bag));
         let key = scope.root_nanbox_f64(crate::object::js_to_property_key(key));
         let descriptor = crate::object::object_ops::decode_property_descriptor(&scope, &bag);
+        // DEC 250: a definition the lock refuses is a failed
+        // [[DefineOwnProperty]], reported as `false`, not thrown. Asked after
+        // the descriptor's getters ran (they are observable first, 28.1.3).
+        if crate::object::builtin_proto::lock_refuses_write(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+        ) {
+            return nanbox_bool(false);
+        }
         nanbox_bool(crate::object::object_ops::define_own_property_decoded(
             &scope,
             &receiver,

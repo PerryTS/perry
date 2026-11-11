@@ -24,6 +24,8 @@ use super::{
     TrustedBoxCapturePtr,
 };
 
+mod facts_const_number;
+
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
 /// retain their existing ABI; trusted inline loads pass the name only on
 /// their cold TDZ arm. Names come from permanent, GC-rooted string globals.
@@ -473,6 +475,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::LocalGet(id) => {
             crate::codegen::arguments::ensure_arguments_object(ctx, *id);
+            if let Some(value) = facts_const_number::read(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }
@@ -546,6 +551,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let value = ctx.block().bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
+                }
+            }
+            // A packed clone's element binding has no local slot until the
+            // slow clone declares one; inside the clone it lives only in its
+            // F64 alloca (`stmt::let_stmt`).
+            if !ctx.locals.contains_key(id) {
+                if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+                    return Ok(ctx.block().load(DOUBLE, &f64_slot));
                 }
             }
             // Repsel Phase 1: a canonical-i32 local's ONLY storage is the i32
@@ -704,7 +717,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
-                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 // Within a stable-packed numeric clone, when `x` is a
                 // canonical raw Number, `x | 0` may feed the canonical i32
                 // slot directly: materializing a double here only to convert
@@ -1363,6 +1377,15 @@ pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) 
 /// plain-slot store with its shadow-frame mirror and i32 mirror, module
 /// globals, the arena owner, buffer views and int facts.
 ///
+/// `id = v` for a value lowering holds already (a value record lane,
+/// `codegen::record_sig`): the write obligations of the `LocalSet` arm, then
+/// the one binding. `hint` is the expression the boxed program assigns.
+pub(crate) fn bind_local(ctx: &mut FnCtx<'_>, id: u32, v: &str, hint: &Expr) -> Result<()> {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, hint);
+    bind_lowered_value_to_local(ctx, id, v, hint)
+}
+
 /// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
 /// a caller holding a value it did not lower through `lower_expr` — a
 /// region's fast arm, which loads the slot directly — binds it through the
@@ -1381,6 +1404,7 @@ pub(crate) fn bind_lowered_value_to_local(
     v: &str,
     value: &Expr,
 ) -> Result<()> {
+    let v = &crate::codegen::facts_number_locals::accept_let_value(ctx, id, value, v.to_string());
     crate::codegen::arguments::note_arguments_assignment(ctx, id);
     // `target = source` creates the same string-buffer alias as a
     // `let target = source` initializer. The declaration path has

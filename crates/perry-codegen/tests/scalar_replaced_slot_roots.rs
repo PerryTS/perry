@@ -7,7 +7,7 @@
 //! `Stmt::Let` — cannot see them, and nothing bound them. A collection landing
 //! between the store and the read swept the value out from under the alloca.
 //!
-//! The end-to-end proof is `test-files/test_gap_repsel_scalar_replaced_locals.ts`
+//! The end-to-end proof is `tests/parity/language/object/test_gap_repsel_scalar_replaced_locals.ts`
 //! on the `cons_scan_off` arm of `scripts/gc_repsel_matrix.sh` — the only
 //! configuration where the bug is observable, because every automatic
 //! collection otherwise forces a conservative native-stack scan that pins the
@@ -91,7 +91,6 @@ fn entry_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -123,11 +122,14 @@ fn entry_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -158,6 +160,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -355,18 +358,8 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -390,12 +383,10 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
                 "a",
                 Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             ),
-            console_log(vec![Expr::IndexGet {
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-            }]),
+            console_log(vec![Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(0)),
+            )]),
         ],
     );
 
@@ -448,18 +439,8 @@ fn scalar_replaced_split_parts_are_bound() {
             source.clone(),
             let_stmt(2, "parts", split),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -724,18 +705,8 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );

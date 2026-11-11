@@ -1,0 +1,4 @@
+3-1-2 1
+DEC 250: Cannot replace built-in member Array.prototype.join: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.indexOf: built-in objects are read-only in a compiled program (adding a new member is allowed)
+3-1-2 1 5

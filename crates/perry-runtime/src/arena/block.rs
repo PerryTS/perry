@@ -47,20 +47,37 @@ fn block_size_for(min_size: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Only empty, arena-owned payload pages may be advised while mapped.
+///
+/// Windows keeps them: an idle block is still registered as heap space, and
+/// address classification reads a candidate header before it consults the
+/// object-start bitmap. Advised pages read back on the other targets, but
+/// decommitted pages fault. Windows decommits a block once it has left the
+/// arena (the pool's reuse window), when no classification admits it.
 pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
     debug_assert_eq!(block.offset, 0);
-    unsafe { release_block_pages(block.data, block.size) }
+    #[cfg(windows)]
+    {
+        let _ = block;
+        0
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        release_block_pages(block.data, block.size)
+    }
 }
 
 /// Apple blocks are whole tagged regions released as reusable; they are
-/// reactivated in [`block_pool_take`] and [`Arena::set_current`]. Other
-/// targets advise the interior pages and need no reactivation.
+/// reactivated in [`block_pool_take`] and [`Arena::set_current`]. Windows
+/// blocks are whole reservations whose pages are decommitted; only pooled
+/// blocks are released (see [`discard_empty_block_pages`]), and
+/// [`block_pool_take`] commits them again. Other targets advise the interior
+/// pages and need no reactivation.
 unsafe fn release_block_pages(data: *mut u8, size: usize) -> usize {
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_vendor = "apple", windows))]
     {
         super::region::release(data, size)
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     {
         decommit::release(data, size)
     }
@@ -341,16 +358,14 @@ pub(crate) fn request_block_pool_drain() {
 
 /// Called only from full-cycle publication. A critical-pressure request stays
 /// sticky through unsafe/deferred periods and is retired after the owed full
-/// collection has completed all arena reclamation.
-pub(crate) fn drain_block_pool_if_requested() -> BlockPoolDrainStats {
+/// collection has completed all arena reclamation. `None`: nobody requested
+/// the drain, so nobody is owed the memory back now.
+pub(crate) fn drain_block_pool_if_requested() -> Option<BlockPoolDrainStats> {
     let requested = BLOCK_POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
         std::mem::replace(&mut pool.drain_requested, false)
     });
-    if !requested {
-        return BlockPoolDrainStats::default();
-    }
-    drain_block_pool()
+    requested.then(drain_block_pool)
 }
 
 #[cfg(test)]
@@ -580,6 +595,7 @@ impl ArenaBlock {
         let ptr = unsafe { self.data.add(aligned_offset) };
         let next = bumped.checked_add(pad - 1)? & !(pad - 1);
         self.offset = next;
+        crate::snap_census::birth(ptr, size);
         Some(ptr)
     }
 
@@ -1308,7 +1324,6 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 }
-
 crate::perry_thread_local! {
     /// Cached running sum of `block.offset` across the old-gen arena —
     /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same

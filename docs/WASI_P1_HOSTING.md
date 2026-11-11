@@ -100,8 +100,7 @@ The changed runtime passes `cargo check --target wasm32-wasip2` with wasi-sdk
 
 ```sh
 RUST_TEST_THREADS=1 cargo test -p perry-wasm-host
-NODE_BIN=/path/to/pinned/node python3 scripts/node_suite_run.py \
-  /path/to/perry "$PWD" wasi
+python3 scripts/parity.py run node-suite/wasi --mode auto
 ```
 
 See [WASI_ROADMAP.md](WASI_ROADMAP.md) for subsequent component work and

@@ -48,7 +48,6 @@ def main():
         ('perry', 'extended-zip', True, [], ['bzip2', 'ppmd-rust', 'deflate64']),
         ('perry-stdlib', None, False, ['perry-uuid', 'uuid', 'chrono', 'perry-cli-support'], []),
         ('perry-stdlib', 'crypto', False, ['uuid', 'chrono', 'perry-cli-support'], ['perry-uuid', 'perry-hex', 'perry-base64']),
-        ('perry-stdlib', 'bundled-nodemailer', False, ['uuid', 'chrono', 'perry-cli-support'], ['perry-uuid']),
         ('perry-runtime', None, False, ['perry-uuid', 'perry-cli-support', 'resolv-conf', 'lazy_static'], []),
     ]
     for package, features, defaults, absent, present in cases:

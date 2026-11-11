@@ -547,7 +547,7 @@ fn typed_feedback_array_get_fallback_reads_an_object_backed_array_subclass_dense
 
     let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, 1.0);
     assert_eq!(actual.to_bits(), 22.0f64.to_bits());
-    let boxed_index = f64::from_bits(crate::value::JSValue::int32(2).bits());
+    let boxed_index = f64::from(2);
     let actual = js_typed_feedback_array_index_get_fallback_boxed(26, receiver, boxed_index);
     assert_eq!(actual.to_bits(), 33.0f64.to_bits());
 
@@ -1016,7 +1016,7 @@ fn typed_feedback_numeric_array_set_guard_requires_numeric_value_and_layout() {
 }
 
 #[test]
-fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
+fn typed_feedback_numeric_array_guards_reject_class_function_objects() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     register(68, TypedFeedbackSiteKind::ArrayElement, "arr[i]=");
@@ -1026,7 +1026,7 @@ fn typed_feedback_numeric_array_guards_reject_registered_class_ref_bits() {
     unsafe {
         crate::object::js_register_class_id(class_id);
     }
-    let class_ref = f64::from_bits(crate::value::INT32_TAG | class_id as u64);
+    let class_ref = crate::object::class_value::class_value(class_id);
 
     let values = [1.0, 2.0];
     let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
@@ -2670,4 +2670,24 @@ fn representation_change_takes_no_registry_lock_with_feedback_off() {
         assert_eq!(typed_feedback_snapshot().representation_invalidations, 1);
         reset_typed_feedback_for_tests();
     });
+}
+
+/// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+/// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+/// Number, and a top-16-only test reads both as one.
+const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+#[test]
+fn a_non_number_0x7ffe_word_is_no_index_and_no_int32_kind() {
+    for bits in [PROTO_REF_5, HIGH_BITS] {
+        assert_eq!(finite_nonnegative_u32_index(f64::from_bits(bits)), None);
+        assert_eq!(finite_nonnegative_i32_index(f64::from_bits(bits)), None);
+        assert_ne!(stable_value_kind(bits), STABLE_VALUE_INT32);
+    }
+    assert_eq!(
+        finite_nonnegative_u32_index(f64::from_bits(0x7FFE_0000_0000_0005)),
+        Some(5)
+    );
+    assert_eq!(stable_value_kind(0x7FFE_0000_0000_0005), STABLE_VALUE_INT32);
 }

@@ -21,6 +21,7 @@ fn init() -> Stmt {
 }
 fn get(n: i64) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(2)),
@@ -87,6 +88,7 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
         Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::Null))),
         Stmt::Expr(get(6)),
         Stmt::Expr(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),

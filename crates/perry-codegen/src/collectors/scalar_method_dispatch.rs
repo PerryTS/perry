@@ -415,9 +415,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
         .classes
         .iter()
         .filter(|class| {
-            class.getters.is_empty()
-                && class.setters.is_empty()
-                && class.computed_members.is_empty()
+            class.getters.is_empty() && class.setters.is_empty() && !class.has_evaluated_members()
         })
         .map(|class| class.name.as_str())
         .collect();
@@ -1110,6 +1108,7 @@ mod tests {
             value: Box::new(Expr::Number(99.0)),
             receiver: Box::new(Expr::LocalGet(RECEIVER)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -1273,6 +1272,7 @@ mod tests {
                 PROTO,
             )))),
             Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(PROTO)),
@@ -1284,6 +1284,7 @@ mod tests {
                     byte_end: 0,
                     byte_offset: 78,
                     object: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(PROTO)),

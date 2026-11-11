@@ -1,0 +1,40 @@
+nest {"a":{"b":{"c":{"d":{"e":1}}}}}
+parsed {"a":{"b":{"c":1}},"d":{"e":[1,{"f":2}]}}
+wide {"a":{"p":1,"q":"two","r":true,"s":null,"t":5.5,"u":{"v":1}},"b":2}
+siblings {"a":{"x":1},"b":{"y":2},"c":{"z":{"w":3}}}
+empty {"a":{},"b":{"c":{}}}
+undef {"a":{"c":1},"d":{}}
+fn {"a":{"c":2},"d":{"f":3}}
+index keys {"a":{"1":"one","2":"two","b":1}}
+escaped keys {"a":{"q\"uote":1,"back\\slash":2,"nl\n":3,"é":4,"😀":5}}
+holes {"a":{"p":1,"r":3},"b":{"c":{"p":1,"r":3}}}
+internal-looking keys {"a":{"__perry_collection_backing__":1,"b":2}}
+shared {"a":{"s":1},"b":{"s":1},"c":[{"s":1},{"d":{"s":1}}]}
+root wide {"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":{"h":7}}
+member toJSON {"a":"k=a","b":{"c":1}}
+grandchild toJSON {"a":{"b":[1,{"c":2}]},"d":{"e":3}}
+toJSON result tree {"a":{"b":{"c":"inner"}}}
+toJSON undefined {"b":{"c":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by member toJSON {"a":1,"b":{"c":1},"d":{"e":{"f":1}}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by grandchild toJSON {"a":{"b":1,"c":{"d":1}},"e":{"f":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by getter {"a":1,"b":{"c":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by nested getter {"a":{"b":1},"c":{"d":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by array element {"a":[1],"b":{"c":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+by BigInt toJSON {"a":{"n":"big"},"b":{"c":1}}
+by nested stringify {"a":"{\"x\":{\"y\":1}}","b":{"c":1}}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+installed {"a":{"b":1}}
+installed parsed {"a":{"b":1}}
+removed {"a":{"b":1}}
+inherited {"a":"P","b":"P","c":"C","d":{"v":4,"w":{"x":5}}}
+accessor toJSON {"a":"acc","b":{"c":1}}
+null proto {"a":{"b":1}}
+exotic {"date":"1970-01-01T00:00:00.000Z","map":{},"set":{},"re":{},"num":3,"str":"s","bool":false,"u8":{"0":1,"1":2},"sub":[1,2],"err":{"code":7},"url":"https://example.com/p?q=1","nonEnum":{"visible":1},"nested":{"date":"1970-01-01T00:00:00.000Z","deeper":{"num":4}}}
+deep ok 3291
+cycle: TypeError

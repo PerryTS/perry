@@ -343,6 +343,14 @@ include!("runtime_layouts/ascii_chars.rs");
 /// the receiver's layout: no spelling is built, hashed or looked up per read.
 pub(crate) mod intrinsic_private_atoms {
     use super::*;
+    runtime_atom!(
+        WORKER_ID,
+        "#<perry:private-value:0:@0:[[WorkerId]]>",
+        "233c70657272793a707269766174652d76616c75653a303a40303a5b5b576f726b657249645d5d3e"
+    );
+    runtime_atom!(BROADCAST_CHANNEL_ID, "#<perry:private-value:0:@0:[[BroadcastChannelId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c49645d5d3e");
+    runtime_atom!(BROADCAST_CHANNEL_NAME, "#<perry:private-value:0:@0:[[BroadcastChannelName]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c4e616d655d5d3e");
+    runtime_atom!(BROADCAST_CHANNEL_CLOSED, "#<perry:private-value:0:@0:[[BroadcastChannelClosed]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b42726f6164636173744368616e6e656c436c6f7365645d5d3e");
     runtime_atom!(MESSAGE_PORT_ID, "#<perry:private-value:0:@0:[[MessagePortId]]>", "233c70657272793a707269766174652d76616c75653a303a40303a5b5b4d657373616765506f727449645d5d3e");
     runtime_atom!(
         REGEXP_MATCHER,
@@ -412,6 +420,43 @@ mod spawn_sync_result {
 }
 pub(crate) use spawn_sync_result::spawn_sync_slot;
 pub use spawn_sync_result::SPAWN_SYNC_RESULT;
+
+/// A dgram socket's `'message'` event `rinfo`: node builds it as the literal
+/// `{ address, family, port, size }`, so it is born on that final shape in one
+/// allocation and its values are stored by slot. It stays an ordinary,
+/// mutable object of `Object.prototype`. The family is one of two static
+/// atoms; the address is a fresh string per message, as in node.
+mod dgram_rinfo {
+    use super::record_atoms::*;
+    use super::*;
+    runtime_atom!(DGRAM_ATOM_IPV4, "IPv4", "49507634");
+    runtime_atom!(DGRAM_ATOM_IPV6, "IPv6", "49507636");
+    runtime_layout!(
+        DGRAM_RINFO,
+        0x4447_5249,
+        0,
+        crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
+        [RECORD_ATOM_4, RECORD_ATOM_17, RECORD_ATOM_8, RECORD_ATOM_26,],
+        realm = ["node:dgram", "node:dgram.createSocket", "node:dgram.Socket"]
+    );
+    /// The slots of [`DGRAM_RINFO`], in node's key order.
+    pub(crate) mod dgram_rinfo_slot {
+        pub(crate) const ADDRESS: usize = 0;
+        pub(crate) const FAMILY: usize = 1;
+        pub(crate) const PORT: usize = 2;
+        pub(crate) const SIZE: usize = 3;
+    }
+    /// The static `"IPv4"` / `"IPv6"` atom string.
+    pub(crate) fn family_atom(ipv6: bool) -> *const StringHeader {
+        if ipv6 {
+            DGRAM_ATOM_IPV6.string
+        } else {
+            DGRAM_ATOM_IPV4.string
+        }
+    }
+}
+pub use dgram_rinfo::DGRAM_RINFO;
+pub(crate) use dgram_rinfo::{dgram_rinfo_slot, family_atom as dgram_family_atom};
 
 /// Allocate a fixed record with every declared property present, including undefined values.
 ///
@@ -615,6 +660,7 @@ const fn atom_hash_prefix(bytes: &[u8], len: usize) -> u64 {
     hash
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn layout_id(desc: *const PerryLayoutDesc) -> u32 {
     (*desc).layout_id
@@ -1003,6 +1049,9 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "ARRAY_PROTOTYPE_NAMED") {
         return crate::codegen_abi::native_layout_word("ARRAY_PROTOTYPE_NAMED", 0);
     }
+    if same(name, "DGRAM_RINFO") {
+        return crate::codegen_abi::native_layout_word("DGRAM_RINFO", 0);
+    }
     if same(name, "DUPLEX") {
         return crate::codegen_abi::native_layout_word("DUPLEX", 1);
     }
@@ -1375,15 +1424,19 @@ const fn runtime_layout_word(name: &str) -> u32 {
     if same(name, "ARRAY_LATE") {
         return 0x80000085;
     }
+    #[cfg(test)]
+    if same(name, "DEFINED_HOLE") {
+        return 0x80000086;
+    }
     panic!("runtime descriptor absent from native catalog");
 }
 
 /// The rows of the runtime layouts only perry-runtime's own tests declare
-/// (`HOLEY` … `ARRAY_LATE` above): the band right after the native
+/// (`HOLEY` … `DEFINED_HOLE` above): the band right after the native
 /// rows. They are runtime layouts like the native ones, so their shape is
 /// installed at their first birth; no startup walk sees them.
 #[cfg(test)]
-const TEST_LAYOUT_ROWS: u32 = 9;
+const TEST_LAYOUT_ROWS: u32 = 10;
 #[cfg(not(test))]
 const TEST_LAYOUT_ROWS: u32 = 0;
 

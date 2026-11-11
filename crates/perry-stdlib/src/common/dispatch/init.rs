@@ -81,6 +81,12 @@ pub unsafe extern "C" fn js_handle_prototype_dispatch(handle: i64) -> f64 {
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_prototype_value();
     }
+    // A Web Streams handle's prototype is its interface's (the lazy stream
+    // families are born on first observation).
+    let proto = perry_runtime::object::web_stream_prototype_value(handle as usize);
+    if proto.to_bits() != perry_runtime::JSValue::undefined().bits() {
+        return proto;
+    }
     try_arm!(PROTOTYPE_CRYPTO, handle);
     f64::from_bits(perry_runtime::JSValue::undefined().bits())
 }
@@ -112,6 +118,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
             thread_name: extern "C" fn() -> f64,
             resource_limits: extern "C" fn() -> f64,
             thread_id: extern "C" fn() -> f64,
+        );
+        fn js_register_worker_threads_callable_dispatch(
+            dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize, *mut f64) -> bool,
         );
         fn js_register_worker_threads_environment_data(
             get: extern "C" fn(f64) -> f64,
@@ -200,6 +209,9 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_resource_limits,
         crate::worker_threads::js_worker_threads_thread_id,
     );
+    js_register_worker_threads_callable_dispatch(
+        crate::worker_threads::dispatch_worker_threads_callable,
+    );
     js_register_worker_threads_environment_data(
         crate::worker_threads::js_worker_threads_get_environment_data,
         crate::worker_threads::js_worker_threads_set_environment_data,
@@ -211,6 +223,10 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
         crate::worker_threads::js_worker_threads_message_channel_new,
         crate::worker_threads::js_worker_threads_broadcast_channel_new,
     );
+    perry_runtime::messaging::register_broadcast_channel_dispatch(
+        crate::worker_threads::dispatch_broadcast_channel_operation,
+    );
+    crate::worker_threads::register_message_port_codec();
     perry_runtime::messaging::js_register_worker_threads_message_port_dispatch(
         crate::worker_threads::dispatch_message_port_core_operation,
     );
@@ -230,6 +246,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
 #[cfg(feature = "web-fetch")]
 pub(super) unsafe fn install_fetch_registrations() {
     extern "C" {
+        fn js_sea_install_blob_factory(factory: usize);
         fn js_register_global_fetch_with_options(
             f: unsafe extern "C" fn(
                 *const perry_runtime::StringHeader,
@@ -275,6 +292,7 @@ pub(super) unsafe fn install_fetch_registrations() {
             f: extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
         );
     }
+    js_sea_install_blob_factory(crate::fetch_blob::js_blob_from_raw_bytes_v1 as *const () as usize);
     js_register_global_fetch_with_options(crate::fetch::js_fetch_with_options);
     // turnloop P6: the abort hook has to be registered next to the fetch hook.
     // Before this, `notify_fetch_abort` only reached the stdlib through a
@@ -491,7 +509,9 @@ pub(super) unsafe fn install_streams_registrations() {
     }
     STREAM_PROPERTY_BAG.set(stream_property_bag);
 
-    crate::streams::install_readable_stream_from_static();
+    // RSTREAM R5: the ReadableStream families' prototype members and
+    // `ReadableStream.from`, both installed by the family's lazy birth.
+    crate::streams::install_stream_prototypes();
     // #1545: register the Web Streams numeric-handle probe so method calls on
     // stream handles whose static type the codegen lost route to the stream
     // dispatch arms in `js_handle_method_dispatch`.
@@ -528,6 +548,11 @@ pub(super) unsafe fn install_streams_registrations() {
             crate::streams::js_writer_write,
             crate::streams::js_writer_close,
             crate::streams::js_writer_abort,
+        );
+        perry_runtime::node_stream::js_register_web_stream_constructors(
+            crate::streams::js_readable_stream_new_from_source_object,
+            crate::streams::js_writable_stream_new_from_sink_object,
+            crate::streams::js_transform_stream_new_from_transformer_object,
         );
     }
 }

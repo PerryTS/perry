@@ -9,7 +9,7 @@ pub(crate) unsafe fn named_bag(
 ) -> Option<*const ObjectHeader> {
     let header = crate::value::addr_class::try_read_gc_header(receiver as usize)?;
     let bag = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let bag = crate::array::array_property_bag(receiver.cast());
             if bag.is_null() {
                 return None;
@@ -81,7 +81,7 @@ pub(crate) unsafe fn try_own_store(
             return named_bag(obj, crate::JSValue::string_ptr(key as *mut _).bits())
                 .is_some_and(|bag| try_own_store(bag.cast_mut(), key, value));
         }
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(header.obj_type) {
             let arr = crate::array::clean_arr_ptr_mut(obj.cast());
             if crate::array::array_object_flags_resolved(arr) & crate::gc::OBJ_FLAG_FROZEN != 0 {
                 return false;
@@ -291,7 +291,7 @@ pub(crate) unsafe fn store_proven_own_slot(
         // and flag test): an own-key overwrite of `%Array.prototype%`'s
         // `join` must set its shadow bit like any other slot store.
         super::builtin_proto::note_value_store(obj, slot, false, "own store");
-        let rep = super::field_rep::slot_rep(record.rep(), slot as u32);
+        let rep = record.lane(slot as u32);
         let address = obj
             .cast::<u8>()
             .add(std::mem::size_of::<ObjectHeader>())
@@ -375,7 +375,7 @@ pub(crate) unsafe fn try_warm_transition(
         record
     } else {
         let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(header.obj_type) {
             return try_warm_array_transition(obj.cast(), key, value, refresh);
         }
         if crate::gc_type_is_not_object!(header.obj_type)
@@ -669,7 +669,7 @@ unsafe fn try_array_store(
         let proto_root = scope.root_nanbox_f64(prototype);
         let proto_addr = (prototype.to_bits() & crate::value::POINTER_MASK) as usize;
         let header = crate::value::addr_class::try_read_gc_header(proto_addr)?;
-        let prototype = if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+        let prototype = if crate::gc_type_is_array!(header.obj_type) {
             let proto_arr = crate::array::clean_arr_ptr_mut(proto_addr as *mut crate::ArrayHeader);
             if crate::array::array_object_flags_resolved(proto_arr)
                 & crate::gc::GC_ARRAY_CUSTOM_PROTO
@@ -800,7 +800,7 @@ pub(crate) unsafe fn try_store_with_refresh(
     }
     let addr = (target.to_bits() & POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(header.obj_type) {
         return try_array_store(target, key, value, name, may_move);
     }
     if header.obj_type == crate::gc::GC_TYPE_CLOSURE {

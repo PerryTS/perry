@@ -43,6 +43,7 @@ use std::ffi::c_void;
 use std::net::SocketAddr;
 use std::path::Path;
 
+use super::write_queue::Eager;
 use super::*;
 use crate::native_payload::{self as np, OwnerLink};
 
@@ -129,6 +130,15 @@ impl TransportCore {
     /// no work and takes no ref.
     pub fn read_op(&self) -> Option<OpId> {
         self.entry.as_ref().and_then(|e| e.read_op)
+    }
+
+    /// Whether a write completion is still owed: a driver write in flight,
+    /// a posted whole-write completion not yet dispatched, or a caller
+    /// write not yet acknowledged. Submits no work and takes no ref.
+    pub fn write_owed(&self) -> bool {
+        self.entry
+            .as_ref()
+            .is_some_and(|e| e.inflight != 0 || e.posted || !e.writes.is_empty())
     }
 
     /// The sink route.
@@ -883,7 +893,7 @@ pub unsafe fn write(
     user: u64,
 ) -> NetResult<usize> {
     let (c, name) = bind(core, link, "write")?;
-    with_driver(|driver| accept_write(driver, c, name, bytes, user))
+    with_driver(|driver| unsafe { accept_write(driver, c, name, link, bytes, user) })
         .unwrap_or_else(|| Err(no_loop()))
 }
 
@@ -1102,10 +1112,11 @@ struct Failure {
     users: Vec<u64>,
 }
 
-fn accept_write(
+unsafe fn accept_write(
     driver: &mut turnloop::Loop,
     c: &mut TransportCore,
     name: Name,
+    link: OwnerLink,
     bytes: Vec<u8>,
     user: u64,
 ) -> NetResult<usize> {
@@ -1118,11 +1129,20 @@ fn accept_write(
             let waiting = !c.backlog.is_idle();
             if !entry.connecting && !waiting && entry.inflight < MAX_INFLIGHT_WRITES {
                 let len = bytes.len();
-                write_queue::submit_bytes(driver, name, entry, bytes)
+                let eager = write_queue::submit_bytes_eager(driver, name, entry, bytes)
                     .map_err(|e| map_error(e, "write"))?;
+                let posted = matches!(eager, Eager::Whole)
+                    && post_whole(driver, entry, name, link).map_err(|e| map_error(e, "write"))?;
+                let sent = match eager {
+                    Eager::Whole => len,
+                    Eager::Part(sent) => sent,
+                };
                 entry.writes.push_back(PendingWrite {
                     user,
                     len,
+                    sent,
+                    sync: sent == len,
+                    posted,
                     last: true,
                 });
             } else {
@@ -1193,8 +1213,22 @@ unsafe fn flush(
         }
         let bytes = std::mem::take(&mut backlog.bytes);
         let mut writes = std::mem::take(&mut backlog.writes);
-        match write_queue::submit_bytes(driver, name, entry, bytes) {
-            Ok(()) => {
+        let submitted = write_queue::submit_bytes_eager(driver, name, entry, bytes).and_then(
+            |eager| match eager {
+                Eager::Whole => Ok((usize::MAX, unsafe {
+                    post_whole(driver, entry, name, link)
+                }?)),
+                Eager::Part(sent) => Ok((sent, false)),
+            },
+        );
+        match submitted {
+            Ok((mut sent, posted)) => {
+                // The kernel took a prefix: it belongs to the oldest writes.
+                for w in writes.iter_mut() {
+                    w.sent = w.len.min(sent);
+                    sent -= w.sent;
+                    w.posted = posted;
+                }
                 if let Some(tail) = writes.last_mut() {
                     tail.last = true;
                 }
@@ -1255,9 +1289,55 @@ unsafe fn flush_after(link: OwnerLink, force: bool) {
     }
 }
 
-/// Retire the caller writes one driver write (or shutdown) covered.
-fn retire(c: &mut TransportCore, op_class: u64) -> Vec<(u64, usize, usize)> {
-    let waiting = c.backlog.bytes.len();
+/// The kernel took a write whole and no driver write carries it: post its
+/// completion on the loop, so its `Wrote` comes on a later turn, after the
+/// caller's `write()` returned (Node runs that callback from the next tick).
+/// One post per socket at a time retires every such write in front. Returns
+/// whether the write is posted; with the post queue full, an empty driver
+/// write carries the completion instead.
+unsafe fn post_whole(
+    driver: &mut turnloop::Loop,
+    entry: &mut Entry,
+    name: Name,
+    link: OwnerLink,
+) -> Result<bool, Error> {
+    if entry.posted {
+        return Ok(true);
+    }
+    match driver
+        .poster()
+        .post(name.token(OP_WRITE), turnloop::Payload::U64(0))
+    {
+        Ok(()) => {}
+        Err(e) if e.payload.is_none() => {}
+        Err(_) => {
+            write_queue::submit_bytes(driver, name, entry, Vec::new())?;
+            return Ok(false);
+        }
+    }
+    census::note_submit(OP_WRITE);
+    // The post's ref: its completion dereferences the cell.
+    hold(link);
+    entry.posted = true;
+    Ok(true)
+}
+
+/// One retired caller write: `(user, len, the part of len the driver wrote,
+/// sync, posted)`.
+type Retired = (u64, usize, usize, bool, bool);
+
+/// Pop the posted writes now in front: the kernel took them whole, and they
+/// complete before anything written after them.
+fn retire_posted(entry: &mut Entry, retired: &mut Vec<Retired>) {
+    while entry.writes.front().is_some_and(|w| w.posted) {
+        let w = entry.writes.pop_front().expect("observed front");
+        retired.push((w.user, w.len, 0, w.sync, true));
+    }
+}
+
+/// Retire the caller writes one driver write (or shutdown) covered, oldest
+/// first, with the posted writes in front of and right behind them.
+fn retire(c: &mut TransportCore, op_class: u64) -> Vec<Retired> {
     let Some(entry) = c.entry.as_mut() else {
         return Vec::new();
     };
@@ -1265,14 +1345,30 @@ fn retire(c: &mut TransportCore, op_class: u64) -> Vec<(u64, usize, usize)> {
         entry.inflight = entry.inflight.saturating_sub(1);
     }
     let mut retired = Vec::new();
+    retire_posted(entry, &mut retired);
     while let Some(w) = entry.writes.pop_front() {
-        entry.queued = entry.queued.saturating_sub(w.len);
-        retired.push((w.user, w.len, entry.queued + waiting));
+        entry.queued = entry.queued.saturating_sub(w.len - w.sent);
+        retired.push((w.user, w.len, w.len - w.sent, w.sync, false));
         if w.last {
             break;
         }
     }
+    retire_posted(entry, &mut retired);
     retired
+}
+
+/// Report retired writes that completed: one `Wrote` each, with the socket's
+/// queued bytes as they stand now.
+unsafe fn emit_wrote(route: u8, link: OwnerLink, retired: &[Retired]) {
+    let id = link.0 as i64;
+    let queued = core_of(link).map_or(0, |c| total_queued(c));
+    for &(user, len, _, sync, _) in retired {
+        let mut wrote = NetCompletion::wrote(id, user, len, queued).linked();
+        if sync {
+            wrote.flags |= sink::NET_FLAG_SYNC_WRITE;
+        }
+        sink::emit(route, wrote);
+    }
 }
 
 fn report_error(
@@ -1575,6 +1671,9 @@ unsafe fn dispatch_stream(
                 }
                 sink::emit(route, event);
             }
+            for _ in 0..defer_eof::purge(defer_eof::Key::Link(link.0), handle) {
+                release(link);
+            }
             // The handle's ref, taken at install. Last: the sink ran with the
             // cell pinned.
             release(link);
@@ -1620,6 +1719,9 @@ unsafe fn dispatch_stream(
             }
             let bytes = lease.as_ref().map(|l| l.as_slice()).unwrap_or(&[]);
             debug_assert!(bytes.len() == n || lease.is_none());
+            if n != 0 {
+                defer_eof::note_data(defer_eof::Key::Link(link.0));
+            }
             sink::emit(route, NetCompletion::data(id, bytes).linked());
             drop(lease);
         }
@@ -1639,7 +1741,12 @@ unsafe fn dispatch_stream(
                 }
                 entry.read_op = None;
             }
-            sink::emit(route, NetCompletion::eof(id).linked());
+            if defer_eof::park(defer_eof::Key::Link(link.0), route, handle) {
+                // Pins the cell until the parked EOF is delivered or dropped.
+                hold(link);
+            } else {
+                sink::emit(route, NetCompletion::eof(id).linked());
+            }
         }
         OpResult::Wrote(n) => {
             let Some(c) = current(link, handle) else {
@@ -1648,20 +1755,39 @@ unsafe fn dispatch_stream(
             let route = c.route;
             let retired = retire(c, OP_WRITE);
             debug_assert!(
-                retired.is_empty() || retired.iter().map(|r| r.1).sum::<usize>() == n,
+                retired.is_empty() || retired.iter().map(|r| r.2).sum::<usize>() == n,
                 "a write completes its whole buffer"
             );
+            // Node's `onwrite`: the completion first writes the buffered
+            // chunks (whatever the kernel takes now completes synchronously),
+            // and `afterWrite` then decides `'drain'` on what is left. So every
+            // retired write reports the length after that flush (perry#9493).
             flush_after(link, false);
-            for (user, len, queued) in retired {
-                sink::emit(route, NetCompletion::wrote(id, user, len, queued).linked());
+            emit_wrote(route, link, &retired);
+        }
+        OpResult::Posted(_) => {
+            // The completion of writes the kernel took whole (`post_whole`).
+            // A retire may already have reported them; then nothing is left.
+            if let Some(c) = core_of(link) {
+                let route = c.route;
+                let mut retired = Vec::new();
+                if let Some(entry) = c.entry.as_mut() {
+                    entry.posted = false;
+                    retire_posted(entry, &mut retired);
+                }
+                emit_wrote(route, link, &retired);
             }
+            release(link);
         }
         OpResult::Shutdown => {
             let Some(c) = current(link, handle) else {
                 return;
             };
             let route = c.route;
-            let user = retire(c, OP_SHUTDOWN).first().map_or(0, |r| r.0);
+            let (written, shut): (Vec<Retired>, Vec<Retired>) =
+                retire(c, OP_SHUTDOWN).into_iter().partition(|r| r.4);
+            emit_wrote(route, link, &written);
+            let user = shut.first().map_or(0, |r| r.0);
             sink::emit(route, NetCompletion::shutdown(id, user).linked());
         }
         OpResult::Err(err) => {
@@ -1669,10 +1795,19 @@ unsafe fn dispatch_stream(
                 return;
             };
             let route = c.route;
-            let users: Vec<u64> = if op == OP_WRITE || op == OP_SHUTDOWN {
-                retire(c, op).into_iter().map(|r| r.0).collect()
-            } else {
-                Vec::new()
+            let (written, failed): (Vec<Retired>, Vec<Retired>) =
+                if op == OP_WRITE || op == OP_SHUTDOWN {
+                    retire(c, op).into_iter().partition(|r| r.4)
+                } else {
+                    Default::default()
+                };
+            let users: Vec<u64> = failed.into_iter().map(|r| r.0).collect();
+            if !written.is_empty() {
+                // The kernel took these whole before the failing write.
+                emit_wrote(route, link, &written);
+            }
+            let Some(c) = current(link, handle) else {
+                return;
             };
             let queued = total_queued(c);
             if terminal {
@@ -1694,6 +1829,29 @@ unsafe fn dispatch_stream(
         }
         _ => {}
     }
+}
+
+/// Deliver an EOF `defer_eof` parked, if the incarnation that read it is
+/// still installed, then drop the ref the park took.
+///
+/// # Safety
+/// The parked EOF's ref pins `link`'s cell.
+pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>) {
+    if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
+        if let Some(c) = current(link, handle) {
+            let route = c.route;
+            sink::emit(route, NetCompletion::eof(link.0 as i64).linked());
+        }
+    }
+    release(link);
+}
+
+/// Drop the ref of an EOF `defer_eof` parked and will never deliver.
+///
+/// # Safety
+/// As [`deliver_parked_eof`].
+pub(super) unsafe fn release_parked_eof(cell: usize) {
+    release(OwnerLink(cell));
 }
 
 unsafe fn accepted(

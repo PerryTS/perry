@@ -1,0 +1,41 @@
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cyclic __proto__ value
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.then: built-in objects are read-only in a compiled program
+warm=19900
+assign -> [object Object]
+assign-removed -> {"tag":1}
+dp-data -> [object Object]
+dp-data-removed -> {"tag":2}
+accessor -> [object Object]
+accessor -> [object Object]
+accessor-getter-called=false
+accessor-removed -> {"tag":3}
+undef-accessor -> [{"tag":4},{"tag":4},{"tag":4}]
+undef-accessor-calls>=3 -> false
+object-assign -> [object Object]
+object-assign-removed -> {"tag":5}
+reflect-set -> [object Object]
+reflect-dp -> [object Object]
+reflect-removed -> {"tag":6}
+own-then -> own-then
+own-then-added-later -> {"tag":7}
+own-then-added-later -> own-then-late
+own-accessor -> own-accessor
+setPrototypeOf -> set-prototype-of
+__proto__ -> dunder-proto
+null-proto -> {"tag":10}
+null-proto-then -> null-proto-then
+proto-of-proto -> no-throw
+proto-of-proto-after -> {"tag":11}
+inherited-two-levels -> grandparent
+await-path -> [object Object]
+returned -> {"tag":13}
+returned -> [object Object]
+done

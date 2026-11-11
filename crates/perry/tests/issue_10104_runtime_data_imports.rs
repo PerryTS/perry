@@ -47,7 +47,7 @@ fn compile_and_run(source: &str) -> String {
 #[test]
 fn runtime_data_loaders_and_legacy_migration_match_bun() {
     let output = compile_and_run(include_str!(
-        "../../../test-files/test_dynamic_import_data_10104.ts"
+        "../../../tests/fixtures/programs/test_dynamic_import_data_10104.ts"
     ));
     assert_eq!(
         output,

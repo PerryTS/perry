@@ -634,6 +634,11 @@ pub extern "C" fn js_string_from_char_code(code: f64) -> *mut StringHeader {
 /// `String.fromCharCode(...arrayLike)` / `String.fromCharCode.apply(_, bytes)`.
 #[no_mangle]
 pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeader {
+    // `.apply(_, undefined | null)` passes no arguments (CreateListFromArrayLike).
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_null() || jsv.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
     let arr = crate::object::js_array_like_to_array(value);
     if arr.is_null() {
         return js_string_from_bytes(std::ptr::null(), 0);
@@ -667,9 +672,7 @@ pub extern "C" fn js_string_from_char_code_array(value: f64) -> *mut StringHeade
 fn throw_invalid_code_point(code: f64) -> ! {
     let msg = format!("Invalid code point {}", code);
     let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_rangeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg_str))
 }
 
 /// Create a string from a Unicode code point (String.fromCodePoint).
@@ -709,6 +712,11 @@ pub extern "C" fn js_string_from_code_point(code: f64) -> *mut StringHeader {
 /// reified `String.fromCodePoint` constructor static so value reads / spread
 /// calls work. (#4627)
 pub fn js_string_from_code_point_array(value: f64) -> *mut StringHeader {
+    // `.apply(_, undefined | null)` passes no arguments (CreateListFromArrayLike).
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    if jsv.is_null() || jsv.is_undefined() {
+        return js_string_from_bytes(std::ptr::null(), 0);
+    }
     let arr = crate::object::js_array_like_to_array(value);
     if arr.is_null() {
         return js_string_from_bytes(std::ptr::null(), 0);

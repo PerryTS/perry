@@ -86,6 +86,9 @@ pub(super) struct Facts {
     pub instance: Option<String>,
     pub extends: Option<String>,
     pub family: Option<String>,
+    /// `effects = { ... }`: what the body does to its inputs (realm_effects.rs).
+    pub effects: Option<Value>,
+    pub throws: Option<Value>,
 }
 
 impl Facts {
@@ -155,6 +158,8 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         instance: None,
         extends: None,
         family: None,
+        effects: None,
+        throws: None,
     };
     let mut fields = BTreeSet::new();
     let mut member_tokens = None;
@@ -353,6 +358,8 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                 }
             }
             "value" => facts.value = Some(constant(&clause[2..])?),
+            "throws" => facts.throws = Some(super::throws::operands(&clause[2..])?),
+            "effects" => facts.effects = Some(super::effects::parse(&clause[2..])?),
 
             "births" => {
                 if clause[2].text != "[" || clause.last().is_none_or(|t| t.text != "]") {
@@ -491,6 +498,12 @@ pub(super) fn logical(
     source: &str,
     native_abi: &super::native::Abi,
 ) -> Result<Value, String> {
+    if facts.effects.is_some() {
+        return Err(format!(
+            "{}: effects belong to the fn_info! that builds the body",
+            facts.name
+        ));
+    }
     if (facts.instance_attrs.is_some() && !facts.native_method)
         || facts.ansi_colors
         || facts.bare_closure
@@ -686,6 +699,8 @@ pub(super) fn callable(
     source_symbol: String,
     source: &str,
 ) -> Result<Value, String> {
+    let effects = facts.effects.take();
+    let throws = facts.throws.take();
     if facts.ansi_colors
         || facts.namespace_table.is_some()
         || facts.provider
@@ -1027,6 +1042,12 @@ pub(super) fn callable(
             Value::Array(births.into_iter().map(string).collect()),
         ),
     ]);
+    if let Some(throws) = throws {
+        declaration.insert("throws".into(), throws);
+    }
+    if let Some(effects) = effects {
+        declaration.insert("effects".into(), effects);
+    }
     if let Some(constructor) = constructor {
         declaration.insert("constructor".into(), constructor);
     }

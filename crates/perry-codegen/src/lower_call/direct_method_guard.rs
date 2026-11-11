@@ -208,7 +208,8 @@ pub(crate) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class
                 return false;
             }
             match fam.keys.get(slot) {
-                Some((k, s)) if k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
+                Some((k, s))
+                    if k.plain() && k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
                 _ => return false,
             }
             slot += 1;

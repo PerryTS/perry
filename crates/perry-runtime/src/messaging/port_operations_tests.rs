@@ -71,22 +71,53 @@ fn registered_post_message_preserves_absence_and_explicit_undefined() {
         crate::closure::js_closure_call0(method_ptr(), receiver())
     });
     assert!(missing.is_err());
-    assert!(with_port_states(|map| map
-        [&(second.get_raw_mut_ptr::<ObjectHeader>() as usize)]
-        .queue
-        .is_empty()));
+    assert!(!port_transport::pending(
+        runtime_port_lease(boxed_object(second.get_raw_mut_ptr())).unwrap()
+    ));
     crate::closure::js_closure_call1(method_ptr(), receiver(), js_undefined());
-    let packet = with_port_states(|map| {
-        map.get_mut(&(second.get_raw_mut_ptr::<ObjectHeader>() as usize))
-            .unwrap()
-            .queue
-            .pop_front()
-    });
+    let packet = take_runtime_port_message(boxed_object(second.get_raw_mut_ptr()));
     assert_eq!(packet.map(f64::to_bits), Some(js_undefined().to_bits()));
     close(std::ptr::null(), receiver(), js_undefined());
     close(
         std::ptr::null(),
         JsThis::from_f64(boxed_object(second.get_raw_mut_ptr())),
+        js_undefined(),
+    );
+}
+
+#[test]
+fn synchronous_runtime_receive_uses_existing_fifo_and_closed_identity() {
+    crate::gc::gc_init();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let first = scope.root_raw_mut_ptr(message_port_object_with_id(0));
+    let second = scope.root_raw_mut_ptr(message_port_object_with_id(0));
+    entangle_ports(first.get_raw_mut_ptr(), second.get_raw_mut_ptr());
+    let receiver = || boxed_object(second.get_raw_mut_ptr());
+    assert!(take_runtime_port_message(receiver()).is_none());
+    for value in [js_undefined(), 42.0] {
+        port_post_message(
+            std::ptr::null(),
+            JsThis::from_f64(boxed_object(first.get_raw_mut_ptr())),
+            value,
+            js_undefined(),
+        );
+    }
+    assert_eq!(
+        take_runtime_port_message(receiver()).map(f64::to_bits),
+        Some(js_undefined().to_bits())
+    );
+    assert_eq!(take_runtime_port_message(receiver()), Some(42.0));
+    assert!(take_runtime_port_message(receiver()).is_none());
+    close(
+        std::ptr::null(),
+        JsThis::from_f64(receiver()),
+        js_undefined(),
+    );
+    assert_eq!(message_port_id(receiver()), Some(0));
+    assert!(take_runtime_port_message(receiver()).is_none());
+    close(
+        std::ptr::null(),
+        JsThis::from_f64(boxed_object(first.get_raw_mut_ptr())),
         js_undefined(),
     );
 }

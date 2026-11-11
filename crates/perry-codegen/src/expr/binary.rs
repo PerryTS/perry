@@ -149,12 +149,18 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             if !is_tested {
@@ -186,10 +192,17 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // A receiver run in flight goes on past the add: the numeric arm
+        // emits no call, and the dynamic arm re-proves the run's receiver
+        // after its conversions (`layout_read::ColdSpan`).
+        let mut span = crate::expr::layout_read::cold_span(ctx);
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
         let fast_val = rebuild_numeric_add_tree(ctx, expr, values, &mut 0);
+        if let Some(span) = span.as_mut() {
+            crate::expr::layout_read::cold_hot_end(ctx, span);
+        }
         let fast_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -210,14 +223,52 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
             let result = rebuild_rooted_dynamic_add_tree(ctx, expr, group, &leaves, &mut 0, false);
             Ok(group.reread_emitted(ctx, result))
         })?;
+        let reproof = match span.as_ref() {
+            Some(span) => crate::expr::layout_read::cold_reprove(ctx, span)?,
+            None => None,
+        };
         let slow_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
         ctx.current_block = merge_idx;
-        Ok(ctx
+        let value = ctx
             .block()
-            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]))
+            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]);
+        if let Some(span) = span {
+            crate::expr::layout_read::cold_merge(ctx, span, &fast_end, reproof);
+        }
+        Ok(value)
     })
+}
+
+/// P3 B1, C2 (`facts_canonical`): a guarded arithmetic leaf the facts prove a
+/// plain Number needs no "is a Number" test.
+fn facts_number_leaf(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
+    let proven = crate::expr::facts_canonical::of(ctx, leaf)
+        == Some(crate::expr::facts_canonical::Num::Number);
+    if proven {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::CanonicalNumber,
+            || serde_json::json!({ "arith": "leaf" }),
+        );
+        crate::facts_consumed::used();
+    }
+    proven
+}
+
+/// Check mode: each fact-trusted leaf is a plain double.
+fn witness_facts_leaves(ctx: &mut FnCtx<'_>, values: &[String], facts: &[bool]) -> Result<()> {
+    for (value, f) in values.iter().zip(facts) {
+        if *f {
+            crate::expr::facts_canonical::witness(
+                ctx,
+                value,
+                crate::expr::facts_canonical::Num::Number,
+                "arithmetic leaf",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// The `+`-shaped guard for the arithmetic operators that cannot concatenate.
@@ -247,13 +298,19 @@ fn lower_guarded_numeric_arith(
     fname: &str,
 ) -> Result<String> {
     let leaves = [left, right];
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
     let range_guard = is_bitwise_op(op) && needs_test.contains(&true);
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             let is_num = if range_guard {
@@ -320,6 +377,13 @@ fn lower_guarded_numeric_arith(
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // The helper is the arm for a BigInt or a value that needs ToNumeric.
+        let all_num = if crate::module::cold_paths_enabled() {
+            ctx.block()
+                .call(I1, "llvm.expect.i1", &[(I1, &all_num), (I1, "true")])
+        } else {
+            all_num
+        };
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
@@ -807,6 +871,11 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         }
     }
     if let Expr::IndexGet { object, index, .. } = expr {
+        if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+            let number = super::rest_elems::Want::Number;
+            let value = super::rest_elems::lower_read(ctx, expr, floor, number)?;
+            return Ok((value, true));
+        }
         if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
             return Ok((value, true));
         }
@@ -877,6 +946,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // no boxed fallback at all (the residual per-element check proves the slot
     // is a raw double before the load), so claiming one here would be a lie
     // that other consumers of that predicate would read.
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
         if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
     if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
@@ -965,6 +1038,29 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+        if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(ctx.block().sitofp(I32, &v, DOUBLE));
+        }
+        // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
+        // is `l` and `r` is never evaluated. (An in-window read under a
+        // packed-loop index fact, a proven raw-f64 field, a numeric local.)
+        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+            && !matches!(
+                std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+        {
+            return lower_expr(ctx, left);
+        }
+        // An element read below a dense floor that is a proven Number
+        // (`proven_array`, PR-C2): never nullish, and its number-context
+        // lowering is the double.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_operand_as_number(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();
@@ -1219,6 +1315,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // BigInt-capable lowering; every guard miss retains that lowering
             // in the peephole's slow arm.
             if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
+                return Ok(value);
+            }
+            // Operands the facts hold as int32 words (an I32 lane, an at-rest
+            // or int32 element) stay i32 through the operator.
+            if let Some(value) = super::int32_operand::try_lower_bitwise(ctx, *op, left, right)? {
                 return Ok(value);
             }
             if matches!(op, BinaryOp::Add) {

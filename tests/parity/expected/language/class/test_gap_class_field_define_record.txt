@@ -1,0 +1,9 @@
+callable kind "node" true true true false
+callable count 0 true true true false
+DEC 250: Cannot add member Object.prototype.get: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.set: built-in objects are read-only in a compiled program
+callable+pollution kind "node" true true true false
+function 5 kind,count
+plain+pollution a 1 true true true false
+plain+pollution b "two" true true true false
+no throw

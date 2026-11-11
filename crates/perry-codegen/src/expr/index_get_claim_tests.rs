@@ -44,6 +44,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
@@ -116,6 +117,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 init: Some(Expr::Binary {
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(ITEMS)),
@@ -320,6 +322,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
@@ -480,6 +483,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     init: Some(Expr::Binary {
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::IndexGet {
+                            element_offset: 0,
                             byte_offset: 0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(ITEMS)),
@@ -547,12 +551,10 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
-    let symbol_read = Expr::IndexGet {
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(Expr::LocalGet(ITEMS)),
-        index: Box::new(Expr::LocalGet(SYMBOL)),
-    };
+    let symbol_read = Expr::synthetic_index_get(
+        Box::new(Expr::LocalGet(ITEMS)),
+        Box::new(Expr::LocalGet(SYMBOL)),
+    );
     let result = match field {
         Some(property) => Expr::PropertyGet {
             byte_end: 0,
@@ -662,12 +664,10 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 name: "result".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(ITEMS)),
-                    index: Box::new(Expr::Integer(0)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(ITEMS)),
+                    Box::new(Expr::Integer(0)),
+                )),
             },
         ],
     );
@@ -812,10 +812,12 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
@@ -828,8 +830,16 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     assert!(ir.contains("aidx.canonical") && ir.contains("aidx.runtime_key"));
     // The "integer-valued double in [0, 2^32)" test is the shared pure
     // normalizer (`memory(none)`, a GC leaf) and a sign test of its result.
+    // N10: the tier's unsigned bound declines the normalizer's `-1`, and the
+    // sign test sits on the tier's miss arm (`icmp slt`, `ubound.cold`); with
+    // `PERRY_UNSIGNED_BOUND=0` it is the split's `icmp sge` again.
+    let sign_test = if crate::expr::index_key::unsigned_bound() {
+        ir.contains("icmp slt i32 %") && ir.contains("ubound.cold")
+    } else {
+        ir.contains("icmp sge i32 %")
+    };
     assert!(
-        ir.contains("call i32 @perry_array_index_normalize_i32(") && ir.contains("icmp sge i32 %"),
+        ir.contains("call i32 @perry_array_index_normalize_i32(") && sign_test,
         "the dynamic key must be normalized by the shared index helper:\n{ir}"
     );
     assert!(ir.contains("aidx.dynamic.guard.deref") && ir.contains("aidx.dynamic.fast"));
@@ -886,10 +896,12 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(ITEMS)),
                     index: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(SPARSE)),
@@ -933,6 +945,7 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
         ],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(ITEMS)),

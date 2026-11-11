@@ -1,0 +1,8 @@
+listening 127.0.0.1 IPv4 true
+listening 127.0.0.1 IPv4 true
+b received 1000 in order true bytes 607584
+a received 1000 in order true bytes 607584
+send callbacks 2000 errors 0 queue 0
+rinfo ok true
+closed 2
+exit 0

@@ -31,10 +31,14 @@
 mod wasm;
 
 pub(crate) mod marks;
-pub(crate) use marks::CatchStack;
 pub use marks::{caller_frame_mark, frame_mark};
 mod native_call;
 pub(crate) use native_call::catch_native_callback;
+pub(crate) mod throw_leaf;
+use throw_leaf::ThrowKind;
+pub use throw_leaf::{
+    rethrow_caught, throw_core, throw_open, throw_program_value, Caught, CoreError, RootedCaught,
+};
 
 struct ExceptionState {
     current_exception: f64,
@@ -251,10 +255,23 @@ fn take_exception() -> f64 {
 /// Run `f` under a trap. `Ok(value)` on a normal return; `Err(exception_bits)`
 /// — with the TLS exception slot cleared — if `f` threw.
 pub fn catch_js_throw<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    catch_thrown(f).map_err(|caught| caught.value())
+}
+
+/// Run `f` under a trap. `Ok(value)` on a normal return; `Err(caught)` —
+/// with the TLS exception slot cleared — if `f` threw. The typed form of
+/// [`catch_js_throw`]: one of the two funnels that make a [`Caught`].
+pub fn catch_thrown<R>(f: impl FnOnce() -> R) -> Result<R, Caught> {
     match trap(f) {
         Some(r) => Ok(r),
-        None => Err(take_exception()),
+        None => Err(Caught::mint(take_exception())),
     }
+}
+
+/// The pending exception (as [`js_get_exception`], without clearing it) as
+/// a [`Caught`]: the other funnel that makes one.
+pub fn pending_exception() -> Caught {
+    Caught::mint(js_get_exception())
 }
 
 /// The fixed generator boundary calls one known two-argument compiled body.
@@ -265,7 +282,7 @@ pub(crate) unsafe fn catch_generator_resume(
     state: &crate::gc::RuntimeHandle<'_>,
     op: f64,
     arg: f64,
-) -> Result<f64, f64> {
+) -> Result<f64, Caught> {
     struct Invocation<'a, 'scope> {
         state: &'a crate::gc::RuntimeHandle<'scope>,
         arg: f64,
@@ -313,7 +330,7 @@ pub(crate) unsafe fn catch_generator_resume(
     if trap_raw::<false>(invoke, (&raw mut ctx).cast()) {
         Ok(ctx.result)
     } else {
-        Err(take_exception())
+        Err(Caught::mint(take_exception()))
     }
 }
 
@@ -329,6 +346,12 @@ crate::perry_thread_local! {
 /// listener), and an unhandled rejection. `Err(value)` is that exception. The
 /// caller ends the worker; the process keeps running, as in Node.
 pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    run_worker_body_caught(f).map_err(|caught| caught.value())
+}
+
+/// The typed worker base retains exception provenance when an execution
+/// phase observes the value before handing it to an outer worker base.
+pub fn run_worker_body_caught<R>(f: impl FnOnce() -> R) -> Result<R, Caught> {
     let outer = IN_WORKER_BASE.with(|d| d.replace(true));
     let outcome = trap_with::<true, R, _>(f);
     IN_WORKER_BASE.with(|d| d.set(outer));
@@ -337,7 +360,11 @@ pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
     with_exception_state(|s| unsafe { (*s).to_worker_base = false });
     match outcome {
         Some(r) => Ok(r),
-        None => Err(take_exception()),
+        None => {
+            let caught = pending_exception();
+            js_clear_exception();
+            Err(caught)
+        }
     }
 }
 
@@ -426,13 +453,14 @@ fn trace_throw_enabled() -> bool {
 #[cold]
 #[optimize(size)]
 #[inline(never)]
-fn trace_throw(value: f64) {
+fn trace_throw(value: f64, kind: ThrowKind) {
     eprintln!("[trace-throw] thrown value:");
     print_uncaught(value);
     let mut ips = [0usize; crate::error::MAX_CAPTURED_FRAMES];
     let n = crate::error::capture_ips(&mut ips);
     eprintln!(
-        "[trace-throw] throw site, innermost first: {}",
+        "[trace-throw] throw site ({}), innermost first: {}",
+        kind.label(),
         crate::error::describe_chain(&ips[..n], n)
     );
 }
@@ -445,8 +473,37 @@ fn trace_throw(value: f64) {
 /// generated frame's handler. Plain `extern "C"` installs an aborting guard at
 /// the function boundary and turns a catchable JS throw into
 /// `panic_cannot_unwind` before the landing pad can run.
+///
+/// This is the entry point of compiled code (a program `throw` statement).
+/// Runtime Rust code throws through the typed leaves instead
+/// ([`throw_core`], [`rethrow_caught`], [`throw_program_value`],
+/// [`throw_open`]).
 #[no_mangle]
-pub extern "C-unwind" fn js_throw(value: f64) -> ! {
+extern "C-unwind" fn js_throw(value: f64) -> ! {
+    raise_thrown(value, ThrowKind::Compiled)
+}
+
+/// Exercise the compiled-code throw entry in runtime unit fixtures.
+#[cfg(test)]
+pub(crate) fn test_throw(value: f64) -> ! {
+    js_throw(value)
+}
+
+/// A `throw` whose handler is a scope of the throwing function itself: the
+/// generated code makes the value pending here, restores the managed stacks
+/// (`js_eh_pad_enter`, as the scope's landing pad does) and branches to the
+/// block that pad continues at. No frame is abandoned, so nothing is
+/// transported; everything else a throw does happens exactly as in
+/// [`raise_thrown`].
+#[no_mangle]
+pub extern "C" fn js_throw_local(value: f64) {
+    set_thrown(value, ThrowKind::Compiled);
+}
+
+/// Make `value` the pending exception of this thread: the part of a throw
+/// that does not depend on where its handler is.
+#[inline]
+fn set_thrown(value: f64, kind: ThrowKind) {
     // The throws premise of the generated GC-effects table: a collection never
     // unwinds. Throw path only (see `forbid_throw_in_collection`).
     crate::gc::allocation_pacing::forbid_throw_in_collection();
@@ -464,8 +521,15 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         }
     });
     if trace_throw_enabled() {
-        trace_throw(value);
+        trace_throw(value, kind);
     }
+}
+
+/// The one raise behind `js_throw` and the four typed leaves: store the
+/// value and transport it to the handler.
+#[inline(never)]
+fn raise_thrown(value: f64, kind: ThrowKind) -> ! {
+    set_thrown(value, kind);
     #[cfg(target_os = "wasi")]
     crate::eh::raise_wasm_exception();
     #[cfg(not(target_os = "wasi"))]
@@ -812,7 +876,7 @@ mod tests {
             let _f2 = js_shadow_frame_push(2);
             js_shadow_slot_set(0, 0x7FFD_0000_0000_00B1);
             assert_eq!(shadow_stack_depth(), depth_at_try + 2);
-            js_throw(1.0)
+            test_throw(1.0)
         });
         assert_eq!(r, Err(1.0));
         assert_eq!(
@@ -834,7 +898,7 @@ mod tests {
             let scope = RuntimeHandleScope::new();
             let _orphaned = scope.root_nanbox_f64(f64::from_bits(0x7FFD_0000_0000_00A1));
             std::mem::forget(scope);
-            js_throw(3.0)
+            test_throw(3.0)
         }
         let base_handles = RuntimeHandleScope::active_len_for_tests();
         let scope = RuntimeHandleScope::new();
@@ -858,7 +922,7 @@ mod tests {
             let inner: Result<(), f64> = catch_js_throw(|| {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let _save = scope.root_new_target_save(crate::object::js_new_target_set(22.0));
-                js_throw(99.0)
+                test_throw(99.0)
             });
             assert_eq!(inner, Err(99.0));
             assert_eq!(
@@ -878,7 +942,7 @@ mod tests {
     #[test]
     fn trap_catches_a_real_throw_and_traps_again() {
         assert_eq!(trap(|| 7), Some(7));
-        let landed = trap(|| -> i32 { js_throw(42.0) });
+        let landed = trap(|| -> i32 { test_throw(42.0) });
         assert!(landed.is_none(), "throw must land in the trap");
         assert_eq!(js_get_exception(), 42.0);
         js_clear_exception();
@@ -889,7 +953,7 @@ mod tests {
     #[test]
     fn catch_js_throw_err_clears_exception() {
         assert_eq!(catch_js_throw(|| 3usize), Ok(3));
-        let r: Result<usize, f64> = catch_js_throw(|| js_throw(7.5));
+        let r: Result<usize, f64> = catch_js_throw(|| test_throw(7.5));
         assert_eq!(r, Err(7.5));
         assert_eq!(js_has_exception(), 0);
         assert_eq!(catch_js_throw(|| 1u8), Ok(1));
@@ -900,9 +964,9 @@ mod tests {
     #[test]
     fn nested_trampoline_arms_unwind_innermost_first() {
         let outcome = catch_js_throw(|| {
-            let inner: Result<u8, f64> = catch_js_throw(|| js_throw(1.0));
+            let inner: Result<u8, f64> = catch_js_throw(|| test_throw(1.0));
             assert_eq!(inner, Err(1.0));
-            js_throw(2.0)
+            test_throw(2.0)
         });
         assert_eq!(outcome, Err(2.0));
     }
@@ -916,7 +980,7 @@ mod tests {
         fn descend(n: usize, scope: &RuntimeHandleScope) -> usize {
             let _h = scope.root_nanbox_f64(f64::from_bits(0x7FFD_0000_0000_0000 | n as u64));
             if n == 0 {
-                js_throw(13.0)
+                test_throw(13.0)
             }
             std::hint::black_box(descend(n - 1, scope)) + 1
         }
@@ -937,7 +1001,7 @@ mod tests {
             *ctx.cast::<i32>() = 9;
         }
         unsafe extern "C-unwind" fn throws(_ctx: *mut core::ffi::c_void) {
-            js_throw(6.5)
+            test_throw(6.5)
         }
         let mut out = 0i32;
         assert_eq!(unsafe { js_trap_call(ok, (&raw mut out).cast()) }, 0);
@@ -970,7 +1034,7 @@ mod tests {
         assert!(!inner_landed);
         assert!(!worker_base_handoff_pending());
         // An ordinary throw afterwards lands in the innermost trap again.
-        assert_eq!(catch_js_throw(|| -> u8 { js_throw(2.0) }), Err(2.0));
+        assert_eq!(catch_js_throw(|| -> u8 { test_throw(2.0) }), Err(2.0));
     }
 
     /// The owned walker recognizes the shim as a Perry handler, so a
@@ -992,10 +1056,10 @@ mod tests {
         use crate::eh_walker as transport;
         use std::sync::atomic::Ordering::Relaxed;
         // Warm the walker's caches and images once.
-        let _ = catch_js_throw(|| -> u8 { js_throw(0.0) });
+        let _ = catch_js_throw(|| -> u8 { test_throw(0.0) });
         let fast = transport::FAST_TRANSPORTS.load(Relaxed);
         let falls = transport::FALLBACKS.load(Relaxed);
-        assert_eq!(catch_js_throw(|| -> u8 { js_throw(1.0) }), Err(1.0));
+        assert_eq!(catch_js_throw(|| -> u8 { test_throw(1.0) }), Err(1.0));
         if std::env::var_os("PERRY_EH_WALKER").is_none() {
             assert_eq!(transport::FALLBACKS.load(Relaxed), falls);
             assert!(transport::FAST_TRANSPORTS.load(Relaxed) > fast);
@@ -1056,5 +1120,37 @@ mod catch_enter_tests {
             "the catch entry clears the exception"
         );
         assert_eq!(js_get_exception(), 0.0);
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_caught(value: f64) -> Caught {
+    // Capturing a fixture leaves another scanner's seeded pending slot intact.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (previous, had_exception) =
+        with_exception_state(|s| unsafe { ((*s).current_exception, (*s).has_exception) });
+    let previous = scope.root_nanbox_f64(previous);
+    let caught = catch_thrown(|| throw_program_value(value)).unwrap_err();
+    with_exception_state(|s| unsafe {
+        crate::gc::runtime_store_root_nanbox_f64_raw_slot(
+            &raw mut (*s).current_exception,
+            previous.get_nanbox_f64(),
+        );
+        (*s).has_exception = had_exception;
+    });
+    caught
+}
+
+#[cfg(test)]
+mod typed_worker_base_tests {
+    use super::*;
+
+    #[test]
+    fn typed_worker_base_rethrows_to_the_outer_base() {
+        let result = run_worker_body::<()>(|| {
+            let caught = run_worker_body_caught(|| -> () { test_throw(42.0) }).unwrap_err();
+            rethrow_caught(caught);
+        });
+        assert_eq!(result, Err(42.0));
     }
 }

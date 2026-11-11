@@ -39,7 +39,7 @@ pub(crate) enum EngineError {
     Type(&'static str),
     /// Returned by a local JS trap. Propagate directly to the ABI boundary;
     /// do not allocate or poll while these unrooted exception bits are held.
-    Abrupt(f64),
+    Abrupt(crate::exception::Caught),
 }
 
 pub(crate) fn charge(budget: &mut Budget, work: usize) -> Result<(), EngineError> {

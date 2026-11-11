@@ -236,6 +236,25 @@ pub(crate) fn build_and_run_link(
             {
                 cmd.arg("-no-pie");
             }
+            // An Android program is a shared object, and a shared object
+            // exports every default-visibility symbol: each one is a
+            // --gc-sections root, so nothing in the runtime or stdlib is ever
+            // collected, and references from adapters that only a linked
+            // wrapper archive installs (perry-ext-http's `js_ext_http_*`,
+            // `common::wrapper_imports`) stay as undefined symbols that make
+            // `System.loadLibrary` fail. The Java side reaches the library
+            // only through JNI, so it exports exactly that and everything
+            // else is local, as in an executable. Patterns, not names: lld
+            // rejects a named global the program doesn't define.
+            if is_android {
+                let script = ctx.cache_dir.join("android-exports.map");
+                fs::create_dir_all(&ctx.cache_dir)?;
+                fs::write(
+                    &script,
+                    "{\n  global:\n    Java_*;\n    JNI_On*;\n    ANativeActivity_on*;\n  local:\n    *;\n};\n",
+                )?;
+                cmd.arg(format!("-Wl,--version-script={}", script.display()));
+            }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
             cmd.arg("-dead_strip");
@@ -271,6 +290,13 @@ pub(crate) fn build_and_run_link(
             !(is_linux || is_android || is_harmonyos),
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+        );
+        super::wrapper_hooks::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+            well_known_libs,
         );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on

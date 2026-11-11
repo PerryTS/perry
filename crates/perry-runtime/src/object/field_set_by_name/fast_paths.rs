@@ -157,7 +157,7 @@ unsafe fn existing_own_data_overwrite(
     let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return false;
     };
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return false;
@@ -438,7 +438,11 @@ pub(crate) unsafe fn leaf_key_add(
     {
         return false;
     }
-    super::builtin_proto::note_write(obj, "probe add");
+    super::builtin_proto::note_write(
+        obj,
+        super::builtin_proto::Mutation::Add(super::builtin_proto::Key::Str(key)),
+        "probe add",
+    );
     if !super::shapes::install_cached_object_shape_key_add(
         obj,
         prev_shape_id,
@@ -554,7 +558,7 @@ pub(crate) fn try_readd_stable_tombstone(
             crate::string::js_string_key_bytes(JSValue::from_bits(key.to_bits()), &mut key_buf)?;
         let key_hash = key_bytes_hash(key_bytes.as_ptr(), key_bytes.len());
         let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_gc.obj_type)
             || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
                 != 0
             || crate::object::keys_find_property_slot_by_bytes(
@@ -643,7 +647,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
         return None;
     }
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED) != 0
         || (*keys).length != shape.logical_key_count
         || (*keys).length >= (*keys).capacity

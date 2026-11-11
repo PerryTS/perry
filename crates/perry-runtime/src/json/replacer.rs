@@ -134,7 +134,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // `keys_array`). Buffer/TypedArray have no `GcHeader`, so exclude
         // them first — `gc_obj_type` would otherwise misread their raw bytes
         // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
-        if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(gc_obj_type(ptr))
             && !crate::buffer::is_registered_buffer(ptr as usize)
             && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
@@ -298,7 +298,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
         return;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
             // stub at the OLD location (`js_array_grow`, issue #233) — its first
             // 8 bytes now hold the forwarding pointer to the grown array, so
@@ -377,14 +377,25 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let (ptr, replacer) =
+        if crate::process::is_process_env_object(crate::value::js_nanbox_pointer(ptr as i64)) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let replacer = scope.root_raw_const_ptr(replacer);
+            let value =
+                crate::process::refresh_process_env(crate::value::js_nanbox_pointer(ptr as i64));
+            (
+                crate::value::js_nanbox_get_pointer(value) as *const u8,
+                replacer.get_raw_const_ptr::<crate::ClosureHeader>(),
+            )
+        } else {
+            (ptr, replacer)
+        };
+
     // Circular-reference detection (mirrors the pretty/array-replacer paths).
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
@@ -396,7 +407,6 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     let obj_root = gc_scope.root_raw_const_ptr(ptr);
     let replacer_root = gc_scope.root_raw_const_ptr(replacer);
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -419,7 +429,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // num_fields can be smaller than keys_len — the min() silently DROPPED
     // every overflow property from replacer serialization (react-server-dom's
     // flight props objects routinely exceed 8 keys).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     let use_pretty = !indent.is_empty();
     let inner_depth = depth + 1;
@@ -594,10 +604,7 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
         let msg = "Converting circular structure to JSON";
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
@@ -1003,6 +1010,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     depth: usize,
 ) {
     check_stringify_nesting_depth(depth);
+    let ptr = super::stringify_object::refresh_environment_receiver(ptr);
+
     // Same deref-safety gate the plain path applies in `is_object_pointer`: the
     // `field_count` / `keys_array` reads below load straight through `ptr`, so an
     // in-range-but-unmapped garbage address (a denormal double that survived the
@@ -1023,10 +1032,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
         // Use js_typeerror_new so error_kind == ERROR_KIND_TYPE_ERROR and
         // `e instanceof TypeError` returns true (matching Node).
-        let err_ptr = crate::error::js_typeerror_new(msg_ptr);
-        crate::exception::js_throw(f64::from_bits(
-            POINTER_TAG | (err_ptr as u64 & POINTER_MASK),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
@@ -1040,7 +1046,6 @@ pub(crate) unsafe fn stringify_object_pretty(
     }
 
     let obj = ptr as *const crate::ObjectHeader;
-    let num_fields = crate::object::object_live_slot_count(obj);
     let Some(keys_view) = super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
         // reached here via a static TYPE_OBJECT hint). Node serializes those as
@@ -1060,7 +1065,7 @@ pub(crate) unsafe fn stringify_object_pretty(
         crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
     // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
     // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
+    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
     let actual_fields = keys_len;
     // Only own ENUMERABLE keys are serialized (gated for the common case).
     // A per-object attribute (a builtin accessor installs no process gate)
@@ -1195,7 +1200,7 @@ pub(crate) unsafe fn stringify_array_pretty(
     // and the `(*arr).length` read below would fault.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_ARRAY,
+        crate::gc_array_type_pat!(),
     )
     .is_none()
     {
@@ -1280,7 +1285,7 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
 #[inline]
 unsafe fn is_dense_array_header(resolved: *const crate::ArrayHeader) -> bool {
     !resolved.is_null()
-        && gc_obj_type(resolved as *const u8) == crate::gc::GC_TYPE_ARRAY
+        && crate::gc_type_is_array!(gc_obj_type(resolved as *const u8))
         && (*resolved).length <= (*resolved).capacity
 }
 
@@ -1498,8 +1503,26 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // (`JSON.stringify([1, {a:2}], [])` → "[1,{}]"). The shared dispatcher
         // routes objects/arrays into the whitelist-aware walks and everything
         // else into the plain serializer.
+        //
+        // The root is a property too (key ""): its `toJSON` runs first, and a
+        // result that has no JSON text makes `JSON.stringify` return undefined.
+        // The result is rooted: `toJSON` can hand back a fresh object and the
+        // walk below allocates.
+        reset_to_json_key();
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let value_after_to_json = root_scope.root_nanbox_f64(apply_to_json(value));
+        if !property_list::serializable_member(value_after_to_json.get_nanbox_f64()) {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
+            restore_stringify_buf(buf);
+            match saved_cache {
+                Some(s) => restore_shape_cache(s),
+                None => clear_shape_cache(),
+            }
+            STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
+            return TAG_UNDEFINED as i64;
+        }
         stringify_value_with_array_replacer(
-            value,
+            value_after_to_json.get_nanbox_f64(),
             allowed_keys,
             &mut buf,
             &indent_str,

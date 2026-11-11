@@ -54,7 +54,7 @@ pub(super) fn before_result_alloc() {
 /// Capture by reference when `f` can throw: its Rust frame can be abandoned by
 /// longjmp. Native ownership belongs in the caller, above this local trap.
 pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, EngineError> {
-    crate::exception::catch_js_throw(f).map_err(EngineError::Abrupt)
+    crate::exception::catch_thrown(f).map_err(EngineError::Abrupt)
 }
 
 pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
@@ -67,10 +67,10 @@ pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
 fn raise(error: EngineError) -> ! {
     // No allocation/poll precedes rethrowing the returned exception bits.
     if let EngineError::Abrupt(value) = error {
-        crate::exception::js_throw(value);
+        crate::exception::rethrow_caught(value);
     }
     if let EngineError::Build(BuildError::Abrupt(bits)) = error {
-        crate::exception::js_throw(f64::from_bits(bits));
+        crate::exception::rethrow_caught(bits);
     }
     let type_error = matches!(error, EngineError::Type(_));
     let (message, syntax) = match error {
@@ -104,14 +104,14 @@ fn raise(error: EngineError) -> ! {
     let text = scope.root_string_ptr(text);
     let exception = text.with_mut_ptr::<StringHeader, _>(|text| {
         if type_error {
-            crate::error::js_typeerror_new(text)
+            crate::error::CoreError::type_error(text)
         } else if syntax {
-            crate::error::js_syntaxerror_new(text)
+            crate::error::CoreError::syntax_error(text)
         } else {
-            crate::error::js_rangeerror_new(text)
+            crate::error::CoreError::range_error(text)
         }
     });
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(exception as i64))
+    crate::exception::throw_core(exception)
 }
 
 /// Construction and reinitialization publish the program. Each operation owns

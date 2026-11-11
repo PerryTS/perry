@@ -174,7 +174,8 @@ fn a_function_put_into_the_callees_array_is_an_open_gap() {
 /// code, run it: `fire` escapes, so `cb` runs on unknown values.
 #[test]
 fn a_function_the_callee_keeps_for_an_unknown_caller_escapes() {
-    let b = r#"let saved: any;
+    let b = r#"import "unseen-host";
+let saved: any;
 export function use(f: any, o: any) { saved = f; return f(o); }
 export function fire(x: any) { return saved(x); }
 (globalThis as any).fire = fire;"#;
@@ -184,9 +185,11 @@ export function fire(x: any) { return saved(x); }
 /// The callee stores the function where unknown code reads it.
 #[test]
 fn a_function_the_callee_hands_to_unknown_code_escapes() {
-    let b = r#"export function use(f: any, o: any) { (globalThis as any).hook = f; return f(o); }"#;
+    let b = r#"import "unseen-host";
+export function use(f: any, o: any) { (globalThis as any).hook = f; return f(o); }"#;
     escapes(&[("a", A_PLAIN), ("b", b)]);
-    let b = r#"export function use(f: any, o: any) { (globalThis as any).keep({ f }); return 0; }"#;
+    let b = r#"import "unseen-host";
+export function use(f: any, o: any) { (globalThis as any).keep({ f }); return 0; }"#;
     escapes(&[("a", A_PLAIN), ("b", b)]);
 }
 
@@ -221,13 +224,16 @@ export function pc(f: any, o: any, n: number): any { return pb(f, o, n); }"#;
 /// The recursion where one side lets the function go: unknown.
 #[test]
 fn a_function_passed_back_and_forth_and_let_go_escapes() {
-    let a = r#"import { pb } from "./b";
+    // The global it stores into is where an unseen module's code reads.
+    let a = &crate::tests::unseen(
+        r#"import { pb } from "./b";
 class P { v = 1; }
 export function main() {
     function cb(x: any) { return x.v; }
     return pb(cb, new P(), 3);
 }
-console.log(main());"#;
+console.log(main());"#,
+    );
     let b = r#"import { pc } from "./c";
 export function pb(f: any, o: any, n: number): any { return n > 0 ? pc(f, o, n - 1) : f(o); }"#;
     let c = r#"import { pb } from "./b";
@@ -252,14 +258,17 @@ fn a_function_read_from_arguments_or_rest_stays_sound() {
 /// callee does.
 #[test]
 fn a_function_its_own_unit_lets_go_escapes() {
-    let a = r#"import { use } from "./b";
+    // The global it stores into is where an unseen module's code reads.
+    let a = &crate::tests::unseen(
+        r#"import { use } from "./b";
 class P { v = 1; }
 export function main() {
     function cb(x: any) { return x.v; }
     (globalThis as any).k = cb;
     return use(cb, new P());
 }
-console.log(main());"#;
+console.log(main());"#,
+    );
     let b = "export function use(f: any, o: any) { const h = { f }; return h.f(o); }";
     escapes(&[("a", a), ("b", b)]);
 }

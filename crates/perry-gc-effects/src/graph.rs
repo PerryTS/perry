@@ -60,6 +60,20 @@ pub(crate) fn crate_of(obj: &str) -> Option<&str> {
     if parts.len() < 3 {
         return None;
     }
+    // Newer rustc versions put the crate name and disambiguator before the
+    // first dot (`perry_runtime-<hash>.<codegen-unit>.<hash>.rcgu.o`). Older
+    // archives use `<prefix>.<crate-name>.<hash>.rcgu.o`. Check both layouts;
+    // otherwise codegen-unit IDs are mistaken for crate names and runtime
+    // exports disappear from the GC effects table.
+    if let Some((crate_name, hash)) = parts[0].rsplit_once('-') {
+        if hash.len() == 16
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Some(crate_name);
+        }
+    }
     Some(if let Some((head, hash)) = parts[1].rsplit_once('-') {
         if hash.len() == 16
             && hash
@@ -247,6 +261,9 @@ pub struct Classification {
     pub stats: Stats,
     reason: Vec<Vec<Option<String>>>,
     witness: Vec<Vec<Option<usize>>>,
+    /// Reach of JS entries and of the write barrier, for effect declarations.
+    pub effect_reach: crate::effects::EffectReach,
+    pub throw_reach: crate::throw_class::ThrowReach,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
@@ -333,6 +350,23 @@ fn matching_nodes(g: &Graph, spell: &[Vec<&str>], rule: &Rule) -> Vec<usize> {
         .collect()
 }
 pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classification> {
+    classify_inner(g, rules, root, false)
+}
+/// Census upper bound only: omit unresolved indirect seeds without inventing
+/// target delegations. This result must never be used to write a sidecar.
+pub fn without_indirect_seeds(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+) -> Result<Classification> {
+    classify_inner(g, rules, root, true)
+}
+fn classify_inner(
+    g: &Graph,
+    rules: &[Rule],
+    root: Option<&Path>,
+    omit_indirect: bool,
+) -> Result<Classification> {
     let nn = g.nodes.len();
     let spell = parallel_map(nn, |i| g.spellings(i));
     let kinds = |kind: &str| rules.iter().filter(|r| r.kind == kind).collect::<Vec<_>>();
@@ -618,6 +652,30 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     } else {
         HashSet::new()
     };
+    // Effect-declaration reach (crate::effects): not part of the classes.
+    let barrier_rules = kinds("barrier");
+    let barrier_seed = parallel_map(nn, |i| match_any(&barrier_rules, &spell[i]).map(|r| r.line));
+    let dead_barrier_rules = barrier_rules
+        .iter()
+        .filter(|r| !barrier_seed.contains(&Some(r.line)))
+        .map(|r| r.description())
+        .collect();
+    let named_kind =
+        |i: usize, kinds: &[&str]| named[i].is_some_and(|r| kinds.contains(&r.kind.as_str()));
+    let effect_reach = crate::effects::EffectReach::solve(
+        g,
+        &extra_pred,
+        |i| {
+            named_kind(i, &["js"])
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| !s.starts_with("unwind:"))
+        },
+        |i| barrier_seed[i].is_some(),
+        |i| named_kind(i, &["panic", "teardown"]),
+        |i| named_kind(i, &["panic", "teardown", "collector", "poll"]),
+        dead_barrier_rules,
+    );
     let mut node_of = BTreeMap::new();
     let mut defs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, n) in g.nodes.iter().enumerate() {
@@ -633,7 +691,73 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
             }
         }
     }
-    let entry_of = |i: usize| {
+    // Coverage starts at exactly the definitions that produce sidecar rows.
+    let mut entry_roots = vec![false; nn];
+    for &i in defs.values().flatten() {
+        entry_roots[i] = true;
+    }
+    let program_rules = kinds("program");
+    let program = parallel_map(nn, |i| match_any(&program_rules, &spell[i]).map(|r| r.line));
+    for line in program.iter().flatten() {
+        *hits.entry(*line).or_default() += 1;
+    }
+    // JS seeds describe program-call edges, not whole runtime functions:
+    // native validation callees remain part of the native-origin bound.
+    let throw_cut: Vec<_> = (0..nn)
+        .map(|i| {
+            program[i].is_some()
+                || named_kind(i, &["panic", "teardown", "collector", "poll", "nothrow"])
+        })
+        .collect();
+    let throw_open: Vec<_> = (0..nn)
+        .map(|i| {
+            if throw_cut[i]
+                || structural[i]
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("indirect"))
+                    && (omit_indirect || named_kind(i, &["js"]))
+            {
+                None
+            } else {
+                structural[i].clone()
+            }
+        })
+        .collect();
+    let declarations = if let Some(root) = root {
+        crate::throw_class::declarations(root)?
+    } else {
+        Vec::new()
+    };
+    let mut throw_reach = crate::throw_class::solve_owned(
+        g,
+        &extra_pred,
+        &throw_cut,
+        &throw_open,
+        &declarations,
+        &g.nodes
+            .iter()
+            .map(|n| crate::table::perry_object(&n.obj, &stems))
+            .collect::<Vec<_>>(),
+        &entry_roots,
+    )?;
+    // Count dynamic program execution separately: the solver must account for
+    // values it can construct, even though these are not native-origin throws.
+    let mut work = VecDeque::new();
+    for i in 0..nn {
+        if program[i].is_some() {
+            throw_reach.interpreted_reach[i] = true;
+            work.push_back(i);
+        }
+    }
+    while let Some(t) = work.pop_front() {
+        for &c in g.pred[t].iter().chain(&extra_pred[t]) {
+            if !throw_reach.interpreted_reach[c] {
+                throw_reach.interpreted_reach[c] = true;
+                work.push_back(c);
+            }
+        }
+    }
+    let entry_of = |name: &str, i: usize| {
         let class = if reason[0][i].is_none() {
             Class::Leaf
         } else if reason[1][i].is_none() {
@@ -643,9 +767,23 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         } else {
             Class::Reenters
         };
+        let mut passes = throw_reach.passes[i].clone();
+        let owns = declarations
+            .iter()
+            .any(|d| d.symbol == name && d.operands.iter().any(|p| p.source.is_none()));
+        let alias_unmapped = passes.iter().any(|p| p.source.is_none()) && !owns;
+        if alias_unmapped {
+            passes.retain(|p| p.source.is_some());
+        }
         Entry {
             class,
             throws: reason[3][i].is_some(),
+            throw_class: if alias_unmapped {
+                crate::table::ThrowClass::Open
+            } else {
+                throw_reach.class[i]
+            },
+            passes,
         }
     };
     // The join of the definitions: the weaker class and the OR of throws, so
@@ -653,11 +791,13 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     let table = defs
         .iter()
         .map(|(name, nodes)| {
-            let mut row = entry_of(nodes[0]);
+            let mut row = entry_of(name, nodes[0]);
             for &i in &nodes[1..] {
-                let e = entry_of(i);
+                let e = entry_of(name, i);
                 row.class = row.class.max(e.class);
                 row.throws |= e.throws;
+                row.throw_class = row.throw_class.max(e.throw_class);
+                row.passes.extend(e.passes);
             }
             (name.clone(), row)
         })
@@ -665,6 +805,10 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
     let mut named_seed_nodes = BTreeMap::new();
     for r in named.iter().flatten() {
         *named_seed_nodes.entry(r.kind.clone()).or_default() += 1;
+    }
+    let program_count = program.iter().flatten().count();
+    if program_count != 0 {
+        named_seed_nodes.insert("program".into(), program_count);
     }
     let stats = Stats {
         nodes: nn,
@@ -683,7 +827,10 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
             .collect(),
         dead_rules: rules
             .iter()
-            .filter(|r| named_kinds.contains(&r.kind.as_str()) && !hits.contains_key(&r.line))
+            .filter(|r| {
+                (named_kinds.contains(&r.kind.as_str()) || r.kind == "program")
+                    && !hits.contains_key(&r.line)
+            })
             .map(Rule::description)
             .collect(),
         forbidden_calls: forbidden,
@@ -704,11 +851,35 @@ pub fn classify(g: &Graph, rules: &[Rule], root: Option<&Path>) -> Result<Classi
         stats,
         reason,
         witness,
+        effect_reach,
+        throw_reach,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn crate_of_supports_current_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of(
+                "perry_runtime-1e10f4d1c1694ef8.atmkte0qb3a7ttnlq3kuhpw14.1he7acv.rcgu.o"
+            ),
+            Some("perry_runtime")
+        );
+        assert_eq!(
+            super::crate_of("foreign_crate-abcdef0123456789.cgu.0.rcgu.o"),
+            Some("foreign_crate")
+        );
+    }
+
+    #[test]
+    fn crate_of_keeps_support_for_legacy_rustc_archive_member_names() {
+        assert_eq!(
+            super::crate_of("runtime.perry_runtime.hash.rcgu.o"),
+            Some("perry_runtime")
+        );
+    }
+
     #[test]
     fn unicode_symbol_names_survive_llvm_suffix_normalization() {
         let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";
@@ -765,3 +936,7 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+#[path = "throw_class_tests.rs"]
+mod throw_class_tests;

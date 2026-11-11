@@ -1,0 +1,29 @@
+Uint8Array(5) length: 5
+Uint8Array(5)[0]: 0
+from array: 10 20 30 40 50
+from array length: 5
+DEC 250: Cannot delete built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+from array without prototype iterator: 6 7
+from array with null iterator: 8 9
+from inherited indexed getter: 73 true 1
+write: 100 200 255
+overflow 256: 0
+negative -1: 255
+Uint8Array.from: 1 2 3 4
+Uint8Array.from length: 4
+sum: 30
+Int32Array: -100 0 2147483647
+Int32Array length: 3
+Float64Array: 3.14 -2.718 0
+Float64Array length: 3
+Int16Array: 32767 -32768
+Uint16Array: 65535 0
+Float32Array: 1.5 -0.5
+Uint8Clamped: 255 0 128
+dynamic length: 10
+expr length: 15
+large sum: 1273080
+large[0]: 0
+large[255]: 255
+large[9999]: 15

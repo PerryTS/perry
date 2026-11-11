@@ -31,7 +31,7 @@ git diff --exit-code -- docs/src/api/reference.md docs/api/perry.d.ts
 cargo test --workspace --exclude perry-ui-ios --exclude perry-ui-tvos \
   --exclude perry-ui-watchos --exclude perry-ui-gtk4 \
   --exclude perry-ui-android --exclude perry-ui-windows
-./run_parity_tests.sh
+python3 scripts/parity.py run --mode auto
 ./scripts/run_doc_tests.sh
 ```
 
@@ -275,10 +275,10 @@ tiers](../testing/ci-tiers.md). The full tier is:
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
   compiler-output gates, `repsel-census`, `harmonyos-smoke`, `security-audit`),
   plus `binary-size` and
-- `parity` — every case of `test-files/` and `test-parity/node-suite/` in
-  auto-optimize mode must match `test-parity/snapshots/linux-auto/` in both
+- `parity` — every case of `tests/fixtures/programs/` and `tests/parity/node-suite/` in
+  auto-optimize mode must match `tests/parity/snapshots/linux-auto/` in both
   directions
-- `compile-smoke` — must compile every file under `test-files/`, plus the UI
+- `compile-smoke` — must compile every file under `tests/fixtures/programs/`, plus the UI
   styling matrix, Fastify integration and memory-stability tests
 - `doc-tests` (macOS + Windows) — must compile + run every example under
   `docs/examples/`

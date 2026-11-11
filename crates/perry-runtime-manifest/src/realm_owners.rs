@@ -78,10 +78,12 @@ mod tests {
                 > 30,
             "the native receivers are checked"
         );
-        // The owner is the declared module, never one read off a name:
-        // performance is the perf_hooks namespace.
+        // The module namespace declares its owner; the ordinary performance
+        // singleton has no native namespace owner.
+        assert!(!owners.contains_key("performance"));
         for (cell, owner) in [
-            ("performance", "perf_hooks"),
+            ("%NativeNamespace:perf_hooks%", "perf_hooks"),
+            ("%NativeNamespace:perf_observer_list%", "perf_observer_list"),
             ("node:path.posix", "path.posix.default"),
         ] {
             assert_eq!(owners.get(cell).map(String::as_str), Some(owner), "{cell}");
