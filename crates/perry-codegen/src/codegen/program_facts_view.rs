@@ -247,6 +247,9 @@ pub struct FactsRecordLayout {
     /// `I32`), so its lane is a plain double; the other lanes hold a
     /// NaN-boxed immediate.
     pub numeric: Vec<bool>,
+    /// Per key: the field holds only int32 Numbers, never `-0` (wpfacts
+    /// `FieldRep::I32`); implies `numeric`. Empty when unknown.
+    pub int32: Vec<bool>,
 }
 
 /// DESIGN-p4l4 VR-3b: the locals that hold a record's lanes (`value_records`):
