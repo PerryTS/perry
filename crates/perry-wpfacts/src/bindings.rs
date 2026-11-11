@@ -494,6 +494,10 @@ pub struct ModuleBindings {
     /// only Numbers (representation RFC §10.4, the call's return
     /// representation). Sorted.
     pub number_calls: Vec<u32>,
+    /// Call byte offsets (`Expr::Call::byte_offset`) whose result holds only
+    /// primitives at every copy, with the union of their kinds (a
+    /// `model::prim` mask, never 0); sorted (`call_kinds`).
+    pub call_kinds: Vec<(u32, u16)>,
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,

@@ -53,6 +53,8 @@ pub(crate) enum Fact {
     ZeroSign,
     BirthImage,
     KeySign,
+    /// A call's result kinds (wpfacts `call_kinds`): a string operand.
+    CallKinds,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -104,6 +106,7 @@ impl Fact {
             Self::ZeroSign => "zero sign",
             Self::BirthImage => "birth image",
             Self::KeySign => "key sign",
+            Self::CallKinds => "call kinds",
         }
     }
 }

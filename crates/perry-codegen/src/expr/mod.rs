@@ -101,6 +101,7 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod facts_string;
 pub(crate) mod fill_birth;
 #[cfg(test)]
 mod fill_birth_tests;

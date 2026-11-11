@@ -1673,7 +1673,13 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 byte_end,
                 ..
-            } => self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end),
+            } => {
+                let result = self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end);
+                if *byte_offset != 0 {
+                    self.call_kinds_at.push((fx.module, *byte_offset, result));
+                }
+                result
+            }
             Expr::CallSpread { callee, args, .. } => {
                 let (a, s) = self.call_args(fx, args);
                 let _ = (&a, &s);
