@@ -39,6 +39,12 @@ names and counts are read after that step, including empty query completion.
 Metadata-only `columns()` reads use a fresh preparation without executing SQL.
 These guarantees describe compilation reuse, not a measured latency speedup.
 
+`run()` accepts statement shapes whose results are not used: a row-returning
+statement such as `INSERT ... RETURNING` is stepped to completion, its rows are
+discarded, and the reported change count comes from the connection. A step
+error makes the call fail instead of reporting a completed run, and `get()` /
+`all()` fail rather than returning the rows read before the error.
+
 ## MongoDB
 
 `mongodb` has no native binding: `import { MongoClient } from "mongodb"`

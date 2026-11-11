@@ -1,1 +1,2 @@
 SQLite better-sqlite3 providers reuse bounded connection-owned preparations while preserving original SQL lexing, schema metadata, bindings and flags. Queries whose boundary characters would be changed by Unicode trimming use original-byte preparation instead; default cache capacity and schema/eviction recompilation limits remain documented.
+ `run()` now accepts row-returning statements such as `INSERT ... RETURNING` in both providers, and a step error fails `run()`, `get()` and `all()` instead of reporting a completed run or partial rows.

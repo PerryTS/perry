@@ -281,6 +281,48 @@ fn sqlite_preparation_run_dml_reuses_validation_and_preserves_results() {
 }
 
 #[test]
+fn sqlite_preparation_all_aborts_instead_of_returning_rows_read_before_an_error() {
+    perry_ffi::initialize_runtime_fixture();
+    let db = make_in_memory_db();
+    // `abs` over the i64 minimum raises integer overflow on the second step:
+    // the first row is produced, then the step fails.
+    let stmt = prepare(
+        db,
+        "SELECT 1 AS a UNION ALL SELECT abs(-9223372036854775808) AS a",
+    );
+    unsafe {
+        assert_eq!(
+            js_array_length(js_sqlite_stmt_all(stmt, std::ptr::null())),
+            0
+        );
+    }
+    assert_eq!(js_sqlite_close(db), 1);
+    drop_handle(stmt);
+}
+
+#[test]
+fn sqlite_preparation_run_reports_step_errors_of_row_returning_statements() {
+    perry_ffi::initialize_runtime_fixture();
+    let db = make_in_memory_db();
+    exec(db, "CREATE TABLE u (id INTEGER PRIMARY KEY)");
+    exec(db, "INSERT INTO u VALUES (1)");
+    let duplicate = prepare(db, "INSERT INTO u VALUES (1) RETURNING id");
+    let count = prepare(db, "SELECT count(*) AS n FROM u");
+    unsafe {
+        // The drain must surface the failed step instead of reporting a
+        // completed run, and the rejected row must not be stored.
+        assert!(js_sqlite_stmt_run(duplicate, std::ptr::null()).is_null());
+        let row = JsValue::from_bits(js_sqlite_stmt_get(count, std::ptr::null()).to_bits())
+            .as_pointer::<ObjectHeader>();
+        assert_eq!(js_object_get_field(row, 0).to_number(), 1.0);
+    }
+    assert_eq!(js_sqlite_close(db), 1);
+    for stmt in [duplicate, count] {
+        drop_handle(stmt);
+    }
+}
+
+#[test]
 fn sqlite_preparation_handles_keep_flags_and_reset_bindings_after_errors() {
     perry_ffi::initialize_runtime_fixture();
     let db = make_in_memory_db();
