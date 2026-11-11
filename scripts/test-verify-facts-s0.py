@@ -128,6 +128,7 @@ def main():
         ("fn-base-admit-negative", "fnbaseadm", "array rep"),
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
         ("key-sign-negative", "keysign", "key sign"),
+        ("wide-key-negative", "widekey", "wide key"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),

@@ -593,6 +593,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
         out.key_signs.extend(mb.key_signs.iter().copied());
+        out.wide_keys.extend(mb.wide_keys.iter().copied());
         out.rest_reads.extend(mb.rest_reads.iter().copied());
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());

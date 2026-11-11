@@ -1428,6 +1428,13 @@ pub struct Model {
     /// is claimed non-negative, a wrong claim the witness at the element
     /// site must catch.
     pub key_sign_sabotage: bool,
+    /// The wide keys (`element_keys::collect_wide`;
+    /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
+    pub wide_keys: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=widekey`): a key past int32
+    /// that may be negative is claimed non-negative, a wrong claim the
+    /// witness at the element site must catch.
+    pub wide_key_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
     /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
     /// claim the proven store's witness must catch.
