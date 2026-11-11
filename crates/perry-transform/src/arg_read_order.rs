@@ -76,7 +76,10 @@ struct Scan {
     ran: bool,
     /// A read of `param` came after that.
     late: bool,
+    /// Plain reads of `param`, each counted once.
     reads: usize,
+    /// Inside the second walk of a loop: its reads are already counted.
+    replay: bool,
 }
 
 impl Scan {
@@ -88,7 +91,16 @@ impl Scan {
             ran: false,
             late: false,
             reads: 0,
+            replay: false,
         }
+    }
+
+    /// A loop: what runs on one trip comes before every read of the next.
+    fn twice(&mut self, mut trip: impl FnMut(&mut Self)) {
+        trip(self);
+        let outer = std::mem::replace(&mut self.replay, true);
+        trip(self);
+        self.replay = outer;
     }
 
     fn stmts(&mut self, stmts: &[Stmt]) {
@@ -127,18 +139,14 @@ impl Scan {
                     self.stmts(b);
                 }
             }
-            Stmt::While { condition, body } => {
-                for _ in 0..2 {
-                    self.expr(condition);
-                    self.stmts(body);
-                }
-            }
-            Stmt::DoWhile { body, condition } => {
-                for _ in 0..2 {
-                    self.stmts(body);
-                    self.expr(condition);
-                }
-            }
+            Stmt::While { condition, body } => self.twice(|scan| {
+                scan.expr(condition);
+                scan.stmts(body);
+            }),
+            Stmt::DoWhile { body, condition } => self.twice(|scan| {
+                scan.stmts(body);
+                scan.expr(condition);
+            }),
             Stmt::For {
                 init,
                 condition,
@@ -148,15 +156,15 @@ impl Scan {
                 if let Some(i) = init {
                     self.stmt(i);
                 }
-                for _ in 0..2 {
+                self.twice(|scan| {
                     if let Some(e) = condition {
-                        self.expr(e);
+                        scan.expr(e);
                     }
-                    self.stmts(body);
+                    scan.stmts(body);
                     if let Some(e) = update {
-                        self.expr(e);
+                        scan.expr(e);
                     }
-                }
+                });
             }
             Stmt::Labeled { body, .. } => self.stmt(body),
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
@@ -194,7 +202,7 @@ impl Scan {
             | Expr::Undefined => {}
             Expr::LocalGet(id) => {
                 if *id == self.param {
-                    self.reads += 1;
+                    self.reads += usize::from(!self.replay);
                     self.late |= self.ran;
                 }
             }
