@@ -66,7 +66,7 @@ for (let round = 0; round < ROUNDS; round++) {
   }
   // An old one-page container gets a young child too.
   small[round % 3] = new Entry("small" + round, round);
-  garbage += churn(4000);
+  garbage += churn(40000);
   // A Map that is born, filled and dropped inside one round.
   const scratch = new Map<number, Entry>();
   for (let j = 0; j < 64; j++) scratch.set(j, new Entry("s" + j, j));
