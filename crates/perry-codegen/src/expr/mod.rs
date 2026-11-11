@@ -101,6 +101,9 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod fill_birth;
+#[cfg(test)]
+mod fill_birth_tests;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
@@ -3447,6 +3450,7 @@ mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
+pub(crate) mod short_string;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) use named_accessor::contained_number_get;

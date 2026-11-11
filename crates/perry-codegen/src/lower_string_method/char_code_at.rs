@@ -88,8 +88,10 @@ enum Op {
     CharCodeAt,
     /// The byte's one-character string: the runtime's image string
     /// `PERRY_ASCII_CHARS[byte]` (the agent's atom of that text, the same
-    /// pointer `js_string_char_at` returns), STRING-tagged. An out-of-range
-    /// index takes the entry, which returns `""`.
+    /// pointer `js_string_char_at` returns), STRING-tagged; as a direct
+    /// operand of a string `+`, the same character as an inline string
+    /// (`expr/short_string.rs`). An out-of-range index takes the entry,
+    /// which returns `""`.
     CharAt,
 }
 
@@ -162,6 +164,14 @@ fn lower_inline(
     use crate::nanbox::POINTER_MASK_I64;
     if !crate::expr::static_string_lowering_enabled() {
         return None;
+    }
+
+    // A `charAt` that is a direct operand of a string `+` answers its
+    // character as an inline string, which that `+` takes without a call
+    // (`expr/short_string.rs`). The slow arm is the entry, as everywhere.
+    let inline_char = op == Op::CharAt && crate::expr::short_string::wants_inline_char(object);
+    if inline_char {
+        crate::expr::note_site("small-string char");
     }
 
     let bits = ctx.block().bitcast_double_to_i64(recv_box);
@@ -265,6 +275,7 @@ fn lower_inline(
     let sso_byte = ctx.block().and(I64, &sso_word, "255");
     let sso_val = match op {
         Op::CharCodeAt => ctx.block().uitofp(I64, &sso_byte, DOUBLE),
+        Op::CharAt if inline_char => crate::expr::short_string::char_value(ctx, &sso_byte),
         Op::CharAt => ascii_char_value(ctx, &sso_byte),
     };
     let sso_pred = ctx.block().label.clone();
@@ -322,7 +333,11 @@ fn lower_inline(
         Op::CharCodeAt => ctx.block().uitofp(crate::types::I8, &byte, DOUBLE),
         Op::CharAt => {
             let byte_i64 = ctx.block().zext(crate::types::I8, &byte, I64);
-            ascii_char_value(ctx, &byte_i64)
+            if inline_char {
+                crate::expr::short_string::char_value(ctx, &byte_i64)
+            } else {
+                ascii_char_value(ctx, &byte_i64)
+            }
         }
     };
     let fast_pred = ctx.block().label.clone();

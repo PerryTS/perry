@@ -489,10 +489,11 @@ pub struct ModuleBindings {
     /// Element reads by `IndexGet::element_offset` whose receiver is proven
     /// (`ElementRead`), joined over every copy of the read the program holds.
     pub element_reads: Vec<(u32, ElementRead)>,
-    /// Method call byte offsets whose result is a Number at every copy of
-    /// the call the program holds: every callee the site reaches returns
+    /// Call byte offsets whose result is a Number at every copy of the call
+    /// the program holds, and at every call that starts at that offset
+    /// (`f(a)(b)`, `o.m(a).n(b)`): every callee the site reaches returns
     /// only Numbers (representation RFC §10.4, the call's return
-    /// representation). Sorted.
+    /// representation). Method calls and calls of any other callee. Sorted.
     pub number_calls: Vec<u32>,
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
@@ -542,6 +543,10 @@ pub struct ModuleBindings {
     pub rest_writes: Vec<(u32, u32)>,
     pub rest_births: Vec<u32>,
     pub rest_reserves: Vec<(u32, u32)>,
+    /// The fill births (`fill_births`): the `fill` call offset of a fused
+    /// fill `new Array(k).fill(v)` codegen may bear as one birth, with `k`.
+    /// Sorted.
+    pub fill_births: Vec<(u32, u32)>,
     /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
     /// byte offset) whose receiver may hold an instance with an I32 lane at
     /// the read's key, with the lane's slot when every receiver value is such
@@ -948,6 +953,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     }
     out.extend(rest_probe(m));
     out.extend(crate::rest_elems::probe(m));
+    out.extend(crate::fill_births::probe(m));
     out.extend(crate::element_keys::probe(g));
     out
 }

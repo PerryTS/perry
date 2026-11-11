@@ -423,6 +423,26 @@ fn int32_operand_switches_are_cache_inputs() {
     }
 }
 
+/// The direct Number call switch decides whether a consumer of `f(a)` takes
+/// the proven-Number lowering, so `=0` must never reuse an `=1` object.
+#[test]
+fn direct_number_calls_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_DIRECT_NUMBER_CALLS"),
+        "PERRY_FACTS_DIRECT_NUMBER_CALLS must key the compile caches"
+    );
+}
+
+/// The at-rest default read's switch decides how `a[k] ?? <int32>` is
+/// lowered, so `=0` must never reuse an `=1` object.
+#[test]
+fn rest_default_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_REST_DEFAULT"),
+        "PERRY_REST_DEFAULT must key the compile caches"
+    );
+}
+
 /// N4: the cold-path switch changes helper declarations, call-site
 /// attributes and branch weights, so `=0` must never reuse an `=1` object.
 #[test]
@@ -450,5 +470,27 @@ fn value_records_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_VALUE_RECORDS"),
         "PERRY_FACTS_VALUE_RECORDS must key the compile caches"
+    );
+}
+
+/// The pure-argument switch decides whether the inliner substitutes a
+/// written local for a parameter (and so whether a call in a loop condition
+/// is inlined at all), so `=0` must never reuse an `=1` object.
+#[test]
+fn inline_pure_args_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_INLINE_PURE_ARGS"),
+        "PERRY_INLINE_PURE_ARGS must key the compile caches"
+    );
+}
+
+/// The small-string switch decides how a string `+`, a one-digit
+/// `String(n)` and a `charAt` operand are lowered, so `=0` must never reuse
+/// an `=1` object.
+#[test]
+fn small_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_SMALL_STRINGS"),
+        "PERRY_SMALL_STRINGS must key the compile caches"
     );
 }

@@ -359,16 +359,16 @@ pub fn app_run(_app_handle: i64) {
 
         // If PERRY_UI_TEST_MODE is set, schedule an automatic exit so doc-example
         // programs can be verified in CI without a human.
-        if perry_ui_testkit::is_test_mode() {
-            let delay = std::time::Duration::from_millis(perry_ui_testkit::exit_delay_ms() as u64);
+        if perry_ui::test_mode::is_test_mode() {
+            let delay = std::time::Duration::from_millis(perry_ui::test_mode::exit_delay_ms() as u64);
             let app_clone = app.clone();
             glib::timeout_add_local_once(delay, move || {
-                if let Some(path) = perry_ui_testkit::screenshot_path() {
+                if let Some(path) = perry_ui::test_mode::screenshot_path() {
                     let mut len: usize = 0;
                     let ptr =
                         crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                     if !ptr.is_null() && len > 0 {
-                        perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                        perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                         unsafe {
                             libc::free(ptr as *mut libc::c_void);
                         }

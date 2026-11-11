@@ -28,7 +28,7 @@ crates/perry-codegen/src/codegen/mod.rs	3672
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2770
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2845
+crates/perry-codegen/src/expr/mod.rs	2853
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8354
 # Representation-aware map core; further decomposition is tracked in #1435.
@@ -46,7 +46,7 @@ crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
-crates/perry-transform/src/inline/call_inliner.rs	2099
+crates/perry-transform/src/inline/call_inliner.rs	2106
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
 crates/perry-stdlib/src/streams.rs	2448
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.

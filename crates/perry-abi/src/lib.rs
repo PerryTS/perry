@@ -339,6 +339,48 @@ pub const GC_TYPE_ARRAY: u8 = 1;
 /// `gc::GC_ARRAY_RAW_F64_LAYOUT`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying
 /// its slots are canonical raw `f64` values.
 pub const GC_ARRAY_RAW_F64_LAYOUT: u16 = 0x80;
+/// `gc::GC_ARRAY_RAW_F64_HOLES`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying
+/// every slot below the length is a canonical raw `f64` or a hole.
+pub const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
+/// `layout_slot::GC_ARRAY_I32_LAYOUT`: a `GC_TYPE_ARRAY`'s `_reserved` bit
+/// saying every element slot holds an I32 word (I32 at rest).
+pub const GC_ARRAY_I32_LAYOUT: u16 = 0x400;
+/// `array::MIN_ARRAY_CAPACITY`: the fewest slots a runtime array birth has.
+pub const MIN_ARRAY_CAPACITY: u32 = 4;
+
+/// The slots a fill birth `new Array(length).fill(v)` has: what
+/// `js_array_constructor_single` gives a dense `new Array(length)`, or the
+/// capacity an at-rest birth reserves (`reserve`, 0 for none) when that is
+/// more. The runtime's `js_array_fill_birth` and the inline birth codegen
+/// emits (`perry-codegen` `expr/fill_birth.rs`) both take it from here.
+pub const fn fill_birth_capacity(length: u32, reserve: u32) -> u32 {
+    let floor = if length > MIN_ARRAY_CAPACITY {
+        length
+    } else {
+        MIN_ARRAY_CAPACITY
+    };
+    if reserve > floor {
+        reserve
+    } else {
+        floor
+    }
+}
+
+/// The `GcHeader::_reserved` layout bits a non-empty fill birth is born with:
+/// the bits the two-step path leaves on `new Array(k).fill(<number>)`
+/// (pointer free, dense raw `f64`, and the raw-`f64`-or-holes bit `new
+/// Array(k)` set), or pointer free with the I32 layout bit when its elements
+/// are stored at rest (`js_array_rest_encode` clears both raw bits). The
+/// runtime asserts both against its own constants and against the two-step
+/// path (`perry-runtime` `array/fill_birth.rs`).
+pub const fn fill_birth_layout(rest: bool) -> u16 {
+    if rest {
+        GC_LAYOUT_POINTER_FREE | GC_ARRAY_I32_LAYOUT
+    } else {
+        GC_LAYOUT_POINTER_FREE | GC_ARRAY_RAW_F64_LAYOUT | GC_ARRAY_RAW_F64_HOLES
+    }
+}
+
 /// `gc::GC_ARRAY_CUSTOM_PROTO`: a `GC_TYPE_ARRAY`'s `_reserved` bit saying its
 /// `[[Prototype]]` was retargeted.
 pub const GC_ARRAY_CUSTOM_PROTO: u16 = 0x40;

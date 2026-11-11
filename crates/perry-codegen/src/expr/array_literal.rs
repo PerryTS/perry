@@ -242,6 +242,61 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     all_numeric_elements: bool,
     reread: impl FnOnce(&mut FnCtx<'f>) -> Result<Vec<String>>,
 ) -> Result<String> {
+    emit_array_birth(
+        ctx,
+        n,
+        None,
+        canonical_raw_f64,
+        layout_notes_needed,
+        all_numeric_elements,
+        reread,
+    )
+}
+
+/// What an inline fill birth `new Array(n).fill(v)` (`expr::fill_birth`)
+/// changes of a literal's inline birth: the slots it reserves (`capacity >=
+/// n`, the slack born as holes) and the word its elements are (`rest`: I32
+/// words, `i64` operands; else plain doubles). Its layout bits are
+/// `perry_abi::fill_birth_layout`, what the runtime's `js_array_fill_birth`
+/// installs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FillShape {
+    pub capacity: usize,
+    pub rest: bool,
+}
+
+/// A birth of `n` elements in `capacity` slots is emitted inline (the bump
+/// allocation and the stores) by [`emit_array_birth`], not by a runtime call.
+pub(crate) fn inline_birth_admitted(ctx: &FnCtx<'_>, n: usize, capacity: usize) -> bool {
+    n != 0
+        && n <= capacity
+        && capacity <= INLINE_ARRAY_MAX_ELEMENTS
+        && !crate::codegen::full_outline_ic_enabled()
+        && crate::target_layout::inline_births_admitted(ctx.target_triple)
+}
+
+/// [`emit_array_from_lowered_values`], or with `fill` the inline fill birth:
+/// the same bump allocation and header words, `fill`'s capacity and layout
+/// bits, and every element stored once as the word `reread` gives (plain
+/// doubles, or `i64` I32 words when `fill.rest`). The caller has checked
+/// [`inline_birth_admitted`]; its values are no pointers, so the collecting
+/// slow arm of the allocation needs no root for them.
+pub(crate) fn emit_array_birth<'f>(
+    ctx: &mut FnCtx<'f>,
+    n: usize,
+    fill: Option<FillShape>,
+    canonical_raw_f64: &[bool],
+    layout_notes_needed: &[bool],
+    all_numeric_elements: bool,
+    reread: impl FnOnce(&mut FnCtx<'f>) -> Result<Vec<String>>,
+) -> Result<String> {
+    if let Some(shape) = fill {
+        anyhow::ensure!(
+            inline_birth_admitted(ctx, n, shape.capacity),
+            "perry-codegen: a fill birth of {n} elements in {} slots is not inline",
+            shape.capacity
+        );
+    }
     // #5391: oversized modules outline array-literal construction. The inline
     // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
     // data-table builders huge (single 18MB functions are impractical to
@@ -249,7 +304,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     // a per-literal stack buffer and build the array in ONE runtime call. The
     // buffer is hoisted to the entry block (fixed size per site; bounded total
     // stack) and consumed immediately by the call, so no GC-visible window.
-    if crate::codegen::full_outline_ic_enabled() {
+    if fill.is_none() && crate::codegen::full_outline_ic_enabled() {
         let vals = reread(ctx)?;
         let buf = ctx.func.alloca_entry_array(DOUBLE, n);
         for (i, v) in vals.iter().enumerate() {
@@ -289,8 +344,9 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
 
         // Empty arrays use the same birth protocol, retaining the runtime's
-        // four-slot append reserve. Nonempty literals keep their exact size.
-        let capacity = n;
+        // four-slot append reserve. Nonempty literals keep their exact size;
+        // a fill birth has the slots the runtime gives it.
+        let capacity = fill.map_or(n, |shape| shape.capacity);
         let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (capacity as u64) * ELEMENT_SIZE;
         let total_size_str = total_size.to_string();
 
@@ -386,6 +442,15 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             None
         };
         let header_word = match &all_plain_numbers {
+            // The fill birth's layout bits replace the pointer-free hint.
+            _ if fill.is_some() => {
+                let layout = perry_abi::fill_birth_layout(fill.is_some_and(|shape| shape.rest));
+                (GC_TYPE_ARRAY
+                    | (GC_FLAG_ARENA << 8)
+                    | (u64::from(layout) << 16)
+                    | (total_size << 32))
+                    .to_string()
+            }
             Some(all_plain) => {
                 // GC_ARRAY_RAW_F64_LAYOUT (0x80) in `_reserved`.
                 let flagged = gc_packed | (0x80u64 << 16);
@@ -431,6 +496,20 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // user-visible address.
         let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
         let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
+
+        if let Some(shape) = fill {
+            let word = if shape.rest { I64 } else { DOUBLE };
+            let blk = ctx.block();
+            for (i, v) in vals.iter().enumerate() {
+                let offset = (32 + i * 8).to_string();
+                let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                // GC_STORE_AUDIT(POINTER_FREE): a plain double or an I32
+                // word (the 0x7FFE band); the header already says so.
+                blk.store(word, v, &elem_ptr);
+            }
+            super::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
+            return Ok(user_ptr_as_i64);
+        }
 
         if let Some(all_plain) = all_plain_numbers {
             let plain_idx = ctx.new_block("arrlit.plain_numbers");

@@ -30,6 +30,7 @@ mod diagnostics;
 mod dump;
 mod element_floors;
 mod element_keys;
+mod fill_births;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -533,6 +534,7 @@ fn generate<'a>(
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
     g.m.rest_capacity = rest_elems::capacity_enabled();
+    g.m.fill_births = fill_births::enabled();
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
     g.m.key_sign = element_keys::sign_enabled();
@@ -1013,6 +1015,7 @@ fn compute_act<'a>(
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);
     records::export(&g, &mut bindings);
+    fill_births::export(&g.m, &mut bindings);
     // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
     let rest_lanes = if g.m.aborted {
         Vec::new()

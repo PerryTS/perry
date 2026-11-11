@@ -1038,6 +1038,10 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+        if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(ctx.block().sitofp(I32, &v, DOUBLE));
+        }
         // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
         // is `l` and `r` is never evaluated. (An in-window read under a
         // packed-loop index fact, a proven raw-f64 field, a numeric local.)

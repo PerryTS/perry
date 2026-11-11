@@ -4981,6 +4981,7 @@ dependencies = [
  "console 0.16.6",
  "dialoguer 0.12.0",
  "dirs",
+ "dotenvy",
  "ed25519-dalek",
  "flate2",
  "fslock",
@@ -4988,10 +4989,10 @@ dependencies = [
  "log",
  "notify",
  "object 0.37.3",
+ "p256",
  "perry-abi",
  "perry-api-manifest",
  "perry-base64",
- "perry-cli-support",
  "perry-codegen",
  "perry-codegen-arkts",
  "perry-codegen-glance",
@@ -5061,20 +5062,6 @@ name = "perry-base64"
 version = "0.5.1663"
 dependencies = [
  "base64 0.23.1",
-]
-
-[[package]]
-name = "perry-cli-support"
-version = "0.5.1663"
-dependencies = [
- "anyhow",
- "console 0.16.6",
- "dotenvy",
- "log",
- "p256",
- "perry-base64",
- "perry-perex",
- "serde_json",
 ]
 
 [[package]]
@@ -5231,14 +5218,6 @@ name = "perry-container-e2e"
 version = "0.5.1663"
 dependencies = [
  "anyhow",
-]
-
-[[package]]
-name = "perry-db-turnloop"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-tls-turnloop",
 ]
 
 [[package]]
@@ -5720,15 +5699,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-tls-turnloop"
-version = "0.5.1663"
-dependencies = [
- "perry-ffi",
- "perry-tls-session",
- "turnloop-tls",
-]
-
-[[package]]
 name = "perry-transform"
 version = "0.5.1663"
 dependencies = [
@@ -5792,7 +5762,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
  "webkit6",
 ]
 
@@ -5810,7 +5779,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5827,7 +5795,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5840,10 +5807,6 @@ version = "0.1.0"
 dependencies = [
  "perry-dispatch",
 ]
-
-[[package]]
-name = "perry-ui-testkit"
-version = "0.5.1663"
 
 [[package]]
 name = "perry-ui-tvos"
@@ -5859,7 +5822,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5876,7 +5838,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5890,7 +5851,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
 ]
 
 [[package]]
@@ -5903,7 +5863,6 @@ dependencies = [
  "perry-ffi",
  "perry-runtime",
  "perry-ui",
- "perry-ui-testkit",
  "png",
  "qrcodegen",
  "webview2-com",
