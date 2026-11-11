@@ -469,9 +469,45 @@ impl<'a> Gen<'a> {
     }
 }
 
-/// Fill `ModuleBindings::inbounds_stores`: the store sites whose key the
-/// facts took to be at most the length. Under the negative control
-/// (`Model::inbounds_sabotage`) that is every index store.
+/// Per proven store site `(module, offset)`: how many Arrays its receiver
+/// may hold (at every copy of a summarized body), and how many of them are
+/// not grow-only (`Model::arr_grow_only`): the store keeps the others
+/// hole-free.
+fn verdicts(g: &Gen<'_>) -> std::collections::BTreeMap<(u32, u32), (u32, u32)> {
+    let mut copies: std::collections::HashMap<NodeId, Vec<NodeId>> = Default::default();
+    for inst in 0..g.m.sum.insts.len() as u32 {
+        g.m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
+    }
+    let mut buf = Vec::new();
+    let mut out: std::collections::BTreeMap<(u32, u32), (u32, u32)> = Default::default();
+    for &(mi, offset, recv) in &g.in_bounds.proven {
+        let e = out.entry((mi, offset)).or_default();
+        let nodes = std::iter::once(recv).chain(copies.get(&recv).into_iter().flatten().copied());
+        for n in nodes {
+            buf.clear();
+            g.m.nodes[n as usize].pts.sorted_into(&mut buf);
+            for &t in &buf {
+                if t == crate::model::TOP || !g.m.is_arr(t) {
+                    continue;
+                }
+                e.0 += 1;
+                if !g.m.arr_grow_only(t) {
+                    e.1 += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Fill `ModuleBindings::inbounds_stores`: the store sites where the facts
+/// lean on the bound, for check mode: the text proves the key and every
+/// Array the receiver may hold is grow-only (a store into an Array that
+/// may shrink marks its hole as before: nothing is claimed there). Under
+/// the negative control (`Model::inbounds_sabotage`) that is every index
+/// store.
 pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [crate::ModuleBindings]) {
     if g.m.aborted || !g.m.inbounds_store {
         return;
@@ -490,8 +526,10 @@ pub(crate) fn collect(g: &Gen<'_>, bindings: &mut [crate::ModuleBindings]) {
             }
         }
     } else {
-        for &(mi, offset, _) in &g.in_bounds.proven {
-            push(mi, offset);
+        for ((mi, offset), (_, shrunk)) in verdicts(g) {
+            if shrunk == 0 {
+                push(mi, offset);
+            }
         }
     }
     for mb in bindings.iter_mut() {
@@ -509,23 +547,7 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
     if !g.m.inbounds_store {
         return Vec::new();
     }
-    let mut buf = Vec::new();
-    let mut lines: std::collections::BTreeMap<(u32, u32), (u32, u32)> = Default::default();
-    for &(mi, offset, recv) in &g.in_bounds.proven {
-        buf.clear();
-        g.m.nodes[recv as usize].pts.sorted_into(&mut buf);
-        let e = lines.entry((mi, offset)).or_default();
-        for &t in &buf {
-            if t == crate::model::TOP || !g.m.is_arr(t) {
-                continue;
-            }
-            e.0 += 1;
-            if !g.m.arr_grow_only(t) {
-                e.1 += 1;
-            }
-        }
-    }
-    lines
+    verdicts(g)
         .into_iter()
         .map(|((mi, offset), (arrays, shrunk))| {
             format!(
