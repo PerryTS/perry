@@ -499,6 +499,24 @@ pub(crate) fn facts_read(
     Ok(bare)
 }
 
+/// The whole-program half of a field store's (or update's) proof: the read
+/// rule ([`facts_read`]), and the receiver is not guarded and no
+/// interpreted code runs (a guarded proof is read-only: decision 150). The
+/// one predicate `prove` gates stores on, and the LIFE fate's store question
+/// (`life_census::CodegenProof::store`). An accessor key is never a birth
+/// data field of the facts, so a setter is refused by the read rule.
+pub(crate) fn facts_store(
+    facts: &crate::codegen::ElisionFacts,
+    recv: &crate::codegen::FactsRecv,
+    property: &str,
+) -> Result<(), &'static str> {
+    facts_read(facts, recv, property)?;
+    if recv.checked || facts.interp_guard {
+        return Err("guarded field proof is read-only; store/update needs checked semantics");
+    }
+    Ok(())
+}
+
 /// The zero-guard proof for `object.property`, if the facts give one.
 pub(crate) fn prove(
     ctx: &FnCtx<'_>,
@@ -522,18 +540,16 @@ pub(crate) fn prove(
         crate::fallback_diag::refuse("receiver has no prefix-stable binding proof");
         None
     })?;
-    if let Err(why) = facts_read(&ctx.wpfacts, &recv, property) {
+    let admitted = match access {
+        Access::Get => facts_read(&ctx.wpfacts, &recv, property).map(|_| ()),
+        Access::Set | Access::Update => facts_store(&ctx.wpfacts, &recv, property),
+    };
+    if let Err(why) = admitted {
         crate::fallback_diag::refuse(why);
         return None;
     }
     let checked = recv.checked;
     let interp_guard = ctx.wpfacts.interp_guard;
-    if (checked || interp_guard) && access != Access::Get {
-        crate::fallback_diag::refuse(
-            "guarded field proof is read-only; store/update needs checked semantics",
-        );
-        return None;
-    }
     if recv.nullable && tested_in_block(ctx, object) {
         recv.nullable = false;
     }
