@@ -271,6 +271,7 @@ fn census_gates_real_add_definition_and_spread_producers() {
             crate::object::spread::js_object_spread_fresh_leading(
                 f64::from_bits(crate::value::TAG_UNDEFINED),
                 object_value,
+                0,
             );
             let readonly = crate::object::js_object_alloc(0, 0);
             crate::object::js_object_set_field_by_name(
