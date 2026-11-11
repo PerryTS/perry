@@ -970,6 +970,12 @@ fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<us
         }
         // The prototype of an object a declaration made.
         Some(w) if w.ends_with(".prototype") => m.declarations.named(w, m),
+        // An ordinary object its creator gave `Object.prototype`'s chain
+        // (`box_chain`: a `JSON.parse` object, 25.5.1 / 10.1.13
+        // OrdinaryObjectCreate): its members are `Object.prototype`'s.
+        Some(w) if members::box_chain(w) == members::BoxChain::Object => {
+            m.declarations.family(Family::Object, m)
+        }
         Some(w) => m.declarations.named(&format!("{w}.prototype"), m),
         None => m.declarations.family(fam, m),
     }
