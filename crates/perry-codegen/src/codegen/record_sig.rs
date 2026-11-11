@@ -196,6 +196,15 @@ pub(crate) fn expand(
     ))
 }
 
+/// Probe (`PERRY_VALUE_RECORDS_TRACE=1`): a function with record lanes gets
+/// no `$sig`, so its records cross boxed (a copy at each call, key reads in
+/// the body).
+pub(crate) fn trace_boxed(name: &str, why: &str) {
+    if std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
+        eprintln!("perry: value records: {name} gets no record $sig ({why}): its records cross boxed");
+    }
+}
+
 /// `defaults` (per parameter of F) per lane.
 pub(crate) fn lane_defaults(plan: &RecordPlan) -> Vec<Option<f64>> {
     let mut out = Vec::new();

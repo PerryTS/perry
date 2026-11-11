@@ -354,3 +354,18 @@ fn an_optional_record_parameter_has_a_presence_lane() {
     assert!(text.contains("signature.record_absent"));
     assert!(text.contains("call void @llvm.trap()"));
 }
+
+#[test]
+fn a_self_recursive_record_function_has_a_record_sig() {
+    let src = "function use(r: { a: number; b: number }, d: number): number { if (d > 0) return use(r, d - 1); return r.a + r.b; }\nfunction mk(n: number, d: number): { a: number; b: number } { if (d > 0) return mk(n + 1, d - 1); return { a: n, b: 2 }; }\nfunction f(n: number): number { const u = mk(n, 1); return use(u, 2); }\nconsole.log(f(1), f(2));\n";
+    let m = lower(src);
+    let on = with_signature(&m, facts(&m, &[("u", false)]), "use", &[Some(false), None], None);
+    let on = with_signature(&m, on, "mk", &[None, None], Some(false));
+    let (_, c, _) = rewrite(&m, &on).expect("rewritten");
+    assert_eq!((c.params, c.returns, c.materialized), (1, 1, 0), "{c:?}");
+    let text = ir(&m, on);
+    let define = sig_define(&text, "use").expect("use$sig");
+    assert_eq!(define.matches("double %arg").count(), 3, "{define}");
+    let define = sig_define(&text, "mk").expect("mk$sig");
+    assert!(define.contains("[3 x double]"), "{define}");
+}

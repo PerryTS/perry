@@ -111,7 +111,9 @@ pub(crate) fn sig_function(f: &Function, defaults: &[Option<f64>]) -> Option<Fun
     Some(out)
 }
 
-/// The typed plan of `f`, or `None` when `f` is not typed (§3.2, T2).
+/// The typed plan of `f`, or `None` when `f` is not typed (§3.2, T2). A
+/// function the `value_records` rewrite gave record lanes that gets no
+/// `$sig` runs boxed; `PERRY_VALUE_RECORDS_TRACE=1` names it.
 fn typed_plan(
     f: &Function,
     sig: &FactsSignature,
@@ -119,8 +121,27 @@ fn typed_plan(
     func_synthetic_arguments: &HashSet<u32>,
     triple: &str,
 ) -> Option<SpecFnPlan> {
+    match typed_plan_or(f, sig, cm, func_synthetic_arguments, triple) {
+        Ok(plan) => Some(plan),
+        Err(why) => {
+            if cm.wpfacts.record_fns.contains_key(&f.id) {
+                super::record_sig::trace_boxed(&f.name, why);
+            }
+            None
+        }
+    }
+}
+
+/// The typed plan of `f`, or why `f` is not typed (§3.2, T2).
+fn typed_plan_or(
+    f: &Function,
+    sig: &FactsSignature,
+    cm: &CrossModuleCtx,
+    func_synthetic_arguments: &HashSet<u32>,
+    triple: &str,
+) -> Result<SpecFnPlan, &'static str> {
     if sig.params.len() != f.params.len() {
-        return None;
+        return Err("the signature and the parameters differ in number");
     }
     // DESIGN-p4l4 VR-3b: a record slot the `value_records` rewrite lowered
     // is the record's lanes (`record_sig`).
@@ -129,7 +150,7 @@ fn typed_plan(
         && sig.ret.encoding() == FactsEnc::Boxed
         && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed)
     {
-        return None;
+        return Err("every slot is Boxed");
     }
     // Shapes the spec_abi path cannot compile, and §1's exclusions.
     if f.is_async
@@ -142,16 +163,20 @@ fn typed_plan(
         || func_synthetic_arguments.contains(&f.id)
         || super::split_regions::is_region_function(f)
     {
-        return None;
+        return Err("async, generator, captures, rest or arguments, or a split region");
     }
     // Excluded tiers (§3.2.1): typed_i1, typed_string, `$this`, arena, a
     // spec tuple with TaPtr/NumberArray, integer_contract.
     if cm.typed_i1_functions.contains(&f.id)
         || cm.typed_string_functions.contains(&f.id)
         || cm.funcs_reading_dynamic_this.contains(&f.id)
-        || cm.arena_threaded_functions.contains(&f.id)
+        // DESIGN-p4l4 VR-3b: a record function leaves the arena tier
+        // (`select`). The births that made it a self-recursive allocator
+        // are the copies of its records, which `F$sig` and its typed calls
+        // never birth.
+        || (!record_fn && cm.arena_threaded_functions.contains(&f.id))
     {
-        return None;
+        return Err("an excluded tier (typed_i1, typed_string, dynamic this, arena)");
     }
     // CWN 11-09 (T6 as the selector): every tier `F$sig` would subsume must
     // be no more precise than the signature, parameter by parameter.
@@ -163,7 +188,7 @@ fn typed_plan(
         && (cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
             || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64))
     {
-        return None;
+        return Err("a typed_abi clone more precise than the signature");
     }
     if let Some(plan) = cm.spec_abi_functions.get(&f.id) {
         if plan
@@ -171,7 +196,7 @@ fn typed_plan(
             .iter()
             .any(|r| matches!(r, SpecParamRep::TaPtr { .. } | SpecParamRep::NumberArray))
         {
-            return None;
+            return Err("a spec tuple with a typed-array or number-array slot");
         }
         if !record_fn
             && !sig
@@ -180,19 +205,21 @@ fn typed_plan(
                 .zip(plan.reps.iter())
                 .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
         {
-            return None;
+            return Err("a spec tuple more precise than the signature");
         }
         if plan.reps.iter().all(|r| matches!(r, SpecParamRep::Boxed))
             && super::checked_integer::eligible(f, triple)
             && super::integer_contract::prove(f).is_some()
         {
-            return None;
+            return Err("an integer contract");
         }
     }
     let mut defaults = Vec::with_capacity(f.params.len());
     for (p, rep) in f.params.iter().zip(sig.params.iter()) {
         defaults.push(match (&p.default, rep) {
-            (Some(d), FactsRep::I32 | FactsRep::F64) => Some(literal_number(d)?),
+            (Some(d), FactsRep::I32 | FactsRep::F64) => {
+                Some(literal_number(d).ok_or("a default that is no literal Number")?)
+            }
             _ => None,
         });
     }
@@ -201,11 +228,12 @@ fn typed_plan(
         None if sig.ret.encoding() == FactsEnc::Boxed
             && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed) =>
         {
-            return None
+            return Err("every slot is Boxed")
         }
         None => (sig.clone(), None),
     };
-    let body = super::record_sig::sig_body(f, &defaults, record.as_ref())?;
+    let body = super::record_sig::sig_body(f, &defaults, record.as_ref())
+        .ok_or("the body does not start with its default prologue")?;
     let defaults = match &record {
         Some(record) => super::record_sig::lane_defaults(record),
         None => defaults,
@@ -234,7 +262,7 @@ fn typed_plan(
         } else {
             MainPublic::Body
         };
-    Some(SpecFnPlan {
+    Ok(SpecFnPlan {
         guards: vec![None; reps.len()],
         reps,
         dispatch: SpecDispatch::Static,
@@ -282,6 +310,9 @@ pub(crate) fn select(
     let mut typed: Vec<(u32, SpecFnPlan)> = Vec::new();
     for f in &hir.functions {
         if !reached.contains(&f.id) {
+            if facts.record_fns.contains_key(&f.id) {
+                super::record_sig::trace_boxed(&f.name, "no typed call of this module reaches it");
+            }
             continue;
         }
         let Some(sig) = facts.signatures.get(&f.id) else {
@@ -295,6 +326,9 @@ pub(crate) fn select(
         cm.typed_f64_functions.remove(&id);
         cm.typed_i32_functions.remove(&id);
         cm.spec_return_proofs.remove(&id);
+        if facts.record_fns.contains_key(&id) {
+            cm.arena_threaded_functions.remove(&id);
+        }
         cm.spec_abi_functions.insert(id, plan);
     }
 }
