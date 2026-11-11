@@ -506,9 +506,10 @@ fn field_ir(rep: FactsRep, in_floor: bool) -> String {
     String::from_utf8(compile_module(&m, opts).expect("fixture compiles")).expect("UTF-8 IR")
 }
 
-/// The capacity bound of a read outside the floor.
+/// The capacity bound of a read outside the floor: the tier's, or the
+/// rep-keyed default read's (`rep_default`, the helper's `a[k] ?? 0`).
 fn capacity_bound(ir: &str) -> bool {
-    ir.contains("arep.inside")
+    ir.contains("arep.inside") || ir.contains("arep.default.inside")
 }
 
 #[test]
