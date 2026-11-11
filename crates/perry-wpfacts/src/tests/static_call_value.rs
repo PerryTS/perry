@@ -28,7 +28,11 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 
 #[test]
 fn a_field_holding_a_prototype_static_called_on_its_object_keeps_it() {
-    for f in ["Object.create", "Object.setPrototypeOf", "Reflect.setPrototypeOf"] {
+    for f in [
+        "Object.create",
+        "Object.setPrototypeOf",
+        "Reflect.setPrototypeOf",
+    ] {
         let src = format!(
             r#"
 const o = {{ pa: 1, m: {f} }};
@@ -37,7 +41,12 @@ console.log(o.pa + 1);
 "#
         );
         let pf = whole(&src);
-        assert_eq!(escape_with_field(&pf, "pa"), None, "{f}\n{}", pf.dump_text());
+        assert_eq!(
+            escape_with_field(&pf, "pa"),
+            None,
+            "{f}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -96,7 +105,12 @@ console.log(o.pa + 1);
 "#
         );
         let pf = whole(&src);
-        assert_eq!(escape_with_field(&pf, "pa"), None, "{f}\n{}", pf.dump_text());
+        assert_eq!(
+            escape_with_field(&pf, "pa"),
+            None,
+            "{f}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -221,15 +235,33 @@ console.log(k.pa + 1, p.pb + 1);
     assert_eq!(escape_with_field(&pf, "pb"), None, "{}", pf.dump_text());
 }
 
-// Control: a bound plain function in the same position is called with
-// anything: its bound argument is handed on.
+// A bound plain function in the same position: no member of the string
+// chain hands it an object (`replace` calls a function replaceValue with
+// the match, the captures, the position and the string: 22.1.3.19.1), so
+// its bound argument reaches no one but ToString of the result.
 #[test]
-fn a_bound_function_given_to_a_computed_primitive_method_hands_its_arguments() {
+fn a_bound_function_given_to_a_computed_primitive_method_is_called_with_primitives() {
     let pf = whole(
         r#"
 function f(o: any) { return o; }
 const p = { pb: 2 };
 try { ("abc" as any)[process.argv[2]](f.bind(null, p)); } catch (e) {}
+console.log(p.pb + 1);
+"#,
+    );
+    assert_eq!(escape_with_field(&pf, "pb"), None, "{}", pf.dump_text());
+}
+
+// Control: the same bound function given to unknown code hands its bound
+// argument on.
+#[test]
+fn a_bound_function_given_to_unknown_code_hands_its_arguments() {
+    let pf = whole(
+        r#"
+function f(o: any) { return o; }
+const p = { pb: 2 };
+const g: any = new Function(process.argv[3]);
+try { ("abc" as any)[process.argv[2]](f.bind(null, p)); g(f.bind(null, p)); } catch (e) {}
 console.log(p.pb + 1);
 "#,
     );
@@ -252,3 +284,85 @@ console.log(k.pa + 1);
     assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
 }
 
+// PEELS5: a primitive method only coerces its arguments (ECMA-262 22.1.3,
+// 21.1.3): a computed key names one chain member (its named arm); an array
+// given to one is converted (ToString), its elements are handed to no one.
+fn pa_escape(src: &str) -> Option<String> {
+    let pf = whole(src);
+    escape_with_field(&pf, "pa")
+}
+
+#[test]
+fn an_array_of_functions_given_to_a_computed_primitive_method_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr = [f];
+try { ("abc" as any)[process.argv[2]](arr); } catch (e) {}
+console.log(o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+#[test]
+fn an_array_of_functions_given_to_pad_start_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+console.log("abc".padStart(10, arr), (1.5).toFixed(arr), o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+#[test]
+fn a_constructor_read_by_an_unknown_key_given_to_a_primitive_method_keeps_it() {
+    let src = r#"
+class K { pa = 1; }
+const k = new K();
+const v = (k as any)[process.argv[3]];
+try { ("abc" as any)[process.argv[2]](v, K); } catch (e) {}
+console.log(k.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+#[test]
+fn object_prototype_members_beside_a_class_given_to_a_primitive_method_keep_it() {
+    let src = r#"
+class K { pa = 1; }
+const k = new K();
+const o: any = {};
+const v = o[process.argv[3]];
+try { ("abc" as any)[process.argv[2]](v, K); } catch (e) {}
+console.log(k.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}
+
+// Control: the array handed to unknown code still escapes its functions.
+#[test]
+fn an_array_of_functions_given_to_unknown_code_beside_a_primitive_method_escapes() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr = [f];
+const g: any = new Function(process.argv[3]);
+try { ("abc" as any)[process.argv[2]](arr); g(arr); } catch (e) {}
+console.log(o.pa + 1);
+"#;
+    assert!(pa_escape(src).is_some(), "{}", whole(src).dump_text());
+}
+
+// PEELS6: a member that only coerces its operands coerces the elements of
+// a spread too (the `apply` form a call with anything makes).
+#[test]
+fn an_array_of_functions_spread_into_a_coercing_primitive_method_keeps_them() {
+    let src = r#"
+const o = { pa: 1 };
+function f() { return o; }
+const arr: any = [f];
+console.log("abc".padStart(...arr), "abc".sup(...arr), o.pa + 1);
+"#;
+    assert_eq!(pa_escape(src), None, "{}", whole(src).dump_text());
+}

@@ -10,6 +10,49 @@ use super::*;
 
 const WK: &str = collections::WK_PREFIX;
 
+/// ECMA-402 9.2.1 CanonicalizeLocaleList(locales): a string is the one
+/// tag; an object is read as array-like: `length` (ToLength), then each
+/// element, ToString'd unless an `Intl.Locale` (no program code runs
+/// there). Getters run in the loads.
+pub(super) fn intl_locales(m: &mut Model, l: NodeId) {
+    let len = m.node_l("intl-locales-length");
+    let key = Key::Named(m.atom("length"));
+    m.cons(l, Cons::Load { key, dst: len });
+    to_prim(m, len, "locale list length");
+    let e = m.node_l("intl-locales-elem");
+    let key = m.elem_key();
+    m.cons(l, Cons::Load { key, dst: e });
+    to_prim(m, e, "locale list element");
+}
+
+/// ECMA-402 9.2.13 GetOption over CoerceOptionsToObject(options): each of
+/// `keys` is read (getters run in the loads) and ToString'd or
+/// ToBoolean'd; nothing else of the options is read.
+pub(super) fn intl_options(m: &mut Model, o: NodeId, keys: &[&str]) {
+    for k in keys {
+        let v = m.node_l("intl-option");
+        let key = Key::Named(m.atom(k));
+        m.cons(o, Cons::Load { key, dst: v });
+        to_prim(m, v, "Intl option");
+    }
+}
+
+/// Every operand of `call` is read by ToPrimitive: its arguments and the
+/// elements of each spread (CreateListFromArrayLike / the iteration of
+/// `...xs`), read through the element key.
+pub(super) fn coerce_operands(m: &mut Model, call: CallId, why: &str) {
+    let c = m.calls[call as usize].clone();
+    for &a in &c.args {
+        to_prim(m, a, why);
+    }
+    for &sp in &c.spread {
+        let e = m.node_l("coerced-spread-elem");
+        let key = m.elem_key();
+        m.cons(sp, Cons::Load { key, dst: e });
+        to_prim(m, e, why);
+    }
+}
+
 /// Operand `v` is read by ToPrimitive (ToString / ToNumber / ToPropertyKey).
 pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
     let r = m.reason(&format!("ToPrimitive of the {why}"));
@@ -154,6 +197,60 @@ fn read_match(m: &mut Model, rec: NodeId) {
 /// rule (the method keeps the generic summary).
 pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
     let c = m.calls[call as usize].clone();
+    // The members that read no operand, or only coerce every operand: the
+    // positions do not matter, so a spread call (`apply`, `f(...xs)`) is
+    // the same rule over the spread's elements.
+    match name {
+        // 22.1.3.28 / .30 / .10 / .31: no operand is read.
+        "toLowerCase" | "toUpperCase" | "toWellFormed" => {
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
+        "isWellFormed" => {
+            ret_prim(m, call, prim::BOOL);
+            return true;
+        }
+        // Every operand is ToString'd or ToIntegerOrInfinity'd (B.2.2.2
+        // CreateHTML: ToString of the attribute value).
+        "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
+        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "trim" | "trimStart"
+        | "trimEnd" | "trimLeft" | "trimRight" | "indexOf" | "lastIndexOf" | "toFixed"
+        | "toPrecision" | "toExponential" | "anchor" | "big" | "blink" | "bold" | "fixed"
+        | "fontcolor" | "fontsize" | "italics" | "link" | "small" | "strike" | "sub" | "sup" => {
+            coerce_operands(m, call, "string method operand");
+            let r = match name {
+                "at" => prim::STR | prim::UNDEF,
+                "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
+                "codePointAt" => prim::NUM | prim::UNDEF,
+                _ => prim::STR,
+            };
+            // `charAt` and `at` read one code unit (or none: `""`,
+            // `undefined`).
+            let one_unit = matches!(name, "charAt" | "at");
+            let saved = one_unit.then(|| {
+                m.cur_range.replace(crate::model::Rg {
+                    num: crate::model::Iv::TOP,
+                    chr: crate::model::range::CHAR_ANY,
+                })
+            });
+            ret_prim(m, call, r);
+            if let Some(saved) = saved {
+                m.cur_range = saved;
+            }
+            return true;
+        }
+        // 22.1.3.36: no operand is read; a String Iterator over the code
+        // points (strings). Its own intrinsic prototype is not described:
+        // the any-iterator kind.
+        n if n == collections::WK_ITERATOR => {
+            let cps = m.node_l("string-iterator-values");
+            m.add_prim(cps, prim::STR);
+            let it = collections::iter_over(m, call, members::ANY_ITERATOR, cps);
+            ret_tok(m, call, it);
+            return true;
+        }
+        _ => {}
+    }
     if !c.spread.is_empty() {
         return false;
     }
@@ -221,43 +318,6 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 m.edge(r, c.ret);
             }
         }
-        // Every operand is ToString'd or ToIntegerOrInfinity'd.
-        "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
-        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "trim" | "trimStart"
-        | "trimEnd" | "indexOf" | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
-            for &a in &c.args {
-                to_prim(m, a, "string method operand");
-            }
-            let r = match name {
-                "at" => prim::STR | prim::UNDEF,
-                "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
-                "codePointAt" => prim::NUM | prim::UNDEF,
-                _ => prim::STR,
-            };
-            // `charAt` and `at` read one code unit (or none: `""`,
-            // `undefined`).
-            let one_unit = matches!(name, "charAt" | "at");
-            let saved = one_unit.then(|| {
-                m.cur_range.replace(crate::model::Rg {
-                    num: crate::model::Iv::TOP,
-                    chr: crate::model::range::CHAR_ANY,
-                })
-            });
-            ret_prim(m, call, r);
-            if let Some(saved) = saved {
-                m.cur_range = saved;
-            }
-            return true;
-        }
-        // 22.1.3.28 / .30 / .10 / .31: no operand is read.
-        "toLowerCase" | "toUpperCase" | "toWellFormed" => {
-            ret_prim(m, call, prim::STR);
-            return true;
-        }
-        "isWellFormed" => {
-            ret_prim(m, call, prim::BOOL);
-            return true;
-        }
         // 22.1.3.7 / .24 / .8 step 2: IsRegExp(searchString) reads @@match;
         // then ToString.
         "includes" | "startsWith" | "endsWith" => {
@@ -270,27 +330,34 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             ret_prim(m, call, prim::BOOL);
             return true;
         }
-        // 22.1.3.12: `that` is ToString'd; locales and options are read by
-        // Intl (any key): they keep the generic protocol.
+        // 22.1.3.12 / .26 / .27 with ECMA-402 19.1.2 / 19.1.3 / 19.1.4:
+        // `that` is ToString'd; `locales` is CanonicalizeLocaleList'd
+        // (`intl_locales`); localeCompare's `options` is read by
+        // InitializeCollator's GetOption calls (`intl_options`). Later
+        // arguments are not read.
         "localeCompare" | "toLocaleLowerCase" | "toLocaleUpperCase" => {
-            let skip = if name == "localeCompare" {
+            let compare = name == "localeCompare";
+            if compare {
                 if let Some(t) = arg0 {
                     to_prim(m, t, "localeCompare operand");
                 }
-                1
-            } else {
-                0
-            };
-            let r = m.reason(&format!(
-                "argument of a primitive method: {name} locales/options"
-            ));
-            for &a in c.args.iter().skip(skip) {
-                m.cons(
-                    a,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Any,
-                    },
+            }
+            if let Some(&l) = c.args.get(compare as usize) {
+                intl_locales(m, l);
+            }
+            if let (true, Some(&o)) = (compare, c.args.get(2)) {
+                intl_options(
+                    m,
+                    o,
+                    &[
+                        "usage",
+                        "localeMatcher",
+                        "collation",
+                        "numeric",
+                        "caseFirst",
+                        "sensitivity",
+                        "ignorePunctuation",
+                    ],
                 );
             }
             ret_prim(

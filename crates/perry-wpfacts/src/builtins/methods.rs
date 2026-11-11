@@ -73,7 +73,10 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity,
+                        holder: None,
+                    }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m
@@ -155,8 +158,7 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         return;
     }
     let Key::Named(a) = key else {
-        // A computed key may name any method of the chain.
-        return prim_method_generic(m, call);
+        return prim_method_computed(m, prim, key, call);
     };
     let name = m.atoms[a as usize].clone();
     // A key a store into ⊤ may have written onto the chain: the call runs
@@ -194,10 +196,47 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
         }
         Some(Mem::Fn) if string_methods::string_method(m, call, &name) => {}
         Some(Mem::Fn) => prim_method_generic(m, call),
+        // `constructor` called as a method: String (22.1.1.1), Number
+        // (21.1.1.1), Symbol (20.4.1.1) and BigInt (21.2.1.1) coerce their
+        // argument (ToPrimitive), Boolean (20.3.1.1) reads nothing; the
+        // result is a primitive (`Symbol()` and `BigInt()` called, not
+        // constructed).
+        Some(Mem::Ctor) => {
+            string_methods::coerce_operands(m, call, "argument of a primitive constructor");
+            ret_prim(
+                m,
+                call,
+                prim::NUM | prim::STR | prim::BOOL | prim::BIGINT | prim::SYMBOL,
+            );
+        }
         // A data member is no function: TypeError.
         Some(_) => {}
         // Absent: a TypeError, unless written (above).
         None => {}
+    }
+}
+
+/// A computed key on a primitive names one member of its chain, or none (a
+/// TypeError): the call of each member the key may spell by its name, by
+/// its named arm (the written-key check of `STAR_KEY` included), as for a
+/// function value (`function_method`). An undescribed chain keeps the
+/// generic arm.
+fn prim_method_computed(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    let mut names: Vec<&'static str> = vec![crate::STAR_KEY];
+    for fam in members::prim_families(prim) {
+        match members::chain_names(fam) {
+            Some(ns) => names.extend(ns),
+            None => return prim_method_generic(m, call),
+        }
+    }
+    names.sort_unstable();
+    names.dedup();
+    for n in names {
+        if n != crate::STAR_KEY && !m.key_may_name_str(key, n) {
+            continue;
+        }
+        let a = m.atom(n);
+        prim_method(m, prim, Key::Named(a), call);
     }
 }
 
@@ -265,7 +304,13 @@ pub(super) fn realm_born_method(
 ) {
     use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
     let a = m.atom(name);
-    let written = !intrinsic_unwritten(m, Family::Opaque, Some(born.name), a, NativeMiss::Call(t, call));
+    let written = !intrinsic_unwritten(
+        m,
+        Family::Opaque,
+        Some(born.name),
+        a,
+        NativeMiss::Call(t, call),
+    );
     match members::realm_chain_find(born, name) {
         members::RealmFind::Absent => {
             if written {
@@ -531,7 +576,11 @@ pub fn object_proto_method_prims(m: &mut Model, prim: u16, call: CallId) {
     }
     for name in OBJECT_PROTO_METHODS {
         if name == "valueOf" {
-            prim_method_generic(m, call);
+            // 20.1.3.7: ToObject(this value); it reads no argument (they
+            // go to no one). The result keeps the generic arm shape.
+            ret_prim(m, call, prim::ALL);
+            let pb = site_tmpl(m, call, "primbox");
+            ret_tok(m, call, pb);
         } else {
             let a = m.atom(name);
             prim_method(m, p, Key::Named(a), call);
