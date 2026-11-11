@@ -383,6 +383,12 @@ pub(crate) fn select_methods(
             let Some(sig) = facts.signatures.get(&m.id) else {
                 continue;
             };
+            // Probe: a record method that gets no `$sig` runs boxed.
+            let boxed = |why: &str| {
+                if facts.record_fns.contains_key(&m.id) {
+                    super::record_sig::trace_boxed(&format!("{}::{}", class.name, m.name), why);
+                }
+            };
             if sig.params.len() != m.params.len()
                 || m.is_async
                 || m.is_generator
@@ -404,6 +410,7 @@ pub(crate) fn select_methods(
                 || crate::collectors::ptr_array_cached_method(class, m).is_some()
                 || super::arguments::method_supports_arguments_length_direct_abi(m)
             {
+                boxed("an excluded tier");
                 continue;
             }
             let mut defaults = Vec::with_capacity(m.params.len());
@@ -459,6 +466,7 @@ pub(crate) fn select_methods(
             // routes to the boxed entry.
             let tower = cm.pshape_tower_routable.contains(&key);
             if tower && proven_this.is_none() {
+                boxed("a tower-routable method without its proven `this` layout");
                 continue;
             }
             // CWN 11-09 (T6 as the selector): every tier `M$sig` would
