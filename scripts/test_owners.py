@@ -130,7 +130,6 @@ OWNERS: list[tuple[str, tuple[str, ...]]] = [
     ("crates/perry-ext-zlib/*", ("zlib",)),
     ("crates/perry-http-server/*", ("http",)),
     ("crates/perry-tls-session/*", ("fetch", "https", "tls")),
-    ("crates/perry-tls-turnloop/*", ("http2", "tls")),
     (TABLE + "async_hooks.rs", ("async_hooks",)),
     (TABLE + "node_core/assert.rs", ("assert",)),
     (TABLE + "node_core/dgram_fs_os.rs", ("dgram", "fs", "os", "tty", "wasi")),

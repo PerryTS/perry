@@ -189,10 +189,6 @@
       "category": "test-support",
       "decision": "keep"
     },
-    "perry-db-turnloop": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
     "perry-diagnostics": {
       "category": "compiler-core",
       "decision": "keep"
@@ -330,10 +326,6 @@
       "decision": "keep"
     },
     "perry-tls-session": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-tls-turnloop": {
       "category": "runtime-core",
       "decision": "keep"
     },
