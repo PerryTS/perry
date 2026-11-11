@@ -1,0 +1,1 @@
+snap census: the walker lock opens the census unwind funnel, so a native event raised while a throw holds the unwinder lock no longer walks the stack through the same lock; the instrumented Supabase census run no longer hangs at the ws buffer-util throw.
