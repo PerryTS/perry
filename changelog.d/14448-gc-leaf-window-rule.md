@@ -1,0 +1,1 @@
+gc: a leaf-only collection (a census of every young small cell) now runs only while the Eden window it leaves is at least as large as Eden; otherwise the copying minor runs at that trigger. Leaf-heavy programs run far fewer Eden-wide censuses (Supabase `--version` executes 1.1% fewer instructions); copying minors are more frequent and copy 1-4% more in leaf-heavy fixtures.
