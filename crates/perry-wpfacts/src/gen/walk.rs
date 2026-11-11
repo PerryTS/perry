@@ -1115,6 +1115,9 @@ impl<'a> Gen<'a> {
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
         let mut pushed = 0;
         let mut i = 0;
+        // A local derived below a guarded counter in this block
+        // (`gen/in_bounds.rs`) is one until the block ends.
+        let derived = self.in_bounds.derived.len();
         while i < ss.len() {
             if let Some(value) = for_of_binding(&ss[i..]) {
                 // `value = arrayRecordForValue(…); state = n; let s = value`:
@@ -1152,6 +1155,7 @@ impl<'a> Gen<'a> {
             }
             i += 1;
         }
+        self.in_bounds.derived.truncate(derived);
         self.narrow_pop(pushed);
     }
 
@@ -1234,6 +1238,7 @@ impl<'a> Gen<'a> {
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
+                self.in_bounds_let(fx, *id, init.as_ref());
                 self.direct_arr = None;
                 if let Some(perry_hir::Expr::ForInKeys(o)) = init {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {

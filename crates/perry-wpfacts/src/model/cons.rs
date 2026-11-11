@@ -107,6 +107,11 @@ pub enum Cons {
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
+    /// A store under an index of each Array in the node, at a site whose
+    /// key gen proved at most the Array's length there
+    /// (`Model::inbounds_sites`): it leaves no hole in an Array whose length
+    /// never shrinks (`Model::index_kept`), and may leave one in any other.
+    IndexKept,
     /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
     /// wrapper's record literal carries `__perry_cjs_record` at birth), or
     /// the published value itself for a raw publication.
@@ -661,6 +666,7 @@ impl Cons {
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::IndexHole => "indexhole",
+            Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",

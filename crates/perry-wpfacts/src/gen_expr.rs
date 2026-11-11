@@ -284,7 +284,7 @@ impl<'a> Gen<'a> {
         key_value: NodeId,
         src: NodeId,
         desc: &str,
-    ) {
+    ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
         self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
@@ -301,6 +301,7 @@ impl<'a> Gen<'a> {
                 },
             ),
         }
+        site
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -1439,7 +1440,20 @@ impl<'a> Gen<'a> {
                         Key::Any(_) => Key::Any(self.key_shape(fx.module, index)),
                         k => k,
                     };
-                    self.store_elem(fx, e, o, key, i, v, "[]=");
+                    // Decided before the store is generated: the solve
+                    // reads the site's verdict (`Model::inbounds_sites`).
+                    let kept = matches!(e, Expr::IndexSet { .. })
+                        && matches!(key, Key::Any(_))
+                        && self.in_bounds_store(fx, object, index);
+                    let site = self.store_elem(fx, e, o, key, i, v, "[]=");
+                    if kept {
+                        self.m.inbounds_sites.insert(site);
+                        let offset = match e {
+                            Expr::IndexSet { element_offset, .. } => *element_offset,
+                            _ => 0,
+                        };
+                        self.in_bounds.proven.push((fx.module, offset, o));
+                    }
                 }
                 let key = match index.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom_index[s]),

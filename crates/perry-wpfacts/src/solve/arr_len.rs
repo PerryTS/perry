@@ -81,11 +81,52 @@ impl Model {
 
     /// Token `t`'s length may be any Number from now on.
     pub(crate) fn arr_len_top(&mut self, t: Tok) {
-        if t == TOP || !self.is_arr(t) || self.arr_floor_sabotage {
+        if t == TOP || !self.is_arr(t) {
+            return;
+        }
+        // Every event that lands here may shrink the Array: an in-bounds
+        // store (`index_kept`) is no proof for it from now on, and the
+        // hole it withheld is marked.
+        if self.arr_shrunk.insert(t) && self.inbounds_kept.contains(&t) {
+            self.mark_hole(t);
+        }
+        if self.arr_floor_sabotage {
             return;
         }
         let n = self.arr_len(t);
         self.arr_len_grow(n, Iv::TOP);
+    }
+
+    /// `Cons::IndexKept`: an index store into Array `t` at a site whose key
+    /// is at most `t`'s length when the store runs (gen compared the key
+    /// with the `length` the Array held earlier, `gen/in_bounds.rs`). It
+    /// overwrites an element or appends, so it leaves no hole, while `t` is
+    /// an Array of this unit whose length never shrinks: between the
+    /// comparison and the store the length only grew. Any other Array may
+    /// have been shortened in between (through another name, in a callee):
+    /// the store may land past its end.
+    pub(crate) fn index_kept(&mut self, t: Tok) {
+        if t == TOP || !self.is_arr(t) {
+            return;
+        }
+        if self.arr_grow_only(t) {
+            self.inbounds_kept.insert(t);
+        } else {
+            self.mark_hole(t);
+        }
+    }
+
+    /// Array `t` is born in this unit and no event may shrink it
+    /// (`arr_shrunk`). One unit of a per-unit solve sees the other units'
+    /// writes only through contracts: no Array is grow-only there.
+    pub(crate) fn arr_grow_only(&self, t: Tok) -> bool {
+        if self.unit_mode || self.arr_shrunk.contains(&t) || self.is_marker(t) {
+            return false;
+        }
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => !self.foreign.contains_key(&tm),
+            _ => false,
+        }
     }
 
     /// Token `t`'s length may be up to `hi` from now on (the floor).

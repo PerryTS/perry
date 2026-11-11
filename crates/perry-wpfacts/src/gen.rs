@@ -13,6 +13,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
@@ -286,6 +287,8 @@ pub struct Gen<'a> {
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
+    /// In-bounds index stores (`gen/in_bounds.rs`).
+    pub(crate) in_bounds: in_bounds::InBounds,
     /// The function body being walked and its locals a guard may narrow
     /// (`narrow::scope_locals`).
     pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
@@ -698,6 +701,7 @@ impl<'a> Gen<'a> {
             binding_writes: FxHashMap::default(),
             for_binding: None,
             narrow: Vec::new(),
+            in_bounds: Default::default(),
             narrow_scope: None,
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),

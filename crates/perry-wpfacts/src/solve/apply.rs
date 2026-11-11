@@ -51,6 +51,11 @@ impl Model {
                     self.mark_hole(t);
                 }
             }
+            Cons::IndexKept => {
+                for &t in toks {
+                    self.index_kept(t);
+                }
+            }
             Cons::OwnValues { dst } => {
                 self.add_prim(dst, prim & prim::STR);
                 for &t in toks {
@@ -1420,8 +1425,26 @@ impl Model {
                 if index && self.index_store_done.insert((n, site, 1)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
-                    // `a[i] = v` may write past the end; `push` appends.
-                    self.cons(o, Cons::IndexHole);
+                }
+                if index {
+                    // `a[i] = v` may write past the end; `push` appends. At
+                    // a site whose key is at most the length
+                    // (`inbounds_sites`) it does not, while the key is a
+                    // Number and nothing else (a key that may be anything
+                    // else was not what gen compared).
+                    let node = &self.nodes[n as usize];
+                    let kept = self.inbounds_store
+                        && (self.inbounds_sabotage || self.inbounds_sites.contains(&site))
+                        && node.prim == prim::NUM
+                        && node.pts.is_empty()
+                        && index_strs.is_empty();
+                    let (kind, c) = match kept {
+                        true => (3, Cons::IndexKept),
+                        false => (4, Cons::IndexHole),
+                    };
+                    if self.index_store_done.insert((n, site, kind)) {
+                        self.cons(o, c);
+                    }
                 }
                 // A key that may be no String (an object to ToPrimitive, a
                 // symbol, a BigInt) keeps the any-key store; any String
