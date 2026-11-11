@@ -1122,6 +1122,13 @@ pub(crate) fn lower_let(
                     .cloned()
                     .expect("canonical local must have an i32 slot");
                 ctx.block().store(I32, &v_i32, &slot);
+            } else if let Some(v_i32) = int_tree_init(ctx, id, init_expr)? {
+                let slot = ctx
+                    .i32_counter_slots
+                    .get(&id)
+                    .cloned()
+                    .expect("canonical local must have an i32 slot");
+                ctx.block().store(I32, &v_i32, &slot);
             } else {
                 let v = lower_expr_with_expected_type(ctx, init_expr, Some(&refined_ty))?;
                 crate::expr::store_canonical_local_from_double(ctx, id, &v, Some(init_expr));
@@ -1289,6 +1296,8 @@ pub(crate) fn lower_let(
             {
                 // i32-native init: compute directly in i32, single store.
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
+                ctx.block().store(I32, &v_i32, &i32_slot);
+            } else if let Some(v_i32) = int_tree_init(ctx, id, init_expr)? {
                 ctx.block().store(I32, &v_i32, &i32_slot);
             } else {
                 // Boxed init entering the i32 slot: NaN-safe conversion (the
@@ -1807,4 +1816,14 @@ pub(crate) fn lower_let(
         ctx.block().store(DOUBLE, &lit, &slot);
     }
     Ok(())
+}
+
+/// The i32 of an I32 local's initializer that is an integer tree the
+/// intervals keep inside int32 (`expr::int_product`). Check mode witnesses a
+/// proven int32 local's stores on the double path, so it takes none.
+fn int_tree_init(ctx: &mut FnCtx<'_>, id: u32, init: &perry_hir::Expr) -> Result<Option<String>> {
+    if crate::codegen::facts_int32_locals::checked(ctx, id) {
+        return Ok(None);
+    }
+    crate::expr::int_product::try_lower_i32(ctx, init)
 }

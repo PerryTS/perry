@@ -218,6 +218,46 @@ function consumers(seed: number): string {
 }
 out.push("consumers " + consumers(777));
 
+// The initializer of an int32 local that is a bounded tree: stored as its
+// integer (`Math.abs` of a small int, a small product).
+function initializers(side: string): string {
+  const c = sign(side);
+  let text = "";
+  let total = 0;
+  for (let i = 0; i < 6 * RUN; i++) {
+    const kind = Math.abs(c * 3 - i);
+    const twice = Math.abs(c) * 2 + i;
+    const spread = (c * 5 + 6) * (i + 1);
+    text += NAMES[kind] + " ";
+    if (kind === 2 || twice > 5) total += spread;
+    total += kind * 100 + twice;
+  }
+  return text + total;
+}
+out.push("initializers " + initializers("white") + " | " + initializers("black"));
+class Pieces {
+  cells: number[] = [];
+  constructor() {
+    for (let i = 0; i < 64; i++) this.cells.push((i % 13) - 6);
+  }
+  at(k: number): number {
+    return this.cells[k] ?? 0;
+  }
+  census(color: number): string {
+    const counts = [0, 0, 0, 0, 0, 0, 0];
+    let own = 0;
+    for (let k = 0; k < 64 * RUN; k++) {
+      const p = this.at(k);
+      const type = Math.abs(p);
+      counts[type] = (counts[type] ?? 0) + 1;
+      if (p * color > 0 && (type === 1 || Math.abs(p) === 6)) own++;
+    }
+    return counts.join(",") + " " + own;
+  }
+}
+const pieces = new Pieces();
+out.push("pieces " + pieces.census(1) + " | " + pieces.census(-1));
+
 // ================= negative controls =================
 
 // The absolute value of -2^31 leaves int32; of `-0`, NaN and a string it is

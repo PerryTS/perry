@@ -31,6 +31,12 @@
 //! interval of the test is inside int32, i64 otherwise; the operators carry
 //! `nsw` (the intervals prove it).
 //!
+//! The **initializer of an I32 local** (`stmt/let_stmt.rs`: the facts made
+//! the local an int32) that is a tree whose every interval is inside int32
+//! is stored as its i32 ([`try_lower_i32`]): `const type = Math.abs(p)` with
+//! `p` in `[-6, 6]` is the integer absolute value, not `sitofp`, a mask and
+//! `fptosi`. The store's truncation maps `-0` to `0` as the integer does.
+//!
 //! Not taken: a tree whose operand may leave `[-2^53, 2^53]` (the double
 //! computation rounds inside the tree), two rounding sides, a leaf that may
 //! write (`i++`, a call), a fractional, NaN or unproven operand, and any
@@ -43,6 +49,8 @@
 //! claims every non-literal leaf is `0`.
 //!
 //! `PERRY_INT_PRODUCTS=0` (`off`, `false`): main's lowering.
+//! `PERRY_INT_PRODUCTS=products`: tests over `+`, `-` and `*` only (no
+//! `Math.abs` node, no I32 initializer).
 
 use anyhow::Result;
 use perry_hir::{BinaryOp, CompareOp, Expr, LogicalOp};
@@ -61,6 +69,13 @@ pub(crate) fn enabled() -> bool {
             Ok("0") | Ok("off") | Ok("false")
         )
     })
+}
+
+/// `PERRY_INT_PRODUCTS=products`: only `+`, `-` and `*` under a test; no
+/// `Math.abs` node and no int32 store ([`try_lower_i32`]).
+fn abs_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_INT_PRODUCTS").as_deref() != Ok("products"))
 }
 
 fn sabotaged() -> bool {
@@ -200,6 +215,9 @@ fn node<'a>(ctx: &FnCtx<'_>, e: &'a Expr, depth: u32) -> Result<Node<'a>, &'stat
         return Err("depth");
     }
     if let Expr::MathAbs(x) = e {
+        if !abs_enabled() {
+            return Err("leaf");
+        }
         let inner = node(ctx, x, depth + 1)?;
         let a = inner.iv();
         if !within(a, (-EXACT, EXACT)) {
@@ -357,6 +375,34 @@ fn arith(e: &Expr) -> bool {
                 ..
             }
     )
+}
+
+/// The i32 of `e` for the store into an I32 local when `e` is a tree whose
+/// every interval is inside int32 (module docs); `None` leaves it to the
+/// other lowerings.
+pub(crate) fn try_lower_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
+    if !enabled() || !abs_enabled() || !arith(e) {
+        return Ok(None);
+    }
+    let Ok(n) = node(ctx, e, 0) else {
+        return Ok(None);
+    };
+    if !n.is_tree() || !n.narrow() {
+        return Ok(None);
+    }
+    if std::env::var("PERRY_ARRAY_BASE_DIAG").as_deref() == Ok("1") {
+        let (lo, hi) = n.iv();
+        eprintln!(
+            "[perry intprod] fn={} value=[{lo},{hi}] verdict=i32-value",
+            ctx.func.name
+        );
+    }
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::Int32Input,
+        || serde_json::json!({ "operand": "int product" }),
+    );
+    crate::facts_consumed::used();
+    Ok(Some(lower(ctx, &n, false)?))
 }
 
 /// `left <op> right` as one integer compare (an `i1`) when a side is an
