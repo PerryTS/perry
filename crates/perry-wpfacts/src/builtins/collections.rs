@@ -143,10 +143,24 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // `Function.prototype` and `Object.prototype`, which define none of
         // them unless the program wrote one there (the written-method
         // arrival, `own_method_inner`); absent, the call throws a TypeError.
-        // A computed key on one is a runtime property: unknown.
+        // A computed key on one is an ordinary [[Get]] of one of those keys:
+        // its own statics (`method_on`), else a method of the described
+        // chain (`Function.prototype`, `Object.prototype`): the call of
+        // each of them by its name. A member the program wrote onto the
+        // chain is the written-method arrival, as for a named key.
         Some("next" | "return" | "throw") | None if !matches!(m.toks[t as usize], TokKind::Func(f, _) if m.funcs[f as usize].gen_step()) => {
             if name.is_none() {
-                unknown_method(m, call, "computed method of a function value");
+                match members::chain_names(Family::Function) {
+                    Some(names) => {
+                        let fns: Vec<&str> = names
+                            .filter(|n| matches!(members::member(Family::Function, n), Some(Mem::Fn)))
+                            .collect();
+                        for n in fns {
+                            function_method(m, t, Some(n), call);
+                        }
+                    }
+                    None => unknown_method(m, call, "computed method of a function value"),
+                }
             }
         }
         // An async generator's step: the function runs with this = itself.
