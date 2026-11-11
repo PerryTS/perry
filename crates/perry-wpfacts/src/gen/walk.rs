@@ -46,6 +46,24 @@ impl<'a> Gen<'a> {
                 self.ctor_phase.insert(tm, ph);
             }
         }
+        // The push-filled births (`push_fills`), with the birth lengths.
+        if self.m.push_fills
+            && self.m.rest_elems
+            && self.m.array_reps
+            && self.arr_lengths
+            && !self.m.unit_mode
+            && !self.m.arr_floor_off
+            // A direct eval in the constructor reaches `this` without naming it.
+            && !self.m.interp_linked
+        {
+            for mi in 0..modules.len() {
+                for c in self.classes_of(mi) {
+                    let fills = crate::push_fills::analyze(c, self.m.push_fill_sabotage);
+                    self.push_fill.add(fills);
+                }
+            }
+            self.m.push_fill_lens = self.push_fill.lens.clone();
+        }
         // Parent leaks close the child's phase at `super()`.
         let tms: Vec<TmplId> = self.ctor_phase.keys().copied().collect();
         for tm in tms.iter().copied() {
@@ -870,6 +888,16 @@ impl<'a> Gen<'a> {
             let site = self.store_site(mi, fi, format!("field {}", f.name), Some(tm), true);
             let v = match &f.init {
                 Some(e) => {
+                    // A push-filled `new Array()`: the builtin's birth at
+                    // its call site is the fill's (`new_builtin` names the
+                    // site before the call exists: the solve is online).
+                    if matches!(e, Expr::New { .. }) {
+                        self.push_fill_new = self
+                            .push_fill
+                            .births
+                            .get(&(e as *const Expr as usize))
+                            .copied();
+                    }
                     if matches!(e, Expr::Array(x, _) if x.is_empty())
                         && f.key_expr.is_none()
                         && !f.is_private
@@ -878,6 +906,7 @@ impl<'a> Gen<'a> {
                             Some(crate::records::ArrBirth::Field(mi, c.id, f.name.clone()));
                     }
                     let v = self.expr(&ffx, e);
+                    self.push_fill_new = None;
                     self.direct_arr = None;
                     v
                 }

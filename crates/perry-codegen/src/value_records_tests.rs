@@ -55,6 +55,7 @@ fn facts(m: &Module, names: &[(&str, bool)]) -> ElisionFacts {
             class_id: Some(class.id),
             keys: class.fields.iter().map(|x| x.name.clone()).collect(),
             numeric: class.fields.iter().map(|_| false).collect(),
+            int32: Vec::new(),
         },
     );
     for (name, opt) in names {
@@ -340,12 +341,18 @@ fn a_record_result_is_an_aggregate() {
     assert!(text.contains("alloca [2 x double]"));
     // The boxed entry of a record-returning function has no caller.
     assert!(text.contains("call void @llvm.trap()"));
+    // VR-4c: the lanes are bound, so the boxed program's key-by-key read of
+    // the result is not lowered.
+    let reads = |t: &str| t.matches("call double @js_object_get_field_value(").count();
+    let bound = reads(&text);
     // Negative control: without the signature the result is a boxed object,
     // read key by key.
     let (_, c, _) = rewrite(&m, &base).expect("rewritten");
     assert_eq!((c.returns, c.calls), (0, 0), "{c:?}");
     assert!(c.unpacked >= 1, "{c:?}");
-    assert!(!ir(&m, base).contains("%perry_record_ret"));
+    let boxed = ir(&m, base);
+    assert!(!boxed.contains("%perry_record_ret"));
+    assert!(bound + 4 <= reads(&boxed), "{bound} {}", reads(&boxed));
 }
 
 #[test]
@@ -567,4 +574,50 @@ fn a_record_array_is_touched_only_by_its_intrinsics() {
     assert_eq!((c.arrays, c.array_ops), (0, 0), "{c:?}");
     assert!(c.materialized > 0, "{c:?}");
     assert!(!ir(&m, off).contains("call double @js_record_array_"));
+}
+
+/// VR-4c: the lane locals of a Number field hold a Number at all times (the
+/// filler of an absent record is `0`), so they carry the field's own facts:
+/// declared `number`, in `number_inputs`, and in `int32_inputs` for an int32
+/// field. An untyped lane local is a GC root slot.
+#[test]
+fn the_lanes_of_number_fields_carry_the_fields_facts() {
+    let m = lower(RESULT);
+    let base = facts(&m, &[("v", false)]);
+    let mut on = with_signature(&m, base.clone(), "mk", &[None], Some(false));
+    on.record_layouts.get_mut(&0).expect("the layout").int32 = vec![true, false];
+    let (out, _, abi) = rewrite(&m, &on).expect("rewritten");
+    assert!(!abi.number_lanes.is_empty());
+    assert!(abi.int32_lanes.is_subset(&abi.number_lanes));
+    // One of the two keys is int32.
+    assert_eq!(abi.int32_lanes.len() * 2, abi.number_lanes.len());
+    let mut declared = 0;
+    perry_hir::tdz_check::for_each_module_stmt_list(&out, &mut |list| {
+        for s in list {
+            if let Stmt::Let { id, ty, .. } = s {
+                if abi.number_lanes.contains(id) {
+                    assert!(matches!(ty, perry_hir::types::Type::Number), "{ty:?}");
+                    declared += 1;
+                }
+            }
+        }
+    });
+    assert!(declared > 0);
+    let mut installed = Arc::new(on.clone());
+    super::rewrite_module(&m, &mut installed).expect("rewritten");
+    assert!(abi
+        .number_lanes
+        .iter()
+        .all(|id| installed.number_inputs.contains(id)));
+    assert!(abi
+        .int32_lanes
+        .iter()
+        .all(|id| installed.int32_inputs.contains(id)));
+    // Negative control: a lane the facts give no Number field stays untyped.
+    let mut boxed = with_signature(&m, base, "mk", &[None], Some(false));
+    for l in boxed.record_layouts.values_mut() {
+        l.numeric = vec![false; l.keys.len()];
+    }
+    let (_, _, abi) = rewrite(&m, &boxed).expect("rewritten");
+    assert!(abi.number_lanes.is_empty() && abi.int32_lanes.is_empty());
 }

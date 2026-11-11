@@ -44,6 +44,7 @@ mod literal_strings;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+mod push_fills;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -537,6 +538,8 @@ fn generate<'a>(
     g.m.rest_elems = rest_elems::enabled();
     g.m.rest_capacity = rest_elems::capacity_enabled();
     g.m.fill_births = fill_births::enabled();
+    g.m.push_fills = push_fills::enabled();
+    g.m.push_fill_sabotage = cfg.sabotage.as_deref() == Some("restpush");
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
     g.m.rest_fields = rest_fields::enabled();
     g.m.key_sign = element_keys::sign_enabled();
@@ -1024,6 +1027,7 @@ fn compute_act<'a>(
     rest_elems::export(&g, &mut bindings);
     records::export(&g, &mut bindings);
     fill_births::export(&g.m, &mut bindings);
+    push_fills::export(&g.m, &mut bindings);
     // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
     let rest_lanes = if g.m.aborted {
         Vec::new()

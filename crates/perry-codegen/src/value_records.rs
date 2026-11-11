@@ -96,6 +96,9 @@ struct Shape {
     keys: Vec<String>,
     /// Per key: a Number lane (its filler is `0`, else `undefined`).
     numeric: Vec<bool>,
+    /// Per key: an int32 lane (a Number lane whose every value is an int32,
+    /// never `-0`).
+    int32: Vec<bool>,
 }
 
 /// A rewritten binding: its field locals (layout order) and the presence
@@ -124,6 +127,12 @@ pub(crate) struct Abi {
     pub fns: std::collections::BTreeMap<u32, FactsRecordFn>,
     pub aggs: std::collections::BTreeMap<u32, FactsRecordLanes>,
     pub births: std::collections::BTreeMap<u32, crate::codegen::FactsRecordBirth>,
+    /// VR-4c: the lane locals of Number fields, and of those the int32
+    /// ones: bindings that hold a Number (an int32) at all times, as the
+    /// facts say of the field (`ElisionFacts::number_inputs`,
+    /// `int32_inputs`).
+    pub number_lanes: std::collections::BTreeSet<u32>,
+    pub int32_lanes: std::collections::BTreeSet<u32>,
 }
 
 /// Per-module counts, for `PERRY_VALUE_RECORDS_TRACE=1` and the probes.
@@ -279,8 +288,41 @@ pub(crate) fn rewrite_module(
     elision.record_fns = abi.fns;
     elision.record_aggs = abi.aggs;
     elision.record_births = abi.births;
+    // VR-4c: the lanes' Number facts (`PERRY_VALUE_RECORD_LANE_FACTS=0`
+    // leaves them untyped).
+    match lane_facts() {
+        LaneFacts::None => {}
+        LaneFacts::Number => elision
+            .number_inputs
+            .extend(abi.number_lanes.iter().copied()),
+        LaneFacts::All => {
+            elision
+                .number_inputs
+                .extend(abi.number_lanes.iter().copied());
+            elision.int32_inputs.extend(abi.int32_lanes.iter().copied());
+        }
+    }
     *facts = std::sync::Arc::new(elision);
     Some(module)
+}
+
+/// VR-4c: which of their field's facts the lane locals carry
+/// (`PERRY_VALUE_RECORD_LANE_FACTS`, a compile-cache input): `0` none (the
+/// lanes are untyped, VR-4b's lowering), `number` the Number facts only,
+/// anything else (the default) the int32 facts too.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaneFacts {
+    None,
+    Number,
+    All,
+}
+
+pub(crate) fn lane_facts() -> LaneFacts {
+    match std::env::var("PERRY_VALUE_RECORD_LANE_FACTS").as_deref() {
+        Ok("0") | Ok("off") | Ok("false") => LaneFacts::None,
+        Ok("number") => LaneFacts::Number,
+        _ => LaneFacts::All,
+    }
 }
 
 fn trace(hir: &Module, c: &Census) {
@@ -337,6 +379,7 @@ fn shapes(hir: &Module, facts: &ElisionFacts) -> HashMap<u32, Shape> {
                 birth,
                 keys: layout.keys.clone(),
                 numeric: layout.numeric.clone(),
+                int32: layout.int32.clone(),
             },
         );
     }
@@ -774,7 +817,7 @@ impl Rewriter<'_> {
     /// A record of `tmpl` with fresh locals.
     fn new_rec(&mut self, tmpl: u32, track: bool) -> Rec {
         let n = self.shapes[&tmpl].keys.len();
-        Rec {
+        let rec = Rec {
             tmpl,
             track,
             present: self.fresh(),
@@ -782,6 +825,30 @@ impl Rewriter<'_> {
             tmp: self.fresh(),
             next: (0..n).map(|_| self.fresh()).collect(),
             agg: self.fresh(),
+        };
+        // VR-4c: a Number lane holds a Number at all times (its filler is
+        // `0`), an int32 lane an int32: the field's own facts.
+        let shape = &self.shapes[&tmpl];
+        for i in 0..n {
+            if shape.numeric.get(i) == Some(&true) {
+                let int32 = shape.int32.get(i) == Some(&true);
+                for id in [rec.fields[i], rec.next[i]] {
+                    self.abi.number_lanes.insert(id);
+                    if int32 {
+                        self.abi.int32_lanes.insert(id);
+                    }
+                }
+            }
+        }
+        rec
+    }
+
+    /// The declared type of lane `i`'s locals.
+    fn lane_type(&self, tmpl: u32, i: usize) -> Type {
+        if lane_facts() != LaneFacts::None && self.shapes[&tmpl].numeric.get(i) == Some(&true) {
+            Type::Number
+        } else {
+            Type::Any
         }
     }
 
@@ -812,9 +879,9 @@ impl Rewriter<'_> {
             out.push(let_stmt(
                 rec.next[i],
                 format!("{name}${k}$next"),
-                Type::Any,
+                self.lane_type(rec.tmpl, i),
                 true,
-                undefined(),
+                self.filler(rec.tmpl, i),
             ));
         }
         out
@@ -828,7 +895,11 @@ impl Rewriter<'_> {
             out.push(let_stmt(
                 rec.present,
                 format!("{name}$present"),
-                Type::Any,
+                if lane_facts() == LaneFacts::None {
+                    Type::Any
+                } else {
+                    Type::Boolean
+                },
                 true,
                 Expr::Bool(false),
             ));
@@ -837,7 +908,7 @@ impl Rewriter<'_> {
             out.push(let_stmt(
                 rec.fields[i],
                 format!("{name}${k}"),
-                Type::Any,
+                self.lane_type(rec.tmpl, i),
                 true,
                 self.filler(rec.tmpl, i),
             ));
@@ -882,7 +953,7 @@ impl Rewriter<'_> {
             out.push(let_stmt(
                 rec.fields[i],
                 format!("{name}${k}"),
-                Type::Any,
+                self.lane_type(rec.tmpl, i),
                 true,
                 v,
             ));
