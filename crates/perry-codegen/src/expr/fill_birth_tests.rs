@@ -290,6 +290,19 @@ fn a_shape_the_facts_do_not_describe_is_refused() {
     );
     assert_eq!(calls(&with, "js_array_constructor_single"), 1, "{with}");
     assert_eq!(calls(&with, "js_array_fill_birth"), 0, "{with}");
+    // A length whose value is the literal but whose expression has an
+    // effect: the facts give the literal's node (`new Array((f(), 8))`), and
+    // bearing the birth would drop the effect.
+    let src = "let n = 0;\nexport function make(): number[] { return new Array<number>((n++, 8)).fill(0); }\n";
+    let with = ir(
+        src,
+        Fact {
+            len: Some(8),
+            ..Default::default()
+        },
+    );
+    assert_eq!(calls(&with, "js_array_constructor_single"), 1, "{with}");
+    assert_eq!(calls(&with, "js_array_fill_birth"), 0, "{with}");
     // A length that is no literal.
     let src =
         "export function make(n: number): number[] { return new Array<number>(n).fill(0); }\n";

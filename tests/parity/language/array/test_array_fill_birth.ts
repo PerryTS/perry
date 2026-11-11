@@ -11,7 +11,8 @@
 // a reserved capacity, the order of evaluation, and births in a loop across
 // collections. Negative controls that keep the two-step birth and must match:
 // a length that is no literal (and a RangeError for a negative or a
-// fractional one, thrown before the fill value is evaluated), a non-number
+// fractional one, thrown before the fill value is evaluated), a length
+// expression with an effect whose value is a literal, a non-number
 // constructor argument, `fill` with a start and an end, a fill on a named
 // Array, the two-argument constructor, a subclass.
 
@@ -275,6 +276,10 @@ for (const bad of [-1, 1.5, 4294967296, NaN, Infinity]) {
     console.log("range error", bad, e instanceof RangeError, (e as Error).message, evaluated);
   }
 }
+let sequenced = 0;
+show("sequence length", new Array<number>((sequenced++, 4)).fill(1));
+show("sequence length again", new Array<number>((sequenced++, 4)).fill(2));
+console.log("sequence effect", sequenced);
 const any3: unknown = "3";
 show("string argument", new Array<unknown>(any3 as number).fill(0));
 show("fill start", new Array<number>(5).fill(1, 2));

@@ -6,12 +6,18 @@
 //! `Array`: the receiver has no binding and no own `fill`, its prototype is
 //! `%Array.prototype%`, and the intrinsic lock refuses any Replace, Delete or
 //! Redefine of that image key, so the call is the native `fill` and writes
-//! every index below the length. When the constructor's argument is an
-//! integer literal `k` the runtime backs densely (`SiteBirth::len`: `0 <= k
-//! <= MAX_FRESH_DENSE_ARRAY_LENGTH`), the two calls together make an Array of
-//! length `k` whose every element is the fill value, and nothing can observe
-//! the Array between them: the constructor cannot throw, and the fill's
-//! argument is evaluated after it, without a name for the Array.
+//! every index below the length. When the constructor's argument is the
+//! node of an integer literal `k` the runtime backs densely
+//! (`SiteBirth::len`: `0 <= k <= MAX_FRESH_DENSE_ARRAY_LENGTH`), the two
+//! calls together make an Array of length `k` whose every element is the
+//! fill value, and nothing can observe the Array between them: the
+//! constructor cannot throw, and the fill's argument is evaluated after it,
+//! without a name for the Array.
+//!
+//! The length is a fact about the argument's value, not about its
+//! expression: `new Array((f(), 8))` has the literal's node too. Codegen
+//! therefore bears the birth only when the argument is the literal itself
+//! (`perry-codegen` `fill_birth::plan`), so no effect is dropped.
 //!
 //! **Export** (`export`): per module, the `fill` call's offset (codegen's
 //! key for the call, as `rest_births`) with `k`. Codegen bears such a call as
