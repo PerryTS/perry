@@ -37,7 +37,9 @@ impl Model {
             let any = self.any_key_node(holder);
             let reason = self.reason("accessor descriptor of a changed holder");
             self.cons(any, Cons::TopIfTop { dst, reason });
-            self.with_b(|m| builtins::lookup_native_descriptor(m, origin, holder, key, dst));
+            self.with_b(|m| {
+                builtins::lookup_native_descriptor(m, origin, holder, key, dst, setter)
+            });
         }
         if let Some(a) = self.shadow_key(holder, key) {
             self.note_shadowed(holder, a, act, false);

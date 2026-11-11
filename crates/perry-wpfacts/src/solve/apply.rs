@@ -565,7 +565,17 @@ impl Model {
                         _ if t == TOP => {
                             let k = Some(Key::Named(key));
                             self.note_fnproto_write(TOP, k, Hard::E5DefineProperty.code());
-                            builtins::note_native_write(self, TOP, k, "E5 Object.defineProperty");
+                            // The definition installs exactly what its
+                            // descriptor says (ECMA-262 6.2.6.5, 10.1.6.3):
+                            // its value as data here, its get/set functions
+                            // by the producer's `Cons::Accessor` (an unknown
+                            // one as an unknown accessor: `AccessorInstall`).
+                            builtins::note_native_data_write(
+                                self,
+                                TOP,
+                                k,
+                                "E5 Object.defineProperty",
+                            );
                             self.reshape(Some(key));
                             // DECISIONS 234: in every unit, as an accessor
                             // through ⊤ under the key (a superset: what a
@@ -955,6 +965,16 @@ impl Model {
                             _ => None,
                         };
                         self.add_top(fa, |_| "accessor of unknown function value".into());
+                        if t == TOP {
+                            // An unknown function installed on whatever ⊤
+                            // is, a builtin prototype included.
+                            builtins::note_native_write(
+                                self,
+                                TOP,
+                                Some(Key::Named(key)),
+                                "accessor of unknown function value",
+                            );
+                        }
                         let site = self.anon_post_site("unknown accessor");
                         let k = if self.atoms[key as usize] == crate::STAR_KEY {
                             Key::any()
@@ -989,7 +1009,13 @@ impl Model {
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     self.note_array_member_write(t, Some(Key::Named(key)), None, "accessor");
-                    builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
+                    if t == TOP {
+                        // A known function: an accessor query that may
+                        // reach the install returns it (10.1.6.3).
+                        builtins::note_native_accessor(self, t, Some(Key::Named(key)), f, setter);
+                    } else {
+                        builtins::note_native_write(self, t, Some(Key::Named(key)), "accessor");
+                    }
                     if t == TOP || self.is_chain_proto(t) {
                         self.reshape(Some(key));
                     }

@@ -876,6 +876,21 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        // Its descriptor's get/set are that unit's values,
+                        // unknown here: installed as unknown accessors.
+                        let f = self.m.node_l("another unit's accessor");
+                        self.m
+                            .add_top(f, |_| "accessor defined by another unit's function".into());
+                        for setter in [false, true] {
+                            self.m.cons(
+                                f,
+                                Cons::Accessor {
+                                    holder: p,
+                                    key,
+                                    setter,
+                                },
+                            );
+                        }
                     }
                     None => self.m.cons(
                         p,

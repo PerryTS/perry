@@ -63,6 +63,7 @@ mod dce_reach;
 mod dead_dynamic_import;
 mod declared_effects;
 mod default_params;
+mod define_through_unknown;
 pub(crate) mod delivery_boundaries;
 pub(crate) mod described_holder_computed_read;
 mod descriptor_reads;

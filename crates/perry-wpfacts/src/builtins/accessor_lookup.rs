@@ -83,9 +83,10 @@ pub(crate) fn lookup_native_descriptor(
     holder: Tok,
     key: Key,
     dst: NodeId,
+    setter: bool,
 ) {
     let Key::Named(a) = key else {
-        native_accessor_any(m, holder, dst);
+        native_accessor_any(m, holder, dst, setter);
         return;
     };
     let name = m.atoms[a as usize].clone();
@@ -101,7 +102,9 @@ pub(crate) fn lookup_native_descriptor(
             {
                 m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
             } else {
-                m.native_missing.push((holder, a, NativeMiss::Lookup(dst)));
+                native_accessor_known(m, holder, a, dst, setter);
+                m.native_missing
+                    .push((holder, a, NativeMiss::Lookup(dst, setter)));
             }
             None
         }
@@ -113,7 +116,7 @@ pub(crate) fn lookup_native_descriptor(
     };
     if let Some(family) = family {
         if members::member(family, &name).is_some()
-            || !intrinsic_unwritten(m, family, None, a, NativeMiss::Lookup(dst))
+            || !intrinsic_unwritten(m, family, None, a, NativeMiss::Lookup(dst, setter))
         {
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
         }
@@ -127,7 +130,7 @@ pub(crate) fn lookup_native_descriptor(
 /// write the model does not place on the holder (through ⊤, or onto it under
 /// any key) may have installed a program function: that write answers ⊤,
 /// now or when it arrives (`NativeMiss::Lookup`).
-fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
+fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId, setter: bool) {
     match m.toks[holder as usize] {
         TokKind::BuiltinFn(Native::Any) => {
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
@@ -146,6 +149,7 @@ fn native_accessor_any(m: &mut Model, holder: Tok, dst: NodeId) {
         });
         return;
     }
+    native_accessor_known(m, holder, star, dst, setter);
     m.native_missing
-        .push((holder, star, NativeMiss::Lookup(dst)));
+        .push((holder, star, NativeMiss::Lookup(dst, setter)));
 }

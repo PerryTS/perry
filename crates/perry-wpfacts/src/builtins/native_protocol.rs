@@ -133,7 +133,7 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// builtin prototype), `.1` a write onto `np` itself (for the global object
 /// or a global's native prototype, onto `Object.prototype` too).
 pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
-    written_by(m, np, a, false, false)
+    written_by(m, np, a, false, &|_| true)
 }
 
 /// [`native_written`] for an accessor descriptor query (`__lookupGetter__`,
@@ -141,8 +141,29 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 /// ([`crate::model::NativeWrite`]) count; a plain store makes a data
 /// property (ECMA-262 10.1.9.2), which such a query never returns.
 pub fn native_accessor_written(m: &Model, np: Tok, a: Atom) -> bool {
-    let (top, own) = written_by(m, np, a, false, true);
+    let (top, own) = written_by(m, np, a, false, &|w| w.accessor);
     top || own
+}
+
+/// The known getters (setters if `setter`) that writes reaching `np`'s key
+/// `a` installed (definitions through ⊤ with a known descriptor), into
+/// `dst`: what an accessor descriptor query that passes `np` returns
+/// besides `undefined` (ECMA-262 10.1.6.3: the descriptor's own functions).
+pub fn native_accessor_known(m: &mut Model, np: Tok, a: Atom, dst: NodeId, setter: bool) {
+    let mut found: Vec<Tok> = Vec::new();
+    for w in m.native_writes.values() {
+        let fns = if setter { &w.setters } else { &w.getters };
+        if fns.is_empty() {
+            continue;
+        }
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            found.extend(fns.iter().copied());
+        }
+    }
+    for f in found {
+        m.add_tok(dst, f);
+    }
 }
 
 /// May the global object's key `a` (`np` the global object or the HIR
@@ -155,7 +176,7 @@ pub fn native_accessor_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// into ⊤ once the global object reached unmodeled code, a write onto
 /// `Object.prototype`.
 pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
-    let (top, own) = written_by(m, np, a, true, false);
+    let (top, own) = written_by(m, np, a, true, &|_| true);
     top || own
 }
 
@@ -164,17 +185,13 @@ fn written_by(
     np: Tok,
     a: Atom,
     field_carries_stores: bool,
-    accessor_only: bool,
+    counts: &dyn Fn(&crate::model::NativeWrite) -> bool,
 ) -> (bool, bool) {
-    let has = |t: Tok, k: Option<Atom>| {
-        m.native_writes
-            .get(&(t, k))
-            .is_some_and(|w| w.accessor || !accessor_only)
-    };
+    let has = |t: Tok, k: Option<Atom>| m.native_writes.get(&(t, k)).is_some_and(counts);
     let any_on = |t: Tok, keyed: &dyn Fn(Option<Atom>) -> bool| {
         m.native_writes
             .iter()
-            .any(|(&(w, k), x)| w == t && (x.accessor || !accessor_only) && keyed(k))
+            .any(|(&(w, k), x)| w == t && counts(x) && keyed(k))
     };
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
@@ -283,13 +300,20 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
 /// prototype itself; `key` `None` (or computed): every key. Lookups that
 /// passed it under a now-written key run as opaque members.
 pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
-    note_write(m, t, key, what, true)
+    note_write(m, t, key, what, true, None)
+}
+
+/// [`note_native_write`] for a known getter (setter if `setter`) `f`
+/// installed by a definition through ⊤ (ECMA-262 10.1.6.3): an accessor
+/// query that may reach it returns `f`, not an unknown value.
+pub fn note_native_accessor(m: &mut Model, t: Tok, key: Option<Key>, f: Tok, setter: bool) {
+    note_write(m, t, key, "accessor", false, Some((f, setter)))
 }
 
 /// [`note_native_write`] for a plain store ([[Set]], ECMA-262 10.1.9.2) or a
 /// delete: it makes, changes or removes a data property, never an accessor.
 pub fn note_native_data_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
-    note_write(m, t, key, what, false)
+    note_write(m, t, key, what, false, None)
 }
 
 /// Does a recorded write already cover a write of `t`'s key `k` (an
@@ -302,7 +326,14 @@ fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool) -> bool {
     })
 }
 
-fn note_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str, accessor: bool) {
+fn note_write(
+    m: &mut Model,
+    t: Tok,
+    key: Option<Key>,
+    what: &str,
+    accessor: bool,
+    known: Option<(Tok, bool)>,
+) {
     if t != TOP
         && !matches!(
             m.toks[t as usize],
@@ -323,7 +354,12 @@ fn note_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str, accessor: boo
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
     m.census_native_write(t, k);
-    if write_covered(m, t, k, accessor) {
+    let new_fn = known.is_some_and(|(f, setter)| {
+        !m.native_writes
+            .get(&(t, k))
+            .is_some_and(|w| if setter { &w.setters } else { &w.getters }.contains(&f))
+    });
+    if !new_fn && write_covered(m, t, k, accessor) {
         return;
     }
     let fresh = !m.native_writes.contains_key(&(t, k));
@@ -342,13 +378,26 @@ fn note_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str, accessor: boo
         m.census_opener(t, k, what, None);
     }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
-    m.native_writes
+    let w = m
+        .native_writes
         .entry((t, k))
-        .and_modify(|w| w.accessor = true)
         .or_insert(crate::model::NativeWrite {
             reason: r,
             accessor,
+            getters: Vec::new(),
+            setters: Vec::new(),
         });
+    w.accessor |= accessor;
+    if let Some((f, setter)) = known {
+        let fns = if setter {
+            &mut w.setters
+        } else {
+            &mut w.getters
+        };
+        if !fns.contains(&f) {
+            fns.push(f);
+        }
+    }
     replay_native_missing(m);
 }
 
@@ -524,7 +573,13 @@ pub(super) fn replay_native_missing(m: &mut Model) {
             m.census_native_read(np, a, miss.clone());
             let written = match miss {
                 NativeMiss::Global(..) => global_value_written(m, np, a),
-                NativeMiss::Lookup(_) => native_accessor_written(m, np, a),
+                NativeMiss::Lookup(dst, setter) => {
+                    let unknown = native_accessor_written(m, np, a);
+                    if !unknown {
+                        native_accessor_known(m, np, a, dst, setter);
+                    }
+                    unknown
+                }
                 _ => native_written(m, np, a),
             };
             if !written {
@@ -541,7 +596,7 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                     old
                 });
             match miss {
-                NativeMiss::Lookup(dst) => {
+                NativeMiss::Lookup(dst, _) => {
                     m.add_top(dst, |_| {
                         "accessor descriptor of a written intrinsic key".into()
                     });

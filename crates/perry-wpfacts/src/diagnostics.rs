@@ -148,7 +148,7 @@ impl Model {
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
             NativeMiss::Load(n)
-            | NativeMiss::Lookup(n)
+            | NativeMiss::Lookup(n, _)
             | NativeMiss::Global(n, _)
             | NativeMiss::Store(n, _) => (false, n),
             NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) | NativeMiss::New(n) => (true, n),

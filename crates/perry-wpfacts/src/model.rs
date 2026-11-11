@@ -753,10 +753,17 @@ impl Key {
 /// an accessor, so it answers no accessor descriptor query. Accessors come
 /// from definitions (`Object.defineProperty`, `__defineGetter__`, accessor
 /// syntax), a prototype change, or code the solver cannot see.
-#[derive(Clone, Copy, Debug)]
+/// A definition installs exactly what its descriptor says (ECMA-262 6.2.6.5
+/// ToPropertyDescriptor, 10.1.6.3 ValidateAndApplyPropertyDescriptor): a
+/// known getter or setter installed through ⊤ is named here (`getters`,
+/// `setters`) and answers an accessor query with itself; `accessor` is a
+/// write that may install a function the record does not name (⊤).
+#[derive(Clone, Debug)]
 pub struct NativeWrite {
     pub reason: u32,
     pub accessor: bool,
+    pub getters: Vec<Tok>,
+    pub setters: Vec<Tok>,
 }
 
 /// A lookup that passed a native prototype not defining its key.
@@ -764,6 +771,9 @@ pub struct NativeWrite {
 pub enum NativeMiss {
     /// A value read into this node.
     Load(NodeId),
+    /// An accessor descriptor query (the getter, or the setter if true)
+    /// answered into this node.
+    Lookup(NodeId, bool),
     /// A method call with this receiver.
     Call(Tok, CallId),
     /// A program-owned global (`builtins::global_user_key`) read into the
@@ -773,8 +783,6 @@ pub enum NativeMiss {
     PrimCall(u16, CallId),
     /// `new Name(...)` of a declared global constructor.
     New(CallId),
-    /// Descriptor metadata, without reading or calling the property.
-    Lookup(NodeId),
     /// A store of this node at this site that met a declared getter-only
     /// accessor (`builtins::getter_only`) and wrote nothing: once the key
     /// may be written natively (the accessor replaced), it is stored again.

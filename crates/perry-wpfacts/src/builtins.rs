@@ -45,11 +45,11 @@ pub(crate) const ARRAY_ITERATOR_KIND: &str = members::ARRAY_ITERATOR;
 pub use members::Family;
 use members::Mem;
 pub use native_protocol::{
-    global_field, global_user_key, global_value_written, is_builtin_module,
+    global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
-    note_handed_to_unknown, note_native_data_write, note_native_write, require_parts,
-    settle_native_given,
+    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
+    require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips};
 
@@ -779,11 +779,14 @@ fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
     }
     let op = m.tok(TokKind::ObjectProto);
     let written = match miss {
-        NativeMiss::Lookup(_) => native_accessor_written(m, op, a),
+        NativeMiss::Lookup(_, _) => native_accessor_written(m, op, a),
         _ => native_written(m, op, a),
     };
     if written {
         return false;
+    }
+    if let NativeMiss::Lookup(dst, setter) = miss {
+        native_accessor_known(m, op, a, dst, setter);
     }
     m.native_missing.push((op, a, miss));
     true
