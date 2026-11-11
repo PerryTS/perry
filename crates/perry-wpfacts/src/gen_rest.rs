@@ -151,6 +151,7 @@ impl<'a> Gen<'a> {
                     // `push_field_single` checks the receiver and runs its own
                     // `push` otherwise, which is the method call itself.
                     let push = self.m.atom("push");
+                    self.list_push(o, Some(a.len() as u32));
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
                     // The array push the HIR folds for a receiver it proved an
@@ -160,6 +161,7 @@ impl<'a> Gen<'a> {
                     // holder stores the same array.
                     match o {
                         Some(o) => {
+                            self.list_push(o, Some(a.len() as u32));
                             // A fill push (`push_fills`): its site is marked
                             // before the store exists (the solve is online).
                             let fill = self

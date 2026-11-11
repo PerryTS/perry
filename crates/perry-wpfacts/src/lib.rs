@@ -41,6 +41,7 @@ mod gen_expr;
 mod gen_rest;
 mod held_lengths;
 mod ledger;
+pub mod list_caps;
 mod literal_strings;
 pub mod model;
 pub mod native_effects;
@@ -550,6 +551,8 @@ fn generate<'a>(
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.map_values = solve::map_vals::enabled();
+    g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
     g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
@@ -1074,6 +1077,11 @@ fn compute_act<'a>(
             cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
+    list_caps::collect(
+        &g,
+        &mut bindings,
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }

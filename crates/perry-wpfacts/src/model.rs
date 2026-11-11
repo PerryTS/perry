@@ -1550,6 +1550,19 @@ pub struct Model {
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,
+    /// `Map.prototype.get` reads a Map's values, not its keys
+    /// (`solve/map_vals.rs`; `PERRY_FACTS_MAP_VALUES=0` turns it off).
+    pub map_values: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=mapvals`): `set`'s key is
+    /// taken for its value, a wrong claim about what `get` returns.
+    pub map_values_sabotage: bool,
+    /// The value node of each Map `get` or `set` ran on (`Model::map_vals`).
+    pub map_vals: FxHashMap<Tok, NodeId>,
+    /// Maps the program's `new Map(...)` bore (`Model::map_born`).
+    pub map_seen: crate::pts::FxHashSet<Tok>,
+    /// Maps whose every content write is a modelled `set`
+    /// (`Model::map_born`, `Model::map_open`).
+    pub map_closed: crate::pts::FxHashSet<Tok>,
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,

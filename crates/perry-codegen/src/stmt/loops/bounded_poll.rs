@@ -962,7 +962,8 @@ mod tests {
         }];
         let mut steps = Vec::new();
         assert!(writes_in_stmts(&body, 1, &mut steps));
-        assert!(writes_in_expr(&inc(1), 1, &mut steps));
+        let update = inc(1);
+        assert!(writes_in_expr(&update, 1, &mut steps));
         assert_eq!(dirs(&steps), vec![Some(Dir::Up), Some(Dir::Up)]);
 
         let reset = vec![Stmt::Expr(Expr::LocalSet(1, Box::new(int(0))))];

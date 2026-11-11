@@ -690,12 +690,16 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
-            ctx.pushed_array_birth = ctx.loop_pushed_arrays.reserve.contains(id)
-                && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
+            ctx.pushed_array_birth =
+                if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty()) {
+                    crate::expr::inline_birth::list_slots(ctx, *id)
+                } else {
+                    0
+                };
             let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
             ctx.snap_lowering = snap_frame;
-            ctx.pushed_array_birth = false;
+            ctx.pushed_array_birth = 0;
             lowered?;
             // A `const` the body uses as a bitwise operand: its ToInt32 once.
             if !*mutable && init.is_some() {

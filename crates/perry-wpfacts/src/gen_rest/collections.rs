@@ -38,6 +38,7 @@ impl<'a> Gen<'a> {
                 let a = self.local(mi, *array_id);
                 let s = self.expr(fx, source);
                 let it = self.iterate(s);
+                self.list_push(a, None);
                 self.elem_store(fx, a, it, "push...");
                 self.prim_node(prim::NUM)
             }
@@ -115,7 +116,11 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::MapNew => {
+                let (t, n) = self.bobj(mi, "Map");
+                self.m.map_born(t, true);
+                n
+            }
             Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.

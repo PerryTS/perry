@@ -512,6 +512,9 @@ pub struct ModuleBindings {
     /// only primitives at every copy, with the union of their kinds (a
     /// `model::prim` mask, never 0); sorted (`call_kinds`).
     pub call_kinds: Vec<(u32, u32, u16)>,
+    /// Local id of a `let x = []` whose birth reserves a capacity, with its
+    /// slots; sorted (`list_caps`).
+    pub list_capacities: Vec<(u32, u32)>,
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
@@ -993,6 +996,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     out.extend(rest_probe(m));
     out.extend(crate::rest_elems::probe(m));
     out.extend(crate::fill_births::probe(m));
+    out.extend(g.m.map_values_probe());
     out.extend(crate::element_keys::probe(g));
     out
 }

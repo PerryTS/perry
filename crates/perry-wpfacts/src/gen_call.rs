@@ -199,6 +199,10 @@ impl<'a> Gen<'a> {
                     }
                 }
                 self.own_test_recv = Some(o);
+                if property == "push" {
+                    // A `push` site, for the list births it may reach.
+                    self.list_push(o, spread.is_empty().then_some(args.len() as u32));
+                }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let (off, end) = if *pb != 0 {
@@ -565,6 +569,7 @@ impl<'a> Gen<'a> {
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self.m.packet_body(f);
         #[cfg(test)]
@@ -592,6 +597,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
         let _: &Vec<Stmt> = body;
     }
 
