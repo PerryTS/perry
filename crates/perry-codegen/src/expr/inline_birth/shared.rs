@@ -135,13 +135,13 @@ pub(crate) fn empty_array(ctx: &mut FnCtx<'_>) -> String {
         crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS => {
             empty_array_with(ctx, PUSHED, crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS)
         }
-        // The sized helper stores its holes in pairs.
-        slots => empty_array_with(ctx, SIZED, (slots + 1) & !1),
+        // The sized helper stores its holes four slots at a time.
+        slots => empty_array_with(ctx, SIZED, (slots + 3) & !3),
     }
 }
 
 /// The body of [`SIZED`]: [`EMPTY`]'s, with the size, the capacity word and
-/// the hole stores computed from `%slots` (an even number).
+/// the hole stores computed from `%slots` (a multiple of four).
 fn sized_body(arena: &crate::target_layout::InlineArenaLayout) -> String {
     use crate::target_layout::{ARRAY_HEADER_SIZE_BYTES, GC_HEADER_SIZE_BYTES};
     const SLOT0: u64 = GC_HEADER_SIZE_BYTES + ARRAY_HEADER_SIZE_BYTES;
@@ -174,15 +174,16 @@ init:
   %ek = getelementptr i8, ptr %base, i64 {ek}
   store i64 0, ptr %ek
   %first = getelementptr i8, ptr %base, i64 {slot0}
+  %holes = insertelement <2 x i64> <i64 {hole}, i64 {hole}>, i64 {hole}, i32 0
   br label %fill
 fill:
   %i = phi i64 [ 0, %init ], [ %next, %fill ]
-  %pair = getelementptr i64, ptr %first, i64 %i
+  %low = getelementptr i64, ptr %first, i64 %i
   ; GC_STORE_AUDIT(INIT): fresh unused array capacity holds holes.
-  store i64 {hole}, ptr %pair
-  %odd = getelementptr i8, ptr %pair, i64 8
-  store i64 {hole}, ptr %odd
-  %next = add i64 %i, 2
+  store <2 x i64> %holes, ptr %low, align 8
+  %high = getelementptr i8, ptr %low, i64 16
+  store <2 x i64> %holes, ptr %high, align 8
+  %next = add i64 %i, 4
   %more = icmp ult i64 %next, %slots
   br i1 %more, label %fill, label %filled
 filled:

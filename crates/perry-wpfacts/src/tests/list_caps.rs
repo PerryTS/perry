@@ -48,7 +48,7 @@ fn a_push_in_a_loop_after_the_birth_reserves_the_cap() {
         "{RUN}function f(n: number): number[] {{ const a: number[] = []; \
          for (let i = 0; i < n; i++) a.push(i); return a; }}\nconsole.log(f(9 * RUN).length);"
     );
-    assert_eq!(lines(&src), ["sites=1 repeated=1 open=0 single=0 cap=40"]);
+    assert_eq!(lines(&src), ["sites=1 repeated=1 open=0 single=0 cap=32"]);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn a_callee_that_pushes_in_its_own_loop_reaches_the_birth() {
          function f(n: number): number[] {{ const a: number[] = []; fill(a, n); return a; }}\n\
          console.log(f(9 * RUN).length);"
     );
-    assert_eq!(lines(&src), ["sites=1 repeated=1 open=0 single=0 cap=40"]);
+    assert_eq!(lines(&src), ["sites=1 repeated=1 open=0 single=0 cap=32"]);
 }
 
 #[test]

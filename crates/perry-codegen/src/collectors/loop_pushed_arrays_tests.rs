@@ -167,8 +167,8 @@ fn ir_with_list_capacities(m: &Module, caps: &[(u32, u32)]) -> String {
 }
 
 /// A capacity from the facts (wpfacts `list_caps`) is the sized birth with
-/// that many slots (an odd count rounded up: the holes are stored in
-/// pairs); it replaces the collector's sixteen, and a local the facts do
+/// that many slots (rounded up to a multiple of four: the holes are stored
+/// four at a time); it replaces the collector's sixteen, and a local the facts do
 /// not name keeps what the collector gives it.
 #[test]
 fn a_list_capacity_from_the_facts_is_the_sized_birth() {

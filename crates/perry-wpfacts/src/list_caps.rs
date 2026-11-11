@@ -8,9 +8,9 @@
 //! that can reach the Array.
 //!
 //! **What the facts hold.** Every `push` of the program (the folded
-//! `Expr::ArrayPush` / `ArrayPushSpread` of `Gen::folded_call`, and any
-//! `x.push(..)` method call of `Gen::call_with`) is recorded where it is
-//! generated with its receiver node, the body it
+//! `Expr::ArrayPush` / `ArrayPushSpread`, the HIR's `array.push` /
+//! `push_field_single` of a field receiver, and any other `x.push(..)`
+//! method call) is recorded where it is generated with its receiver node, the body it
 //! stands in and its loop depth in that body (`Gen::list_pushes`); every
 //! list birth with its template, body and loop depth (`Gen::list_births`).
 //! After the solve a push site *reaches* a birth when its receiver (any copy
@@ -47,14 +47,18 @@
 //! is consumed here and nothing can be falsified at run time; a missed or
 //! spurious site costs slots or a growth, never an answer. The cost is
 //! bounded by the cap: a reserving birth holds at most `C` slots, `(C - 4)
-//! * 8` bytes more than the four-slot birth (288 bytes at 40) and `(C - 16)
+//! * 8` bytes more than the four-slot birth (224 bytes at 32) and `(C - 16)
 //! * 8` more than the sixteen-slot birth codegen's own collector gives a
-//! local pushed in a loop of its body (192 bytes at 40), and that only for
-//! an Array that stays short.
+//! local pushed in a loop of its body (128 bytes at 32), and that only for
+//! an Array that stays short: one that reaches 17 elements has 32 slots
+//! after its first growth anyway. Codegen rounds the count up to a multiple
+//! of four (its birth stores the holes four at a time).
 //!
 //! `C` itself is a growth-policy constant, as the runtime's "at least 16
 //! more slots" is: for an unbounded list the facts give the class, not a
-//! number. `PERRY_LIST_BIRTH_CAPACITY=<n>` (5..=[`MAX_SLOTS`]) sets it for
+//! number. 32 is the capacity the sixteen-slot birth has after its first
+//! growth (`grown_capacity` doubles it): the birth takes that step in
+//! advance. `PERRY_LIST_BIRTH_CAPACITY=<n>` (5..=[`MAX_SLOTS`]) sets it for
 //! measurements; `0` (also `off`, `false`) exports nothing: main's births.
 
 use crate::bindings::ModuleBindings;
@@ -63,7 +67,7 @@ use crate::model::{NodeId, TmplId};
 use crate::pts::FxHashMap;
 
 /// The slots a list birth reserves when a repeated push reaches it.
-pub(crate) const DEFAULT_SLOTS: u32 = 40;
+pub(crate) const DEFAULT_SLOTS: u32 = 32;
 /// The most slots `PERRY_LIST_BIRTH_CAPACITY` may ask for: the birth is one
 /// inline bump allocation whose slots are stored one by one.
 pub(crate) const MAX_SLOTS: u32 = 64;
