@@ -42,6 +42,16 @@
 //! write onto the argument's local, which would change the caller's binding
 //! (`f = (a) => (a = a + 10); f(x)` must leave `x` alone).
 //!
+//! Module init is handled too, in the statement lists nested inside its
+//! statements (loop bodies, blocks, branches) and in closure bodies there,
+//! never in the top-level init list itself, whose bindings are module
+//! globals that any function may read. A function declared in such a list
+//! is hoisted out of `module.init` into `module.functions`, so a scan of the
+//! list does not see its uses: there a candidate must occur nowhere outside
+//! `module.init` by the census, which makes every occurrence one of the
+//! list's own, all counted by the scan. A module with top-level await is
+//! left alone, because its init becomes an async body.
+//!
 //! Because the arrow is lexically scoped, `this`, captured locals and
 //! `arguments` inside its body already denote the enclosing function's
 //! bindings, so the substituted expression is valid exactly where the call
@@ -55,56 +65,104 @@ use perry_hir::walker::{walk_expr_children, walk_expr_children_mut};
 use perry_hir::{CompareOp, Expr, Function, Module, Stmt};
 
 use crate::inline::substitute_locals;
-use crate::local_occurrences::count_module;
+use crate::local_occurrences::{count_list_occurrences, count_module_occurrences, WriteCensus};
 
-/// Module-wide write counts (`LocalSet` / `Update` targets) from the shared
-/// census. A local absent from it is never written. The rewrite keeps that
-/// true: it copies bodies that write only locals already counted, and it
-/// never reduces an arrow whose parameter is written.
-type Writes = HashMap<LocalId, usize>;
+/// What the list rewrite knows about the module.
+struct Census {
+    /// The shared write census. The rewrite keeps it true: it copies bodies
+    /// that write only locals already counted, and it never reduces an arrow
+    /// whose parameter is written.
+    writes: WriteCensus,
+    /// In module init only: occurrences outside `module.init` (whole-module
+    /// census minus the init census, taken before init is rewritten; init
+    /// rewrites do not change it). A candidate with any is kept.
+    outside_init: Option<HashMap<LocalId, usize>>,
+}
 
-pub fn run(module: &mut Module) {
-    let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
-    let writes = count_module(module, true);
-    for f in &mut module.functions {
-        run_function(f, &writes, &mut next_local_id);
-    }
-    for c in &mut module.classes {
-        if let Some(ctor) = &mut c.constructor {
-            run_function(ctor, &writes, &mut next_local_id);
-        }
-        for m in &mut c.methods {
-            run_function(m, &writes, &mut next_local_id);
-        }
-        for m in &mut c.static_methods {
-            run_function(m, &writes, &mut next_local_id);
-        }
-        for (_, g) in &mut c.getters {
-            run_function(g, &writes, &mut next_local_id);
-        }
-        for (_, s) in &mut c.setters {
-            run_function(s, &writes, &mut next_local_id);
-        }
+impl Census {
+    fn used_outside_list(&self, set: &[LocalId]) -> bool {
+        self.outside_init
+            .as_ref()
+            .is_some_and(|outside| set.iter().any(|id| outside.contains_key(id)))
     }
 }
 
-fn run_function(f: &mut Function, writes: &Writes, next_local_id: &mut LocalId) {
+pub fn run(module: &mut Module) {
+    let mut next_local_id = crate::generator::compute_max_local_id(module).saturating_add(1);
+    let census = Census {
+        writes: WriteCensus::of(module),
+        outside_init: None,
+    };
+    for f in &mut module.functions {
+        run_function(f, &census, &mut next_local_id);
+    }
+    for c in &mut module.classes {
+        if let Some(ctor) = &mut c.constructor {
+            run_function(ctor, &census, &mut next_local_id);
+        }
+        for m in &mut c.methods {
+            run_function(m, &census, &mut next_local_id);
+        }
+        for m in &mut c.static_methods {
+            run_function(m, &census, &mut next_local_id);
+        }
+        for (_, g) in &mut c.getters {
+            run_function(g, &census, &mut next_local_id);
+        }
+        for (_, s) in &mut c.setters {
+            run_function(s, &census, &mut next_local_id);
+        }
+    }
+    run_init(module, census.writes, &mut next_local_id);
+}
+
+/// The lists nested in module init and the closure bodies there; the
+/// top-level list stays as it is. Census taken after the bodies above were
+/// rewritten, so `outside_init` is exact.
+fn run_init(module: &mut Module, writes: WriteCensus, next_local_id: &mut LocalId) {
+    if module.has_top_level_await {
+        return;
+    }
+    let mut outside = count_module_occurrences(module);
+    for (id, n) in count_list_occurrences(&module.init) {
+        if let Some(total) = outside.get_mut(&id) {
+            *total -= n;
+            if *total == 0 {
+                outside.remove(&id);
+            }
+        }
+    }
+    let census = Census {
+        writes,
+        outside_init: Some(outside),
+    };
+    for s in module.init.iter_mut() {
+        for inner in nested_stmt_lists(s) {
+            process_stmts(inner, &census, next_local_id);
+        }
+        for_each_expr_in_stmt_mut(s, &mut |e| {
+            process_closure_bodies(e, &census, next_local_id)
+        });
+    }
+}
+
+fn run_function(f: &mut Function, census: &Census, next_local_id: &mut LocalId) {
     // The async/generator transforms rewrite these bodies into state machines
     // whose locals are boxed cells; keep the shapes they expect.
     if f.is_async || f.is_generator {
         return;
     }
-    process_stmts(&mut f.body, writes, next_local_id);
+    process_stmts(&mut f.body, census, next_local_id);
 }
 
-fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut LocalId) {
+fn process_stmts(stmts: &mut Vec<Stmt>, census: &Census, next_local_id: &mut LocalId) {
     // Inner lists and closure bodies first, so a nested helper is reduced in
     // its own scope before the enclosing list is examined.
     for s in stmts.iter_mut() {
         for inner in nested_stmt_lists(s) {
-            process_stmts(inner, writes, next_local_id);
+            process_stmts(inner, census, next_local_id);
         }
-        for_each_expr_in_stmt_mut(s, &mut |e| process_closure_bodies(e, writes, next_local_id));
+        for_each_expr_in_stmt_mut(s, &mut |e| process_closure_bodies(e, census, next_local_id));
     }
 
     remove_dead_default_guards(stmts);
@@ -116,7 +174,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut Loc
                 id,
                 init: Some(init),
                 ..
-            } => arrow_candidate(*id, init, writes),
+            } => arrow_candidate(*id, init, &census.writes),
             _ => None,
         };
         let Some((id, params, body_expr)) = candidate else {
@@ -131,7 +189,11 @@ fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut Loc
         // its initializer leaves those live boxes uninitialized even though
         // every later use is an inlineable call (#9721). Earlier calls must
         // also retain their original TDZ behavior.
-        let mut earlier_uses = Uses::new(params.len(), writes);
+        if census.used_outside_list(&set) {
+            i += 1;
+            continue;
+        }
+        let mut earlier_uses = Uses::new(params.len(), &census.writes);
         for s in &stmts[..i] {
             collect_uses_in_stmt(s, &set, &mut earlier_uses);
         }
@@ -139,7 +201,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut Loc
             i += 1;
             continue;
         }
-        let mut uses = Uses::new(params.len(), writes);
+        let mut uses = Uses::new(params.len(), &census.writes);
         for s in &stmts[i + 1..] {
             collect_uses_in_stmt(s, &set, &mut uses);
         }
@@ -160,12 +222,12 @@ fn process_stmts(stmts: &mut Vec<Stmt>, writes: &Writes, next_local_id: &mut Loc
     }
 }
 
-fn process_closure_bodies(expr: &mut Expr, writes: &Writes, next_local_id: &mut LocalId) {
+fn process_closure_bodies(expr: &mut Expr, census: &Census, next_local_id: &mut LocalId) {
     if let Expr::Closure { body, .. } = expr {
-        process_stmts(body, writes, next_local_id);
+        process_stmts(body, census, next_local_id);
     }
     walk_expr_children_mut(expr, &mut |child| {
-        process_closure_bodies(child, writes, next_local_id)
+        process_closure_bodies(child, census, next_local_id)
     });
 }
 
@@ -174,7 +236,7 @@ fn process_closure_bodies(expr: &mut Expr, writes: &Writes, next_local_id: &mut 
 fn arrow_candidate(
     id: LocalId,
     init: &Expr,
-    writes: &Writes,
+    writes: &WriteCensus,
 ) -> Option<(LocalId, Vec<LocalId>, Expr)> {
     let Expr::Closure {
         params,
@@ -201,7 +263,7 @@ fn arrow_candidate(
             .any(|p| p.default.is_some() || p.is_rest || p.arguments_object.is_some())
         // Parameter ids are the arrow's own, so a census write is a write
         // in this body.
-        || params.iter().any(|p| writes.contains_key(&p.id))
+        || params.iter().any(|p| writes.may_be_written(p.id))
     {
         return None;
     }
@@ -236,22 +298,6 @@ fn arrow_candidate(
         return None;
     }
     Some((id, params.iter().map(|p| p.id).collect(), expr.clone()))
-}
-
-/// An argument whose value is the same wherever the substituted body reads
-/// it and whose evaluation has no effect, so substitution may move, copy or
-/// drop it: a literal, or a read of a local nothing in the module writes.
-fn is_stable_arg(expr: &Expr, writes: &Writes) -> bool {
-    match expr {
-        Expr::Integer(_)
-        | Expr::Number(_)
-        | Expr::Bool(_)
-        | Expr::String(_)
-        | Expr::Null
-        | Expr::Undefined => true,
-        Expr::LocalGet(x) => !writes.contains_key(x),
-        _ => false,
-    }
 }
 
 /// `id` plus every local that is a plain copy of it (`let y = id;`,
@@ -317,11 +363,11 @@ struct Uses<'a> {
     calls: usize,
     bad_arity: bool,
     other: bool,
-    writes: &'a Writes,
+    writes: &'a WriteCensus,
 }
 
 impl<'a> Uses<'a> {
-    fn new(arity: usize, writes: &'a Writes) -> Self {
+    fn new(arity: usize, writes: &'a WriteCensus) -> Self {
         Uses {
             arity,
             calls: 0,
@@ -357,7 +403,7 @@ fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
         Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
-            if args.len() != uses.arity || !args.iter().all(|a| is_stable_arg(a, uses.writes)) {
+            if args.len() != uses.arity || !args.iter().all(|a| uses.writes.is_stable_arg(a)) {
                 uses.bad_arity = true;
             }
             for a in args {
@@ -741,8 +787,11 @@ mod tests {
     fn reduce(stmts: &mut Vec<Stmt>, next: &mut LocalId) {
         let mut module = Module::new("test");
         module.init = stmts.clone();
-        let writes = count_module(&module, true);
-        process_stmts(stmts, &writes, next);
+        let census = Census {
+            writes: WriteCensus::of(&module),
+            outside_init: None,
+        };
+        process_stmts(stmts, &census, next);
     }
 
     fn param(id: LocalId, name: &str) -> Param {
@@ -1222,5 +1271,118 @@ mod tests {
             format!("{stmts:?}"),
             format!("{:?}", vec![Stmt::Expr(Expr::Integer(3))])
         );
+    }
+
+    /// `let f = () => entity; f();` inside a module-init loop.
+    fn init_loop() -> Stmt {
+        Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![
+                let_f(arrow(1, vec![], Expr::LocalGet(ENTITY), false)),
+                Stmt::Expr(call_local(F, vec![])),
+            ],
+        }
+    }
+
+    fn module_with_init(init: Vec<Stmt>) -> Module {
+        let mut module = Module::new("test");
+        module.init = init;
+        module
+    }
+
+    fn function_calling_f() -> Function {
+        Function {
+            id: 3,
+            name: "h".to_string(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(call_local(F, vec![])))],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: vec![F],
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }
+    }
+
+    #[test]
+    fn folds_a_call_in_a_list_nested_in_module_init() {
+        let mut module = module_with_init(vec![init_loop()]);
+        run(&mut module);
+        let expected = Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![Stmt::Expr(Expr::LocalGet(ENTITY))],
+        };
+        assert_eq!(
+            format!("{:?}", module.init),
+            format!("{:?}", vec![expected])
+        );
+    }
+
+    /// The top-level init list declares module globals: left as it is.
+    #[test]
+    fn the_top_level_init_list_is_untouched() {
+        let Stmt::While { body, .. } = init_loop() else {
+            unreachable!()
+        };
+        let mut module = module_with_init(body);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// A function declared in the loop is hoisted into `module.functions`,
+    /// where the list scan cannot see its call; the census can.
+    #[test]
+    fn a_use_from_a_hoisted_function_keeps_the_closure() {
+        let mut module = module_with_init(vec![init_loop()]);
+        module.functions.push(function_calling_f());
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// Init with top-level await becomes an async body: left alone.
+    #[test]
+    fn init_with_top_level_await_is_untouched() {
+        let mut module = module_with_init(vec![init_loop()]);
+        module.has_top_level_await = true;
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+    }
+
+    /// The must-not cases of a function body hold in init too: a written
+    /// parameter, or an argument local written elsewhere in the module.
+    #[test]
+    fn init_keeps_a_written_parameter_or_argument() {
+        const M: LocalId = 2;
+        let loop_with = |init: Expr, arg: Expr| Stmt::While {
+            condition: Expr::Bool(true),
+            body: vec![let_f(init), Stmt::Expr(call_local(F, vec![arg]))],
+        };
+        let written_param = arrow(
+            1,
+            vec![param(P, "a")],
+            Expr::LocalSet(P, Box::new(Expr::Integer(5))),
+            false,
+        );
+        let mut module = module_with_init(vec![loop_with(written_param, Expr::LocalGet(ENTITY))]);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
+
+        let read = arrow(1, vec![param(P, "a")], Expr::LocalGet(P), false);
+        let mut module = module_with_init(vec![
+            loop_with(read, Expr::LocalGet(M)),
+            Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::Integer(2)))),
+        ]);
+        let before = format!("{:?}", module.init);
+        run(&mut module);
+        assert_eq!(format!("{:?}", module.init), before);
     }
 }

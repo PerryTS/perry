@@ -222,6 +222,7 @@ pub(crate) use range_facts::{
     record_int_facts_for_update, record_local_value_alias_for_write, while_condition_range_fact,
     IntRange, IntRangeFact,
 };
+pub(crate) use range_facts::{facts_local_range, facts_local_ranges};
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
     emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
@@ -1548,6 +1549,9 @@ pub(crate) struct FnCtx<'a> {
     /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
     /// mode witnesses every returned value against it (§5).
     pub sig_return: Option<crate::codegen::FactsRep>,
+    /// DESIGN-p4l4 VR-3b: the value record this typed entry returns as its
+    /// lanes (`codegen::record_sig::lower_return`).
+    pub sig_record_return: Option<crate::codegen::FactsRecRep>,
     /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
     pub typed_methods:
         &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
@@ -3365,6 +3369,8 @@ pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
 pub(crate) mod index_key;
+pub(crate) mod int32_key;
+pub(crate) mod int32_operand;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]
@@ -3422,7 +3428,7 @@ mod js_runtime;
 mod literals_vars;
 pub(crate) mod private_resume_frame;
 pub(crate) mod resume_locals;
-pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
+pub(crate) use literals_vars::{bind_local, bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;

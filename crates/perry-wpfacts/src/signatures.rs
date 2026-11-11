@@ -68,6 +68,14 @@ impl Signature {
             && self.this_class.is_none()
             && self.params.iter().all(|r| r.encoding() == Enc::Boxed)
     }
+
+    /// A parameter or the result is a value record (DESIGN-p4l4 §5.2).
+    pub fn has_record(&self) -> bool {
+        self.params
+            .iter()
+            .chain(std::iter::once(&self.ret))
+            .any(|r| matches!(r, Rep::Record(_)))
+    }
 }
 
 /// `PERRY_FACTS_TYPED_SIGNATURES=0` exports no signature and no typed call.
@@ -202,6 +210,15 @@ pub(crate) fn collect(
             });
             params.push(rep);
         }
+        // DESIGN-p4l4 VR-3b: a Record slot exists only with record
+        // signatures on.
+        if !m.record_signatures {
+            for p in &mut params {
+                if matches!(p, Rep::Record(_)) {
+                    *p = Rep::Boxed;
+                }
+            }
+        }
         let mut ret = rep_at(f.ret);
         let mut this_nodes = vec![f.this];
         for it in &m.sum.insts {
@@ -209,6 +226,9 @@ pub(crate) fn collect(
                 ret = Rep::join(ret, rep1(it.ret));
                 this_nodes.push(it.this);
             }
+        }
+        if !m.record_signatures && matches!(ret, Rep::Record(_)) {
+            ret = Rep::Boxed;
         }
         let this_class = one_class(g, &this_nodes);
         let sig = Signature {
@@ -223,6 +243,39 @@ pub(crate) fn collect(
         }
     }
     // Typed call sites (§2, E3).
+    let targets = call_targets(g, sites);
+    // DESIGN-p4l4 VR-3b: a Record slot is the callee's ABI, so every call
+    // that enters the body by a source call site must be one of its typed
+    // calls, in the body's own module (codegen's typed calls are
+    // same-module). A function with a site that is not keeps its Record
+    // slots Boxed: its callers pass a materialized copy (§4.2) and its body
+    // reads the copy key by key.
+    let mut demoted: std::collections::BTreeSet<(u32, u32)> = Default::default();
+    for (key, (t, recs)) in &targets {
+        let Some(sig) = sigs.get(t) else { continue };
+        if sig.has_record()
+            && (key.0 != t.0
+                || recs
+                    .iter()
+                    .any(|r| refusal(g, &all, sig, &defaults[t], &r.args).is_some()))
+        {
+            demoted.insert(*t);
+        }
+    }
+    for t in &demoted {
+        let sig = sigs.get_mut(t).expect("a demoted signature");
+        for p in sig.params.iter_mut().chain(std::iter::once(&mut sig.ret)) {
+            if matches!(p, Rep::Record(_)) {
+                *p = Rep::Boxed;
+            }
+        }
+        if sig.is_boxed() {
+            sigs.remove(t);
+        }
+        if let Some(mb) = bindings.get_mut(t.0 as usize) {
+            mb.record_demoted.push(t.1);
+        }
+    }
     let mut typed: Vec<((u32, u32), (u32, u32))> = Vec::new();
     for (key, (t, recs)) in resolve(g, sites) {
         let why = match t {
@@ -483,7 +536,9 @@ fn refusal(
         (v.fract() == 0.0 && !(v == 0.0 && v.is_sign_negative())).then_some((v as i64, v as i64))
     };
     sig.params.iter().enumerate().find_map(|(i, &rep)| {
-        if rep.encoding() == Enc::Boxed {
+        // A Record slot's arguments are the parameter node's own values:
+        // tokens of its one template (and `undefined`), DESIGN-p4l4 §1.1.
+        if matches!(rep.encoding(), Enc::Boxed | Enc::Record) {
             return None;
         }
         let lit = lits.get(i).copied().flatten();
