@@ -323,13 +323,16 @@ fn unknown_prim_method(m: &mut Model, call: CallId, why: &str) {
 }
 
 /// What the unknown method's `this` is: the receiver given (it escapes),
-/// the runtime's own object (`unknown_method_proto`'s `own`), or a
-/// primitive (nothing escapes).
+/// the runtime's own object (`unknown_method_proto`'s `own`), a
+/// primitive (nothing escapes), or not read at all: a static whose steps
+/// never read the this value (`Object.create`), called as a value with any
+/// receiver (`native_namespace_call`), hands it to no one.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Recv {
     Given,
     Own,
     Primitive,
+    Ignored,
 }
 
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
@@ -377,7 +380,7 @@ fn unknown_method_proto_inner(
     // every token of the receiver node.
     let kept = |m: &Model, t: Tok| recv == Recv::Own && m.named_shared(t).is_some();
     match (m.cur_this, &c.this) {
-        _ if recv == Recv::Primitive => {}
+        _ if matches!(recv, Recv::Primitive | Recv::Ignored) => {}
         (Some(t), _) if kept(m, t) => {}
         (Some(t), _) => m.escape(t, r),
         (None, ThisArg::Node(n)) => m.sink_node(*n, r),
@@ -2103,15 +2106,17 @@ fn ns_method_inner(
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "is" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
+        // Neither reads the this value (ECMA-262 20.1.2.2, 20.1.2.23,
+        // 28.1.13): called as a value on any receiver, it is given to no one.
         (BuiltinNs::Object, "create") => {
-            unknown_method_proto(m, call, "argument of builtin Object.create", Some(0), true)
+            unknown_method_at(m, call, "argument of builtin Object.create", Some(0), Recv::Ignored)
         }
-        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_proto(
+        (BuiltinNs::Object | BuiltinNs::Reflect, "setPrototypeOf") => unknown_method_at(
             m,
             call,
             &format!("argument of builtin {ns:?}.setPrototypeOf"),
             Some(1),
-            true,
+            Recv::Ignored,
         ),
         (BuiltinNs::Object, "getPrototypeOf") | (BuiltinNs::Reflect, "getPrototypeOf") => {
             if let Some(o) = arg(m, call, 0) {
