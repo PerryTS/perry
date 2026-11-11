@@ -1611,6 +1611,10 @@ impl<'a, 'g> Scan<'a, 'g> {
                         }
                         let (r2, a2, o2) = self.held(s, admitted, arrs);
                         let t2: FxHashSet<TmplId> = a2.iter().map(|a| arrs[a]).collect();
+                        // S0 `vrarrjoin`: a copy that holds another Array.
+                        if m.record_array_join_sabotage && t2.is_empty() && !o2 && r2.is_empty() {
+                            continue;
+                        }
                         if o2 || !r2.is_empty() || sn.prim & !glue != 0 || t2 != tms {
                             why = Some(R6Join(format!("copies of {at}")));
                             break;

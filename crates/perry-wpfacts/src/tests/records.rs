@@ -536,3 +536,34 @@ fn a_reader_through_the_owner_of_a_record_array_rejects() {
     .expect_err("for-in");
     assert!(r.starts_with("R6Join"), "{r}");
 }
+
+/// S0 arm `vrarrjoin` (§10.3): the sabotage types a binding of a record
+/// array and of another Array a record array; unsabotaged, the join rejects.
+#[test]
+fn the_array_join_sabotage_types_a_mixed_binding() {
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/verify_facts_s0/vr-arrjoin-negative.ts"
+    ))
+    .expect("the S0 fixture");
+    let exported = |sabotage: Option<&str>| {
+        let pf = facts_with(
+            &src,
+            FactsConfig {
+                value_records: true,
+                sabotage: sabotage.map(String::from),
+                ..FactsConfig::default()
+            },
+        );
+        let text = pf.dump_text();
+        (
+            text.lines()
+                .filter(|l| l.starts_with("# record_array ") && l.contains(" local="))
+                .count(),
+            text.contains(" REJECTED R6Join("),
+        )
+    };
+    // `undos` and `len`'s parameter.
+    assert_eq!(exported(Some("vrarrjoin")), (2, false));
+    assert_eq!(exported(None), (0, true));
+}
