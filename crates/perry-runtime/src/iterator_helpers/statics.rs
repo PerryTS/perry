@@ -221,13 +221,12 @@ unsafe extern "C" fn concat_thunk(
         }
         let method = scope.root_nanbox_f64(method);
         for value in [item.get_nanbox_f64(), method.get_nanbox_f64()] {
-            list.set_raw_mut_ptr(crate::array::js_array_push_f64(
-                list.get_raw_mut_ptr(),
-                value,
-            ));
+            let updated = list.with_mut_ptr(|array| crate::array::js_array_push_f64(array, value));
+            list.set_raw_mut_ptr(updated);
         }
     }
-    let list = js_nanbox_pointer(list.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64);
+    let list =
+        list.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| js_nanbox_pointer(array as i64));
     new_helper(OP_CONCAT, undefined(), list)
 }
 
