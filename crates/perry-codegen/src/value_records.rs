@@ -227,8 +227,8 @@ impl Refs {
             lets: HashMap::new(),
             bad: HashSet::new(),
         };
-        let mut on_expr = |e: &Expr, r: &mut Refs| {
-            let mut bad = |id: &LocalId, r: &mut Refs| {
+        let on_expr = |e: &Expr, r: &mut Refs| {
+            let bad = |id: &LocalId, r: &mut Refs| {
                 if cands.contains_key(id) {
                     r.bad.insert(*id);
                 }
@@ -306,7 +306,7 @@ impl Refs {
                     Stmt::PreallocateBoxes(ids)
                     | Stmt::PreallocateTdzBoxes(ids)
                     | Stmt::ReleaseBoxes(ids) => {
-                        r.bad.extend(ids.iter().filter(|id| cands.contains_key(id)));
+                        r.bad.extend(ids.iter().filter(|id| cands.contains_key(*id)));
                     }
                     _ => {}
                 }
