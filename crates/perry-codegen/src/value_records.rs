@@ -290,21 +290,35 @@ pub(crate) fn rewrite_module(
     elision.record_births = abi.births;
     // VR-4c: the lanes' Number facts (`PERRY_VALUE_RECORD_LANE_FACTS=0`
     // leaves them untyped).
-    if lane_facts_enabled() {
-        elision.number_inputs.extend(abi.number_lanes.iter().copied());
-        elision.int32_inputs.extend(abi.int32_lanes.iter().copied());
+    match lane_facts() {
+        LaneFacts::None => {}
+        LaneFacts::Number => elision.number_inputs.extend(abi.number_lanes.iter().copied()),
+        LaneFacts::All => {
+            elision.number_inputs.extend(abi.number_lanes.iter().copied());
+            elision.int32_inputs.extend(abi.int32_lanes.iter().copied());
+        }
     }
     *facts = std::sync::Arc::new(elision);
     Some(module)
 }
 
-/// VR-4c: the lane locals carry their field's Number facts unless
-/// `PERRY_VALUE_RECORD_LANE_FACTS=0` (a compile-cache input).
-pub(crate) fn lane_facts_enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_VALUE_RECORD_LANE_FACTS").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
+/// VR-4c: which of their field's facts the lane locals carry
+/// (`PERRY_VALUE_RECORD_LANE_FACTS`, a compile-cache input): `0` none (the
+/// lanes are untyped, VR-4b's lowering), `number` the Number facts only,
+/// anything else (the default) the int32 facts too.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LaneFacts {
+    None,
+    Number,
+    All,
+}
+
+pub(crate) fn lane_facts() -> LaneFacts {
+    match std::env::var("PERRY_VALUE_RECORD_LANE_FACTS").as_deref() {
+        Ok("0") | Ok("off") | Ok("false") => LaneFacts::None,
+        Ok("number") => LaneFacts::Number,
+        _ => LaneFacts::All,
+    }
 }
 
 fn trace(hir: &Module, c: &Census) {
@@ -827,7 +841,7 @@ impl Rewriter<'_> {
 
     /// The declared type of lane `i`'s locals.
     fn lane_type(&self, tmpl: u32, i: usize) -> Type {
-        if self.shapes[&tmpl].numeric.get(i) == Some(&true) {
+        if lane_facts() != LaneFacts::None && self.shapes[&tmpl].numeric.get(i) == Some(&true) {
             Type::Number
         } else {
             Type::Any
@@ -877,7 +891,11 @@ impl Rewriter<'_> {
             out.push(let_stmt(
                 rec.present,
                 format!("{name}$present"),
-                Type::Boolean,
+                if lane_facts() == LaneFacts::None {
+                    Type::Any
+                } else {
+                    Type::Boolean
+                },
                 true,
                 Expr::Bool(false),
             ));
