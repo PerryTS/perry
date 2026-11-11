@@ -4013,7 +4013,10 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     if due == Some(BudgetedGcTrigger::YoungScavengeCap)
         && !scheduled
         && gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
+        && leaf_service_precedes_copying_cap(
+            scavenge_nursery_cap_dueness_bytes(),
+            crate::arena::copying_from_space_in_use_bytes(),
+        )
         && !crate::arena::young_large_containers_exist()
     {
         super::leaf_service::collect();
@@ -5551,6 +5554,33 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
         crate::arena::copying_active_survivor_in_use_bytes(),
         leaf_bytes,
     )
+}
+
+/// Whether the young collection due at a safepoint is the leaf-only service
+/// (census the young small cells, retire unnamed young leaves) rather than
+/// the copying minor.
+///
+/// Only below the copying cap (`small_bytes < cap`), and only while the
+/// allocation window the service reopens is at least the Eden it censuses,
+/// `window - eden >= eden`. The census reads every young small cell, so its
+/// cost grows with Eden, and it frees leaves, not Eden: it only defers the
+/// copying minor by `window - eden`. With less than Eden's worth of window
+/// left, the copying cap is due before another census-sized batch of work
+/// could accumulate, so the census would be paid twice for one minor (once
+/// here, once by the minor's own trace). The copying minor runs now instead
+/// and retires the dead leaves itself. `small_bytes` is the from-space
+/// reading `leaf_window_due` takes; the survivor space is read only below the
+/// cap, where the young arm can have been due through its leaf arm (at or
+/// above it the copying cap is due and nothing else is read). The window is
+/// the copying minor's own budget.
+pub(super) fn leaf_service_precedes_copying_cap(cap: usize, small_bytes: usize) -> bool {
+    if small_bytes >= cap {
+        return false;
+    }
+    let survivor_bytes = crate::arena::copying_active_survivor_in_use_bytes();
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
+    window.saturating_sub(eden) >= eden
 }
 
 /// The leaf arm of the young trigger: Eden plus the young leaves against
