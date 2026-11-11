@@ -135,8 +135,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let o = site_tmpl(m, call, "RegExp");
             ret_tok(m, call, o);
         }
-        BuiltinNs::TypedArray
-        | BuiltinNs::TypedArrayKind(_)
+        BuiltinNs::TypedArrayKind(_)
         | BuiltinNs::DataView
         | BuiltinNs::ArrayBuffer
         | BuiltinNs::SharedArrayBuffer => {
@@ -206,6 +205,30 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         // Not a constructor (TypeError).
         BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {}
+        // A constructor whose [[Construct]] throws a TypeError before it reads
+        // an argument: Symbol (20.4.1.1 step 1), BigInt (21.2.1.1 step 1),
+        // %TypedArray% (23.2.1.1 step 1). Nothing is constructed.
+        BuiltinNs::Symbol | BuiltinNs::BigInt | BuiltinNs::TypedArray => {}
+        // Number (21.1.1.1), String (22.1.1.1), Boolean (20.3.1.1) with a
+        // NewTarget: ToNumeric / ToString / ToBoolean of the first operand,
+        // then a wrapper object OrdinaryCreateFromConstructor(NewTarget, ...)
+        // with the primitive in its internal slot. It is the wrapper the
+        // syntactic form births (gen `BoxedPrimitiveNew` -> "BoxedPrimitive"),
+        // so `new Number(x)` and `new C(x)` with C = Number are one model.
+        BuiltinNs::Number | BuiltinNs::String | BuiltinNs::Boolean => {
+            let c = m.calls[call as usize].clone();
+            if ns != BuiltinNs::Boolean {
+                if let Some(&a) = c.args.first() {
+                    string_methods::to_prim(
+                        m,
+                        a,
+                        "primitive wrapper constructor ToNumeric/ToString",
+                    );
+                }
+            }
+            let o = site_tmpl(m, call, "BoxedPrimitive");
+            ret_tok(m, call, o);
+        }
         BuiltinNs::Array => call_builtin_ns(m, ns, call),
         BuiltinNs::Object => {
             let o = site_tmpl(m, call, "Object()");
