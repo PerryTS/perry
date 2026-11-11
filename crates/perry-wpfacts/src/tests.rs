@@ -2032,3 +2032,4 @@ mod navigator_store;
 mod object_prototype_method_calls;
 mod peelk18;
 mod peelk19;
+mod peelk20;
