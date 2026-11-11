@@ -31,16 +31,10 @@
 //! interval of the test is inside int32, i64 otherwise; the operators carry
 //! `nsw` (the intervals prove it).
 //!
-//! An **int32 consumer** (`lower_expr_native_i32`: the store into an I32
-//! slot, an index, a bitwise operand) takes a tree whose every interval is
-//! inside int32 as its i32 ([`try_lower_i32`]): `const type = Math.abs(p)`
-//! with `p` in `[-6, 6]` is the integer absolute value, not `sitofp`, a mask
-//! and `fptosi`. The consumer's ToInt32 maps `-0` to `0` as the integer does.
-//!
 //! Not taken: a tree whose operand may leave `[-2^53, 2^53]` (the double
 //! computation rounds inside the tree), two rounding sides, a leaf that may
 //! write (`i++`, a call), a fractional, NaN or unproven operand, and any
-//! double use of the tree (its `-0` is observable there).
+//! value use of the tree (its `-0` is observable there).
 //!
 //! Probe: `PERRY_ARRAY_BASE_DIAG=1` prints one `[perry intprod]` line per
 //! test with a tree side. Check mode (`PERRY_VERIFY_FACTS=1`): each leaf is
@@ -363,34 +357,6 @@ fn arith(e: &Expr) -> bool {
                 ..
             }
     )
-}
-
-/// The i32 of `e` for an int32 consumer when `e` is a tree whose every
-/// interval is inside int32 (module docs); `None` leaves it to the other
-/// lowerings.
-pub(crate) fn try_lower_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<String>> {
-    if !enabled() || !arith(e) {
-        return Ok(None);
-    }
-    let Ok(n) = node(ctx, e, 0) else {
-        return Ok(None);
-    };
-    if !n.is_tree() || !n.narrow() {
-        return Ok(None);
-    }
-    if std::env::var("PERRY_ARRAY_BASE_DIAG").as_deref() == Ok("1") {
-        let (lo, hi) = n.iv();
-        eprintln!(
-            "[perry intprod] fn={} value=[{lo},{hi}] verdict=i32-value",
-            ctx.func.name
-        );
-    }
-    crate::verify_facts::consumed(
-        crate::verify_facts::Fact::Int32Input,
-        || serde_json::json!({ "operand": "int product" }),
-    );
-    crate::facts_consumed::used();
-    Ok(Some(lower(ctx, &n, false)?))
 }
 
 /// `left <op> right` as one integer compare (an `i1`) when a side is an

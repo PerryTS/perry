@@ -198,6 +198,26 @@ function absolutes(): string {
 }
 out.push("absolutes " + absolutes());
 
+// Bounded trees into int32 consumers: an index, a bitwise operand, a shift.
+const SMALL = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+function consumers(seed: number): string {
+  let x = seed | 0;
+  let text = "";
+  let bits = 0, shifted = 0;
+  for (let i = 0; i < 40 * RUN; i++) {
+    x = (Math.imul(x, 1103515245) + 12345) | 0;
+    const q = (x & 15) - 8;
+    const r = ((x >> 4) & 7) - 3;
+    text += SMALL[Math.abs(q)];
+    bits ^= Math.abs(q * r) | (q * r + 40);
+    shifted += (Math.abs(q) * 3 + r) << 2;
+    const k = Math.abs(q - r);
+    if (k > 9) shifted -= k;
+  }
+  return text + " " + bits + " " + shifted;
+}
+out.push("consumers " + consumers(777));
+
 // ================= negative controls =================
 
 // The absolute value of -2^31 leaves int32; of `-0`, NaN and a string it is
