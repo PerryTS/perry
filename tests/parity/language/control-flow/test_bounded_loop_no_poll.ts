@@ -33,7 +33,16 @@ class Grid {
     return s;
   }
 
-  // The step is one of two literals of opposite sign, chosen before the loop.
+  // The step is one of two literals of opposite sign, chosen before the
+  // loop by a comparison of a Number (as `ranks` below by a boolean).
+  files(sq: number, dir: number): number {
+    let n = 0;
+    for (let f = (sq & 7) + (dir > 0 ? 1 : -1); f >= 0 && f < 8; f += dir > 0 ? 1 : -1) {
+      if (this.at((sq & 0x70) + f) < 0) n++;
+    }
+    return n;
+  }
+
   ranks(sq: number, up: boolean): number {
     let n = 0;
     for (let r = (sq >> 4) + (up ? 1 : -1); r >= 0 && r < 8; r += up ? 1 : -1) {
@@ -123,6 +132,14 @@ class Grid {
     return s;
   }
 
+  // Control: the test bounds the counter by another local, so the interval
+  // alone is the bound.
+  open(n: number): number {
+    let s = 0;
+    for (let i = 0; i < n; i++) s += this.at(i & 0x77);
+    return s;
+  }
+
   // Control: each loop is bounded, the nest is past the budget: the outer
   // loop keeps its poll.
   wide(): number {
@@ -158,6 +175,12 @@ for (let sq = 0; sq < 120 * RUN; sq++) {
   ranks += g.ranks(sq, (sq & 1) === 0) * (sq + 1);
 }
 console.log("ranks", ranks);
+let files = 0;
+for (let sq = 0; sq < 120 * RUN; sq++) {
+  if ((sq & 0x88) !== 0) continue;
+  files += g.files(sq, (sq & 2) === 0 ? 1 : -1) * (sq + 1);
+}
+console.log("files", files);
 console.log("skip", g.skip());
 console.log("down", g.down());
 console.log("withCall", g.withCall(), g.log.length);
@@ -165,5 +188,6 @@ console.log("withAlloc", g.withAlloc());
 console.log("collatz", g.collatz(27 * RUN), g.collatz(97));
 console.log("reset", g.reset());
 console.log("long", g.long());
+console.log("open", g.open(90000 * RUN));
 console.log("wide", g.wide());
 console.log("churn", g.churn(60000 * RUN));
