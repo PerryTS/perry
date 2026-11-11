@@ -155,9 +155,13 @@ fn typed_plan(
     }
     // CWN 11-09 (T6 as the selector): every tier `F$sig` would subsume must
     // be no more precise than the signature, parameter by parameter.
+    // DESIGN-p4l4 VR-3b: not for a record function. Without its `$sig` the
+    // record crosses boxed (a birth at each call and key reads in the
+    // body), which no subsumed tier's precision pays for.
     let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
-    if cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
-        || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64)
+    if !record_fn
+        && (cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
+            || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64))
     {
         return None;
     }
@@ -169,11 +173,12 @@ fn typed_plan(
         {
             return None;
         }
-        if !sig
-            .params
-            .iter()
-            .zip(plan.reps.iter())
-            .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
+        if !record_fn
+            && !sig
+                .params
+                .iter()
+                .zip(plan.reps.iter())
+                .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
         {
             return None;
         }
@@ -438,11 +443,13 @@ pub(crate) fn select_methods(
                             || *rep == FactsRep::I32 && range.is_some_and(|(lo, _)| lo >= 0)
                     })
             });
-            if cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
-                || cm.typed_f64_methods.contains(&key) && !all(FactsRep::F64)
-                || !index_ok
-                || cm.pshape_methods.contains_key(&key) && proven_this.is_none()
-                || cm.pshape_arg_methods.contains_key(&key)
+            // DESIGN-p4l4 VR-3b: not for a record method (`typed_plan`).
+            if record.is_none()
+                && (cm.typed_i32_methods.contains(&key) && !all(FactsRep::I32)
+                    || cm.typed_f64_methods.contains(&key) && !all(FactsRep::F64)
+                    || !index_ok
+                    || cm.pshape_methods.contains_key(&key) && proven_this.is_none()
+                    || cm.pshape_arg_methods.contains_key(&key))
             {
                 continue;
             }
