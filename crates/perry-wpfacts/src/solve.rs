@@ -1497,6 +1497,21 @@ impl Model {
         if !calls && reads.is_empty() {
             return;
         }
+        // `PERRY_WPF_IMPLSRC=1`: one stderr line per protocol request on `t`
+        // (`keys` `None`: any method may run), naming the requesting rule
+        // (the escape ledger's reason), the protocol, the token and its
+        // kind; a second line names the implicit call the request opens.
+        if implsrc_on() {
+            let kind = format!("{:?}", self.toks[t as usize]);
+            eprintln!(
+                "perry: wpfacts implsrc: tok={t} marker={} done={} proto={proto:?} reason={:?} name={:?} kind={}",
+                self.is_marker(t),
+                self.implicit_done.contains(&(t, proto)),
+                self.reasons[reason as usize],
+                self.tok_name(t),
+                &kind[..kind.len().min(80)]
+            );
+        }
         self.mark_use(t, proto.touch_bit());
         // A marker: the protocol runs on the values beside it; on the
         // marker it calls what the marker reaches under the protocol's
@@ -1598,6 +1613,12 @@ impl Model {
         });
         self.protocol_calls.insert(call);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
+        if implsrc_on() {
+            eprintln!(
+                "perry: wpfacts implsrc-call: call={call} tok={t} proto={proto:?} reason={:?}",
+                self.reasons[reason as usize]
+            );
+        }
         match keys {
             None => self.method_on(t, Key::any(), call),
             Some(ks) => {
@@ -2000,4 +2021,10 @@ pub(crate) fn grow_range(node: &mut Node, iv: Iv) -> bool {
     };
     node.drange = true;
     true
+}
+
+/// `PERRY_WPF_IMPLSRC=1` (`Model::implicit`).
+fn implsrc_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_IMPLSRC").is_some())
 }
