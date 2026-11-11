@@ -98,6 +98,11 @@ pub(crate) fn class_lanes(
     mask
 }
 
+/// The I32 word of 0, as an IR constant: an I32 lane's birth default.
+pub(crate) fn zero_word() -> &'static str {
+    INT32_TAG_I64
+}
+
 /// `rep` with an I32 lane (`11`) at every slot of `mask`.
 pub(crate) fn with_lanes(rep: u64, mask: u32) -> u64 {
     let mut rep = rep;

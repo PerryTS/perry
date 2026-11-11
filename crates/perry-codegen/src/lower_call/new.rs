@@ -25,6 +25,7 @@ use crate::nanbox::double_literal;
 use crate::rooting::{self, open_rooted_group, Repr, RootedGroup};
 use crate::types::{DOUBLE, I32, I64, PTR};
 
+pub(super) mod birth_image;
 mod instance;
 use instance::{
     adopt_constructor_args, construction_runs_user_code, refresh_rooted_args, reload_instance,
@@ -565,8 +566,35 @@ fn lower_new_impl_inner<'a>(
                 })
                 .collect()
         });
-        super::new_alloc::ConstructorBirth { fields }
+        super::new_alloc::ConstructorBirth {
+            fields,
+            image: None,
+        }
     });
+    // Birth cost: a complete plan the compact birth does not write is born
+    // as its image (`new/birth_image.rs`), decided with the one plan the
+    // post-birth diamond then consumes.
+    let mut constructor_birth = constructor_birth;
+    let mut image_plan = if constructor_birth
+        .as_ref()
+        .is_some_and(|birth| birth.fields.is_some())
+        && crate::expr::rest_fields::lanes_of(ctx, class_name) == 0
+    {
+        None
+    } else {
+        let ready = declared_layout || literal_constant_image;
+        birth_image::plan(ctx, class_name, class, args, lowered_args.len(), ready)
+    };
+    if let Some(plan) = image_plan.as_ref() {
+        let cid = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+        let image = birth_image::values(ctx, group, class_name, class, plan, args, cid)?;
+        constructor_birth
+            .get_or_insert(super::new_alloc::ConstructorBirth {
+                fields: None,
+                image: None,
+            })
+            .image = Some(image);
+    }
     let alloc =
         super::new_alloc::emit_instance_alloc(ctx, class_name, class, constructor_birth.as_ref());
     let fresh_prologue = super::new_alloc::prove_fresh_prologue(&alloc);
@@ -722,18 +750,21 @@ fn lower_new_impl_inner<'a>(
         // neither of which requires it — and the diamond's slow arm IS the call,
         // so emitting it when the call cannot be emitted would leave the fast
         // arm branching into a block nothing terminates.
-        let prologue_plan =
-            if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
-                super::ctor_prologue_stores::prologue_store_plan(
-                    ctx,
-                    class_name,
-                    class,
-                    lowered_args.len(),
-                    constructor_layout_ready,
-                )
-            } else {
-                None
-            };
+        // An image birth wrote its plan's stores: that plan, not a second
+        // derivation, drives the diamond below.
+        let prologue_plan = if fields_written.is_some() && image_plan.is_some() {
+            image_plan.take()
+        } else if saved_new_target.is_none() && local_constructor_symbol_exists(ctx, class) {
+            super::ctor_prologue_stores::prologue_store_plan(
+                ctx,
+                class_name,
+                class,
+                lowered_args.len(),
+                constructor_layout_ready,
+            )
+        } else {
+            None
+        };
         assert!(
             fields_written.is_none() || prologue_plan.is_some(),
             "a complete compact birth must retain its constructor-store plan"
