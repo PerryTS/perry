@@ -46,6 +46,10 @@ use crate::types::{DOUBLE, I32, I64};
 use super::{emit_root_nanbox_store_on_block, lower_expr, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // I32 at rest (PR C): an update of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     match expr {
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
         // Lowered as: load → fadd/fsub 1.0 → store. Same as the

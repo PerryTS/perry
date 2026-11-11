@@ -104,6 +104,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_array_rest_encode", DOUBLE, &[DOUBLE]);
     module.declare_function("js_array_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_array_rest_set", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
+    // I32 at rest, PR C: the complete field read/store through the layout
+    // accessor, and the lanes of a class born keyless (`expr::rest_fields`).
+    module.declare_function("js_object_rest_get", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_object_rest_set", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, I32]);
+    module.declare_function("js_object_rest_lanes", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
         "perry_array_read_cold_shared",
         DOUBLE,
