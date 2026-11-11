@@ -241,6 +241,11 @@ impl Model {
                     .globs
                     .iter()
                     .any(|g| g.len() == 1 && g[0] == n),
+                // The `[util.inspect.custom]` hook is a Symbol-keyed entry
+                // or a class method HIR names `INSPECT_CUSTOM_METHOD` (the
+                // class vtable slot perry-runtime formatting.rs reads); a
+                // String key never installs it.
+                crate::model::INSPECT_CUSTOM_METHOD => false,
                 n => self.key_shapes[s as usize].admits(n),
             },
         }
