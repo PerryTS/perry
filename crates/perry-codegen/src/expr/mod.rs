@@ -1549,6 +1549,9 @@ pub(crate) struct FnCtx<'a> {
     /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
     /// mode witnesses every returned value against it (§5).
     pub sig_return: Option<crate::codegen::FactsRep>,
+    /// DESIGN-p4l4 VR-3b: the value record this typed entry returns as its
+    /// lanes (`codegen::record_sig::lower_return`).
+    pub sig_record_return: Option<crate::codegen::FactsRecRep>,
     /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
     pub typed_methods:
         &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
@@ -3425,7 +3428,7 @@ mod js_runtime;
 mod literals_vars;
 pub(crate) mod private_resume_frame;
 pub(crate) mod resume_locals;
-pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
+pub(crate) use literals_vars::{bind_local, bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;

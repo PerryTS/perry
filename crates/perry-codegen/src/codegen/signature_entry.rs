@@ -47,6 +47,11 @@ pub(crate) fn with_direct_call<R>(byte_offset: u32, f: impl FnOnce() -> R) -> R 
     out
 }
 
+/// The byte offset of the direct call being lowered (0: none).
+pub(crate) fn direct_call_offset() -> u32 {
+    DIRECT_CALL.with(|s| s.get())
+}
+
 fn literal_number(e: &Expr) -> Option<f64> {
     match e {
         Expr::Number(n) => Some(*n),
@@ -57,7 +62,7 @@ fn literal_number(e: &Expr) -> Option<f64> {
 
 /// `if (p === undefined) { p = <default>; }`, the prologue statement HIR
 /// lowering prepends for a defaulted parameter `p`.
-fn is_default_prologue(s: &Stmt, id: u32) -> bool {
+pub(crate) fn is_default_prologue(s: &Stmt, id: u32) -> bool {
     let Stmt::If {
         condition:
             Expr::Compare {
@@ -106,7 +111,9 @@ pub(crate) fn sig_function(f: &Function, defaults: &[Option<f64>]) -> Option<Fun
     Some(out)
 }
 
-/// The typed plan of `f`, or `None` when `f` is not typed (§3.2, T2).
+/// The typed plan of `f`, or `None` when `f` is not typed (§3.2, T2). A
+/// function the `value_records` rewrite gave record lanes that gets no
+/// `$sig` runs boxed; `PERRY_VALUE_RECORDS_TRACE=1` names it.
 fn typed_plan(
     f: &Function,
     sig: &FactsSignature,
@@ -114,11 +121,36 @@ fn typed_plan(
     func_synthetic_arguments: &HashSet<u32>,
     triple: &str,
 ) -> Option<SpecFnPlan> {
-    if sig.params.len() != f.params.len()
-        || (sig.ret.encoding() == FactsEnc::Boxed
-            && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed))
+    match typed_plan_or(f, sig, cm, func_synthetic_arguments, triple) {
+        Ok(plan) => Some(plan),
+        Err(why) => {
+            if cm.wpfacts.record_fns.contains_key(&f.id) {
+                super::record_sig::trace_boxed(&f.name, why);
+            }
+            None
+        }
+    }
+}
+
+/// The typed plan of `f`, or why `f` is not typed (§3.2, T2).
+fn typed_plan_or(
+    f: &Function,
+    sig: &FactsSignature,
+    cm: &CrossModuleCtx,
+    func_synthetic_arguments: &HashSet<u32>,
+    triple: &str,
+) -> Result<SpecFnPlan, &'static str> {
+    if sig.params.len() != f.params.len() {
+        return Err("the signature and the parameters differ in number");
+    }
+    // DESIGN-p4l4 VR-3b: a record slot the `value_records` rewrite lowered
+    // is the record's lanes (`record_sig`).
+    let record_fn = cm.wpfacts.record_fns.contains_key(&f.id);
+    if !record_fn
+        && sig.ret.encoding() == FactsEnc::Boxed
+        && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed)
     {
-        return None;
+        return Err("every slot is Boxed");
     }
     // Shapes the spec_abi path cannot compile, and §1's exclusions.
     if f.is_async
@@ -131,24 +163,32 @@ fn typed_plan(
         || func_synthetic_arguments.contains(&f.id)
         || super::split_regions::is_region_function(f)
     {
-        return None;
+        return Err("async, generator, captures, rest or arguments, or a split region");
     }
     // Excluded tiers (§3.2.1): typed_i1, typed_string, `$this`, arena, a
     // spec tuple with TaPtr/NumberArray, integer_contract.
     if cm.typed_i1_functions.contains(&f.id)
         || cm.typed_string_functions.contains(&f.id)
         || cm.funcs_reading_dynamic_this.contains(&f.id)
-        || cm.arena_threaded_functions.contains(&f.id)
+        // DESIGN-p4l4 VR-3b: a record function leaves the arena tier
+        // (`select`). The births that made it a self-recursive allocator
+        // are the copies of its records, which `F$sig` and its typed calls
+        // never birth.
+        || (!record_fn && cm.arena_threaded_functions.contains(&f.id))
     {
-        return None;
+        return Err("an excluded tier (typed_i1, typed_string, dynamic this, arena)");
     }
     // CWN 11-09 (T6 as the selector): every tier `F$sig` would subsume must
     // be no more precise than the signature, parameter by parameter.
+    // DESIGN-p4l4 VR-3b: not for a record function. Without its `$sig` the
+    // record crosses boxed (a birth at each call and key reads in the
+    // body), which no subsumed tier's precision pays for.
     let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
-    if cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
-        || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64)
+    if !record_fn
+        && (cm.typed_i32_functions.contains(&f.id) && !all(FactsRep::I32)
+            || cm.typed_f64_functions.contains(&f.id) && !all(FactsRep::F64))
     {
-        return None;
+        return Err("a typed_abi clone more precise than the signature");
     }
     if let Some(plan) = cm.spec_abi_functions.get(&f.id) {
         if plan
@@ -156,33 +196,50 @@ fn typed_plan(
             .iter()
             .any(|r| matches!(r, SpecParamRep::TaPtr { .. } | SpecParamRep::NumberArray))
         {
-            return None;
+            return Err("a spec tuple with a typed-array or number-array slot");
         }
-        if !sig
-            .params
-            .iter()
-            .zip(plan.reps.iter())
-            .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
+        if !record_fn
+            && !sig
+                .params
+                .iter()
+                .zip(plan.reps.iter())
+                .all(|(have, clone)| at_least(*have, spec_rep(*clone)))
         {
-            return None;
+            return Err("a spec tuple more precise than the signature");
         }
         if plan.reps.iter().all(|r| matches!(r, SpecParamRep::Boxed))
             && super::checked_integer::eligible(f, triple)
             && super::integer_contract::prove(f).is_some()
         {
-            return None;
+            return Err("an integer contract");
         }
     }
     let mut defaults = Vec::with_capacity(f.params.len());
     for (p, rep) in f.params.iter().zip(sig.params.iter()) {
         defaults.push(match (&p.default, rep) {
-            (Some(d), FactsRep::I32 | FactsRep::F64) => Some(literal_number(d)?),
+            (Some(d), FactsRep::I32 | FactsRep::F64) => {
+                Some(literal_number(d).ok_or("a default that is no literal Number")?)
+            }
             _ => None,
         });
     }
-    let body = sig_function(f, &defaults)?;
+    let (sig, record) = match super::record_sig::expand(sig, f, &cm.wpfacts, &defaults) {
+        Some((lanes, record)) => (lanes, Some(record)),
+        None if sig.ret.encoding() == FactsEnc::Boxed
+            && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed) =>
+        {
+            return Err("every slot is Boxed")
+        }
+        None => (sig.clone(), None),
+    };
+    let body = super::record_sig::sig_body(f, &defaults, record.as_ref())
+        .ok_or("the body does not start with its default prologue")?;
+    let defaults = match &record {
+        Some(record) => super::record_sig::lane_defaults(record),
+        None => defaults,
+    };
     let demoted = crate::collectors::callee_demoted_params(&body);
-    let reps = sig
+    let reps: Vec<SpecParamRep> = sig
         .params
         .iter()
         .zip(demoted.iter())
@@ -205,13 +262,14 @@ fn typed_plan(
         } else {
             MainPublic::Body
         };
-    Some(SpecFnPlan {
+    Ok(SpecFnPlan {
+        guards: vec![None; reps.len()],
         reps,
         dispatch: SpecDispatch::Static,
-        guards: vec![None; f.params.len()],
-        signature: Some(sig.clone()),
+        signature: Some(sig),
         sig_defaults: defaults,
         sig_public,
+        record,
     })
 }
 
@@ -252,6 +310,9 @@ pub(crate) fn select(
     let mut typed: Vec<(u32, SpecFnPlan)> = Vec::new();
     for f in &hir.functions {
         if !reached.contains(&f.id) {
+            if facts.record_fns.contains_key(&f.id) {
+                super::record_sig::trace_boxed(&f.name, "no typed call of this module reaches it");
+            }
             continue;
         }
         let Some(sig) = facts.signatures.get(&f.id) else {
@@ -265,6 +326,9 @@ pub(crate) fn select(
         cm.typed_f64_functions.remove(&id);
         cm.typed_i32_functions.remove(&id);
         cm.spec_return_proofs.remove(&id);
+        if facts.record_fns.contains_key(&id) {
+            cm.arena_threaded_functions.remove(&id);
+        }
         cm.spec_abi_functions.insert(id, plan);
     }
 }
@@ -375,6 +439,12 @@ pub(crate) fn select_methods(
             let Some(sig) = facts.signatures.get(&m.id) else {
                 continue;
             };
+            // Probe: a record method that gets no `$sig` runs boxed.
+            let boxed = |why: &str| {
+                if facts.record_fns.contains_key(&m.id) {
+                    super::record_sig::trace_boxed(&format!("{}::{}", class.name, m.name), why);
+                }
+            };
             if sig.params.len() != m.params.len()
                 || m.is_async
                 || m.is_generator
@@ -397,6 +467,7 @@ pub(crate) fn select_methods(
                 || crate::collectors::ptr_array_cached_method(class, m).is_some()
                 || super::arguments::method_supports_arguments_length_direct_abi(m)
             {
+                boxed("an excluded tier");
                 probe(&class.name, &m.name, sig, Some("excluded-tier"));
                 continue;
             }
@@ -418,12 +489,21 @@ pub(crate) fn select_methods(
                 probe(&class.name, &m.name, sig, Some("default"));
                 continue;
             }
-            let Some(body) = sig_function(m, &defaults) else {
+            // DESIGN-p4l4 VR-3b: the lane signature of a record plan.
+            let (lane_sig, record) = match super::record_sig::expand(sig, m, &facts, &defaults) {
+                Some((lanes, record)) => (lanes, Some(record)),
+                None => (sig.clone(), None),
+            };
+            let Some(body) = super::record_sig::sig_body(m, &defaults, record.as_ref()) else {
                 probe(&class.name, &m.name, sig, Some("default"));
                 continue;
             };
+            let defaults = match &record {
+                Some(record) => super::record_sig::lane_defaults(record),
+                None => defaults,
+            };
             let demoted = crate::collectors::callee_demoted_params(&body);
-            let reps = sig
+            let reps: Vec<SpecParamRep> = lane_sig
                 .params
                 .iter()
                 .zip(demoted.iter())
@@ -445,6 +525,7 @@ pub(crate) fn select_methods(
             // routes to the boxed entry.
             let tower = cm.pshape_tower_routable.contains(&key);
             if tower && proven_this.is_none() {
+                boxed("a tower-routable method without its proven `this` layout");
                 probe(&class.name, &m.name, sig, Some("tower"));
                 continue;
             }
@@ -477,7 +558,8 @@ pub(crate) fn select_methods(
             } else {
                 None
             };
-            if less_precise.is_some() {
+            // DESIGN-p4l4 VR-3b: not for a record method (`typed_plan`).
+            if less_precise.is_some() && record.is_none() {
                 probe(&class.name, &m.name, sig, less_precise);
                 continue;
             }
@@ -485,6 +567,7 @@ pub(crate) fn select_methods(
             // through its `this` layout: without one, `M$sig` would be the
             // public body again.
             if proven_this.is_none()
+                && record.is_none()
                 && sig.ret.encoding() == FactsEnc::Boxed
                 && sig.params.iter().all(|r| r.encoding() == FactsEnc::Boxed)
             {
@@ -500,12 +583,13 @@ pub(crate) fn select_methods(
                 class: class.name.clone(),
                 name: m.name.clone(),
                 plan: SpecFnPlan {
+                    guards: vec![None; reps.len()],
                     reps,
                     dispatch: SpecDispatch::Static,
-                    guards: vec![None; m.params.len()],
-                    signature: Some(sig.clone()),
+                    signature: Some(lane_sig),
                     sig_defaults: defaults,
                     sig_public: MainPublic::Body,
+                    record,
                 },
                 proven_this,
             });
@@ -566,7 +650,7 @@ fn emit_rep_test(
 }
 
 /// Check mode: `value` is in `rep`/`range` at a lowered site; a miss exits 86.
-fn witness_value(
+pub(crate) fn witness_value(
     ctx: &mut FnCtx<'_>,
     rep: FactsRep,
     range: Option<(i64, i64)>,
@@ -657,7 +741,7 @@ pub(crate) fn sig_llvm_ty(rep: FactsRep) -> LlvmType {
 }
 
 /// `arg === undefined ? L : arg` (§4.1).
-fn emit_default_select(blk: &mut LlBlock, arg: &str, literal: f64) -> String {
+pub(crate) fn emit_default_select(blk: &mut LlBlock, arg: &str, literal: f64) -> String {
     let bits = blk.bitcast_double_to_i64(arg);
     let undefined = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_UNDEFINED_I64);
     blk.select(I1, &undefined, DOUBLE, &double_literal(literal), arg)
@@ -684,6 +768,10 @@ pub(crate) fn try_emit_typed_call(
         return None;
     }
     let plan = ctx.spec_abi_functions.get(&fid)?;
+    // A record plan's calls are `record_sig::try_lower_call`'s.
+    if plan.record.is_some() {
+        return None;
+    }
     let sig = plan.signature.clone()?;
     let defaults = plan.sig_defaults.clone();
     if lowered.len() < sig.params.len() {
@@ -755,6 +843,10 @@ pub(crate) fn try_lower_typed_method_call(
     let Some(tm) = ctx.typed_methods.get(&mid) else {
         return Ok(None);
     };
+    // A record plan's calls are `record_sig::try_lower_call`'s.
+    if tm.plan.record.is_some() {
+        return Ok(None);
+    }
     let Some(public) = ctx
         .methods
         .get(&(tm.class.clone(), tm.name.clone()))
@@ -906,12 +998,28 @@ fn emit_entry(
     params.extend(f.params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
     let sig_name = super::spec_entry_name(public_name, plan);
     let check = crate::verify_facts::enabled();
+    // DESIGN-p4l4 VR-3b (`record_sig`): the lanes of a record slot have the
+    // slot's own site, and the entry of a record-returning function is one
+    // false proof.
+    let record = plan.record.as_ref();
+    let dead = record.is_some_and(|r| r.ret.is_some());
+    let mut record_lane = vec![false; sig.params.len()];
+    if let Some(r) = record {
+        for (param, slot) in r.slots.iter().enumerate() {
+            if let super::record_sig::Slot::Lanes { present, numeric } = slot {
+                let at = r.lane_index(param);
+                for lane in &mut record_lane[at..at + usize::from(*present) + numeric.len()] {
+                    *lane = true;
+                }
+            }
+        }
+    }
     let sites: Vec<Option<crate::verify_facts::SiteArg>> = sig
         .params
         .iter()
         .enumerate()
         .map(|(i, rep)| {
-            (check && rep.encoding() != FactsEnc::Boxed).then(|| {
+            (check && !dead && !record_lane[i] && rep.encoding() != FactsEnc::Boxed).then(|| {
                 // A claim names the emission allocated next: record it right
                 // before its site.
                 crate::verify_facts::covered(
@@ -928,7 +1036,7 @@ fn emit_entry(
         })
         .collect();
     let this_site = match receiver {
-        Some(Some(cid)) if check => Some((cid, {
+        Some(Some(cid)) if check && !dead => Some((cid, {
             crate::verify_facts::covered(
                 Fact::Signature,
                 || serde_json::json!({ "entry": public_name, "this_class": cid }),
@@ -942,10 +1050,47 @@ fn emit_entry(
         })),
         _ => None,
     };
+    let record_site = |what: String| {
+        check.then(|| {
+            crate::verify_facts::covered(
+                Fact::RecordEntry,
+                || serde_json::json!({ "entry": public_name, "record": what }),
+            );
+            crate::verify_facts::raw_entry_site(public_name, public_name, Fact::RecordEntry, &what)
+        })
+    };
+    let record_sites: Vec<Option<crate::verify_facts::SiteArg>> = match record {
+        Some(r) if !dead => r
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(i, s)| match s {
+                super::record_sig::Slot::Lanes { .. } => {
+                    record_site(format!("boxed entry record argument {i}"))
+                }
+                super::record_sig::Slot::Plain => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let record_ret_site = record
+        .and_then(|r| r.ret)
+        .and_then(|_| record_site("boxed entry of a record result".to_string()));
     let wf = llmod.define_function(public_name, DOUBLE, params);
     let _ = wf.create_block("entry");
     let mut cur = 0usize;
-    let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(f.params.len() + 1);
+    // A function that returns a record has no boxed caller (wpfacts
+    // R5UntypedCall): its boxed entry is a false proof.
+    if dead {
+        let blk = wf.block_mut(cur).unwrap();
+        if record_ret_site.is_some() {
+            blk.call_void("perry_verify_facts_tick", &[]);
+        }
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        super::record_sig::emit_false_proof(blk, &undefined, record_ret_site.as_ref());
+        return;
+    }
+    let mut raw: Vec<(LlvmType, String)> = Vec::with_capacity(sig.params.len() + 1);
     if receiver.is_some() {
         raw.push((DOUBLE, "%this_arg".to_string()));
     }
@@ -978,8 +1123,25 @@ fn emit_entry(
         mb.unreachable();
         cur = next;
     }
-    for (i, p) in f.params.iter().enumerate() {
+    for (param, p) in f.params.iter().enumerate() {
         let arg = format!("%arg{}", p.id);
+        // The parameter's first lane in the signature.
+        let i = record.map_or(param, |r| r.lane_index(param));
+        if let Some(super::record_sig::Slot::Lanes { present, numeric }) =
+            record.map(|r| &r.slots[param])
+        {
+            let (next, lanes) = super::record_sig::entry_lanes(
+                wf,
+                cur,
+                &arg,
+                *present,
+                numeric,
+                record_sites[param].as_ref(),
+            );
+            cur = next;
+            raw.extend(lanes.into_iter().map(|v| (DOUBLE, v)));
+            continue;
+        }
         let rep = sig.params[i];
         let blk = wf.block_mut(cur).unwrap();
         let value = match plan.sig_defaults[i] {

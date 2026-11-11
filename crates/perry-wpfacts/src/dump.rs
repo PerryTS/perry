@@ -203,6 +203,11 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 s.ret.name()
             ));
         }
+        for func in &bindings.record_demoted {
+            out.push_str(&format!(
+                "# record-signature module={mi} func={func} DEMOTED a source call is not a typed call of its module\n"
+            ));
+        }
     }
     // N6: each module binding the facts give one Number.
     for (mi, bindings) in pf.bindings.iter().enumerate() {

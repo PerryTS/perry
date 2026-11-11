@@ -339,6 +339,14 @@ pub(super) fn compile_method(
         llvm_name
     };
     let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
+    let sig_record_return = sig
+        .and_then(|tm| tm.plan.record.as_ref())
+        .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((crate::types::PTR, super::record_sig::RESULT_PARAM.to_string()));
+    }
     let lf = llmod.define_function(
         &llvm_name,
         super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
@@ -895,6 +903,7 @@ pub(super) fn compile_method(
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
         sig_return,
+        sig_record_return,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
@@ -1789,6 +1798,12 @@ pub(super) fn compile_method(
         ctx.current_block = *after_idx;
     }
 
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
     if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
         // P2: the facts prove an I32 entry never completes normally.
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

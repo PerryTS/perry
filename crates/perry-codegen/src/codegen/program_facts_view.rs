@@ -243,6 +243,41 @@ pub struct FactsRecRep {
 pub struct FactsRecordLayout {
     pub class_id: Option<u32>,
     pub keys: Vec<String>,
+    /// Per key: the field holds only Numbers (wpfacts `FieldRep::F64` or
+    /// `I32`), so its lane is a plain double; the other lanes hold a
+    /// NaN-boxed immediate.
+    pub numeric: Vec<bool>,
+}
+
+/// DESIGN-p4l4 VR-3b: the locals that hold a record's lanes (`value_records`):
+/// the presence local when the record may be absent, and one local per
+/// layout key.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsRecordLanes {
+    pub tmpl: u32,
+    pub present: Option<u32>,
+    pub fields: Vec<u32>,
+}
+
+/// A function the `value_records` rewrite gave record parameters or a
+/// record result: `F$sig` drops the entry prologue (`prologue_len`
+/// statements at `prologue_at`) and receives each such parameter as its
+/// lanes; `ret`: it returns its result lanes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsRecordFn {
+    pub prologue_at: usize,
+    pub prologue_len: usize,
+    pub params: Vec<Option<FactsRecordLanes>>,
+    pub ret: bool,
+}
+
+/// How a template's copy is written (`value_records::Shape`): `new <class>`
+/// whose argument `j` is layout key `order[j]`, or an object literal of the
+/// layout keys.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FactsRecordBirth {
+    pub class: Option<String>,
+    pub order: Vec<usize>,
 }
 
 /// wpfacts `Enc`: how a slot's word is stored and passed.
@@ -364,6 +399,13 @@ pub struct ElisionFacts {
     /// Template id → the layout of an admitted value record that some
     /// `record_locals` entry names.
     pub record_layouts: std::collections::BTreeMap<u32, FactsRecordLayout>,
+    /// VR-3b, filled by the `value_records` rewrite of this module (not by
+    /// the driver): function id → its record parameters and result; the
+    /// aggregate temporary of a record-returning typed call → the lanes its
+    /// result is written to; template → how its copy is written.
+    pub record_fns: std::collections::BTreeMap<u32, FactsRecordFn>,
+    pub record_aggs: std::collections::BTreeMap<u32, FactsRecordLanes>,
+    pub record_births: std::collections::BTreeMap<u32, FactsRecordBirth>,
     /// Local id → the constant contents of every value it holds: such a
     /// local whose Arrays are all born from literals of these constant
     /// Numbers, as bit patterns (wpfacts `BindingFacts::const_elems`).
@@ -408,6 +450,11 @@ pub struct ElisionFacts {
     /// every copy, with its interval (wpfacts `ModuleBindings::element_keys`,
     /// PR-C2; `expr::index_get::proven_array`).
     pub element_keys: std::collections::BTreeMap<u32, (i64, i64)>,
+    /// Element sites (reads and stores, by `element_offset`) whose key is an
+    /// integer Number inside the int32 range at every copy, with its
+    /// interval (wpfacts `ModuleBindings::key_signs`;
+    /// `expr::index_key::key_fact`).
+    pub key_signs: std::collections::BTreeMap<u32, (i64, i64)>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest
@@ -578,6 +625,12 @@ pub struct FactsSignature {
     /// −0 tolerance (wpfacts PR D): an I32 parameter may receive `-0` (no
     /// use observes it); the check-mode entry witness admits it.
     pub zero_ok: bool,
+    /// DESIGN-p4l4 VR-3b: per parameter, the value record it is (wpfacts
+    /// `Rep::Record`, its layout in `ElisionFacts::record_layouts`); such a
+    /// slot's `params` entry is Boxed. Empty when no parameter is one.
+    pub record_params: Vec<Option<FactsRecRep>>,
+    /// The value record the function returns (`ret` is then Boxed).
+    pub record_ret: Option<FactsRecRep>,
 }
 
 /// `field_read_calls`).

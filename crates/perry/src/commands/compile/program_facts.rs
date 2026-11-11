@@ -153,6 +153,10 @@ pub(crate) fn run(
         ),
         // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -586,6 +590,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.element_floors.extend(mb.element_floors.iter().copied());
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
+        out.key_signs.extend(mb.key_signs.iter().copied());
         out.rest_reads.extend(mb.rest_reads.iter().copied());
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
@@ -593,16 +598,47 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
-            out.signatures.insert(
-                *id,
-                perry_codegen::FactsSignature {
-                    params: sig.params.iter().map(rep).collect(),
-                    ranges: sig.ranges.clone(),
-                    ret: rep(&sig.ret),
-                    this_class: sig.this_class,
-                    zero_ok: pf.zero_sign_tolerated > 0,
-                },
-            );
+            // DESIGN-p4l4 VR-3b: a Record slot whose layout this module
+            // lowers (`record_layout`: the literal is born here).
+            let mut record = |r: &perry_wpfacts::Rep| match r {
+                perry_wpfacts::Rep::Record(r) => {
+                    let layout = record_layout(pf, path, r.tmpl)?;
+                    out.record_layouts.insert(r.tmpl, layout);
+                    Some(perry_codegen::FactsRecRep {
+                        tmpl: r.tmpl,
+                        opt: r.opt,
+                    })
+                }
+                _ => None,
+            };
+            let mut record_params: Vec<_> = sig.params.iter().map(&mut record).collect();
+            if record_params.iter().all(Option::is_none) {
+                record_params.clear();
+            }
+            let record_ret = record(&sig.ret);
+            let sig = perry_codegen::FactsSignature {
+                params: sig.params.iter().map(rep).collect(),
+                ranges: sig.ranges.clone(),
+                ret: rep(&sig.ret),
+                this_class: sig.this_class,
+                zero_ok: pf.zero_sign_tolerated > 0,
+                record_params,
+                record_ret,
+            };
+            // A signature whose every slot is Boxed here (a record this
+            // module does not lower) is none.
+            if sig.record_ret.is_none()
+                && sig.record_params.is_empty()
+                && sig.this_class.is_none()
+                && sig.ret.encoding() == perry_codegen::FactsEnc::Boxed
+                && sig
+                    .params
+                    .iter()
+                    .all(|r| r.encoding() == perry_codegen::FactsEnc::Boxed)
+            {
+                continue;
+            }
+            out.signatures.insert(*id, sig);
         }
         // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
         let module_index = pf.module_paths.iter().position(|p| p == path);
@@ -969,6 +1005,10 @@ pub(crate) fn activation(
         ),
         // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -1133,6 +1173,16 @@ fn record_layout(
     Some(perry_codegen::FactsRecordLayout {
         class_id: t.class_id,
         keys: layout.fields.iter().map(|(k, _)| k.clone()).collect(),
+        numeric: layout
+            .fields
+            .iter()
+            .map(|(_, r)| {
+                matches!(
+                    r,
+                    perry_wpfacts::records::FieldRep::F64 | perry_wpfacts::records::FieldRep::I32
+                )
+            })
+            .collect(),
     })
 }
 

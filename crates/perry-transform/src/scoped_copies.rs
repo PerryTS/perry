@@ -38,20 +38,38 @@ use perry_hir::{Expr, Function, Module, Stmt};
 
 use crate::local_occurrences::{count_module, count_module_occurrences};
 
-struct Census {
-    all: HashMap<LocalId, usize>,
+/// The module-wide local census, shared with `field_forward`.
+pub(crate) struct Census {
+    pub(crate) all: HashMap<LocalId, usize>,
     writes: HashMap<LocalId, usize>,
     /// Names that can only mean a class declared by this module.
     classes: HashSet<String>,
 }
 
 impl Census {
-    fn unwritten(&self, id: LocalId) -> bool {
+    pub(crate) fn of_module(module: &Module) -> Self {
+        let mut classes: HashSet<String> = module.classes.iter().map(|c| c.name.clone()).collect();
+        for other in module
+            .type_aliases
+            .iter()
+            .map(|a| &a.name)
+            .chain(module.interfaces.iter().map(|i| &i.name))
+        {
+            classes.remove(other);
+        }
+        Census {
+            all: count_module_occurrences(module),
+            writes: count_module(module, true),
+            classes,
+        }
+    }
+
+    pub(crate) fn unwritten(&self, id: LocalId) -> bool {
         !self.writes.contains_key(&id)
     }
 
     /// A binding of this type holds the value itself in both locals.
-    fn binds_by_reference(&self, ty: &Type) -> bool {
+    pub(crate) fn binds_by_reference(&self, ty: &Type) -> bool {
         match ty {
             Type::Named(name) => self.classes.contains(name),
             _ => ty.is_primitive(),
@@ -63,20 +81,7 @@ impl Census {
 type Avail = Vec<(LocalId, Type)>;
 
 pub fn run(module: &mut Module) {
-    let mut classes: HashSet<String> = module.classes.iter().map(|c| c.name.clone()).collect();
-    for other in module
-        .type_aliases
-        .iter()
-        .map(|a| &a.name)
-        .chain(module.interfaces.iter().map(|i| &i.name))
-    {
-        classes.remove(other);
-    }
-    let cx = Census {
-        all: count_module_occurrences(module),
-        writes: count_module(module, true),
-        classes,
-    };
+    let cx = Census::of_module(module);
     for f in &mut module.functions {
         fold_function(f, &cx);
     }
