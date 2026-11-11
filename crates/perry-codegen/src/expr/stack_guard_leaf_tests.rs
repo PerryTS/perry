@@ -153,3 +153,32 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
         .unwrap_or_else(|| panic!("no call:\n{body}"));
     assert!(check < call_line, "the check precedes the call:\n{body}");
 }
+
+/// N12: the pass that drops dominated checks (`inprocess/stack_checks.rs`)
+/// reads the shapes `emit_check` writes: the ELF check, and the Apple one
+/// whose hot-cache lookup skips the check for a thread without a limit. Every
+/// emitted check must be found, and must cover what follows it.
+#[cfg(feature = "llvm-inprocess")]
+#[test]
+fn the_dominated_check_pass_reads_the_emitted_check_on_each_target() {
+    for target in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] {
+        let mut m = Module::new("stack_guard_leaf.ts");
+        m.functions = vec![
+            function(1, "leaf", vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+            function(2, "rec", vec![Stmt::Return(Some(call(2)))]),
+            function(3, "outer", vec![Stmt::Return(Some(call(1)))]),
+        ];
+        m.init = vec![Stmt::Expr(call(2)), Stmt::Expr(call(3))];
+        m.init_kind = ModuleInitKind::Eager;
+        let opts = crate::CompileOptions {
+            target: Some(target.into()),
+            ..super::class_field_barrier_tests::ir_opts()
+        };
+        let ir = String::from_utf8(compile_module(&m, opts).unwrap()).unwrap();
+        let emitted = ir.matches("call void @js_stack_overflow()").count();
+        assert!(emitted >= 2, "{target}: rec and outer check:\n{ir}");
+        let (found, covering) = crate::inprocess::stack_checks::recognized_checks(&ir);
+        assert_eq!(found, emitted, "{target}: every emitted check is found");
+        assert_eq!(covering, emitted, "{target}: every check covers its body");
+    }
+}
