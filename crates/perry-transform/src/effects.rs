@@ -6,7 +6,9 @@
 //! proves the opposite: running it executes no code outside the body and
 //! writes nothing but fields of its own receiver. Then a caller's facts about
 //! other objects survive the call, and each parameter has one of two fates:
-//! it is dropped, or the receiver keeps it.
+//! it is dropped, or the receiver keeps it. Those fates are the general
+//! parameter-fate rule (`effects_fate.rs`, [`Fates`]) applied to the
+//! constructor body: one definition of "kept" for every consumer.
 //!
 //! The first user is construction. `new C(...)` is a call, so the inliner
 //! forgot the class of every earlier `new` at it: `const a = new V(); const b
@@ -32,22 +34,20 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use perry_hir::{Class, Expr, Function, Module, Stmt};
+use perry_hir::{Class, Expr, Module, Stmt};
 
-/// The fate of one parameter of a closed function.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kept {
-    /// Not stored anywhere: it does not outlive the call through this call.
-    No,
-    /// Stored in a field of the receiver: it lives as long as the receiver.
-    ByReceiver,
-}
+#[path = "effects_fate.rs"]
+mod fate;
+pub use fate::{
+    body_fates, direct_target, BodyOnly, Fate, FateProof, Fates, FnFates, ParamFate, Proof,
+};
 
 /// A closed function: see the module comment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Closed {
-    /// One entry per declared parameter.
-    pub kept: Vec<Kept>,
+    /// One entry per declared parameter: `Dropped` or `KeptByReceiver`,
+    /// the general rule's answer (`effects_fate`) for this body.
+    pub kept: Vec<Fate>,
 }
 
 /// The closed constructions of one module, by class name.
@@ -118,18 +118,7 @@ fn own_field_store(expr: &Expr) -> Option<(&str, &Expr)> {
     }
 }
 
-fn ordinary(f: &Function) -> bool {
-    !f.is_async
-        && !f.is_generator
-        && f.captures.is_empty()
-        && f.decorators.is_empty()
-        && f.params.iter().all(|p| {
-            p.default.is_none()
-                && !p.is_rest
-                && p.arguments_object.is_none()
-                && p.decorators.is_empty()
-        })
-}
+use fate::ordinary;
 
 fn closed_construction(class: &Class) -> Option<Closed> {
     if class.extends.is_some()
@@ -159,7 +148,6 @@ fn closed_construction(class: &Class) -> Option<Closed> {
     if !ordinary(ctor) {
         return None;
     }
-    let mut kept = vec![Kept::No; ctor.params.len()];
     for stmt in &ctor.body {
         match stmt {
             Stmt::Return(None) => {}
@@ -168,17 +156,36 @@ fn closed_construction(class: &Class) -> Option<Closed> {
                 if has_accessor(class, name) || !is_value(value) {
                     return None;
                 }
+                // A local that is not a parameter cannot exist: the body
+                // declares none.
                 if let Expr::LocalGet(id) = value {
-                    // A local that is not a parameter cannot exist: the body
-                    // declares none.
-                    let at = ctor.params.iter().position(|p| p.id == *id)?;
-                    kept[at] = Kept::ByReceiver;
+                    ctor.params.iter().position(|p| p.id == *id)?;
                 }
             }
             _ => return None,
         }
     }
+    // The fates are the general rule's: the checks above prove every store
+    // writes an own data field of the receiver and reaches no setter.
+    let fates = body_fates(ctor, &OwnStores, &Fates::default());
+    let kept = fates.params.iter().map(|p| p.fate).collect();
     Some(Closed { kept })
+}
+
+/// The proof a closed construction gives the general rule: every store into
+/// `this` is an own data store (checked by `closed_construction` first).
+struct OwnStores;
+
+impl FateProof for OwnStores {
+    fn read(&self, _: perry_hir::types::FuncId, _: &Expr, _: &str, _: u32) -> Option<Proof> {
+        None
+    }
+    fn store(&self, _: perry_hir::types::FuncId, _: &str) -> Option<Proof> {
+        Some(Proof::Proven)
+    }
+    fn targets(&self, callee: &Expr) -> Option<(Vec<perry_hir::types::FuncId>, Proof)> {
+        direct_target(callee)
+    }
 }
 
 /// Does `class` itself declare a getter or setter named `name`?

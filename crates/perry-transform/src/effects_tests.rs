@@ -112,7 +112,10 @@ fn construction(classes: Vec<Class>) -> Option<Closed> {
 #[test]
 fn stores_of_parameters_and_literals_close_the_construction() {
     let closed = construction(vec![point()]).expect("closed");
-    assert_eq!(closed.kept, [Kept::ByReceiver, Kept::No, Kept::ByReceiver]);
+    assert_eq!(
+        closed.kept,
+        [Fate::KeptByReceiver, Fate::Dropped, Fate::KeptByReceiver]
+    );
 }
 
 #[test]
