@@ -53,12 +53,13 @@ pub(super) fn family_ctor(m: &mut Model, fam: Family, dst: NodeId) {
     }
 }
 
-/// `dst` ⊇ what a builtin object of family `fam` reads under named key `a`
+/// `dst` ⊇ what builtin object `t` of family `fam` reads under named key `a`
 /// from its intrinsic chain: the described member, or the opaque member
 /// once the key may have been written (own data fields come from the field
 /// storage, `load_from`; an absent key reads nothing more).
 pub(super) fn family_load(
     m: &mut Model,
+    t: Tok,
     fam: Family,
     what: Option<&'static str>,
     a: Atom,
@@ -75,6 +76,11 @@ pub(super) fn family_load(
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
         if buffer_member_absent(m, what, &name) {
             m.add_prim(dst, prim::UNDEF);
+        } else if let Some(e) = declared_accessor(m, fam, what, &name) {
+            // An accessor whose getter the runtime declares (`RegExp
+            // .prototype.flags`): the getter's declared result on `t`, as
+            // the declared getter of a declaration-made prototype reads.
+            super::effects::getter_load(m, e, t, a, dst);
         } else if realm_accessor(m, fam, what, &name) {
             undeclared_getter_result(m, dst);
         } else {
@@ -766,7 +772,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.edge(all, dst);
                     m.add_prim(dst, prim::UNDEF);
                 }
-                (Key::Named(a), Some(_)) => family_load(m, Family::Array, None, a, dst),
+                (Key::Named(a), Some(_)) => family_load(m, t, Family::Array, None, a, dst),
                 (Key::Any(_), Some(_)) => unreachable!(),
             },
             TmplKind::BObj { what, .. } => {
@@ -883,7 +889,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         if what == "primbox" || what == "arraybox" {
                             m.add_prim(dst, prim::ALL);
                         }
-                        family_load(m, fam, Some(what), a, dst);
+                        family_load(m, t, fam, Some(what), a, dst);
                     }
                     (Key::Any(_), Some(_)) => unreachable!(),
                 }
@@ -931,7 +937,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::NativeProto(ref n) if ns_by_name(n).and_then(proto_family).is_some() => {
             let (fam, what, _) = ns_by_name(n).and_then(proto_family).unwrap();
             match key {
-                Key::Named(a) => family_load(m, fam, what, a, dst),
+                Key::Named(a) => family_load(m, t, fam, what, a, dst),
                 Key::Any(_) => family_any(m, Some(t), fam, what, key, dst),
             }
         }
@@ -942,7 +948,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 return;
             }
             let Key::Named(a) = key else { unreachable!() };
-            family_load(m, Family::Function, None, a, dst);
+            family_load(m, t, Family::Function, None, a, dst);
         }
         // A builtin function value under a computed key: its own data
         // (`name`, `length`, what the program stored: `load_from`), or a
@@ -1056,7 +1062,7 @@ pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
         None
     };
     match key {
-        Key::Named(a) => family_load(m, fam, what, a, dst),
+        Key::Named(a) => family_load(m, of, fam, what, a, dst),
         Key::Any(_) if is_site_builtin(m, of) => tok_load(m, q, key, dst),
         Key::Any(_) => family_any(m, Some(of), fam, what, key, dst),
     }

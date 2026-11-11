@@ -963,14 +963,40 @@ fn realm_holder(m: &Model, fam: Family, what: Option<&'static str>) -> Option<us
 /// getter, so its value is the getter's result, never a function of the
 /// chain (`Response.prototype.body`).
 fn realm_accessor(m: &Model, fam: Family, what: Option<&'static str>, name: &str) -> bool {
+    realm_getter(m, fam, what, name).is_some()
+}
+
+/// The getter (its realm identity, `RegExp.prototype.flags.<get>`) of the
+/// accessor `name` where a builtin object of family `fam` (`what`) reads it
+/// (`realm_accessor`).
+fn realm_getter(
+    m: &Model,
+    fam: Family,
+    what: Option<&'static str>,
+    name: &str,
+) -> Option<&'static str> {
     let own = (what == Some("Buffer"))
         .then(|| m.declarations.named("Buffer.prototype", m))
         .flatten();
     [own, realm_holder(m, fam, what)]
         .into_iter()
         .flatten()
-        .find_map(|h| m.declarations.property(h, name, m))
-        .is_some_and(|p| p.get.is_some())
+        .find_map(|h| m.declarations.property(h, name, m))?
+        .get
+}
+
+/// The declaration of the getter accessor `name` runs where a builtin
+/// object of family `fam` (`what`) reads it (`realm_accessor`), when the
+/// runtime declares its result (`effects::declared_at`, the getter's own
+/// `.<get>` entry): a load reads that result (`effects::getter_load`).
+fn declared_accessor(
+    m: &Model,
+    fam: Family,
+    what: Option<&'static str>,
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let getter = realm_getter(m, fam, what, name)?;
+    effects::declared_at(getter.strip_suffix(".<get>")?, "<get>")
 }
 
 /// What a load of an accessor whose getter the realm does not declare

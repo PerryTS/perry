@@ -489,12 +489,12 @@ pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",
-        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "source",
-        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,

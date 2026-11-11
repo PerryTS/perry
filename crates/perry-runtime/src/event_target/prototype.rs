@@ -534,15 +534,15 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "DOMException" => {
             get(
                 "name",
-                crate::fn_info!(#[realm("DOMException.prototype.name.<get>")] export crate::event_target::prototype::get_dom_name, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.name.<get>", effects = { returns(prim(str)) })] export crate::event_target::prototype::get_dom_name, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "message",
-                crate::fn_info!(#[realm("DOMException.prototype.message.<get>")] export crate::event_target::prototype::get_dom_message, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.message.<get>", effects = { returns(prim(str)) })] export crate::event_target::prototype::get_dom_message, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "code",
-                crate::fn_info!(#[realm("DOMException.prototype.code.<get>")] export crate::event_target::prototype::get_dom_code, 0; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("DOMException.prototype.code.<get>", effects = { returns(prim(num)) })] export crate::event_target::prototype::get_dom_code, 0; with_flags(crate::closure::FN_BUILTIN)),
             );
             for (index, name) in DOM_CODES.iter().enumerate() {
                 js_object_set_field_by_name(proto, key(name.as_bytes()), (index + 1) as f64);
