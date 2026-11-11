@@ -29,6 +29,13 @@ const CLASSIFIED: &[(&str, &str, usize, &str)] = &[
         4,
         "allocation",
     ),
+    // The fill birth: `capacity >= length` (`perry_abi::fill_birth_capacity`).
+    (
+        "array/fill_birth.rs",
+        "(*arr).capacity = capacity;",
+        1,
+        "allocation",
+    ),
     // ---- ArrayHeader: growth raises capacity.
     (
         "array/push_pop/growth.rs",
