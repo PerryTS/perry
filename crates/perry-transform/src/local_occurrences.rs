@@ -280,10 +280,14 @@ fn count_stmt(stmt: &Stmt, c: &mut Counter) {
     match stmt {
         Stmt::Let { id, init, .. } => {
             c.any(*id);
+            // A second `let` of the same id (a rebuilt frame) with any other
+            // initializer, or none, takes the local out.
+            if init.as_ref().is_some_and(primitive_valued) {
+                c.primitive_lets.insert(*id);
+            } else {
+                c.other_stores.insert(*id);
+            }
             if let Some(e) = init {
-                if primitive_valued(e) {
-                    c.primitive_lets.insert(*id);
-                }
                 count_expr(e, c);
             }
         }
