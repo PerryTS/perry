@@ -194,12 +194,29 @@ fn gated_read(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> bool {
 /// The lane slot wpfacts proves for the read at `byte_offset`: every value
 /// its receiver may hold is an instance with an I32 lane at that slot for
 /// the key, or nullish (`ElisionFacts::rest_lane_reads`).
-fn site_slot(ctx: &FnCtx<'_>, byte_offset: u32) -> Option<u32> {
+fn site_slot(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> Option<u32> {
     ctx.wpfacts
         .rest_lane_reads
         .get(&byte_offset)
         .copied()
-        .filter(|&s| byte_offset != 0 && s < LANE_SLOTS)
+        .filter(|&s| byte_offset != 0 && s < LANE_SLOTS && lanes_agree(ctx, property))
+}
+
+/// Every class the facts give a lane at `property` has that lane in codegen
+/// too (`class_lanes` keeps none for a class born with its keys at its
+/// static family layout): a site verdict of the facts then names lanes the
+/// objects carry.
+fn lanes_agree(ctx: &FnCtx<'_>, property: &str) -> bool {
+    ctx.wpfacts.classes.iter().all(|(&cid, fc)| {
+        fc.fields
+            .iter()
+            .filter(|f| f.key == property && f.rest)
+            .all(|f| {
+                wpfacts_access::class_name_of(ctx, cid).is_some_and(|name| {
+                    f.slot < LANE_SLOTS && lanes_of(ctx, &name) & (1 << f.slot) != 0
+                })
+            })
+    })
 }
 
 /// The receiver is no heap object here: a scalar-replaced binding or the
@@ -517,8 +534,8 @@ fn get(
     let p = match plan(ctx, object, property, Access::Get) {
         Plan::Ordinary => return Ok(None),
         Plan::Proven(p) => p,
-        Plan::Complete if site_slot(ctx, byte_offset).is_some() => {
-            let slot = site_slot(ctx, byte_offset).unwrap_or_default();
+        Plan::Complete if site_slot(ctx, property, byte_offset).is_some() => {
+            let slot = site_slot(ctx, property, byte_offset).unwrap_or_default();
             return site_get(ctx, object, property, slot, want).map(Some);
         }
         Plan::Complete if class_guard(ctx, property).is_some() => {
