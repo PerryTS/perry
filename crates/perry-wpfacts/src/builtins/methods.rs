@@ -478,34 +478,64 @@ pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) 
 
 /// A call of `BuiltinNs::ObjectProtoMethod`: any method of
 /// `Object.prototype`. On a receiver it is each method's call on it
-/// (`proto_method`). Without one, `hasOwnProperty` / `propertyIsEnumerable`
-/// convert their key before they throw, `isPrototypeOf` of a primitive is
-/// `false`, `toString` is `"[object Undefined]"`; the others throw
-/// (ToObject of `undefined`).
+/// (`proto_method`); a receiver node's values each run them on their own
+/// (`Cons::NativeThis`, `object_proto_method_prims` for its primitives).
+/// None of the methods hands `this` or an argument to unknown code.
 pub(super) fn object_proto_method_call(m: &mut Model, call: CallId) {
     match (m.cur_this, m.calls[call as usize].this.clone()) {
-        (Some(o), _) => {
+        (Some(o), _) | (None, ThisArg::Tok(o)) => {
             let op = m.tok(TokKind::ObjectProto);
             for name in OBJECT_PROTO_METHODS {
                 let a = m.atom(name);
                 proto_method(m, op, o, Key::Named(a), call);
             }
         }
-        (None, ThisArg::Undef) => {
-            if let Some(k) = arg(m, call, 0) {
-                let reason = m.reason("ToPropertyKey");
-                m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-            }
-            ret_prim(m, call, prim::STR | prim::BOOL);
+        (None, ThisArg::Undef) => object_proto_method_nullish(m, call),
+        (None, ThisArg::Node(n)) => {
+            let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
+            m.cons(n, Cons::NativeThis { call, f });
         }
-        // A receiver node no token stands for: its values are unknown here.
-        (None, _) => unknown_method(m, call, "call of an Object.prototype method"),
+    }
+}
+
+/// `Object.prototype`'s methods on `undefined` / `null`: `hasOwnProperty` /
+/// `propertyIsEnumerable` convert their key before they throw,
+/// `isPrototypeOf` of a primitive is `false`, `toString` is
+/// `"[object Undefined]"`; the others throw (ToObject of `undefined`).
+fn object_proto_method_nullish(m: &mut Model, call: CallId) {
+    if let Some(k) = arg(m, call, 0) {
+        let reason = m.reason("ToPropertyKey");
+        m.cons(
+            k,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+    }
+    ret_prim(m, call, prim::STR | prim::BOOL);
+}
+
+/// The primitive receivers `prim` of a call of `ObjectProtoMethod`:
+/// `undefined` / `null` as without a receiver; another primitive runs each
+/// method as its call by name on the primitive does (`prim_method`), except
+/// `valueOf`, whose result is the primitive's wrapper (ToObject), as a
+/// method of the chain the model does not describe one by one gives it.
+pub fn object_proto_method_prims(m: &mut Model, prim: u16, call: CallId) {
+    if prim & (prim::UNDEF | prim::NULL) != 0 {
+        object_proto_method_nullish(m, call);
+    }
+    let p = prim & !(prim::UNDEF | prim::NULL);
+    if p == 0 {
+        return;
+    }
+    for name in OBJECT_PROTO_METHODS {
+        if name == "valueOf" {
+            prim_method_generic(m, call);
+        } else {
+            let a = m.atom(name);
+            prim_method(m, p, Key::Named(a), call);
+        }
     }
 }
 
