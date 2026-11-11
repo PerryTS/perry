@@ -319,6 +319,7 @@ fn witness(
         rep: base.rep,
         in_floor: call_floor.is_some(),
         key_floor: call_floor.unwrap_or(base.rep.floor),
+        below_length: false,
         number: base.rep.elem != FactsElemRep::Boxed,
         receiver: super::proven_array::Receiver::Field,
     };

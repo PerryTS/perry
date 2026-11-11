@@ -5,6 +5,7 @@ pub(crate) mod bounded_poll;
 mod i32_counter;
 mod iterator_record;
 mod rest_counter;
+mod walk_bound;
 pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
 use accumulator_scope::{emit_packed_numeric_accumulator_admission, PackedAccumulatorScope};
 
@@ -8174,6 +8175,19 @@ fn lower_for_after_init_impl(
         ctx.int_range_facts.push(fact);
     }
 
+    // The loop over an immutable Number array (`walk_bound`): its counter is
+    // below the Array's length in the body, and no other tier has the bound.
+    let walk = if overflow_exit.is_none() {
+        let bound = hoist_classification.is_none()
+            && precomputed_i32_bound.is_none()
+            && local_bound_classification.is_none()
+            && dynamic_i32_bound.is_none();
+        let scope = loop_proof_scope_id;
+        walk_bound::install(ctx, init, condition, update, body, scope, bound)?
+    } else {
+        None
+    };
+
     let cond_idx = ctx.new_block(&format!("{label_prefix}.cond"));
     let body_idx = ctx.new_block(&format!("{label_prefix}.body"));
     let update_idx = ctx.new_block(&format!("{label_prefix}.update"));
@@ -8223,6 +8237,9 @@ fn lower_for_after_init_impl(
         false
     };
     let used_i32_cond = if used_precomputed_i32_cond {
+        true
+    } else if let Some(walk) = &walk {
+        walk_bound::emit_cond(ctx, walk, &body_label, &exit_label);
         true
     } else if let (Some(hoist), Some(ref len_i32_slot)) = (hoist_classification, &i32_length_slot) {
         // Existing path: `i < arr.length` / `i <= arr.length` with

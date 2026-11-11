@@ -325,6 +325,7 @@ fn array_fact_switches_are_cache_inputs() {
     for name in [
         "PERRY_FACTS_ARRAY_BASE",
         "PERRY_FACTS_FN_BASES",
+        "PERRY_FACTS_WALK_INDEXED",
         "PERRY_FACTS_ARRAY_FIELDS",
         "PERRY_FACTS_ARRAY_FLOOR",
         "PERRY_FACTS_ARRAY_LENGTHS",
