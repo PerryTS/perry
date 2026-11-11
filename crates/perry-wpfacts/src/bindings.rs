@@ -558,6 +558,10 @@ pub struct ModuleBindings {
     /// integer Number at every copy and may lie past the int32 range, with
     /// the hull of its interval; sorted (`element_keys::collect_wide`).
     pub wide_keys: Vec<(u32, (i64, i64))>,
+    /// Index stores by `element_offset` whose key the facts took to be at
+    /// most the Array's length (`gen/in_bounds.rs`): check mode tests the
+    /// claim at the store. Sorted, unique.
+    pub inbounds_stores: Vec<u32>,
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call
@@ -998,6 +1002,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     out.extend(crate::fill_births::probe(m));
     out.extend(g.m.map_values_probe());
     out.extend(crate::element_keys::probe(g));
+    out.extend(crate::gen::in_bounds::probe(g));
     out
 }
 

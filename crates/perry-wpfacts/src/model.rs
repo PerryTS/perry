@@ -1566,6 +1566,26 @@ pub struct Model {
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
+    /// Store sites of `a[k] = v` whose key gen proved at most the length
+    /// of the Array the local `a` holds there (`gen/in_bounds.rs`): the
+    /// store overwrites an element or appends, so it leaves no hole in an
+    /// Array whose length never shrinks (`Cons::IndexKept`).
+    pub inbounds_sites: crate::pts::FxHashSet<SiteId>,
+    /// Arrays whose length may shrink: every event that makes a length ⊤
+    /// (`Model::arr_len_top`: a `length` store, `pop`, `shift`, `splice`,
+    /// an escape, a HARD marker, ...). An Array of this unit that is not
+    /// here only ever grows.
+    pub arr_shrunk: crate::pts::FxHashSet<Tok>,
+    /// Arrays an in-bounds store kept hole-free (`Cons::IndexKept`): a
+    /// later shrink marks the hole it withheld (`Model::arr_len_top`).
+    pub inbounds_kept: crate::pts::FxHashSet<Tok>,
+    /// In-bounds index stores leave no hole (`gen/in_bounds.rs`;
+    /// `PERRY_FACTS_INBOUNDS_STORE=0` turns it off).
+    pub inbounds_store: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=inbounds`): every index
+    /// store under a Number key counts as in bounds, a wrong claim the
+    /// element read's witness must catch (a hole read as a Number).
+    pub inbounds_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.

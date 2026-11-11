@@ -80,6 +80,33 @@ pub(crate) struct Narrow {
     /// loop, inside it): "Writes on a leaving path".
     jumps: u32,
     tries: u32,
+    /// The test implies `local < a.length` for this local `a`
+    /// (`gen/in_bounds.rs`).
+    below_length: Option<u32>,
+}
+
+impl Narrow {
+    /// (module, local, function body).
+    pub(crate) fn key(&self) -> (u32, u32, FnIdx) {
+        (self.mi, self.id, self.f)
+    }
+
+    /// The local still holds the value the test saw.
+    pub(crate) fn unwritten(&self) -> bool {
+        !self.written
+    }
+
+    pub(crate) fn below_length_of(&self) -> Option<u32> {
+        self.below_length
+    }
+}
+
+/// The local `a` of a clip `< a.length`.
+fn below_length(kind: u8, bound: &Bound) -> Option<u32> {
+    match bound {
+        Bound::Length(a) if kind == crate::model::range::CLIP_LT => Some(*a),
+        _ => None,
+    }
 }
 
 fn expr_has(e: &Expr, p: &mut impl FnMut(&Expr) -> bool) -> bool {
@@ -168,7 +195,9 @@ impl<'a> Gen<'a> {
         let i = self.local(mi, id);
         // One clip per comparison, chained: the reads see their meet.
         let mut start = i;
+        let mut below = None;
         for (kind, bound) in clips {
+            below = below.or(below_length(kind, &bound));
             let b = self.bound_node(mi, bound);
             let dst = self.tmp("narrow");
             self.zs_carrier(dst);
@@ -189,6 +218,7 @@ impl<'a> Gen<'a> {
             in_update: false,
             jumps: self.jumps,
             tries: self.tries,
+            below_length: below,
         });
         true
     }
@@ -440,6 +470,11 @@ pub(crate) struct Scope {
     saved: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
     mi: u32,
     own: Vec<u32>,
+    /// The enclosing body's in-bounds state (`gen/in_bounds.rs`).
+    in_bounds: (
+        Option<super::in_bounds::BodyLocals>,
+        Vec<super::in_bounds::Derived>,
+    ),
 }
 
 impl<'a> Gen<'a> {
@@ -464,14 +499,17 @@ impl<'a> Gen<'a> {
             self.narrow_consts.extend(own.iter().map(|&c| (mi, c)));
             (f, ls)
         });
+        let in_bounds = self.in_bounds_enter_body(f, params, body);
         Scope {
             saved: std::mem::replace(&mut self.narrow_scope, scope),
             mi,
             own,
+            in_bounds,
         }
     }
 
     pub(crate) fn narrow_exit_body(&mut self, s: Scope) {
+        self.in_bounds_exit_body(s.in_bounds);
         for &id in &s.own {
             self.narrow_consts.remove(&(s.mi, id));
         }
@@ -990,8 +1028,10 @@ impl<'a> Gen<'a> {
                 .unwrap_or_else(|| self.local(mi, id));
             let start = self.tmp("guard");
             self.zs_carrier(start);
+            let mut below = None;
             match fact {
                 Implied::Clip(_, kind, bound) => {
+                    below = below_length(kind, &bound);
                     let is_char = matches!(bound, Bound::Char(_));
                     let b = self.bound_node(mi, bound);
                     let op = match is_char {
@@ -1023,6 +1063,7 @@ impl<'a> Gen<'a> {
                 in_update: false,
                 jumps: self.jumps,
                 tries: self.tries,
+                below_length: below,
             });
             pushed += 1;
         }

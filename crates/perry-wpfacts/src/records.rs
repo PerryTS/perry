@@ -279,7 +279,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::AnnexBDefine { .. }
         | Cons::UnnamedSet { .. } => Reject(R2Write(c.kind_name().into())),
         Cons::RuntimeStore { .. } => Reject(R5StoreHeap("realm".into())),
-        Cons::IndexHole | Cons::LenIndex { .. } | Cons::LenPermuted { .. } => {
+        Cons::IndexHole | Cons::IndexKept | Cons::LenIndex { .. } | Cons::LenPermuted { .. } => {
             Reject(R2Write("[index]".into()))
         }
         Cons::ArrayLenArg { .. } => Reject(R5StoreHeap("Array(x)".into())),
@@ -387,7 +387,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
         Cons::MCall { key, .. } | Cons::Load { key, .. } => op(named(key)),
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
-        Cons::IndexHole => Use::Reject(R6Store("hole".into())),
+        Cons::IndexHole | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
         // `push`'s own store of its argument (`Gen::elem_store`).
         Cons::Store { site, .. }
             if m.stores
@@ -1854,7 +1854,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::AddsKeys
                 | Cons::ProtoFrom { .. }
                 | Cons::AnnexBDefine { .. }
-                | Cons::IndexHole => "mutate",
+                | Cons::IndexHole
+                | Cons::IndexKept => "mutate",
                 Cons::RetInto { .. }
                 | Cons::TopSink { .. }
                 | Cons::TopIfAny { .. }

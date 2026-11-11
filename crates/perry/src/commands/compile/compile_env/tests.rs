@@ -483,6 +483,17 @@ fn slice_births_switch_is_a_cache_input() {
     );
 }
 
+/// In-bounds index stores: the switch changes which Arrays iterate without
+/// `undefined`, and with it the exported reps and typed signatures, so `=0`
+/// must never reuse an `=1` object.
+#[test]
+fn inbounds_store_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_INBOUNDS_STORE"),
+        "PERRY_FACTS_INBOUNDS_STORE must key the compile caches"
+    );
+}
+
 /// `a[k] ?? <literal>` over an Array of Numbers: the switch changes the
 /// read's lowering, so `=0` must never reuse an `=1` object.
 #[test]

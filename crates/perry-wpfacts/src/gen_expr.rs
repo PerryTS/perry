@@ -284,7 +284,7 @@ impl<'a> Gen<'a> {
         key_value: NodeId,
         src: NodeId,
         desc: &str,
-    ) {
+    ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc.into(), None, false);
         self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
@@ -301,6 +301,7 @@ impl<'a> Gen<'a> {
                 },
             ),
         }
+        site
     }
 
     /// A `this.k = v` store in a function `new` may call, before `this`
@@ -1256,6 +1257,7 @@ impl<'a> Gen<'a> {
                         self.mark_fn_phase(fx, e, target, site);
                         self.mark_rooted(e, site);
                         self.m.stores[site as usize].key_value = Some(k);
+                        self.in_bounds_site(fx, e, o, key, site);
                         match key {
                             Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
                             // The key's values decide: an index or any key.
@@ -1439,7 +1441,8 @@ impl<'a> Gen<'a> {
                         Key::Any(_) => Key::Any(self.key_shape(fx.module, index)),
                         k => k,
                     };
-                    self.store_elem(fx, e, o, key, i, v, "[]=");
+                    let site = self.store_elem(fx, e, o, key, i, v, "[]=");
+                    self.in_bounds_site(fx, e, o, key, site);
                 }
                 let key = match index.as_ref() {
                     Expr::String(s) => Key::Named(self.m.atom_index[s]),

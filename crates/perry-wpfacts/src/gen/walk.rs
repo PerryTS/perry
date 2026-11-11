@@ -1121,6 +1121,9 @@ impl<'a> Gen<'a> {
     pub(crate) fn stmts(&mut self, fx: &Fx, ss: &[Stmt]) {
         let mut pushed = 0;
         let mut i = 0;
+        // A local derived below a guarded counter in this block
+        // (`gen/in_bounds.rs`) is one until the block ends.
+        let derived = self.in_bounds.derived.len();
         while i < ss.len() {
             if let Some(value) = for_of_binding(&ss[i..]) {
                 // `value = arrayRecordForValue(…); state = n; let s = value`:
@@ -1158,6 +1161,7 @@ impl<'a> Gen<'a> {
             }
             i += 1;
         }
+        self.in_bounds.derived.truncate(derived);
         self.narrow_pop(pushed);
     }
 
@@ -1241,6 +1245,7 @@ impl<'a> Gen<'a> {
                     }
                     None => self.m.add_prim(n, prim::UNDEF),
                 }
+                self.in_bounds_let(fx, *id, init.as_ref());
                 // `let id = []`: a list birth (`list_caps`). The empty literal
                 // bore one template, the first made since the statement began.
                 if matches!(init, Some(perry_hir::Expr::Array(x, _)) if x.is_empty())

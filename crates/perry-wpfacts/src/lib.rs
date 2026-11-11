@@ -548,6 +548,8 @@ fn generate<'a>(
     g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
     g.m.wide_keys = element_keys::wide_enabled();
     g.m.slice_births = builtins::slice_births_enabled();
+    g.m.inbounds_store = gen::in_bounds::enabled();
+    g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
@@ -1099,6 +1101,7 @@ fn compute_act<'a>(
     element_keys::collect(&g, &mut bindings);
     element_keys::collect_signs(&g, &mut bindings);
     element_keys::collect_wide(&g, &mut bindings);
+    gen::in_bounds::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
