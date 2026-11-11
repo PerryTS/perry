@@ -1096,6 +1096,25 @@ pub(crate) fn native_receiver(m: &Model, fam: Family, what: Option<&'static str>
     }
 }
 
+/// Is receiver token `r` a value that is never callable: an object the
+/// program or the runtime made that is no function (a literal, a class
+/// instance or prototype, an array, a builtin object of a non-function
+/// kind), or `Object.prototype`? `false` for a function value, a parameter
+/// marker (it stands for the caller's values), ⊤, and every other token.
+/// A `Function.prototype` method called with such a `this` throws a
+/// TypeError before it reads `this` or an argument (`Model::native_call`).
+pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
+    if m.is_marker(r) {
+        return false;
+    }
+    match &m.toks[r as usize] {
+        TokKind::Obj(tm, _) => !matches!(&m.tmpls[*tm as usize].kind,
+            TmplKind::BObj { what, .. } if members::bobj_family(what) == Family::Function),
+        TokKind::Proto(_) | TokKind::ObjectProto => true,
+        _ => false,
+    }
+}
+
 /// Invoke the prototype member's model, rather than redispatching a
 /// callable namespace receiver as a static namespace call.
 pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Atom, call: CallId) {

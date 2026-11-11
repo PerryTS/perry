@@ -69,6 +69,9 @@ impl Model {
             if fam == Family::Str {
                 return self.string_this(call, t, r, key);
             }
+            if fam == Family::Function && builtins::never_callable(self, r) {
+                return self.function_this_not_callable(call, t, r, key);
+            }
             return self.declared_proto_call(call, t, identity);
         }
         if self.bind_done.insert((call, t, r)) {
@@ -91,6 +94,25 @@ impl Model {
         if self.bind_done.insert((call, t, u32::MAX - 7)) {
             self.diagnostic_callee(call, t);
             self.with_b(|m| builtins::run_function(m, e, call));
+        }
+        true
+    }
+
+    /// A `Function.prototype` method called with a receiver `r` that is no
+    /// function (`builtins::never_callable`), the method a value: an object
+    /// field holding `Function.prototype.call` called as the object's
+    /// method, `Function.prototype.call.call(o)`. `call`, `apply`, `bind`
+    /// and `toString` throw a TypeError before they read `this` or an
+    /// argument (ECMA-262 20.2.3.3 step 2, 20.2.3.1 step 2, 20.2.3.2 step 2,
+    /// 20.2.3.5 step 3); `@@hasInstance` is OrdinaryHasInstance, false for a
+    /// non-callable `this` (20.2.3.6, 7.3.21 step 1): the member's model.
+    /// Nothing reaches unknown code.
+    fn function_this_not_callable(&mut self, call: CallId, t: Tok, r: Tok, key: Atom) -> bool {
+        if self.bind_done.insert((call, t, r)) {
+            self.diagnostic_callee(call, t);
+            if self.atoms[key as usize].starts_with(builtins::WK_PREFIX) {
+                self.with_b(|m| builtins::native_prototype_call(m, Family::Function, r, key, call));
+            }
         }
         true
     }
