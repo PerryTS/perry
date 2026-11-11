@@ -561,7 +561,10 @@ impl Rewriter<'_> {
             })
         });
         let mut lanes: Vec<Option<FactsRecordLanes>> = vec![None; f.params.len()];
+        // The lane declarations `F$sig` replaces by its parameters, then
+        // the declarations both bodies keep.
         let mut prologue: Vec<Stmt> = Vec::new();
+        let mut kept: Vec<Stmt> = Vec::new();
         if let (Some(sig), true) = (sig, plain_prologue) {
             for (i, p) in f.params.iter().enumerate() {
                 let Some(Some(r)) = sig.record_params.get(i) else {
@@ -572,6 +575,7 @@ impl Rewriter<'_> {
                 }
                 let rec = self.new_rec(r.tmpl, r.opt);
                 self.unpack_param(&rec, p.id, &p.name, &mut prologue);
+                kept.extend(self.scratch_stmts(&rec, &p.name));
                 lanes[i] = Some(lanes_of(&rec));
                 self.recs.insert(p.id, rec);
                 self.census.params += 1;
@@ -586,7 +590,7 @@ impl Rewriter<'_> {
             // The result lanes always track presence: `return;` and a
             // completion without `return` are the absent record.
             let rec = self.new_rec(r.tmpl, true);
-            prologue.extend(self.decl_stmts(&rec, "return"));
+            kept.extend(self.decl_stmts(&rec, "return"));
             let id = self.fresh();
             self.recs.insert(id, rec);
             self.ret = Some(id);
@@ -597,6 +601,7 @@ impl Rewriter<'_> {
         self.ret = saved_ret;
         if lanes.iter().any(Option::is_some) || ret {
             let len = prologue.len();
+            prologue.append(&mut kept);
             f.body.splice(at..at, prologue);
             self.abi.fns.insert(
                 f.id,
@@ -726,7 +731,6 @@ impl Rewriter<'_> {
                 v,
             ));
         }
-        out.extend(self.scratch_stmts(rec, name));
     }
 
     /// A temporary record of `tmpl`, declared before the statement in
