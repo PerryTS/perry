@@ -560,6 +560,29 @@ pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> 
     crate::typedarray_hook_slots::buffer_written_member(addr, name)
 }
 
+/// [`buffer_written_member`] called with the Buffer `buf_f64` as `this`: the
+/// name dispatch's arm. The same bit, then one call into the typed-array group.
+#[inline(always)]
+fn buffer_written_member_call(addr: usize, name: &str, buf_f64: f64, args: &[f64]) -> Option<f64> {
+    if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        return None;
+    }
+    crate::typedarray_hook_slots::buffer_written_member_call(addr, name, buf_f64, args)
+}
+
+/// The body behind [`buffer_written_member_call`], linked through the
+/// typed-array hook group.
+pub(crate) fn buffer_written_member_call_lookup(
+    addr: usize,
+    name: &str,
+    buf_f64: f64,
+    args: &[f64],
+) -> Option<f64> {
+    buffer_written_member_lookup(addr, name).map(|member| call_buffer_member(member, buf_f64, args))
+}
+
 /// The lookup behind [`buffer_written_member`], linked through the typed-array
 /// hook group.
 pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JSValue> {
@@ -592,8 +615,6 @@ pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JS
 }
 
 /// Call the member [`buffer_written_member`] found, with the Buffer as `this`.
-#[cold]
-#[inline(never)]
 fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(buf_f64);
@@ -691,8 +712,8 @@ pub unsafe fn dispatch_buffer_method(
     }
     // BUFEQ: a Buffer's own member of `Buffer.prototype` is what
     // `[[Get]](buf, name)` finds once the program has written that prototype.
-    if let Some(member) = buffer_written_member(addr, method_name) {
-        return call_buffer_member(member, buf_f64, args);
+    if let Some(result) = buffer_written_member_call(addr, method_name, buf_f64, args) {
+        return result;
     }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {

@@ -243,11 +243,33 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    super::own_override::as_builtin_definition(|| unsafe {
-        trace_seal(family, (*proto).parent_class_id);
-        seal_object(proto, family);
-        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
-    });
+    super::own_override::as_builtin_definition(|| unsafe { seal_and_publish(family, proto) });
+}
+
+/// [`seal_built_intrinsic`] for a host family (`Buffer`), whose prototype is
+/// completed by a member install reached only through its feature group
+/// (`typedarray_hook_slots::buffer_prototype_members`). Its own definition
+/// scope keeps the always-linked object intrinsic's seal a single-caller body.
+#[inline(never)]
+pub(crate) fn seal_built_host_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
+    debug_assert!(!family.realm_intrinsic());
+    if proto.is_null() {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::own_override::as_builtin_definition(|| unsafe { seal_and_publish(family, proto) });
+}
+
+/// Seal `proto` as `family` and publish it in this agent's intrinsic slot.
+///
+/// # Safety
+/// `proto` is a live, complete `ObjectHeader`; the caller is a builtin
+/// definition with collection suppressed.
+#[inline(always)]
+unsafe fn seal_and_publish(family: BuiltinProto, proto: *mut ObjectHeader) {
+    trace_seal(family, (*proto).parent_class_id);
+    seal_object(proto, family);
+    crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
 }
 
 /// The meta family field of a sealed RUNTIME prototype (one the runtime
@@ -356,10 +378,10 @@ pub(crate) fn add_locked(family: usize) -> bool {
 /// lock covers it ([`locked_family`]).
 #[inline(always)]
 pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
-    if family < super::builtin_namespace::FIRST {
-        BuiltinProto::from_index(family)
-            .filter(|f| f.realm_intrinsic())
-            .map(LockHolder::Proto)
+    // A host family (`Buffer`, `REALM_INTRINSICS..FIRST`) is not locked:
+    // the program patches it as in node, which only sets its shadow bit.
+    if family < BuiltinProto::REALM_INTRINSICS {
+        BuiltinProto::from_index(family).map(LockHolder::Proto)
     } else if family == ITERATOR_FAMILY {
         Some(LockHolder::Iterator)
     } else if family == ARRAY_ITERATOR_FAMILY {

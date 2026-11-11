@@ -557,9 +557,24 @@ pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<crate::va
         .get()
         .and_then(|lookup| lookup(addr, name))
 }
+/// [`buffer_written_member`] called with the Buffer as `this`
+/// (`buffer_dispatch::dispatch_buffer_method`'s arm), same group.
+static BUFFER_WRITTEN_MEMBER_CALL: Hook<fn(usize, &str, f64, &[f64]) -> Option<f64>> =
+    Hook::empty();
+pub(crate) fn buffer_written_member_call(
+    addr: usize,
+    name: &str,
+    buf_f64: f64,
+    args: &[f64],
+) -> Option<f64> {
+    BUFFER_WRITTEN_MEMBER_CALL
+        .get()
+        .and_then(|call| call(addr, name, buf_f64, args))
+}
 pub(crate) fn install() {
     crate::perry_install_once!({
         BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_written_member_lookup);
+        BUFFER_WRITTEN_MEMBER_CALL.set(crate::object::buffer_written_member_call_lookup);
         BUFFER_PROTOTYPE_MEMBERS
             .set(crate::object::native_module::callable_exports::install_buffer_prototype_members);
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);
