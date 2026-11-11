@@ -518,6 +518,17 @@ pub(crate) fn try_lower_number(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
     }
 }
 
+/// `expr` is a gated read whose every receiver has the lane at its proven
+/// slot and never lacks the key (the read [`try_lower_number`] takes): its
+/// value is the lane's int32, a Number in the int32 range
+/// (`i32_fast_path::is_known_i32_range`).
+pub(crate) fn is_int32_read(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    matches!(expr, Expr::PropertyGet { object, property, byte_offset, .. }
+        if gated_read(ctx, property, *byte_offset)
+            && !scalar(ctx, object)
+            && matches!(plan(ctx, object, property, Access::Get), Plan::Proven(p) if !p.nullable))
+}
+
 /// Is `expr` a gated read, which a raw slot tier must leave alone?
 pub(crate) fn is_gated_read(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     matches!(expr, Expr::PropertyGet { object, property, byte_offset, .. }
