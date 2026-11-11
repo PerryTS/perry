@@ -115,6 +115,20 @@ fn identity_rejects() {
         rejected("switch (u) { case u: console.log(1); }\n"),
         "R4Identity(switch)"
     );
+    // A FinalizationRegistry keeps its target and its token by identity.
+    const FR: &str = "const fr = new FinalizationRegistry((_h: any) => {});\n";
+    assert_eq!(
+        rejected(&format!("{FR}fr.register(u, 1);\nconsole.log(u.a);\n")),
+        "R4Identity(collection-key)"
+    );
+    assert_eq!(
+        rejected(&format!("{FR}const k = {{}};\nfr.register(k, 1, u);\nconsole.log(u.a);\n")),
+        "R4Identity(collection-key)"
+    );
+    assert_eq!(
+        rejected(&format!("{FR}console.log(fr.unregister(u), u.a);\n")),
+        "R4Identity(collection-key)"
+    );
     // Negative control: a presence test is no identity.
     let src = "const x: { a: number; b: boolean } | undefined = Math.random() > 2 ? undefined : { a: 1, b: true };\nconsole.log(x === undefined, x !== undefined ? x.a : 0);\n";
     assert!(verdict(src, &["a", "b"], on()).is_ok(), "{src}");
