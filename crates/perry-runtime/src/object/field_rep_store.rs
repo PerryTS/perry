@@ -264,9 +264,12 @@ unsafe fn install_i32_lanes_learned(obj: *mut ObjectHeader, id: LayoutWord, mask
         rest &= rest - 1;
         rep = field_rep::with_slot_rep(rep, slot, field_rep::REP_SPECIAL);
     }
+    // `to` was learned from this very record (a definition edge adds a key),
+    // whose facts are immutable: the same key count names the lanes step.
+    // Its key list may be the canonical copy of `from`'s, so the list's
+    // address is not compared.
     if target == id
         || to.rep() != rep
-        || to.keys() != from.keys()
         || to.logical_key_count() != from.logical_key_count()
         || to.live_inline_slot_count() != from.live_inline_slot_count()
         || to.proto_id() != from.proto_id()
@@ -295,7 +298,14 @@ unsafe fn install_i32_lanes_learned(obj: *mut ObjectHeader, id: LayoutWord, mask
             *fields.add(slot) = word;
         }
     }
-    stamp_object_shape_id_with_carrier_note(obj, target);
+    // As a field definition's learned edge stamps a fresh object
+    // (`class_field_chain::try_define`).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
+        super::shapes::stamp_birth_shape_id_with_carrier_note(obj, target);
+    } else {
+        stamp_object_shape_id_with_carrier_note(obj, target);
+    }
     true
 }
 
