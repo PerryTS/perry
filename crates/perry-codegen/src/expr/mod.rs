@@ -1909,12 +1909,6 @@ pub(crate) struct FnCtx<'a> {
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,
-    /// #6405: this module assigns a Buffer numeric read-method name as an own
-    /// property somewhere (`buf.readUInt8 = fn`), so an own prop may shadow the
-    /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
-    /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
-    /// every program that never shadows a Buffer method (the common case).
-    pub program_shadows_buffer_read_method: bool,
     /// This module contains a shape barrier such as `Object.defineProperty`.
     /// Native Buffer/TypedArray views normally read `.length` straight from
     /// their header, but a barrier can install an own `length` property that

@@ -3207,8 +3207,6 @@ fn lower_module(
         loop_pushed_arrays: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
-        program_shadows_buffer_read_method:
-            crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can

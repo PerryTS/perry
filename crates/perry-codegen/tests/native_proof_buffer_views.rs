@@ -32,6 +32,9 @@ mod runtime_fallback;
 #[path = "native_proof_buffer_views/pointer_lifetime.rs"]
 mod pointer_lifetime;
 
+#[path = "native_proof_buffer_views/prototype_guard.rs"]
+mod prototype_guard;
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         namespace_self_import: false,

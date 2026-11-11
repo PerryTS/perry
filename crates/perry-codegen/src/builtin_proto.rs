@@ -33,26 +33,44 @@ pub(crate) use perry_abi::BuiltinProto;
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
 /// the agent's intrinsic, two loads and a compare.
 pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
-    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
-    let own = ctx.block().load(I32, &at);
-    let own = ctx.block().icmp_uge(I32, &own, &end);
+    let own = emit_shadow_bit(ctx, family);
     let patched = if family == BuiltinProto::Object {
         own
     } else {
-        let object =
-            crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
-        let at = ctx.block().gep(crate::types::I8, &object, &[(I64, "4")]);
-        let parent = ctx.block().load(I32, &at);
-        let parent = ctx.block().icmp_uge(I32, &parent, &end);
+        let parent = emit_shadow_bit(ctx, BuiltinProto::Object);
         ctx.block().or(I1, &own, &parent)
     };
-    let blk = ctx.block();
-    // Unlikely, and said so: a guard's generic arm must not cost the
-    // function's hot loops their register assignment (the same reason
-    // `array_push_own`'s exit carries the hint).
-    blk.call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
+    emit_unlikely(ctx.block(), &patched)
+}
+
+/// `i1`: true when the agent's intrinsic prototype of `family` ITSELF was
+/// written, defined, deleted or relinked: its own shadow bit, one slot load,
+/// one word load and a compare. The runtime reads the same word
+/// (`object::builtin_proto::prototype_unwritten`). It is the exact fact for a
+/// member the realm declares OWN on that prototype (a Buffer reader on
+/// Buffer.prototype): `%Object.prototype%` lies behind it on the chain.
+pub(crate) fn emit_prototype_written(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    family: BuiltinProto,
+) -> String {
+    let own = emit_shadow_bit(ctx, family);
+    emit_unlikely(ctx.block(), &own)
+}
+
+/// The shadow bit of the agent's intrinsic prototype of `family`.
+fn emit_shadow_bit(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
+    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
+    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
+    let word = ctx.block().load(I32, &at);
+    ctx.block().icmp_uge(I32, &word, &end)
+}
+
+/// Unlikely, and said so: a guard's generic arm must not cost the function's
+/// hot loops their register assignment (the same reason `array_push_own`'s
+/// exit carries the hint).
+fn emit_unlikely(blk: &mut LlBlock, patched: &str) -> String {
+    blk.call(I1, "llvm.expect.i1", &[(I1, patched), (I1, "false")])
 }
 
 /// [`emit_patched_test`] over several families (a borrowed call also reads
