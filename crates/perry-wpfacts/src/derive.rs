@@ -1815,7 +1815,9 @@ fn native_member(
                         ..
                     } => NativeFamily::Collection(w),
                     TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
-                    TmplKind::BObj { what: "Buffer", .. } => NativeFamily::Buffer,
+                    // The per-unit solve misses a write onto `Buffer.prototype`
+                    // through `Object.assign`: it proves no Buffer member.
+                    TmplKind::BObj { what: "Buffer", .. } if !m.unit_mode => NativeFamily::Buffer,
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -1900,8 +1902,20 @@ fn builtin_protos_unwritten(
     }
     // DEC 250: a final read (the runtime refuses every write that would
     // change it) is written by no store, the program's or one through ⊤.
+    let locked = fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a));
+    // Interpreted code (DEC 150's summary node: `new Function`, direct and
+    // indirect eval, any solved call that may be the Function constructor)
+    // holds every global, so every builtin prototype, and writes under any
+    // key. A NativeMember site runs its member with no test (codegen's
+    // `native_member_calls` takes no interp guard word), so only a final
+    // read survives it.
+    if fam.is_some() && !locked && m.interp_runs {
+        return Err(
+            "native member: interpreted code may write the key onto a builtin prototype".into(),
+        );
+    }
     let (through_top, own) = match objproto {
-        _ if fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a)) => (false, false),
+        _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
         None => (crate::builtins::native_written(m, TOP, a), false),
     };

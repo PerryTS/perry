@@ -371,7 +371,7 @@ fn rule_holders(
         if node.pts.is_empty() {
             continue;
         }
-        let why = if captured.contains(&(n as NodeId)) {
+        let refused = if captured.contains(&(n as NodeId)) {
             Some("captured".to_string())
         } else {
             match frame_of(m, n) {
@@ -386,7 +386,7 @@ fn rule_holders(
                     .then(|| format!("suspending({})", m.funcs[f as usize].name.replace(' ', "_"))),
             }
         };
-        let Some(why) = why else {
+        let Some(why) = refused else {
             continue;
         };
         if let Some(id) = node.pts.storage_id() {

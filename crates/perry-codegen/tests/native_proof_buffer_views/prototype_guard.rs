@@ -1,9 +1,10 @@
-//! The Buffer numeric read fold is gated by Buffer.prototype's own shadow bit,
-//! the word the runtime's Buffer name dispatch reads: every fold tests it and
-//! a set bit takes the ordinary dispatch call. No syntactic scan of the
-//! program decides it (`Buffer.prototype[k] = f`, `eval`, `new Function` all
-//! set the bit at run time). An own property on the receiver is the operand
-//! proof's business: the binding is no longer sealed, so nothing folds.
+//! The Buffer numeric read fold is the proven path only: a reader site the
+//! whole-program facts prove (NativeMember: no write may reach
+//! `Buffer.prototype`'s reader, by the program or by interpreted code) is the
+//! native load with no test; any other site is the ordinary method call (no
+//! fold, no shadow-bit test, no dispatch arm). An own property on the
+//! receiver is the operand proof's business: the binding is no longer
+//! sealed, so nothing folds.
 
 use super::*;
 
@@ -22,44 +23,29 @@ fn own_set(buffer_id: u32, method: &str) -> Stmt {
 }
 
 #[test]
-fn buffer_read_fold_tests_the_buffer_prototype_bit() {
-    let ir = compile_ir(
-        "buffer_read_prototype_guard.ts",
-        vec![
-            buffer_let(1, "buf", int(8)),
-            Stmt::Expr(buffer_read(1, "readInt32BE", int(0))),
-            Stmt::Return(Some(int(0))),
-        ],
-    );
-    assert!(
-        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains("bytes.numeric.load"),
-        "the read still folds:\n{ir}"
-    );
-    assert!(ir.contains(WRITTEN), "the fold tests the shadow bit:\n{ir}");
-    assert_eq!(
-        ir.matches("call double @js_native_call_method(").count(),
-        1,
-        "a written Buffer.prototype takes ONE ordinary dispatch call:\n{ir}"
-    );
-}
-
-#[test]
 fn a_reader_named_write_elsewhere_does_not_deopt_the_fold() {
     // Was the #6405 module scan: any `x.readInt32BE = …` in the module
-    // disabled every fold. The bit decides now; `other` is not the receiver.
-    let ir = compile_ir(
+    // disabled every fold. The proof decides now; `other` is not the receiver.
+    let ir = compile_ir_with_opts(
         "buffer_read_unrelated_shadow.ts",
         vec![
             buffer_let(1, "buf", int(8)),
             buffer_let(3, "other", int(8)),
             own_set(3, "readInt32BE"),
-            Stmt::Expr(buffer_read(1, "readInt32BE", int(0))),
+            Stmt::Expr(proven_buffer_read(1, "readInt32BE", int(0))),
             Stmt::Return(Some(int(0))),
         ],
+        proven_opts(),
     );
     assert!(
-        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains(WRITTEN),
-        "the read on `buf` folds under the guard:\n{ir}"
+        ir.contains("call i32 @llvm.bswap.i32(") && !ir.contains(WRITTEN),
+        "the proven read on the sealed `buf` is the native load with no test:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call double @js_method_call_slow(").count()
+            + ir.matches("call double @js_native_call_method(").count(),
+        0,
+        "the proven read on `buf` is no method call:\n{ir}"
     );
 }
 
@@ -139,15 +125,15 @@ fn a_proven_reader_site_is_the_native_load_alone() {
 }
 
 #[test]
-fn an_unproven_reader_site_tests_the_bit_and_keeps_the_dispatch_arm() {
+fn an_unproven_reader_site_is_the_ordinary_method_call() {
     let ir = reader_site_ir("buffer_read_unproven_site.ts", &[]);
     assert!(
-        ir.contains("call i32 @llvm.bswap.i32(") && ir.contains(WRITTEN),
-        "the unproven read folds under the guard:\n{ir}"
+        !ir.contains("bytes.numeric.load") && !ir.contains(WRITTEN),
+        "an unproven read neither folds nor tests a bit:\n{ir}"
     );
     assert_eq!(
-        ir.matches("call double @js_native_call_method(").count(),
+        ir.matches("call double @js_method_call_slow(").count(),
         1,
-        "a written Buffer.prototype takes ONE ordinary dispatch call:\n{ir}"
+        "an unproven read is ONE ordinary method call:\n{ir}"
     );
 }

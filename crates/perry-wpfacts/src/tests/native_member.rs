@@ -530,7 +530,7 @@ fn a_sealed_regexp_prototype_write_keeps_the_native_member() {
 /// A Buffer method `Buffer.prototype` owns (`readInt32BE`, `readUInt8`) is
 /// a NativeMember until a write may reach it: onto `Buffer.prototype` by
 /// name, under any key, through the prototype read off a buffer, an own
-/// property of the receiver, or unknown code.
+/// property of the receiver, or unknown code. Whole-program solve only.
 #[test]
 fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
     for key in ["readInt32BE", "readUInt8"] {
@@ -543,15 +543,39 @@ fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
             format!("(b as any).{key} = () => 7;"),
             "(b as any)[process.argv[2]] = () => 7;".to_string(),
             "eval(process.argv[2]);".to_string(),
+            "(0, eval)(process.argv[2]);".to_string(),
             "new Function(process.argv[2])();".to_string(),
         ] {
-            control_and_negative(
-                "const b = Buffer.alloc(8);",
-                &write,
-                &format!("b.{key}(0)"),
-                key,
-                true,
-            );
+            // The driver links the interpreter for a program with dynamic
+            // code (`dynamic_reach.rs`: a deferred eval/Function site);
+            // without it the Function constructor throws.
+            let dynamic = write.contains("eval") || write.contains("Function(");
+            let cfg = if dynamic {
+                FactsConfig {
+                    dynamic_code: Some("E14 test: dynamic code".into()),
+                    interpreted_sources: true,
+                    ..FactsConfig::default()
+                }
+            } else {
+                FactsConfig::default()
+            };
+            for units in [false, true] {
+                let src = |w: &str| {
+                    format!(
+                        "function main() {{ const b = Buffer.alloc(8); {w} return b.{key}(0); }}\nconsole.log(main());"
+                    )
+                };
+                // The per-unit solve proves no Buffer member (it misses a
+                // write through `Object.assign`): the control is a
+                // NativeMember in the whole-program solve only.
+                let pf = one(&src(""), units);
+                let v = verdicts_in(&pf, 0, key, true);
+                let ok = if units { none_native(&v) } else { native(&v) };
+                assert!(ok, "control units={units} {}: {v:?}", src(""));
+                let pf = modules(&[("t", &src(&write))], units, &cfg);
+                let v = verdicts_in(&pf, 0, key, true);
+                assert!(none_native(&v), "units={units} {}: {v:?}", src(&write));
+            }
         }
     }
 }

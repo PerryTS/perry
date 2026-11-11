@@ -21,18 +21,18 @@ use perry_abi::BuiltinProto;
 /// intrinsification isn't possible (the generic path then catches it) —
 /// currently that's any receiver that isn't a tracked `buffer_data_slot`.
 ///
-/// The folded body is the builtin `Buffer.prototype.<read>` only while that
-/// prototype is unwritten: the realm declares every numeric reader an OWN
-/// member of Buffer.prototype, so the exact fact is Buffer.prototype's own
-/// shadow bit, the same word the runtime's Buffer name dispatch reads
+/// The folded body is the builtin `Buffer.prototype.<read>` only where the
+/// whole-program facts prove no write may reach that reader
+/// (`native_member_proven`): such a site is the native load with no test. A
+/// local view at any other site is the ordinary method call, whose runtime
+/// dispatch reads Buffer.prototype's own shadow bit
 /// (`prototype_unwritten(BuiltinProto::Buffer)`, perry-runtime
-/// `object/buffer_dispatch.rs`). Every fold tests it; a set bit (any write,
-/// define, delete or relink of Buffer.prototype, however the key was built,
-/// by eval or `new Function` included) takes the ordinary dispatch call
-/// ([`emit_dispatch_call`]), which reads the same bit. An own property on the
-/// receiver is the operand proof's business: a local view is trusted only
-/// while its binding is sealed (`collectors/sealed_buffers.rs`), and a
-/// parameter read tests the receiver's property bag.
+/// `object/buffer_dispatch.rs`). A guarded parameter read at an unproven site
+/// folds the same bit into its admission test and takes the dispatch call
+/// ([`emit_dispatch_call`]) once it is set. An own property on the receiver
+/// is the operand proof's business: a local view is trusted only while its
+/// binding is sealed (`collectors/sealed_buffers.rs`), and a parameter read
+/// tests the receiver's property bag.
 struct BufferNumericReadSpec {
     width_bytes: u32,
     endian: BufferEndian,
@@ -337,9 +337,8 @@ fn emit_guarded_param_read(
 
 /// `recv.readX(offset)` on a Buffer the operand proof admits. A site the
 /// whole-program facts prove (`native_member_proven`: no write may reach
-/// `Buffer.prototype`'s reader) is the native load and nothing else; any
-/// other site tests Buffer.prototype's own shadow bit, and a set bit takes
-/// the ordinary dispatch call (which may run program code).
+/// `Buffer.prototype`'s reader) is the native load and nothing else; an
+/// unproven local-view site is left to the ordinary method call.
 pub(super) fn try_emit_buffer_read_intrinsic(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
@@ -362,9 +361,11 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         if ctx.receiver_descriptors.byte_view_param(*id).is_some()
             && crate::expr::numeric_index_has_integer_array_index_proof(ctx, &args[0])
         {
-            return emit_guarded_param_read(ctx, object, method, &args[0], &spec, proven)
-                .map(Some);
+            return emit_guarded_param_read(ctx, object, method, &args[0], &spec, proven).map(Some);
         }
+    }
+    if !proven {
+        return Ok(None);
     }
     let access_spec = BufferAccessSpec::buffer_numeric_read(
         spec.width_bytes,
@@ -376,40 +377,14 @@ pub(super) fn try_emit_buffer_read_intrinsic(
     else {
         return Ok(None);
     };
-    if proven {
-        crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Buffer]);
-        return Ok(Some(emit_local_view_read(ctx, proof, access_spec, &spec, method)));
-    }
-    // The proof evaluated the index; the receiver is a local read. Both
-    // arms below use these values, so nothing is evaluated twice.
-    let boxed = crate::expr::lower_expr(ctx, object)?;
-    let written = crate::builtin_proto::emit_prototype_written(ctx, BuiltinProto::Buffer);
-    let direct = ctx.new_block("bytes.numeric.load");
-    let generic = ctx.new_block("bytes.numeric.slow");
-    let done = ctx.new_block("bytes.numeric.done");
-    let direct_l = ctx.block_label(direct);
-    let generic_l = ctx.block_label(generic);
-    let done_l = ctx.block_label(done);
-    ctx.block().cond_br(&written, &generic_l, &direct_l);
-    ctx.current_block = generic;
-    let generic_value = emit_dispatch_call(ctx, &boxed, method, &proof.index.value);
-    let generic_end = ctx.block().label.clone();
-    ctx.block().br(&done_l);
-    ctx.current_block = direct;
-    let result = emit_local_view_read(ctx, proof, access_spec, &spec, method);
-    let direct_value = crate::expr::materialize_js_value(
+    crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Buffer]);
+    Ok(Some(emit_local_view_read(
         ctx,
-        result,
-        crate::native_value::MaterializationReason::FunctionAbi,
-    );
-    let direct_end = ctx.block().label.clone();
-    ctx.block().br(&done_l);
-    ctx.current_block = done;
-    let merged = ctx.block().phi(
-        DOUBLE,
-        &[(&direct_value, &direct_end), (&generic_value, &generic_end)],
-    );
-    Ok(Some(LoweredValue::js_value(merged)))
+        proof,
+        access_spec,
+        &spec,
+        method,
+    )))
 }
 
 /// The folded read of a proven local Buffer view: the access pointer, the

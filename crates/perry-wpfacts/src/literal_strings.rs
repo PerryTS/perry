@@ -158,7 +158,7 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                 ));
             } else if f.kind.top || f.kind.prims & prim::STR != 0 {
                 // A String field without the fact, and what ends it.
-                let why = if f.kind.top {
+                let refused = if f.kind.top {
                     "kind_top".to_string()
                 } else if !f.data_field {
                     "accessor".to_string()
@@ -166,7 +166,7 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                     refusal(m, &nodes).unwrap_or_else(|| "none".to_string())
                 };
                 out.push(format!(
-                    "# lit_strings field {}.{} refused={why}",
+                    "# lit_strings field {}.{} refused={refused}",
                     tf.display, f.key
                 ));
             }
