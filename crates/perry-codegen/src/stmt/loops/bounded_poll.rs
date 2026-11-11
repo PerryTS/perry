@@ -15,8 +15,12 @@
 //!    `[lo, hi]` (`range_facts::facts_local_range`: every value `c` ever
 //!    holds is an int32 in it), and every iteration moves `c` at least once,
 //!    always in the same direction, by a nonzero integer (`trip`). The values
-//!    `c` holds at successive back edges are then distinct integers of
-//!    `[lo, hi]`: L runs at most `hi - lo + 1` iterations per entry.
+//!    `c` holds when successive iterations start are then distinct integers
+//!    of `[lo, hi]`, and each of them passed L's test: where the test bounds
+//!    `c` by a literal (`c < 128`, `c >= 0 && c < 8`, `c <= Math.min(7, x)`),
+//!    they lie in that window too (`guard_window`). L runs at most as many
+//!    iterations per entry as the interval and the window share integers
+//!    (one more for a `do-while`, whose first iteration no test admits).
 //! 2. **Body effect.** No block emitted for L (tests, body, update, nested
 //!    loops, cold arms, every clone a versioning tier made) holds a call that
 //!    may collect or run user code: only LLVM intrinsics, inline asm markers
@@ -138,7 +142,8 @@ pub(crate) struct Trip {
     pub(crate) counter: u32,
     pub(crate) lo: i64,
     pub(crate) hi: i64,
-    /// `hi - lo + 1`.
+    /// The most iterations per entry: the integers of `[lo, hi]` the loop's
+    /// test admits (`guard_window`).
     pub(crate) bound: u64,
 }
 
@@ -357,11 +362,13 @@ fn collecting_call(block: &crate::block::LlBlock, effects: &GcEffects) -> Option
     if matches!(insts.last(), Some(LlInst::Unreachable)) {
         return None;
     }
-    // `js_shadow_slot_set` is a bounds-checked TLS store: the exemption the
-    // call-free clone scans make (`LlInst::is_gc_unsafe_call`).
+    // The shadow slot stores are bounds-checked TLS stores that cannot
+    // allocate or collect (`gc/roots/shadow_stack.rs`; the call-free clone
+    // scans exempt the same, `LlInst::is_gc_unsafe_call`), and a body whose
+    // roots lower to stack maps drops them (`gc_call_effects::effects_of`).
     let leaf = |callee: &str| {
         callee.starts_with("llvm.")
-            || callee == "js_shadow_slot_set"
+            || matches!(callee, "js_shadow_slot_set" | "js_shadow_slot_bind")
             || effects.classify_direct_callee(callee) == GcCallEffect::CannotCollect
     };
     insts.iter().find_map(|inst| match inst {
@@ -651,23 +658,145 @@ fn progress_counters(l: Loop<'_>) -> Vec<u32> {
     out
 }
 
-/// `e` reads only literals and locals nothing in `l` writes, through
-/// operators: the same value in every iteration.
-fn invariant(ctx: &FnCtx<'_>, l: Loop<'_>, e: &Expr) -> bool {
+/// The truth of `e` is the same in every iteration of `l`: `e` reads only
+/// literals and locals nothing in `l` writes, and an operator that coerces
+/// its operands (a comparison, arithmetic) runs no user code
+/// (`expr_is_inert_primitive`). ToBoolean of a local, `!` and `&&` / `||`
+/// run none whatever the local holds.
+fn stable_truth(ctx: &FnCtx<'_>, l: Loop<'_>, e: &Expr) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
-        Expr::LocalGet(id) => {
-            !closure_writable(ctx, *id)
-                && !stmts_mutate_local(l.body(), *id)
-                && !l.controls().iter().any(|c| expr_mutates_local(c, *id))
+        Expr::LocalGet(id) => unwritten(ctx, l, *id),
+        Expr::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } => stable_truth(ctx, l, operand),
+        Expr::Logical { left, right, .. } => {
+            stable_truth(ctx, l, left) && stable_truth(ctx, l, right)
         }
-        Expr::Compare { left, right, .. } | Expr::Binary { left, right, .. } => {
-            invariant(ctx, l, left) && invariant(ctx, l, right)
+        Expr::Compare { .. } | Expr::Binary { .. } | Expr::Unary { .. } => {
+            crate::rooting::expr_is_inert_primitive(ctx, e) && reads_unwritten(ctx, l, e)
         }
-        Expr::Logical { left, right, .. } => invariant(ctx, l, left) && invariant(ctx, l, right),
-        Expr::Unary { operand, .. } => invariant(ctx, l, operand),
         _ => false,
     }
+}
+
+/// `e` is literals and locals nothing in `l` writes, under operators.
+fn reads_unwritten(ctx: &FnCtx<'_>, l: Loop<'_>, e: &Expr) -> bool {
+    match e {
+        Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
+        Expr::LocalGet(id) => unwritten(ctx, l, *id),
+        Expr::Compare { left, right, .. }
+        | Expr::Binary { left, right, .. }
+        | Expr::Logical { left, right, .. } => {
+            reads_unwritten(ctx, l, left) && reads_unwritten(ctx, l, right)
+        }
+        Expr::Unary { operand, .. } => reads_unwritten(ctx, l, operand),
+        _ => false,
+    }
+}
+
+/// Nothing in `l` (and no closure) writes local `id`.
+fn unwritten(ctx: &FnCtx<'_>, l: Loop<'_>, id: u32) -> bool {
+    !closure_writable(ctx, id)
+        && !stmts_mutate_local(l.body(), id)
+        && !l.controls().iter().any(|c| expr_mutates_local(c, id))
+}
+
+/// A value every evaluation of `e` stays at or below (`upper`) or at or
+/// above (`!upper`), whatever the program state: a literal, or a
+/// `Math.min` / `Math.max` with a literal on the side that bounds it.
+fn literal_bound(e: &Expr, upper: bool) -> Option<i64> {
+    if let Some(n) = literal_int(e) {
+        return Some(n);
+    }
+    let pick = |a: i64, b: i64| if upper { a.min(b) } else { a.max(b) };
+    match (e, upper) {
+        // `min(..) <= each operand`, `max(..) >= each operand`: any bounded
+        // operand bounds the whole, the tightest one best.
+        (Expr::MathMin(v), true) | (Expr::MathMax(v), false) => v
+            .iter()
+            .filter_map(|x| literal_bound(x, upper))
+            .reduce(pick),
+        // The other side needs every operand bounded, and takes the loosest.
+        (Expr::MathMin(v), false) | (Expr::MathMax(v), true) if !v.is_empty() => v
+            .iter()
+            .map(|x| literal_bound(x, upper))
+            .collect::<Option<Vec<i64>>>()?
+            .into_iter()
+            .reduce(|a, b| if upper { a.max(b) } else { a.min(b) }),
+        _ => None,
+    }
+}
+
+/// The window `[lo, hi]` the test `e` admits local `id` to: the bounds its
+/// `&&` conjuncts put on `id` by a comparison with a literal bound
+/// (`literal_bound`). An unbounded side is `i64::MIN` / `i64::MAX`.
+fn guard_window(e: &Expr, id: u32) -> (i64, i64) {
+    let is_c = |x: &Expr| matches!(x, Expr::LocalGet(l) if *l == id);
+    match e {
+        Expr::Logical {
+            op: perry_hir::LogicalOp::And,
+            left,
+            right,
+        } => {
+            let (a, b) = (guard_window(left, id), guard_window(right, id));
+            (a.0.max(b.0), a.1.min(b.1))
+        }
+        Expr::Compare { op, left, right } => {
+            use perry_hir::CompareOp::{Ge, Gt, Le, Lt};
+            // `c op bound`, or `bound op c` read from the other side.
+            let (op, bound) = if is_c(left) {
+                (*op, right)
+            } else if is_c(right) {
+                let mirrored = match op {
+                    Lt => Gt,
+                    Le => Ge,
+                    Gt => Lt,
+                    Ge => Le,
+                    other => *other,
+                };
+                (mirrored, left)
+            } else {
+                return (i64::MIN, i64::MAX);
+            };
+            match op {
+                Lt => literal_bound(bound, true)
+                    .map_or((i64::MIN, i64::MAX), |k| (i64::MIN, k.saturating_sub(1))),
+                Le => literal_bound(bound, true).map_or((i64::MIN, i64::MAX), |k| (i64::MIN, k)),
+                Gt => literal_bound(bound, false)
+                    .map_or((i64::MIN, i64::MAX), |k| (k.saturating_add(1), i64::MAX)),
+                Ge => literal_bound(bound, false).map_or((i64::MIN, i64::MAX), |k| (k, i64::MAX)),
+                _ => (i64::MIN, i64::MAX),
+            }
+        }
+        _ => (i64::MIN, i64::MAX),
+    }
+}
+
+/// The most iterations per entry of a loop whose counter `id` holds a
+/// different integer of `[lo, hi]` at the start of every iteration (module
+/// docs, 1).
+fn trip_bound(l: Loop<'_>, id: u32, lo: i64, hi: i64) -> Option<u64> {
+    let (test, unguarded) = match l {
+        Loop::For { condition, .. } => (condition, 0),
+        Loop::While { condition, .. } => (Some(condition), 0),
+        // The first iteration runs before any test.
+        Loop::DoWhile { condition, .. } => (Some(condition), 1),
+    };
+    // A test that itself writes the counter compares values of different
+    // moments: it bounds nothing here.
+    let (wlo, whi) = test
+        .filter(|t| !expr_mutates_local(t, id))
+        .map_or((i64::MIN, i64::MAX), |t| guard_window(t, id));
+    let (a, b) = (lo.max(wlo), hi.min(whi));
+    let admitted = if a > b {
+        0
+    } else {
+        u64::try_from(b.checked_sub(a)?.checked_add(1)?).ok()?
+    };
+    // At least one, so that a nest's weight is never zero.
+    Some(admitted.saturating_add(unguarded).max(1))
 }
 
 fn closure_writable(ctx: &FnCtx<'_>, id: u32) -> bool {
@@ -696,7 +825,12 @@ fn prove(ctx: &FnCtx<'_>, l: Loop<'_>, id: u32) -> Option<Trip> {
     if lo > hi {
         return None;
     }
-    let bound = u64::try_from(hi.checked_sub(lo)?.checked_add(1)?).ok()?;
+    // The sabotaged proof is the interval alone.
+    let bound = if sabotaged() {
+        u64::try_from(hi.checked_sub(lo)?.checked_add(1)?).ok()?
+    } else {
+        trip_bound(l, id, lo, hi)?
+    };
     let trip = Trip {
         counter: id,
         lo,
@@ -716,9 +850,7 @@ fn prove(ctx: &FnCtx<'_>, l: Loop<'_>, id: u32) -> Option<Trip> {
     let one_way = match steps.as_slice() {
         [] => false,
         // One write: its step is the same nonzero integer in every iteration.
-        [Step::Either(test)] => {
-            crate::rooting::expr_is_inert_primitive(ctx, test) && invariant(ctx, l, test)
-        }
+        [Step::Either(test)] => stable_truth(ctx, l, test),
         all => {
             let dir = |s: &Step<'_>| match s {
                 Step::Known(d) => Some(*d),
@@ -893,6 +1025,97 @@ mod tests {
             body: &first
         })
         .is_empty());
+    }
+
+    fn cmp(op: perry_hir::CompareOp, left: Expr, right: Expr) -> Expr {
+        Expr::Compare {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    fn and(left: Expr, right: Expr) -> Expr {
+        Expr::Logical {
+            op: perry_hir::LogicalOp::And,
+            left: Box::new(left),
+            right: Box::new(right),
+        }
+    }
+
+    #[test]
+    fn the_test_window_is_the_literal_bounds_of_its_conjuncts() {
+        use perry_hir::CompareOp::{Ge, Gt, Le, Lt, Ne};
+        let c = || Expr::LocalGet(1);
+        assert_eq!(guard_window(&cmp(Lt, c(), int(128)), 1), (i64::MIN, 127));
+        assert_eq!(guard_window(&cmp(Le, c(), int(7)), 1), (i64::MIN, 7));
+        assert_eq!(guard_window(&cmp(Gt, c(), int(0)), 1), (1, i64::MAX));
+        // `8 > c` is `c < 8`.
+        assert_eq!(guard_window(&cmp(Gt, int(8), c()), 1), (i64::MIN, 7));
+        assert_eq!(
+            guard_window(&and(cmp(Ge, c(), int(0)), cmp(Lt, c(), int(8))), 1),
+            (0, 7)
+        );
+        // `c <= Math.min(7, x)` is at most 7; `c <= Math.max(7, x)` is unbounded.
+        let min = Expr::MathMin(vec![int(7), Expr::LocalGet(2)]);
+        let max = Expr::MathMax(vec![int(7), Expr::LocalGet(2)]);
+        assert_eq!(guard_window(&cmp(Le, c(), min), 1), (i64::MIN, 7));
+        assert_eq!(guard_window(&cmp(Le, c(), max), 1), (i64::MIN, i64::MAX));
+        // A bound that is a local, another local's test, `!==` and `||` bound nothing.
+        let open = (i64::MIN, i64::MAX);
+        assert_eq!(guard_window(&cmp(Lt, c(), Expr::LocalGet(2)), 1), open);
+        assert_eq!(guard_window(&cmp(Lt, Expr::LocalGet(2), int(8)), 1), open);
+        assert_eq!(guard_window(&cmp(Ne, c(), int(8)), 1), open);
+        let or = Expr::Logical {
+            op: perry_hir::LogicalOp::Or,
+            left: Box::new(cmp(Lt, c(), int(8))),
+            right: Box::new(cmp(Lt, c(), int(4))),
+        };
+        assert_eq!(guard_window(&or, 1), open);
+    }
+
+    #[test]
+    fn the_trip_bound_is_the_interval_inside_the_window() {
+        use perry_hir::CompareOp::{Ge, Lt};
+        let body: Vec<Stmt> = Vec::new();
+        let test = cmp(Lt, Expr::LocalGet(1), int(128));
+        let for_ = |condition| Loop::For {
+            condition,
+            update: None,
+            body: &body,
+        };
+        // [0, 65535] under `c < 128`: 128 iterations.
+        assert_eq!(trip_bound(for_(Some(&test)), 1, 0, 65535), Some(128));
+        // No test: the interval.
+        assert_eq!(trip_bound(for_(None), 1, 0, 65535), Some(65536));
+        // The interval is inside the window.
+        assert_eq!(trip_bound(for_(Some(&test)), 1, 3, 18), Some(16));
+        // An empty meet still weighs one.
+        assert_eq!(trip_bound(for_(Some(&test)), 1, 200, 300), Some(1));
+        let both = and(
+            cmp(Ge, Expr::LocalGet(1), int(0)),
+            cmp(Lt, Expr::LocalGet(1), int(8)),
+        );
+        assert_eq!(trip_bound(for_(Some(&both)), 1, -1, 127), Some(8));
+        // A test that moves the counter bounds nothing.
+        let moving = and(
+            cmp(Lt, Expr::LocalGet(1), int(8)),
+            cmp(Lt, inc(1), int(100)),
+        );
+        assert_eq!(trip_bound(for_(Some(&moving)), 1, 0, 255), Some(256));
+        // A `do-while` runs once before its test.
+        assert_eq!(
+            trip_bound(
+                Loop::DoWhile {
+                    body: &body,
+                    condition: &both
+                },
+                1,
+                -1,
+                127
+            ),
+            Some(9)
+        );
     }
 
     #[test]
