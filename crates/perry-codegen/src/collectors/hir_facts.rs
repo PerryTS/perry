@@ -749,6 +749,16 @@ pub(crate) fn collect_type_facts(
             stmts,
             &non_escaping_object_literals,
         );
+    super::life_census::observe(
+        stmts,
+        boxed_vars,
+        module_globals,
+        &super::life_census::Scalar {
+            news: &non_escaping_news,
+            objects: &non_escaping_object_literals,
+            arrays: &non_escaping_arrays,
+        },
+    );
     // #9843: the segment-record member of the escape family. Cheap by
     // construction — `collect_segment_for_of_sites` walks the region only
     // when it holds a `for…of` whose subject is an `X.segment(q)` call.

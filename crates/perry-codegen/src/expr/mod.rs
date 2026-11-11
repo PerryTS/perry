@@ -1925,6 +1925,11 @@ pub(crate) struct FnCtx<'a> {
     /// remain HIR expressions so loop-local range facts can be applied at the
     /// eventual access site.
     pub int_range_aliases: std::collections::HashMap<u32, perry_hir::Expr>,
+    /// Locals of this body worth an i32 shadow of their ToInt32
+    /// (`int32_shadow::plan`).
+    pub int32_shadow_plan: std::collections::HashSet<u32>,
+    /// Local id → the i32 slot holding its ToInt32 (`int32_shadow`).
+    pub int32_shadows: std::collections::HashMap<u32, String>,
     /// Scoped local integer ranges derived from loop/while guards.
     pub int_range_facts: Vec<IntRangeFact>,
     /// Monotonic source for loop-local proof scopes. Loop exit removes only
@@ -3370,6 +3375,8 @@ pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 mod index_get_claim_tests;
 pub(crate) mod index_key;
 pub(crate) mod int32_key;
+pub(crate) mod int32_operand;
+pub(crate) mod int32_shadow;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]

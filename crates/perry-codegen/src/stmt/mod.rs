@@ -695,6 +695,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             ctx.snap_lowering = snap_frame;
             ctx.pushed_array_birth = false;
             lowered?;
+            // A `const` the body uses as a bitwise operand: its ToInt32 once.
+            if !*mutable && init.is_some() {
+                crate::expr::int32_shadow::materialize(ctx, *id)?;
+            }
             // Object model step 1: a family prototype's birth.
             crate::layout_desc::create_families::lower_binding(ctx, *id)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);

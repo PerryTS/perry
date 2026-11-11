@@ -94,6 +94,28 @@ elif name == "f12":
         need(r.get("pending") == str(len(js)), "job_queue jobs= does not list every pending job")
         need(all(len(j) == 3 and int(j[1]) not in (0, int(r["init"])) and int(j[2], 16) != 0 for j in js),
              "a job without its queueing init or callback")
+elif name == "f14q":
+    # SNAPK4: the run queues beside TASK_QUEUE, each named from its own store.
+    # m.ts queues a nextTick, a util.aborted resolution, a timeout (25), an
+    # interval (40) and an immediate; n.ts's init_enter sees all of them.
+    def ents(rows, field):
+        return [e.split(":") for r in rows for e in r.get(field, "").split(",") if e and not e.startswith("+")]
+    tq = [kv(v) for v in vals("tick_queue")]
+    sr = [kv(v) for v in vals("scheduled_resolves")]
+    tm = [kv(v) for v in vals("timer_queue")]
+    info = f"tick={tq[:1]} resolves={sr[:1]} timers={tm[:1]}"
+    need(len(tq) >= 1 and all(r["policy"] == "image" for r in tq), "no tick_queue image row")
+    need(all(len(e) == 3 and e[0] == "tick" and int(e[1]) != 0 and int(e[2], 16) != 0 for e in ents(tq, "ticks")),
+         "a tick without its queueing init or callback")
+    need(len(sr) >= 1 and all(r["policy"] == "image" for r in sr), "no scheduled_resolves image row")
+    need(all(len(e) == 3 and e[0] == "resolve" and int(e[1]) != 0 for e in ents(sr, "resolves")),
+         "a scheduled resolve without its queueing init")
+    need(len(tm) >= 1 and all(r["policy"] == "STOP" for r in tm), "no timer_queue STOP row")
+    te = ents(tm, "timers")
+    need(all(len(e) == 5 and int(e[1]) != 0 for e in te), "a timer without its queueing init")
+    kinds = {(e[0], e[3], e[4]) for e in te if int(e[2], 16) != 0}
+    for k in (("timeout", "25", "0"), ("interval", "40", "1"), ("immediate", "0", "0")):
+        need(k in kinds, f"no {k[0]} entry with delay {k[1]} repeat {k[2]} and a callback")
 elif name in ("f13", "f13s"):
     rp = [kv(v) for v in vals("stack.runtime_pc")]
     m_init = inits("stack.runtime_pc")

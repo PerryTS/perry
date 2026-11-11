@@ -1041,7 +1041,12 @@ fn compute_act<'a>(
         );
     }
     if canonical_numbers::enabled() {
-        canonical_numbers::collect(&g, &mut bindings);
+        canonical_numbers::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
     }
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);

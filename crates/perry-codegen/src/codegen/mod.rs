@@ -3017,6 +3017,7 @@ fn lower_module(
             }
         }
     }
+    let _life_census = crate::collectors::life_census::register(hir, &opts.program_facts.elision);
     let mut cross_module = CrossModuleCtx {
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,
