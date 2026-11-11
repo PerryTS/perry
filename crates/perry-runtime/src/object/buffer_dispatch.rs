@@ -541,7 +541,141 @@ pub(crate) unsafe fn array_buffer_slice(addr: usize, args: &[f64]) -> f64 {
     f64::from_bits(JSValue::pointer(result as *mut u8).bits())
 }
 
+/// `[[Get]](buf, name)` for an own member `name` of `Buffer.prototype`, on
+/// the Buffer at `addr`, once the program has written that prototype: its own
+/// shadow bit (`prototype_unwritten(Buffer)`, which reads clear through the
+/// stand-in until `Buffer.prototype` is built). `None` while it is unwritten,
+/// for a receiver that is not a Buffer, for a name that is not such a member
+/// (an inherited `%TypedArray%` member is not this fact), and when the lookup
+/// still finds the builtin member, whose body is the name dispatch: the caller
+/// then runs exactly what it runs on an unwritten prototype. The receiver's
+/// own properties are the caller's, read before this.
+#[inline(always)]
+pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> {
+    if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        return None;
+    }
+    crate::typedarray_hook_slots::buffer_written_member(addr, name)
+}
+
+/// The name dispatch once the program has written `Buffer.prototype`, linked
+/// through the typed-array hook group (`dispatch_buffer_method` reaches it
+/// behind the shadow bit). A Buffer's own property and a non-Buffer receiver
+/// are [`dispatch_builtin_buffer_method`]'s, as is a name whose lookup still
+/// finds the builtin member; any other own member of `Buffer.prototype` is
+/// what `[[Get]](buf, name)` finds, called with the Buffer as `this`.
+///
+/// # Safety
+/// As [`dispatch_buffer_method`].
+pub(crate) unsafe fn dispatch_written_buffer_lookup(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if !crate::buffer::buffer_has_own_prop(addr, method_name) {
+        if let Some(member) = buffer_written_member_lookup(addr, method_name) {
+            let buf_f64 = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+            let args = if !args_ptr.is_null() && args_len > 0 {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            };
+            return call_buffer_member(member, buf_f64, args);
+        }
+    }
+    dispatch_builtin_buffer_method(addr, method_name, args_ptr, args_len)
+}
+
+/// The lookup behind [`buffer_written_member`], linked through the typed-array
+/// hook group.
+pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JSValue> {
+    if !crate::buffer::is_node_buffer(addr)
+        || !crate::object::native_module::callable_exports::is_buffer_prototype_member(name)
+    {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(addr as *mut u8).bits()));
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    let raw = || crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+    let proto_bits = crate::object::prototype_chain::object_static_prototype(raw())
+        .unwrap_or_else(|| crate::object::builtin_prototype_value("Buffer").to_bits());
+    let value = key.with_const_ptr(|key: *const crate::StringHeader| {
+        crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+            raw(),
+            proto_bits,
+            key,
+        )
+        .unwrap_or_else(JSValue::undefined)
+    });
+    if crate::object::native_module::callable_exports::is_buffer_prototype_method_thunk(value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Call the member [`buffer_written_member`] found, with the Buffer as `this`.
+fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(buf_f64);
+    let member = scope.root_nanbox_f64(f64::from_bits(member.bits()));
+    if matches!(
+        member.get_nanbox_f64().to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        crate::closure::throw_not_callable();
+    }
+    match crate::collection_iter::call_with_this_capturing_throw(
+        member.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+        args,
+    ) {
+        Ok(value) => value,
+        Err(error) => crate::exception::rethrow_caught(error),
+    }
+}
+
+/// The name dispatch of a method call on the Buffer (or view) at `addr`.
+/// BUFEQ: once the program has written `Buffer.prototype` (its own shadow bit,
+/// clear through the stand-in until it is built), a Buffer's own member of
+/// that prototype is what `[[Get]](buf, name)` finds: the dispatch is then the
+/// typed-array group's [`dispatch_written_buffer_lookup`]. One bit test
+/// selects it or the builtin dispatch, which stays its own body.
+///
+/// # Safety
+/// `addr` is a live Buffer or buffer view; `args_ptr` names `args_len` values
+/// (or is null).
+#[inline(never)]
 pub unsafe fn dispatch_buffer_method(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // One test selects the body; both run with this call's own arguments.
+    let dispatch: BufferDispatch = if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        dispatch_builtin_buffer_method
+    } else {
+        crate::typedarray_hook_slots::written_buffer_dispatch()
+    };
+    dispatch(addr, method_name, args_ptr, args_len)
+}
+
+/// The signature of [`dispatch_buffer_method`] and of the bodies it selects.
+pub(crate) type BufferDispatch = unsafe fn(usize, &str, *const f64, usize) -> f64;
+
+/// The builtin name dispatch: the receiver's own property, the `#BUFNS` view
+/// members, then the Buffer and typed-array method bodies by name.
+#[inline(never)]
+pub(crate) unsafe fn dispatch_builtin_buffer_method(
     addr: usize,
     method_name: &str,
     args_ptr: *const f64,
@@ -1291,3 +1425,7 @@ pub unsafe fn dispatch_buffer_method(
 #[cfg(test)]
 #[path = "buffer_dispatch_write_args_tests.rs"]
 mod write_args_tests;
+
+#[cfg(test)]
+#[path = "buffer_written_member_tests.rs"]
+mod written_member_tests;
