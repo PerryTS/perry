@@ -79,8 +79,12 @@ impl Model {
         }
         // A function value's inherited fields are observations of the same
         // denotation as its own fields. Keep edges at the use: sharing the
-        // prototype storage would make Any an equivalence relation.
-        if !self.unit_mode && holder != origin && !self.is_elem_key(key) {
+        // prototype storage would make Any an equivalence relation. A key
+        // the namespace `origin` owns ends the lookup at `origin` (ECMA-262
+        // 10.1.8.1 OrdinaryGet; `Promise.all`, 27.2.4.1): where `holder`
+        // denotes `origin`, its chain is not read.
+        let owned = matches!(key, Key::Named(a) if builtins::namespace_owns(self, origin, a));
+        if !self.unit_mode && holder != origin && !self.is_elem_key(key) && !owned {
             if self.is_proto_key(key) {
                 if let ChainAct::Load(dst) = act {
                     self.proto_value_at(holder, dst);

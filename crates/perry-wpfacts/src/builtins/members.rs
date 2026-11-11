@@ -1224,6 +1224,12 @@ pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
     matches!(ns_statics(ns).members.and_then(|own| own.find(name)), Some(Mem::Fn))
 }
 
+/// Is `name` listed on namespace `ns` itself (an own static of any kind,
+/// not a member of its chain)?
+pub(super) fn ns_own_member(ns: BuiltinNs, name: &str) -> bool {
+    ns_statics(ns).members.and_then(|own| own.find(name)).is_some()
+}
+
 fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
     let own = description.members?;
     if let Some(mem) = own.find(name) {

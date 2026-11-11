@@ -684,6 +684,18 @@ impl Model {
             }
             return;
         }
+        // ECMA-262 10.1.8.1 OrdinaryGet: an own property ends the lookup.
+        // A namespace object's own static (`Promise.all`) never reads its
+        // chain: what a store wrote onto `Function.prototype` or
+        // `Object.prototype` under that key, a data value or an accessor,
+        // is not its value. A store or definition that may replace or
+        // delete the static is the namespace's own written key (`tok_load`
+        // reads the opaque member, or replays the read).
+        if let Key::Named(a) = key {
+            if builtins::namespace_owns(self, t, a) {
+                return;
+            }
+        }
         // The prototype chain's values, shared by every receiver of `t`.
         let cv = self.cv_of(t, key, !shadow);
         if defined {

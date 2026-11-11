@@ -1797,6 +1797,25 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
     m.native_coordinates(t).is_some_and(|c| c.constructible)
 }
 
+/// Does builtin namespace object `t` hold `a` as an own property
+/// (ECMA-262 10.1.8.1 OrdinaryGet: a lookup ends at it, its prototype is
+/// not read)? A static the realm declares on the object itself
+/// (`native_property`, data or accessor) or the namespace's own static
+/// table (`Promise.all`, 27.2.4.1), not its chain's member. A store that
+/// may replace or delete it is the namespace's own written key
+/// (`native_written` of `t`), which `ns_load` replays. The global object
+/// is not one: its own keys are the program's globals (`global_value_written`).
+pub(crate) fn namespace_owns(m: &Model, t: Tok, a: Atom) -> bool {
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return false;
+    };
+    if m.unit_mode || global_object(m, t) {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    m.native_property(t, name).is_some() || members::ns_own_member(ns, name)
+}
+
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
