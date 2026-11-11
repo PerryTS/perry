@@ -5565,10 +5565,9 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
 /// `window - eden >= eden`. The census reads every young small cell, so its
 /// cost grows with Eden, and it frees leaves, not Eden: it only defers the
 /// copying minor by `window - eden`. With less than Eden's worth of window
-/// left, the copying cap is due before another census-sized batch of work
-/// could accumulate, so the census would be paid twice for one minor (once
-/// here, once by the minor's own trace). The copying minor runs now instead
-/// and retires the dead leaves itself. `small_bytes` is the from-space
+/// left, the census reads more cells than the allocation it defers, so the
+/// copying minor runs at the leaf arm's due point instead and retires the
+/// dead leaves itself. `small_bytes` is the from-space
 /// reading `leaf_window_due` takes; the survivor space is read only below the
 /// cap, where the young arm can have been due through its leaf arm (at or
 /// above it the copying cap is due and nothing else is read). The window is
