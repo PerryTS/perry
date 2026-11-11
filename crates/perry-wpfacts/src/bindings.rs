@@ -499,6 +499,10 @@ pub struct ModuleBindings {
     /// only Numbers (representation RFC §10.4, the call's return
     /// representation). Method calls and calls of any other callee. Sorted.
     pub number_calls: Vec<u32>,
+    /// Call spans (`Expr::Call::byte_offset`, `byte_end`) whose result holds
+    /// only primitives at every copy, with the union of their kinds (a
+    /// `model::prim` mask, never 0); sorted (`call_kinds`).
+    pub call_kinds: Vec<(u32, u32, u16)>,
     /// Method call byte offsets proven field element reads
     /// (`field_read_calls`, b1), sorted.
     pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
@@ -538,6 +542,10 @@ pub struct ModuleBindings {
     /// range at every copy, with the hull of its interval; sorted
     /// (`element_keys::collect_signs`).
     pub key_signs: Vec<(u32, (i64, i64))>,
+    /// Element sites by `element_offset` whose key is a non-negative
+    /// integer Number at every copy and may lie past the int32 range, with
+    /// the hull of its interval; sorted (`element_keys::collect_wide`).
+    pub wide_keys: Vec<(u32, (i64, i64))>,
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call
@@ -556,6 +564,18 @@ pub struct ModuleBindings {
     /// the read's key, with the lane's slot when every receiver value is such
     /// an instance at that slot or nullish (`u32::MAX` otherwise). Sorted.
     pub rest_lane_reads: Vec<(u32, u32)>,
+    /// Value records VR-4b (`records::export`): what codegen types as a
+    /// record array of the named record template. `record_array_locals`: a
+    /// binding (local id); `record_array_reads`: a named read (byte offset
+    /// and key: the reads of a member chain share their offset);
+    /// the births: an array literal that is the whole value of a `let` or a
+    /// local assignment (local id), of a named store (its element offset),
+    /// of a class field initializer (class id, field). Sorted.
+    pub record_array_locals: Vec<(u32, u32)>,
+    pub record_array_reads: Vec<(u32, String, u32)>,
+    pub record_array_birth_locals: Vec<(u32, u32)>,
+    pub record_array_birth_stores: Vec<(u32, u32)>,
+    pub record_array_birth_fields: Vec<(u32, String, u32)>,
 }
 
 /// An element read `a[i]` whose every receiver is a program Array that
@@ -738,7 +758,8 @@ fn record_rep(m: &Model, n: NodeId) -> Option<RecRep> {
 /// that is not foreign, escaped or hard (each tested here: `const_length`
 /// leans on `mark_hard` making the length ⊤), and whose template no named
 /// or metadata write touched (`owner_metadata_written`, as `ElementRead`
-/// requires). No primitive, no ⊤, no marker of any kind; a node with no
+/// requires), and, for a `slice` birth, whose species constructor is
+/// `%Array%` or none (`derive::exact_array`). No primitive, no ⊤, no marker of any kind; a node with no
 /// value proves nothing. The rep is the join over the tokens of each one's
 /// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
 pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
@@ -765,6 +786,10 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
             let TokKind::Obj(tm, _) = m.toks[t as usize] else {
                 return None;
             };
+            // A record array is its own representation (DESIGN-p4l4 B1).
+            if m.record_arrays.contains_key(&tm) {
+                return None;
+            }
             let TmplKind::Arr {
                 hole_free,
                 plain: true,
@@ -777,6 +802,14 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
                 || m.is_escaped(t)
                 || m.hard.contains_key(&t)
                 || owner_metadata_written(m, tm)
+            {
+                return None;
+            }
+            // A plain `slice` birth (`builtins::site_slice_arr`) is an Array
+            // only while the species constructor is `%Array%` or none.
+            if m.tmpls[tm as usize].species.is_some()
+                && !m.slice_birth_sabotage
+                && !crate::derive::exact_array(m, t)
             {
                 return None;
             }

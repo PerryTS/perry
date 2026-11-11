@@ -24,11 +24,11 @@ crates/perry/src/commands/compile/run_pipeline.rs	6248
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
 crates/perry-hir/src/lower_decl/body_stmt.rs	2063
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3672
+crates/perry-codegen/src/codegen/mod.rs	3673
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2770
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2854
+crates/perry-codegen/src/expr/mod.rs	2856
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8354
 # Representation-aware map core; further decomposition is tracked in #1435.

@@ -1061,6 +1061,13 @@ fn lower_numeric_logical_for_number_context(
             crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
             return Ok(l);
         }
+        // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
+        // is on the read's miss arm only (`index_get::rep_default`).
+        if let Some(v) =
+            crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)?
+        {
+            return Ok(v);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();
@@ -1372,6 +1379,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_declared_string_expr(ctx, right)
                 {
                     return lower_string_concat(ctx, left, right);
+                }
+                // The same pairwise concat for operands the whole-program
+                // facts call strings (a call's result kinds).
+                if super::facts_string::both_strings(ctx, left, right) {
+                    return super::facts_string::lower_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {
                     let other_known_primitive = if l_is_str {

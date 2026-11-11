@@ -306,9 +306,17 @@ fn lower_array_index_set_via_runtime_key(
     // Key signs: what the facts prove of this store's key (`index_key::
     // store_key_fact`).
     key: Option<super::index_key::KeyFact>,
+    // The receiver's rep when the rep-keyed store takes the site
+    // (`index_set_rep::fact`).
+    rep: Option<super::index_get::proven_array::RepRead>,
 ) -> Result<String> {
     let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
-    let value_is_numeric = is_numeric_expr(ctx, value);
+    // A value the facts prove a Number (`a[j] ?? 0` over an Array of
+    // Numbers whose static type says nothing) selects the guarded store's
+    // number-over-number arm as a statically numeric one does: the arm
+    // tests the value itself, so this is a choice of code, not a proof.
+    let value_is_numeric = is_numeric_expr(ctx, value)
+        || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number);
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
@@ -357,29 +365,40 @@ fn lower_array_index_set_via_runtime_key(
                 Some(fact) => super::index_key::exact_i32(ctx, &idx_double, fact),
                 None => super::index_key::normalize_unsigned(ctx, &idx_double, Some(index)),
             };
-            super::index_set_guarded::emit_guarded_inbounds_array_store(
-                ctx,
-                &arr_box,
-                &guard_idx_i32,
-                &val_double,
-                "idxset.runtime_key",
-                layout_note_needed,
-                value_needs_barrier,
-                value_is_numeric,
-                |ctx| {
-                    emit_array_runtime_key_store(
-                        ctx,
-                        object,
-                        &arr_box,
-                        &idx_double,
-                        &val_double,
-                        &val_bits,
-                        value_needs_barrier,
-                        source_label,
-                        assignment_strict,
-                    )
-                },
-            )?;
+            let exact = |ctx: &mut FnCtx<'_>| {
+                emit_array_runtime_key_store(
+                    ctx,
+                    object,
+                    &arr_box,
+                    &idx_double,
+                    &val_double,
+                    &val_bits,
+                    value_needs_barrier,
+                    source_label,
+                    assignment_strict,
+                )
+            };
+            match rep {
+                Some(read) => super::index_set_rep::emit(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    read,
+                    exact,
+                )?,
+                None => super::index_set_guarded::emit_guarded_inbounds_array_store(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    "idxset.runtime_key",
+                    layout_note_needed,
+                    value_needs_barrier,
+                    value_is_numeric,
+                    exact,
+                )?,
+            }
             Ok(val_double)
         },
     )
@@ -1068,6 +1087,7 @@ pub(crate) fn lower(
                     "array[dynamic_numeric_index]",
                     assignment_strict,
                     super::index_key::store_key_fact(ctx, expr),
+                    super::index_set_rep::fact(ctx, object.as_ref(), expr),
                 );
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
@@ -1191,6 +1211,7 @@ pub(crate) fn lower(
                                 "array[dynamic_numeric_index]",
                                 assignment_strict,
                                 super::index_key::store_key_fact(ctx, expr),
+                                super::index_set_rep::fact(ctx, object.as_ref(), expr),
                             );
                         };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);

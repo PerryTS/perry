@@ -101,6 +101,7 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod facts_string;
 pub(crate) mod fill_birth;
 #[cfg(test)]
 mod fill_birth_tests;
@@ -3421,6 +3422,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
+mod index_set_rep;
 mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;

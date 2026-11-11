@@ -74,6 +74,47 @@ thread_local! {
     static CHAR_OPERAND_RECEIVERS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
 }
 
+thread_local! {
+    /// The string literals (by address) to lower as inline strings: the
+    /// empty default of a `??` operand of the string `+` being lowered
+    /// (`expr/facts_string.rs`). A lowering hint like the one above.
+    static INLINE_LITERALS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Run `lower` with each of `literals` (short ASCII string literals) marked:
+/// its lowering is the inline string of its text ([`inline_literal`]).
+pub(crate) fn with_inline_literals<T>(literals: &[&Expr], lower: impl FnOnce() -> T) -> T {
+    if !enabled() || literals.is_empty() {
+        return lower();
+    }
+    let depth = INLINE_LITERALS.with(|r| {
+        let mut r = r.borrow_mut();
+        let depth = r.len();
+        r.extend(literals.iter().map(|e| *e as *const Expr as usize));
+        depth
+    });
+    let out = lower();
+    INLINE_LITERALS.with(|r| r.borrow_mut().truncate(depth));
+    out
+}
+
+/// The inline string of literal `e` (text `s`) when it is marked and fits:
+/// ASCII, at most five bytes.
+pub(crate) fn inline_literal(e: &Expr, s: &str) -> Option<String> {
+    if s.len() as u64 > MAX_LEN || !s.is_ascii() {
+        return None;
+    }
+    let addr = e as *const Expr as usize;
+    if !INLINE_LITERALS.with(|r| r.borrow().contains(&addr)) {
+        return None;
+    }
+    let mut bits = SHORT_STRING_TAG | ((s.len() as u64) << LEN_SHIFT);
+    for (i, b) in s.bytes().enumerate() {
+        bits |= u64::from(b) << (i * 8);
+    }
+    Some(crate::nanbox::double_literal(f64::from_bits(bits)))
+}
+
 /// The receiver of `e` when `e` is `recv.charAt(..)`.
 fn char_at_receiver(e: &Expr) -> Option<&Expr> {
     let Expr::Call { callee, .. } = e else {

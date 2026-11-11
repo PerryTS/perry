@@ -782,6 +782,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
             I32,
             &[DOUBLE, DOUBLE, I64, I64],
         );
+        // VR-4b: the receiver of a record-array intrinsic.
+        module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
     }
     // #8655: guarded packed-array / dense Array-subclass read before the

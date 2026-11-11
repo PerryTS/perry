@@ -48,6 +48,7 @@ pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
+pub(crate) mod rep_default;
 #[cfg(test)]
 mod proven_array_tests;
 pub(crate) use foreign_counter::{
@@ -581,7 +582,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                 false,
                 repair_slot.as_deref(),
                 proven,
-                super::index_key::key_fact(ctx, *element_offset),
+                super::index_key::split_key_fact(ctx, *element_offset),
             )
             .map(Some)
         });
@@ -1462,7 +1463,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 true,
                                 repair_slot.as_deref(),
                                 proven,
-                                super::index_key::key_fact(ctx, *element_offset),
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
@@ -1520,7 +1521,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 repair_slot.as_deref(),
                                 proven,
-                                super::index_key::key_fact(ctx, *element_offset),
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
