@@ -40,6 +40,19 @@ pub(crate) fn emit_number_to_string_inline(
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
 
+    // One digit first (`expr/short_string.rs`): an integral `0..=9` is the
+    // digit's byte in a constant. Everything else continues below.
+    let digit = if super::short_string::enabled() {
+        let range_idx = ctx.new_block("num2str.range");
+        let range_label = ctx.block_label(range_idx);
+        let arm = super::short_string::emit_digit_arm(ctx, v, &range_label);
+        ctx.block().br(&merge_label);
+        ctx.current_block = range_idx;
+        Some(arm)
+    } else {
+        None
+    };
+
     // Range first: `fptosi` of an out-of-range value is poison, so it runs
     // only behind this branch. Every comparison with a NaN — a NaN-boxed
     // non-number included — is false.
@@ -115,11 +128,13 @@ pub(crate) fn emit_number_to_string_inline(
 
     ctx.current_block = merge_idx;
     let fast_label_end = ctx.block_label(fast_idx);
-    Ok(ctx.block().phi(
-        DOUBLE,
-        &[
-            (fast.as_str(), fast_label_end.as_str()),
-            (slow_val.as_str(), slow_end.as_str()),
-        ],
-    ))
+    let digit = digit.map(|(value, idx)| (value, ctx.block_label(idx)));
+    let mut incoming = vec![
+        (fast.as_str(), fast_label_end.as_str()),
+        (slow_val.as_str(), slow_end.as_str()),
+    ];
+    if let Some((value, label)) = &digit {
+        incoming.push((value.as_str(), label.as_str()));
+    }
+    Ok(ctx.block().phi(DOUBLE, &incoming))
 }

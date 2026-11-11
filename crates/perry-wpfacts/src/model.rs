@@ -1316,7 +1316,7 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
     /// takes a key that reaches the length's lower bound as below it.
     pub elem_undef_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
