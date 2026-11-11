@@ -1005,7 +1005,7 @@ fn compute_act<'a>(
         rest_fields::admit(&g, &mut templates, interp_guard.is_some())
     };
     rest_fields::export_reads(&g, &templates, &mut bindings);
-    let rep_probe = if cfg.diagnostics && !g.m.aborted {
+    let mut rep_probe = if cfg.diagnostics && !g.m.aborted {
         let mut p = bindings::rep_probe(&g);
         p.extend(rest_lanes);
         if g.m.zero_sign {
@@ -1043,6 +1043,7 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
     if g.m.aborted {

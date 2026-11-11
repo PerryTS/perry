@@ -22,6 +22,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
+    // Each member's `toJSON` (and the members' own walks) run user code that
+    // can move this object's values; the member values and keys are rooted
+    // here and read back from the roots after every callback.
+    let gc_scope = crate::gc::RuntimeHandleScope::new();
     let obj = ptr as *const crate::ObjectHeader;
     let Some(keys_view) = super::super::stringify::object_keys_array_checked(obj) else {
         // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
@@ -60,7 +64,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     // entry (#11791); the shape answers once for the whole walk.
     let hide_private =
         crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
-    let mut field_map: Vec<(String, f64)> = Vec::new();
+    let mut field_map: Vec<(String, crate::gc::RuntimeHandle<'_>, crate::gc::RuntimeHandle<'_>)> =
+        Vec::new();
     // OrdinaryOwnPropertyKeys order: array indices ascending, then strings.
     let key_order = crate::object::ecma_own_key_order(keys_view);
     for j in 0..actual_fields {
@@ -94,32 +99,41 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
                 field_val = gv;
             }
         }
-        let key_name = if f < keys_len {
-            let key_f64 = *keys_elements.add(f as usize);
-            let key_bits = key_f64.to_bits();
+        let key_ptr = {
+            let key_bits = (*keys_elements.add(f as usize)).to_bits();
             let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-            let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
+            if key_tag == STRING_TAG || key_tag == POINTER_TAG {
                 (key_bits & POINTER_MASK) as *const StringHeader
             } else {
                 key_bits as *const StringHeader
-            };
-            str_from_header(key_ptr)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("field{}", f))
-        } else {
-            format!("field{}", f)
+            }
         };
-        field_map.push((key_name, field_val));
+        let key_name = str_from_header(key_ptr)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("field{}", f));
+        // The key handed to `toJSON(key)` is the property key itself.
+        let key_value = if str_from_header(key_ptr).is_some() {
+            nanbox_string_f64(key_ptr)
+        } else {
+            nanbox_string_f64(js_string_from_bytes(key_name.as_ptr(), key_name.len() as u32))
+        };
+        let key_root = gc_scope.root_nanbox_f64(key_value);
+        let value_root = gc_scope.root_nanbox_f64(field_val);
+        field_map.push((key_name, key_root, value_root));
     }
 
     buf.push('{');
     let mut first = true;
     for allowed_key in allowed_keys {
-        if let Some((_, field_val)) = field_map.iter().find(|(k, _)| k == allowed_key) {
-            let field_bits = field_val.to_bits();
-            if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
+        if let Some((_, key_root, value_root)) = field_map.iter().find(|(k, _, _)| k == allowed_key)
+        {
+            // SerializeJSONProperty: toJSON(key) first, then the type checks.
+            let field_val =
+                apply_to_json_keyed(value_root.get_nanbox_f64(), key_root.get_nanbox_f64());
+            if !serializable_member(field_val) {
                 continue;
             }
+            let field_val = &field_val;
             if !first {
                 buf.push(',');
             }
@@ -170,6 +184,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
 /// `stringify_object_with_array_replacer` and an array through
 /// `stringify_array_with_array_replacer`. Scalars, boxed primitive wrappers,
 /// buffers, Map/Set, etc. defer to the ordinary (whitelist-agnostic) serializer.
+///
+/// `val` has already been through SerializeJSONProperty's `toJSON` step (its
+/// caller ran it with the property key), so nothing below calls `toJSON` on
+/// `val` itself again.
 pub(crate) unsafe fn stringify_value_with_array_replacer(
     val: f64,
     allowed_keys: &[String],
@@ -186,7 +204,7 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             indent,
             depth,
             super::super::stringify_proxy::Replacer::Keys(allowed_keys),
-            false,
+            true,
         ) {
             return;
         }
@@ -220,11 +238,26 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             }
         }
     }
+    // The ordinary serializer probes `toJSON` on an object it is handed; the
+    // one-shot guard tells that probe the step already ran for `val`.
+    arm_to_json_result_guard(val);
     if use_pretty {
         stringify_value_pretty(val, TYPE_UNKNOWN, buf, indent, depth);
     } else {
         stringify_value(val, TYPE_UNKNOWN, buf);
     }
+    SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+}
+
+/// SerializeJSONProperty's result types that produce no JSON text: undefined,
+/// a function (including a callable proxy) and a Symbol. A member with one is
+/// left out of an object and written as `null` in an array.
+pub(super) unsafe fn serializable_member(value: f64) -> bool {
+    let bits = value.to_bits();
+    !(bits == TAG_UNDEFINED
+        || is_closure_value(bits)
+        || is_symbol_value(bits)
+        || crate::proxy_hooks::proxy_wraps_callable(value))
 }
 
 /// Array walk under an active array replacer. Every element is serialized (the
@@ -255,9 +288,11 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length;
-    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
+    // An element's `toJSON` and the nested walks run user code that can move
+    // this array: root it and re-derive the element base for every index.
+    let gc_scope = crate::gc::RuntimeHandleScope::new();
+    let arr_root = gc_scope.root_raw_const_ptr(ptr);
+    let len = (*(ptr as *const crate::ArrayHeader)).length;
     if len == 0 {
         buf.push_str("[]");
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -275,13 +310,26 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
                 buf.push_str(indent);
             }
         }
-        let elem = *elements.add(i as usize);
+        let arr = crate::array::clean_arr_ptr(arr_root.get_raw_const_ptr::<crate::ArrayHeader>());
+        let elem = if i < (*arr).length {
+            *(crate::array::array_elements_ptr(arr) as *const f64).add(i as usize)
+        } else {
+            f64::from_bits(TAG_UNDEFINED)
+        };
+        // SerializeJSONProperty: toJSON(index) first. Only an object or a
+        // BigInt can carry one, so other elements build no index key.
         let elem_bits = elem.to_bits();
-        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
-        if elem_bits == TAG_UNDEFINED
-            || elem_bits == crate::value::TAG_HOLE
-            || is_closure_value(elem_bits)
+        let elem = if extract_pointer(elem_bits).is_some()
+            || (elem_bits & 0xFFFF_0000_0000_0000) == BIGINT_TAG
         {
+            let index = i.to_string();
+            let key = nanbox_string_f64(js_string_from_bytes(index.as_ptr(), index.len() as u32));
+            apply_to_json_keyed(elem, key)
+        } else {
+            elem
+        };
+        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
+        if elem.to_bits() == crate::value::TAG_HOLE || !serializable_member(elem) {
             buf.push_str("null");
         } else {
             stringify_value_with_array_replacer(

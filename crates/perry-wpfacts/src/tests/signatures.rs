@@ -404,3 +404,103 @@ console.log(s);
     let id = id_of(src, "inc");
     assert!(!typed_targets(src).contains(&id), "{:?}", sig(src, "inc"));
 }
+
+/// The `# typed_call` probe lines of `src` (the dump's, diagnostics on).
+fn typed_call_lines(src: &str) -> Vec<String> {
+    let pf = facts_with(
+        src,
+        crate::FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    pf.rep_probe
+        .iter()
+        .filter(|l| l.starts_with("# typed_call "))
+        .cloned()
+        .collect()
+}
+
+/// A board helper whose key and value are int32s of either sign: both
+/// parameters are I32 with intervals that start below 0, and every call
+/// site is typed. (Whether codegen keeps the method's index clones over
+/// this signature is its selector's `signed_index_params` rule.)
+const SIGNED_SET: &str = r#"
+class Board {
+  cells: number[] = new Array<number>(64).fill(0);
+  keys: number[] = [];
+  h = 0;
+  set(square: number, piece: number): void {
+    const old = this.cells[square] ?? 0;
+    if (old !== 0) this.h ^= this.keys[(old + 6) * 64 + square] ?? 0;
+    this.cells[square] = piece;
+    if (piece !== 0) this.h ^= this.keys[(piece + 6) * 64 + square] ?? 0;
+  }
+}
+const b = new Board();
+for (let i = 0; i < 64; i++) b.set(i, (i % 13) - 6);
+b.set(-8, -3);
+console.log(b.h);
+"#;
+
+#[test]
+fn a_signed_key_and_value_are_i32_parameters_with_their_intervals() {
+    let s = sig(SIGNED_SET, "set").expect("a signature");
+    assert_eq!(s.params, vec![I32, I32], "{s:?}");
+    assert!(
+        s.ranges[0].is_some_and(|(lo, hi)| lo <= -8 && hi >= 63),
+        "{s:?}"
+    );
+    assert!(
+        s.ranges[1].is_some_and(|(lo, hi)| lo <= -6 && hi >= 6),
+        "{s:?}"
+    );
+    let id = id_of(SIGNED_SET, "set");
+    assert_eq!(typed_targets(SIGNED_SET), vec![id, id]);
+}
+
+#[test]
+fn the_probe_names_each_typed_call_and_each_refusal() {
+    let lines = typed_call_lines(SIGNED_SET);
+    let typed = lines
+        .iter()
+        .filter(|l| l.contains(" callee=set typed=1"))
+        .count();
+    assert_eq!(typed, 2, "{lines:#?}");
+    // A fraction makes `piece` a double: the calls are typed still (F64
+    // slot). A string argument is no Number: that call is refused, by
+    // argument and reason.
+    let src = format!("{SIGNED_SET}\nfunction pick(i: number): number {{ return (i * 2) | 0; }}\nlet t = 0;\nfor (let i = 0; i < 9; i++) t += pick(i);\nconsole.log(t);\n");
+    let lines = typed_call_lines(&src);
+    assert!(
+        lines.iter().any(|l| l.contains(" callee=pick typed=1")),
+        "{lines:#?}"
+    );
+    // An override: two bodies, no typed call, the probe names both.
+    let src = r#"
+class A { f(x: number): number { return x | 0; } }
+class B extends A { f(x: number): number { return (x * 2) | 0; } }
+const xs: A[] = [new A(), new B()];
+let s = 0;
+for (let i = 0; i < 4; i++) s += xs[i & 1].f(i);
+console.log(s);
+"#;
+    let lines = typed_call_lines(src);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(" callee=f typed=0 why=method-not-one-target")),
+        "{lines:#?}"
+    );
+    assert!(!lines.iter().any(|l| l.contains("typed=1")), "{lines:#?}");
+}
+
+#[test]
+fn without_diagnostics_there_is_no_probe_line() {
+    let pf = facts(SIGNED_SET);
+    assert!(
+        !pf.rep_probe.iter().any(|l| l.starts_with("# typed_call ")),
+        "{:#?}",
+        pf.rep_probe
+    );
+}

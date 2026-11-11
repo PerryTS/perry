@@ -92,7 +92,7 @@ pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
 pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
-pub(crate) use try_stmt::lower_try;
+pub(crate) use try_stmt::{emit_throw, lower_try};
 
 pub(crate) fn record_boxed_slot_js_value_bits(
     ctx: &mut FnCtx<'_>,
@@ -911,8 +911,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 blk.ret(DOUBLE, &boxed);
             } else {
                 crate::expr::resume_locals::write_back(ctx)?;
-                ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
-                ctx.block().unreachable();
+                try_stmt::emit_throw(ctx, &val);
             }
             Ok(())
         }
