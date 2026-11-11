@@ -190,3 +190,94 @@ class Odd {
   k = "kept";
 }
 console.log("undefined and fn fields", JSON.stringify(new Odd()));
+
+// Slice B (per-key attributes from the shape summary): the summary is read
+// per key, so changes made by user code during the walk stay visible.
+
+// A getter that deletes a later key during the walk.
+class Del2 {
+  a = 1;
+  b = 2;
+  c = 3;
+}
+const del2 = new Del2() as any;
+Object.defineProperty(del2, "a", {
+  enumerable: true,
+  configurable: true,
+  get() {
+    delete this.b;
+    return "a-getter";
+  },
+});
+console.log("getter deletes later key", JSON.stringify(del2), JSON.stringify(del2));
+
+// A member toJSON that deletes a later key of its holder.
+class Holder {
+  m: any;
+  n = "n";
+  o = "o";
+  constructor() {
+    const self = this;
+    this.m = {
+      toJSON() {
+        delete (self as any).n;
+        return "m";
+      },
+    };
+  }
+}
+console.log("member toJSON deletes key", JSON.stringify(new Holder()));
+
+// A member toJSON that installs an accessor on its holder (the holder had none).
+class Grows2 {
+  m: any;
+  late = 1;
+  constructor() {
+    const self = this;
+    this.m = {
+      toJSON() {
+        Object.defineProperty(self, "late", { get: () => "late-getter", enumerable: true, configurable: true });
+        return "m";
+      },
+    };
+  }
+}
+console.log("member toJSON adds accessor", JSON.stringify(new Grows2()));
+
+// A subclass re-declaring a field (both names live in the class layout).
+class Base2 {
+  tag = 1;
+  a = "a";
+}
+class Re extends Base2 {
+  tag = 2;
+}
+console.log("redeclared field", JSON.stringify(new Re()));
+const reNe = new Re();
+Object.defineProperty(reNe, "tag", { enumerable: false });
+console.log("redeclared non-enumerable", JSON.stringify(reNe), Object.keys(reNe).join(","));
+const reAcc = new Re();
+Object.defineProperty(reAcc, "tag", { get: () => 9, enumerable: true, configurable: true });
+console.log("redeclared accessor", JSON.stringify(reAcc));
+
+// Private field plus an own accessor on the instance.
+class PrivAcc {
+  #p = 1;
+  shown = 2;
+  peek() {
+    return this.#p;
+  }
+}
+const pa = new PrivAcc();
+Object.defineProperty(pa, "shown", { get: () => "via-getter", enumerable: true, configurable: true });
+console.log("private + own accessor", JSON.stringify(pa), JSON.stringify(new PrivAcc()));
+
+// An optional field never assigned, then a non-enumerable sibling.
+class Opt {
+  a?: number;
+  b = 1;
+  c = 2;
+}
+const opt = new Opt();
+Object.defineProperty(opt, "c", { enumerable: false });
+console.log("optional + non-enumerable", JSON.stringify(opt), JSON.stringify(new Opt()));
