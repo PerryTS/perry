@@ -1156,7 +1156,9 @@ impl<'a> Gen<'a> {
                 if let Some(callee) = self.private_method_callee(mi, object) {
                     return callee;
                 }
-                self.load(o, Key::Named(a))
+                let dst = self.load(o, Key::Named(a));
+                self.field_reads.push(dst);
+                dst
             }
             Expr::PropertySet {
                 object,
@@ -1276,6 +1278,7 @@ impl<'a> Gen<'a> {
                 let o = self.expr(fx, object);
                 let a = self.member_atom(object, property);
                 let cur = self.load(o, Key::Named(a));
+                self.field_reads.push(cur);
                 let r = self.m.reason("ToNumeric");
                 self.m.cons(
                     cur,

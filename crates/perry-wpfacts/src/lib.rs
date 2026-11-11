@@ -43,6 +43,7 @@ pub mod native_effects;
 pub mod pts;
 pub mod records;
 mod rest_elems;
+mod rest_fields;
 pub mod signatures;
 mod rooted;
 mod solve;
@@ -532,6 +533,8 @@ fn generate<'a>(
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
+    g.m.rest_fields = rest_fields::enabled();
+    g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
     g.m.zero_sign =
@@ -999,8 +1002,16 @@ fn compute_act<'a>(
     }
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);
+    // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
+    let rest_lanes = if g.m.aborted {
+        Vec::new()
+    } else {
+        rest_fields::admit(&g, &mut templates, interp_guard.is_some())
+    };
+    rest_fields::export_reads(&g, &templates, &mut bindings);
     let rep_probe = if cfg.diagnostics && !g.m.aborted {
         let mut p = bindings::rep_probe(&g);
+        p.extend(rest_lanes);
         if g.m.zero_sign {
             p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
         }

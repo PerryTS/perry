@@ -91,6 +91,7 @@ fn tm1_facts(m: &Module) -> crate::codegen::ProgramFactsView {
         classes: Vec::new(),
         nullable: false,
         rep: crate::codegen::FactsRep::Boxed,
+        rest: false,
     };
     let mut elision = ElisionFacts::default();
     elision.locals.insert(

@@ -72,6 +72,10 @@ use super::{
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    // I32 at rest (PR C): a read of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     // Object model step 1: a literal family's added key, one slot load.
     if let Expr::PropertyGet {
         object, property, ..

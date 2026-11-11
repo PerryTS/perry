@@ -1178,9 +1178,6 @@ pub(super) fn try_array_only_methods(
                                 | Expr::ArrayToSorted { .. }
                                 | Expr::ArrayToSpliced { .. }
                                 | Expr::ArrayWith { .. }
-                                | Expr::ArrayEntries(_)
-                                | Expr::ArrayKeys(_)
-                                | Expr::ArrayValues(_)
                                 | Expr::ObjectKeys(_)
                                 | Expr::ObjectValues(_)
                                 | Expr::ObjectEntries(_)
