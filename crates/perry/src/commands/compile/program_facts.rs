@@ -1222,6 +1222,11 @@ fn record_layout(
                 )
             })
             .collect(),
+        int32: layout
+            .fields
+            .iter()
+            .map(|(_, r)| matches!(r, perry_wpfacts::records::FieldRep::I32))
+            .collect(),
     })
 }
 

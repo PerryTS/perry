@@ -55,6 +55,7 @@ fn facts(m: &Module, names: &[(&str, bool)]) -> ElisionFacts {
             class_id: Some(class.id),
             keys: class.fields.iter().map(|x| x.name.clone()).collect(),
             numeric: class.fields.iter().map(|_| false).collect(),
+            int32: Vec::new(),
         },
     );
     for (name, opt) in names {
