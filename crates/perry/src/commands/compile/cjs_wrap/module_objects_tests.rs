@@ -322,7 +322,9 @@ fn regenerate_wpfacts_cjs_fixtures() {
     // `t7`'s `b.js` requires `module` (Node's `Module._cache`): not closed.
     // `t8`'s entry is ESM (`cjs_t8/m.js`, not wrapped): its `createRequire`
     // makes the program not closed, and no wrapped module is the entry.
-    let sets: [(&str, &[&str], bool, bool); 7] = [
+    // `spec`'s `a.js` requires `process`: not closed, so every static edge
+    // keeps its arm that reloads the target by path (R-SPEC).
+    let sets: [(&str, &[&str], bool, bool); 8] = [
         ("t1", &["b.js", "a.js", "m.js"], false, true),
         ("t2", &["r.js", "m.js"], false, true),
         (
@@ -340,6 +342,7 @@ fn regenerate_wpfacts_cjs_fixtures() {
         ),
         ("t7", &["a.js", "b.js", "m.js"], true, true),
         ("t8", &["l.js"], true, false),
+        ("spec", &["b.js", "a.js", "m.js"], true, true),
     ];
     for (t, files, open, cjs_entry) in sets {
         let dir = tempfile::tempdir().expect("tempdir");

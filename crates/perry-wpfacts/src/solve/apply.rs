@@ -479,6 +479,24 @@ impl Model {
                     }
                 }
             }
+            Cons::RequireSpec { call } => {
+                // R-SPEC: each string constant resolves once, as that
+                // literal does; any string, a token or ⊤ once as a value
+                // no constant spells.
+                let strs = self.nodes[n as usize].strs;
+                let any_str = prim & prim::STR != 0 && strs == STRS_TOP;
+                if prim & prim::STR != 0 && !any_str {
+                    let atoms = self.str_atoms(strs).to_vec();
+                    for a in atoms {
+                        if self.require_spec_done.insert((call, Some(a))) {
+                            self.with_b(|m| builtins::require_by_spec(m, call, Some(a)));
+                        }
+                    }
+                }
+                if (any_str || !toks.is_empty()) && self.require_spec_done.insert((call, None)) {
+                    self.with_b(|m| builtins::require_by_spec(m, call, None));
+                }
+            }
             Cons::TopIfTop { dst, reason } => {
                 if toks.contains(&TOP) {
                     self.add_top(dst, |m| m.reasons[reason as usize].clone());

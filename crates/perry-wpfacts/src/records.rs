@@ -295,6 +295,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         // Escape.
         Cons::TopSink { .. }
         | Cons::TopIfAny { .. }
+        | Cons::RequireSpec { .. }
         | Cons::Hard { .. }
         | Cons::Miss { .. }
         | Cons::ShareBuffer { .. } => Reject(R5Escape(c.kind_name().into())),
@@ -401,9 +402,10 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         // receiver (`Model::arr_permuted`).
         Cons::LenIndex { .. } => op("pop".into()),
         Cons::LenPermuted { .. } => Use::Reject(R6Store("[index]".into())),
-        Cons::TopSink { .. } | Cons::TopIfAny { .. } | Cons::Hard { .. } => {
-            Use::Reject(R6ArrayHolder(c.kind_name().into()))
-        }
+        Cons::TopSink { .. }
+        | Cons::TopIfAny { .. }
+        | Cons::RequireSpec { .. }
+        | Cons::Hard { .. } => Use::Reject(R6ArrayHolder(c.kind_name().into())),
         _ => op(c.kind_name().into()),
     }
 }

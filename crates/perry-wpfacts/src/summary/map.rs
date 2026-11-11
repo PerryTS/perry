@@ -124,6 +124,7 @@ pub fn map_cons(
             from: n(from),
             reason,
         },
+        RequireSpec { call } => RequireSpec { call: k(call) },
         TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
@@ -472,6 +473,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | RequireSpec { .. }
             | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }

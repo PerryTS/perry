@@ -2282,6 +2282,116 @@ pub(crate) fn solved_namespace_call(module: &str, method: &str) -> Option<&'stat
         .map(|e| e.name)
 }
 
+/// What `require(spec)` returns for one value of its specifier (R-SPEC):
+/// `spec` a string constant, resolved as the loader resolves it (Node
+/// resolves builtins first, then paths), or `None`, a value no constant
+/// spells (any string, a token, ⊤), which may name anything. A literal call
+/// is the one-value case; `Cons::RequireSpec` runs it per value that reaches
+/// a computed specifier.
+pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
+    let name = spec.map(|a| m.atoms[a as usize].clone());
+    // `require('module')` is the node:module namespace, which hands out
+    // `Module._cache`: the cache reaches code nothing models. A value no
+    // constant spells may name it too.
+    if name
+        .as_deref()
+        .is_none_or(|s| matches!(s, "module" | "node:module"))
+    {
+        let r = m.reason("node:module namespace hands out Module._cache");
+        let cache = m.cjs_cache;
+        m.sink_node(cache, r);
+    }
+    // A compiled module named by a constant path: its exports (the
+    // registry record's `exports`, as `require.cache[path]` holds).
+    let rec = spec.and_then(|a| m.cjs_paths.get(&a)).copied();
+    if m.explain && rec.is_none() {
+        let known: Vec<String> = m
+            .cjs_paths
+            .keys()
+            .map(|a| m.atoms[*a as usize].clone())
+            .collect();
+        eprintln!("perry: wpfacts explain: require call spec {name:?} not in {known:?}");
+    }
+    if let Some(rec) = rec {
+        let ret = m.calls[call as usize].ret;
+        let ea = m.atom("exports");
+        // As requirePathModule: the named path, or a record the
+        // runtime published under a path it computed.
+        let unknown = m.cjs_unknown;
+        // The path node holds what `require` returns.
+        m.edge(rec, ret);
+        m.cons(
+            unknown,
+            Cons::Load {
+                key: Key::Named(ea),
+                dst: ret,
+            },
+        );
+        m.add_prim(ret, prim::UNDEF);
+        return;
+    }
+    // The runtime loader never interprets code: a specifier no compiled
+    // path resolves names a registered record (its live exports or a raw
+    // publication), a native module namespace, a manifest addon or parsed
+    // JSON. Only the last three are opaque.
+    // All of it only once a specifier reaches the call: a shared loader
+    // body no computed specifier reaches yields nothing.
+    implicit_args(m, call, "require specifier", Protocol::ToPrimitive);
+    let ret = m.calls[call as usize].ret;
+    // Besides the opaque ⊤, the result is a registered record's exports, as
+    // `requirePathModule` reads them: a ⊤ callee runs only what escaped, and
+    // registering a module's exports does not escape them. A relative
+    // literal (`createRequire(import.meta.url)("./l.cjs")`) names no
+    // registered path either. Per unit the registry is another unit's
+    // value, ⊤, as in `requirePathModule`.
+    if !m.unit_mode {
+        let reg = m.cjs_union;
+        m.cons(reg, Cons::CjsPublish { dst: ret });
+    }
+    // The loader resolves builtins first: the result is also the builtin
+    // module object of each name the value may be, a constant's own or,
+    // for a value no constant spells, every one. A member read then
+    // resolves per key.
+    let names: Vec<&'static str> = match name.as_deref() {
+        Some(s) => builtin_module_names()
+            .filter(|n| same_builtin(n, s))
+            .collect(),
+        None => builtin_module_names().collect(),
+    };
+    let mods = m.node_l("require: builtin module objects");
+    for n in names {
+        if let Some(t) = builtin_module_tok(m, n) {
+            m.add_tok(mods, t);
+        }
+    }
+    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+        m.cons(
+            a0,
+            Cons::TopIfAny {
+                dst: ret,
+                from: mods,
+                reason: None,
+            },
+        );
+    }
+    // It caches the registry records it loads.
+    let r = m.reason("module loaded by a computed specifier");
+    let (cache, _) = require_parts(m);
+    let fa = m.field_any(cache);
+    let reg = m.cjs_union;
+    m.edge(reg, fa);
+    if let Some(a0) = m.calls[call as usize].args.first().copied() {
+        m.cons(
+            a0,
+            Cons::TopIfAny {
+                dst: ret,
+                from: ret,
+                reason: Some(r),
+            },
+        );
+    }
+}
+
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
@@ -2289,134 +2399,14 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             // The path registry may run a lazy module body inside the call.
             let (lazy, region) = (m.lazy_raise, m.calls[call as usize].region);
             m.edge(lazy, region);
-            // `require('module')` is the node:module namespace, which hands
-            // out `Module._cache`: the cache reaches code nothing models. A
-            // specifier that is no literal may name it too (the loader
-            // resolves builtins first), once a specifier reaches the call.
-            let lit = m
-                .call_lit
-                .get(&call)
-                .map(|a| matches!(m.atoms[*a as usize].as_str(), "module" | "node:module"));
-            let spec = m.calls[call as usize].args.first().copied();
-            if lit.unwrap_or(spec.is_some()) {
-                let r = m.reason("node:module namespace hands out Module._cache");
-                let cache = m.cjs_cache;
-                match (lit, spec) {
-                    (None, Some(a0)) => {
-                        let s = m.node_l("require(computed) may be node:module");
-                        m.sink_node(s, r);
-                        m.cons(
-                            a0,
-                            Cons::TopIfAny {
-                                dst: s,
-                                from: cache,
-                                reason: None,
-                            },
-                        );
-                    }
-                    _ => m.sink_node(cache, r),
-                }
-            }
-            // A compiled module named by a constant path: its exports (the
-            // registry record's `exports`, as `require.cache[path]` holds).
-            let rec = m
-                .call_lit
-                .get(&call)
-                .and_then(|a| m.cjs_paths.get(a))
-                .copied();
-            if m.explain && rec.is_none() {
-                let lit = m.call_lit.get(&call).map(|a| m.atoms[*a as usize].clone());
-                let known: Vec<String> = m
-                    .cjs_paths
-                    .keys()
-                    .map(|a| m.atoms[*a as usize].clone())
-                    .collect();
-                eprintln!("perry: wpfacts explain: require call lit {lit:?} not in {known:?}");
-            }
-            match rec {
-                Some(rec) => {
-                    let ret = m.calls[call as usize].ret;
-                    let ea = m.atom("exports");
-                    // As requirePathModule: the named path, or a record the
-                    // runtime published under a path it computed.
-                    let unknown = m.cjs_unknown;
-                    // The path node holds what `require` returns.
-                    m.edge(rec, ret);
-                    m.cons(
-                        unknown,
-                        Cons::Load {
-                            key: Key::Named(ea),
-                            dst: ret,
-                        },
-                    );
-                    m.add_prim(ret, prim::UNDEF);
-                }
+            // R-SPEC: the call resolves per value of its specifier. A
+            // literal is the one-value case; a computed specifier resolves
+            // each value that reaches it (`Cons::RequireSpec`).
+            match m.call_lit.get(&call).copied() {
+                Some(a) => require_by_spec(m, call, Some(a)),
                 None => {
-                    // The runtime loader never interprets code: a computed
-                    // specifier resolves to a registered record (its live
-                    // exports or a raw publication), a native module
-                    // namespace, a manifest addon or parsed JSON. Only the
-                    // last three are opaque.
-                    // All of it only once a specifier reaches the call: a
-                    // shared loader body no computed specifier reaches
-                    // yields nothing.
-                    implicit_args(m, call, "require specifier", Protocol::ToPrimitive);
-                    let ret = m.calls[call as usize].ret;
-                    // Besides the opaque ⊤, the result is a registered
-                    // record's exports, as `requirePathModule` reads them: a
-                    // ⊤ callee runs only what escaped, and registering a
-                    // module's exports does not escape them. A relative
-                    // literal (`createRequire(import.meta.url)("./l.cjs")`)
-                    // names no registered path either. Per unit the registry
-                    // is another unit's value, ⊤, as in `requirePathModule`.
-                    if !m.unit_mode {
-                        let reg = m.cjs_union;
-                        m.cons(reg, Cons::CjsPublish { dst: ret });
-                    }
-                    // The loader resolves builtins first: the result is also
-                    // the builtin module object of each name the specifier
-                    // may be, a literal's own or, for a computed specifier,
-                    // every one. A member read then resolves per key.
-                    let names: Vec<&'static str> = match m.call_lit.get(&call) {
-                        Some(a) => {
-                            let s = m.atoms[*a as usize].clone();
-                            builtin_module_names()
-                                .filter(|n| same_builtin(n, &s))
-                                .collect()
-                        }
-                        None => builtin_module_names().collect(),
-                    };
-                    let mods = m.node_l("require: builtin module objects");
-                    for n in names {
-                        if let Some(t) = builtin_module_tok(m, n) {
-                            m.add_tok(mods, t);
-                        }
-                    }
                     if let Some(a0) = m.calls[call as usize].args.first().copied() {
-                        m.cons(
-                            a0,
-                            Cons::TopIfAny {
-                                dst: ret,
-                                from: mods,
-                                reason: None,
-                            },
-                        );
-                    }
-                    // It caches the registry records it loads.
-                    let r = m.reason("module loaded by a computed specifier");
-                    let (cache, _) = require_parts(m);
-                    let fa = m.field_any(cache);
-                    let reg = m.cjs_union;
-                    m.edge(reg, fa);
-                    if let Some(a0) = m.calls[call as usize].args.first().copied() {
-                        m.cons(
-                            a0,
-                            Cons::TopIfAny {
-                                dst: ret,
-                                from: ret,
-                                reason: Some(r),
-                            },
-                        );
+                        m.cons(a0, Cons::RequireSpec { call });
                     }
                 }
             }

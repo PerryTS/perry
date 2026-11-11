@@ -306,6 +306,7 @@ impl Model {
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
             | Cons::CallArgs { call }
+            | Cons::RequireSpec { call }
             | Cons::ForInBody { call, .. }
             | Cons::ForInKeys { call, .. } => call,
             Cons::Chain {

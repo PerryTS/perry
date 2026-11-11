@@ -131,6 +131,7 @@ impl Model {
                 from,
                 reason.and_then(|r| self.reasons.get(r as usize))
             ),
+            Cons::RequireSpec { call } => format!("RequireSpec call={:?}", call),
             Cons::TopIfTop { dst, reason } => format!(
                 "TopIfTop dst={:?} reason={:?}",
                 dst,
