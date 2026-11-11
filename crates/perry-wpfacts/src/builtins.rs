@@ -1350,6 +1350,31 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
     }
 }
 
+/// Does the realm give the builtin function value `identity` no enumerable
+/// own property, so that a copy of its own enumerable properties
+/// (`{...[].map}`, `Object.assign(t, Array.prototype.map)`) reads only what
+/// the program put on it (`Model::own_props_modelled`)? A function the
+/// specification gives a realm namespace or prototype is a built-in function
+/// object (ECMA-262 10.3.4 CreateBuiltinFunction): its own `length` and
+/// `name` are defined non-enumerable (10.2.9 SetFunctionName, 10.2.10
+/// SetFunctionLength), as is a constructor's `prototype`. Its owner decides:
+/// a function of a host object (`fs.realpath` owns an enumerable `native`)
+/// keeps its own properties out of the model.
+pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
+    let owner = identity.split(['.', '[']).next().unwrap_or("");
+    ns_by_name(owner).is_some_and(realm_own_props_unenumerable)
+}
+
+/// Does the realm create a builtin object of kind `what` with no enumerable
+/// own property, so that a copy of its own enumerable properties reads only
+/// what the program stored on it (its fields, `Model::load_from`)? A RegExp
+/// object owns only `lastIndex`, defined `[[Enumerable]]: false` (ECMA-262
+/// 22.2.3.1 RegExpAlloc); a Promise owns none (27.2.3.1, 27.2.4.7: internal
+/// slots only).
+pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
+    matches!(what, "RegExp" | "Promise")
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property

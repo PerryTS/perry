@@ -73,7 +73,7 @@ fn a_spread_of_an_own_keys_array_copies_its_values() {
 }
 
 /// Sabotage twin: a Date's own properties are not in the model (nor a
-/// Map's, a RegExp's, a typed array's …): the copy stays ⊤.
+/// Map's, a typed array's …): the copy stays ⊤.
 #[test]
 fn a_spread_of_an_unmodelled_builtin_object_stays_unproven() {
     assert!(!verdicts("new Date()", "{ a: obj, ...src }").1);
@@ -211,5 +211,47 @@ console.log(obj.len(), typeof o.a);
 fn a_spread_of_error_or_a_host_namespace_stays_unproven() {
     for ns in ["Error", "console", "process"] {
         assert!(!verdicts(ns, "{ a: obj, ...src }").1, "spread of {ns}");
+    }
+}
+
+/// A function the realm gives a namespace or prototype has no enumerable
+/// own property (ECMA-262 10.3.4 CreateBuiltinFunction; 10.2.9, 10.2.10:
+/// `name` and `length` non-enumerable), a RegExp object only the
+/// non-enumerable `lastIndex` (22.2.3.1), a Promise none (27.2.4.7): a copy
+/// of one copies only what the program stored on it, here nothing.
+#[test]
+fn a_copy_of_a_realm_function_or_object_copies_no_unknown_value() {
+    for src in ["[].map", "Array.prototype.sort", "Object.keys", "/a/g", "Promise.resolve(1)"] {
+        assert!(verdicts(src, "{ a: obj, ...src }").1, "spread of {src}");
+        assert!(verdicts(src, "Object.assign({ a: obj }, src)").1, "assign of {src}");
+    }
+}
+
+/// Twin: what the program stored on a realm function is copied, under its key.
+#[test]
+fn a_program_store_on_a_realm_function_is_copied() {
+    let src = r#"
+class V { k = 1; len() { return this.k; } }
+const obj = new V();
+const m: any = [].map;
+m.cb = (x: any) => x.len();
+const o: any = { a: obj, ...m };
+const f = o.cb;
+if (typeof f === "function") f(obj);
+console.log(obj.len(), typeof o.a);
+"#;
+    let pf = facts(src);
+    assert!(proven(&call_of(&pf, "len").verdict));
+}
+
+/// Control: the realm function is handed to unknown code first, which may
+/// store a function under `cb`: the copy carries that unknown value.
+#[test]
+fn a_realm_function_handed_to_unknown_code_stays_unproven() {
+    for src in ["[].map", "/a/g"] {
+        let source =
+            format!("((x: any) => {{ new Function(process.argv[2])(x); return x; }})({src})");
+        assert!(!verdicts(&source, "{ a: obj, ...src }").1, "spread of {src}");
+        assert!(!verdicts(&source, "Object.assign({ a: obj }, src)").1, "assign of {src}");
     }
 }

@@ -391,10 +391,14 @@ impl Model {
     pub(crate) fn own_props_modelled(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
             TokKind::Builtin(ns) => builtins::realm_own_props_unenumerable(*ns),
+            TokKind::BuiltinFn(Native::Member { identity, .. }) => {
+                builtins::realm_function_own_props_unenumerable(identity)
+            }
             TokKind::Top | TokKind::BuiltinFn(_) | TokKind::NativeProto(_) => false,
             TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
                 TmplKind::BObj { what, site, .. } => {
-                    site != u32::MAX && builtins::own_values_filled(what)
+                    (site != u32::MAX && builtins::own_values_filled(what))
+                        || builtins::realm_object_own_props_unenumerable(what)
                 }
                 _ => true,
             },
