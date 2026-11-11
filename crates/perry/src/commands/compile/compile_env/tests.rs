@@ -428,6 +428,17 @@ fn array_store_switch_is_a_cache_input() {
     );
 }
 
+/// A Map's values apart from its keys: the switch changes what `get`
+/// returns in the facts, and with it reps and typed signatures, so `=0`
+/// must never reuse an `=1` object.
+#[test]
+fn map_values_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_MAP_VALUES"),
+        "PERRY_FACTS_MAP_VALUES must key the compile caches"
+    );
+}
+
 /// Plain `slice` births: the switch changes the exported array reps, so `=0`
 /// must never reuse an `=1` object.
 #[test]
