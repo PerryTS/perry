@@ -107,6 +107,12 @@ pub mod guard {
     /// the left-hand side through; a primitive throws and lets none.
     pub const NOT_BUFFER_CTOR: u8 = 12;
     pub const NOT_SHARED_BUFFER_CTOR: u8 = 13;
+    /// `=== false` true (`IS_FALSE`) or false (`NOT_FALSE`), and the same
+    /// for `true`: no object is a Boolean, so only `NOT_*` admits one.
+    pub const IS_FALSE: u8 = 14;
+    pub const NOT_FALSE: u8 = 15;
+    pub const IS_TRUE: u8 = 16;
+    pub const NOT_TRUE: u8 = 17;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -117,7 +123,7 @@ pub mod guard {
             NULLISH => p::UNDEF | p::NULL,
             NOT_NULLISH => p::ALL & !(p::UNDEF | p::NULL),
             // Every primitive kind but `undefined`/`null` has a truthy value.
-            TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
+            TRUTHY => p::NUM | p::STR | p::TRUE | p::BIGINT | p::SYMBOL,
             NOT_STR => p::ALL & !p::STR,
             BOXED_NUM => p::NUM,
             BOXED_STR => p::STR,
@@ -127,21 +133,35 @@ pub mod guard {
             // A primitive right-hand side throws (InstanceofOperator step
             // 1): it selects no false side.
             NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR => 0,
+            // ECMA-262 7.2.16 IsStrictlyEqual with a Boolean constant: only
+            // that Boolean is (`IS_*`); every other value is not (`NOT_*`).
+            IS_FALSE => p::FALSE,
+            NOT_FALSE => p::ALL & !p::FALSE,
+            IS_TRUE => p::TRUE,
+            NOT_TRUE => p::ALL & !p::TRUE,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
-            _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
+            _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
     }
 
     /// An object or function token admits the test.
     pub fn objects(test: u8) -> bool {
-        matches!(test, NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR)
+        matches!(
+            test,
+            NOT_UNDEF | NOT_NULLISH | TRUTHY | NOT_STR | NOT_FALSE | NOT_TRUE
+        )
     }
 }
 
 pub mod prim {
     pub const NUM: u16 = 1 << 0;
     pub const STR: u16 = 1 << 1;
-    pub const BOOL: u16 = 1 << 2;
+    /// A Boolean is one of two kinds, `true` and `false` (ECMA-262 6.1.2):
+    /// a literal holds one, every other producer of a Boolean both (`BOOL`).
+    /// Bit 7 is the contract section's object bit (`derive::KindFacts::mask`).
+    pub const TRUE: u16 = 1 << 2;
+    pub const FALSE: u16 = 1 << 8;
+    pub const BOOL: u16 = TRUE | FALSE;
     pub const NULL: u16 = 1 << 3;
     pub const UNDEF: u16 = 1 << 4;
     pub const BIGINT: u16 = 1 << 5;
@@ -152,10 +172,15 @@ pub mod prim {
 
     pub fn name(bits: u16) -> String {
         let mut v = Vec::new();
+        let bn = match bits & BOOL {
+            BOOL => "bool",
+            TRUE => "true",
+            _ => "false",
+        };
         for (b, n) in [
             (NUM, "num"),
             (STR, "str"),
-            (BOOL, "bool"),
+            (bits & BOOL, bn),
             (NULL, "null"),
             (UNDEF, "undef"),
             (BIGINT, "bigint"),

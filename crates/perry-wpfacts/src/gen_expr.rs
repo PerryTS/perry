@@ -714,7 +714,8 @@ impl<'a> Gen<'a> {
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
-            Expr::Bool(_) => self.prim_node(prim::BOOL),
+            Expr::Bool(true) => self.prim_node(prim::TRUE),
+            Expr::Bool(false) => self.prim_node(prim::FALSE),
             Expr::Number(v) => self.num_literal(*v),
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),

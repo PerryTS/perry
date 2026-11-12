@@ -67,7 +67,11 @@ impl KindFact {
         if self.top {
             return 0xffff;
         }
-        let mut m = self.prims;
+        // The section has one Boolean bit, the `true` one's.
+        let mut m = self.prims & !prim::FALSE;
+        if self.prims & prim::BOOL != 0 {
+            m |= prim::TRUE;
+        }
         if !self.objs.is_empty() || self.funcs > 0 || self.builtin_objs > 0 {
             m |= 1 << 7;
         }
