@@ -1771,28 +1771,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
-                }
-                let elements =
-                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
-                        as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
-                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                        continue;
-                    }
-                    let v = crate::array::js_array_get(arr, i);
-                    crate::array::js_array_push_f64(result, f64::from_bits(v.bits()));
-                }
-                for name in crate::array::array_named_property_enumeration_names(arr, true, length)
-                {
-                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
-                        crate::array::js_array_push_f64(result, v);
-                    }
-                }
-                return result;
+                return super::entries_shape::array_values_or_entries(arr, false);
             }
         }
     }
