@@ -403,9 +403,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_char_code_array", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
-        Expr::ProcessStdin => Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[])),
-        Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
-        Expr::ProcessStderr => Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[])),
+        Expr::ProcessStdin => Ok(ctx.block().call(
+            DOUBLE,
+            perry_hir::realm_reach::lowered_operation(expr).expect("stdio value read"),
+            &[],
+        )),
+        Expr::ProcessStdout => Ok(ctx.block().call(
+            DOUBLE,
+            perry_hir::realm_reach::lowered_operation(expr).expect("stdio value read"),
+            &[],
+        )),
+        Expr::ProcessStderr => Ok(ctx.block().call(
+            DOUBLE,
+            perry_hir::realm_reach::lowered_operation(expr).expect("stdio value read"),
+            &[],
+        )),
         Expr::MathAsinh(o) => {
             let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_asinh", &[(DOUBLE, &v)]))

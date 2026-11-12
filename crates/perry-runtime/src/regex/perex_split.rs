@@ -607,5 +607,7 @@ pub(crate) extern "C" fn regexp_thunk(
 }
 
 pub extern "C" fn js_string_split_js(receiver: f64, separator: f64, limit: f64) -> f64 {
+    crate::realm_decl! { operation js_string_split_js, calls = [js_array_alloc_named_props_reserved], births = [Array, RegExp] }
+
     api::finish(string(receiver, separator, limit))
 }

@@ -34,7 +34,7 @@ impl TypedFeedbackContract {
     pub(crate) const fn object_get_by_name() -> Self {
         Self::new(
             "object_get_by_name_guard",
-            "js_object_get_field_by_name_f64",
+            perry_hir::realm_reach::field_get_operation(),
         )
     }
 
@@ -51,7 +51,10 @@ impl TypedFeedbackContract {
     }
 
     pub(crate) const fn class_field_get() -> Self {
-        Self::new("class_field_get_guard", "js_object_get_field_by_name_f64")
+        Self::new(
+            "class_field_get_guard",
+            perry_hir::realm_reach::field_get_operation(),
+        )
     }
 
     pub(crate) const fn class_field_set() -> Self {

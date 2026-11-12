@@ -55,7 +55,7 @@ impl RealmPlan {
             .get("%Global%")
             .ok_or("realm has no global cell")?
             .clone();
-        select_properties(&mut global, reach);
+        select_properties(&mut global, reach, index)?;
 
         let mut result = Self {
             cells: BTreeMap::from([("%Global%".into(), global)]),
@@ -87,7 +87,7 @@ impl RealmPlan {
                     .last(name)
                     .is_some_and(|row| row.runtime_layout_holder())
                 {
-                    select_properties(&mut selected, reach);
+                    select_properties(&mut selected, reach, index)?;
                 }
                 result.cells.insert(name.clone(), selected);
             }
@@ -204,23 +204,36 @@ impl RealmPlan {
 
 /// Every ordinary cell, including the global, uses the logical member rule.
 /// Fixed runtime layouts and native namespaces keep their physical slot order.
-fn select_properties(declaration: &mut RealmDeclaration, reach: &RealmReach) {
-    if reach.is_full() {
-        return;
+fn select_properties(
+    declaration: &mut RealmDeclaration,
+    reach: &RealmReach,
+    index: &perry_hir::realm_reach_index::RealmIndex,
+) -> Result<(), String> {
+    if let Some(header) = &declaration.header {
+        if perry_abi::gc_type_is_object!(header.gc_type) {
+            crate::codegen::realm_image::header::object_word(declaration, header)?;
+        }
     }
+    if reach.is_full() {
+        return Ok(());
+    }
+    let holder = index
+        .last(&declaration.name)
+        .expect("selected realm holder is indexed");
     declaration.properties.retain_mut(|property| {
         let enumerable = property.attributes & 2 != 0;
         property.get = property
             .get
             .take()
-            .filter(|name| reach.keeps_member(name, enumerable));
+            .filter(|name| reach.keeps_member(index, holder, &property.key, name, enumerable));
         property.set = property
             .set
             .take()
-            .filter(|name| reach.keeps_member(name, enumerable));
+            .filter(|name| reach.keeps_member(index, holder, &property.key, name, enumerable));
         let value = match &property.value {
             Some(RealmValue::Reference(name) | RealmValue::RawReference(name)) => {
-                name == "%Global%" || reach.keeps_member(name, enumerable)
+                name == "%Global%"
+                    || reach.keeps_member(index, holder, &property.key, name, enumerable)
             }
             Some(_) => true,
             None => false,
@@ -245,6 +258,16 @@ fn select_properties(declaration: &mut RealmDeclaration, reach: &RealmReach) {
     declaration
         .own_symbol_order
         .retain(|key| symbols.contains(key));
+    let projected_word = declaration
+        .header
+        .as_ref()
+        .filter(|header| perry_abi::gc_type_is_object!(header.gc_type))
+        .map(|header| crate::codegen::realm_image::header::object_birth_word(declaration, header))
+        .transpose()?;
+    if let (Some(word), Some(header)) = (projected_word, &mut declaration.header) {
+        header.reserved = word;
+    }
+    Ok(())
 }
 
 fn collect_value(value: &RealmValue, atoms: &mut BTreeSet<String>, symbols: &mut BTreeSet<String>) {
@@ -386,7 +409,27 @@ mod tests {
 
     #[test]
     fn hello_has_only_reached_cells_and_the_filtered_global() {
-        let reach = reach("console.log('hi');");
+        let r = reach("console.log('hi');");
+        let plan = RealmPlan::from_reach(&r).unwrap();
+        for ctor in ["Object", "Function", "Array"] {
+            assert!(!plan.cells.contains_key(ctor), "{ctor}");
+        }
+        for name in plan.cells.keys().filter(|n| *n != "%Global%") {
+            assert!(r.names.contains(name), "{name}");
+        }
+        assert!(plan.cells["%Global%"]
+            .properties
+            .iter()
+            .any(|p| p.key == "console"));
+        assert!(!plan.cells["%Global%"]
+            .properties
+            .iter()
+            .any(|p| p.key == "Array"));
+    }
+
+    #[test]
+    fn named_array_keeps_its_constructor_prototype_and_symbols() {
+        let reach = reach("Array; console.log('hi');");
         assert!(!reach.is_full());
         let plan = RealmPlan::from_reach(&reach).unwrap();
         assert!(plan.cells.contains_key("Array.prototype"));
@@ -411,7 +454,10 @@ mod tests {
 
     #[test]
     fn runtime_layouts_follow_reached_births_without_retaining_unrelated_kinds() {
-        let hello = RealmPlan::from_reach(&reach("console.log('hi');")).unwrap();
+        let features = RealmPlan::from_reach(&reach(
+            "console.log('hi'); Object.getOwnPropertyDescriptor; RegExp.prototype.exec;",
+        ))
+        .unwrap();
         for layout in [
             "ARRAY_NAMED",
             "ARRAY_PROTOTYPE_NAMED",
@@ -422,21 +468,24 @@ mod tests {
             "RECORD_F328_0",
         ] {
             assert!(
-                hello
+                features
                     .runtime_layouts
                     .contains_key(&format!("%Layout:{layout}%")),
                 "{layout}"
             );
         }
-        // A string literal reaches String, whose declared matching births
-        // include RegExp. Hello therefore correctly includes these layouts.
+        // The descriptor and RegExp member bodies own these layouts.
         for layout in ["REGEX_EXEC_NAMED", "REGEX_EXEC_INDICES_NAMED"] {
-            assert!(hello
+            assert!(features
                 .runtime_layouts
                 .contains_key(&format!("%Layout:{layout}%")));
         }
-        let core = RealmPlan::from_reach(&reach("1 + 2;")).unwrap();
-        // The global object is born on its layout in every program.
+        let arithmetic = RealmPlan::from_reach(&reach("1 + 2;")).unwrap();
+        assert!(!arithmetic
+            .runtime_layouts
+            .contains_key("%Layout:GLOBAL_OBJECT%"));
+        let core = RealmPlan::from_reach(&reach("globalThis.Object;")).unwrap();
+        // Global materialization executes its allocation owner.
         assert!(core.runtime_layouts.contains_key("%Layout:GLOBAL_OBJECT%"));
         assert!(!core
             .runtime_layouts
@@ -450,7 +499,7 @@ mod tests {
             "RECORD_F473_0",
         ] {
             assert!(
-                !hello
+                !features
                     .runtime_layouts
                     .contains_key(&format!("%Layout:{layout}%")),
                 "{layout}"
@@ -596,8 +645,8 @@ mod tests {
 
     #[test]
     fn an_absent_birth_is_an_error_not_implicit_reachability() {
-        let mut reach = reach("console.log('hi');");
-        reach.names.remove("Array.prototype");
+        let mut reach = reach("Array; console.log('hi');");
+        assert!(reach.names.remove("Array.prototype"));
         let error = RealmPlan::from_reach(&reach).unwrap_err();
         assert!(error.contains("Array.prototype"), "{error}");
     }

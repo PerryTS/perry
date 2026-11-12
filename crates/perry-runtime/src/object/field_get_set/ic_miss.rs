@@ -11,6 +11,7 @@ pub extern "C" fn js_object_get_field_by_name_f64(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_by_name_f64, calls = [string_property_get_miss, builtin_global_atom] }
     if !cannot_be_private_member_name(key) {
         if let Some(value) = private_member_get_by_name(obj, key) {
             return value;
@@ -230,6 +231,7 @@ mod class_field_define_fast;
 /// own properties, a Buffer, a typed array, a small native handle); every
 /// other receiver takes the complete by-name operation. Nothing is learned.
 pub(crate) fn get_field_miss(obj: *const ObjectHeader, key: *const crate::StringHeader) -> f64 {
+    crate::realm_decl! { operation get_field_miss, calls = [js_object_get_field_by_name_f64] }
     if !key.is_null() {
         let obj_bits = obj as u64;
         if (obj_bits & crate::value::TAG_MASK) == crate::value::SHORT_STRING_TAG {

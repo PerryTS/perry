@@ -40,6 +40,8 @@ mod namespace;
 mod native;
 #[path = "realm_object.rs"]
 mod object;
+#[path = "realm_operation.rs"]
+mod operation;
 #[path = "realm_projection.rs"]
 mod projection;
 #[path = "realm_record.rs"]
@@ -401,7 +403,8 @@ fn merge_effects(
         }
         let (module, key) = name
             .strip_prefix("node:")
-            .and_then(|n| n.rsplit_once('.'))
+            .unwrap_or(&name)
+            .rsplit_once('.')
             .ok_or_else(|| format!("{at}: not a node module member"))?;
         let text = arm(module, key)
             .ok_or_else(|| format!("{at}: no native_module_dispatch arm ({module:?}, {key:?})"))?;
@@ -420,7 +423,7 @@ fn merge_effects(
 /// The text of the native_module_dispatch arm `("module", "key") => ...`:
 /// its first line and the lines indented deeper under it.
 fn dispatch_arm(sources: &[(PathBuf, String)], module: &str, key: &str) -> Option<String> {
-    let head = format!("({module:?}, {key:?}) =>");
+    let head = format!("({module:?}, {key:?})");
     sources
         .iter()
         .filter(|(f, _)| {
@@ -428,19 +431,27 @@ fn dispatch_arm(sources: &[(PathBuf, String)], module: &str, key: &str) -> Optio
                 .any(|c| c.as_os_str() == "native_module_dispatch")
         })
         .find_map(|(_, s)| {
-            let at = s.find(&head)?;
-            let line_start = s[..at].rfind('\n').map_or(0, |i| i + 1);
-            let indent = at - line_start;
-            let mut text = String::new();
-            for (i, line) in s[line_start..].lines().enumerate() {
-                let deeper = line.len() - line.trim_start().len() > indent;
-                if i > 0 && !deeper {
-                    break;
+            s.match_indices(&head).find_map(|(at, _)| {
+                let pattern = s[at..].lines().next()?.split_once("=>")?.0;
+                // Guarded overloads have their own bodies; only the ordinary
+                // arm (including alternative patterns) declares this member.
+                if pattern.contains(" if ") {
+                    return None;
                 }
-                text.push_str(line);
-                text.push('\n');
-            }
-            Some(text)
+                let line_start = s[..at].rfind('\n').map_or(0, |i| i + 1);
+                let pattern_start = s[line_start..].find('(')? + line_start;
+                let indent = pattern_start - line_start;
+                let mut text = String::new();
+                for (i, line) in s[line_start..].lines().enumerate() {
+                    let deeper = line.len() - line.trim_start().len() > indent;
+                    if i > 0 && !deeper {
+                        break;
+                    }
+                    text.push_str(line);
+                    text.push('\n');
+                }
+                Some(text)
+            })
         })
 }
 
@@ -864,6 +875,27 @@ fn declarations_with_receivers(
             } else {
                 None
             };
+            if entries.first().is_some_and(|t| t.text == "operation") {
+                let mut declaration = operation::parse(entries)?;
+                let Value::Object(map) = &mut declaration else {
+                    unreachable!()
+                };
+                map.insert("source".into(), Value::String(path.replace('\\', "/")));
+                map.insert(
+                    "line".into(),
+                    Value::Number(
+                        (source[..token.start]
+                            .bytes()
+                            .filter(|&b| b == b'\n')
+                            .count()
+                            + 1)
+                        .to_string(),
+                    ),
+                );
+                out.push(declaration);
+                skip_until = end + 1;
+                continue;
+            }
             if native_key.is_none() && owned_info.is_none() {
                 if let Some(declaration) =
                     effects_at_body(entries, &ts, end, source, path, &mut resolve)?

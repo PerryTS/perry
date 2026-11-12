@@ -74,3 +74,17 @@ pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<
     lower_module(hir, opts, Some(&mut births))?;
     Ok(births)
 }
+
+/// Collect Exec facts from the very call instructions lowering emits. This
+/// runs before the program's entry image is selected; no object or parallel
+/// call registry is retained. In particular, optimized field reads contribute
+/// their selected helper rather than a guess from the HIR expression kind.
+pub fn module_realm_exec(
+    hir: &HirModule,
+    mut opts: CompileOptions,
+    index: &perry_hir::realm_reach_index::RealmIndex,
+) -> Result<std::collections::BTreeSet<String>> {
+    ensure_layout_plan(hir, &mut opts)?;
+    let lowered = lower_module(hir, opts, None)?.expect("normal lowering produces a module");
+    Ok(lowered.llmod.realm_exec(index))
+}

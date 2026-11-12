@@ -9,6 +9,27 @@ macro_rules! entry {
     };
 }
 const CATALOG: &[RealmEntry] = &[
+    RealmEntry {
+        name: "%Global%",
+        kind: RealmKind::Namespace,
+        births: &["Map", "Buffer"],
+        module: None,
+        facts: "{}",
+        effects: &[],
+        proto: None,
+        own: &[
+            crate::realm_manifest::RealmOwn {
+                key: "Map",
+                symbol: false,
+                value: crate::realm_manifest::RealmOwnValue::Reference("Map"),
+            },
+            crate::realm_manifest::RealmOwn {
+                key: "Buffer",
+                symbol: false,
+                value: crate::realm_manifest::RealmOwnValue::Reference("Buffer"),
+            },
+        ],
+    },
     entry!("Object"),
     entry!("Function"),
     entry!("Array"),
@@ -191,7 +212,9 @@ fn restricting_drops_top_and_closes_the_given_names() {
     let mut r = reach("new Map(); with ({}) { x; }");
     assert!(r.is_full(), "{r:?}");
     assert_eq!(r.names.len(), CATALOG.len());
-    r.restrict_to(["Buffer".to_string()]);
+    let mut snapshot = RealmReach::default();
+    snapshot.own("Buffer");
+    r = RealmReach::from_snapshot(snapshot, Default::default(), &RealmIndex::new(CATALOG));
     assert!(!r.is_full());
     r.close(&RealmIndex::new(CATALOG));
     // The given names and their births; nothing else.
@@ -603,4 +626,101 @@ fn an_ambient_require_declaration_keeps_require_the_loader() {
     );
     assert!(!r.names.contains("node:fs"), "{r:?}");
     assert!(!r.top.contains(&RealmTop::DynamicModule), "{r:?}");
+}
+
+#[test]
+fn realm_hello_has_no_unconditional_kind_seeds() {
+    let r = reach("console.log('hello');");
+    for name in [
+        "Object",
+        "Function",
+        "Array",
+        "Error",
+        "TypeError",
+        "RangeError",
+        "SyntaxError",
+        "ReferenceError",
+        "EvalError",
+        "URIError",
+        "AggregateError",
+        "SuppressedError",
+    ] {
+        assert!(!r.names.contains(name), "{name}: {r:?}");
+    }
+}
+
+#[test]
+fn lowered_materialization_births_global_but_program_global_loads_do_not() {
+    let mut table = CATALOG.to_vec();
+    table.push(RealmEntry {
+        name: "%Global%",
+        kind: RealmKind::Namespace,
+        births: &[],
+        module: None,
+        facts: "{}",
+        effects: &[],
+        own: &[],
+        proto: None,
+    });
+    let index = RealmIndex::new(&table);
+    for (expr, born) in [
+        (crate::Expr::GlobalGet(0), false),
+        (crate::Expr::GlobalThisExpr, true),
+        (
+            crate::Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(crate::Expr::GlobalThisExpr),
+                index: Box::new(crate::Expr::String("Map".into())),
+            },
+            false,
+        ),
+    ] {
+        let mut module = crate::Module::new("realm");
+        module.init.push(crate::Stmt::Expr(expr));
+        let mut r = RealmReach::default();
+        scan_lowered(&module, &index, &mut r);
+        assert_eq!(r.own_names.contains("%Global%"), born, "{r:?}");
+    }
+}
+
+#[test]
+fn unresolved_writes_materialize_global_and_implicit_arguments_do_not() {
+    let mut table = CATALOG.to_vec();
+    for name in ["%Global%", "Object.prototype", "Function.prototype"] {
+        table.push(RealmEntry {
+            name,
+            kind: RealmKind::Namespace,
+            births: &[],
+            module: None,
+            facts: "{}",
+            effects: &[],
+            own: &[],
+            proto: None,
+        });
+    }
+    let index = RealmIndex::new(&table);
+    for (source, born) in [
+        ("missing=1;", true),
+        ("({value:missing}={value:1});", true),
+        ("([missing]=[1]);", true),
+        ("let local=1; local=2;", false),
+        // HIR bakes these CommonJS wrapper paths into string literals.
+        ("__dirname; __filename;", false),
+        ("()=>arguments;", false),
+        ("function f(){return arguments;}", false),
+    ] {
+        let module = perry_parser::parse_typescript(source, "events.cjs").unwrap();
+        let r = scan(&module, &index);
+        assert_eq!(
+            r.exec.contains("js_get_global_this"),
+            born,
+            "{source}: {r:?}"
+        );
+        assert!(!r.own_names.contains("%Global%"));
+        if source.contains("arguments") {
+            assert!(r.chain_roots.contains("Object.prototype"));
+        }
+    }
 }

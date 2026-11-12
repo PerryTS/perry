@@ -383,7 +383,7 @@ pub(crate) fn install_regex_proto_methods(proto_obj: *mut ObjectHeader) {
     ipm(
         proto_obj,
         "exec",
-        crate::fn_info!(#[realm(RegExp.prototype.exec)] export crate::object::regex_proto_thunks::regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm(RegExp.prototype.exec, calls = [js_array_alloc_named_props_reserved])] export crate::object::regex_proto_thunks::regex_proto_exec_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         1,
     );
     #[cfg(feature = "regex-engine")]
@@ -423,13 +423,13 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
         (
             "match",
             "[Symbol.match]",
-            crate::fn_info!(#[realm("RegExp.prototype[\"@@match\"]", constructible = true)] export crate::regex::perex_match_search::match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            crate::fn_info!(#[realm("RegExp.prototype[\"@@match\"]", constructible = true, calls = [js_array_alloc_named_props_reserved])] export crate::regex::perex_match_search::match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
             1,
         ),
         (
             "search",
             "[Symbol.search]",
-            crate::fn_info!(#[realm("RegExp.prototype[\"@@search\"]", constructible = true)] export crate::regex::perex_match_search::search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            crate::fn_info!(#[realm("RegExp.prototype[\"@@search\"]", constructible = true, calls = [js_array_alloc_named_props_reserved])] export crate::regex::perex_match_search::search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
             1,
         ),
         (
@@ -441,13 +441,13 @@ fn install_regex_symbol_methods(proto: *mut crate::object::ObjectHeader) {
         (
             "split",
             "[Symbol.split]",
-            crate::fn_info!(#[realm("RegExp.prototype[\"@@split\"]", constructible = true)] export crate::regex::perex_split::regexp_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            crate::fn_info!(#[realm("RegExp.prototype[\"@@split\"]", constructible = true, calls = [js_array_alloc_named_props_reserved])] export crate::regex::perex_split::regexp_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
             2,
         ),
         (
             "replace",
             "[Symbol.replace]",
-            crate::fn_info!(#[realm("RegExp.prototype[\"@@replace\"]", constructible = true)] export crate::regex::perex_replace::regexp_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+            crate::fn_info!(#[realm("RegExp.prototype[\"@@replace\"]", constructible = true, calls = [js_array_alloc_named_props_reserved])] export crate::regex::perex_replace::regexp_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
             2,
         ),
     ] {

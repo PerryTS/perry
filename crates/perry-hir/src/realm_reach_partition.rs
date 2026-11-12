@@ -1,7 +1,7 @@
 //! The shared logical ownership and birth predicates.
 use super::{is_global, primitive_prototype_member};
 use crate::realm_reach_index::{RealmIndex, PRIMITIVE_KINDS};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RealmTop {
@@ -28,20 +28,35 @@ impl RealmTop {
 /// (`Object.keys/entries/values`, `JSON.stringify`, `for-in`, object spread
 /// and rest, `Object.assign` sources) or all of them (`Reflect.ownKeys`,
 /// `Object.getOwnPropertyNames/Symbols/Descriptors`, a formatted value).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum KeylessRead {
     Enumerable,
     All,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RealmReach {
+    #[serde(skip)]
     pub names: BTreeSet<String>,
     /// Reached values whose body births are live, recomputed by `close`.
+    #[serde(skip)]
     pub whole: BTreeSet<String>,
     /// Held structure whose body births are not live, recomputed by `close`.
+    #[serde(skip)]
     pub structure: BTreeSet<String>,
+    #[serde(skip)]
     pub top: BTreeSet<RealmTop>,
+    /// Prototypes supplied by program syntax, without naming constructors.
+    pub chain_roots: BTreeSet<String>,
+    /// A declared body may inspect a nonprimitive operand through its chain.
+    pub chain_read: bool,
+    /// Runtime calls emitted independently of program naming.
+    pub exec: BTreeSet<String>,
+    /// Global keys awaiting resolution against writes of executing operations.
+    pub global_keys: BTreeSet<String>,
     /// The names the program itself names, before the birth closure (and
     /// before a top scan closes R to the whole catalog). Every such name
     /// enters through [`own`](Self::own); [`close`](Self::close) adds to
@@ -119,6 +134,10 @@ impl RealmReach {
         self.receiver_keys
             .extend(other.receiver_keys.iter().cloned());
         self.any_receiver_key |= other.any_receiver_key;
+        self.chain_roots.extend(other.chain_roots.iter().cloned());
+        self.chain_read |= other.chain_read;
+        self.exec.extend(other.exec.iter().cloned());
+        self.global_keys.extend(other.global_keys.iter().cloned());
         self.chain_keys.extend(other.chain_keys.iter().cloned());
         self.own_keys.extend(other.own_keys.iter().cloned());
         self.keyless_read = self.keyless_read.max(other.keyless_read);
@@ -146,16 +165,75 @@ impl RealmReach {
         }
     }
 
-    /// Test-only (the realm-diff gate's `PERRY_REALM_REACH_NAMES` input):
-    /// R becomes exactly `names`, with every top reason dropped, so a program
-    /// that reflects over `globalThis` (the realm dumper) can be built with a
-    /// partial image. A top program's own names are not kept: a scan closes a
-    /// top R to the whole catalog, so they are no longer distinguishable.
-    /// [`close`](Self::close) then applies the birth relation as usual.
-    pub fn restrict_to(&mut self, names: impl IntoIterator<Item = String>) {
-        self.top.clear();
-        self.own_names = names.into_iter().collect();
-        self.names.clone_from(&self.own_names);
+    /// Replace all program facts; a dumper retains only calls it actually emits.
+    pub fn from_snapshot(snapshot: Self, exec: BTreeSet<String>, index: &RealmIndex) -> Self {
+        let mut reach = snapshot;
+        reach.top.clear();
+        reach.names.clear();
+        reach.whole.clear();
+        reach.structure.clear();
+        reach.exec.extend(exec);
+        reach.close(index);
+        reach
+    }
+
+    pub fn exec(&mut self, symbol: &str) {
+        self.exec.insert(symbol.into());
+    }
+
+    pub fn executing(&self, index: &RealmIndex) -> BTreeSet<String> {
+        let mut calls = self.exec.clone();
+        calls.extend(
+            self.whole
+                .iter()
+                .filter_map(|n| index.last(n))
+                .filter_map(|row| row.body())
+                .map(|body| body.rsplit("::").next().unwrap())
+                .filter(|body| index.operation(body).is_some())
+                .map(str::to_owned),
+        );
+        calls.extend(
+            self.whole
+                .iter()
+                .filter_map(|n| index.last(n))
+                .flat_map(|row| row.calls())
+                .map(str::to_owned),
+        );
+        loop {
+            let before = calls.len();
+            for symbol in calls.clone() {
+                for op in index.bodies(&symbol) {
+                    calls.extend(
+                        op.calls()
+                            .map(|call| call.rsplit("::").next().unwrap().to_owned()),
+                    );
+                }
+            }
+            if calls.len() == before {
+                return calls;
+            }
+        }
+    }
+
+    /// A declared slot or a write by an operation which the program executes.
+    pub fn resolve<'a>(&self, index: &'a RealmIndex, holder: &str, key: &str) -> Option<&'a str> {
+        index
+            .last(holder)
+            .and_then(|row| row.members().find(|(k, _, _)| *k == key).map(|(_, _, v)| v))
+            .or_else(|| {
+                index.rows().find_map(|op| {
+                    let value = op.writes().find(|(h, k, _)| *h == holder && *k == key)?.2;
+                    self.executes(index, op).then_some(value)
+                })
+            })
+    }
+
+    pub fn global_read(&mut self, index: &RealmIndex, key: &str) {
+        self.exec("js_get_global_this");
+        self.global_keys.insert(key.into());
+        if let Some(value) = self.resolve(index, "%Global%", key) {
+            self.own(value);
+        }
     }
 
     pub fn close(&mut self, index: &RealmIndex) {
@@ -198,84 +276,214 @@ impl RealmReach {
                 }
             }
         }
-        if let Some(global) = index.last("%Global%") {
-            self.names.extend(
-                global
-                    .births()
-                    .filter(|b| b.starts_with("%Layout:"))
-                    .map(str::to_owned),
-            );
-        }
-        // Membership is taken from held holders. Revisit it when a newly held
-        // holder or a promoted body changes the ownership of an existing cell.
+        self.names.extend(self.own_names.iter().cloned());
+        self.names.extend(self.chain_roots.iter().cloned());
+        // Starting at own_names makes WHOLE the least fixpoint of the same
+        // monotone predicate used for the final partition.
+        self.whole.extend(self.own_names.iter().cloned());
         loop {
-            let before = (self.names.clone(), self.whole.clone());
-            let mut members = BTreeMap::<String, Vec<_>>::new();
-            for name in &self.names {
-                if let Some(row) = index.last(name) {
-                    for (key, symbol, value) in row.members() {
-                        members.entry(value.to_owned()).or_default().push((
-                            key.to_owned(),
-                            symbol,
-                            row,
-                        ));
+            let before = (
+                self.names.clone(),
+                self.whole.clone(),
+                self.chain_roots.clone(),
+            );
+            for key in self.global_keys.clone() {
+                if let Some(value) = self.resolve(index, "%Global%", &key) {
+                    self.own(value);
+                }
+            }
+            // Exec births hold identities and kept slots; only naming owns bodies.
+            let executing = self.executing(index);
+            for symbol in &executing {
+                for op in index.bodies(symbol) {
+                    self.names.extend(op.demands().map(str::to_owned));
+                    for birth in op
+                        .births()
+                        .filter(|b| !op.members().any(|(_, _, v)| v == *b))
+                    {
+                        if let Some(proto) = index.last(birth).and_then(|r| r.instance_prototype())
+                        {
+                            self.chain_roots.insert(proto.into());
+                        } else if self.follows_birth_with(index, op, birth, &executing) {
+                            self.names.insert(birth.into());
+                        }
+                    }
+                    for (_, _, value) in op.writes() {
+                        self.names.insert(value.into());
                     }
                 }
             }
+            let (value_born, chain_born) = self.birth_roles(index);
+            self.names.extend(value_born.iter().cloned());
+            self.names.extend(chain_born.iter().cloned());
             for name in self.names.clone() {
-                let owned = self.own_names.contains(&name)
-                    || members.get(&name).map_or_else(
-                        || !primitive_prototype_member(&name),
-                        |keys| self.owned_member(&name, keys),
-                    );
-                if owned {
-                    self.whole.insert(name.clone());
-                }
-                if !self.whole.contains(&name) {
-                    self.structure.insert(name);
+                if self.is_whole(&name, index, &value_born, &chain_born) {
+                    self.whole.insert(name);
                 }
             }
+            self.structure = self.names.difference(&self.whole).cloned().collect();
             for name in self.names.clone() {
                 let Some(row) = index.last(&name) else {
                     continue;
                 };
                 for birth in row.births() {
-                    if self.follows_birth(row, birth) {
+                    if !row.members().any(|(_, _, v)| v == birth)
+                        && self.whole.contains(&name)
+                        && index.kind_birth(birth)
+                    {
+                        if let Some(proto) = index.last(birth).and_then(|b| b.instance_prototype())
+                        {
+                            self.chain_roots.insert(proto.to_owned());
+                        }
+                    }
+                    if self.follows_birth_with(index, row, birth, &executing) {
                         self.names.insert(birth.to_owned());
                     }
                 }
             }
-            if before == (self.names.clone(), self.whole.clone()) {
+            if before
+                == (
+                    self.names.clone(),
+                    self.whole.clone(),
+                    self.chain_roots.clone(),
+                )
+            {
                 break;
             }
         }
         self.structure = self.names.difference(&self.whole).cloned().collect();
     }
 
-    /// The one birth predicate used by the logical and physical closes.
-    /// Layouts of held objects remain live even when only structure is held.
-    /// The global is in neither set: its structure is its runtime layout
-    /// (in every R, `close`), and a global read is a value root naming the
-    /// member it reads.
-    pub fn follows_birth(&self, row: crate::realm_reach_index::Row<'_>, birth: &str) -> bool {
-        let name = row.name();
-        self.whole.contains(name)
-            || (self.structure.contains(name)
-                && (row.structure_has(birth)
-                    || (birth.starts_with("%Layout:") && !primitive_prototype_member(name))))
+    fn birth_roles(&self, index: &RealmIndex) -> (BTreeSet<String>, BTreeSet<String>) {
+        let mut values = BTreeSet::new();
+        let mut chains = self.chain_roots.clone();
+        for name in self.whole.iter().map(String::as_str) {
+            let Some(row) = index.last(name) else {
+                continue;
+            };
+            for birth in row.births() {
+                if Some(birth) != row.prototype() && !row.members().any(|(_, _, v)| v == birth) {
+                    if index.kind_birth(birth) {
+                        if let Some(proto) = index.last(birth).and_then(|b| b.instance_prototype())
+                        {
+                            chains.insert(proto.to_owned());
+                        }
+                    } else {
+                        values.insert(birth.to_owned());
+                    }
+                }
+            }
+            if let Some(proto) = row.prototype() {
+                chains.insert(proto.to_owned());
+            }
+        }
+        if let Some(proto) = index.last("%Global%").and_then(|r| r.prototype()) {
+            chains.insert(proto.into());
+        }
+        let mut pending: Vec<_> = chains.iter().cloned().collect();
+        while let Some(name) = pending.pop() {
+            if let Some(proto) = index.last(&name).and_then(|r| r.prototype()) {
+                if chains.insert(proto.to_owned()) {
+                    pending.push(proto.to_owned());
+                }
+            }
+        }
+        (values, chains)
     }
 
-    /// The one member predicate of an image-derived holder's selection: the
-    /// image keeps member `value` (its descriptor `enumerable` or not) when
-    /// the member is reached (its body births are live), or when it is held
-    /// and a keyless own read that sees it may read its holder: an own-
-    /// property callable with an unknown key (`own_keys` None) or a keyless
-    /// read (`keyless_read`; an enumerable-only one sees enumerable members
-    /// only). Such a read needs the member as a value, not its body.
-    pub fn keeps_member(&self, value: &str, enumerable: bool) -> bool {
-        self.whole.contains(value)
-            || (self.names.contains(value)
-                && (self.own_keys.contains(&None)
+    fn is_whole(
+        &self,
+        name: &str,
+        index: &RealmIndex,
+        value_born: &BTreeSet<String>,
+        chain_born: &BTreeSet<String>,
+    ) -> bool {
+        self.own_names.contains(name)
+            || self.owned_member(index, name)
+            || value_born.contains(name)
+            || (chain_born.contains(name) && (self.chain_read || self.may_read_prototype()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn assert_whole_fixpoint(&self, index: &RealmIndex) {
+        let (values, chains) = self.birth_roles(index);
+        for name in &self.names {
+            assert_eq!(
+                self.whole.contains(name),
+                self.is_whole(name, index, &values, &chains),
+                "WHOLE fixpoint: {name}"
+            );
+        }
+    }
+
+    pub fn executes(&self, index: &RealmIndex, row: crate::realm_reach_index::Row<'_>) -> bool {
+        self.whole.contains(row.name())
+            || row.operation().or_else(|| row.body()).is_some_and(|body| {
+                self.executing(index)
+                    .contains(body.rsplit("::").next().unwrap())
+            })
+    }
+
+    /// Logical birth closure and physical member selection share this rule.
+    pub fn follows_birth(
+        &self,
+        index: &RealmIndex,
+        row: crate::realm_reach_index::Row<'_>,
+        birth: &str,
+    ) -> bool {
+        self.follows_birth_with(index, row, birth, &self.executing(index))
+    }
+
+    fn follows_birth_with(
+        &self,
+        index: &RealmIndex,
+        row: crate::realm_reach_index::Row<'_>,
+        birth: &str,
+        executing: &BTreeSet<String>,
+    ) -> bool {
+        let mut member = false;
+        for (key, symbol, value) in row.members().filter(|(_, _, value)| *value == birth) {
+            member = true;
+            if self.keeps_member(index, row, key, value, row.member_enumerable(key, symbol)) {
+                return true;
+            }
+        }
+        if member {
+            return false;
+        }
+        ((self.whole.contains(row.name())
+            || row
+                .operation()
+                .or_else(|| row.body())
+                .is_some_and(|body| executing.contains(body.rsplit("::").next().unwrap())))
+            && !index.kind_birth(birth))
+            || (self.names.contains(row.name())
+                && row.structure_has(birth)
+                && !(birth.starts_with("%Layout:") && primitive_prototype_member(row.name())))
+    }
+
+    /// Keeping a slot needs its value's identity, not its body's births.
+    /// Bind reads constructor.prototype by key without owning the prototype.
+    /// A physical global cell alone does not hold every global as a value;
+    /// keyless retention requires the holder itself in the program's R.
+    pub fn keeps_member(
+        &self,
+        index: &RealmIndex,
+        holder: crate::realm_reach_index::Row<'_>,
+        key: &str,
+        value: &str,
+        enumerable: bool,
+    ) -> bool {
+        self.owned_member(index, value)
+            || index.rows().any(|op| {
+                op.writes()
+                    .any(|(h, k, v)| h == holder.name() && k == key && v == value)
+                    && self.resolve(index, holder.name(), key) == Some(value)
+                    && self.executes(index, op)
+            })
+            || (self.names.contains(holder.name())
+                && ((key == "prototype" && holder.has_constructor())
+                    || self.own_keys.contains(&None)
                     || self.keyless_read == Some(KeylessRead::All)
                     || (enumerable && self.keyless_read == Some(KeylessRead::Enumerable))))
     }
@@ -298,63 +506,52 @@ impl RealmReach {
             })
     }
 
-    /// R1k: the program may hold a primitive prototype as a value without
-    /// naming it (`K.prototype` named is a holder: it escapes or is read by
-    /// key): it reads a prototype through `getPrototypeOf` or `__proto__`,
-    /// reads key `prototype` on a receiver the scan cannot name (`s.constructor
-    /// .prototype`), or reads an unknown key on such a receiver. An
-    /// own-property callable reads key `prototype` (an unknown key there
-    /// includes it) only off a constructor: a primitive one the program holds
-    /// unnamed only through a `constructor` read (a named one escapes, which
-    /// owns its prototype's members already, `own_all`).
+    /// A [[Prototype]] observation exposes chain cells as values. Reading a
+    /// slot called `prototype` only keeps that slot; it observes no members
+    /// of the value stored there (OrdinaryHasInstance compares its identity).
     fn may_read_prototype(&self) -> bool {
         self.any_receiver_key
-            || ["__proto__", "prototype"]
-                .iter()
-                .any(|key| self.receiver_keys.contains(*key))
+            || [
+                "__proto__",
+                "getPrototypeOf",
+                "isPrototypeOf",
+                "setPrototypeOf",
+            ]
+            .iter()
+            .any(|key| self.receiver_keys.contains(*key))
             || self.own_names.iter().any(|name| {
                 name.ends_with(".getPrototypeOf")
-                    || (name.contains("__proto__") && !name.ends_with(".<set>"))
+                    || name.ends_with(".isPrototypeOf")
+                    || name.ends_with(".setPrototypeOf")
+                    || name.contains("__proto__")
             })
-            || (self.own_keys.contains(&Some("prototype".to_string()))
-                && self.may_hold_constructor())
     }
 
-    /// R1k: the program may hold a primitive constructor as a value without
-    /// naming it: it reads key `constructor` on a receiver the scan cannot
-    /// name or through an own-property callable, or owns a prototype's
-    /// `constructor` member (`"s".constructor`).
-    fn may_hold_constructor(&self) -> bool {
-        self.receiver_keys.contains("constructor")
-            || self.own_keys.contains(&Some("constructor".to_string()))
-            || self
-                .own_names
-                .iter()
-                .any(|name| name.ends_with(".constructor"))
-    }
-
-    /// §7: member `name` of a held holder (named by it under `keys`) is
-    /// owned: the program names it, a receiver the scan cannot name reads its
-    /// key (or any key), or its key is one the runtime spells (protocol and
-    /// symbol members), or its holder's layout is fixed by the runtime
-    /// layout descriptor (the image cannot drop a slot of a runtime layout).
-    fn owned_member(
-        &self,
-        name: &str,
-        keys: &[(String, bool, crate::realm_reach_index::Row<'_>)],
-    ) -> bool {
+    /// Ownership is a naming/read event on a member of a held holder.
+    fn owned_member(&self, index: &RealmIndex, name: &str) -> bool {
+        if self.own_names.contains(name) {
+            return true;
+        }
         let setter = name.ends_with(".<set>");
-        self.own_names.contains(name)
-            || self.any_receiver_key
-            || (setter && self.any_setter_key)
-            || keys.iter().any(|(key, symbol, holder)| {
-                holder.runtime_layout_holder()
-                    || (self.whole.contains(holder.name())
-                        && (*symbol || key.contains("@@") || holder.runtime_spelled_key(key)))
-                    // Bind reads each intrinsic constructor's prototype by key.
-                    || (key == "prototype" && holder.has_constructor())
-                    || self.receiver_keys.contains(key)
-                    || (setter && self.setter_keys.contains(key))
+        self.names
+            .iter()
+            .filter_map(|n| index.last(n))
+            .any(|holder| {
+                holder.members().any(|(key, symbol, value)| {
+                    value == name
+                        // A prototype slot read observes the cell's identity,
+                        // not the members/body of the value stored there.
+                        && key != "prototype"
+                        && (self.any_receiver_key
+                            || (setter && self.any_setter_key)
+                            || holder.runtime_layout_holder()
+                            || (self.whole.contains(holder.name())
+                                && (symbol
+                                    || key.contains("@@")
+                                    || holder.runtime_spelled_key(key)))
+                            || self.receiver_keys.contains(key)
+                            || (setter && self.setter_keys.contains(key)))
+                })
             })
     }
 }

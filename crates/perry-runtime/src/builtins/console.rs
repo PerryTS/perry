@@ -389,8 +389,10 @@ pub extern "C" fn js_console_log_i64(value: i64) {
     println!("{}", value);
 }
 
+crate::realm_decl! { "console.log", effects = { reads(rest(0)); returns(prim(undefined)) } }
 #[no_mangle]
 pub extern "C" fn js_console_log_spread(arr_ptr: *const crate::array::ArrayHeader) {
+    crate::realm_decl! { operation js_console_log_spread, calls = [print_console_formatted] }
     if arr_ptr.is_null() {
         println!();
         return;
@@ -447,6 +449,7 @@ pub extern "C" fn js_console_warn_spread(arr_ptr: *const crate::array::ArrayHead
 }
 
 fn print_console_formatted(arr_ptr: *const crate::array::ArrayHeader, stderr: bool) {
+    crate::realm_decl! { operation print_console_formatted, calls = [js_util_format] }
     let formatted = js_util_format(arr_ptr);
     let text = jsvalue_string_content(formatted).unwrap_or_default();
     print_console_text(&text, stderr);

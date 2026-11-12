@@ -363,6 +363,7 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
+    crate::realm_decl! { operation class_value_mint, calls = [definition_parent_value] }
     // A class function object is a static cell built on first use, the same
     // whichever init asks first: the SNAP census counts it as the runtime's.
     let _census = crate::snap_census::runtime_scope();
@@ -955,6 +956,7 @@ pub(crate) fn class_value_if_minted(class_id: u32) -> Option<*mut ClosureHeader>
 /// use). `class_id` must be a registered class.
 #[inline]
 pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
+    crate::realm_decl! { operation class_value_ptr, calls = [class_value_mint] }
     match class_value_cached(class_id) {
         Some(c) => c,
         None => class_value_mint(class_id),
@@ -1183,6 +1185,7 @@ pub(crate) fn class_prototype_addr(class_id: u32) -> usize {
 /// legacy static-chain consumers when its current edge equals that definition.
 /// The current edge itself lives solely in the class function's capture word.
 pub(crate) fn definition_parent_value(class_id: u32) -> f64 {
+    crate::realm_decl! { operation definition_parent_value, calls = [function_prototype_ptr_materialized] }
     if let Some(value) = super::class_registry::stashed_dynamic_parent_value(class_id) {
         let bits = value.to_bits();
         if bits != crate::value::TAG_UNDEFINED && bits != crate::value::TAG_NULL {
@@ -1609,6 +1612,7 @@ pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
 }
 
 pub(crate) fn class_static_set_bytes(class_id: u32, name: &[u8], value: f64) {
+    crate::realm_decl! { operation class_static_set_bytes, calls = [class_value_ptr] }
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: as above; the bag writers run under a GcSuppressScope.
     unsafe {

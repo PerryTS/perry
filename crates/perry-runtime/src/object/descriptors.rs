@@ -190,6 +190,7 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 /// TAG_UNDEFINED if the property doesn't exist.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
+    crate::realm_decl! { operation js_object_get_own_property_descriptor, calls = [builtin_global_atom], births = ["%Layout:RECORD_F327_0%", "%Layout:RECORD_F328_0%"] }
     unsafe {
         own_property(obj_value, key_value)
             .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |property| {
@@ -1727,6 +1728,7 @@ unsafe fn proxy_get_own_property_descriptors(obj_value: f64) -> f64 {
 /// module init threw `TypeError: value is not a function` (#1791/#1758).
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptors(obj_value: f64) -> f64 {
+    crate::realm_decl! { operation js_object_get_own_property_descriptors, calls = [js_object_get_own_property_descriptor] }
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     unsafe {
         // ToObject(Symbol) is a wrapper with no own properties. The symbol's

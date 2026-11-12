@@ -82,6 +82,11 @@ pub extern "C" fn js_nm_install_assert() {
         Ordering::Relaxed,
     );
 }
+crate::realm_decl! { operation js_globalthis_seed_async_local_storage,
+    calls = [js_get_global_this, js_nm_install_async_hooks],
+    writes = [("%Global%", "AsyncLocalStorage", "node:async_hooks.AsyncLocalStorage")],
+    births = []
+}
 /// Seed `globalThis.AsyncLocalStorage` with the `async_hooks` constructor
 /// BEFORE any module init runs. Next.js's `node-environment-baseline.js` does
 /// exactly this assignment, but only when its own init runs — and several

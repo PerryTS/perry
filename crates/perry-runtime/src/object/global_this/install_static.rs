@@ -489,7 +489,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "create",
-                crate::fn_info!(#[realm(Object.create)] export crate::object::global_this::bigint_promise::object_create_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.create, births = [Object])] export crate::object::global_this::bigint_promise::object_create_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
@@ -534,7 +534,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "getOwnPropertyDescriptors",
-                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptors, arguments = keyed)] export crate::object::global_this::bigint_promise::object_get_own_property_descriptors_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptors, arguments = keyed, births = [Object])] export crate::object::global_this::bigint_promise::object_get_own_property_descriptors_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
@@ -544,7 +544,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "groupBy",
-                crate::fn_info!(#[realm(Object.groupBy)] export crate::object::global_this::bigint_promise::object_group_by_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.groupBy, births = [Object])] export crate::object::global_this::bigint_promise::object_group_by_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
@@ -559,7 +559,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "getOwnPropertyDescriptor",
-                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptor, arguments = keyed)] export crate::object::global_this::bigint_promise::object_get_own_property_descriptor_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Object.getOwnPropertyDescriptor, arguments = keyed, births = [Object])] export crate::object::global_this::bigint_promise::object_get_own_property_descriptor_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
@@ -569,7 +569,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "fromEntries",
-                crate::fn_info!(#[realm(Object.fromEntries)] export crate::object::global_this::bigint_promise::object_from_entries_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Object.fromEntries, births = [Object])] export crate::object::global_this::bigint_promise::object_from_entries_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
@@ -1173,7 +1173,7 @@ pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
             );
             s.method(
                 "parse",
-                crate::fn_info!(#[realm(URL.parse)] export crate::object::global_this::install_static::url_parse_thunk, 2; with_declared(1)),
+                crate::fn_info!(#[realm(URL.parse, births = [URL, URLSearchParams, "%Layout:URL_COMPONENTS%", "%Layout:URL_SEARCH_PARAMS%"])] export crate::object::global_this::install_static::url_parse_thunk, 2; with_declared(1)),
                 1,
             );
         }

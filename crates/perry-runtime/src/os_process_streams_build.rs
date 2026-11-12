@@ -11,6 +11,7 @@ pub(super) fn build_stream_object_with_write(
     fd: f64,
     writable: f64,
 ) -> *mut crate::object::ObjectHeader {
+    crate::realm_decl! { operation build_stream_object_with_write, calls = [js_object_alloc_with_shape] }
     use crate::closure::js_closure_alloc;
     use crate::object::{js_object_alloc_with_shape, js_object_set_field};
     use crate::value::JSValue;

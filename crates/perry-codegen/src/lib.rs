@@ -116,13 +116,14 @@ pub mod workers;
 pub use codegen::{
     assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
-    namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
-    resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
-    AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
-    CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
-    FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
-    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
-    FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    module_realm_exec, namespace_member_class_key, namespace_member_func_key,
+    namespace_member_var_key, resolve_target_triple, startup_global_birth,
+    take_module_static_seeds, target_os_of, user_function_symbol, AppMetadata, BirthProto,
+    BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape,
+    ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep, FactsBody, FactsClass,
+    FactsElemRep, FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
+    FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
     ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
@@ -345,9 +346,14 @@ pub mod realm_manifest {
 
     #[test]
     fn temporal_reach_closes_the_generated_family_without_selecting_top() {
-        let mut reach = perry_hir::realm_reach::RealmReach::default();
-        reach.names.insert("Temporal".into());
-        reach.close(&perry_hir::realm_reach_index::RealmIndex::new(REALM));
+        let index = perry_hir::realm_reach_index::RealmIndex::new(REALM);
+        let mut structure = perry_hir::realm_reach::RealmReach::default();
+        structure.names.insert("Temporal".into());
+        structure.close(&index);
+        assert!(structure.structure.contains("Temporal"));
+        assert!(!structure.names.contains("Temporal.Duration"));
+        let source = perry_parser::parse_typescript("Temporal;", "realm.cjs").unwrap();
+        let reach = perry_hir::realm_reach::scan(&source, &index);
         assert!(!reach.is_full());
         for name in [
             "Temporal.Duration.prototype.years.<get>",

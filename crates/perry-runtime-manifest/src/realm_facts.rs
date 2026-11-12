@@ -48,6 +48,7 @@ pub(super) struct Facts {
     pub capture_number: Option<String>,
     pub capture_bindings: Option<Vec<String>>,
     pub births: Vec<String>,
+    pub calls: Vec<String>,
     pub arguments: Option<String>,
     pub provider: bool,
     pub bare_closure: bool,
@@ -125,6 +126,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         capture_number: None,
         capture_bindings: None,
         births: Vec::new(),
+        calls: Vec::new(),
         arguments: None,
         provider: false,
         bare_closure: false,
@@ -341,13 +343,25 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
                     facts.attrs = Some(attrs);
                 }
             }
-            "arguments" if clause.len() == 3 && matches!(clause[2].text, "keyed" | "formatted") => {
+            "arguments"
+                if clause.len() == 3
+                    && matches!(clause[2].text, "keyed" | "formatted" | "converted") =>
+            {
                 facts.arguments = Some(format!("{}_arguments", clause[2].text));
             }
             "value" => facts.value = Some(constant(&clause[2..])?),
             "throws" => facts.throws = Some(super::throws::operands(&clause[2..])?),
             "effects" => facts.effects = Some(super::effects::parse(&clause[2..])?),
 
+            "calls" => {
+                if clause[2].text != "[" || clause.last().is_none_or(|t| t.text != "]") {
+                    return Err("calls must be a list of body symbols".into());
+                }
+                facts.calls = info::split(&clause[3..clause.len() - 1], ",")
+                    .iter()
+                    .map(|item| path(item))
+                    .collect::<Result<_, _>>()?;
+            }
             "births" => {
                 if clause[2].text != "[" || clause.last().is_none_or(|t| t.text != "]") {
                     return Err("births must be a list of realm paths".into());
@@ -480,6 +494,19 @@ fn sealed_native_namespaces(source: &str) -> Result<Vec<&str>, String> {
     Ok(sealed)
 }
 
+fn with_calls(mut declaration: Value, calls: Vec<String>) -> Value {
+    if !calls.is_empty() {
+        let Value::Object(map) = &mut declaration else {
+            unreachable!()
+        };
+        map.insert(
+            "calls".into(),
+            Value::Array(calls.into_iter().map(string).collect()),
+        );
+    }
+    declaration
+}
+
 fn with_arguments(mut declaration: Value, arguments: Option<String>) -> Value {
     if let Some(arguments) = arguments {
         let Value::Object(map) = &mut declaration else {
@@ -496,8 +523,9 @@ pub(super) fn logical(
     native_abi: &super::native::Abi,
 ) -> Result<Value, String> {
     let arguments = facts.arguments.take();
+    let calls = std::mem::take(&mut facts.calls);
     logical_birth(facts, source, native_abi)
-        .map(|declaration| with_arguments(declaration, arguments))
+        .map(|declaration| with_calls(with_arguments(declaration, arguments), calls))
 }
 
 fn logical_birth(
@@ -677,6 +705,19 @@ pub(super) fn public_name(name: &str, kind: &str) -> Result<String, String> {
 }
 
 pub(super) fn callable(
+    mut facts: Facts,
+    info: &Info,
+    constants: &BTreeMap<String, u64>,
+    body: String,
+    source_symbol: String,
+    source: &str,
+) -> Result<Value, String> {
+    let calls = std::mem::take(&mut facts.calls);
+    callable_birth(facts, info, constants, body, source_symbol, source)
+        .map(|declaration| with_calls(declaration, calls))
+}
+
+fn callable_birth(
     mut facts: Facts,
     info: &Info,
     constants: &BTreeMap<String, u64>,
@@ -1055,7 +1096,7 @@ mod tests {
     use super::*;
     #[test]
     fn argument_modes_are_source_owned_facts() {
-        for mode in ["keyed", "formatted"] {
+        for mode in ["keyed", "formatted", "converted"] {
             let source = format!("Example.member, arguments = {mode}");
             let facts = parse(&tokens(&source).unwrap()).unwrap();
             assert_eq!(
@@ -1114,5 +1155,21 @@ mod tests {
         }
         assert!(parse(&tokens("Atomics.add, typo=1").unwrap()).is_err());
         assert!(parse(&tokens("Atomics.add, births=[], births=[]").unwrap()).is_err());
+    }
+    #[test]
+    fn declared_body_calls_are_preserved_without_becoming_births() {
+        let facts = parse(
+            &tokens("Example.member, calls = [named_result_allocator], births = [Array]").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(facts.calls, ["named_result_allocator"]);
+        assert_eq!(facts.births, ["Array"]);
+        let value = with_calls(object([("name", string("Example.member"))]), facts.calls);
+        assert_eq!(
+            value.get("calls").unwrap().array().unwrap()[0].string(),
+            Some("named_result_allocator")
+        );
+        assert!(value.get("births").is_none());
+        assert!(parse(&tokens("Example.member, calls = named_result_allocator").unwrap()).is_err());
     }
 }

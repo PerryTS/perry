@@ -1435,3 +1435,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// calls so recursive activations do not repeat the runtime accessor.
     pub arena_threaded_functions: std::collections::HashSet<u32>,
 }
+
+/// The path-init startup hook materializes the global object. Its birth and
+/// emitted call use this one predicate on the existing entry path list.
+pub fn startup_global_birth(paths: &[(String, String)]) -> Option<&'static str> {
+    (!paths.is_empty()).then_some("js_globalthis_seed_async_local_storage")
+}

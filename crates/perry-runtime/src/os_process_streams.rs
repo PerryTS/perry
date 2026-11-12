@@ -1741,6 +1741,7 @@ pub fn scan_process_stream_singleton_roots_mut(visitor: &mut crate::gc::RuntimeR
 /// process.stdin -> stream object whose `.write(...)` is a no-op.
 #[no_mangle]
 pub extern "C" fn js_process_stdin() -> f64 {
+    crate::realm_decl! { operation js_process_stdin, calls = [build_stream_object_with_write] }
     use crate::value::JSValue;
     let (obj, fresh) = STDIN_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -1780,6 +1781,7 @@ pub extern "C" fn js_process_stdin() -> f64 {
 /// process.stdout -> stream object whose `.write(s)` writes `s` to fd 1.
 #[no_mangle]
 pub extern "C" fn js_process_stdout() -> f64 {
+    crate::realm_decl! { operation js_process_stdout, calls = [build_stream_object_with_write] }
     use crate::value::JSValue;
     let obj = STDOUT_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();
@@ -1810,6 +1812,7 @@ pub(crate) fn refresh_tty_stream_sizes() {
 /// process.stderr -> stream object whose `.write(s)` writes `s` to fd 2.
 #[no_mangle]
 pub extern "C" fn js_process_stderr() -> f64 {
+    crate::realm_decl! { operation js_process_stderr, calls = [build_stream_object_with_write] }
     use crate::value::JSValue;
     let obj = STDERR_STREAM_SINGLETON.with(|slot| {
         let mut slot = slot.borrow_mut();

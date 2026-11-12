@@ -68,6 +68,7 @@ pub(crate) static FUNCTION_PROTOTYPE_PTR: crate::object::RealmAtomicI64 =
 /// 0 until then and answers only "has anything been installed there".
 /// Allocates on the first call: callers root what they hold across it.
 pub(crate) fn function_prototype_ptr_materialized() -> usize {
+    crate::realm_decl! { operation function_prototype_ptr_materialized, calls = [js_get_global_this] }
     let proto = FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
     if proto != 0 {
         return proto as usize;

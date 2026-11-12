@@ -68,6 +68,38 @@ pub enum RealmProtocol {
     ShallowInspect,
 }
 
+impl RealmProtocol {
+    /// Keys a protocol reads on its operand; a read keeps the slot without
+    /// making the value in that slot escape or exposing its members.
+    pub fn receiver_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::ToPrimitive => &["@@toPrimitive", "valueOf", "toString"],
+            Self::Iterate => &["@@iterator"],
+            Self::IterNext => &["next", "return", "throw"],
+            Self::IterResult => &["done", "value"],
+            Self::Json => &["toJSON"],
+            Self::HasInstance => &["@@hasInstance", "prototype"],
+            Self::OwnKeys => &[],
+            Self::ShallowInspect => &[
+                "@for:nodejs.util.inspect.custom",
+                "@@toStringTag",
+                "stack",
+                "message",
+                "name",
+                "errors",
+                "byteLength",
+                "href",
+                "constructor",
+            ],
+        }
+    }
+
+    /// Await's PromiseResolve reads the thenable's slot, not its chain.
+    pub fn await_receiver_keys() -> &'static [&'static str] {
+        &["then"]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RealmPrim {
@@ -566,7 +598,10 @@ mod operand_tests {
 
     #[test]
     fn json_and_unknown_operands_parse_and_round_trip() {
-        for (text, want) in [("\"json\"", RealmOperand::Json), ("\"unknown\"", RealmOperand::Unknown)] {
+        for (text, want) in [
+            ("\"json\"", RealmOperand::Json),
+            ("\"unknown\"", RealmOperand::Unknown),
+        ] {
             let got: RealmOperand = serde_json::from_str(text).unwrap();
             assert_eq!(got, want);
             assert_eq!(serde_json::to_string(&got).unwrap(), text);
@@ -577,5 +612,23 @@ mod operand_tests {
             RealmOperand::Union(vec![RealmOperand::Json, RealmOperand::Unknown].into())
         );
         assert!(serde_json::from_str::<RealmOperand>("\"jsonn\"").is_err());
+    }
+}
+
+#[cfg(test)]
+mod reach_key_tests {
+    use super::*;
+    #[test]
+    fn hasinstance_declares_both_key_reads() {
+        assert_eq!(
+            RealmProtocol::HasInstance.receiver_keys(),
+            &["@@hasInstance", "prototype"]
+        );
+        let read: RealmEffect =
+            serde_json::from_str(r#"{"reads":[{"root":"this","steps":[{"field":"prototype"}]}]}"#)
+                .unwrap();
+        assert!(
+            matches!(read, RealmEffect::Reads(ref s) if s[0].steps.as_ref() == [RealmSlotStep::Field("prototype".into())])
+        );
     }
 }

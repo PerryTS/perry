@@ -437,6 +437,7 @@ pub(crate) extern "C" fn json_stringify_thunk(
     replacer: f64,
     space: f64,
 ) -> f64 {
+    crate::realm_decl! { operation json_stringify_thunk, calls = [js_json_stringify_full] }
     f64::from_bits(unsafe { crate::json::js_json_stringify_full(value, replacer, space) as u64 })
 }
 
@@ -947,17 +948,17 @@ pub(crate) fn promise_static_function_info(
 ) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     use crate::fn_info;
     Some(match name {
-        "resolve" => (fn_info!(#[realm(Promise.resolve)] export crate::object::global_this::bigint_promise::promise_resolve_static, 1; with_declared(1)), 1),
-        "reject" => (fn_info!(#[realm(Promise.reject)] export crate::object::global_this::bigint_promise::promise_reject_static, 1; with_declared(1)), 1),
-        "all" => (fn_info!(#[realm(Promise.all)] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
-        "race" => (fn_info!(#[realm(Promise.race)] export crate::object::global_this::bigint_promise::promise_race_static, 1; with_declared(1)), 1),
-        "allSettled" => (fn_info!(#[realm(Promise.allSettled)] export crate::object::global_this::bigint_promise::promise_all_settled_static, 1; with_declared(1)), 1),
-        "any" => (fn_info!(#[realm(Promise.any)] export crate::object::global_this::bigint_promise::promise_any_static, 1; with_declared(1)), 1),
+        "resolve" => (fn_info!(#[realm(Promise.resolve, births = [Function])] export crate::object::global_this::bigint_promise::promise_resolve_static, 1; with_declared(1)), 1),
+        "reject" => (fn_info!(#[realm(Promise.reject, births = [Function])] export crate::object::global_this::bigint_promise::promise_reject_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(#[realm(Promise.all, births = [Function])] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
+        "race" => (fn_info!(#[realm(Promise.race, births = [Function])] export crate::object::global_this::bigint_promise::promise_race_static, 1; with_declared(1)), 1),
+        "allSettled" => (fn_info!(#[realm(Promise.allSettled, births = [Function])] export crate::object::global_this::bigint_promise::promise_all_settled_static, 1; with_declared(1)), 1),
+        "any" => (fn_info!(#[realm(Promise.any, births = [Function])] export crate::object::global_this::bigint_promise::promise_any_static, 1; with_declared(1)), 1),
         "withResolvers" => (
-            fn_info!(#[realm(Promise.withResolvers)] export crate::object::global_this::bigint_promise::promise_with_resolvers_static, 0; with_declared(0)),
+            fn_info!(#[realm(Promise.withResolvers, births = [Function, Object])] export crate::object::global_this::bigint_promise::promise_with_resolvers_static, 0; with_declared(0)),
             0,
         ),
-        "try" => (fn_info!(#[realm(Promise.try)] export crate::object::global_this::bigint_promise::promise_try_static, 2; with_rest(1)), 1),
+        "try" => (fn_info!(#[realm(Promise.try, births = [Function])] export crate::object::global_this::bigint_promise::promise_try_static, 2; with_rest(1)), 1),
         _ => return None,
     })
 }

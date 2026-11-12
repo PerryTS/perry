@@ -521,8 +521,12 @@ pub(crate) extern "C" fn regexp_thunk(
 }
 
 pub extern "C" fn js_string_replace_js(receiver: f64, search: f64, replacement: f64) -> f64 {
+    crate::realm_decl! { operation js_string_replace_js, calls = [js_array_alloc_named_props_reserved] }
+
     api::finish(string(false, receiver, search, replacement))
 }
 pub extern "C" fn js_string_replace_all_js(receiver: f64, search: f64, replacement: f64) -> f64 {
+    crate::realm_decl! { operation js_string_replace_all_js, calls = [js_array_alloc_named_props_reserved] }
+
     api::finish(string(true, receiver, search, replacement))
 }

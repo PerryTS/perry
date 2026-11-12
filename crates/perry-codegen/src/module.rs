@@ -707,6 +707,26 @@ impl LlModule {
     /// and the in-process constructor (`for_each_final_line`) are separate
     /// consumers, so a pass living inside one of them would silently not apply
     /// to the other.
+    /// Exec events are the selected direct calls in the emitted IR itself.
+    pub(crate) fn realm_exec(
+        &self,
+        index: &perry_hir::realm_reach_index::RealmIndex,
+    ) -> std::collections::BTreeSet<String> {
+        self.functions
+            .iter()
+            .flat_map(|f| f.blocks())
+            .flat_map(|b| b.insts())
+            .filter_map(|instruction| match instruction {
+                crate::inst::LlInst::Call { callee, .. }
+                    if index.bodies(callee).next().is_some() =>
+                {
+                    Some(callee.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(crate) fn diagnostic_functions(&self) -> impl Iterator<Item = &LlFunction> {
         self.functions.iter()
     }

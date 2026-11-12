@@ -34,6 +34,29 @@ impl<'a> Row<'a> {
             .get("constructor")
             .is_some_and(|v| !v.is_null())
     }
+    /// A constructor birth denotes an instance, whose chain starts here.
+    pub fn instance_prototype(self) -> Option<&'static str> {
+        self.has_constructor()
+            .then(|| {
+                self.members()
+                    .find(|(key, _, _)| *key == "prototype")
+                    .map(|(_, _, value)| value)
+            })
+            .flatten()
+    }
+    pub fn member_enumerable(self, key: &str, symbol: bool) -> bool {
+        self.0
+            .facts
+            .get("properties")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .any(|p| {
+                p["key"].as_str() == Some(key)
+                    && p["symbol"].as_bool().unwrap_or(false) == symbol
+                    && p["attributes"].as_u64().unwrap_or(0) & 2 != 0
+            })
+    }
     pub fn runtime_layout_holder(self) -> bool {
         self.0
             .facts
@@ -81,6 +104,50 @@ impl<'a> Row<'a> {
     pub fn facts(self) -> &'a serde_json::Value {
         &self.0.facts
     }
+    pub fn calls(self) -> impl Iterator<Item = &'a str> {
+        self.0
+            .facts
+            .get("calls")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+    }
+    pub fn writes(self) -> impl Iterator<Item = (&'a str, &'a str, &'a str)> {
+        self.0
+            .facts
+            .get("writes")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| {
+                Some((
+                    v.get("holder")?.as_str()?,
+                    v.get("key")?.as_str()?,
+                    v.get("value")?.as_str()?,
+                ))
+            })
+    }
+    pub fn operation(self) -> Option<&'a str> {
+        self.0.facts.get("operation").and_then(|v| v.as_str())
+    }
+    pub fn demands(self) -> impl Iterator<Item = &'a str> {
+        self.0
+            .facts
+            .get("demands")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+    }
+    pub fn body(self) -> Option<&'a str> {
+        self.0
+            .facts
+            .get("effects_body")
+            .and_then(|v| v.as_str())
+            .and_then(|body| body.strip_prefix("source:"))
+            .or_else(|| self.0.facts.get("body").and_then(|v| v.as_str()))
+    }
     pub fn births(self) -> impl Iterator<Item = &'static str> {
         self.0.entry.births.iter().copied()
     }
@@ -126,21 +193,8 @@ impl RealmIndex {
             }
             let facts = parse_facts(entry.facts);
             let mut structure = BTreeSet::new();
-            if entry.kind == RealmKind::Prototype {
-                structure.extend(entry.births.iter().map(|b| b.to_string()));
-            }
             structure.extend(entry.proto.map(str::to_owned));
-            for own in entry.own {
-                match own.value {
-                    RealmOwnValue::Reference(v) => {
-                        structure.insert(v.into());
-                    }
-                    RealmOwnValue::Accessor { get, set } => {
-                        structure.extend([get, set].into_iter().flatten().map(str::to_owned));
-                    }
-                    _ => {}
-                }
-            }
+
             for value in facts
                 .get("captures")
                 .and_then(|v| v.as_array())
@@ -167,7 +221,43 @@ impl RealmIndex {
                 structure,
             });
         }
+        let storage = result
+            .rows
+            .iter()
+            .filter_map(|r| {
+                let owners = r.facts.pointer("/storage/owners")?.as_array()?;
+                Some((
+                    r.entry.name,
+                    owners
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (layout, owners) in storage {
+            for row in &mut result.rows {
+                if owners.iter().any(|owner| owner == row.entry.name) {
+                    row.structure.insert(layout.into());
+                }
+            }
+        }
         result
+    }
+    pub fn operation(&self, symbol: &str) -> Option<Row<'_>> {
+        self.rows()
+            .find(|r| r.facts().get("operation").and_then(|v| v.as_str()) == Some(symbol))
+    }
+    pub fn bodies<'a>(&'a self, symbol: &'a str) -> impl Iterator<Item = Row<'a>> + 'a {
+        self.rows().filter(move |row| {
+            row.operation()
+                .or_else(|| row.body())
+                .is_some_and(|body| body.rsplit("::").next() == Some(symbol))
+        })
+    }
+    pub fn kind_birth(&self, birth: &str) -> bool {
+        self.last(birth).is_some_and(|row| row.has_constructor())
     }
     pub fn rows(&self) -> impl Iterator<Item = Row<'_>> {
         self.rows.iter().map(Row)
@@ -215,6 +305,52 @@ impl RealmIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prototype_birth_is_not_structural_without_a_structural_edge() {
+        let table = [
+            RealmEntry {
+                name: "Holder.prototype",
+                kind: RealmKind::Prototype,
+                births: &["Ctor", "Parent", "Captured", "%Layout:VALUE%"],
+                module: None,
+                facts: r#"{"captures":[{"kind":"reference","value":"Captured"}]}"#,
+                effects: &[],
+                own: &[],
+                proto: Some("Parent"),
+            },
+            RealmEntry {
+                name: "%Layout:VALUE%",
+                kind: RealmKind::Exotic,
+                births: &[],
+                module: None,
+                effects: &[],
+                own: &[],
+                proto: None,
+                facts: r#"{"storage":{"kind":"runtime_layout","owners":["Holder.prototype"]}}"#,
+            },
+            RealmEntry {
+                name: "%Layout:BODY%",
+                kind: RealmKind::Exotic,
+                births: &[],
+                module: None,
+                effects: &[],
+                own: &[],
+                proto: None,
+                facts: r#"{"storage":{"kind":"runtime_layout","owners":["Other"]}}"#,
+            },
+        ];
+        let index = RealmIndex::new(&table);
+        let row = index.first("Holder.prototype").unwrap();
+        assert!(
+            !row.structure_has("Ctor"),
+            "a prototype's birth is not a structural link"
+        );
+        assert!(!row.structure_has("%Layout:BODY%"));
+        for name in ["Parent", "Captured", "%Layout:VALUE%"] {
+            assert!(row.structure_has(name), "{name}");
+        }
+    }
+
     #[test]
     fn parses_once_per_caller_owned_table() {
         let table = [RealmEntry {

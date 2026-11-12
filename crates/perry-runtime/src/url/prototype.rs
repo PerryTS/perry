@@ -75,7 +75,7 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
         (
             "href",
             crate::fn_info!(#[realm("URL.prototype.href.<get>")] export crate::url::prototype::get_href, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.href.<set>")] export crate::url::prototype::set_href, 1; with_declared(1))),
+            Some(crate::fn_info!(#[realm("URL.prototype.href.<set>", births = ["%Layout:URL_COMPONENTS%", "%Layout:URL_SEARCH_PARAMS%"])] export crate::url::prototype::set_href, 1; with_declared(1))),
         ),
         (
             "origin",
@@ -120,7 +120,7 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
         (
             "search",
             crate::fn_info!(#[realm("URL.prototype.search.<get>")] export crate::url::prototype::get_search, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.search.<set>")] export crate::url::prototype::set_search, 1; with_declared(1))),
+            Some(crate::fn_info!(#[realm("URL.prototype.search.<set>", births = ["%Layout:URL_SEARCH_PARAMS%"])] export crate::url::prototype::set_search, 1; with_declared(1))),
         ),
         (
             "searchParams",

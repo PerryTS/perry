@@ -28,6 +28,7 @@ fn collect(
                     | "native_nonconstructors"
                     | "native_key"
                     | "module_provider"
+                    | "operation"
             ) {
                 continue;
             }

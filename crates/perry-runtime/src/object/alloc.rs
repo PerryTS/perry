@@ -353,6 +353,7 @@ pub(crate) unsafe fn build_keys_source_array(
     prefix_len: u32,
     keys: &[&[u8]],
 ) -> *mut ArrayHeader {
+    crate::realm_decl! { operation build_keys_source_array, calls = [js_string_pool_atom] }
     let total = prefix_len as usize + keys.len();
     // A class keys cache fill on first use (the temporary list and its key
     // atoms): the SNAP census counts it as the runtime's.
@@ -902,6 +903,7 @@ pub extern "C" fn js_object_alloc_with_shape(
     packed_keys: *const u8,
     packed_keys_len: u32,
 ) -> *mut ObjectHeader {
+    crate::realm_decl! { operation js_object_alloc_with_shape, calls = [build_keys_source_array] }
     // Allocate extra field slots for dynamic property growth (plain objects may get new fields)
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let total_size = meta_form_alloc_bytes(alloc_field_count);

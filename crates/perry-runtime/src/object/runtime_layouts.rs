@@ -843,7 +843,7 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29],
-    realm = ["RegExp"]
+    realm = []
 );
 // A `d`-flag exec result's named layout: `index`, `input`, `groups`, `indices`.
 runtime_layout!(
@@ -852,7 +852,7 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_SYMBOL_ITERATOR, ATOM_27, ATOM_28, ATOM_29, ATOM_30],
-    realm = ["RegExp"]
+    realm = []
 );
 // A `d`-flag `indices` array's named layout: `groups`.
 runtime_layout!(
@@ -861,7 +861,7 @@ runtime_layout!(
     0,
     crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     [ATOM_SYMBOL_ITERATOR, ATOM_29],
-    realm = ["RegExp"]
+    realm = []
 );
 // Empty array named family; absent iterator slot 0 is the hole marker.
 runtime_layout!(

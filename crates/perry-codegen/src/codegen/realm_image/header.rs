@@ -67,6 +67,15 @@ pub(crate) fn object_word(
     cell: &RealmDeclaration,
     header: &RealmHeaderFacts,
 ) -> Result<u16, String> {
+    agree(cell, header.reserved, object_birth_word(cell, header)?)
+}
+
+/// The selected shape derives its own word after member selection. The raw
+/// declaration is validated before projection; the emitter checks it again.
+pub(crate) fn object_birth_word(
+    cell: &RealmDeclaration,
+    header: &RealmHeaderFacts,
+) -> Result<u16, String> {
     let word = header.reserved;
     let class_id = header.class_id.unwrap_or(0);
     let exotic = if class_id == perry_abi::NATIVE_MODULE_CLASS_ID {
@@ -110,7 +119,7 @@ pub(crate) fn object_word(
         typed_array_prototype: word & perry_abi::OBJ_FLAG_TYPED_ARRAY_PROTO != 0,
         integrity: Integrity::of_bits(word),
     };
-    agree(cell, word, object_reserved(birth))
+    Ok(object_reserved(birth))
 }
 
 /// A closure cell's birth word (before the props-bag transition).

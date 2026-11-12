@@ -168,6 +168,7 @@ pub(super) fn utf16_boundary_at(s: *const StringHeader, idx: usize) -> Option<(u
 /// worth revisiting if it shows up hot, but the alternative was a crash.
 #[no_mangle]
 pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
+    crate::realm_decl! { operation js_string_index_get_boxed, calls = [string_property_get_miss] }
     const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
     if jsval.is_short_string() {
@@ -218,6 +219,7 @@ pub extern "C" fn js_string_index_get_boxed(value: f64, key: f64) -> f64 {
 /// Keep the raw index helper own-only: boxed strings also use it while walking
 /// their own properties, before consulting their potentially custom prototype.
 fn string_property_get_miss(value: f64, key: f64) -> f64 {
+    crate::realm_decl! { operation string_property_get_miss, calls = [js_get_global_this] }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = scope.root_nanbox_f64(key);

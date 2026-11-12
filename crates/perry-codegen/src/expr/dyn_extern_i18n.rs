@@ -13,8 +13,8 @@ use crate::rooting::{with_rooted_accumulator, with_rooted_group, Arg, Repr};
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
 use super::{
-    emit_string_literal_global, import_origin_suffix, is_global_this_builtin_name, lower_expr,
-    nanbox_pointer_inline, nanbox_string_inline, unbox_to_i64, FnCtx, I18nLowerCtx,
+    emit_string_literal_global, import_origin_suffix, lower_expr, nanbox_pointer_inline,
+    nanbox_string_inline, unbox_to_i64, FnCtx, I18nLowerCtx,
 };
 
 #[path = "worker_new.rs"]
@@ -823,7 +823,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         deferred_namespace_value_for_prefix(ctx, target_prefix)
                     } else if ctx.program_has_tla {
                         let blk = ctx.block();
-                        let record = blk.call(I64, &format!("{}__async_record", target_prefix), &[]);
+                        let record =
+                            blk.call(I64, &format!("{}__async_record", target_prefix), &[]);
                         let promise = blk.call(DOUBLE, "js_async_module_import", &[(I64, &record)]);
                         blk.store(DOUBLE, &promise, &result_slot);
                         blk.br(&join_label);
@@ -1077,7 +1078,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // → every React renderer). Resolve them to the same
             // `populate_global_this_builtins` closure `globalThis.<name>`
             // reads, which is callable through the dynamic dispatch path.
-            if is_global_this_builtin_name(name) {
+            if perry_hir::realm_reach::global_value_read(expr, &crate::realm_manifest::REALM)
+                .is_some()
+            {
                 crate::expr::property_get::globalget::emit_global_value_installs(ctx, name);
                 return crate::expr::property_get::globalget::lower_global_builtin_read(ctx, name);
             }

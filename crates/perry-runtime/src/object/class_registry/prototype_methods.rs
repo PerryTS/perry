@@ -37,6 +37,7 @@ pub unsafe extern "C" fn js_class_register_static_field(
     value: f64,
     global_slot: *mut f64,
 ) {
+    crate::realm_decl! { operation js_class_register_static_field, calls = [class_static_set_bytes] }
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }

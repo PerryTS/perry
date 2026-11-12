@@ -11,7 +11,7 @@ fn plan(source: &str) -> RealmPlan {
 
 #[test]
 fn hello_and_full_realm_atoms_verify_on_each_target() {
-    for source in ["console.log('hi');", "with ({}) { console.log('hi'); }"] {
+    for source in ["[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "with ({}) { [Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi'); }"] {
         let plan = plan(source);
         for triple in [
             "x86_64-unknown-linux-gnu",
@@ -143,7 +143,7 @@ fn symbol_identities_are_unique_and_disjoint_from_dynamic_births() {
 
 #[test]
 fn function_prototype_state_key_links_to_its_image_string() {
-    let plan = plan("console.log('hi');");
+    let plan = plan("[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');");
     assert!(plan.cells.values().any(|cell| cell
         .header
         .as_ref()

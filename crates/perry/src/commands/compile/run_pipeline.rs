@@ -3822,6 +3822,32 @@ pub fn run_with_parse_cache(
     // Reuse the exact import-route preparation in both passes. The contract
     // pass releases each module's metadata before visiting the next module;
     // the second pass prepares owned options before releasing the HIR graph.
+    // The entry's path list is the canonical input to its startup birth and
+    // to every module option; reach and emission cannot select different hooks.
+    let program_nextjs_path_inits: Vec<(String, String)> = ctx
+        .native_modules
+        .iter()
+        // A module is on this list by WHERE it is (a Next.js server
+        // module, or a compilePackages module), never by how it is
+        // loaded: a non-empty list makes the entry seed
+        // `globalThis.AsyncLocalStorage`, which node has only in a
+        // Next.js process. A module reached only through `import()`
+        // gets its path anchor from the lazy list below.
+        .filter(|(p, _)| {
+            self::collect_modules::is_nextjs_runtime_module(p)
+                    // A `perry.compilePackages` module may be reachable
+                    // ONLY through a runtime-computed require (Next's
+                    // require-hook aliases `styled-jsx` to its resolved
+                    // package directory); without a path-init anchor the
+                    // linker dead-strips it and the runtime require dies
+                    // with MODULE_NOT_FOUND even though it was compiled.
+                    || ctx
+                        .compile_package_dirs
+                        .iter()
+                        .any(|dir| p.starts_with(dir))
+        })
+        .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
+        .collect();
     let prepare_module = |path: &PathBuf,
                           hir_module: &perry_hir::Module,
                           contracts_only: bool|
@@ -3870,30 +3896,8 @@ pub fn run_with_parse_cache(
         // its `__init` address by path (`js_register_path_init`). Only the
         // entry emits these; the runtime `require(absolutePath)` shim then
         // triggers the matching module's lazy init on first load.
-        let nextjs_path_init_modules: Vec<(String, String)> = if is_entry {
-            ctx.native_modules
-                .iter()
-                // A module is on this list by WHERE it is (a Next.js server
-                // module, or a compilePackages module), never by how it is
-                // loaded: a non-empty list makes the entry seed
-                // `globalThis.AsyncLocalStorage`, which node has only in a
-                // Next.js process. A module reached only through `import()`
-                // gets its path anchor from the lazy list below.
-                .filter(|(p, _)| {
-                    self::collect_modules::is_nextjs_runtime_module(p)
-                            // A `perry.compilePackages` module may be reachable
-                            // ONLY through a runtime-computed require (Next's
-                            // require-hook aliases `styled-jsx` to its resolved
-                            // package directory); without a path-init anchor the
-                            // linker dead-strips it and the runtime require dies
-                            // with MODULE_NOT_FOUND even though it was compiled.
-                            || ctx
-                                .compile_package_dirs
-                                .iter()
-                                .any(|dir| p.starts_with(dir))
-                })
-                .map(|(p, m)| (p.to_string_lossy().into_owned(), sanitize_name(&m.name)))
-                .collect()
+        let nextjs_path_init_modules = if is_entry {
+            program_nextjs_path_inits.clone()
         } else {
             Vec::new()
         };
@@ -4027,12 +4031,12 @@ pub fn run_with_parse_cache(
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
             if !program_has_tla {
-            if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| {
-                    deferred_module_prefixes.contains(dep)
-                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
-                });
-            }
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| {
+                        deferred_module_prefixes.contains(dep)
+                            || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                    });
+                }
             }
             if program_has_tla {
                 // A `defer` request is not an evaluation dependency: the
@@ -4049,8 +4053,11 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
-                    .map(|m| sanitize_name(&m.name)).collect();
+                deps = ordered
+                    .iter()
+                    .filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name))
+                    .collect();
             }
             deps
         };
@@ -6590,57 +6597,13 @@ pub fn run_with_parse_cache(
         &static_shape_ids,
     );
     let mut realm_reach = ctx.realm_reach.clone();
+    if let Some(birth) = perry_codegen::startup_global_birth(&program_nextjs_path_inits) {
+        realm_reach.exec(birth);
+    }
     for module in ctx.native_modules.values() {
         perry_hir::realm_reach::scan_lowered(module, &ctx.realm_index, &mut realm_reach);
     }
     realm_reach.program_signals(&ctx.patched_builtins);
-    // Test-only input of the realm-diff gate (DESIGN §3.2, "The R-restricted
-    // realm-diff gate"; scripts/realm_diff_gate.py): R becomes exactly the
-    // file's names with top dropped, so the dumper, which reflects over
-    // globalThis, is built with a partial image; the close below applies the
-    // birth relation. A top program's own names are not kept (a top scan is
-    // already closed to the whole catalog). Inert when unset; the line it
-    // prints lets the gate assert the input took effect, and the gate checks
-    // that the closed R equals the file. The cache keys hash the path
-    // (compile_env), not the file, so the gate compiles with PERRY_NO_CACHE.
-    if let Some(path) = std::env::var_os("PERRY_REALM_REACH_NAMES") {
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: {e}"))?;
-        let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| serde_json::from_value(v.get("names")?.clone()).ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("PERRY_REALM_REACH_NAMES {path:?}: expected {{\"names\": [...]}}")
-            })?;
-        eprintln!(
-            "[realm-reach-names] {} {}",
-            path.to_string_lossy(),
-            names.len()
-        );
-        realm_reach.restrict_to(names);
-    }
-    realm_reach.close(&ctx.realm_index);
-    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
-        let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
-        eprintln!(
-            "[realm-reach] {}/{} top={:?}",
-            realm_reach.names.len(),
-            perry_codegen::realm_manifest::REALM.len(),
-            reasons
-        );
-        eprintln!(
-            "[realm-reach-json] {}",
-            serde_json::json!({
-                "names": realm_reach.names, "top": reasons,
-                "full": perry_codegen::realm_manifest::REALM.len()
-            })
-        );
-    }
-    // R drives the entry module's realm emission (WRT3p-A1: the runtime
-    // layouts' descriptors and key lists).
-    let realm_reach = std::sync::Arc::new(realm_reach);
-    let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
-    let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     // fninfer (decision 140): per-function inferred signatures over the
     // final HIR. Measurement dump only (`PERRY_FNINFER_DUMP=<path>`).
     super::fn_infer::dump(&ctx.native_modules);
@@ -6730,7 +6693,7 @@ pub fn run_with_parse_cache(
                 program_class_shape_ids.restricted_to(class_ids.iter().copied());
         }
     };
-    let prepared_options: Vec<_> = module_pool.install(|| {
+    let mut prepared_options: Vec<_> = module_pool.install(|| {
         codegen_modules
             .par_iter()
             .map(|path| {
@@ -6751,14 +6714,106 @@ pub fn run_with_parse_cache(
                 std::sync::Arc::make_mut(&mut opts.program_facts.elision).dynamic_code_reach =
                     ctx.patched_builtins.dynamic_code_reach.clone();
                 opts.program_layouts = std::sync::Arc::clone(&program_layouts);
-                if opts.is_entry_module {
-                    opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
-                }
                 Ok::<_, String>(opts)
             })
             .collect::<Vec<_>>()
     });
     program_step("module options", Some(options_started));
+    // EXEC is a fact of the emitted call instruction. Run the same lowering
+    // with these final options before selecting the entry's runtime layouts;
+    // retain only the canonical Exec input, never a call cache or a side table.
+    let exec_inputs = module_pool
+        .install(|| {
+            codegen_modules
+                .par_iter()
+                .zip(prepared_options.par_iter())
+                .map(|(path, opts)| -> Result<_, String> {
+                    let mut opts = opts.as_ref().map_err(Clone::clone)?.clone();
+                    slice_shape_ids(path, &mut opts);
+                    perry_codegen::module_realm_exec(
+                        &ctx.native_modules[path],
+                        opts,
+                        &ctx.realm_index,
+                    )
+                    .map_err(|e| format!("{}: {e:#}", path.display()))
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .map_err(|e| anyhow!(e))?;
+    for events in exec_inputs {
+        realm_reach.exec.extend(events);
+    }
+    let dumper_exec = perry_hir::realm_reach::RealmReach::from_snapshot(
+        Default::default(),
+        realm_reach.exec.clone(),
+        &ctx.realm_index,
+    )
+    .executing(&ctx.realm_index);
+    let mut fixture_exec = std::collections::BTreeSet::<String>::new();
+    let mut exec_only = std::collections::BTreeSet::<String>::new();
+    if let Some(path) = std::env::var_os("PERRY_REALM_REACH_NAMES") {
+        let text = std::fs::read_to_string(&path)?;
+        let value: serde_json::Value = serde_json::from_str(&text)?;
+        let names: Vec<String> = serde_json::from_value(value["names"].clone())?;
+        let snapshot: perry_hir::realm_reach::RealmReach =
+            serde_json::from_value(value["reach"].clone())?;
+        let fixture = perry_hir::realm_reach::RealmReach::from_snapshot(
+            snapshot.clone(),
+            Default::default(),
+            &ctx.realm_index,
+        );
+        anyhow::ensure!(
+            fixture.names == names.iter().cloned().collect(),
+            "realm snapshot does not close to its names"
+        );
+        fixture_exec = fixture.executing(&ctx.realm_index);
+        realm_reach = perry_hir::realm_reach::RealmReach::from_snapshot(
+            snapshot,
+            realm_reach.exec.clone(),
+            &ctx.realm_index,
+        );
+        exec_only = realm_reach
+            .names
+            .difference(&fixture.names)
+            .cloned()
+            .collect();
+        eprintln!(
+            "[realm-reach-names] {} {}",
+            path.to_string_lossy(),
+            names.len()
+        );
+    }
+    realm_reach.close(&ctx.realm_index);
+    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
+        let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
+        eprintln!(
+            "[realm-reach] {}/{} top={:?}",
+            realm_reach.names.len(),
+            perry_codegen::realm_manifest::REALM.len(),
+            reasons
+        );
+        eprintln!(
+            "[realm-reach-json] {}",
+            serde_json::json!({
+                "names": realm_reach.names, "top": reasons,
+                "reach": realm_reach, "exec_only": exec_only,
+                "fixture_exec": fixture_exec, "dumper_exec": dumper_exec,
+                "full": perry_codegen::realm_manifest::REALM.len()
+            })
+        );
+    }
+    // R drives the entry module's realm emission (WRT3p-A1: the runtime
+    // layouts' descriptors and key lists).
+    let realm_reach = std::sync::Arc::new(realm_reach);
+    let reach_report = super::reach_report::start(&ctx, args.output_type != "executable")?;
+    let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
+    for opts in &mut prepared_options {
+        if let Ok(opts) = opts {
+            if opts.is_entry_module {
+                opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
+            }
+        }
+    }
     // Per-module options now own the facts needed by lowering. Release the
     // program's preparation inputs before any LLVM worker starts.
     drop((

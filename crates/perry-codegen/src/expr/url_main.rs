@@ -89,7 +89,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let obj = rooting::call_with_roots(
                     ctx,
                     I64,
-                    "js_url_new_with_base",
+                    perry_hir::realm_reach::lowered_operation(expr)
+                        .expect("lowered runtime operation"),
                     &[Arg::Root(&url_slot), Arg::Root(&base_slot)],
                 );
                 // Reverse acquisition order: a release is a stack cut, so
@@ -103,7 +104,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let url_ptr = ctx
                     .block()
                     .call(I64, "js_url_coerce_string", &[(DOUBLE, &url_v)]);
-                ctx.block().call(I64, "js_url_new", &[(I64, &url_ptr)])
+                ctx.block().call(
+                    I64,
+                    perry_hir::realm_reach::lowered_operation(expr)
+                        .expect("lowered runtime operation"),
+                    &[(I64, &url_ptr)],
+                )
             };
             Ok(nanbox_pointer_inline(ctx.block(), &obj))
         }

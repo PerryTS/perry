@@ -950,7 +950,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
                 return Ok(blk.call(
                     DOUBLE,
-                    "js_object_get_field_by_name_f64",
+                    perry_hir::realm_reach::field_get_operation(),
                     &[(I64, &obj_bits), (I64, &key_raw)],
                 ));
             }
@@ -1115,7 +1115,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             // GlobalGet names the global object. Builtin property values
             // retain their own receiver and take ordinary property lowering.
-            if matches!(object.as_ref(), Expr::GlobalGet(_)) {
+            if perry_hir::realm_reach::global_value_read(expr, &crate::realm_manifest::REALM)
+                .is_some()
+            {
                 return lower_globalget_property(ctx, property);
             }
             // Namespace-import member access: `import * as O from './oids';
@@ -1409,7 +1411,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
                     return Ok(blk.call(
                         DOUBLE,
-                        "js_object_get_field_by_name_f64",
+                        perry_hir::realm_reach::field_get_operation(),
                         &[(I64, &obj_handle), (I64, &key_handle)],
                     ));
                 }
@@ -1572,7 +1574,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
                     return Ok(blk.call(
                         DOUBLE,
-                        "js_object_get_field_by_name_f64",
+                        perry_hir::realm_reach::field_get_operation(),
                         &[(I64, &obj_bits), (I64, &key_handle)],
                     ));
                 }

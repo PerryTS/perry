@@ -254,6 +254,7 @@ crate::perry_thread_local! {
 /// when the agent's table is already torn down.
 #[inline]
 pub(crate) fn atom_lookup(bytes: &[u8], hash: u64) -> Option<*const StringHeader> {
+    crate::realm_decl! { operation atom_lookup, calls = [builtin_global_atom] }
     ATOMS
         .try_with(|t| unsafe { (*t.get()).lookup(bytes, hash) })
         .ok()
@@ -330,6 +331,7 @@ pub extern "C" fn js_string_pool_atom(
     hash: u64,
     is_wtf8: i32,
 ) -> *mut StringHeader {
+    crate::realm_decl! { operation js_string_pool_atom, calls = [atom_lookup] }
     if is_wtf8 != 0 || len == 0 || len > INTERN_MAX_BYTE_LEN || bytes.is_null() {
         return image_string(bytes, len);
     }

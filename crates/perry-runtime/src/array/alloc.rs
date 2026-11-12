@@ -168,6 +168,8 @@ pub(crate) fn js_array_alloc_named_props_reserved(
     capacity: u32,
     set: crate::array::NamedPropertyKeys,
 ) -> *mut ArrayHeader {
+    crate::realm_decl! { operation js_array_alloc_named_props_reserved, births = [Array, "%Layout:REGEX_EXEC_NAMED%", "%Layout:REGEX_EXEC_INDICES_NAMED%", "%Layout:REGEX_INDICES_GROUPS_NAMED%"] }
+
     let scope = crate::gc::RuntimeHandleScope::new();
     let array = scope.root_raw_mut_ptr(js_array_alloc(capacity));
     unsafe {

@@ -4,18 +4,26 @@ use super::*;
 
 #[no_mangle]
 pub extern "C" fn js_string_match_js(receiver: f64, pattern: f64) -> f64 {
+    crate::realm_decl! { operation js_string_match_js, calls = [js_array_alloc_named_props_reserved], births = [RegExp] }
+
     perex_api::finish(operations::string(Operation::Match, receiver, pattern))
 }
 #[no_mangle]
 pub extern "C" fn js_string_search_js(receiver: f64, pattern: f64) -> f64 {
+    crate::realm_decl! { operation js_string_search_js, calls = [js_array_alloc_named_props_reserved], births = [RegExp] }
+
     perex_api::finish(operations::string(Operation::Search, receiver, pattern))
 }
 #[no_mangle]
 pub extern "C" fn js_string_match_value(s: *const StringHeader, pattern: f64) -> f64 {
+    crate::realm_decl! { operation js_string_match_value, calls = [js_string_match_js] }
+
     js_string_match_js(crate::value::js_nanbox_string(s as i64), pattern)
 }
 #[no_mangle]
 pub extern "C" fn js_string_search_value(s: *const StringHeader, pattern: f64) -> f64 {
+    crate::realm_decl! { operation js_string_search_value, calls = [js_string_search_js] }
+
     js_string_search_js(crate::value::js_nanbox_string(s as i64), pattern)
 }
 

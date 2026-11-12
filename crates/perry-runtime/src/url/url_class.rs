@@ -184,6 +184,7 @@ fn coerce_url_setter_value(value: f64) -> String {
 /// js_url_new(url: *mut StringHeader) -> *mut ObjectHeader (URL object)
 #[no_mangle]
 pub extern "C" fn js_url_new(url_str: *mut crate::StringHeader) -> *mut ObjectHeader {
+    crate::realm_decl! { operation js_url_new, calls = [create_url_object] }
     let url_string = if url_str.is_null() {
         String::new()
     } else {
@@ -207,6 +208,7 @@ pub extern "C" fn js_url_new_with_base(
     url_str: *mut crate::StringHeader,
     base_str: *mut crate::StringHeader,
 ) -> *mut ObjectHeader {
+    crate::realm_decl! { operation js_url_new_with_base, calls = [create_url_object] }
     let url_string = if url_str.is_null() {
         String::new()
     } else {

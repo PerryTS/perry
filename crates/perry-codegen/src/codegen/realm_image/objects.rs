@@ -66,8 +66,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hello_objects_emit_values_back_edges_and_custom_prototypes() {
-        let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
+    fn named_objects_emit_values_back_edges_and_custom_prototypes() {
+        let hir = perry_parser::parse_typescript("[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "realm.cjs").unwrap();
         let reach = perry_hir::realm_reach::scan(
             &hir,
             &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),

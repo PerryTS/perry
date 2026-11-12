@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::realm_reach_index::{member_of_primitive, RealmIndex, PRIMITIVE_KINDS};
-use swc_common::{Globals, Mark, SyntaxContext, GLOBALS};
+use swc_common::{Globals, Mark, Spanned, SyntaxContext, GLOBALS};
 use swc_ecma_ast as ast;
 use swc_ecma_visit::{Visit, VisitMut, VisitMutWith, VisitWith};
 
@@ -30,24 +30,6 @@ pub fn scan(module: &ast::Module, entries: &RealmIndex) -> RealmReach {
     crate::dynamic_code::scan(module, "<realm>", &mut dynamic);
     if dynamic.globals {
         out.top.insert(RealmTop::DynamicCode);
-    }
-    for name in [
-        "Object",
-        "Function",
-        "Array",
-        "Error",
-        "TypeError",
-        "RangeError",
-        "SyntaxError",
-        "ReferenceError",
-        "EvalError",
-        "URIError",
-        "AggregateError",
-        "SuppressedError",
-    ] {
-        if entries.has(name) {
-            out.own(name);
-        }
     }
     scan_resolved(module, entries, &mut out);
     for source in crate::dynamic_code::constant_source_bodies(module) {
@@ -149,6 +131,7 @@ fn scan_resolved(module: &ast::Module, entries: &RealmIndex, out: &mut RealmReac
             called_makers: BTreeSet::new(),
             write: false,
             direct_callee: None,
+            value_callee: None,
         });
     });
 }
@@ -186,21 +169,95 @@ impl Visit for Constants {
     }
 }
 
-/// Lowering can expose the global object without a literal global spelling,
-/// notably constant Function('return this')() and global-script top-level this.
-/// Static member receivers still name only that member; they do not escape.
+/// Both source members and lowered value reads use the global's declared slots.
+pub trait RealmGlobals {
+    fn global_member(&self, key: &str) -> bool;
+}
+impl RealmGlobals for RealmIndex {
+    fn global_member(&self, key: &str) -> bool {
+        self.last("%Global%")
+            .is_some_and(|r| r.entry().own.iter().any(|p| p.key == key && !p.symbol))
+    }
+}
+impl RealmGlobals for &[crate::realm_manifest::RealmEntry] {
+    fn global_member(&self, key: &str) -> bool {
+        self.iter()
+            .find(|r| r.name == "%Global%")
+            .is_some_and(|r| r.own.iter().any(|p| p.key == key && !p.symbol))
+    }
+}
+
+/// The operations for which codegen materializes the global to load a value.
+pub fn global_value_read<'a>(
+    expr: &'a crate::Expr,
+    entries: &impl RealmGlobals,
+) -> Option<&'a str> {
+    use crate::Expr;
+    match expr {
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::GlobalGet(_)) => Some(property),
+        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if matches!(name.as_str(), "js_global_get_optional" | "js_global_get_or_throw_unresolved")) => {
+            if let [Expr::String(key)] = args.as_slice() {
+                Some(key)
+            } else {
+                None
+            }
+        }
+        Expr::ExternFuncRef { name, .. } if entries.global_member(name) => Some(name),
+        _ => None,
+    }
+}
+
+/// The runtime body selected by a lowered intrinsic operation. The emitter
+/// and the reach use the same symbol for these calls.
+pub const fn field_get_operation() -> &'static str {
+    "js_object_get_field_by_name_f64"
+}
+
+pub fn string_index_operation() -> &'static str {
+    "js_string_index_get_boxed"
+}
+
+pub fn lowered_operation(expr: &crate::Expr) -> Option<&'static str> {
+    use crate::Expr;
+    match expr {
+        Expr::ProcessStdin => Some("js_process_stdin"),
+        Expr::ProcessStdout => Some("js_process_stdout"),
+        Expr::ProcessStderr => Some("js_process_stderr"),
+        Expr::ObjectGetOwnPropertyDescriptor(..) => Some("js_object_get_own_property_descriptor"),
+        Expr::ObjectGetOwnPropertyDescriptors(..) => Some("js_object_get_own_property_descriptors"),
+        Expr::UrlNew { base: Some(_), .. } => Some("js_url_new_with_base"),
+        Expr::UrlNew { base: None, .. } => Some("js_url_new"),
+        Expr::PropertyGet {
+            object, property, ..
+        } if matches!(object.as_ref(), Expr::String(value)
+            if property != "length" && !property.parse::<usize>().ok().is_some_and(|i|
+                i.to_string() == *property && i < value.encode_utf16().count())) =>
+        {
+            Some(field_get_operation())
+        }
+        Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::String(_)) => {
+            Some(string_index_operation())
+        }
+        _ => None,
+    }
+}
+
 pub fn scan_lowered(module: &crate::Module, entries: &RealmIndex, out: &mut RealmReach) {
     use crate::Expr;
     let mut static_receivers = BTreeSet::new();
+    let mut callees = BTreeSet::new();
     let mut permit = |receiver: &Expr, key: &str| {
         if matches!(receiver, Expr::GlobalThisExpr) {
             static_receivers.insert(receiver as *const Expr as usize);
-            if entries.has(key) {
-                out.own(key);
-            }
+            out.global_read(entries, key);
         }
     };
     crate::for_each_module_expr(module, &mut |expr| match expr {
+        Expr::Call { callee, .. } => {
+            callees.insert(callee.as_ref() as *const Expr as usize);
+        }
         Expr::PropertyGet {
             object, property, ..
         }
@@ -230,10 +287,34 @@ pub fn scan_lowered(module: &crate::Module, entries: &RealmIndex, out: &mut Real
         }
         _ => {}
     });
+    if module
+        .classes
+        .iter()
+        .any(|class| !class.static_fields.is_empty())
+    {
+        out.exec("js_class_register_static_field");
+    }
     crate::for_each_module_expr(module, &mut |expr| {
+        if let Some(symbol) = lowered_operation(expr) {
+            out.exec(symbol);
+        }
+        if !callees.contains(&(expr as *const Expr as usize)) {
+            if let Some(key) = global_value_read(expr, entries) {
+                out.global_read(entries, key);
+            }
+        }
+        if let Expr::Call { callee, .. } = expr {
+            if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                if entries.bodies(name).next().is_some() {
+                    out.exec(name);
+                }
+            }
+        }
         if matches!(expr, Expr::GlobalThisExpr)
             && !static_receivers.contains(&(expr as *const Expr as usize))
         {
+            out.exec("js_get_global_this");
+            out.own("%Global%");
             out.top.insert(RealmTop::GlobalObjectValue);
         }
     });
@@ -429,6 +510,7 @@ struct Scan<'a> {
     called_makers: BTreeSet<swc_common::Span>,
     write: bool,
     direct_callee: Option<swc_common::Span>,
+    value_callee: Option<swc_common::Span>,
 }
 
 impl Scan<'_> {
@@ -534,10 +616,8 @@ impl Scan<'_> {
             } else {
                 self.out.top.insert(RealmTop::DynamicModule);
             }
-        } else {
-            // Generic calls can receive every primitive kind. Literal-only
-            // programs below name just the kinds present in their expressions.
-            self.primitive_prototypes();
+        } else if let Some(callee) = callee {
+            self.call_events(callee, args);
         }
         match callee {
             Some(callee) if self.loader_or_maker(callee) => self.loader_parts(callee),
@@ -549,7 +629,10 @@ impl Scan<'_> {
                 } else {
                     None
                 };
+                let previous_value = self.value_callee;
+                self.value_callee = Some(callee.span());
                 callee.visit_with(self);
+                self.value_callee = previous_value;
                 self.direct_callee = previous;
             }
             None => {}
@@ -560,6 +643,9 @@ impl Scan<'_> {
     }
 
     fn iterables(&mut self, value: &ast::Expr) {
+        self.protocol(value, crate::realm_manifest::RealmProtocol::Iterate);
+        self.protocol(value, crate::realm_manifest::RealmProtocol::IterNext);
+        self.protocol(value, crate::realm_manifest::RealmProtocol::IterResult);
         match crate::patched_builtins::peel(value) {
             ast::Expr::Array(_) => self.add("%ArrayIteratorPrototype%"),
             ast::Expr::Lit(ast::Lit::Str(_)) | ast::Expr::Tpl(_) => {
@@ -833,6 +919,11 @@ impl Scan<'_> {
 
 impl Scan<'_> {
     fn member(&mut self, member: &ast::MemberExpr, read: bool) {
+        if read && self.direct_callee != Some(member.span) {
+            if let Some(name) = self.holder(&ast::Expr::Member(member.clone())) {
+                self.callable_value(&name);
+            }
+        }
         let write = std::mem::take(&mut self.write);
         if matches!(member.prop, ast::MemberProp::PrivateName(_)) {
             member.obj.visit_with(self);
@@ -865,7 +956,7 @@ impl Scan<'_> {
                 if read && is_global(&key) {
                     self.out.top.insert(RealmTop::GlobalObjectValue);
                 } else {
-                    self.add(&key);
+                    self.out.global_read(self.entries, &key);
                 }
             } else {
                 self.out.top.insert(RealmTop::GlobalObjectValue);
@@ -917,6 +1008,9 @@ impl Scan<'_> {
                     ast::Expr::Lit(_) | ast::Expr::Array(_) | ast::Expr::Object(_) => &[],
                     _ => &PRIMITIVE_KINDS,
                 };
+                for kind in kinds {
+                    self.add(kind);
+                }
                 for name in self
                     .entries
                     .prototype_members(kinds, self.key(&member.prop).as_deref())
@@ -956,16 +1050,45 @@ impl Visit for Scan<'_> {
                 if is_global(&i.sym) {
                     self.out.top.insert(RealmTop::GlobalObjectValue);
                 } else {
+                    if matches!(i.sym.as_ref(), "module" | "exports" | "arguments") {
+                        self.objects();
+                    } else if !self.entries.has(&i.sym)
+                        && !matches!(
+                            i.sym.as_ref(),
+                            "undefined" | "NaN" | "Infinity" | "__dirname" | "__filename"
+                        )
+                    {
+                        self.out.global_read(self.entries, &i.sym);
+                    }
+                    self.out.global_keys.insert(i.sym.to_string());
                     self.add(&i.sym);
-                    self.own_all(&i.sym);
+                    if self.value_callee != Some(expr.span()) {
+                        self.callable_value(&i.sym);
+                        self.own_all(&i.sym);
+                    }
                 }
             }
+        }
+        match expr {
+            ast::Expr::Object(_) | ast::Expr::MetaProp(_) => self.objects(),
+            ast::Expr::Array(_) => self.instance("Array"),
+            ast::Expr::Ident(i) if i.sym == "arguments" => self.objects(),
+            _ => {}
         }
         expr.visit_children_with(self);
     }
 
     fn visit_member_expr(&mut self, member: &ast::MemberExpr) {
         self.member(member, true);
+    }
+
+    fn visit_binding_ident(&mut self, ident: &ast::BindingIdent) {
+        // Resolver-marked assignment patterns write the actual global object;
+        // declarations and parameters carry their own binding mark.
+        if self.free(&ident.id) {
+            self.out.exec("js_get_global_this");
+        }
+        ident.visit_children_with(self);
     }
 
     fn visit_assign_expr(&mut self, assign: &ast::AssignExpr) {
@@ -1003,6 +1126,9 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_prop(&mut self, prop: &ast::Prop) {
+        if matches!(prop, ast::Prop::Getter(_) | ast::Prop::Setter(_)) {
+            self.functions();
+        }
         if let ast::Prop::Shorthand(i) = prop {
             if self.loaders.loader_ident(i) || self.loaders.maker_ident(i) {
                 self.out.top.insert(RealmTop::DynamicModule);
@@ -1011,6 +1137,7 @@ impl Visit for Scan<'_> {
                 if is_global(&i.sym) {
                     self.out.top.insert(RealmTop::GlobalObjectValue);
                 } else {
+                    self.out.global_keys.insert(i.sym.to_string());
                     self.add(&i.sym);
                 }
             }
@@ -1120,18 +1247,16 @@ impl Visit for Scan<'_> {
 
     fn visit_lit(&mut self, lit: &ast::Lit) {
         match lit {
-            ast::Lit::Regex(_) => self.add("RegExp"),
-            ast::Lit::Str(_) => self.add("String"),
-            ast::Lit::Num(_) => self.add("Number"),
-            ast::Lit::Bool(_) => self.add("Boolean"),
-            ast::Lit::BigInt(_) => self.add("BigInt"),
+            ast::Lit::Regex(_) => self.instance("RegExp"),
             _ => {}
         }
     }
 
     fn visit_function(&mut self, function: &ast::Function) {
+        self.objects();
+        self.functions();
         if function.is_async {
-            self.add("Promise");
+            self.instance("Promise");
             self.add("%AsyncFunctionPrototype%");
         }
         if function.is_generator {
@@ -1150,22 +1275,30 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_arrow_expr(&mut self, arrow: &ast::ArrowExpr) {
+        self.functions();
         if arrow.is_async {
-            self.add("Promise");
+            self.instance("Promise");
             self.add("%AsyncFunctionPrototype%");
         }
         arrow.visit_children_with(self);
     }
 
     fn visit_await_expr(&mut self, expr: &ast::AwaitExpr) {
-        self.add("Promise");
+        self.instance("Promise");
+        if !primitive(&expr.arg) {
+            self.out.receiver_keys.extend(
+                crate::realm_manifest::RealmProtocol::await_receiver_keys()
+                    .iter()
+                    .map(|k| k.to_string()),
+            );
+        }
         expr.visit_children_with(self);
     }
 
     fn visit_for_of_stmt(&mut self, stmt: &ast::ForOfStmt) {
         self.iterables(&stmt.right);
         if stmt.is_await {
-            self.add("Promise");
+            self.instance("Promise");
             self.add("%AsyncIteratorPrototype%");
             self.add("%AsyncGeneratorPrototype%");
         }
@@ -1204,6 +1337,23 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_array_pat(&mut self, pat: &ast::ArrayPat) {
+        if pat
+            .elems
+            .iter()
+            .flatten()
+            .any(|p| matches!(p, ast::Pat::Rest(_)))
+        {
+            self.instance("Array");
+        }
+        for p in [
+            crate::realm_manifest::RealmProtocol::Iterate,
+            crate::realm_manifest::RealmProtocol::IterNext,
+            crate::realm_manifest::RealmProtocol::IterResult,
+        ] {
+            self.out
+                .receiver_keys
+                .extend(p.receiver_keys().iter().map(|k| k.to_string()));
+        }
         // Parameter/assignment patterns may lack an initializer at this site.
         self.add("%IteratorPrototype%");
         self.add("%ArrayIteratorPrototype%");
@@ -1235,7 +1385,9 @@ impl Visit for Scan<'_> {
                     self.out.receiver_keys.insert(p.key.sym.to_string());
                 }
                 ast::ObjectPatProp::Rest(_) => {
-                    self.out.keyless_read = self.out.keyless_read.max(Some(KeylessRead::Enumerable))
+                    self.out.keyless_read =
+                        self.out.keyless_read.max(Some(KeylessRead::Enumerable));
+                    self.objects();
                 }
             }
         }
@@ -1252,18 +1404,62 @@ impl Visit for Scan<'_> {
     }
 
     fn visit_new_expr(&mut self, expression: &ast::NewExpr) {
-        self.primitive_prototypes();
+        if let Some(kind) = self.holder(&expression.callee) {
+            if let Some(proto) = self
+                .entries
+                .last(&kind)
+                .and_then(|r| r.instance_prototype())
+            {
+                self.out.chain_roots.insert(proto.to_string());
+            }
+        }
+        if self.holder(&expression.callee).is_none() {
+            self.objects();
+        }
+        if let Some(args) = &expression.args {
+            self.call_events(&expression.callee, args);
+        }
         expression.visit_children_with(self);
+    }
+
+    fn visit_class(&mut self, class: &ast::Class) {
+        self.objects();
+        self.functions();
+        class.visit_children_with(self);
+    }
+
+    fn visit_bin_expr(&mut self, expr: &ast::BinExpr) {
+        use crate::realm_manifest::RealmProtocol;
+        use ast::BinaryOp::*;
+        match expr.op {
+            InstanceOf => {
+                self.protocol_operand(&expr.right, RealmProtocol::HasInstance);
+                expr.left.visit_with(self);
+                return;
+            }
+            Add | Lt | LtEq | Gt | GtEq | EqEq | NotEq => {
+                self.protocol_operand(&expr.left, RealmProtocol::ToPrimitive);
+                self.protocol_operand(&expr.right, RealmProtocol::ToPrimitive);
+                return;
+            }
+            _ => {}
+        }
+        expr.visit_children_with(self);
     }
 
     fn visit_ts_interface_decl(&mut self, _: &ast::TsInterfaceDecl) {}
     fn visit_ts_type_alias_decl(&mut self, _: &ast::TsTypeAliasDecl) {}
 
     fn visit_tpl(&mut self, tpl: &ast::Tpl) {
-        self.add("String");
-        tpl.visit_children_with(self);
+        for expr in &tpl.exprs {
+            self.protocol_operand(expr, crate::realm_manifest::RealmProtocol::ToPrimitive);
+        }
     }
 }
+
+#[path = "realm_reach_events.rs"]
+mod events;
+use events::primitive;
 
 #[cfg(test)]
 #[path = "realm_reach_tests.rs"]

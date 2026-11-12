@@ -201,6 +201,7 @@ pub(crate) unsafe fn try_stringify_lazy_array(value: f64) -> Option<*mut StringH
 
 #[no_mangle]
 pub unsafe extern "C" fn js_json_stringify(value: f64, type_hint: u32) -> *mut StringHeader {
+    crate::realm_decl! { operation js_json_stringify, calls = [builtin_global_atom] }
     if let Some(ptr) = super::stringify_string::try_heap_string(value.to_bits()) {
         return ptr;
     }

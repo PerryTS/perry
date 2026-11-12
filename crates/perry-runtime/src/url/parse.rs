@@ -435,6 +435,7 @@ pub(crate) fn encode_non_ascii(s: &str) -> String {
 
 /// Create a URL object from a string
 pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
+    crate::realm_decl! { operation create_url_object, calls = [create_url_search_params_object] }
     let (protocol, mut host, mut hostname, port, pathname, search, hash) = parse_url(url_string);
     let pathname = super::url_class::percent_encode_path(&pathname);
     let search = encode_non_ascii(&search);

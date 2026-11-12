@@ -4,7 +4,7 @@ use perry_abi::{LayoutRow, LayoutWord, ShapeObjectKind};
 
 #[test]
 fn descriptor_values_and_direct_aliases_verify_on_each_target() {
-    let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
+    let hir = perry_parser::parse_typescript("[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "realm.cjs").unwrap();
     let reach = perry_hir::realm_reach::scan(
         &hir,
         &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
@@ -146,7 +146,7 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
     let mut symbol_keyed = 0;
     let mut keyless = 0;
     let mut associated = 0;
-    for source in ["console.log('hi');", "1 + 2;", "with ({}) {}"] {
+    for source in ["[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "1 + 2;", "with ({}) {}"] {
         let hir = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
         let reach = perry_hir::realm_reach::scan(
             &hir,

@@ -292,6 +292,7 @@ fn coerce_search_param_arg(value: f64) -> String {
 
 /// Create a URLSearchParams object from entries
 pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
+    crate::realm_decl! { operation create_url_search_params_object, calls = [js_get_global_this] }
     // The layout's prototype family names `%URLSearchParams.prototype%`, which
     // the realm builds with `globalThis`: build it before the first instance
     // (#12697), or the instance's [[Prototype]] word would still be empty.

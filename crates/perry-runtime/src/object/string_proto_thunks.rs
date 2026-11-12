@@ -125,22 +125,22 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
         ) {
             let fp = match name {
                 "match" => {
-                    crate::fn_info!(#[realm(String.prototype.match, births = [RegExp])] export crate::object::string_proto_thunks::string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.match, births = [RegExp], calls = [js_string_match_js])] export crate::object::string_proto_thunks::string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "matchAll" => {
                     crate::fn_info!(#[realm(String.prototype.matchAll, births = [RegExp])] export crate::object::string_proto_thunks::string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replace" => {
-                    crate::fn_info!(#[realm(String.prototype.replace)] export crate::object::string_proto_thunks::string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.replace, calls = [js_string_replace_js])] export crate::object::string_proto_thunks::string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replaceAll" => {
-                    crate::fn_info!(#[realm(String.prototype.replaceAll)] export crate::object::string_proto_thunks::string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.replaceAll, calls = [js_string_replace_all_js])] export crate::object::string_proto_thunks::string_proto_replace_all_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "split" => {
-                    crate::fn_info!(#[realm(String.prototype.split)] export crate::object::string_proto_thunks::string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.split, births = [Array], calls = [js_string_split_js])] export crate::object::string_proto_thunks::string_proto_split_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))
                 }
                 _ => {
-                    crate::fn_info!(#[realm(String.prototype.search)] export crate::object::string_proto_thunks::string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.search, births = [RegExp], calls = [js_string_search_js])] export crate::object::string_proto_thunks::string_proto_search_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
             };
             super::global_this::install_proto_method(proto_obj, name, fp, spec_length);
@@ -232,7 +232,7 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]")] export crate::object::string_proto_thunks::string_proto_symbol_iterator_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]", births = ["%StringIteratorPrototype%"])] export crate::object::string_proto_thunks::string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;

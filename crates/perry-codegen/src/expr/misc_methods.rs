@@ -754,7 +754,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let k = rooted_values[1].clone();
             let rooted_result = ctx.block().call(
                 DOUBLE,
-                "js_object_get_own_property_descriptor",
+                perry_hir::realm_reach::lowered_operation(expr).expect("lowered runtime operation"),
                 &[(DOUBLE, &o), (DOUBLE, &k)],
             );
             rooted_group.release(ctx);
@@ -766,7 +766,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let o = lower_expr(ctx, obj)?;
             Ok(ctx.block().call(
                 DOUBLE,
-                "js_object_get_own_property_descriptors",
+                perry_hir::realm_reach::lowered_operation(expr).expect("lowered runtime operation"),
                 &[(DOUBLE, &o)],
             ))
         }

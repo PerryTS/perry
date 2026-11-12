@@ -368,22 +368,22 @@ fn build_iterator_prototypes() {
     super::iterator_ctor::install_prototype_accessors(shared);
 
     let array_proto = build_family_proto(
-        crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next")] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Array Iterator",
         shared,
     );
     let map_proto = build_family_proto(
-        crate::fn_info!(#[realm("%MapIteratorPrototype%.next")] export crate::object::iterator_prototypes::map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%MapIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Map Iterator",
         shared,
     );
     let set_proto = build_family_proto(
-        crate::fn_info!(#[realm("%SetIteratorPrototype%.next")] export crate::object::iterator_prototypes::set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%SetIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Set Iterator",
         shared,
     );
     let string_proto = build_family_proto(
-        crate::fn_info!(#[realm("%StringIteratorPrototype%.next")] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%StringIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "String Iterator",
         shared,
     );

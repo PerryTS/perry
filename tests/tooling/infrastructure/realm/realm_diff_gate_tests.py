@@ -17,12 +17,13 @@ NAMES_FILE = Path("/x/hello.names.json")
 NAMES = ["console", "globalThis"]
 
 
-def log(names_line=True, top=(), names=tuple(NAMES)):
+def log(names_line=True, top=(), names=tuple(NAMES), exec_only=(), fixture_exec=(), dumper_exec=()):
     lines = []
     if names_line:
         lines.append(f"[realm-reach-names] {NAMES_FILE} {len(NAMES)}")
     lines.append("[realm-reach-json] " + json.dumps(
-        {"names": list(names), "top": list(top), "full": 10}))
+        {"names": list(names), "top": list(top), "full": 10, "exec_only": list(exec_only),
+         "fixture_exec": list(fixture_exec), "dumper_exec": list(dumper_exec)}))
     return "\n".join(lines) + "\n"
 
 
@@ -48,6 +49,21 @@ class RestrictedCheck(unittest.TestCase):
             gate.check_restricted(log(names=("console",)), NAMES_FILE, NAMES)
         with self.assertRaisesRegex(gate.GateError, "not the names file"):
             gate.check_restricted(log(names=tuple(NAMES) + ("Object",)), NAMES_FILE, NAMES)
+
+    def test_additional_executing_body_keeps_exact_union_after_global_bootstrap(self):
+        extra = "%Layout:RESULT%"
+        output = log(names=tuple(NAMES) + (extra,), exec_only=(extra,),
+                     fixture_exec=("js_get_global_this",),
+                     dumper_exec=("js_get_global_this", "descriptor"))
+        gate.check_restricted(output, NAMES_FILE, NAMES)
+        with self.assertRaisesRegex(gate.GateError, "not the names file"):
+            gate.check_restricted(output.replace(extra, "wrong", 1), NAMES_FILE, NAMES)
+
+    def test_covered_executing_closure_has_no_exec_only_names(self):
+        output = log(names=tuple(NAMES) + ("extra",), exec_only=("extra",),
+                     fixture_exec=("descriptor", "bootstrap"), dumper_exec=("descriptor",))
+        with self.assertRaisesRegex(gate.GateError, "covers executing bodies"):
+            gate.check_restricted(output, NAMES_FILE, NAMES)
 
     def test_one_reach_line_is_required(self):
         with self.assertRaisesRegex(gate.GateError, "one \\[realm-reach-json\\]"):
@@ -130,7 +146,8 @@ class OneSource(unittest.TestCase):
         def compile_ts(perry, source, binary, extra_env):
             mode = "check" if "PERRY_REALM_REACH_NAMES" in extra_env else "reference"
             sources[mode] = Path(source).read_text()
-            return log().replace(str(NAMES_FILE), str(refs / "hello.names.json"))
+            names_input = extra_env.get("PERRY_REALM_REACH_NAMES", str(refs / "hello.names.json"))
+            return log().replace(str(NAMES_FILE), names_input)
         try:
             gate.REFS = refs
             gate.witness_names = lambda perry, program, out: list(NAMES)

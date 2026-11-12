@@ -453,6 +453,7 @@ pub(super) fn birth_at(
         "Object.prototype".to_owned()
     };
     let mut extra = Vec::new();
+    let mut operation = None;
     let mut declared = None;
     let mut never_move = false;
     let mut integrity = Integrity::Extensible;
@@ -510,6 +511,7 @@ pub(super) fn birth_at(
                     return Err("omit the default integrity".into());
                 }
             }
+            "operation" => operation = Some(facts::path(&clause[2..])?),
             "births" if clause[2].text == "[" && clause.last().unwrap().text == "]" => {
                 for path in info::split(&clause[3..clause.len() - 1], ",") {
                     extra.push(facts::path(path)?);
@@ -627,6 +629,9 @@ pub(super) fn birth_at(
     let Value::Object(map) = &mut declaration else {
         unreachable!()
     };
+    if let Some(operation) = operation {
+        map.insert("operation".into(), string(operation));
+    }
     if prototype.is_empty() {
         map.remove("prototype");
     }

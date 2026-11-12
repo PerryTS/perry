@@ -1149,6 +1149,7 @@ runtime_layout!(GLOBAL_OBJECT, 0x5254_0012, 0, crate::object::layout_desc::LAYOU
 /// the builtin name's image atom.
 #[inline(never)]
 pub(crate) fn builtin_global_atom(name: &[u8], hash: u64) -> Option<*const StringHeader> {
+    crate::realm_decl! { operation builtin_global_atom, demands = ["%Layout:GLOBAL_OBJECT%"] }
     // SAFETY: the descriptor is the program's immutable definition of the
     // layout; its keys and index are image data of that descriptor.
     let (keys, index, mask) = unsafe {

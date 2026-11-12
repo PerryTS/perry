@@ -121,7 +121,7 @@ const MEMBERS: &[Member] = &[
     ),
     Member::method(
         "max",
-        crate::fn_info!(#[realm(Math.max, spec = {length = 2}, emit = metadata(realm_math_max_metadata))] export crate::object::global_this::builtin_thunks::math_max_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(Math.max, arguments = converted, effects = { coerce(rest(0), ToPrimitive); returns(prim(num)) }, spec = {length = 2}, emit = metadata(realm_math_max_metadata))] export crate::object::global_this::builtin_thunks::math_max_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
         realm_math_max_metadata!(length),
     ),
     Member::method(

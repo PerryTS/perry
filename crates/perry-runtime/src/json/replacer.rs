@@ -1327,6 +1327,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
     replacer_f64: f64,
     spacer_f64: f64,
 ) -> i64 {
+    crate::realm_decl! { operation js_json_stringify_full, calls = [builtin_global_atom] }
     let value_bits = value.to_bits();
     let replacer_bits = replacer_f64.to_bits();
     let spacer_bits = spacer_f64.to_bits();

@@ -660,7 +660,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "join",
-                crate::fn_info!(#[realm(Array.prototype.join, effects = { reads(this); coerce(elems(this), ToPrimitive); coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(str)) })] export crate::object::global_this::array_error::array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.join, arguments = converted, effects = { reads(this); coerce(elems(this), ToPrimitive); coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(str)) })] export crate::object::global_this::array_error::array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
@@ -820,7 +820,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(#[realm(Function.prototype.bind, effects = { reads(field(this, length), field(this, name)); stores(fresh); returns(bound) })] export native_args crate::object::global_this::array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.bind, effects = { reads(field(this, length), field(this, name)); stores(fresh); returns(bound) }, births = [Function])] export native_args crate::object::global_this::array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -1056,19 +1056,19 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "catch",
-                crate::fn_info!(#[realm(Promise.prototype.catch)] export crate::promise::then::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.catch, births = [Function])] export crate::promise::then::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "finally",
-                crate::fn_info!(#[realm(Promise.prototype.finally)] export crate::promise::then::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.finally, births = [Function])] export crate::promise::then::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "then",
-                crate::fn_info!(#[realm(Promise.prototype.then)] export crate::promise::then::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.then, births = [Function])] export crate::promise::then::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");

@@ -217,6 +217,7 @@ fn inspect_format_arg(val: f64) -> String {
 
 #[no_mangle]
 pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f64 {
+    crate::realm_decl! { operation js_util_format, calls = [builtin_global_atom] }
     use crate::value::JSValue;
     // Helper: produce a NaN-boxed string from a Rust `&str`.
     fn boxed_string(s: &str) -> f64 {

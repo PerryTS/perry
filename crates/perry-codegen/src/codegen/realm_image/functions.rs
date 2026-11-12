@@ -143,7 +143,10 @@ mod tests {
 
     #[test]
     fn every_reached_function_owns_its_info_bag_captures_and_prototype_state() {
-        for source in ["console.log('hi');", "with ({}) {}"] {
+        for source in [
+            "Object; Function; Array; String; RegExp; [Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');",
+            "with ({}) {}",
+        ] {
             let hir = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
             let reach = perry_hir::realm_reach::scan(
                 &hir,
@@ -204,13 +207,8 @@ mod tests {
                     emit_function(&mut module, cell, &layouts, &atoms).unwrap();
                     count += 1;
                 }
-                // A vacuity guard, measured: hello reaches 229 functions (274 before the
-                // builtin prototypes stopped owning copies of Object.prototype members;
-                // #12774
-                // dropped six Object own copies of Object.prototype methods,
-                // hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toString,
-                // toLocaleString and valueOf; they are inherited, not own), and
-                // the full realm reaches 2499 (2584 before the copies went).
+                // Both the named partial realm and the full realm exercise
+                // function bags, captures and constructor prototype state.
                 assert!(count >= if reach.is_full() { 2490 } else { 229 });
                 let ir = module.to_ir();
                 assert!(

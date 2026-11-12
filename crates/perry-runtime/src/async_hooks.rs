@@ -248,7 +248,7 @@ pub(crate) fn install_async_resource_prototype(
     );
     proto.method(
         "bind",
-        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind")] export crate::async_hooks::resource_methods::async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("node:async_hooks.AsyncResource.prototype.bind", births = [Function])] export crate::async_hooks::resource_methods::async_resource_bind_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     );
 }

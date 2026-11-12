@@ -34,7 +34,6 @@ use crate::expr::{variant_name, FnCtx};
 #[cfg(test)]
 mod alloc_hot_tests;
 mod atomics;
-pub(crate) mod field_read_call;
 pub(crate) mod birth_lanes;
 #[cfg(test)]
 mod birth_lanes_tests;
@@ -48,6 +47,7 @@ mod closure_analysis;
 #[cfg(test)]
 mod closure_call_arity_tests;
 mod console_promise;
+pub(crate) mod field_read_call;
 pub(crate) use console_promise::{
     emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
     try_lower_optional_method_call,
@@ -679,16 +679,36 @@ fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Resul
                 }
             }
         }
-        if name == "js_global_get_optional" {
-            if let [Expr::String(key)] = args {
-                return crate::expr::property_get::globalget::lower_optional_global_read(ctx, key);
+        if matches!(
+            name.as_str(),
+            "js_global_get_optional" | "js_global_get_or_throw_unresolved"
+        ) {
+            let call = Expr::Call {
+                callee: Box::new(callee.clone()),
+                args: args.to_vec(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                byte_end: 0,
+            };
+            if name == "js_global_get_optional" {
+                if let Some(key) =
+                    perry_hir::realm_reach::global_value_read(&call, &crate::realm_manifest::REALM)
+                {
+                    return crate::expr::property_get::globalget::lower_optional_global_read(
+                        ctx, key,
+                    );
+                }
             }
-        }
-        if name == "js_global_get_or_throw_unresolved" {
-            let off = ctx.strings.pending_call_offset();
-            crate::expr::calls::emit_call_location_at(ctx, off);
-            if let [Expr::String(key)] = args {
-                return crate::expr::property_get::globalget::lower_global_builtin_read(ctx, key);
+            if name == "js_global_get_or_throw_unresolved" {
+                let off = ctx.strings.pending_call_offset();
+                crate::expr::calls::emit_call_location_at(ctx, off);
+                if let Some(key) =
+                    perry_hir::realm_reach::global_value_read(&call, &crate::realm_manifest::REALM)
+                {
+                    return crate::expr::property_get::globalget::lower_global_builtin_read(
+                        ctx, key,
+                    );
+                }
             }
         }
     }

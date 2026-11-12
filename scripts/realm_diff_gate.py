@@ -141,9 +141,13 @@ def check_restricted(log, names_file, names):
     reach = reach_of(log)
     if reach["top"]:
         raise GateError(f"restricted dumper R is still top: {reach['top']}")
-    if set(reach["names"]) != set(names):
-        extra = sorted(set(reach["names"]) - set(names))[:10]
-        missing = sorted(set(names) - set(reach["names"]))[:10]
+    exec_only = set(reach.get("exec_only", []))
+    if set(reach["dumper_exec"]) <= set(reach["fixture_exec"]) and exec_only:
+        raise GateError(f"fixture covers executing bodies but dumper adds {sorted(exec_only)}")
+    expected = set(names) | exec_only
+    if set(reach["names"]) != expected:
+        extra = sorted(set(reach["names"]) - expected)[:10]
+        missing = sorted(expected - set(reach["names"]))[:10]
         raise GateError(f"restricted dumper R is not the names file: extra {extra}, missing {missing}")
 
 
@@ -173,6 +177,8 @@ def witness_names(perry, program, out):
     reach = reach_of(log)
     if reach["top"]:
         raise GateError(f"witness {program} selects top: {reach['top']}")
+    names_file = out / program / "reach.names.json"
+    names_file.write_text(json.dumps({"names":sorted(reach["names"]),"reach":reach["reach"]}, indent=2) + "\n")
     return sorted(reach["names"])
 
 
@@ -225,8 +231,8 @@ def main():
                 continue
             binary = out / f"dump-{program}" / "realm-dump"
             log = compile_ts(args.perry, dumper_source(set(names)), binary,
-                             {"PERRY_REALM_REACH_NAMES": str(names_file)})
-            check_restricted(log, names_file, names)
+                             {"PERRY_REALM_REACH_NAMES": str(out / program / "reach.names.json")})
+            check_restricted(log, out / program / "reach.names.json", names)
             ok &= compare(program, reference, dump(binary, set(names), walk=True), out)
         if "full" in wanted or args.self_test:
             binary = out / "dump-full" / "realm-dump"

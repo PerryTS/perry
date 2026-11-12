@@ -208,6 +208,24 @@ pub struct RealmDeclaration {
     pub effects_body: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub throws: Vec<RealmThrowOperand>,
+    /// Emitted runtime operation, without an image cell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<String>,
+    /// Immutable descriptor dependencies of an executing operation, not heap births.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub demands: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub writes: Vec<RealmWrite>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RealmWrite {
+    pub holder: String,
+    pub key: String,
+    pub value: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

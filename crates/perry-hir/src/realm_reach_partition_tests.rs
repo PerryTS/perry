@@ -72,10 +72,20 @@ fn index() -> RealmIndex {
 fn runtime_spelled_members_require_a_whole_holder() {
     let index = index();
     let mut structure = RealmReach::default();
-    structure.own("Owner");
+    structure.names.insert("Holder".into());
     structure.close(&index);
     assert!(structure.structure.contains("Holder"));
-    assert!(structure.structure.contains("Holder.next"));
+    assert_eq!(
+        structure.names.contains("Holder.next"),
+        structure.keeps_member(
+            &index,
+            index.last("Holder").unwrap(),
+            "next",
+            "Holder.next",
+            false
+        )
+    );
+    assert!(!structure.names.contains("Holder.next"));
     assert!(!structure.names.contains("Body"));
     let mut whole = RealmReach::default();
     whole.own("Holder");
@@ -87,40 +97,102 @@ fn runtime_spelled_members_require_a_whole_holder() {
 fn reclose_preserves_the_partition_and_body_births() {
     let index = index();
     let mut reach = RealmReach::default();
-    reach.own("Owner");
+    reach.names.insert("Holder".into());
     reach.close(&index);
+    reach.assert_whole_fixpoint(&index);
     let once = reach.clone();
     reach.close(&index);
     assert_eq!(reach, once);
     reach.receiver_keys.insert("next".into());
     reach.close(&index);
     assert!(reach.whole.contains("Holder.next") && reach.names.contains("Body"));
+    reach.assert_whole_fixpoint(&index);
     let once = reach.clone();
     reach.close(&index);
     assert_eq!(reach, once);
 }
 #[test]
-fn constructor_prototype_is_owned_by_its_bind_read() {
+fn a_member_enters_reach_if_and_only_if_its_slot_is_kept() {
+    let index = index();
+    let mut reach = RealmReach::default();
+    reach.own("Owner");
+    reach.close(&index);
+    assert!(!reach.names.contains("Holder"));
+    assert!(!reach.names.contains("Holder.next"));
+    reach.keyless_read = Some(KeylessRead::All);
+    reach.close(&index);
+    assert!(reach.structure.contains("Holder"));
+    assert!(reach.structure.contains("Holder.next"));
+    assert!(!reach.names.contains("Body"));
+    for holder in reach.names.iter().filter_map(|n| index.last(n)) {
+        for (key, symbol, value) in holder.members() {
+            assert_eq!(
+                reach.names.contains(value),
+                reach.keeps_member(
+                    &index,
+                    holder,
+                    key,
+                    value,
+                    holder.member_enumerable(key, symbol)
+                )
+            );
+        }
+    }
+    reach.assert_whole_fixpoint(&index);
+}
+#[test]
+fn constructor_prototype_is_kept_by_its_bind_read() {
     let index = index();
     let mut reach = RealmReach::default();
     reach.own("Ctor");
     reach.close(&index);
-    assert!(reach.whole.contains("Ctor.prototype"));
-    assert!(reach.keeps_member("Ctor.prototype", false));
+    assert!(reach.structure.contains("Ctor.prototype"));
+    assert!(reach.keeps_member(
+        &index,
+        index.last("Ctor").unwrap(),
+        "prototype",
+        "Ctor.prototype",
+        false
+    ));
 }
 #[test]
 fn keyless_reads_keep_values_without_following_their_bodies() {
     let index = index();
     let mut reach = RealmReach::default();
-    reach.own("Owner");
+    reach.names.insert("Holder".into());
     reach.close(&index);
-    assert!(!reach.keeps_member("Holder.next", true));
+    assert!(!reach.keeps_member(
+        &index,
+        index.last("Holder").unwrap(),
+        "next",
+        "Holder.next",
+        true
+    ));
     reach.keyless_read = Some(KeylessRead::Enumerable);
-    assert!(reach.keeps_member("Holder.next", true));
-    assert!(!reach.keeps_member("Holder.next", false));
+    assert!(reach.keeps_member(
+        &index,
+        index.last("Holder").unwrap(),
+        "next",
+        "Holder.next",
+        true
+    ));
+    assert!(!reach.keeps_member(
+        &index,
+        index.last("Holder").unwrap(),
+        "next",
+        "Holder.next",
+        false
+    ));
     reach.keyless_read = Some(KeylessRead::All);
-    assert!(reach.keeps_member("Holder.next", false));
+    assert!(reach.keeps_member(
+        &index,
+        index.last("Holder").unwrap(),
+        "next",
+        "Holder.next",
+        false
+    ));
     reach.close(&index);
+    assert!(reach.structure.contains("Holder.next"));
     assert!(!reach.names.contains("Body"));
 }
 #[test]
@@ -150,7 +222,7 @@ fn a_structure_cell_keeps_raw_captures_without_running_its_body() {
         row("Uncalled", RealmKind::Constructor, &[], &[], "{}"),
     ]);
     let mut reach = RealmReach::default();
-    reach.own("Owner");
+    reach.names.insert("Holder".into());
     reach.close(&index);
     assert!(reach.structure.contains("Holder"));
     assert!(reach.names.contains("Captured"));
@@ -175,13 +247,29 @@ fn keyed_calls_record_the_visible_key_and_escaped_callables_record_any_key() {
             DEFINE,
             "{}",
         ),
-        row(
-            "Object.defineProperty",
-            RealmKind::Method,
-            &[],
-            &[],
-            r#"{"flags":["keyed_arguments"]}"#,
-        ),
+        RealmEntry {
+            // A declared keyed body, rather than an unknown callee: this
+            // test isolates the visible-key rule from unknown-code escape.
+            effects: &[crate::realm_manifest::RealmEffect::Reads(
+                std::borrow::Cow::Borrowed(&[
+                    crate::realm_manifest::RealmSlot {
+                        root: crate::realm_manifest::RealmSlotRoot::Arg(0),
+                        steps: std::borrow::Cow::Borrowed(&[]),
+                    },
+                    crate::realm_manifest::RealmSlot {
+                        root: crate::realm_manifest::RealmSlotRoot::Arg(2),
+                        steps: std::borrow::Cow::Borrowed(&[]),
+                    },
+                ]),
+            )],
+            ..row(
+                "Object.defineProperty",
+                RealmKind::Method,
+                &[],
+                &[],
+                r#"{"flags":["keyed_arguments"]}"#,
+            )
+        },
     ]);
     let parse = |source| perry_parser::parse_typescript(source, "keys.ts").unwrap();
     let direct = scan(
@@ -262,4 +350,46 @@ fn named_native_imports_own_the_imported_member() {
     let reach = scan(&module, &index);
     assert!(reach.own_names.contains("Worker"));
     assert!(reach.names.contains("Body"));
+}
+
+#[test]
+fn declared_coercions_read_field_keys_without_unknown_code_escape() {
+    use crate::realm_manifest::{
+        RealmEffect, RealmProtocol, RealmSlot, RealmSlotRoot, RealmSlotStep,
+    };
+    use std::borrow::Cow;
+    const EFFECTS: &[RealmEffect] = &[RealmEffect::Coerce {
+        slot: RealmSlot {
+            root: RealmSlotRoot::Arg(0),
+            steps: Cow::Borrowed(&[RealmSlotStep::Field(Cow::Borrowed("target"))]),
+        },
+        protocol: RealmProtocol::HasInstance,
+    }];
+    let index = RealmIndex::new(&[RealmEntry {
+        effects: EFFECTS,
+        ..row("Host", RealmKind::Function, &[], &[], "{}")
+    }]);
+    let parsed =
+        perry_parser::parse_typescript("function f(o) { Host(o); }", "coerce.cjs").unwrap();
+    let r = scan(&parsed, &index);
+    assert_eq!(
+        r.receiver_keys,
+        BTreeSet::from(["target".into(), "@@hasInstance".into(), "prototype".into()])
+    );
+    assert!(!r.chain_read);
+    assert!(!r.any_receiver_key);
+}
+
+#[test]
+fn a_declared_prototype_key_keeps_the_slot_without_owning_its_value() {
+    let index = index();
+    let mut r = RealmReach::default();
+    r.names.insert("Ctor".into());
+    r.receiver_keys.insert("prototype".into());
+    r.close(&index);
+    assert!(r.structure.contains("Ctor.prototype"), "{r:?}");
+    assert!(!r.whole.contains("Ctor.prototype"));
+    let holder = index.last("Ctor").unwrap();
+    assert!(r.keeps_member(&index, holder, "prototype", "Ctor.prototype", false));
+    r.assert_whole_fixpoint(&index);
 }

@@ -927,15 +927,15 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     );
     let (next_info, return_info, throw_info) = if is_async {
         (
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next")] export crate::object::global_this::generator::async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return")] export crate::object::global_this::generator::async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw")] export crate::object::global_this::generator::async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.next", births = [Object])] export crate::object::global_this::generator::async_generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.return", births = [Object])] export crate::object::global_this::generator::async_generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%AsyncGeneratorPrototype%.throw", births = [Object])] export crate::object::global_this::generator::async_generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     } else {
         (
-            crate::fn_info!(#[realm("%GeneratorPrototype%.next")] export crate::object::global_this::generator::generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%GeneratorPrototype%.return")] export crate::object::global_this::generator::generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
-            crate::fn_info!(#[realm("%GeneratorPrototype%.throw")] export crate::object::global_this::generator::generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.next", births = [Object])] export crate::object::global_this::generator::generator_proto_next_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.return", births = [Object])] export crate::object::global_this::generator::generator_proto_return_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("%GeneratorPrototype%.throw", births = [Object])] export crate::object::global_this::generator::generator_proto_throw_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
         )
     };
     for (name, info, key) in [

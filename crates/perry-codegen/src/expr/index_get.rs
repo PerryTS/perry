@@ -42,10 +42,10 @@ use super::{
 
 pub(crate) mod array_rep;
 mod const_array;
-pub(crate) mod field_base;
-mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
+pub(crate) mod field_base;
+mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
 #[cfg(test)]
@@ -1285,7 +1285,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // concatenation. The boxed entry point decides by tag.
                     Ok(blk.call(
                         DOUBLE,
-                        "js_string_index_get_boxed",
+                        perry_hir::realm_reach::string_index_operation(),
                         &[(DOUBLE, &s_box), (DOUBLE, &idx_d)],
                     ))
                 });

@@ -61,6 +61,7 @@ pub extern "C-unwind" fn js_object_get_field_slow(
     obj_handle: i64,
     key: *const crate::StringHeader,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_slow, calls = [get_field_miss] }
     let obj = obj_handle as usize as *const ObjectHeader;
     if !crate::value::addr_class::is_above_handle_band(obj as usize) || key.is_null() {
         return super::ic_miss::get_field_miss(obj, key);
@@ -120,6 +121,7 @@ pub extern "C-unwind" fn js_object_get_field_value(
     key: *const crate::StringHeader,
     site_id: u64,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_value, calls = [js_object_get_field_slow, js_object_get_field_nonptr] }
     let bits = obj_bits as u64;
     if bits >> 48 == crate::value::POINTER_TAG >> 48
         && crate::value::addr_class::is_above_handle_band(
@@ -141,6 +143,7 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
     key: *const crate::StringHeader,
     site_id: u64,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_nonptr, calls = [js_object_get_field_by_name_f64, get_field_miss] }
     let bits = obj_bits as u64;
     let tag = bits >> 48;
     let obj_unmasked = bits as usize as *const ObjectHeader;
@@ -262,6 +265,7 @@ pub unsafe extern "C-unwind" fn js_object_get_field_site_slow(
     key: *const crate::StringHeader,
     memo: *mut crate::object::layout_probe::site_memo::ReadSiteMemo,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_site_slow, calls = [get_field_miss] }
     use crate::object::layout_probe::{
         self,
         site_memo::{self, Answer},
@@ -310,6 +314,7 @@ pub unsafe extern "C-unwind" fn js_object_get_field_value_site(
     site_id: u64,
     memo: *mut crate::object::layout_probe::site_memo::ReadSiteMemo,
 ) -> f64 {
+    crate::realm_decl! { operation js_object_get_field_value_site, calls = [js_object_get_field_site_slow, js_object_get_field_nonptr] }
     let bits = obj_bits as u64;
     if bits >> 48 == crate::value::POINTER_TAG >> 48
         && crate::value::addr_class::is_above_handle_band(

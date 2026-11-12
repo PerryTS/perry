@@ -67,7 +67,7 @@ mod tests {
 
     #[test]
     fn accessor_halves_and_data_references_emit_in_manifest_order() {
-        let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
+        let hir = perry_parser::parse_typescript("[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "realm.cjs").unwrap();
         let reach = perry_hir::realm_reach::scan(
             &hir,
             &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
@@ -121,7 +121,7 @@ mod tests {
 
     #[test]
     fn inherited_constructor_prototype_uses_function_state() {
-        let hir = perry_parser::parse_typescript("console.log('hi');", "realm.cjs").unwrap();
+        let hir = perry_parser::parse_typescript("[Object,Function,Array,Error,TypeError,RangeError,SyntaxError,ReferenceError,EvalError,URIError,AggregateError,SuppressedError]; console.log('hi');", "realm.cjs").unwrap();
         let reach = perry_hir::realm_reach::scan(
             &hir,
             &perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM),
