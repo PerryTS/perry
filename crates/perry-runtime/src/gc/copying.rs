@@ -690,6 +690,12 @@ fn untraced_promotion_instrument_veto<const DIAGNOSTICS: bool>() -> Option<&'sta
     if DIAGNOSTICS && crate::gc::gc_verify_mark_enabled() {
         return Some("verify_mark");
     }
+    // The life claims (check mode, lifetime measurement) read the copy and
+    // promotion points of the trace: untraced, every claim reads as freed.
+    #[cfg(perry_gc_instruments)]
+    if DIAGNOSTICS && super::diagnostic_hooks::life_hooks_armed() {
+        return Some("life_claims");
+    }
     if super::barrier::incremental_mark_in_progress_on_this_thread() {
         return Some("incremental_mark_in_progress");
     }
