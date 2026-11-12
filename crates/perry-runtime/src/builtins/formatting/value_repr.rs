@@ -113,37 +113,82 @@ impl ArrayEntry {
     }
 }
 
-/// Split an array's raw element slots into the entries Node prints: each
-/// non-hole slot rendered by `render`, each *run* of holes collapsed to one
-/// `<N empty items>` entry.
+/// Node's entries for an array of `len` slots, fed its present elements in
+/// index order: each element rendered, each *run* of absent indices (a hole,
+/// or an index past a sparse Array's store with no own element) collapsed to
+/// one `<N empty items>` entry.
+struct EntryRuns {
+    parts: Vec<ArrayEntry>,
+    next: usize,
+}
+
+impl EntryRuns {
+    fn new() -> Self {
+        EntryRuns {
+            parts: Vec::new(),
+            next: 0,
+        }
+    }
+
+    fn present(&mut self, index: usize, entry: ArrayEntry) {
+        if index > self.next {
+            self.parts
+                .push(ArrayEntry::new(empty_items_label(index - self.next), false));
+        }
+        self.parts.push(entry);
+        self.next = index + 1;
+    }
+
+    fn finish(mut self, len: usize) -> Vec<ArrayEntry> {
+        if len > self.next {
+            self.parts
+                .push(ArrayEntry::new(empty_items_label(len - self.next), false));
+        }
+        self.parts
+    }
+}
+
+/// The entries Node prints for the plain Array `arr`: its own elements in
+/// index order, rendered by `render`, with runs of absent indices collapsed.
+/// A sparse Array (`length > capacity`) keeps its far elements in its named
+/// layout: they are read from there, never as slots past the store
+/// (`array_for_each_own_element`), so `[]; a[3000000] = 1` is
+/// `[ <3000000 empty items>, 1 ]`.
 ///
 /// # Safety
 ///
-/// `data_ptr` must point at `len` readable f64 element slots.
-pub(crate) unsafe fn array_entries_with_holes<F>(
-    data_ptr: *const f64,
-    len: usize,
+/// `arr` is a live, forwarding-resolved plain Array.
+pub(crate) unsafe fn array_entries<F>(
+    arr: *const crate::array::ArrayHeader,
     mut render: F,
 ) -> Vec<ArrayEntry>
 where
     F: FnMut(f64) -> ArrayEntry,
 {
-    let mut parts: Vec<ArrayEntry> = Vec::with_capacity(len);
-    let mut i = 0usize;
-    while i < len {
-        let elem = *data_ptr.add(i);
-        if is_array_hole(elem) {
-            let start = i;
-            while i < len && is_array_hole(*data_ptr.add(i)) {
-                i += 1;
-            }
-            parts.push(ArrayEntry::new(empty_items_label(i - start), false));
-            continue;
+    let len = (*arr).length as usize;
+    let mut runs = EntryRuns::new();
+    crate::array::array_for_each_own_element(arr, |index, elem| {
+        runs.present(index as usize, render(elem));
+        true
+    });
+    // A render that ran program code (an inspect hook) may have shortened
+    // the Array: the trailing run ends at its length now, as in node.
+    runs.finish(len.min((*arr).length as usize))
+}
+
+/// [`array_entries`] over a slice of raw slots (`TAG_HOLE` = absent).
+#[cfg(test)]
+fn array_entries_with_holes<F>(slots: &[f64], mut render: F) -> Vec<ArrayEntry>
+where
+    F: FnMut(f64) -> ArrayEntry,
+{
+    let mut runs = EntryRuns::new();
+    for (index, &elem) in slots.iter().enumerate() {
+        if !is_array_hole(elem) {
+            runs.present(index, render(elem));
         }
-        parts.push(render(elem));
-        i += 1;
     }
-    parts
+    runs.finish(slots.len())
 }
 
 /// Classify a rendered element for the numeric column layout. A number or an
@@ -242,11 +287,7 @@ mod tests {
     fn hole_runs_collapse_and_non_holes_render() {
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         let slots = [1.0, hole, hole, 2.0, hole];
-        let parts = unsafe {
-            array_entries_with_holes(slots.as_ptr(), slots.len(), |v| {
-                ArrayEntry::new(v.to_string(), true)
-            })
-        };
+        let parts = array_entries_with_holes(&slots, |v| ArrayEntry::new(v.to_string(), true));
         let rendered: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(rendered, ["1", "<2 empty items>", "2", "<1 empty item>"]);
         assert_eq!(
@@ -259,11 +300,7 @@ mod tests {
     fn a_whole_array_of_holes_is_one_entry() {
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         let slots = [hole; 7];
-        let parts = unsafe {
-            array_entries_with_holes(slots.as_ptr(), slots.len(), |_| {
-                ArrayEntry::new("?".to_string(), true)
-            })
-        };
+        let parts = array_entries_with_holes(&slots, |_| ArrayEntry::new("?".to_string(), true));
         assert_eq!(parts.len(), 1);
         // Seven SLOTS but one ENTRY, so Node keeps it on one line.
         assert_eq!(array_body(parts, 0, true), "[ <7 empty items> ]");
