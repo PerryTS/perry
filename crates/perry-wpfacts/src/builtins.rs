@@ -2668,7 +2668,7 @@ fn ns_method_inner(
             // is locked, so item `i` is `ei`; its resolve element function
             // writes index `i` of the result only (27.2.4.1.2 step 8, 27.2.4.1.3).
             let lit = match (name, m.calls[call as usize].spread.is_empty(), arg(m, call, 0)) {
-                ("all", true, Some(a)) => m.lit_elems_at(call, a),
+                ("all", true, Some(a)) if promise_all_index() => m.lit_elems_at(call, a),
                 _ => None,
             };
             let settled = m.node_l("settled");
@@ -3031,4 +3031,14 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
         m.add_prim(f, prim::STR);
     }
     e
+}
+
+/// The per-index rule for `Promise.all` over an array literal, OFF by
+/// default (`PERRY_FACTS_PROMISE_ALL_INDEX=1`: on). Off, the result is one
+/// merged element set as for any iterable. On, the three.js skin solve
+/// keeps its proven sites but its maker trees deepen (one GLTFLoader
+/// per-primitive Mesh holds 10,942 objects instead of 278, work 103M ->
+/// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
+fn promise_all_index() -> bool {
+    std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
 }

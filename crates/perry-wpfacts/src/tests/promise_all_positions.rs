@@ -10,8 +10,20 @@
 
 use super::*;
 
-/// The sink takes `s` only through a wrong position read.
+/// The sink takes `s` only through a wrong position read (the rule on).
 fn verdict(tail: &str) -> Verdict {
+    verdict_with(tail, true)
+}
+
+/// The rule is behind `PERRY_FACTS_PROMISE_ALL_INDEX` (default off).
+fn verdict_with(tail: &str, on: bool) -> Verdict {
+    std::env::set_var("PERRY_FACTS_PROMISE_ALL_INDEX", if on { "1" } else { "0" });
+    let v = verdict_src(tail);
+    std::env::remove_var("PERRY_FACTS_PROMISE_ALL_INDEX");
+    v
+}
+
+fn verdict_src(tail: &str) -> Verdict {
     let src = format!(
         r#"
         class Svc {{ size = 3; }}
@@ -138,6 +150,18 @@ fn json_key_reads_all() {
         "const k: any = JSON.parse(process.argv[2]); \
          Promise.all([Promise.resolve(s), Promise.resolve({ b: 2 })]) \
          .then((r: any) => { take(r[k]); });",
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// Default off: the result is one merged element set, so `r[1]` may be
+/// item 0 `s` and the sink takes it.
+#[test]
+fn rule_off_merges_the_result() {
+    let v = verdict_with(
+        "Promise.all([Promise.resolve(s), Promise.resolve({ b: 2 })]) \
+         .then((r: any) => { take(r[1]); });",
+        false,
     );
     assert!(!proven(&v), "{v:?}");
 }
