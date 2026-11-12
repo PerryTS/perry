@@ -738,13 +738,16 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::ObjectIs(a, b) => self.prim_op_identity(
-                fx,
-                &[a, b],
-                prim::BOOL,
-                "primitive builtin operand",
-                IdentityRoute::ObjectIs,
-            ),
+            // `Object.is(a, b)` is SameValue (ECMA-262 20.1.2.14, 7.2.10):
+            // it compares the operands as they are, by identity for objects,
+            // and converts nothing (no ToPrimitive, no valueOf/toString).
+            Expr::ObjectIs(a, b) => {
+                for o in [a, b] {
+                    let v = self.expr(fx, o);
+                    self.m.identity(v, IdentityRoute::ObjectIs);
+                }
+                self.prim_node(prim::BOOL)
+            }
                         // The predicates that convert nothing: `Array.isArray` reads only
             // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
             // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
