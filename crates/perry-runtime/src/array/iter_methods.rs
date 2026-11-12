@@ -361,9 +361,10 @@ pub extern "C" fn js_array_map(
         // callback is ever invoked. For the common case (plain array whose
         // constructor is the intrinsic `Array`) this returns a fresh plain
         // array, identical to the prior `js_array_alloc_with_length`.
-        let result_box =
+        // Only the default arm's fresh plain array takes slot writes: a
+        // species constructor may return a frozen, short or pre-filled Array.
+        let (result_box, is_plain) =
             crate::array::species::array_species_create(rooted.receiver(), length as usize);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
         // Root the result too: it must survive (and be re-derived after)
         // every callback-triggered collection during the fill loop.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -412,8 +413,8 @@ pub extern "C" fn js_array_map(
                     written_run += 1;
                 }
             } else {
-                // Custom species container: CreateDataPropertyOrThrow via [[Set]].
-                crate::array::species::species_result_set(
+                // Species constructor's result: CreateDataPropertyOrThrow.
+                crate::array::species::species_result_define(
                     result_rooted.get_nanbox_f64(),
                     i,
                     mapped,
@@ -569,8 +570,8 @@ pub extern "C" fn js_array_filter(
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
         // poisoned getter or non-constructor species before the callback runs).
-        let result_box = crate::array::species::array_species_create(rooted.receiver(), 0);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
+        let (result_box, is_plain) =
+            crate::array::species::array_species_create(rooted.receiver(), 0);
         // Root the result across callbacks; a push can also REALLOCATE the
         // plain array, so write the returned pointer back into the handle.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -616,10 +617,11 @@ pub extern "C" fn js_array_filter(
                         crate::value::JSValue::pointer(result as *const u8).bits(),
                     ));
                 } else {
-                    crate::array::species::species_result_set(
+                    // CreateDataPropertyOrThrow(A, to, kValue).
+                    crate::array::species::species_result_define(
                         result_rooted.get_nanbox_f64(),
                         to,
-                        element,
+                        element_root.get_nanbox_f64(),
                     );
                     to += 1;
                 }
