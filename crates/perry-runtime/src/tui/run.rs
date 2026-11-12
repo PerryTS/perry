@@ -16,6 +16,28 @@ use crate::value::JSValue;
 use super::input::{disable_raw_mode, drain_input, enable_raw_mode, EXIT_FLAG};
 use super::state::STATE_DIRTY;
 
+fn run_frames(mut frame: impl FnMut()) {
+    while !EXIT_FLAG.load(Ordering::Acquire) {
+        crate::event_pump::perry_poll();
+        if EXIT_FLAG.load(Ordering::Acquire) {
+            break;
+        }
+        STATE_DIRTY.store(false, Ordering::Release);
+        super::hooks::reset_hook_index();
+        frame();
+        if EXIT_FLAG.load(Ordering::Acquire) {
+            break;
+        }
+        let _ = drain_input();
+        if EXIT_FLAG.load(Ordering::Acquire) {
+            break;
+        }
+        if !STATE_DIRTY.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(16));
+        }
+    }
+}
+
 /// `run(component)` — enter the render loop. The component closure is
 /// called every frame and must return a Widget handle.
 ///
@@ -23,19 +45,22 @@ use super::state::STATE_DIRTY;
 ///   1. Enable raw mode + spawn the byte reader.
 ///   2. Clear screen + home cursor.
 ///   3. Loop:
+///      - Advance async work outside component construction; stop on exit.
+///      - Clear the previous dirty flag and reset the hook index.
 ///      - Call component → Widget handle.
 ///      - Paint into back buffer + flush diff.
 ///      - Drain pending input bytes (dispatching to useInput handler).
 ///      - If state was set during dispatch, re-render immediately.
 ///      - Otherwise sleep ~16 ms (≈60 fps polling cap).
 ///      - Exit when EXIT_FLAG is set.
-///   4. Restore cooked-mode termios + clear screen.
+///   4. Restore cooked-mode termios, cursor and the primary screen.
 #[no_mangle]
 pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
     if component == 0 {
         return f64::from_bits(JSValue::undefined().bits());
     }
-    let component_closure = component as *const ClosureHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let component_closure = scope.root_raw_const_ptr(component as *const ClosureHeader);
 
     // Enter alt screen + clear + hide cursor. (Alt screen via DECSET 1049
     // is widely supported and means we don't pollute the user's primary
@@ -49,46 +74,18 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
     }
     enable_raw_mode();
 
-    loop {
-        if EXIT_FLAG.load(Ordering::Acquire) {
-            break;
-        }
-
-        // Reset hook index — ink-shape hooks (useState/useEffect/useMemo/
-        // useRef) bind to a per-frame index, so the slot at position N
-        // is the SAME slot the previous frame's Nth hook saw. Without
-        // this reset the index would grow unboundedly and every render
-        // would allocate fresh state. (#679 Phase 1.)
-        super::hooks::reset_hook_index();
-
-        // Call the component to get a fresh widget tree.
-        let widget_v = js_closure_call0(component_closure, crate::closure::plain_call_receiver());
-        // #340/#341: the component returns a widget handle OBJECT, so resolve
-        // it through the brand instead of masking the tag off whatever came
-        // back. A component that returns a number or a string now paints
-        // nothing (tree id 0, "no such node") rather than addressing whichever
-        // tree node its low 48 bits happened to name.
+    run_frames(|| {
+        let widget_v = component_closure
+            .across_const::<ClosureHeader, _>(|| {
+                js_closure_call0(
+                    component_closure.get_raw_const_ptr(),
+                    crate::closure::plain_call_receiver(),
+                )
+            })
+            .0;
         let widget_handle = super::handle_object::tui_widget_id_from_bits(widget_v.to_bits());
-
-        // Paint the tree into the back buffer + flush.
         super::ffi::paint_root_for_run(widget_handle);
-
-        // Clear the dirty flag *before* draining input — if the user's
-        // handler calls state.set, dirty flips back on, and we'll
-        // see it after drain returns.
-        STATE_DIRTY.store(false, Ordering::Release);
-
-        // Drain any pending input bytes; useInput handlers fire here.
-        let _ = drain_input();
-
-        if STATE_DIRTY.load(Ordering::Acquire) {
-            // State changed — re-render without sleeping.
-            continue;
-        }
-
-        // No state change → idle for one polling tick.
-        std::thread::sleep(Duration::from_millis(16));
-    }
+    });
 
     // Restore terminal state.
     disable_raw_mode();
@@ -102,4 +99,100 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
     }
 
     f64::from_bits(JSValue::undefined().bits())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    static CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn update_state(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        CALLBACKS.fetch_add(1, Ordering::AcqRel);
+        STATE_DIRTY.store(true, Ordering::Release);
+        f64::from_bits(JSValue::undefined().bits())
+    }
+
+    fn reset() {
+        crate::gc::initialize_runtime_fixture();
+        EXIT_FLAG.store(false, Ordering::Release);
+        STATE_DIRTY.store(false, Ordering::Release);
+        CALLBACKS.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn timers_progress_without_input_between_frames() {
+        let _serial = crate::event_pump::tests::serial();
+        let _gc = crate::gc::global_side_table_test_lock();
+        reset();
+        let callback = crate::closure::js_closure_alloc(crate::fn_info!(update_state, 0), 0);
+        let timeout = crate::timer::js_set_timeout_callback(callback as i64, 0.0);
+        let interval = unsafe {
+            crate::timer::js_set_interval_callback_args(callback as i64, 0.0, std::ptr::null(), 0)
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut frames = 0;
+        run_frames(|| {
+            frames += 1;
+            if CALLBACKS.load(Ordering::Acquire) >= 3 || std::time::Instant::now() > deadline {
+                super::super::input::js_perry_tui_exit();
+            }
+        });
+        crate::timer::js_clear_timeout_value(f64::from_bits(timeout as u64));
+        crate::timer::js_clear_interval_value(f64::from_bits(interval as u64));
+        assert!(CALLBACKS.load(Ordering::Acquire) >= 3);
+        assert!(frames > 0);
+    }
+
+    #[test]
+    fn promise_microtasks_progress_before_building_a_frame() {
+        let _serial = crate::event_pump::tests::serial();
+        let _gc = crate::gc::global_side_table_test_lock();
+        reset();
+        extern "C" fn settled(
+            _closure: *const ClosureHeader,
+            _this: crate::closure::JsThis,
+            _value: f64,
+        ) -> f64 {
+            CALLBACKS.fetch_add(1, Ordering::AcqRel);
+            f64::from_bits(JSValue::undefined().bits())
+        }
+        let callback = crate::closure::js_closure_alloc(crate::fn_info!(settled, 1), 0);
+        let promise = crate::promise::js_promise_resolved(1.0);
+        crate::promise::js_promise_then(promise, callback, std::ptr::null());
+        run_frames(|| {
+            assert_eq!(CALLBACKS.load(Ordering::Acquire), 1);
+            super::super::input::js_perry_tui_exit();
+        });
+    }
+
+    #[test]
+    fn pump_exit_does_not_build_another_frame() {
+        let _serial = crate::event_pump::tests::serial();
+        let _gc = crate::gc::global_side_table_test_lock();
+        reset();
+        extern "C" fn exit(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+            super::super::input::js_perry_tui_exit()
+        }
+        let callback = crate::closure::js_closure_alloc(crate::fn_info!(exit, 0), 0);
+        crate::timer::js_set_timeout_callback(callback as i64, 0.0);
+        run_frames(|| panic!("pump requested exit before the frame"));
+        assert!(EXIT_FLAG.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn dirty_updates_during_a_frame_are_not_erased() {
+        let _serial = crate::event_pump::tests::serial();
+        let _gc = crate::gc::global_side_table_test_lock();
+        reset();
+        run_frames(|| {
+            STATE_DIRTY.store(true, Ordering::Release);
+            super::super::input::js_perry_tui_exit();
+        });
+        assert!(STATE_DIRTY.load(Ordering::Acquire));
+    }
 }
