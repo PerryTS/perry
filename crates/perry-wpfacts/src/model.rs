@@ -1815,6 +1815,9 @@ pub struct Model {
     /// An iteration consumer reads `done` of each step result
     /// (`Model::step_done`, `reach::step_done`).
     pub reach_step_done: bool,
+    /// A built-in consumer that can stop early closes its iterator
+    /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
+    pub reach_iter_close: bool,
     /// A hand-written built-in rule's positions hold what a spread
     /// argument supplies (`Model::positional`, `reach::spread_args`).
     pub reach_spread_args: bool,
