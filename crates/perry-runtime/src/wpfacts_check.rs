@@ -287,8 +287,16 @@ macro_rules! check_field {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
-                ".{key_name}: slot {slot} of class_id {cid} holds key {:?}",
-                key_value_bytes(at).map(|b| String::from_utf8_lossy(&b).into_owned())
+                ".{key_name}: slot {slot} of class_id {cid} holds key {:?} (key word {at:#x}, value {:#x}, flags {flags}, overflow entry {:?})",
+                key_value_bytes(at).map(|b| String::from_utf8_lossy(&b).into_owned()),
+                value.to_bits(),
+                unsafe {
+                    let t = crate::object::overflow::table(addr as *const ObjectHeader);
+                    (!t.is_null()).then(|| {
+                        crate::object::overflow::find_bytes(t, key)
+                            .map(|i| (i, crate::object::overflow::fixed_slot_of(t, i)))
+                    })
+                }
             ),
         );
     }
