@@ -66,9 +66,12 @@ pub struct FamilyVerdict {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FamilyReach {
     pub families: Vec<FamilyVerdict>,
-    /// Diagnostics (`PERRY_FACTS_EXPLAIN=1`): every other reason a rule
-    /// found, as (family, reason); empty otherwise.
-    pub also: Vec<(&'static str, String)>,
+    /// Diagnostics only (`PERRY_FACTS_EXPLAIN=1` or
+    /// `PERRY_FACTS_FAMILY_REACH=closed`): what the fact would say were
+    /// every value of the program known (the rules without L0 and L1). It
+    /// names what a program in an unknown world observes anyway; it is no
+    /// fact and nothing may act on it.
+    pub closed: Vec<FamilyVerdict>,
 }
 
 impl FamilyReach {
@@ -103,10 +106,12 @@ impl FamilyReach {
                     f.reason.replace(['\n', '\r'], " ")
                 )
             })
-            .chain(self.also.iter().map(|(family, reason)| {
+            .chain(self.closed.iter().map(|f| {
                 format!(
-                    "# family_reach_also {family} reason={}",
-                    reason.replace(['\n', '\r'], " ")
+                    "# family_reach_closed {} {} reason={}",
+                    f.family,
+                    if f.live { "live" } else { "never" },
+                    f.reason.replace(['\n', '\r'], " ")
                 )
             }))
             .collect()
@@ -147,12 +152,20 @@ impl State {
 /// entry of one: its key, the families and the entry's name.
 type Member = (&'static str, FamilySet, &'static str);
 
-/// What one realm entry observes: its own families and the families of the
-/// entries it declares born.
+/// What one realm entry observes.
 #[derive(Clone, Copy, Default)]
 struct Entry {
+    /// Its own families.
     own: FamilySet,
+    /// The families of what it declares born when it runs or is read as a
+    /// member: its declared births that are not its own members. Empty for
+    /// a holder of core (`String`, `process`): a core holder's declaration
+    /// lists what any of its members may bear, and its members are observed
+    /// one by one.
     births: FamilySet,
+    /// The same without the exception for core holders: what the entry
+    /// reaches when it is used as a value.
+    reach: FamilySet,
 }
 
 /// The realm table, grouped for the rules. Built once per process from
@@ -168,8 +181,10 @@ pub(crate) struct Index {
     /// Root holder -> everything reachable below it: the families of its
     /// entries and of their declared births (the text part's closure).
     roots: FxHashMap<&'static str, FamilySet>,
-    /// Key -> the entries of a family under that key on a core holder.
-    core_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
+    /// Key -> the families members under that key add to their holder's (a
+    /// member of a family on a core holder, a member that bears another
+    /// family), with one such entry.
+    member_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
     /// Key -> the direct members of a family's namespace under that key
     /// (`floor` of `Math`: lowering can drop the namespace's name).
     namespace_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
@@ -216,13 +231,14 @@ fn is_global_holder(name: &str) -> bool {
 pub(crate) fn index() -> &'static Index {
     static INDEX: std::sync::OnceLock<Index> = std::sync::OnceLock::new();
     INDEX.get_or_init(|| {
+        use perry_hir::realm_manifest::RealmKind;
         let realm = crate::native_effects::realm();
         let mut ix = Index {
             entries: Default::default(),
             members: Default::default(),
             holders: Default::default(),
             roots: Default::default(),
-            core_keys: Default::default(),
+            member_keys: Default::default(),
             namespace_keys: Default::default(),
             computed: Vec::new(),
             string_proto: Vec::new(),
@@ -232,63 +248,78 @@ pub(crate) fn index() -> &'static Index {
             function_proto: Vec::new(),
             object_proto: Vec::new(),
         };
+        // A member of `parent` (structure, not something it bears).
+        let child = |parent: &str, name: &str| {
+            name.strip_prefix(parent)
+                .is_some_and(|rest| rest.starts_with(['.', '[']))
+        };
         for e in realm {
             let own = families_of(e.name);
-            let births = if is_global_holder(e.name) {
+            let reach = if is_global_holder(e.name) {
                 0
             } else {
                 e.births
                     .iter()
-                    .filter(|b| !is_global_holder(b))
+                    .filter(|b| !is_global_holder(b) && !child(e.name, b))
                     .fold(0, |set, b| set | families_of(b))
             };
-            ix.entries.insert(e.name, Entry { own, births });
+            let core_holder = families_of(families::entry_root(e.name)) == 0
+                && families::entry_module(e.name).is_none()
+                && matches!(
+                    e.kind,
+                    RealmKind::Constructor
+                        | RealmKind::Namespace
+                        | RealmKind::Prototype
+                        | RealmKind::Exotic
+                );
+            let births = if core_holder { 0 } else { reach };
+            ix.entries.insert(e.name, Entry { own, births, reach });
         }
         // The global namespace objects (`Math`, `JSON`, `Intl`): lowering
         // can keep a read of a member of one as a read off the global scope.
         let namespaces: crate::pts::FxHashSet<&'static str> = realm
             .iter()
             .filter(|e| {
-                matches!(e.kind, perry_hir::realm_manifest::RealmKind::Namespace)
+                matches!(e.kind, RealmKind::Namespace)
                     && families::entry_root(e.name) == e.name
                     && families::entry_module(e.name).is_none()
             })
             .map(|e| e.name)
             .collect();
         for e in realm {
-            let Entry { own, births } = ix.entries[e.name];
+            let Entry { own, reach, .. } = ix.entries[e.name];
             let root = families::entry_root(e.name);
             let root_own = families_of(root);
-            *ix.roots.entry(root).or_default() |= own | births;
-            if root_own != 0 || families::entry_module(e.name).is_some() {
-                // A holder of a family: observing any entry of it observes
-                // the family and what the entry declares born.
-                if own | births != 0 {
-                    ix.holders.insert(e.name, own | births);
-                }
+            let of_family = root_own != 0 || families::entry_module(e.name).is_some();
+            *ix.roots.entry(root).or_default() |= own | reach;
+            if of_family && own | reach != 0 {
+                // A holder of a family: observing it observes the family
+                // and what it declares born.
+                ix.holders.insert(e.name, own | reach);
             }
             let Some((holder, key)) = split_member(e.name) else {
                 continue;
             };
-            if own | births == 0 {
+            if own | reach == 0 {
                 continue;
             }
             ix.members
                 .entry(holder)
                 .or_default()
-                .push((key, own | births, e.name));
-            if root_own == 0 && families::entry_module(e.name).is_none() {
-                // A member of a family (or a producer of one) on a core
-                // holder.
-                let slot = ix.core_keys.entry(key).or_insert((0, e.name));
-                slot.0 |= own | births;
-                // A prototype's values are present without being named.
-                if holder.contains(".prototype") || holder.starts_with('%') {
-                    ix.computed.push((own | births, e.name));
+                .push((key, own | reach, e.name));
+            // A member that is of a family its holder is not, or bears one.
+            let beyond = (own | reach) & !root_own;
+            if beyond != 0 && families::entry_module(e.name).is_none() {
+                let slot = ix.member_keys.entry(key).or_insert((0, e.name));
+                slot.0 |= beyond;
+                // A core prototype's values are present without being named.
+                if root_own == 0 && (holder.contains(".prototype") || holder.starts_with('%')) {
+                    ix.computed.push((beyond, e.name));
                 }
-            } else if holder == root && namespaces.contains(root) {
+            }
+            if holder == root && namespaces.contains(root) && root_own != 0 {
                 let slot = ix.namespace_keys.entry(key).or_insert((0, e.name));
-                slot.0 |= own | births;
+                slot.0 |= own | reach;
             }
         }
         let of = |ix: &Index, holder: &str| ix.members.get(holder).cloned().unwrap_or_default();
@@ -309,8 +340,21 @@ impl Index {
         self.roots.get(root).copied().unwrap_or(0)
     }
 
+    /// The families a computed key in a body that is not walked makes live.
+    #[cfg(test)]
+    pub(crate) fn computed_families(&self) -> FamilySet {
+        self.computed.iter().fold(0, |set, (s, _)| set | s)
+    }
+
+    /// What running or reading entry `name` observes.
     pub(crate) fn entry(&self, name: &str) -> Option<FamilySet> {
         self.entries.get(name).map(|e| e.own | e.births)
+    }
+
+    /// What naming entry `name` as a constructed class, a type or an
+    /// operand observes: its families and what it declares born.
+    pub(crate) fn named(&self, name: &str) -> Option<FamilySet> {
+        self.entries.get(name).map(|e| e.own | e.reach)
     }
 }
 
@@ -525,7 +569,7 @@ pub(crate) fn run(m: &mut Model, entry: &'static str) {
         return;
     };
     m.family_reach.mark(e.own, || format!("L2:{entry} runs"));
-    m.family_reach.mark(e.births, || {
+    m.family_reach.mark(e.births & !e.own, || {
         format!(
             "L4:{entry} declares the birth of a {} entry",
             first_name(e.births & !e.own)
@@ -571,43 +615,48 @@ pub(crate) fn generic(m: &mut Model, why: &'static str) {
 struct Verdicts {
     live: FamilySet,
     why: Vec<Option<String>>,
-    /// Explain mode: every later reason too.
-    also: Option<Vec<(&'static str, String)>>,
 }
 
 impl Verdicts {
+    fn new() -> Self {
+        Verdicts {
+            live: 0,
+            why: vec![None; RUNTIME_FAMILIES.len()],
+        }
+    }
+
     fn mark(&mut self, set: FamilySet, why: impl FnOnce() -> String) {
-        let set = set & families::all_families();
-        let new = set & !self.live;
-        if new == 0 && (set == 0 || self.also.is_none()) {
+        let new = set & families::all_families() & !self.live;
+        if new == 0 {
             return;
         }
         let why = why();
         for (i, slot) in self.why.iter_mut().enumerate() {
             if new & (1 << i) != 0 {
                 *slot = Some(why.clone());
-            } else if set & (1 << i) != 0 {
-                if let Some(also) = &mut self.also {
-                    // One line per (family, reason); the all-family rules
-                    // are named once, on the first family.
-                    if (set != families::all_families() || i == 0)
-                        && !also.iter().any(|(f, w)| *f == RUNTIME_FAMILIES[i].id && *w == why)
-                    {
-                        also.push((RUNTIME_FAMILIES[i].id, why.clone()));
-                    }
-                }
             }
         }
         self.live |= new;
+    }
+
+    fn verdicts(self) -> Vec<FamilyVerdict> {
+        RUNTIME_FAMILIES
+            .iter()
+            .zip(self.why)
+            .map(|(f, why)| FamilyVerdict {
+                family: f.id,
+                live: why.is_some(),
+                reason: why.unwrap_or_else(|| "none".into()),
+            })
+            .collect()
     }
 
     fn all(&mut self, why: impl FnOnce() -> String) {
         self.mark(families::all_families(), why);
     }
 
-    /// Nothing is left to find (explain mode goes on, to name every reason).
     fn full(&self) -> bool {
-        self.also.is_none() && self.live == families::all_families()
+        self.live == families::all_families()
     }
 }
 
@@ -628,7 +677,7 @@ fn observe_tokens(m: &Model, v: &mut Verdicts) {
             TokKind::BuiltinFn(Native::Member { identity, .. }) => {
                 if let Some(e) = ix.entries.get(identity) {
                     v.mark(e.own, || format!("L2:{identity} is read"));
-                    v.mark(e.births, || {
+                    v.mark(e.births & !e.own, || {
                         format!(
                             "L4:{identity} declares the birth of a {} entry",
                             first_name(e.births & !e.own)
@@ -657,16 +706,56 @@ fn observe_tokens(m: &Model, v: &mut Verdicts) {
     }
 }
 
+/// L2, L3 and L4: what the program observes in a closed world.
+fn closed_world(g: &crate::gen::Gen, dynamic_code: Option<&str>) -> Verdicts {
+    let m = &g.m;
+    let mut v = Verdicts::new();
+    // `dyn_eval` is the driver's decision, an input of the solve.
+    if let Some(linked) = dynamic_code {
+        v.mark(families::family_bit("dyn_eval"), || {
+            format!("input:{linked}")
+        });
+    }
+    // L2.
+    for (i, why) in m.family_reach.why.iter().enumerate() {
+        if let Some(why) = why {
+            v.mark(1 << i, || why.clone());
+        }
+    }
+    observe_tokens(m, &mut v);
+    // L3.
+    if !v.full() {
+        text::scan(g, &mut |set, why| v.mark(set, || why()));
+    }
+    // L4: what a live family requires.
+    loop {
+        let before = v.live;
+        for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
+            if before & (1 << i) != 0 {
+                for r in f.requires {
+                    v.mark(families::family_bit(r), || {
+                        format!("L4:required by {}", f.id)
+                    });
+                }
+            }
+        }
+        if v.live == before {
+            return v;
+        }
+    }
+}
+
+/// The closed-world diagnostic is asked for.
+fn closed_requested(m: &Model) -> bool {
+    m.explain || std::env::var("PERRY_FACTS_FAMILY_REACH").as_deref() == Ok("closed")
+}
+
 /// The fact, after the fixpoint. `unit`: the modules are one unit of a
 /// larger program (L0). `dynamic_code`: the driver linked the interpreter
 /// (an input of the solve, reported as such).
 pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>) -> FamilyReach {
     let m = &g.m;
-    let mut v = Verdicts {
-        live: 0,
-        why: vec![None; RUNTIME_FAMILIES.len()],
-        also: m.explain.then(Vec::new),
-    };
+    let mut v = Verdicts::new();
     // L0.
     if unit {
         v.all(|| "L0:per-unit solve".into());
@@ -674,12 +763,6 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
         v.all(|| "L0:solve aborted".into());
     } else if m.widened {
         v.all(|| "L0:solve widened".into());
-    }
-    // `dyn_eval` is the driver's decision, an input of the solve.
-    if let Some(linked) = dynamic_code {
-        v.mark(families::family_bit("dyn_eval"), || {
-            format!("input:{linked}")
-        });
     }
     // L1.
     if !v.full() {
@@ -695,46 +778,22 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
             v.all(|| why);
         }
     }
-    // L2.
-    if !v.full() {
-        for (i, why) in m.family_reach.why.iter().enumerate() {
+    // L2, L3, L4.
+    let diagnostic = closed_requested(m) && !unit && !m.aborted;
+    let closed = (!v.full() || diagnostic).then(|| closed_world(g, dynamic_code));
+    if let Some(closed) = &closed {
+        for (i, why) in closed.why.iter().enumerate() {
             if let Some(why) = why {
                 v.mark(1 << i, || why.clone());
             }
         }
-        observe_tokens(m, &mut v);
-    }
-    // L3.
-    if !v.full() {
-        text::scan(g, &mut |set, why| v.mark(set, why));
-    }
-    // L4: what a live family requires.
-    loop {
-        let before = v.live;
-        for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
-            if before & (1 << i) != 0 {
-                for r in f.requires {
-                    v.mark(families::family_bit(r), || {
-                        format!("L4:required by {}", f.id)
-                    });
-                }
-            }
-        }
-        if v.live == before {
-            break;
-        }
     }
     FamilyReach {
-        families: RUNTIME_FAMILIES
-            .iter()
-            .zip(v.why)
-            .map(|(f, why)| FamilyVerdict {
-                family: f.id,
-                live: why.is_some(),
-                reason: why.unwrap_or_else(|| "none".into()),
-            })
-            .collect(),
-        also: v.also.unwrap_or_default(),
+        families: v.verdicts(),
+        closed: closed
+            .filter(|_| diagnostic)
+            .map(Verdicts::verdicts)
+            .unwrap_or_default(),
     }
 }
 
@@ -743,15 +802,11 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
 /// source `Model::top_tok_node`, which holds ⊤ in every program and is no
 /// value of this one).
 fn unknown_value(m: &Model) -> Option<String> {
-    let ignore = std::env::var("PERRY_FACTS_FAMILY_REACH_TOP_IGNORE").unwrap_or_default();
-    let ignore: Vec<&str> = ignore.split(',').filter(|s| !s.is_empty()).collect();
     let mut labels = std::collections::BTreeMap::<&str, (usize, usize)>::new();
     for (i, n) in m.nodes.iter().enumerate() {
         if i as u32 != m.top_tok_node && n.pts.contains_tok(TOP) {
             let label = m.labels.get(i).copied().unwrap_or("?");
-            if !ignore.contains(&label) {
-                labels.entry(label).or_insert((i, 0)).1 += 1;
-            }
+            labels.entry(label).or_insert((i, 0)).1 += 1;
         }
     }
     let (&label, &(first, _)) = labels.iter().next()?;

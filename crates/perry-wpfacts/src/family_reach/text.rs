@@ -14,7 +14,9 @@
 //!   (`globalThis["Uint8" + "Array"]`) is a static key; listing the global
 //!   object's keys is no observation.
 //! - **static member keys**: a string the text holds that is the key of a
-//!   member of a family on a core holder (`normalize`), wherever it stands.
+//!   member of a family its holder is not of (`normalize` on
+//!   `String.prototype`, `toLocaleString` on `Date.prototype`), wherever it
+//!   stands.
 //! - **computed keys**: only in a body generation does not walk (in a walked
 //!   body the solve has the key's strings and the receivers): any member of
 //!   a family on a core prototype.
@@ -126,7 +128,30 @@ impl Scan<'_, '_, '_> {
         (self.mark)(families::all_families(), why);
     }
 
+    /// The module of a `NativeMethodCall` / `NativeModuleRef`. Lowering also
+    /// uses the field for receivers that are no module: its own helpers
+    /// (`__perry_runtime`: iteration records, destructuring) and a few
+    /// built-in receivers by kind.
     fn module_spec(&mut self, spec: &str) {
+        let ix = index();
+        match spec {
+            s if s.starts_with("__perry_") => return,
+            "array" => return,
+            "bigint" => {
+                return (self.mark)(families::family_bit("bigint"), &|| {
+                    "L3:a BigInt method".into()
+                })
+            }
+            "fetch" | "Headers" | "readable_stream" | "readable_stream_reader" => {
+                let set = ["fetch", "Headers", "ReadableStream"]
+                    .iter()
+                    .fold(0, |set, name| {
+                        set | families::entry_families(name).unwrap_or(0) | ix.root(name)
+                    });
+                return (self.mark)(set, &|| format!("L3:a {spec} method"));
+            }
+            _ => {}
+        }
         match families::module_families(spec) {
             Some(set) => {
                 let root = format!("node:{}", spec.strip_prefix("node:").unwrap_or(spec));
@@ -163,6 +188,13 @@ impl Scan<'_, '_, '_> {
         let ix = index();
         match ix.entry(name) {
             Some(set) => (self.mark)(set, &|| format!("L3:{name}")),
+            // A call whose namespace lowering dropped (`console.log(..)` is
+            // a call of `log` off the global scope): a `console` member is
+            // core, a `Math` call that reaches here names no table (the
+            // namespace's calls are intrinsic nodes; the detector reads it
+            // the same way), any other namespace's member names it.
+            None if ix.entries.contains_key(format!("console.{name}").as_str())
+                || ix.entries.contains_key(format!("Math.{name}").as_str()) => {}
             None => self.global_value(name),
         }
     }
@@ -174,11 +206,13 @@ impl Scan<'_, '_, '_> {
             // A global the realm does not declare (a program global).
             return;
         }
-        if families::entry_families(name).is_some_and(|set| set != 0) {
-            // A holder of a family: any member of it observes the family.
-            (self.mark)(ix.entry(name).unwrap_or(0) | ix.root(name), &|| {
-                format!("L3:{name}.{key}")
-            });
+        if let Some(own) = families::entry_families(name).filter(|set| *set != 0) {
+            // A holder of a family: the family, and what the member is and
+            // bears; a member the realm does not declare is the whole holder.
+            let member = ix
+                .entry(&format!("{name}.{key}"))
+                .unwrap_or_else(|| ix.root(name));
+            (self.mark)(own | member, &|| format!("L3:{name}.{key}"));
             return;
         }
         if key == "prototype" && self.member_receivers.contains(&addr(e)) {
@@ -206,7 +240,7 @@ impl Scan<'_, '_, '_> {
                 (self.mark)(set, &|| format!("L3:node {}", node_name(e)));
             }
             Node::Entry(name) => {
-                let set = families::entry_families(name).unwrap_or(0) | ix.entry(name).unwrap_or(0);
+                let set = families::entry_families(name).unwrap_or(0) | ix.named(name).unwrap_or(0);
                 (self.mark)(set, &|| format!("L3:node {} ({name})", node_name(e)));
             }
             Node::Spec(spec) => {
@@ -368,18 +402,20 @@ fn string_rules(found: &FxHashSet<String>, mark: &mut Mark<'_>) {
     let mut sorted: Vec<&String> = found.iter().collect();
     sorted.sort_unstable();
     for s in sorted {
-        // A holder of a family, by name (a constructed class, a type, a
-        // property that names it): everything below it.
+        // A holder of a family, by name (a constructed class, a type, an
+        // `instanceof` operand): the family and what the holder declares
+        // born. A member of another family has its key; the holder as a
+        // value is a node (`Scan::global_value`).
         if families::entry_root(s) == s.as_str()
             && ix.roots.contains_key(s.as_str())
             && families::entry_families(s).is_some_and(|set| set != 0)
         {
             mark(
-                families::entry_families(s).unwrap_or(0) | ix.root(s),
+                families::entry_families(s).unwrap_or(0) | ix.named(s).unwrap_or(0),
                 &|| format!("L3:the name {s}"),
             );
         }
-        if let Some(&(set, entry)) = ix.core_keys.get(s.as_str()) {
+        if let Some(&(set, entry)) = ix.member_keys.get(s.as_str()) {
             mark(set, &|| format!("L3:the key {s} ({entry})"));
         }
     }
