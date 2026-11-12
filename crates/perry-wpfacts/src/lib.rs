@@ -38,6 +38,7 @@ mod gen_call;
 mod gen_cjs;
 mod gen_const;
 mod gen_expr;
+mod gen_protocol;
 mod gen_rest;
 mod held_lengths;
 mod ledger;
@@ -556,6 +557,8 @@ fn generate<'a>(
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.instance_nodes =
+        bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
     g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
     g.m.map_values = solve::map_vals::enabled();
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");

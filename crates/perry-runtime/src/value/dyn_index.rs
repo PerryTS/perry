@@ -569,12 +569,22 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             {
                 return crate::array::js_array_get_f64(arr, idx_i32 as u32);
             }
-            let length = unsafe { (*arr).length };
+            let (length, capacity) = unsafe { ((*arr).length, (*arr).capacity) };
+            // A long sparse Array keeps a short store under its length: only
+            // the complete accessor knows where such an element lives.
+            if length > capacity {
+                return crate::array::js_array_get_f64(arr, idx_i32 as u32);
+            }
             if (idx_i32 as u32) >= length {
                 return f64::from_bits(TAG_UNDEFINED);
             }
-        }
-        if crate::gc_type_is_object!(obj_type) || obj_type == crate::gc::GC_TYPE_CLOSURE {
+        } else {
+            // Every other GC-headed receiver (an ordinary object, a function,
+            // a Date, a Promise, an Error, a RegExp, a weak collection, a
+            // boxed primitive, ...) has no element vector behind its header:
+            // `o[i]` is the ordinary [[Get]] of ToString(i), own first, then
+            // the [[Prototype]] chain. Nothing but an Array reaches the
+            // element load at the end of this function.
             // An ordinary object's integral key (`record[id]`) is read by its
             // atom from the layouts first: no key string is allocated.
             let mut raw_ptr = raw_ptr;
@@ -620,7 +630,12 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             return v;
         }
     }
-    if idx_i32 < 0 {
+    // Only a live Array whose `idx_i32 < length <= capacity` was proven above
+    // has an element to load. A receiver without a GC header (the allocator
+    // does not vouch for the word) has no property to read: before, its
+    // "slot" `raw_ptr + 8 + 8 * index` was loaded with no bound at all.
+    if idx_i32 < 0 || !receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type))
+    {
         return f64::from_bits(TAG_UNDEFINED);
     }
     // A plain array's logical element 0 is not always physical slot 0: a
@@ -628,14 +643,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // (`array/named_props.rs`), keeps dead or reserved slack in front of it.
     // `array_elements_ptr` derives the base from `GcHeader.size` and
     // `capacity`, the same two words codegen's inline loads use.
-    let elem_addr = if receiver_tag.is_some_and(|(obj_type, _)| crate::gc_type_is_array!(obj_type))
-    {
-        unsafe {
-            crate::array::array_elements_ptr(raw_ptr as *const crate::array::ArrayHeader)
-                .add(idx_i32 as usize) as usize
-        }
-    } else {
-        raw_ptr.wrapping_add(8 + (idx_i32 as usize) * 8)
+    let elem_addr = unsafe {
+        crate::array::array_elements_ptr(raw_ptr as *const crate::array::ArrayHeader)
+            .add(idx_i32 as usize) as usize
     };
     let v = unsafe { *(elem_addr as *const f64) };
     if v.to_bits() == crate::value::TAG_HOLE {
