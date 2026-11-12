@@ -153,19 +153,10 @@ impl Model {
             if self.enum_key_any_done(o, src, site) {
                 return;
             }
-            let covered = t != TOP
-                && match from {
-                    None => {
-                        (self.enum_free(t)
-                            || self.enum_obj(t)
-                            || builtins::enum_free_instance(self, t))
-                            && !self.is_elem_array(t)
-                            && !self.tmpl_of(t).is_some_and(|tm| {
-                                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. })
-                            })
-                    }
-                    Some(f) => self.enum_link(f, t),
-                };
+            let covered = match from {
+                None => self.enum_subject(t),
+                Some(f) => t != TOP && self.enum_link(f, t),
+            };
             if enum_diag() {
                 let r = if t == TOP {
                     "top".to_string()
@@ -220,6 +211,53 @@ impl Model {
         }
     }
 
+    /// ENUM3: a for-in subject whose enumerable String keys are the names
+    /// the program wrote on it (`Node::enum_key` fields) and what
+    /// `enum_key_watch` collects: a built-in object of `enum_free`, a
+    /// program value (`enum_obj`) or a built-in instance
+    /// (`builtins::enum_free_instance`); not ⊤, not an array (its index
+    /// keys). The one predicate of the keyed store (`enum_key_store`) and
+    /// of the per-key for-in runs (`Model::for_in_keys`).
+    pub(crate) fn enum_subject(&self, t: Tok) -> bool {
+        t != TOP
+            && (self.enum_free(t) || self.enum_obj(t) || builtins::enum_free_instance(self, t))
+            && !self.is_elem_array(t)
+            && !self
+                .tmpl_of(t)
+                .is_some_and(|tm| matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+    }
+
+    /// ENUM3: does what `enum_key_watch(t)` collects hold a value now: was
+    /// `t` written under a key no name lists (its any-key field, a shaped
+    /// computed-key store)? Read without making the watch node.
+    pub(crate) fn enum_any_written(&self, t: Tok) -> bool {
+        let held = |n: NodeId| {
+            let nd = &self.nodes[n as usize];
+            !nd.pts.is_empty() || nd.prim != 0
+        };
+        let any = match self.is_elem_array(t) {
+            true => self.named_any.get(&t),
+            false => self.field_any.get(&t),
+        };
+        any.is_some_and(|&n| held(n))
+            || self
+                .shaped_of
+                .get(&t)
+                .is_some_and(|v| v.iter().any(|&(_, n, store)| store && held(n)))
+    }
+
+    /// ENUM3: is `a` a key a for-in may yield? String keys only (ECMA-262
+    /// 14.7.5.9 EnumerateObjectProperties): never a private name, a symbol
+    /// (a well-known symbol's `@@` key, `util.inspect.custom`'s) nor an
+    /// internal slot.
+    pub(crate) fn enum_string_key(&self, a: Atom) -> bool {
+        let name = &self.atoms[a as usize];
+        !(self.is_private_atom(a)
+            || name.starts_with("@@")
+            || name == crate::model::INSPECT_CUSTOM_METHOD
+            || builtins::is_internal_key(name))
+    }
+
     /// ENUM3: what `t` holds under keys no name lists: its any-key field and
     /// every shaped computed-key store into it (`key_store_node`), now and
     /// later. A node of its own: a field node of an observed token runs no
@@ -251,17 +289,7 @@ impl Model {
     }
 
     fn enum_key_named(&mut self, o: NodeId, src: NodeId, site: SiteId, a: Atom) {
-        if self.is_private_atom(a) || self.enum_key_any_done(o, src, site) {
-            return;
-        }
-        // A for-in yields String keys only (ECMA-262 14.7.5.9
-        // EnumerateObjectProperties): never a symbol (a well-known symbol's
-        // `@@` key, `util.inspect.custom`'s) nor an internal slot.
-        let name = &self.atoms[a as usize];
-        if name.starts_with("@@")
-            || name == crate::model::INSPECT_CUSTOM_METHOD
-            || builtins::is_internal_key(name)
-        {
+        if !self.enum_string_key(a) || self.enum_key_any_done(o, src, site) {
             return;
         }
         if self.atoms[a as usize] == crate::STAR_KEY {

@@ -4,9 +4,12 @@ use super::*;
 
 impl Model {
     /// Run for-in body `ft` (through template call `call`) over the iterated
-    /// value `t` (FVA 4.3b): once per key of a literal whose keys are exactly
-    /// its birth keys (`for_in_keys`), each run's key parameter holding its
-    /// one key, else once with every key.
+    /// value `t` (FVA 4.3b): once per key of a literal whose enumerable keys
+    /// are known (`for_in_keys`), each run's key parameter holding its one
+    /// key, else once with every key. Each iteration binds one key and
+    /// `t[k]` in it reads that key only (ECMA-262 14.7.5.6
+    /// ForIn/OfBodyEvaluation, 14.7.5.9 EnumerateObjectProperties), so the
+    /// per-key runs are the loop's whole effect on `t`.
     pub(crate) fn for_in_tok(&mut self, call: CallId, ft: Tok, t: Tok) {
         if self.act.is_some() {
             let f = self.tok_fn(ft);
@@ -18,13 +21,24 @@ impl Model {
         }
         let f = self.tok_fn(ft);
         let keys = match self.summarized(f) && self.instantiable(ft) {
-            true => self.for_in_keys(f, t, None),
+            true => self.for_in_keys(f, t),
             false => None,
         };
         let Some(keys) = keys else {
             return self.for_in_every_key(call, ft);
         };
-        for k in keys {
+        if self.for_in_key_runs(call, ft, &keys).is_some() {
+            self.for_in_runs.push((call, ft, t));
+        }
+    }
+
+    /// The runs of body `ft` for `keys`, made on first use. `None`: the body
+    /// does not take its key as a fresh slot, so it ran with every key
+    /// instead; else whether a run was new.
+    fn for_in_key_runs(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> Option<bool> {
+        let mut made = false;
+        for &k in keys {
+            made |= !self.sum.inst_key.contains_key(&(6, k, ft));
             let inst = self.instance((6, k, ft));
             match self.sum.insts[inst as usize].params.first().copied() {
                 // The run reads no key.
@@ -32,10 +46,13 @@ impl Model {
                 // A fresh slot: the run's key (its key variable's copy holds
                 // the key's atom, `instance`).
                 Some(p) if self.nodes[p as usize].frame == inst + 1 => self.add_prim(p, prim::STR),
-                _ => return self.for_in_every_key(call, ft),
+                _ => {
+                    self.for_in_every_key(call, ft);
+                    return None;
+                }
             }
         }
-        self.for_in_runs.push((call, ft, t));
+        Some(made)
     }
 
     /// Run for-in body `ft` once with every key (the loop as it is).
@@ -45,21 +62,21 @@ impl Model {
         }
     }
 
-    /// The keys a for-in run of body `f` over `t` visits, when they are
-    /// exactly `t`'s: a literal not escaped and not HARD, with no key added
-    /// after birth or stored under a computed key, no computed member, no
-    /// `__proto__`, whose chain gets no enumerable key from the program
-    /// (nothing writes `Object.prototype`, `object_proto_written`); a body
-    /// defining a property under its key also needs each key to be one
-    /// generation named (`for_in_define_keys`). `late`: the keys stored into
-    /// each template (`settle_for_in`; the check before it only knows the
-    /// cheap facts).
-    fn for_in_keys(
-        &self,
-        f: FnIdx,
-        t: Tok,
-        late: Option<&FxHashMap<TmplId, Vec<Atom>>>,
-    ) -> Option<Vec<Atom>> {
+    /// The keys a for-in run of body `f` over `t` visits, as far as the
+    /// solve knows them now: `t` is a subject of ENUM3 (`enum_subject`:
+    /// its enumerable keys are the names the program wrote on it), a
+    /// literal (its chain is `Object.prototype`, or its class's prototype
+    /// whose program-written keys are listed, `proto_writers`) not escaped
+    /// and not HARD, never written under a key no name lists
+    /// (`enum_any_written`), with no computed member and no `__proto__`,
+    /// whose chain gets no enumerable key from the program (nothing writes
+    /// `Object.prototype`, `object_proto_written`); a body defining a
+    /// property under its key also needs each key to be one generation
+    /// named (`for_in_define_keys`). The keys are its birth keys, its
+    /// methods and every enumerable field the program wrote
+    /// (`Node::enum_key`); keys written later get their run once the
+    /// worklist is empty (`settle_for_in`).
+    fn for_in_keys(&self, f: FnIdx, t: Tok) -> Option<Vec<Atom>> {
         let TokKind::Obj(tm, _) = self.toks[t as usize] else {
             return None;
         };
@@ -74,12 +91,16 @@ impl Model {
         );
         if !literal
             || tpl.has_computed_members
+            || !self.enum_subject(t)
             || self.is_escaped(t)
             || self.hard.contains_key(&t)
-            || self.adds_keys.get(&tm).is_some_and(|&n| n > 0)
-            || self.any_writers.contains_key(&tm)
+            || self.enum_any_written(t)
             || self.object_proto_written()
         {
+            return None;
+        }
+        let star = |a: Atom| self.atoms[a as usize] == crate::STAR_KEY;
+        if self.accessor_keys.get(&t).is_some_and(|ks| ks.iter().any(|&a| star(a))) {
             return None;
         }
         let mut keys: Vec<Atom> = Vec::new();
@@ -90,20 +111,30 @@ impl Model {
             .proto_members
             .iter()
             .filter(|&&a| self.atoms[a as usize] != "constructor");
-        for &a in own.chain(methods) {
+        // The enumerable fields the program wrote (ENUM3).
+        let written = self.field_keys.get(&t).into_iter().flatten().filter(|&&a| {
+            self.fields
+                .get(&(t, a))
+                .is_some_and(|&n| self.nodes[n as usize].enum_key)
+        });
+        for &a in own.chain(methods).chain(written) {
             let name = self.atoms[a as usize].as_str();
-            if name == "__proto__" {
+            if name == "__proto__" || star(a) {
                 return None;
             }
             // A symbol is no for-in key.
-            if !name.starts_with(crate::builtins::WK_PREFIX) && !keys.contains(&a) {
+            if !name.starts_with(crate::builtins::WK_PREFIX)
+                && self.enum_string_key(a)
+                && !keys.contains(&a)
+            {
                 keys.push(a);
             }
         }
-        if late.is_some_and(|l| {
-            l.get(&tm)
-                .is_some_and(|ws| ws.iter().any(|a| !keys.contains(a)))
-        }) {
+        if self
+            .proto_writers
+            .keys()
+            .any(|&(w, a)| w == tm && !keys.contains(&a))
+        {
             return None;
         }
         if self.for_in_defines.contains(&f)
@@ -129,33 +160,24 @@ impl Model {
             .any(|&(w, _)| matches!(self.toks[w as usize], TokKind::ObjectProto))
     }
 
-    /// Once the worklist is empty: a literal a for-in body ran per key over
-    /// that gained a key after birth (or escaped, or turned HARD) since runs
-    /// the body once more with every key. True when one did.
+    /// Once the worklist is empty: each literal a for-in body ran per key
+    /// over is looked at again. A key written on it since gets its run; one
+    /// that escaped, turned HARD or was written under a key no name lists
+    /// since runs the body once more with every key. True when either
+    /// happened.
     pub(crate) fn settle_for_in(&mut self) -> bool {
-        if self.for_in_runs.is_empty() {
-            return false;
-        }
-        let tms: crate::pts::FxHashSet<TmplId> = self
-            .for_in_runs
-            .iter()
-            .filter_map(|&(_, _, t)| self.tmpl_of(t))
-            .collect();
-        let mut late: FxHashMap<TmplId, Vec<Atom>> = FxHashMap::default();
-        for &(tm, a) in self.writers.keys().chain(self.proto_writers.keys()) {
-            if tms.contains(&tm) {
-                late.entry(tm).or_default().push(a);
-            }
-        }
         let mut more = false;
         for (call, ft, t) in self.for_in_runs.clone() {
             if self.for_in_any.contains(&(call, ft)) {
                 continue;
             }
             let f = self.tok_fn(ft);
-            if self.for_in_keys(f, t, Some(&late)).is_none() {
-                self.for_in_every_key(call, ft);
-                more = true;
+            match self.for_in_keys(f, t) {
+                None => {
+                    self.for_in_every_key(call, ft);
+                    more = true;
+                }
+                Some(keys) => more |= self.for_in_key_runs(call, ft, &keys) != Some(false),
             }
         }
         more
