@@ -488,6 +488,11 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             if k >= (*arr).length as i64 {
                 return false;
             }
+            // Past a sparse Array's store the element lives in its named
+            // layout: the complete HasProperty answers, never a raw slot.
+            if k >= i64::from((*arr).capacity) {
+                return crate::array::array_spec_has_index(arr, k as u32);
+            }
             let el = *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64)
                 .add(k as usize);
             if el.to_bits() != TAG_HOLE {

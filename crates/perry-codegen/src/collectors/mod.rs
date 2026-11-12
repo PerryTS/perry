@@ -7,6 +7,7 @@
 
 mod all_pointer_arrays;
 pub(crate) mod life_census;
+pub(crate) mod life_claims;
 pub(crate) mod anon_key_adds;
 mod byte_read_key;
 #[cfg(test)]

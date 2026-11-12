@@ -943,6 +943,11 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         if idx < 0 || idx >= length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
+        // A sparse Array keeps a short store under its length: an index past
+        // the store is read by the complete accessor, never as a raw slot.
+        if idx >= i64::from((*arr).capacity) {
+            return crate::array::js_array_get_f64(arr, idx as u32);
+        }
         let elements_ptr = array_elements_ptr(arr);
         array_element_get_value(elements_ptr, idx as usize)
     }
@@ -1242,9 +1247,20 @@ pub extern "C" fn js_array_flatMap(
             ));
         };
 
+        // A sparse store, an index accessor or an inherited index: the
+        // receiver is read by HasProperty / Get, as `map` and `filter` do.
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
-            let Some(element) = rooted.present(i) else {
-                continue;
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(rooted.arr(), i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(rooted.arr(), i as u32)
+            } else {
+                match rooted.present(i) {
+                    Some(element) => element,
+                    None => continue,
+                }
             };
             let mapped = cb_site.call(
                 current_callback(),
@@ -1257,7 +1273,18 @@ pub extern "C" fn js_array_flatMap(
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
             let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
-            if !sub_arr.is_null() {
+            if !sub_arr.is_null() && crate::array::array_iteration_is_exotic(sub_arr) {
+                // The callback returned a sparse (or otherwise exotic) Array:
+                // FlattenIntoArray reads it by HasProperty / Get.
+                let sub_len = (*sub_arr).length;
+                for j in 0..sub_len {
+                    let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
+                    if !crate::array::array_spec_has_index(sub_arr, j) {
+                        continue;
+                    }
+                    push_rooted(crate::array::array_spec_get(sub_arr, j));
+                }
+            } else if !sub_arr.is_null() {
                 let sub_len = (*sub_arr).length;
                 for j in 0..sub_len as usize {
                     // Resolve from the rooted value after each allocation so a
