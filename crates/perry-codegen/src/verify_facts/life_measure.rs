@@ -76,11 +76,19 @@ pub(crate) fn birth(ctx: &mut FnCtx<'_>, e: &Expr, value: &str) {
     ctx.block().call_void("perry_life_birth", &[(I64, &bits), (I64, &site), (I64, &loop_id)]);
 }
 
-/// The statement list `stmts` begins: the body's own list starts its activation.
+/// The statement list `stmts` begins: the body's own list starts its
+/// activation; a loop body's list starts an iteration (`perry_life_loop`).
 pub(crate) fn list_begin(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) {
-    if on(ctx) && stmts.as_ptr() as usize == ctx.life_claims.body && !ctx.block().is_terminated() {
+    if !on(ctx) || ctx.block().is_terminated() {
+        return;
+    }
+    let at = stmts.as_ptr() as usize;
+    if at == ctx.life_claims.body {
         let body = (ctx.life_claims.body_id as i64).to_string();
         ctx.block().call_void("perry_life_enter", &[(I64, &body)]);
+    } else if !stmts.is_empty() && ctx.life_claims.loops.contains(&at) {
+        let loop_id = (at as u64).to_string();
+        ctx.block().call_void("perry_life_loop", &[(I64, &loop_id)]);
     }
 }
 

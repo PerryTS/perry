@@ -5237,6 +5237,7 @@ perry_life_catch	void	i64
 perry_life_depth	i64	
 perry_life_enter	void	i64
 perry_life_iter	void	i64
+perry_life_loop	void	i64
 perry_life_return	void	
 perry_life_turn	void	
 perry_macos_bundle_chdir	void	

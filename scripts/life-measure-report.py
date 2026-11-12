@@ -18,7 +18,7 @@ import math
 from collections import defaultdict
 from pathlib import Path
 
-B = ["iteration", "return", "caller", "turn"]
+B = ["iteration", "return", "caller", "turn", "dyn", "dyn2"]
 HOLDERS = ["frame", "outer_frame", "shadow", "global", "remembered", "object", "other"]
 
 
@@ -160,10 +160,15 @@ def report(name, sites, totals):
         md.append(f"- {b}: {holders(sites, b)}")
     md.append("")
     md.append("## Table 2: top 30 sites by bytes")
-    md.append("| site (function kind class offset) | side | births | bytes | dead@iter | dead@ret | dead@caller | dead@turn | first dead | CI width (worst) | iter/ret holder |")
-    md.append("|---|---|---|---|---|---|---|---|---|---|---|")
-    mono_bad = 0
+    md.append("| site (function kind class offset) | side | births | bytes | dead@iter | dead@ret | dead@caller | dead@turn | dead@dyn | dead@dyn2 | first dead | CI width (worst) | iter/ret holder |")
+    md.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    mono_bad = dyn_bad = 0
     for s in sites:
+        di, dd = s["b"].get("iteration"), s["b"].get("dyn")
+        if di and dd and di["samples"] and dd["samples"]:
+            # Dead at the own loop's iteration end implies dead at the dynamic one.
+            if (dd["samples"] - dd["alive"]) + dd["unresolved"] < (di["samples"] - di["alive"]):
+                dyn_bad += 1
         di = s["b"].get("iteration")
         dr = s["b"].get("return")
         if di and dr and di["samples"] and dr["samples"]:
@@ -195,7 +200,8 @@ def report(name, sites, totals):
         md.append(f"| {k[1]} {k[2]} {k[3]} {k[4]} | {s['side']} | {s['births']:,} | {s['bytes']:,} | " + " | ".join(cells)
                   + f" | {first} | ±{50 * worst:.1f} pts | {'/'.join(hold)} |")
     md.append("")
-    md.append(f"Monotone check (dead at return >= dead at iteration, per site): {mono_bad} sites violate. "
+    md.append(f"Monotone check (dead at return >= dead at iteration, per site): {mono_bad} sites violate; "
+              f"(dead at dyn >= dead at iteration): {dyn_bad} sites violate. "
               "`*`: fewer than 20 decided samples.")
     return md, sh, births, bytes_, arena
 

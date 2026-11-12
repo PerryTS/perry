@@ -768,6 +768,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_life_depth", I64, &[]);
         module.declare_function("perry_life_enter", crate::types::VOID, &[I64]);
         module.declare_function("perry_life_iter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_loop", crate::types::VOID, &[I64]);
         module.declare_function("perry_life_return", crate::types::VOID, &[]);
         module.declare_function("perry_life_turn", crate::types::VOID, &[]);
     }
