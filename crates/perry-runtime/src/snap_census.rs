@@ -250,6 +250,10 @@ impl Drop for WalkScope {
     fn drop(&mut self) {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         runner::walk_origin(self.0 .0, self.0 .1);
+        // On the non-linux census configurations the walk stack is tracked
+        // elsewhere; reading the tuple here keeps the fields live for Drop.
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = (self.0 .0, self.0 .1);
     }
 }
 

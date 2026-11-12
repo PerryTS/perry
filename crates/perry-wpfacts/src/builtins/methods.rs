@@ -45,6 +45,7 @@ pub fn prim_plain_key(m: &mut Model, prim: u16, call: CallId) {
 }
 
 pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
+    crate::family_reach::tok(m, t, _key);
     match m.toks[t as usize] {
         // Object.prototype members are reachable from every object the
         // runtime handles: unknown code may call them with any receiver.
@@ -137,6 +138,7 @@ pub(crate) fn native_method_at(m: &mut Model, r: NativeRecv, key: Key, call: Cal
 }
 
 pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
+    crate::family_reach::primitive(m, prim, key);
     if native_waits(m, NativeRecv::Prim(prim), key, call) {
         return;
     }
@@ -309,6 +311,7 @@ pub(super) fn realm_born_method(
 
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
+    crate::family_reach::tok(m, t, key);
     if native_waits(m, NativeRecv::Own(t), key, call) {
         return;
     }
@@ -456,6 +459,7 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
 /// Builtin methods found on the prototype chain (`Object.prototype` and
 /// native parent prototypes), run with `this` = `origin`.
 pub fn proto_method(m: &mut Model, p: Tok, origin: Tok, key: Key, call: CallId) {
+    crate::family_reach::chain(m, origin, p, key);
     if native_waits(m, NativeRecv::Proto(p, origin), key, call) {
         return;
     }
@@ -689,6 +693,23 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
             m.toks[t as usize],
             TokKind::Obj(..) | TokKind::Func(..) | TokKind::Proto(_) | TokKind::ClassObj(_)
         ) || super::undeclared(m, t, key))
+}
+
+/// IsCallable (ECMA-262 7.2.3) of a token that is surely a function: a
+/// program function, a bound function, a class, a native function, a
+/// builtin constructor. ⊤, a marker and every other token may be no
+/// function.
+pub(crate) fn surely_callable(m: &Model, t: Tok) -> bool {
+    if t == TOP || m.is_marker(t) {
+        return false;
+    }
+    match m.toks[t as usize] {
+        TokKind::Func(..) | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => {
+            true
+        }
+        TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,
+        _ => false,
+    }
 }
 
 /// Callable values other than a program function that an accessor may

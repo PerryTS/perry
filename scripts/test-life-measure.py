@@ -9,7 +9,10 @@ run. The negative control runs m2 with PERRY_FACTS_SABOTAGE=lifekeep (every
 sample also stored in a global root): m2 must then report 0% dead, so its
 check must FAIL. m1 must never report a death. The default archives offered
 under the instrumented names must make a measure compile fail to link on
-the perry_life_ entry points.
+the perry_life_ entry points. The allocation census (PERRY_LIFE_ALLOC) at
+one sample per byte must give sampled covered / uncovered bytes EQUAL to its
+exact counts on a1_alloc_mix (a known mix of claimed object literals and
+unclaimed runtime strings).
 """
 import argparse
 import os
@@ -30,6 +33,10 @@ EXPECT = {
     "m6_timer": ("arm", "object", [("turn", "min_samples", 20), ("turn", "alive_share", 1.0)]),
     "m7_throw": ("inner", "object", [("return", "min_samples", 100), ("return", "dead_share", 1.0),
                                      ("return", "all_late", 0)]),
+    "m8_callee_dyn": ("make", "object", [("dyn", "min_samples", 200), ("dyn", "dead_share", 1.0)]),
+    # The return probe's minor promotes about half of add's survivors (old at the dynamic boundary: unresolved,
+    # never guessed); the young half decides it.
+    "m9_callee_acc": ("add", "object", [("dyn", "min_samples", 90), ("dyn", "alive_share", 1.0)]),
 }
 
 
@@ -87,6 +94,37 @@ def check(rows, function, kind, tests):
     return bad
 
 
+def check_alloc(path):
+    """The alloc TSV at one sample per byte: sampled bytes per state equal the exact ones."""
+    meta, types, sampled = {}, {}, {"covered": 0, "uncovered": 0, "unplaced": 0}
+    for line in path.read_text().splitlines():
+        f = line.split("\t")
+        if f[0] == "#meta":
+            meta = dict(kv.split("=", 1) for kv in f[1:])
+        elif f[0] == "#type":
+            types[f[1]] = [int(x) for x in f[2:8]]
+        elif f[0] == "sample":
+            sampled[f[1]] += int(f[4])
+    bad = []
+    if meta.get("interval") != "1":
+        bad.append("interval " + meta.get("interval", "?"))
+    total = sum(v[1] + v[3] for v in types.values())
+    covered = sum(v[5] for v in types.values())
+    if sampled["covered"] != covered:
+        bad.append(f"covered sampled {sampled['covered']} != exact {covered}")
+    if sampled["uncovered"] + sampled["unplaced"] != total - covered:
+        bad.append(f"uncovered sampled {sampled['uncovered']}+{sampled['unplaced']} != exact {total - covered}")
+    obj, st = types.get("object", [0] * 6), types.get("string", [0] * 6)
+    if obj[4] < 300:
+        bad.append(f"covered objects {obj[4]} < 300")
+    if st[1] + st[3] < 300 * 100 or st[5] != 0:
+        bad.append(f"strings {st[1] + st[3]} B (want >= 30000), covered {st[5]} (want 0)")
+    for k in ("claims_outside", "walk_breaks", "inline_slow_bad"):
+        if meta.get(k) != "0":
+            bad.append(f"{k}={meta.get(k)}")
+    return bad
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--perry", type=Path, required=True)
@@ -130,15 +168,38 @@ def main():
         if not ok:
             failures.append(name)
             (out / (name + ".stderr")).write_bytes(r.stderr)
-        if name == "m2_body":
+        if name in ("m2_body", "m8_callee_dyn"):
             r2, tsv2 = measure(name, exe, {"PERRY_FACTS_SABOTAGE": "lifekeep"})
             bad2 = check(load(sites, tsv2), function, kind, tests) if tsv2.exists() else ["no tsv"]
             dead0 = not check(load(sites, tsv2), function, kind, [("any", "no_dead", 0)]) if tsv2.exists() else False
             ok2 = r2.returncode == 0 and bool(bad2) and dead0
-            print(f"control lifekeep m2_body: rc={r2.returncode} check {'FAILS' if bad2 else 'passes'}, "
+            print(f"control lifekeep {name}: rc={r2.returncode} check {'FAILS' if bad2 else 'passes'}, "
                   f"0% dead={dead0}: {'OK' if ok2 else 'FAIL'}")
             if not ok2:
-                failures.append("control:lifekeep")
+                failures.append("control:lifekeep:" + name)
+    # LIFE I2 A: the allocation census at one sample per byte. The sampled
+    # covered / uncovered bytes are the exact ones (one predicate: claimed by
+    # a census birth while in the epoch map), on a known mix: 300 object
+    # literals at a census site, 300 runtime strings of 100..106 characters.
+    name = "a1_alloc_mix"
+    c, exe, sites = build(name)
+    alloc = out / (name + ".alloc.tsv")
+    alloc.unlink(missing_ok=True)
+    bad = []
+    if c.returncode != 0:
+        bad.append(f"compile rc={c.returncode}")
+        (out / (name + ".compile.txt")).write_bytes(c.stdout + c.stderr)
+    else:
+        r, _ = measure(name, exe, {"PERRY_LIFE_ALLOC": str(alloc), "PERRY_LIFE_ALLOC_SAMPLE": "1"})
+        if r.returncode != 0 or r.stdout != (fixtures / (name + ".node.txt")).read_bytes():
+            bad.append(f"rc={r.returncode} or output differs from node")
+        if not alloc.exists():
+            bad.append("no alloc tsv")
+        else:
+            bad += check_alloc(alloc)
+    print(f"{name}: sampled = exact at 1 B: {'OK' if not bad else 'FAIL ' + '; '.join(bad)}")
+    if bad:
+        failures.append(name)
     # The default archives under the instrumented names: no perry_life_ hooks.
     plain = out / "default-as-instr"
     plain.mkdir(exist_ok=True)

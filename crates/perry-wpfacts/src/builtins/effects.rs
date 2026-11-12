@@ -984,6 +984,7 @@ fn run(
     callee: Option<Tok>,
     call: CallId,
 ) {
+    crate::family_reach::run(m, entry.name);
     if let Some(p) = m.prof.as_mut() {
         let site = m.calls[call as usize].site;
         let (runs, sites) = p.natives.entry(entry.name).or_default();
