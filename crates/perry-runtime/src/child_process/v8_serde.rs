@@ -294,7 +294,17 @@ impl Serializer {
             if self.write_reference_or_register(raw) {
                 return true;
             }
-            let array = crate::array::js_array_from_value(value);
+            // A plain Array is written from itself: `js_array_from_value` is
+            // `Array.from`, whose copy turns every hole into `undefined` and
+            // reads a sparse Array's gap index by index. Anything else that
+            // IsArray (a Proxy over an Array) is still read through that copy.
+            let plain = crate::value::addr_class::pointer_value_header(value.to_bits())
+                .is_some_and(|header| crate::gc_type_is_array!(header.obj_type));
+            let array = if plain {
+                raw as *mut crate::array::ArrayHeader
+            } else {
+                crate::array::js_array_from_value(value)
+            };
             self.write_dense_array(array);
             return true;
         }
