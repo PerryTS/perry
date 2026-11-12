@@ -252,6 +252,20 @@ def main():
         assert value["predicate"] == "canonical number", value
         save("canonical-number-negative-false", status=86)
 
+    # An interval rule's bounds are those of doubles (`model::range`): the
+    # repro of the false int32 claim is right and unreported, and the rule
+    # before it (`PERRY_FACTS_INT_BOUNDS=0`: a product past 2^60 is the empty
+    # interval) is a false proof the int32 witness reports.
+    source = fixtures / "int-bounds-negative.ts"
+    exe, e = compile_(source, "int-bounds-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("int-bounds-negative-correct", status=0)
+    exe, e = compile_(source, "int-bounds-negative-false", PERRY_FACTS_INT_BOUNDS="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "int32 input", value
+    save("int-bounds-negative-false", status=86)
+
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
     observed = observe(exe, e)

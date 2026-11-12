@@ -36,6 +36,13 @@ fn check_constraint(
     module: &Module,
     idx: &ModuleIndex,
 ) -> Result<(), ConstraintError> {
+    // A type-parameter argument arrives here uninstantiated: its bound is
+    // enforced where it was instantiated, so every constraint accepts it.
+    // Comparing the bare TypeVar with this parameter's constraint instead
+    // warned on nested generic calls that tsc accepts.
+    if matches!(concrete_type, Type::TypeVar(_)) {
+        return Ok(());
+    }
     match constraint {
         // Named constraint - check if concrete type is or implements the interface
         Type::Named(name) => check_named_constraint(type_param, concrete_type, name, module, idx),
@@ -339,5 +346,34 @@ pub(crate) fn check_class_constraints(
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(actual: Type, constraint: Type) -> bool {
+        let module = Module::new("test");
+        let idx = ModuleIndex::new(&module);
+        check_constraint("T", &actual, &constraint, &module, &idx).is_ok()
+    }
+
+    // A generic argument reaches the constraint check as its own TypeVar; its
+    // bound was enforced where it was instantiated. Rejecting it here warned on
+    // calls tsc accepts (nested generic calls).
+    #[test]
+    fn constraint_accepts_a_type_parameter_argument() {
+        let array_of_numbers = Type::Array(Box::new(Type::Number));
+        assert!(check(Type::TypeVar("F".to_string()), array_of_numbers.clone()));
+        assert!(check(Type::TypeVar("F".to_string()), Type::String));
+    }
+
+    // The TypeVar arm must not widen the check: a concrete mismatched argument
+    // still fails.
+    #[test]
+    fn constraint_still_rejects_a_mismatched_concrete_argument() {
+        let array_of_numbers = Type::Array(Box::new(Type::Number));
+        assert!(!check(Type::String, array_of_numbers));
     }
 }

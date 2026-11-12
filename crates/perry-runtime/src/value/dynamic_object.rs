@@ -1055,9 +1055,13 @@ mod length_handle_band_tests {
     fn uint8array_own_length_shadows_intrinsic_length() {
         let typed = crate::buffer::js_uint8array_alloc(3);
         assert!(crate::buffer::is_uint8array_buffer(typed as usize));
-        assert!(unsafe {
+        // `ta.length = 1` is rejected (the prototype's `length` has no
+        // setter); `Object.defineProperty` is what creates an own `length`.
+        assert!(!unsafe {
             crate::typedarray_props::typed_array_set_property_by_name(typed as usize, "length", 1.0)
         });
+        assert_eq!(js_value_length_property_f64(crate::value::js_nanbox_pointer(typed as i64)), 3.0);
+        crate::typedarray_props::test_define_own_data(typed as usize, "length", 1.0);
 
         let boxed = crate::value::js_nanbox_pointer(typed as i64);
         assert_eq!(js_value_length_property_f64(boxed), 1.0);
