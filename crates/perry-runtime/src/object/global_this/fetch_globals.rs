@@ -87,8 +87,9 @@ pub(crate) fn global_this_is_materialized() -> bool {
 }
 
 /// This thread's realm global's address, 0 before it exists: the census's
-/// key-granular container (design §2.10.13). Census builds only.
-#[cfg(perry_gc_instruments)]
+/// key-granular container (design §2.10.13). Census builds only; the only
+/// reader is the linux-x86_64 census runner.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) fn thread_realm_global_addr() -> usize {
     (THREAD_GLOBAL_THIS.with(|c| c.get()) & crate::value::POINTER_MASK) as usize
 }

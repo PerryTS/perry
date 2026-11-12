@@ -735,7 +735,13 @@ pub(crate) static TASK_QUEUE: RefCell<std::collections::VecDeque<Task>>
 
 /// SNAPK2b census: the promise jobs queued and not yet run (None while the
 /// queue is being changed).
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_pending_jobs() -> Option<usize> {
     TASK_QUEUE.with(|q| q.try_borrow().ok().map(|q| q.len()))
 }
@@ -744,7 +750,13 @@ pub(crate) fn snap_pending_jobs() -> Option<usize> {
 /// itself: its kind, its callback's code address (`JsFunctionInfo::code`; 0
 /// for a reaction with no callback, which only settles its `next`) and the
 /// init that queued it (`AsyncContextSnapshot::snap_init`, set at enqueue).
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SnapPendingJob {
     pub kind: &'static str,
@@ -754,7 +766,13 @@ pub(crate) struct SnapPendingJob {
 
 /// SNAPK3c census: the queued jobs in queue order (None while the queue is
 /// being changed).
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_pending_job_list() -> Option<Vec<SnapPendingJob>> {
     TASK_QUEUE.with(|q| {
         q.try_borrow()
@@ -765,7 +783,13 @@ pub(crate) fn snap_pending_job_list() -> Option<Vec<SnapPendingJob>> {
 
 /// SNAPK3c/K4 census: a callback's code address (`JsFunctionInfo::code`), 0
 /// for no callback.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_closure_code(callback: ClosurePtr) -> usize {
     if callback.is_null() {
         return 0;
@@ -781,7 +805,13 @@ pub(crate) fn snap_closure_code(callback: ClosurePtr) -> usize {
 /// SNAPK4 census: the scheduled resolutions in queue order, one
 /// `(owner, code)` per entry: the init that queued it and 0 (a resolution runs
 /// no callback; it settles its promise). None while the queue is borrowed.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_scheduled_resolves() -> Option<Vec<(u32, usize)>> {
     combinators::SCHEDULED_RESOLVES.with(|q| {
         q.try_borrow()
@@ -791,6 +821,10 @@ pub(crate) fn snap_scheduled_resolves() -> Option<Vec<(u32, usize)>> {
 }
 
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 fn snap_pending_job(task: &Task) -> SnapPendingJob {
     let code = snap_closure_code;
     let (kind, callback, owner) = match task {

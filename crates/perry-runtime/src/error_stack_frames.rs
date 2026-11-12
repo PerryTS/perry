@@ -471,24 +471,26 @@ fn capture_encoded(
         });
     }
 
-    let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
-    let n = walk::capture_js(origin, &mut pcs, want);
-    if diag_enabled() {
-        eprintln!(
-            "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",
-            walk::diag_stack_top(),
-            walk::diag_frame_pointer(),
-            &pcs[..n]
-        );
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        let mut pcs = [0usize; MAX_CAPTURED_FRAMES];
+        let n = walk::capture_js(origin, &mut pcs, want);
+        if diag_enabled() {
+            eprintln!(
+                "[stackdiag] capture: frames={n} want={want} top={:#x} fp0={:#x} pcs={:x?}",
+                walk::diag_stack_top(),
+                walk::diag_frame_pointer(),
+                &pcs[..n]
+            );
+        }
+        let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
+        if n == 0 {
+            return (blob, 0);
+        }
+        let len = encode_pcs(&pcs[..n], &mut blob);
+        (blob, len)
     }
-    let mut blob = [0u8; MAX_CAPTURED_FRAMES * PC_CHARS];
-    if n == 0 {
-        return (blob, 0);
-    }
-    let len = encode_pcs(&pcs[..n], &mut blob);
-    (blob, len)
 }
-
 /// Raw return addresses of the current native stack, innermost first, for
 /// the GC's site-attribution diagnostics (`gc/diag_sites.rs`, the
 /// `PERRY_ALLOC_SITE_SAMPLE` sampler). Every native frame, runtime ones
@@ -932,10 +934,12 @@ pub(crate) fn capture_frames_payload() -> Vec<u8> {
         });
     }
 
-    let origin = walk::origin();
-    capture_frames_payload_from(origin)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        let origin = walk::origin();
+        capture_frames_payload_from(origin)
+    }
 }
-
 #[inline(never)]
 fn capture_frames_payload_from(origin: walk::Origin) -> Vec<u8> {
     let limit = stack_trace_limit();
@@ -1009,30 +1013,32 @@ pub(crate) fn frames_payload_to_lines(payload: &[u8]) -> String {
         );
     }
 
-    let (limit, payload) = match payload.split_first() {
-        Some((c, rest)) => match decode_char(*c) {
-            Some(limit) => (limit as usize, rest),
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        let (limit, payload) = match payload.split_first() {
+            Some((c, rest)) => match decode_char(*c) {
+                Some(limit) => (limit as usize, rest),
+                None => (RENDER_LIMIT, payload),
+            },
             None => (RENDER_LIMIT, payload),
-        },
-        None => (RENDER_LIMIT, payload),
-    };
-    if limit == 0 {
-        return String::new();
-    }
-    let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
-        Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
-        None => (payload, None),
-    };
-    // The recorded #5247 line is the innermost frame and counts toward it.
-    let resolved = render_frames(blob, limit - usize::from(recorded.is_some()));
-    match (recorded, resolved) {
-        (Some(line), Some(frames)) => format!("{line}\n{frames}"),
-        (Some(line), None) => line.to_string(),
-        (None, Some(frames)) => frames,
-        (None, None) => "    at <anonymous>".to_string(),
+        };
+        if limit == 0 {
+            return String::new();
+        }
+        let (blob, recorded) = match payload.iter().position(|b| *b == b'\n') {
+            Some(at) => (&payload[..at], std::str::from_utf8(&payload[at + 1..]).ok()),
+            None => (payload, None),
+        };
+        // The recorded #5247 line is the innermost frame and counts toward it.
+        let resolved = render_frames(blob, limit - usize::from(recorded.is_some()));
+        match (recorded, resolved) {
+            (Some(line), Some(frames)) => format!("{line}\n{frames}"),
+            (Some(line), None) => line.to_string(),
+            (None, Some(frames)) => frames,
+            (None, None) => "    at <anonymous>".to_string(),
+        }
     }
 }
-
 /// #9486: format-and-memoise half of [`js_error_get_stack`].
 pub(crate) unsafe fn materialize_error_stack(error: *mut ErrorHeader) -> *mut StringHeader {
     if !(*error).stack.is_null() {

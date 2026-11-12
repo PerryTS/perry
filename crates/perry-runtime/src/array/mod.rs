@@ -111,6 +111,8 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
+mod from_primitive_tests;
+#[cfg(test)]
 mod hole_tail_tests;
 #[cfg(test)]
 mod identity_growth_tests;
