@@ -781,6 +781,10 @@ impl Model {
                 } else {
                     self.key_store_node(t, key)
                 };
+                // Relations: a store under a key not known here writes the
+                // object's any-key (or numeric) field node.
+                let (sf, sm) = (self.stores[site as usize].func, self.stores[site as usize].module);
+                self.rel(|| format!("anystore {t} {src} {f} site={site} fn={sf} m={sm}"));
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let birth = self.stores[site as usize].birth;
