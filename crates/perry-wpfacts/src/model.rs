@@ -83,6 +83,11 @@ pub mod guard {
     /// A primitive but `undefined`/`null`, no object: what a sloppy
     /// function boxes as its `this`.
     pub const BOXED: u8 = 7;
+    /// A value no call can take (IsCallable false, ECMA-262 7.2.3): every
+    /// primitive, and an object token that is surely no function
+    /// (`builtins::methods::surely_callable`); the `then` read of a value
+    /// a promise resolves with (`Cons::Fulfil`).
+    pub const NOT_CALLABLE: u8 = 11;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -96,6 +101,7 @@ pub mod guard {
             TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
             NOT_STR => p::ALL & !p::STR,
             BOXED => p::ALL & !(p::UNDEF | p::NULL),
+            NOT_CALLABLE => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -1821,6 +1827,9 @@ pub struct Model {
     /// A built-in consumer that can stop early closes its iterator
     /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
     pub reach_iter_close: bool,
+    /// A promise adopts a thenable it is resolved with (`Cons::Fulfil`,
+    /// `builtins::resolver`; `reach::thenable`).
+    pub reach_thenable: bool,
     /// A hand-written built-in rule's positions hold what a spread
     /// argument supplies (`Model::positional`, `reach::spread_args`).
     pub reach_spread_args: bool,
@@ -1864,6 +1873,8 @@ pub struct Model {
     pub ta_exact_len: FxHashMap<TmplId, u32>,
     pub ta_birth_input: FxHashMap<TmplId, NodeId>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The reject functions (`builtins::rejecter`) by the node they feed.
+    pub rejecters: FxHashMap<NodeId, Tok>,
     /// The executors of promise capabilities (`builtins::capability_executor`),
     /// by the node of the value their capability is resolved with.
     pub executors: FxHashMap<NodeId, Tok>,
@@ -2558,6 +2569,8 @@ pub struct Model {
     /// DECISIONS 225: the function bodies that can run, when the analysis
     /// gates bodies on it (`None`: every body runs).
     pub act: Option<Act>,
+    /// What the solve observed of the runtime families (`family_reach`).
+    pub(crate) family_reach: crate::family_reach::State,
 }
 
 /// DECISIONS 225: which function bodies can run. A body is active once its

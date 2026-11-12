@@ -1535,6 +1535,7 @@ pub fn dispatch_arraylike_read_method(
         "flat" => super::flat_clone::js_arraylike_flat(object, a(0)),
         "toReversed" => super::generic_copy::js_arraylike_toReversed(object),
         "toSorted" => super::generic_copy::js_arraylike_toSorted(object, a(0)),
+        "toSpliced" => super::generic_copy::js_arraylike_toSpliced(object, args_ptr, args_len),
         "with" => super::generic_copy::js_arraylike_with(object, a(0), a(1)),
         "keys" => super::iter_object::array_keys_iter(object),
         "entries" => super::iter_object::array_entries_iter(object),

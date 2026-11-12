@@ -592,25 +592,68 @@ fn site_tmpl_born(
     t
 }
 
-/// A synthetic resolver function: its first parameter flows into `dst`.
-pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
+/// A synthetic resolve function of the promise whose settled value is
+/// `dst` (ECMA-262 27.2.1.3.2): its first parameter is adopted into `dst`
+/// (`adopt`), so a thenable passes on what it resolves, never itself.
+pub fn resolver(m: &mut Model, by: CallId, dst: NodeId) -> Tok {
+    if !m.reach_thenable {
+        return plain_resolver(m, dst);
+    }
     if let Some(&t) = m.resolvers.get(&dst) {
         return t;
     }
+    // Memoized before `adopt`, which asks for this resolver again.
+    let (tok, p) = settle_fn(m, "<resolver>", dst, false);
+    m.resolvers.insert(dst, tok);
+    adopt(m, by, p, dst);
+    tok
+}
+
+/// A synthetic reject function (27.2.1.3.1): its first parameter is the
+/// reason, as it is (a reject function adopts nothing).
+pub fn rejecter(m: &mut Model, dst: NodeId) -> Tok {
+    if !m.reach_thenable {
+        return plain_resolver(m, dst);
+    }
+    if let Some(&t) = m.rejecters.get(&dst) {
+        return t;
+    }
+    let (tok, _) = settle_fn(m, "<rejecter>", dst, true);
+    m.rejecters.insert(dst, tok);
+    tok
+}
+
+/// `PERRY_FACTS_REACH_THENABLE=0` (`reach::thenable`): the previous model,
+/// one synthetic function for both sides whose first parameter flows into
+/// `dst` as it is.
+pub(crate) fn plain_resolver(m: &mut Model, dst: NodeId) -> Tok {
+    if let Some(&t) = m.resolvers.get(&dst) {
+        return t;
+    }
+    let (tok, _) = settle_fn(m, "<resolver>", dst, true);
+    m.resolvers.insert(dst, tok);
+    tok
+}
+
+/// A resolve or reject function's token and first parameter; `plain`: the
+/// parameter flows into `dst` as it is.
+fn settle_fn(m: &mut Model, name: &str, dst: NodeId, plain: bool) -> (Tok, NodeId) {
     let fx = m.funcs.len() as FnIdx;
     let tok = m.tok(TokKind::Func(fx, NO_CTX));
     let this = m.node_l("this(resolver)");
     let ret = m.node_l("ret(resolver)");
     let args_all = m.node_l("args(resolver)");
     let p = m.node_l("resolver-param");
-    m.edge(p, dst);
+    if plain {
+        m.edge(p, dst);
+    }
     m.funcs.push(FuncInfo {
         #[cfg(test)]
         body_packet: Default::default(),
         module: 0,
         func_id: u32::MAX,
         raise: u32::MAX,
-        name: "<resolver>".into(),
+        name: name.into(),
         params: vec![p],
         rest: None,
         this,
@@ -633,8 +676,7 @@ pub fn resolver(m: &mut Model, dst: NodeId) -> Tok {
         forwarded: false,
     });
     m.add_prim(ret, prim::UNDEF);
-    m.resolvers.insert(dst, tok);
-    tok
+    (tok, p)
 }
 
 /// Another unit's accessor on a shared object (`Model::replay_shared`), a
@@ -697,7 +739,11 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
 pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
-    m.edge(v, dst);
+    if m.reach_thenable {
+        m.cons(v, Cons::Fulfil { dst });
+    } else {
+        m.edge(v, dst);
+    }
     let a = m.atom("#value");
     m.cons(
         v,
@@ -706,9 +752,9 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             dst,
         },
     );
-    let res = resolver(m, dst);
+    let res = resolver(m, by, dst);
     let thrown = m.thrown;
-    let rej = resolver(m, thrown);
+    let rej = rejecter(m, thrown);
     let rn = m.node_l("resolver");
     m.add_tok(rn, res);
     let jn = m.node_l("rejecter");
@@ -897,6 +943,15 @@ pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
     lock_family(m, t).is_some_and(|f| members::locked_read(f, what, &m.atoms[a as usize]))
 }
 
+/// The read of named key `a` on builtin receiver `t` is final
+/// (`locked_chain_read`) and its intrinsic chain defines `a`: a locked
+/// native member is found, never the chain end's `undefined`
+/// (`Promise.prototype.then` on a promise).
+pub(crate) fn locked_chain_defines(m: &Model, t: Tok, a: Atom) -> bool {
+    locked_chain_read(m, t, a)
+        && lock_family(m, t).is_some_and(|f| members::member(f, &m.atoms[a as usize]).is_some())
+}
+
 /// Is a read of `name` on the declared intrinsic prototype `holder` final?
 /// `holder` is its realm-table name (`%GeneratorPrototype%`,
 /// `%MapIteratorPrototype%` …, the same declaration the runtime seals) and
@@ -988,6 +1043,7 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
 /// The opaque builtin function value; in explain mode, counted by the
 /// arm that minted it (`perry: wpfacts explain: builtin-fn minted`).
 fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
+    crate::family_reach::generic(m, why);
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
@@ -1759,6 +1815,7 @@ fn console_args(m: &mut Model, call: CallId) {
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
 }
 
@@ -2415,6 +2472,7 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {
