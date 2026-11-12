@@ -383,6 +383,9 @@ pub struct Gen<'a> {
     /// DECISIONS 225: the bodies not walked yet because they are not
     /// active (`Gen::walk_activated` walks each once it is).
     pub(crate) pending_walk: FxHashMap<FnIdx, Vec<PendingWalk<'a>>>,
+    /// DECISIONS 225: the bodies never walked (the activation set is final
+    /// and does not hold them): `family_reach` reads their text.
+    pub(crate) unwalked: Vec<PendingWalk<'a>>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
     /// sources (module path → source → module path). A re-export declares
@@ -760,6 +763,7 @@ impl<'a> Gen<'a> {
             num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
+            unwalked: Vec::new(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
