@@ -515,11 +515,14 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     })
     .flatten();
     let Some((addr, bytes, w)) = sampled else { return };
-    pop_deeper(fp);
+    // No probe here: the birth's value is not rooted across this call, so
+    // the hook must not collect. Activations a throw left on top (frames
+    // deeper than this one) are skipped; the next hook that may collect
+    // pops them.
     let _ = table(|t| {
         let m = &mut t.measure;
-        let depth = m.acts.len();
-        let own = (depth > 0 && m.acts[depth - 1].fp == fp).then(|| depth - 1);
+        let live = m.acts.iter().rposition(|a| a.fp >= fp).map_or(0, |i| i + 1);
+        let own = (live > 0 && m.acts[live - 1].fp == fp).then(|| live - 1);
         let mut applies = 1 << TURN;
         if loop_id != 0 {
             applies |= 1 << ITER;
@@ -570,9 +573,10 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_enter() {
     let fp = caller_fp();
-    // Strictly deeper frames only: an inlined body enters in its caller's
-    // frame (same fp), nested in the caller's activation.
-    pop_deeper(fp);
+    // No probe here (the body's arguments are not rooted across this call):
+    // activations a throw left deeper than this frame stay below the new one
+    // and are popped, late, by the next hook of a shallower frame. An inlined
+    // body enters in its caller's frame (same fp), nested in its activation.
     let _ = table(|t| t.measure.acts.push(Act { fp, pend: Vec::new() }));
 }
 
