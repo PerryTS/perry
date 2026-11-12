@@ -180,6 +180,13 @@ elif name == "f8":
     u = inits("ids.uid")
     info = f"entry={e} uid_inits={u}"
     need(e is not None and len(u) == 1 and not (u & {0, e}), "ids.uid not read by the imaged init")
+elif name == "f15u":
+    # SNAPK7: throws from 600 distinct sites with allocator churn. A throw
+    # decodes call-frame rows under the walker lock; an allocation there can
+    # read the clock (a census native row), which must not walk the stack
+    # again under that lock. Red: the run deadlocks, no boundary, no report.
+    need(os.path.exists(report), "no report (the run never finished)")
+    info = f"rows={len(ops)} boundary={sum(1 for _, _, o, _ in ops if o == 'boundary')}"
 else:
     fails.append("unknown fixture")
 print(f"{name} {'PASS' if not fails else 'FAIL ' + '; '.join(fails)} | {info}"[:600])
