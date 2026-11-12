@@ -2685,10 +2685,10 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if let Some(index) = finite_nonnegative_i32_index(index) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw_addr as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
         }
         return receiver;

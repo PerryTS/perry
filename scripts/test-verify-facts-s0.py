@@ -96,6 +96,55 @@ def main():
                 assert observed.returncode == 0 and observed.stdout == expected, observed
             save(arm, status=observed.returncode)
 
+    # family_reach (check mode's family claim). Its witnesses exist only in
+    # the instrumented runtime variant, which PERRY_GC_INSTRUMENTS=1 links.
+    runtime_dir = Path(os.environ.get("PERRY_RUNTIME_DIR", str(args.perry.parent)))
+    if (runtime_dir / "libperry_runtime_instr.a").exists():
+        instr = dict(PERRY_GC_INSTRUMENTS="1")
+        for name, family, observed_text in [
+            ("family-bytes-negative", "typedarray", "a byte cell is born"),
+            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born"),
+            ("family-bytes-observe-negative", "typedarray", "is observed"),
+            ("family-bytes-poolsize-negative", "typedarray", "is observed"),
+            ("family-regex-negative", "regex_engine", "a RegExp is born"),
+        ]:
+            source = fixtures / (name + ".ts")
+            expected = oracle(source)
+            exe, e = compile_(source, name + "-correct", **instr)
+            observed = observe(exe, e)
+            assert observed.returncode == 0 and observed.stdout == expected, observed
+            dump = args.out / (name + ".facts")
+            exe, e = compile_(source, name + "-false", PERRY_FACTS_SABOTAGE="famreach:" + family,
+                              PERRY_FACTS_DUMP=str(dump), **instr)
+            assert f"# family_reach {family} never reason=none" in dump.read_text(), name
+            value = report(observe(exe, e))
+            assert value["verdict"] == "family" and value["predicate"] == "family", value
+            member = value["observed_member"] or ""
+            assert observed_text in member, value
+            assert member.startswith(family + ": ") or value["expectation"] == family, value
+            # Without the instrumented variant no claim is made: the same
+            # sabotaged fact has no consumer.
+            exe, e = compile_(source, name + "-default", PERRY_FACTS_SABOTAGE="famreach:" + family)
+            observed = observe(exe, e)
+            assert observed.returncode == 0 and observed.stdout == expected, observed
+            save(name, status=86)
+        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live")]:
+            source = fixtures / (name + ".ts")
+            dump = args.out / (name + ".facts")
+            exe, e = compile_(source, name, PERRY_FACTS_DUMP=str(dump), **instr)
+            assert f"# family_reach typedarray {verdict} " in dump.read_text(), name
+            observed = observe(exe, e)
+            if name == "family-bytes-unwalked" and observed.returncode == 86:
+                # The spread callback is a call edge the activation reach
+                # does not see yet: its own claim ("inactive body") reports.
+                # The family claim does not: the text made the family live.
+                assert report(observed)["verdict"] == "Activation", observed
+            else:
+                assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+            save(name, status=observed.returncode)
+    else:
+        save("family-claims", status="skipped: no instrumented runtime variant")
+
     for source in sorted(fixtures.glob("existing-*.ts")):
         exe, e = compile_(source, source.stem)
         observed = observe(exe, e)
@@ -142,6 +191,9 @@ def main():
         ("held-length-negative", "heldlen", "held length"),
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
+        ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("typed-array-site-negative", "tasite", "method site"),
+        ("array-site-negative", "arraysite", "method site"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
@@ -252,6 +304,20 @@ def main():
         assert value["predicate"] == "canonical number", value
         save("canonical-number-negative-false", status=86)
 
+    # An interval rule's bounds are those of doubles (`model::range`): the
+    # repro of the false int32 claim is right and unreported, and the rule
+    # before it (`PERRY_FACTS_INT_BOUNDS=0`: a product past 2^60 is the empty
+    # interval) is a false proof the int32 witness reports.
+    source = fixtures / "int-bounds-negative.ts"
+    exe, e = compile_(source, "int-bounds-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("int-bounds-negative-correct", status=0)
+    exe, e = compile_(source, "int-bounds-negative-false", PERRY_FACTS_INT_BOUNDS="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "int32 input", value
+    save("int-bounds-negative-false", status=86)
+
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
     observed = observe(exe, e)
@@ -268,6 +334,23 @@ def main():
     observed = observe(exe, e)
     assert observed.returncode == 0 and observed.stdout == oracle(source), observed
     save("slot-key", status=86, key=value["key"])
+
+    # A class with reservations (#14485): a reserved key's witness admits
+    # the hole at its slot behind the read's hole compare, and a key added
+    # out of the layout's order through its overflow entry
+    # (WPF_MAYBE_ABSENT, `slot_ref`). A real false slot claim on such a class
+    # still reports: with the facts' constructor order check off
+    # (`PERRY_FACTS_CTOR_ORDER=0`), `d`'s store after an out-of-order add
+    # bypasses the overflow and its slot holds a key the object does not
+    # name.
+    source = fixtures / "slot-key-reserved.ts"
+    exe, e = compile_(source, "slot-key-reserved-false", PERRY_FACTS_CTOR_ORDER="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "F3 slot" and value["key"] == "d", value
+    exe, e = compile_(source, "slot-key-reserved-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("slot-key-reserved", status=86, key=value["key"])
 
     for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call"), ("copy-inline", "activation:this")]:
         source = fixtures / (name + ".ts")

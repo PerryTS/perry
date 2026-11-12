@@ -932,7 +932,7 @@ impl Walker {
         if images.is_empty() {
             return None;
         }
-        let own = Walker::build as usize as u64;
+        let own = Walker::build as *const () as usize as u64;
         let own_text = images
             .iter()
             .find(|i| own >= i.image.text_addr && own < i.image.text_end)
@@ -2011,7 +2011,7 @@ mod tests {
         {
             let mut guard = locked_walker_for_walk().expect("walker");
             let stale = guard.generation;
-            let _ = guard.site(Walker::build as usize as u64);
+            let _ = guard.site(Walker::build as *const () as usize as u64);
             assert_eq!(guard.generation, stale, "a site in the walker's own image read the loader state");
             let _ = guard.site(addr);
             assert_eq!(guard.generation, before, "a site of the opened object did not refresh the index");

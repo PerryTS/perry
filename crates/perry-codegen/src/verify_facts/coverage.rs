@@ -48,6 +48,8 @@ pub(crate) enum Fact {
     RecordMutation,
     /// DESIGN-p4l4 VR-3b: a value record reached a boxed entry (B3).
     RecordEntry,
+    /// `family_reach` says a runtime family is never created or observed.
+    Family,
     /// DESIGN-p4l4 VR-4b: the receiver of a record-array intrinsic is a
     /// record array (R6).
     RecordArray,
@@ -66,6 +68,12 @@ pub(crate) enum Fact {
     /// A loop without calls keeps a local Array's length beside stores
     /// through other names (wpfacts `named_lengths`).
     NamedLength,
+    /// A loop without calls keeps a local Array's length: its reads, stores
+    /// and operators run no program code (wpfacts `quiet_sites`).
+    QuietSites,
+    /// A by-name method call keeps its built-in lowering by what the facts
+    /// prove of its receiver's values (wpfacts `method_sites`).
+    MethodSite,
     /// A loop's trip bound from its counter's interval
     /// (`stmt::loops::bounded_poll`).
     LoopTrip,
@@ -118,6 +126,7 @@ impl Fact {
             Self::RecordIdentity => "value record identity",
             Self::RecordMutation => "value record mutation",
             Self::RecordEntry => "value record boxed entry",
+            Self::Family => "family",
             Self::RecordArray => "value record array",
             Self::FieldRep => "field rep",
             Self::UnsignedBound => "unsigned bound",
@@ -129,6 +138,8 @@ impl Fact {
             Self::LiteralString => "literal string",
             Self::HeldLength => "held length",
             Self::NamedLength => "named length",
+            Self::QuietSites => "quiet sites",
+            Self::MethodSite => "method site",
             Self::LoopTrip => "loop trip bound",
             Self::Lifetime => "lifetime",
         }

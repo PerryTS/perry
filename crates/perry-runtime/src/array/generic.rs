@@ -488,6 +488,11 @@ pub(super) fn al_has(recv: f64, k: i64) -> bool {
             if k >= (*arr).length as i64 {
                 return false;
             }
+            // Past a sparse Array's store the element lives in its named
+            // layout: the complete HasProperty answers, never a raw slot.
+            if k >= i64::from((*arr).capacity) {
+                return crate::array::array_spec_has_index(arr, k as u32);
+            }
             let el = *(crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64)
                 .add(k as usize);
             if el.to_bits() != TAG_HOLE {
@@ -651,37 +656,31 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     if len > u32::MAX as i64 {
         crate::array::array_length_range_error();
     }
-    let result_h = scope.root_raw_mut_ptr(js_array_alloc_with_length(len.max(0) as u32));
+    // ArraySpeciesCreate(O, len): an Array-subclass receiver's result is an
+    // instance of its species (the subclass, unless it says otherwise).
+    let sink = unsafe {
+        crate::array::species::SpeciesSink::new(
+            &scope,
+            recv_h.get_nanbox_f64(),
+            len.max(0) as usize,
+        )
+    };
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue; // preserve holes
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        // `across_mut` runs the callback and hands back the result array's
-        // POST-collection address: the callback can allocate, and #8082 caught
-        // this exact write landing in mprotect-poisoned from-space when the
-        // element pointer was derived before it. The pre-call address is never
-        // bound, so there is nothing stale to reach for.
-        let (mapped, result) = result_h.across_mut::<ArrayHeader, _>(|| {
-            cb_site.call(
-                callback_pointer(cb_h.get_nanbox_f64()),
-                crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
-                v,
-                k as f64,
-                recv_h.get_nanbox_f64(),
-            )
-        });
-        let elems =
-            unsafe { crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64 };
-        unsafe {
-            // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
-            ptr::write(elems.add(k as usize), mapped);
-            note_array_slot(result, k as usize, mapped.to_bits());
-        }
+        let mapped = cb_site.call(
+            callback_pointer(cb_h.get_nanbox_f64()),
+            crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
+            v,
+            k as f64,
+            recv_h.get_nanbox_f64(),
+        );
+        // The sink re-reads the result's address after the callback (#8082).
+        unsafe { sink.define(k as usize, mapped) };
     }
-    // Scoped argument to a non-allocating operation: `nanbox_arr` only tags the
-    // pointer, so the address cannot go stale inside the call.
-    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+    sink.finish()
 }
 
 #[no_mangle]
@@ -695,7 +694,9 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
     let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
-    let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
+    // ArraySpeciesCreate(O, 0).
+    let mut sink =
+        unsafe { crate::array::species::SpeciesSink::new(&scope, recv_h.get_nanbox_f64(), 0) };
     // One reusable handle keeps `v` (read BEFORE the callback, pushed AFTER
     // it — the spec's value, not a re-read) alive across the call without
     // growing the handle stack per element.
@@ -713,18 +714,11 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
             recv_h.get_nanbox_f64(),
         );
         if crate::value::js_is_truthy(keep) != 0 {
-            // `js_array_push_f64` is self-rooting for the array it is handed
-            // (its grow path roots and re-reads it) and returns the current
-            // address, so a scoped argument is the right shape here. The value
-            // is read from its handle first, exactly as before.
-            let value = v_h.get_nanbox_f64();
-            let grown =
-                result_h.with_mut_ptr::<ArrayHeader, _>(|arr| js_array_push_f64(arr, value));
-            result_h.set_raw_mut_ptr(grown);
+            // The value is read from its handle first, exactly as before.
+            unsafe { sink.push(v_h.get_nanbox_f64()) };
         }
     }
-    // Scoped argument to a non-allocating operation — see `js_arraylike_map`.
-    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+    sink.finish()
 }
 
 /// Generic `Array.prototype.flatMap.call(receiver, mapper, thisArg)`
@@ -743,27 +737,68 @@ pub extern "C" fn js_arraylike_flatMap(recv: f64, cb: f64, this_arg: f64) -> f64
     // LengthOfArrayLike before IsCallable, as for the other callback methods.
     let len = al_length(recv_h.get_nanbox_f64());
     let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
-    let result_h = scope.root_raw_mut_ptr(js_array_alloc(0));
-    let mapped_h = scope.root_nanbox_f64(undef());
+    // ArraySpeciesCreate(O, 0), then FlattenIntoArray with the mapper.
+    let mut sink =
+        unsafe { crate::array::species::SpeciesSink::new(&scope, recv_h.get_nanbox_f64(), 0) };
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
         }
         let v = al_get(recv_h.get_nanbox_f64(), k);
-        mapped_h.set_nanbox_f64(cb_site.call(
+        let mapped = cb_site.call(
             callback_pointer(cb_h.get_nanbox_f64()),
             crate::closure::JsThis::from_f64(this_h.get_nanbox_f64()),
             v,
             k as f64,
             recv_h.get_nanbox_f64(),
-        ));
-        let mapped = mapped_h.get_nanbox_f64();
-        let grown = result_h.with_mut_ptr::<ArrayHeader, _>(|arr| unsafe {
-            super::flat_clone::flat_map_append(arr, mapped)
-        });
-        result_h.set_raw_mut_ptr(grown);
+        );
+        // The mapper's result is spread by one level when it is an Array.
+        unsafe { flatten_element(&mut sink, mapped, 1) };
     }
-    result_h.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+    sink.finish()
+}
+
+/// FlattenIntoArray's step for one element (ECMA-262 §23.1.3.13.1): an Array
+/// (IsArray: also an Array-subclass instance and a Proxy for one) is spread
+/// while `depth > 0`, its present elements by HasProperty / Get; anything
+/// else is defined at the sink's running index.
+pub(super) unsafe fn flatten_element(
+    sink: &mut crate::array::species::SpeciesSink<'_>,
+    element: f64,
+    depth: u32,
+) {
+    if depth == 0 || crate::value::js_is_truthy(crate::array::js_array_is_array(element)) == 0 {
+        sink.push(element);
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(element);
+    let len = al_length(source.get_nanbox_f64());
+    for k in 0..len {
+        if !al_has(source.get_nanbox_f64(), k) {
+            continue;
+        }
+        let inner = al_get(source.get_nanbox_f64(), k);
+        flatten_element(sink, inner, depth - 1);
+    }
+}
+
+/// `Array.prototype.flat` (ECMA-262 §23.1.3.13) with the species resolution:
+/// `ArraySpeciesCreate(O, 0)`, then FlattenIntoArray to `depth` levels.
+pub(super) fn flat_with_species(receiver: f64, depth: u32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(to_object(receiver));
+    let len = al_length(recv_h.get_nanbox_f64());
+    let mut sink =
+        unsafe { crate::array::species::SpeciesSink::new(&scope, recv_h.get_nanbox_f64(), 0) };
+    for k in 0..len {
+        if !al_has(recv_h.get_nanbox_f64(), k) {
+            continue;
+        }
+        let element = al_get(recv_h.get_nanbox_f64(), k);
+        unsafe { flatten_element(&mut sink, element, depth) };
+    }
+    sink.finish()
 }
 
 #[no_mangle]
@@ -1500,6 +1535,7 @@ pub fn dispatch_arraylike_read_method(
         "flat" => super::flat_clone::js_arraylike_flat(object, a(0)),
         "toReversed" => super::generic_copy::js_arraylike_toReversed(object),
         "toSorted" => super::generic_copy::js_arraylike_toSorted(object, a(0)),
+        "toSpliced" => super::generic_copy::js_arraylike_toSpliced(object, args_ptr, args_len),
         "with" => super::generic_copy::js_arraylike_with(object, a(0), a(1)),
         "keys" => super::iter_object::array_keys_iter(object),
         "entries" => super::iter_object::array_entries_iter(object),
@@ -1744,8 +1780,23 @@ pub fn try_object_arraylike_mutator(
     // method (`{ push(x) {…} }`) is left to the normal dispatch.
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    if matches!(classify_own_slot(own, method), OwnSlot::UserMethod) {
-        return None;
+    match classify_own_slot(own, method) {
+        OwnSlot::UserMethod => return None,
+        OwnSlot::BorrowedBuiltin => {}
+        // No method of the name on the object or its chain (the read above
+        // is the chain's `Get`). `obj.push(v)` is `Call(Get(obj, "push"), obj,
+        // [v])`: the array algorithm runs only when that `Get` selects
+        // `Array.prototype`'s method, which an Array subclass instance and an
+        // object with a real array on its chain inherit without holding it
+        // as a property. Any other object (`{ length: 0 }.push(7)`:
+        // TypeError) is left to the ordinary dispatch.
+        OwnSlot::Absent => {
+            if !super::subclass::is_array_subclass_class_id(class_id)
+                && !proto_chain_contains_real_array(raw as usize)
+            {
+                return None;
+            }
+        }
     }
     run_object_mutator(object, method, args_ptr, args_len)
 }

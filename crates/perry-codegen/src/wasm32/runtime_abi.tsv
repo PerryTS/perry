@@ -85,6 +85,7 @@ js_array_b_lastIndexOf1	f64	f64,f64
 js_array_b_lastIndexOf2	f64	f64,f64,f64
 js_array_b_map1	f64	f64,f64
 js_array_b_mapDiscard1	f64	f64,f64
+js_array_b_pop0	f64	f64
 js_array_b_reduce1	f64	f64,f64
 js_array_b_reduce2	f64	f64,f64,f64
 js_array_b_reduceRight1	f64	f64,f64
@@ -198,6 +199,7 @@ js_array_m_lastIndexOf1	f64	f64,f64
 js_array_m_lastIndexOf2	f64	f64,f64,f64
 js_array_m_map1	f64	f64,f64
 js_array_m_mapDiscard1	f64	f64,f64
+js_array_m_pop0	f64	f64
 js_array_m_reduce1	f64	f64,f64
 js_array_m_reduce2	f64	f64,f64,f64
 js_array_m_reduceRight1	f64	f64,f64
@@ -216,6 +218,8 @@ js_array_map	ptr	ptr,ptr
 js_array_map_discard	void	ptr,ptr
 js_array_mark_arguments_object	ptr	ptr
 js_array_mark_numeric_f64_layout	i32s	ptr
+js_array_member_witness	i32s	f64,f64
+js_array_method_needs_get	i32s	f64,f64
 js_array_note_numeric_write	void	ptr,i64
 js_array_note_numeric_write_value	f64	ptr,f64
 js_array_numeric_get_f64_unboxed	f64	ptr,i32u
@@ -5229,6 +5233,14 @@ perry_ios_classes_registered	void
 perry_ios_get_connected_scene	i64	
 perry_key_content_hash	i64	ptr
 perry_layout_index_probe	i32s	ptr,ptr
+perry_life_birth	void	i64,i64,i64
+perry_life_catch	void	i64
+perry_life_depth	i64	
+perry_life_enter	void	i64
+perry_life_iter	void	i64
+perry_life_loop	void	i64
+perry_life_return	void	
+perry_life_turn	void	
 perry_macos_bundle_chdir	void	
 perry_media_create_player	i64	i64
 perry_media_destroy	void	f64
@@ -5310,6 +5322,8 @@ perry_updater_refresh_due	i64
 perry_verify_facts_call	ptr	f64,i64,i64,i64
 perry_verify_facts_call_miss	i32s	ptr,i64,i64
 perry_verify_facts_entry	void	i64,i64
+perry_verify_facts_families	void	i64,i64,i64
+perry_verify_facts_family_observed	void	i64,i64
 perry_verify_facts_field	i32s	f64,f64,i64,i64,i64,i64,i32s,i32s,i32s,i32s,i64,i64
 perry_verify_facts_init	void	
 perry_verify_facts_life_arg	i64	i64

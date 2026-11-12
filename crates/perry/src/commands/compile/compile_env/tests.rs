@@ -417,6 +417,115 @@ fn named_lengths_switch_is_a_cache_input() {
     );
 }
 
+/// Typed-array method sites: the switch changes the exported facts and
+/// every method call on a receiver annotated a typed array, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn typed_array_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_TYPED_ARRAY_SITES"),
+        "PERRY_FACTS_TYPED_ARRAY_SITES must key the compile caches"
+    );
+}
+
+/// Array method sites: the switch changes the exported facts and every
+/// by-name Array method call that drops its run-time guard, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn array_method_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_ARRAY_METHOD_SITES"),
+        "PERRY_FACTS_ARRAY_METHOD_SITES must key the compile caches"
+    );
+}
+
+/// Quiet sites: the switch changes the exported facts and every loop
+/// without calls that keeps `a.length` beside a read, store or operator
+/// that may run program code, so `=0` must never reuse an `=1` object.
+#[test]
+fn quiet_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_QUIET_SITES"),
+        "PERRY_FACTS_QUIET_SITES must key the compile caches"
+    );
+}
+
+/// Activation reach, name-keyed folds: the switch changes which bodies the
+/// solve calls active (and every fact that follows from what they do), so
+/// `=0` must never reuse an `=1` object.
+#[test]
+fn reach_folds_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_FOLDS"),
+        "PERRY_FACTS_REACH_FOLDS must key the compile caches"
+    );
+}
+
+/// Activation reach, the `done` read of a step result: the switch changes
+/// which bodies the solve calls active, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn reach_step_done_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_STEP_DONE"),
+        "PERRY_FACTS_REACH_STEP_DONE must key the compile caches"
+    );
+}
+
+/// Activation reach, the new target of `Reflect.construct`: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_new_target_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_NEW_TARGET"),
+        "PERRY_FACTS_REACH_NEW_TARGET must key the compile caches"
+    );
+}
+
+/// Activation reach, spread arguments of built-in rules: the switch changes
+/// which bodies the solve calls active, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn reach_spread_args_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_SPREAD_ARGS"),
+        "PERRY_FACTS_REACH_SPREAD_ARGS must key the compile caches"
+    );
+}
+
+/// Activation reach, IteratorClose by a built-in consumer: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_iter_close_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_ITER_CLOSE"),
+        "PERRY_FACTS_REACH_ITER_CLOSE must key the compile caches"
+    );
+}
+
+/// Activation reach, a generator object's inherited members: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_gen_members_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_GEN_MEMBERS"),
+        "PERRY_FACTS_REACH_GEN_MEMBERS must key the compile caches"
+    );
+}
+
+/// Activation reach, thenable adoption: the switch changes which bodies the
+/// solve calls active, so `=0` must never reuse an `=1` object.
+#[test]
+fn reach_thenable_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_THENABLE"),
+        "PERRY_FACTS_REACH_THENABLE must key the compile caches"
+    );
+}
+
 /// Literal strings: the switch changes the exported facts and every store
 /// and alias that drops its string demote, so `=0` must never reuse an `=1`
 /// object.
@@ -565,6 +674,23 @@ fn int32_operand_switches_are_cache_inputs() {
     }
 }
 
+/// The double-exact range rules: the facts' interval bounds, codegen's own
+/// range proofs and the mask of an i32 shift count each change the emitted
+/// code, so `=0` must never reuse an `=1` object.
+#[test]
+fn double_exact_range_switches_are_cache_inputs() {
+    for name in [
+        "PERRY_FACTS_INT_BOUNDS",
+        "PERRY_INT_RANGE_EXACT",
+        "PERRY_SHIFT_COUNT_MASK",
+    ] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// The direct Number call switch decides whether a consumer of `f(a)` takes
 /// the proven-Number lowering, so `=0` must never reuse an `=1` object.
 #[test]
@@ -648,6 +774,17 @@ fn call_kinds_switch_is_a_cache_input() {
     );
 }
 
+/// The Array method tiers: the switch changes the facts' model of
+/// `Expr::ArrayPop` and the guard, predicate and `pop` entry of every Array
+/// method site, so `=0` must never reuse an `=1` object.
+#[test]
+fn array_method_tiers_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_ARRAY_METHOD_TIERS"),
+        "PERRY_ARRAY_METHOD_TIERS must key the compile caches"
+    );
+}
+
 /// The push method tiers: the switch changes the facts' model of the native
 /// array push and the code of every push tier that resolves `push` on its
 /// receiver, so `=0` must never reuse an `=1` object.
@@ -656,5 +793,16 @@ fn push_method_tiers_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_PUSH_METHOD_TIERS"),
         "PERRY_PUSH_METHOD_TIERS must key the compile caches"
+    );
+}
+
+/// Declared getter results on locked realm holders: the switch changes what
+/// a load of such an accessor (a RegExp's `flags`) holds (unknown when off),
+/// so `=0` must never reuse an `=1` object.
+#[test]
+fn declared_getter_results_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_DECLARED_GETTER_RESULTS"),
+        "PERRY_FACTS_DECLARED_GETTER_RESULTS must key the compile caches"
     );
 }

@@ -42,6 +42,10 @@ pub const WPF_STORE: u32 = 1;
 pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (a reserved or declared key, `FieldProof::
+/// maybe_absent`): the site pairs the load with the hole compare, whose miss
+/// is the generic read, so a hole at the key's slot is part of the claim.
+pub const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Use the same numeric classification as runtime value dispatch.
 fn is_plain_f64(bits: u64) -> bool {
@@ -260,7 +264,27 @@ macro_rules! check_field {
     } else {
         key_matches(at, key)
     };
-    if !key_matches {
+    // F3 is "slot k is the key's own storage word". Once an overflow orders
+    // the object (`object::overflow`), a key added out of the layout's order
+    // keeps its fixed slot through an appended entry that references it,
+    // while the layout's own entry at k stays a tombstone: the claim holds
+    // when the key's live entry references slot k. A possibly absent key
+    // (reserved or declared) read behind the hole compare may also find the
+    // hole at k, where the layout names it or no key (a tombstone).
+    let slot_ref = || unsafe {
+        let t = crate::object::overflow::table(addr as *const ObjectHeader);
+        !t.is_null()
+            && crate::object::overflow::find_bytes(t, key)
+                .and_then(|i| crate::object::overflow::fixed_slot_of(t, i))
+                == Some(slot)
+    };
+    // `ObjectKeys::get` reads a tombstone (`TAG_HOLE`) as `undefined`, which
+    // is never a key.
+    let no_key = at == crate::value::TAG_HOLE || at == crate::value::TAG_UNDEFINED;
+    let absent_hole = || {
+        flags & WPF_MAYBE_ABSENT != 0 && value.to_bits() == crate::value::TAG_HOLE && no_key
+    };
+    if !key_matches && !slot_ref() && !absent_hole() {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
@@ -576,6 +600,8 @@ pub extern "C" fn perry_verify_facts_tick() {
 // hooks (`gc/diagnostic_hooks.rs`).
 #[cfg(perry_gc_instruments)]
 mod life;
+#[cfg(perry_gc_instruments)]
+mod life_measure;
 mod report;
 pub(crate) mod records;
 use report::Witness;
@@ -598,3 +624,8 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
 
 #[cfg(test)]
 mod reporting_tests;
+
+// The family claim (`family_reach` never): only in the instrumented variant.
+// Declared last, so that no line of this file moves in the default build.
+#[cfg(perry_gc_instruments)]
+pub(crate) mod family;

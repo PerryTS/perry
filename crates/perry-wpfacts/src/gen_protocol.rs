@@ -13,7 +13,12 @@ impl<'a> Gen<'a> {
     /// `then` passes to the resolve function.
     pub(crate) fn awaited(&mut self, v: NodeId) -> NodeId {
         let out = self.tmp("awaited");
-        self.m.edge(v, out);
+        if !self.m.reach_thenable {
+            return self.awaited_plain(v, out);
+        }
+        // One rule with `builtins::adopt`: a value fulfils as itself only
+        // when its `then` read is not callable (`Cons::Fulfil`).
+        self.m.cons(v, Cons::Fulfil { dst: out });
         let pa = self.m.atom("#value");
         self.m.cons(
             v,
@@ -23,10 +28,15 @@ impl<'a> Gen<'a> {
             },
         );
         // Thenables: `then(resolve, reject)` with runtime resolvers.
-        let resolver = self.resolver_fn(out);
-        let rej = self.resolver_fn(self.thrown);
+        let rn = self.tmp("resolver");
+        let jn = self.tmp("rejecter");
         let then = self.m.atom("then");
-        let (call, ret) = self.new_call(ThisArg::Node(v), vec![resolver, rej], vec![]);
+        let (call, ret) = self.new_call(ThisArg::Node(v), vec![rn, jn], vec![]);
+        let res = crate::builtins::resolver(&mut self.m, call, out);
+        self.m.add_tok(rn, res);
+        let thrown = self.thrown;
+        let rej = crate::builtins::rejecter(&mut self.m, thrown);
+        self.m.add_tok(jn, rej);
         self.m.cons(
             v,
             Cons::MCall {
@@ -38,11 +48,35 @@ impl<'a> Gen<'a> {
         out
     }
 
-    /// A synthetic function whose first parameter flows into `dst` (a
-    /// promise resolver handed to user code).
-    pub(crate) fn resolver_fn(&mut self, dst: NodeId) -> NodeId {
-        let t = crate::builtins::resolver(&mut self.m, dst);
-        self.tok_node(t)
+    /// `PERRY_FACTS_REACH_THENABLE=0` (`reach::thenable`): the previous
+    /// `awaited`, where the value also flows into `out` as itself and the
+    /// resolve function copies what a thenable passes it.
+    fn awaited_plain(&mut self, v: NodeId, out: NodeId) -> NodeId {
+        self.m.edge(v, out);
+        let pa = self.m.atom("#value");
+        self.m.cons(
+            v,
+            Cons::Load {
+                key: Key::Named(pa),
+                dst: out,
+            },
+        );
+        let t = crate::builtins::plain_resolver(&mut self.m, out);
+        let resolver = self.tok_node(t);
+        let thrown = self.thrown;
+        let t = crate::builtins::plain_resolver(&mut self.m, thrown);
+        let rej = self.tok_node(t);
+        let then = self.m.atom("then");
+        let (call, ret) = self.new_call(ThisArg::Node(v), vec![resolver, rej], vec![]);
+        self.m.cons(
+            v,
+            Cons::MCall {
+                key: Key::Named(then),
+                call,
+            },
+        );
+        let _ = ret;
+        out
     }
 
     /// The body of an async function that runs untransformed: one without
@@ -82,6 +116,22 @@ impl<'a> Gen<'a> {
     /// `v[Symbol.iterator]()`, then `.next()` on the result and on `v`
     /// itself, then `.value`.
     pub(crate) fn iterate(&mut self, v: NodeId) -> NodeId {
+        self.iterate_with(v, false)
+    }
+
+    /// `iterate` by a consumer that can stop before the iterator is done:
+    /// what it does with a value may throw (the mapper of `Array.from`, a
+    /// `groupBy` callback, the adder of a collection constructor on an
+    /// entry that is no object, a property definition), or it hands the
+    /// iterator on (`Iterator.from`), and the runtime then closes the
+    /// iterator (IteratorClose, ECMA-262 7.4.11): `return` is called on it,
+    /// a protocol call as the for-of record's close is (`gen/glue.rs`).
+    pub(crate) fn iterate_closed(&mut self, v: NodeId) -> NodeId {
+        let close = self.m.reach_iter_close;
+        self.iterate_with(v, close)
+    }
+
+    fn iterate_with(&mut self, v: NodeId, close: bool) -> NodeId {
         let out = self.tmp("iterated");
         let ik = self.m.iter_key();
         self.m.cons(v, Cons::Load { key: ik, dst: out });
@@ -104,7 +154,27 @@ impl<'a> Gen<'a> {
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });
         self.m.cons(r2, Cons::Load { key: va, dst: out });
+        self.step_done(r1);
+        self.step_done(r2);
+        if close {
+            // The iterator is what `v[Symbol.iterator]()` returned, or `v`
+            // itself (a value the runtime finds no iterator for).
+            let ra = Key::Named(self.m.atom("return"));
+            for recv in [it, v] {
+                let (rc, _) = self.new_call(ThisArg::Node(recv), vec![], vec![]);
+                self.m.protocol_calls.insert(rc);
+                self.m.cons(recv, Cons::MCall { key: ra, call: rc });
+            }
+        }
         out
+    }
+
+    /// The consumer's read of `done` on the step results in `result`
+    /// (`Model::step_done`), a node of the body being walked.
+    pub(crate) fn step_done(&mut self, result: NodeId) {
+        if let Some(d) = self.m.step_done(result) {
+            self.m.own(d);
+        }
     }
 
     /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):

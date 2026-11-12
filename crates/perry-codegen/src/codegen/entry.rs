@@ -517,6 +517,24 @@ pub(super) fn compile_module_entry(
                 .unwrap()
                 .call_void("perry_verify_facts_init", &[]);
         }
+        // The family claim: the families the facts say are never created or
+        // observed, for the instrumented runtime's witnesses.
+        if crate::verify_facts::family_claims_on() && cross_module.wpfacts.family_never != 0 {
+            let site = crate::verify_facts::raw_entry_site(
+                "__perry_family",
+                "main",
+                crate::verify_facts::Fact::Family,
+                "family_reach",
+            );
+            main.block_mut(0).unwrap().call_void(
+                "perry_verify_facts_families",
+                &[
+                    (I64, &(cross_module.wpfacts.family_never as i64).to_string()),
+                    (I64, &site.pointer),
+                    (I64, site.len.as_deref().unwrap()),
+                ],
+            );
+        }
         {
             let blk = main.block_mut(0).unwrap();
             // SNAP census: the program's TLS slots lie between the anchors the
@@ -1384,6 +1402,7 @@ pub(super) fn compile_module_entry(
                 // `beforeExit` to emit — only Node's exit sequence. Skipping
                 // the loop drops the microtask runner and the event-loop
                 // phases from the link.
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
@@ -1443,6 +1462,7 @@ pub(super) fn compile_module_entry(
                     let _ = ctx
                         .block()
                         .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                    crate::verify_facts::life_measure::turn(&mut ctx);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
@@ -1490,6 +1510,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 let _ = ctx.block().call(I32, "js_event_loop_timers_phase", &[]);
                 if cross_module.needs_stdlib {
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);

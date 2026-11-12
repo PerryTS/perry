@@ -218,6 +218,33 @@ static LIFE_BEFORE_MINOR: Hook<fn()> = Hook::empty();
 #[cfg(perry_gc_instruments)]
 static LIFE_AFTER_MINOR: Hook<fn()> = Hook::empty();
 
+// LIFE I1 (`wpfacts_check/life_measure.rs`): a synchronous full cycle has
+// complete marks (beside the census's pass 1).
+#[cfg(perry_gc_instruments)]
+static LIFE_FULL_MARKED: Hook<fn()> = Hook::empty();
+
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_full_marked() {
+    if let Some(f) = LIFE_FULL_MARKED.get() {
+        f();
+    }
+}
+
+/// The lifetime measurement's full-cycle hook.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn install_life_full(marked: fn()) {
+    LIFE_FULL_MARKED.set(marked);
+}
+
+/// Are the life hooks armed (check mode or lifetime measurement)? Their
+/// subject is the copied minor's trace: a cycle that reaches nothing would
+/// read every claimed object as unreached (freed), so an untraced promotion
+/// is vetoed while they are (`copying.rs`, `untraced_promotion_instrument_veto`).
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_hooks_armed() -> bool {
+    LIFE_REACHED.get().is_some()
+}
+
 #[cfg(perry_gc_instruments)]
 pub(super) fn life_reached(old: usize, new: usize) {
     if let Some(f) = LIFE_REACHED.get() {

@@ -59,10 +59,17 @@ pub(super) enum Others {
 }
 
 /// The names of a loop's guarded receiver.
-pub(super) struct Names {
+pub(crate) struct Names {
     /// The locals the text makes aliases of it (itself among them).
     pub(super) ids: std::collections::HashSet<u32>,
     pub(super) others: Others,
+    /// The walker asks of every read, store and operator of the loop
+    /// whether it runs program code (`crate::quiet`): code that is not
+    /// the loop's may change the receiver's length whatever the loop's own
+    /// stores do. Not asked for a receiver whose length nothing changes,
+    /// inside a versioned clone (dropped when a call survived in its
+    /// emitted blocks), nor with `PERRY_FACTS_QUIET_SITES=0`.
+    pub(super) quiet: bool,
 }
 
 /// Local `id` has a named length by the facts.
@@ -73,8 +80,24 @@ fn named(ctx: &FnCtx<'_>, id: u32) -> bool {
         && ctx.wpfacts.named_length_locals.contains(&id)
 }
 
+pub(super) fn diag_on() -> bool {
+    std::env::var("PERRY_ARRAY_BASE_DIAG").as_deref() == Ok("1")
+}
+
+/// One `[perry quiet]` line per loop the walker refuses for a site that
+/// may run program code alone (`refused:site`), or for its bound's own
+/// read (`refused:length-read`).
+pub(super) fn quiet_diag(ctx: &FnCtx<'_>, arr: u32, verdict: &str) {
+    if diag_on() {
+        eprintln!(
+            "[perry quiet] fn={} array={arr} verdict={verdict}",
+            ctx.func.name
+        );
+    }
+}
+
 pub(super) fn diag(ctx: &FnCtx<'_>, arr: u32, verdict: &str) {
-    if std::env::var("PERRY_ARRAY_BASE_DIAG").as_deref() == Ok("1") {
+    if diag_on() {
         eprintln!(
             "[perry named len] fn={} array={arr} verdict={verdict}",
             ctx.func.name
@@ -84,8 +107,14 @@ pub(super) fn diag(ctx: &FnCtx<'_>, arr: u32, verdict: &str) {
 
 impl Names {
     /// The names of `arr_id` with `ids` its aliases by the text, before the
-    /// facts are asked.
-    pub(super) fn new(ctx: &FnCtx<'_>, arr_id: u32, ids: std::collections::HashSet<u32>) -> Self {
+    /// facts are asked. `ask_quiet`: the loop is no versioned clone, so the
+    /// walker asks whether its sites run program code.
+    pub(super) fn new(
+        ctx: &FnCtx<'_>,
+        arr_id: u32,
+        ids: std::collections::HashSet<u32>,
+        ask_quiet: bool,
+    ) -> Self {
         let object = Expr::LocalGet(arr_id);
         let fixed = ctx.sealed_buffer_locals.contains(&arr_id)
             || crate::expr::proven_view_receiver(ctx, &object).is_some();
@@ -93,7 +122,11 @@ impl Names {
             true => Others::Feared,
             false => Others::Unasked,
         };
-        Names { ids, others }
+        Names {
+            ids,
+            others,
+            quiet: ask_quiet && crate::quiet::enabled() && !fixed,
+        }
     }
 
     /// The walker refused the loop with every other receiver feared: the
@@ -138,13 +171,24 @@ impl Names {
     }
 }
 
-/// A loop that keeps `arr`'s length by the fact: the consumption record,
+/// A loop that keeps `arr`'s length by a fact: the consumption record,
 /// and in check mode the test, in the loop's condition block, that the
-/// length kept in `slot` is still the live one.
-pub(super) fn witness(ctx: &mut FnCtx<'_>, arr: u32, slot: Option<&str>) -> Result<()> {
+/// length kept in `slot` is still the live one. `named`: the loop leans on
+/// the named length; otherwise on its sites being quiet (`crate::quiet`:
+/// program code run by one of them could have changed the length).
+pub(super) fn witness(
+    ctx: &mut FnCtx<'_>,
+    arr: u32,
+    slot: Option<&str>,
+    named: bool,
+) -> Result<()> {
+    let fact = match named {
+        true => crate::verify_facts::Fact::NamedLength,
+        false => crate::verify_facts::Fact::QuietSites,
+    };
     crate::facts_consumed::used();
     crate::verify_facts::covered(
-        crate::verify_facts::Fact::NamedLength,
+        fact,
         || serde_json::json!({ "local": arr, "use": "length" }),
     );
     // A clone whose caller made the trip count has no slot; in check mode
@@ -160,18 +204,21 @@ pub(super) fn witness(ctx: &mut FnCtx<'_>, arr: u32, slot: Option<&str>) -> Resu
         &[(DOUBLE, &arr_box)],
     );
     let same = ctx.block().fcmp("oeq", &live, &kept);
-    let miss = ctx.new_block("namedlen.verify_miss");
-    let next = ctx.new_block("namedlen.admitted");
+    let (miss, next) = match named {
+        true => ("namedlen.verify_miss", "namedlen.admitted"),
+        false => ("quiet.verify_miss", "quiet.admitted"),
+    };
+    let miss = ctx.new_block(miss);
+    let next = ctx.new_block(next);
     let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
     crate::verify_facts::tick(ctx);
     ctx.block().cond_br(&same, &next_l, &miss_l);
     ctx.current_block = miss;
-    let site = crate::verify_facts::site_arg(
-        ctx,
-        &format!("local {arr} changes its length through its own name only"),
-        crate::verify_facts::Fact::NamedLength,
-        &[],
-    );
+    let what = match named {
+        true => format!("local {arr} changes its length through its own name only"),
+        false => format!("a loop over local {arr} runs no program code at its sites"),
+    };
+    let site = crate::verify_facts::site_arg(ctx, &what, fact, &[]);
     let _ = crate::verify_facts::check(
         ctx,
         I32,

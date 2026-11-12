@@ -52,6 +52,9 @@ use super::{lower_expr, FnCtx};
 pub(crate) const WPF_STORE: u32 = 1;
 pub(crate) const WPF_NULLABLE: u32 = 2;
 pub(crate) const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (`FieldProof::maybe_absent`): the read's hole
+/// compare is part of the claim, so a hole at the slot is no false slot.
+pub(crate) const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Kind-mask bits (`perry_wpfacts::KindFact::mask`).
 const K_NUM: u16 = 1;
@@ -517,6 +520,32 @@ pub(crate) fn facts_store(
     Ok(())
 }
 
+/// Quiet sites (`crate::quiet`): the store `object.property = v` runs no
+/// program code. The facts' store rule ([`facts_store`]) on the receiver
+/// binding: every class it may hold has `property` as a definite data
+/// birth field (an accessor key is never one), unguarded, no interpreted
+/// code. A scalar-replaced local is no object at all: its store writes a
+/// slot of the frame. Asks only; consumes no fact.
+pub(crate) fn quiet_store(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    if let Expr::LocalGet(id) = object {
+        if ctx.scalar_replaced.contains_key(id) {
+            return true;
+        }
+    }
+    if ctx.wpfacts.is_empty() || ctx.wpfacts_off {
+        return false;
+    }
+    let recv = match object {
+        Expr::LocalGet(id) if !ctx.pod_records.contains_key(id) => ctx.wpfacts.locals.get(id),
+        Expr::This if !ctx.is_static_class_this(object) => ctx.this_stack.last().and_then(|top| {
+            let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
+            ctx.wpfacts.this_of.get(fid)
+        }),
+        _ => None,
+    };
+    recv.is_some_and(|r| facts_store(&ctx.wpfacts, r, property).is_ok())
+}
+
 /// The zero-guard proof for `object.property`, if the facts give one.
 pub(crate) fn prove(
     ctx: &FnCtx<'_>,
@@ -854,6 +883,11 @@ pub(crate) fn emit_witness(
                 WPF_RAW_F64
             } else {
                 0
+            }
+            | if p.maybe_absent && flags & WPF_STORE == 0 {
+                WPF_MAYBE_ABSENT
+            } else {
+                0
             };
         ctx.block().call(
             I32,
@@ -904,6 +938,11 @@ pub(crate) fn emit_witness(
         | if p.nullable { WPF_NULLABLE } else { 0 }
         | if p.raw_f64 && flags & WPF_STORE == 0 {
             WPF_RAW_F64
+        } else {
+            0
+        }
+        | if p.maybe_absent && flags & WPF_STORE == 0 {
+            WPF_MAYBE_ABSENT
         } else {
             0
         };

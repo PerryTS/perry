@@ -90,6 +90,9 @@ struct LengthHoist {
     /// The walker kept the loop only with the facts' word that no store
     /// through another name reaches the receiver (`named_len`).
     named: bool,
+    /// The walker asked the facts whether the loop's reads, stores and
+    /// operators run program code (`crate::quiet`), and kept the loop.
+    quiet: bool,
 }
 
 /// #9254 phase 3: prove the dynamic extent in which an ordinary
@@ -5597,13 +5600,19 @@ fn match_packed_f64_versioned_loop(
     // Check mode: a loop kept by a named length is witnessed in the
     // ordinary loop's condition block only (`named_len`).
     let unwitnessed = |hoist: &LengthHoist| hoist.named && crate::verify_facts::enabled();
+    // The clone this match builds is entered only when no call survived in
+    // its emitted blocks (`fast_clone_not_call_free`): that scan, not the
+    // walker, is its proof that no program code runs, so the walker does
+    // not ask (`crate::quiet`).
     let ordinary_hoist = condition
-        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        .and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, false, false))
         .filter(|hoist| !unwitnessed(hoist));
     let hoist = ordinary_hoist
         .or_else(|| {
             condition
-                .and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+                .and_then(|cond| {
+                    classify_for_length_hoist_impl(ctx, cond, update, body, true, false)
+                })
                 .filter(|hoist| !unwitnessed(hoist))
         })
         .or_else(|| {
@@ -7862,8 +7871,13 @@ fn lower_for_after_init_impl(
     let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
         || precomputed_i32_bound.is_some();
+    // Inside a versioned clone the emitted blocks are scanned for calls and
+    // the clone is dropped when one survived: the walker asks the facts
+    // about program code (`crate::quiet`) only for the ordinary loop.
     let raw_hoist_classification: Option<LengthHoist> = condition
-        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        .and_then(|cond| {
+            classify_for_length_hoist_impl(ctx, cond, update, body, false, !in_call_free_clone)
+        })
         // Check mode: a loop kept by a named length is one whose condition
         // block holds the witness (`named_len::witness`).
         .filter(|hoist| !(hoist.named && in_call_free_clone && crate::verify_facts::enabled()));
@@ -7885,6 +7899,7 @@ fn lower_for_after_init_impl(
             lhs_addend: 0,
             buffer_bounds_width_units: None,
             named: false,
+            quiet: false,
         }));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
@@ -8271,8 +8286,13 @@ fn lower_for_after_init_impl(
         ctx.block().cond_br(&overflowed, &exit_label, &go_label);
         ctx.current_block = go_idx;
     }
-    if let Some(hoist) = hoist_classification.filter(|hoist| hoist.named) {
-        named_len::witness(ctx, hoist.arr_id, hoisted_length_slot.as_deref())?;
+    if let Some(hoist) = hoist_classification.filter(|hoist| hoist.named || hoist.quiet) {
+        named_len::witness(
+            ctx,
+            hoist.arr_id,
+            hoisted_length_slot.as_deref(),
+            hoist.named,
+        )?;
     }
     let used_precomputed_i32_cond = if let Some((counter_id, bound_i32)) = &precomputed_i32_bound {
         // #6011: range-versioned fast copy — the caller already materialized
@@ -8634,6 +8654,7 @@ pub(crate) fn emit_gc_loop_safepoint(
     body: &[Stmt],
     controls: &[&perry_hir::Expr],
 ) {
+    crate::verify_facts::life_measure::iteration(ctx, body);
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }
@@ -9072,21 +9093,17 @@ fn collect_guarded_array_aliases_in_expr(
 /// about one local id; accepting `const alias = arr; alias.push(...)` would let
 /// a length mutation bypass both the cached-length slot and the derived
 /// bounded-index facts.
-fn classify_for_length_hoist(
-    ctx: &crate::expr::FnCtx<'_>,
-    cond: &perry_hir::Expr,
-    update: Option<&perry_hir::Expr>,
-    body: &[perry_hir::Stmt],
-) -> Option<LengthHoist> {
-    classify_for_length_hoist_impl(ctx, cond, update, body, false)
-}
-
+///
+/// `ask_quiet`: the walker asks of every read, store and operator whether
+/// it runs program code (`crate::quiet`). Off for a versioned clone, whose
+/// emitted blocks are scanned for calls instead.
 fn classify_for_length_hoist_impl(
     ctx: &crate::expr::FnCtx<'_>,
     cond: &perry_hir::Expr,
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
     allow_materialization_hazard: bool,
+    ask_quiet: bool,
 ) -> Option<LengthHoist> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
@@ -9130,6 +9147,7 @@ fn classify_for_length_hoist_impl(
         ctx,
         arr_id,
         guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+        ask_quiet,
     );
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
@@ -9158,6 +9176,12 @@ fn classify_for_length_hoist_impl(
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
+    // The bound's own read: `a.length` of a receiver that may run a getter
+    // or a trap for it is read at every step.
+    if names.quiet && !crate::quiet::site(ctx, right) {
+        named_len::quiet_diag(ctx, arr_id, "refused:length-read");
+        return None;
+    }
     let preserved = |names: &named_len::Names| {
         body.iter().all(|s| {
             stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound, names)
@@ -9168,10 +9192,18 @@ fn classify_for_length_hoist_impl(
     // asked again with the facts' word on them (`named_len`).
     let mut named = false;
     if !preserved(&names) {
-        let cleared = names.ask(ctx, arr_id)?;
-        if !preserved(&names) {
+        let cleared = names.ask(ctx, arr_id);
+        if cleared.is_none() || !preserved(&names) {
+            // A loop only its implicit-code sites refuse (`crate::quiet`).
+            if names.quiet && named_len::diag_on() {
+                names.quiet = false;
+                if preserved(&names) {
+                    named_len::quiet_diag(ctx, arr_id, "refused:site");
+                }
+            }
             return None;
         }
+        let cleared = cleared?;
         if !cleared {
             named_len::diag(ctx, arr_id, "refused:no-fact");
             return None;
@@ -9186,6 +9218,9 @@ fn classify_for_length_hoist_impl(
     }
     .filter(|width| *width >= 1 && *width <= u32::MAX as i64)
     .map(|width| width as u32);
+    if names.quiet {
+        named_len::quiet_diag(ctx, arr_id, "kept");
+    }
     Some(LengthHoist {
         arr_id,
         counter_id: bounded_idx_id,
@@ -9193,6 +9228,7 @@ fn classify_for_length_hoist_impl(
         lhs_addend,
         buffer_bounds_width_units,
         named,
+        quiet: names.quiet,
     })
 }
 
@@ -9254,6 +9290,7 @@ fn classify_for_length_hoist_rejection(
         ctx,
         arr_id,
         guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+        true,
     )
     .asked(ctx, arr_id);
     let body_effect = stmts_array_length_effect(
@@ -9924,6 +9961,10 @@ fn expr_array_length_effect(
     let walk = |sub: &Expr| {
         expr_array_length_effect(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
     };
+    // A site that may run program code is a call (`crate::quiet`).
+    if aliases.quiet && !crate::quiet::site(ctx, e) {
+        return LoopArrayLengthEffect::UnknownCallEscape;
+    }
     match e {
         Expr::ArrayPush {
             array_id, value, ..
@@ -10389,6 +10430,11 @@ pub(crate) fn expr_preserves_array_length(
     let walk = |sub: &Expr| {
         expr_preserves_array_length(ctx, sub, arr_id, bounded_idx_id, has_strict_bound, aliases)
     };
+    // A site that may run program code is a call (`crate::quiet`): the
+    // code it runs is not this loop's, and may change any length.
+    if aliases.quiet && !crate::quiet::site(ctx, e) {
+        return false;
+    }
     match e {
         Expr::ArrayPush {
             array_id, value, ..

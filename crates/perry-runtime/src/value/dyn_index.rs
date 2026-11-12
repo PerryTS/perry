@@ -856,13 +856,17 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         }
     }
     if crate::buffer::is_registered_buffer(raw_ptr) {
+        // The value converts before the bound is read and for an invalid
+        // numeric index too (`u[-1] = obj` runs `valueOf`); the helper roots
+        // the view across the conversion, which can run program code.
         if let Some(idx_i32) = finite_nonnegative_i32_index(index) {
-            let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw_ptr as *mut crate::buffer::BufferHeader,
                 idx_i32,
-                i32::from(byte),
+                value,
             );
+        } else if JSValue::from_bits(index.to_bits()).is_number() {
+            let _ = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
         }
         return value;
     }
@@ -1039,3 +1043,7 @@ mod collection_tag_tests;
 #[cfg(test)]
 #[path = "dyn_index_uint8array_tests.rs"]
 mod uint8array_tests;
+
+#[cfg(test)]
+#[path = "dyn_index_non_array_receiver_tests.rs"]
+mod non_array_receiver_tests;

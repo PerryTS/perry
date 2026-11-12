@@ -414,6 +414,11 @@ impl<'a> Gen<'a> {
         // before the solve, when a parent value not yet settled counts as a
         // leak; `settle_parent_layouts` recomputes these keys once it is.
         let parent_leaks = !self.parent_pending(tm) && self.parent_chain_leaks(tm);
+        // A parent constructor that may add a key out of the layout's order
+        // leaves the instance ordered by an overflow: every key this class
+        // adds then gets an entry there, so none is created by a bare store
+        // (`CtorPhase::disordered`).
+        let parent_disordered = self.parent_chain_disordered(tm);
         // The keys in the order construction defines them
         // (`perry_hir::private_names::construction_entries`): a private
         // field's entry is claimed at its declaration, so it holds the next
@@ -439,6 +444,7 @@ impl<'a> Gen<'a> {
                 // then it is a reservation like a constructor store.
                 perry_hir::ClassFieldOrigin::Definition | perry_hir::ClassFieldOrigin::Capture
                     if parent_leaks
+                        || parent_disordered
                         || phase
                             .as_ref()
                             .is_some_and(|ph| ph.late_fields.contains(&f.name)) =>
@@ -456,7 +462,7 @@ impl<'a> Gen<'a> {
                 let a = self.m.atom(k);
                 push_unique(&mut keys, a);
             }
-            if !parent_leaks {
+            if !parent_leaks && !parent_disordered {
                 for k in &ph.definite {
                     let a = self.m.atom(k);
                     push_unique(&mut definite, a);
@@ -542,6 +548,19 @@ impl<'a> Gen<'a> {
         false
     }
 
+    /// Some constructor up the chain may leave the instance with an
+    /// out-of-order add behind it (`CtorPhase::disordered`).
+    fn parent_chain_disordered(&self, tm: TmplId) -> bool {
+        let mut cur = self.m.tmpls[tm as usize].parent;
+        while let Some(p) = cur {
+            if self.ctor_phase.get(&p).is_some_and(|ph| ph.disordered) {
+                return true;
+            }
+            cur = self.m.tmpls[p as usize].parent;
+        }
+        false
+    }
+
     fn parent_chain_leaks(&self, tm: TmplId) -> bool {
         if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
             return true;
@@ -620,6 +639,8 @@ impl<'a> Gen<'a> {
         }
         if !self.m.act.as_ref().is_some_and(|a| a.fixed) {
             self.pending_walk.entry(f).or_default().push(w);
+        } else if self.m.family_reach.on {
+            self.unwalked.push(w);
         }
         true
     }

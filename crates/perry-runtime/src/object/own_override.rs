@@ -270,6 +270,109 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
     authoritative_has_own(recv, key)
 }
 
+/// Is `recv` a live ordinary object (`GC_TYPE_OBJECT`: an object literal, a
+/// class instance, an array-like) that is no Array subclass instance?
+///
+/// An Array method site is folded from the receiver's DECLARED type, and a
+/// declared type is a hint: `const a: number[] = obj as any`, a JSON value, a
+/// class instance behind an interface. Such a receiver reads no method from
+/// `%Array.prototype%` unless its own chain says so, and nothing recorded on
+/// the cell proves which method `Get(recv, name)` selects (it may be an own
+/// property, an inherited one, an accessor, or absent: the call's TypeError),
+/// so the site performs the real `Get`. An Array subclass instance keeps the
+/// by-name builtin: its body resolves a class override itself
+/// (`array::subclass`), as before.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value.
+pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
+    let bits = recv.to_bits();
+    let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
+        return false;
+    };
+    // A typed array or buffer has no GC header (its registries answer): it
+    // has methods of its own (`%TypedArray%.prototype.at`, ...).
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::buffer::is_registered_buffer(raw)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+    {
+        return true;
+    }
+    if crate::gc_type_is_array!(header.obj_type)
+        || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        || header.obj_type == crate::gc::GC_TYPE_PROXY
+    {
+        return false;
+    }
+    if crate::gc_type_is_object!(header.obj_type) {
+        return header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && !crate::array::is_array_subclass_instance(recv);
+    }
+    // Any other cell (a Map, a Set, a Date, a closure, a Symbol, ...) reads
+    // its methods from its own prototype: `Get` decides.
+    true
+}
+
+/// A primitive behind an Array annotation: only the real `Get` answers for
+/// it. `null` / `undefined` (the call's TypeError), a boolean, a Number, a
+/// String (heap or inline: `String.prototype` has its own `at`, `indexOf`,
+/// `slice`, `concat`, ...), a BigInt. None of them is an address: handed to a
+/// builtin as one, a short string's payload is its BYTES, read as an Array
+/// header (SIGSEGV), and a Number ran the builtin on an empty array-like
+/// where node throws `x.push is not a function`. Only an object pointer
+/// (`POINTER_TAG`, including the runtime-id band: a Proxy, a stream handle)
+/// and a JS handle (`JS_HANDLE_TAG`) keep the receiver's own answer.
+#[inline]
+pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
+    // POINTER_TAG 0x7FFD, JS_HANDLE_TAG 0x7FFB.
+    !matches!(recv.to_bits() >> 48, 0x7FFD | 0x7FFB)
+}
+
+/// THE predicate of every Array method site: must `recv.<key>(..)` perform
+/// the real `Get` (`1`), or does `recv` resolve `key` to the realm's
+/// `Array.prototype` builtin (`0`)?
+///
+/// [`js_receiver_may_own_named_method`] answers for the receiver kinds whose
+/// builtins are lowered directly (an Array from its header and named layout,
+/// a modified prototype, a Proxy); this adds the receivers the annotation lied
+/// about ([`array_site_object_receiver`], [`array_site_nullish_receiver`]). The emitted guard of an Array site
+/// asks this (`PERRY_ARRAY_METHOD_TIERS`, default), and the checked entries
+/// (`builtin_proto_entries::array_admits`) apply the same two tests.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_method_needs_get(recv: f64, key: f64) -> i32 {
+    if array_site_nullish_receiver(recv) || array_site_object_receiver(recv) {
+        return 1;
+    }
+    js_receiver_may_own_named_method(recv, key)
+}
+
+/// Check mode's test of a method-site verdict (codegen `method_site`): is
+/// `recv` an Array exotic object that holds no own property `key` and has
+/// no `[[Prototype]]` of its own, so that `recv.<key>` reads
+/// `%Array.prototype%`'s member? (That member is the realm's: the runtime
+/// refuses every write of a built-in method, DEC 250.) Unlike the guard's
+/// predicate it does not read the prototype's shadow byte, which a refused
+/// or unrelated write also sets.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_member_witness(recv: f64, key: f64) -> i32 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+        return 0;
+    };
+    if !(crate::gc_type_is_array!(header.obj_type)
+        || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        || header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    {
+        return 0;
+    }
+    i32::from(authoritative_has_own(recv, key) == 0)
+}
+
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
 /// correctly for every cell kind and needs no readable ShapeId.
 ///
@@ -613,9 +716,10 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_method(
     push_or_own_declined(arr, value, own_out)
 }
 
-/// The `Get(recv, "push")` + `Call` of a receiver that is a live ordinary
-/// object (`GC_TYPE_OBJECT`), not an Array. `None` when the receiver is
-/// anything else, or when the selected method is the builtin.
+/// The `Get(recv, "push")` + `Call` of a receiver that is a live cell but no
+/// Array (an ordinary object, a Map, a Set, a Date, a closure, a Symbol, a
+/// typed array). `None` for an Array, a Proxy or a forwarded head, or when the
+/// selected method is the builtin.
 #[cold]
 #[inline(never)]
 unsafe fn push_object_method(
@@ -623,11 +727,22 @@ unsafe fn push_object_method(
     value: f64,
     own_out: *mut u32,
 ) -> Option<u64> {
-    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if !crate::gc_type_is_object!(header.obj_type)
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
+    // A typed array or buffer has no GC header (its registries answer): it
+    // has no `push` (node: TypeError).
+    let registered = crate::buffer::is_registered_buffer(arr as usize)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some();
+    if !registered {
+        let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+        // An Array (or a lazy one) and a Proxy are the callers' own; any other
+        // cell (an ordinary object, a Map, a Set, a Date, a closure, a Symbol)
+        // reads `push` from its own chain.
+        if crate::gc_type_is_array!(header.obj_type)
+            || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            || header.obj_type == crate::gc::GC_TYPE_PROXY
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
     }
     let recv = crate::value::js_nanbox_pointer(arr as i64);
     let args = [value];

@@ -571,8 +571,10 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        // Not an object (a stream handle id, …): owns nothing.
-        return true;
+        // Not an object (a stream handle id, …): owns nothing. `null` and
+        // `undefined` behind the annotation take the real `Get`, which
+        // throws.
+        return !super::own_override::array_site_nullish_receiver(*recv);
     }
     let addr = (bits & POINTER_MASK) as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
@@ -587,6 +589,18 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
                 || (h._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
                     && !may_own_named(recv, name, args))
         }
+        // An ordinary object behind the Array annotation (an array-like, a
+        // class instance, an object with its own method of the name): only
+        // the real `Get` says which method it holds, or that it holds none.
+        Some(h)
+            if crate::gc_type_is_object!(h.obj_type)
+                && super::own_override::array_site_object_receiver(*recv) =>
+        {
+            false
+        }
+        // Any other cell kind behind the Array annotation (a Map, a Date, a
+        // closure, a typed array, ...): the real `Get`.
+        _ if super::own_override::array_site_object_receiver(*recv) => false,
         _ => {
             super::own_override::PERRY_OWN_NAMED_PROP_INSTALLED
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -618,7 +632,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        return true;
+        return !super::own_override::array_site_nullish_receiver(recv);
     }
     let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
@@ -651,6 +665,15 @@ unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
 unsafe fn array_slow(recv: &mut f64, name: &[u8], args: &mut [f64], out: &mut f64) -> bool {
     if array_admits(recv, name, args) {
         return false;
+    }
+    // A primitive behind the Array annotation (a String, a boolean, ...): its
+    // `Get` selects its own kind's member, which may be a builtin too
+    // (`String.prototype.slice`): run it as itself.
+    if recv.to_bits() & !POINTER_MASK != POINTER_TAG
+        && super::own_override::array_site_nullish_receiver(*recv)
+    {
+        *out = super::builtin_proto::complete_call(*recv, name, args);
+        return true;
     }
     match redirect_or_refresh(recv, name, args) {
         Some(value) => {
@@ -743,4 +766,5 @@ array_entries! {
     js_array_m_slice1 / js_array_b_slice1 = b"slice", recv(a) => ptr_boxed(js_array_slice_values(arr(recv), a, UNDEFINED));
     js_array_m_slice2 / js_array_b_slice2 = b"slice", recv(a, b) => ptr_boxed(js_array_slice_values(arr(recv), a, b));
     js_array_m_shift0 / js_array_b_shift0 = b"shift", recv() => js_array_shift_f64(arr(recv));
+    js_array_m_pop0 / js_array_b_pop0 = b"pop", recv() => js_array_pop_f64(arr(recv));
 }

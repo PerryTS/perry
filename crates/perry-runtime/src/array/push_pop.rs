@@ -7,17 +7,17 @@ use std::ptr;
 #[path = "push_pop/growth.rs"]
 mod growth;
 use growth::initialize_growth_slack;
+pub(super) use growth::install_array_growth_forwarding_with;
 #[cfg(test)]
 pub(crate) use growth::GrowInPlaceTestGuard;
-pub(super) use growth::install_array_growth_forwarding_with;
 
 #[path = "push_pop/guards.rs"]
 mod guards;
 pub(crate) use guards::array_length_is_non_writable;
 pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
-pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 use guards::throw_non_writable_length;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
@@ -180,10 +180,31 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
     } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
+    unsafe { grow_backing_unguarded::<MAY_COLLECT>(arr, min_capacity, exact) }
+}
+
+/// [`grow_backing_to`] without the integrity refusal: the store of a sealed
+/// or non-extensible Array grows when its `length` does (ArraySetLength adds
+/// no property). Every element add goes through the guarded form.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+unsafe fn grow_backing_unguarded<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+    exact: bool,
+) -> *mut ArrayHeader {
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
             return arr;
+        }
+        // A sparse Array's far elements live in its named layout. A store
+        // that grows over them must take them in (`adopt_sparse_indices`),
+        // which the no-collect form does not do: it declines.
+        let sparse_source = (*arr).length > old_capacity;
+        if sparse_source && !MAY_COLLECT {
+            return ptr::null_mut();
         }
         // DEC 250 (i): `%Array.prototype%` never gains an element. It has no
         // element room (`seal_realm`), and this is the one place an existing
@@ -234,7 +255,11 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
         // it stands. No copy, no forwarding stub, no new address for an alias
         // to chase (see `try_extend_in_place`).
         if growth::try_extend_in_place(arr, old_header, new_capacity) {
-            return arr;
+            return if sparse_source {
+                growth::adopt_sparse_indices(arr)
+            } else {
+                arr
+            };
         }
         let reserve = crate::array::key_attrs_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
@@ -418,6 +443,9 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
             initialize_growth_slack(new_ptr, used, new_capacity as usize);
         }
 
+        if sparse_source {
+            return growth::adopt_sparse_indices(new_ptr);
+        }
         new_ptr
     }
 }
@@ -1651,17 +1679,52 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
         }
         return;
     }
-    js_array_set_length(cleaned, new_length);
+    // ArraySetLength returned false: an element that cannot be deleted
+    // stopped the truncation, and `Set(O, "length", n, true)` throws.
+    if let Err(index) = array_set_length(cleaned, new_length) {
+        throw_cannot_delete_array_index(index);
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
+    // The sloppy `Set(O, "length", n, false)`: a blocked truncation is silent.
+    let _ = array_set_length(arr, new_length);
+}
+
+/// `Reflect.set(arr, "length", n)`: the [[Set]]'s own boolean. `false` for a
+/// frozen Array, a read-only `length` and a truncation an undeletable element
+/// stopped; an invalid length still throws its RangeError.
+pub(crate) fn array_set_length_reflect(arr: *mut ArrayHeader, new_length: f64) -> bool {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        return true;
+    }
+    if array_object_flags(cleaned) & gc::OBJ_FLAG_FROZEN != 0
+        || array_length_is_non_writable(cleaned)
+    {
+        return false;
+    }
+    array_set_length(cleaned, new_length).is_ok()
+}
+
+/// ArraySetLength (ECMA-262 §10.4.2.4) for `arr.length = n`.
+///
+/// `Err(index)`: the truncation stopped at an element that cannot be deleted
+/// (a non-configurable index, any element of a sealed Array); `length` is now
+/// `index + 1`. A frozen Array and a read-only `length` leave the Array as it
+/// is and answer `Ok` (the strict entry throws for them before it calls).
+///
+/// Extensibility does not enter: a non-extensible or sealed Array may shrink
+/// (it loses the elements that can be deleted) and may grow (a longer
+/// `length` adds no property).
+fn array_set_length(arr: *mut ArrayHeader, new_length: f64) -> Result<(), u32> {
     if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
-        return;
+        return Ok(());
     }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return;
+        return Ok(());
     }
     let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
@@ -1674,10 +1737,19 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             None => array_object_flags(arr),
         };
         if flags & gc::OBJ_FLAG_FROZEN != 0 {
-            return;
+            return Ok(());
         }
-        if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 && n != cur {
-            return;
+        if n < cur && flags & gc::OBJ_FLAG_SEALED != 0 {
+            // Every element of a sealed Array is non-configurable: the highest
+            // present index at or above `n` stops the truncation. The holes
+            // above it go.
+            if let Some(index) = highest_present_index(arr, n, cur) {
+                if index + 1 < cur {
+                    crate::array::array_truncate_length(arr, index + 1);
+                    refresh_array_numeric_layout(arr);
+                }
+                return Err(index);
+            }
         }
         // `defineProperty(arr, "length", {writable:false})` records the flag
         // in the attrs side table; an ordinary `arr.length = n` write must
@@ -1688,7 +1760,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 .map(|a| !a.writable())
                 .unwrap_or(false)
         {
-            return;
+            return Ok(());
         }
         if n < cur {
             // ArraySetLength deletes indices from high to low. This must clear
@@ -1731,7 +1803,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 // EK §3.1 `length = n`: the prefix stops at the new length.
                 crate::array::ek_lower_prefix(arr, n);
                 rebuild_array_layout(arr);
-                return;
+                return Ok(());
             }
             let scope = gc::RuntimeHandleScope::new();
             let _arr_handle = scope.root_raw_mut_ptr(arr);
@@ -1753,7 +1825,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     if js_array_delete(arr, i) == 0 {
                         (*arr).length = i + 1;
                         refresh_array_numeric_layout(arr);
-                        return;
+                        return Err(i);
                     }
                 }
             }
@@ -1761,7 +1833,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 if js_array_delete(arr, i) == 0 {
                     (*arr).length = i + 1;
                     refresh_array_numeric_layout(arr);
-                    return;
+                    return Err(i);
                 }
             }
             (*arr).length = n;
@@ -1779,27 +1851,60 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             if n > (*arr).capacity && n > 1_000_000 {
                 (*arr).length = n;
                 refresh_array_numeric_layout(arr);
-                return;
+                return Ok(());
             }
             // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
+            // A longer `length` adds no property, so a sealed or
+            // non-extensible Array takes it too: its store grows by the
+            // unguarded form (`js_array_grow` refuses such an Array, which is
+            // right for an element add).
             let target = if n > (*arr).capacity {
-                js_array_grow(arr, n)
+                if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
+                    grow_backing_unguarded::<true>(arr, n, false)
+                } else {
+                    js_array_grow(arr, n)
+                }
             } else {
                 arr
             };
             if !target.is_null() {
-                for i in cur..n {
+                // Only slots the store has: a growth that was refused leaves a
+                // logical length over the old store.
+                for i in cur..n.min((*target).capacity) {
                     note_array_slot(target, i as usize, value::TAG_HOLE);
                 }
                 (*target).length = n;
+                if n > (*target).capacity {
+                    refresh_array_numeric_layout(target);
+                }
             }
         }
         // n == cur is a no-op.
     }
+    Ok(())
+}
+
+/// The highest index in `[from, to)` that is an own property of `arr`: a
+/// dense non-hole slot, a far element in the named layout or an accessor.
+unsafe fn highest_present_index(arr: *mut ArrayHeader, from: u32, to: u32) -> Option<u32> {
+    let capacity = (*arr).capacity;
+    if to > capacity {
+        let far = array_named_property_names(arr, false)
+            .into_iter()
+            .filter_map(|name| crate::object::canonical_array_index(&name))
+            .filter(|&index| index >= from.max(capacity) && index < to)
+            .max();
+        if far.is_some() {
+            return far;
+        }
+    }
+    (from..to.min(capacity))
+        .rev()
+        .find(|&index| crate::array::indexing::array_has_own_index(arr, index))
 }
 
 /// Delete an element from an array by index, creating a "hole".

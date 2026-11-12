@@ -690,6 +690,12 @@ fn untraced_promotion_instrument_veto<const DIAGNOSTICS: bool>() -> Option<&'sta
     if DIAGNOSTICS && crate::gc::gc_verify_mark_enabled() {
         return Some("verify_mark");
     }
+    // The life claims (check mode, lifetime measurement) read the copy and
+    // promotion points of the trace: untraced, every claim reads as freed.
+    #[cfg(perry_gc_instruments)]
+    if DIAGNOSTICS && super::diagnostic_hooks::life_hooks_armed() {
+        return Some("life_claims");
+    }
     if super::barrier::incremental_mark_in_progress_on_this_thread() {
         return Some("incremental_mark_in_progress");
     }
@@ -1915,6 +1921,14 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     }
     if let Some(d) = collector.survival.as_ref().filter(|_| DIAGNOSTICS) {
         d.report(super::survival_diag::next_minor_seq());
+    }
+    #[cfg(perry_gc_instruments)]
+    if DIAGNOSTICS && crate::arena::alloc_life::on() {
+        crate::arena::alloc_life::copied(
+            collector.stats.promoted_bytes,
+            collector.stats.copied_bytes,
+            collector.stats.in_place_promoted_bytes,
+        );
     }
     if DIAGNOSTICS {
         crate::arena::alloc_sample::report("minor")

@@ -50,6 +50,12 @@ pub(super) unsafe fn array_sparse_index_property_set(
     let new_length = index + 1;
     if (*arr).length < new_length {
         (*arr).length = new_length;
+        // `length` now exceeds the store: no raw-slot layout claim covers
+        // `[0, length)` any more (the guarded numeric readers test the claim
+        // and `index < length` only).
+        if new_length > (*arr).capacity {
+            crate::array::header::clear_array_numeric_layout(arr);
+        }
     }
     arr
 }

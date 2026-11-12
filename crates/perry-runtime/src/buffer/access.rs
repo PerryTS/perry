@@ -11,7 +11,8 @@ enum BufferSetSource {
 
 #[inline]
 fn js_value_to_number(value: f64) -> f64 {
-    crate::value::JSValue::from_bits(value.to_bits()).to_number()
+    // ToNumber: an object's `valueOf` / `toString` / `Symbol.toPrimitive` runs.
+    crate::builtins::js_number_coerce(value)
 }
 
 #[inline]
@@ -30,11 +31,9 @@ fn to_integer_or_zero(value: f64) -> i64 {
 
 #[inline]
 fn to_uint8(value: f64) -> u8 {
-    let number = js_value_to_number(value);
-    if !number.is_finite() || number == 0.0 {
-        return 0;
-    }
-    (number.trunc() as i64).rem_euclid(256) as u8
+    // The shared element conversion: ToNumber (a BigInt or a Symbol throws),
+    // then ToUint8.
+    crate::typedarray_hook_slots::jsvalue_to_uint8(value)
 }
 
 #[inline]
@@ -324,6 +323,37 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
         }
         *data.add(index as usize) = byte;
     }
+}
+
+/// `buf[index] = value` for a `Buffer` / `Uint8Array` with a JS value: the
+/// element store of an integer-indexed object (TypedArraySetElement).
+/// `ToNumber(value)` first, for every index (an invalid one included): an
+/// object's `valueOf` / `toString` / `Symbol.toPrimitive` runs, a BigInt or a
+/// Symbol throws a TypeError and nothing is stored. Then `ToUint8` (modulo
+/// 2^8, not a saturating cast) and the store, if `index` is still inside the
+/// view: the conversion may have detached, shrunk or moved it, so the bound
+/// is the one `js_buffer_set` reads after it.
+///
+/// Every runtime byte store that receives a JS value goes through here; the
+/// raw `js_buffer_set` takes an already-converted integer.
+pub(crate) fn js_buffer_set_value(buf_ptr: *mut BufferHeader, index: i32, value: f64) {
+    if buf_ptr.is_null() {
+        return;
+    }
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    if v.is_number() || v.is_int32() {
+        let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+        js_buffer_set(buf_ptr, index, i32::from(byte));
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf = scope.root_raw_mut_ptr(buf_ptr);
+    let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+    js_buffer_set(
+        buf.get_raw_mut_ptr::<BufferHeader>(),
+        index,
+        i32::from(byte),
+    );
 }
 
 /// Copy bytes from source buffer into target buffer at given offset.

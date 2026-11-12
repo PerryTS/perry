@@ -276,6 +276,11 @@ pub(crate) fn build_and_run_link(
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }
+        // The runtime archives this link may pull from, for the default
+        // hot-text order (`hot_text_order`).
+        let stdlib_archive = stdlib_lib.as_deref().filter(|_| ctx.needs_stdlib);
+        let runtime_archives: Vec<&Path> =
+            std::iter::once(runtime_lib).chain(stdlib_archive).collect();
         super::function_layout::add_link_args(
             &mut cmd,
             &ctx.cache_dir,
@@ -284,6 +289,8 @@ pub(crate) fn build_and_run_link(
             is_harmonyos,
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+            &runtime_archives,
+            verbose,
         )?;
         super::runtime_layouts::add_link_args(
             &mut cmd,

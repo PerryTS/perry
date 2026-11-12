@@ -228,6 +228,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #10943: the own-override guard condition; 0 takes the builtin, 1 the
     // universal dispatcher.
     module.declare_function("js_receiver_may_own_named_method", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_array_method_needs_get", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_array_member_witness", I32, &[DOUBLE, DOUBLE]);
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
     module.declare_function(
         "js_object_property_is_enumerable",

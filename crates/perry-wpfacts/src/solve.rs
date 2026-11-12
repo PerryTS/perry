@@ -291,6 +291,7 @@ impl Model {
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
@@ -1681,6 +1682,7 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(

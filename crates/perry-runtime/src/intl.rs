@@ -69,7 +69,7 @@ pub mod segments_view;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
-    collator_bound_compare_thunk, date_time_format_bound_format_thunk,
+    date_time_format_bound_format_thunk,
     date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
     date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
     resolve_collator_locale, temporal_locale_string, TemporalLocaleCtx,

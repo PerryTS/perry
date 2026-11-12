@@ -495,6 +495,9 @@ pub(crate) const ARRAY_ENTRIES: &[(&str, usize, usize)] = &[
     ("values", 0, 0),
     ("slice", 1, 2),
     ("shift", 0, 0),
+    // `Expr::ArrayPop` and the inline pop's slow arm
+    // (`array_proto_guard::emit_array_pop_call`).
+    ("pop", 0, 0),
     // `arr.map(f)` whose result is discarded (`stmt/unused_expr.rs`).
     ("mapDiscard", 1, 1),
 ];

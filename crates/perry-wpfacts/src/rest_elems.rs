@@ -549,14 +549,16 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
 /// template, as `tok_arr_rep` joins it for a binding (co-occurrence makes a
 /// node all-or-none). Codegen reads it as `FactsArrRep::at_rest`: the
 /// rep-keyed loads and the held bases of a field decode the I32 word.
+///
+/// The mark is the storage the admission gives the Array (its births encode
+/// I32 words), so it is made whatever tier reads it: `PERRY_REST_TIERS=0`
+/// is a codegen switch (`expr::rest_elems::tiers_enabled`, the at-rest
+/// tiers), as it is for a local's rep (`bindings::tok_arr_rep`). A field
+/// rep left unmarked claimed double slots for I32 words, and every
+/// rep-keyed consumer that refuses an at-rest rep (`a[k] ?? n`, the
+/// rep-keyed store, the held lengths) read or wrote the words as doubles.
 pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFacts]) {
-    // `PERRY_REST_TIERS=0` (codegen `expr::rest_elems::tiers_enabled`) keeps
-    // PR B's field reps.
-    let off = matches!(
-        std::env::var("PERRY_REST_TIERS").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    );
-    if m.rest_tmpls.is_empty() || off {
+    if m.rest_tmpls.is_empty() {
         return;
     }
     for tf in templates.iter_mut() {

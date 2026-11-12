@@ -274,6 +274,7 @@ impl Model {
                 | Cons::Guard { dst, .. }
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
+                | Cons::Fulfil { dst }
                 | Cons::Falsy { dst }
                 | Cons::NotUndefined { dst }
                 // The gate of an own-only read runs where the read does.
@@ -786,6 +787,9 @@ impl Model {
             // that asks gets the template's answer.
             if self.protocol_calls.contains(t) {
                 self.protocol_calls.insert(id);
+            }
+            if let Some(&brand) = self.name_fold_calls.get(t) {
+                self.name_fold_calls.insert(id, brand);
             }
             if lay != LAY_NONE {
                 self.sum.call_lay.insert(id, lay);
