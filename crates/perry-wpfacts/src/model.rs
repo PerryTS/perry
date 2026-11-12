@@ -89,9 +89,13 @@ pub mod guard {
     /// A value that is no String after ToPrimitive: an operand of `+` that
     /// lets the other operand's numeric kinds reach the result.
     pub const NOT_STR: u8 = 6;
-    /// A primitive but `undefined`/`null`, no object: what a sloppy
-    /// function boxes as its `this`.
-    pub const BOXED: u8 = 7;
+    /// A primitive a sloppy function's `this` boxes (ECMA-262 10.2.1.2
+    /// step 6, ToObject 7.1.18), one test per wrapper kind: a Number, a
+    /// String, a Boolean, a BigInt or Symbol.
+    pub const BOXED_NUM: u8 = 7;
+    pub const BOXED_STR: u8 = 8;
+    pub const BOXED_BOOL: u8 = 9;
+    pub const BOXED_OTHER: u8 = 10;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -104,7 +108,10 @@ pub mod guard {
             // Every primitive kind but `undefined`/`null` has a truthy value.
             TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
             NOT_STR => p::ALL & !p::STR,
-            BOXED => p::ALL & !(p::UNDEF | p::NULL),
+            BOXED_NUM => p::NUM,
+            BOXED_STR => p::STR,
+            BOXED_BOOL => p::BOOL,
+            BOXED_OTHER => p::BIGINT | p::SYMBOL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }

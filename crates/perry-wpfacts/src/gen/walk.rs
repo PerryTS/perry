@@ -720,7 +720,7 @@ impl<'a> Gen<'a> {
         if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
             // The view belongs to the function's body, like its parameters.
             let prev = std::mem::replace(&mut self.m.cur_fn, fxi);
-            fx.this = self.sloppy_this(info.this);
+            fx.this = self.sloppy_this(mi, info.this);
             self.m.cur_fn = prev;
         }
         if f.is_async && !f.is_generator {
@@ -762,18 +762,30 @@ impl<'a> Gen<'a> {
     }
 
     /// The `this` a sloppy function's body reads: its callers' `this`,
-    /// where a nullish one is the global object and a primitive one is
-    /// boxed, an object the model does not hold (anything). The function's
-    /// own `this` node, its interface, stays what callers pass.
-    pub(crate) fn sloppy_this(&mut self, this: NodeId) -> NodeId {
+    /// where a nullish one is the realm's global this value and a primitive
+    /// one is ToObject of it (ECMA-262 10.2.1.2 OrdinaryCallBindThis steps
+    /// 5-6): a fresh wrapper object of the primitive's kind (7.1.18), one
+    /// per function and kind. The function's own `this` node, its
+    /// interface, stays what callers pass.
+    pub(crate) fn sloppy_this(&mut self, mi: u32, this: NodeId) -> NodeId {
         let view = self.m.node_l("sloppy-this");
         self.m.own(view);
         self.m.edge(this, view);
         let global_tok = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
         let global = self.tok_node(global_tok);
+        use crate::model::guard;
+        let num = self.bobj(mi, "BoxedNumber").1;
+        let str_ = self.bobj(mi, "BoxedString").1;
+        let boolean = self.bobj(mi, "BoxedBoolean").1;
+        // A BigInt or Symbol wrapper: an object whose kind the model does
+        // not name, like `Object(prim)`.
+        let other = self.bobj(mi, "Object(prim)").1;
         for (test, from) in [
-            (crate::model::guard::NULLISH, global),
-            (crate::model::guard::BOXED, self.m.top_tok_node),
+            (guard::NULLISH, global),
+            (guard::BOXED_NUM, num),
+            (guard::BOXED_STR, str_),
+            (guard::BOXED_BOOL, boolean),
+            (guard::BOXED_OTHER, other),
         ] {
             self.m.cons(
                 view,

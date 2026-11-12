@@ -43,6 +43,7 @@ mod box_chain;
 mod boxed_primitive_methods;
 pub(crate) mod box_computed_read;
 mod builtin_fn_absent_member;
+mod sloppy_this_wrapper;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;

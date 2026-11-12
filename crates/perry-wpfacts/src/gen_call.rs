@@ -559,7 +559,7 @@ impl<'a> Gen<'a> {
         let cfx = if sloppy {
             sfx = cfx.clone();
             let prev = std::mem::replace(&mut self.m.cur_fn, f);
-            sfx.this = self.sloppy_this(cfx.this);
+            sfx.this = self.sloppy_this(cfx.module, cfx.this);
             self.m.cur_fn = prev;
             &sfx
         } else {
