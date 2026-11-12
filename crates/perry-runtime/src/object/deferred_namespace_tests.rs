@@ -231,7 +231,7 @@ fn deferred_namespace_method_lookup_reads_before_call_arguments() {
     let ns = fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let ns = scope.root_nanbox_f64(ns);
-    let key = unsafe { crate::string::js_string_from_bytes(b"value".as_ptr(), 5) };
+    let key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
     let id = crate::value::js_nanbox_string(key as i64).to_bits() as i64;
     assert_eq!(CALLS.load(Ordering::SeqCst), 0);
     // A non-callable value still has to be read now, not deferred to the
