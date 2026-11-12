@@ -208,6 +208,33 @@ function r2(xs: number[]): number {
   r2down(other, xs.length);
   return other.length;
 }
+// C1: the literal is born in a callee the facts expand into its caller's
+// summary: the caller's instances bear it.
+function c1made(xs: number[]): number {
+  const made: number[] = [5, 6, 7];
+  fill(made, xs.length);
+  return made.length;
+}
+function c1(xs: number[], ys: number[]): number {
+  let s = 0;
+  for (const y of ys) s += y;
+  return c1made(xs) * 1000 + c1made(ys) + s;
+}
+// C2: a guarded counter beside the literal: the instances' intervals of
+// `d` and `k` are joined with the shared node's.
+function c2(xs: number[], k: number): number {
+  const other: number[] = [5, 6, 7];
+  for (const v of xs) fill(other, 1);
+  const tbl = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120];
+  let s = 0;
+  let t = k | 0;
+  while (t >= 0 && t < 10) {
+    const d = t;
+    s += tbl[d] + other.length;
+    t += 3;
+  }
+  return s;
+}
 // O1: an object literal whose field a callee rewrites.
 function bump(o: { n: any; tag: string }, k: number, v: any): void {
   for (let i = 0; i < k; i++) o.n = v;
@@ -268,6 +295,8 @@ console.log("i4", i4([1, 2]), i4([]));
 console.log("t1", t1([1, 2], 2), t1([1, 2], 0));
 console.log("r1", r1([1], 3), r1([], 0));
 console.log("r2", r2([1, 2, 3]), r2([]));
+console.log("c1", c1([1, 2], [3]), c1([], []));
+console.log("c2", c2([1, 2], 1), c2([], 2), c2([1], -1), c2([1, 2, 3], 4));
 console.log("o1", o1([1]), o1([]));
 console.log("n1", n1([1, 2]), n1([]));
 console.log("n2", n2([1, 2]), n2([]));

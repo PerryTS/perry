@@ -22,14 +22,19 @@ pub fn instance_nodes_enabled() -> bool {
 /// The nodes a binding's values live in. The body of a summarized function
 /// (`summary`) is solved once per instance, each on its own copy of the
 /// body's slot nodes (`Inst::fresh`). The shared node is the observation
-/// layer: it holds every caller's arguments and every call's result, but a
-/// literal the body bears is one token per instance, and only the
-/// instance's copy holds it; the shared node keeps the literal's template
-/// token, which no effect of a callee ever reaches (a push through a
-/// parameter grows the instance's token). A fact of a binding (a local, a
-/// `this`, a site operand) is therefore a fact of its shared node AND of
-/// every instance copy: every per-binding fact reads its nodes from `of`,
-/// so none can read the shared node alone.
+/// layer: it holds every caller's arguments and every call's result, and
+/// runs every read rule, so it alone is the binding, with one exception. A
+/// literal the body bears per instance (`Summary::births`) is one token per
+/// instance, and only the instance's copy holds it; the shared node keeps
+/// the literal's template token, which no effect of a callee ever reaches
+/// (a push through a parameter grows the instance's token). In a body with
+/// such births a fact of a binding (a local, a `this`, a site operand) is
+/// therefore a fact of its shared node AND of every instance copy: every
+/// per-binding fact reads its nodes from `of`, so none can read the shared
+/// node alone. The copies of a body without births add nothing the shared
+/// node lacks, and their intervals are coarser (an instance's loop counter
+/// widens past the bound the shared body's narrowing keeps), so they are
+/// left out.
 pub(crate) struct BindingNodes {
     copies: FxHashMap<NodeId, Vec<NodeId>>,
     live: usize,
@@ -41,7 +46,7 @@ impl BindingNodes {
     pub(crate) fn new(m: &Model) -> Self {
         BindingNodes {
             copies: if m.instance_nodes {
-                crate::rest_elems::node_copies(m)
+                instance_born_copies(m)
             } else {
                 FxHashMap::default()
             },
@@ -56,6 +61,21 @@ impl BindingNodes {
             .filter(|&c| (c as usize) < self.live)
             .collect()
     }
+}
+
+/// The copies, by shared node, of every instance whose summary bears
+/// literals per instance (`Summary::births`: its own, and those of the
+/// calls expanded into it).
+fn instance_born_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
+    let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for (inst, it) in m.sum.insts.iter().enumerate() {
+        if m.sum.of.get(&it.f).is_some_and(|s| !s.births.is_empty()) {
+            m.inst_copies(inst as u32, |orig, copy| {
+                copies.entry(orig).or_default().push(copy)
+            });
+        }
+    }
+    copies
 }
 
 /// A compiled body a binding or a field may hold (FVA): what codegen needs
