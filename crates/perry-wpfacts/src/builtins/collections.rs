@@ -1719,6 +1719,9 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let e = effects::declared_at("Buffer.prototype", n).expect("declared");
             effects::run_native(m, e, t, call);
         }
+        ("Buffer", Some("slice")) if c.spread.is_empty() => {
+            typed_array_methods::buffer_view_slice(m, t, call)
+        }
         ("Buffer", _) => {
             anyfall("buffer method argument", &what, &name);
             implicit_args(m, call, "buffer method argument", Protocol::Any);

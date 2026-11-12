@@ -70,6 +70,28 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
     species(m, t, call, vec![num]);
 }
 
+/// `slice(start, end)` of a Buffer. `Buffer.prototype.slice` is a view of
+/// the same memory (Node lib/buffer.js: `subarray`'s result, a Buffer); the
+/// token also stands for its [[ViewedArrayBuffer]] (`.buffer` reads the view
+/// token, `loads.rs`), whose `slice` is `ArrayBuffer.prototype.slice`: a
+/// fresh ArrayBuffer (ECMA-262 25.1.6.7). Both convert start and end
+/// (ToIntegerOrInfinity); neither result is a primitive.
+pub(super) fn buffer_view_slice(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    for &a in c.args.iter().take(2) {
+        to_prim(m, a, "buffer slice start/end ToIntegerOrInfinity");
+    }
+    let recv = m.node_l("buffer-receiver");
+    m.add_tok(recv, t);
+    let view = site_tmpl(m, call, "Buffer");
+    let fa = m.field_any(view);
+    m.add_prim(fa, prim::NUM);
+    ret_tok(m, call, view);
+    m.cons(recv, Cons::ShareBuffer { ta: view });
+    let ab = site_tmpl(m, call, "ArrayBuffer");
+    ret_tok(m, call, ab);
+}
+
 fn fresh(m: &mut Model, call: CallId) -> Tok {
     let out = site_tmpl(m, call, "TypedArray");
     let fa = m.field_any(out);
