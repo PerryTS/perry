@@ -52,6 +52,12 @@ pub enum Site {
 /// every copy of the site (wpfacts `method_sites`).
 pub const SITE_TYPED_ARRAY: u8 = 1;
 
+/// A method site's receiver holds only Array exotic objects and the member
+/// it names is the realm's `Array.prototype` built-in on each of them, at
+/// every copy of the site: the solver's `NativeMember` verdict over the
+/// Array family (wpfacts `method_sites`).
+pub const SITE_ARRAY_MEMBER: u8 = 2;
+
 /// The site of the unfolded call whose callee is `callee`, when it has a
 /// source offset.
 pub fn callee_site(callee: &Expr) -> Option<Site> {

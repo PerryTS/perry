@@ -428,6 +428,17 @@ fn typed_array_sites_switch_is_a_cache_input() {
     );
 }
 
+/// Array method sites: the switch changes the exported facts and every
+/// by-name Array method call that drops its run-time guard, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn array_method_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_ARRAY_METHOD_SITES"),
+        "PERRY_FACTS_ARRAY_METHOD_SITES must key the compile caches"
+    );
+}
+
 /// Quiet sites: the switch changes the exported facts and every loop
 /// without calls that keeps `a.length` beside a read, store or operator
 /// that may run program code, so `=0` must never reuse an `=1` object.
@@ -502,6 +513,16 @@ fn reach_gen_members_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_GEN_MEMBERS"),
         "PERRY_FACTS_REACH_GEN_MEMBERS must key the compile caches"
+    );
+}
+
+/// Activation reach, thenable adoption: the switch changes which bodies the
+/// solve calls active, so `=0` must never reuse an `=1` object.
+#[test]
+fn reach_thenable_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_THENABLE"),
+        "PERRY_FACTS_REACH_THENABLE must key the compile caches"
     );
 }
 
