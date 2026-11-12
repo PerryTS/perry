@@ -144,3 +144,26 @@ fn flat_keeps_the_far_element() {
         assert_eq!(numbers(flat), (4, 15.0));
     }
 }
+
+#[test]
+fn own_element_walk_stops_at_the_store_and_visits_the_far_element() {
+    let _serialized = crate::array::test_serialize();
+    let arr = sparse();
+    let mut seen = Vec::new();
+    unsafe {
+        crate::array::array_for_each_own_element(arr, |index, value| {
+            seen.push((index, value));
+            true
+        });
+    }
+    assert_eq!(seen, [(0, 1.0), (1, 2.0), (2, 3.0), (N, 9.0)]);
+    // A visit that answers `false` stops the walk.
+    let mut first = Vec::new();
+    unsafe {
+        crate::array::array_for_each_own_element(arr, |index, _| {
+            first.push(index);
+            false
+        });
+    }
+    assert_eq!(first, [0]);
+}
