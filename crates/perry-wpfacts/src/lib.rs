@@ -592,6 +592,7 @@ fn generate<'a>(
         reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
     g.m.reach_gen_members =
         reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
+    g.m.reach_thenable = reach::thenable() && cfg.sabotage.as_deref() != Some("noreachthenable");
     g.m.reach_iter_close =
         reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
     g.m.reach_spread_args =
