@@ -431,13 +431,23 @@ mod ordered_records;
 core::arch::global_asm!(".weak perry_fnrec_bounds\n.hidden perry_fnrec_bounds");
 
 fn static_record_bounds() -> Option<&'static FunctionRecordBounds> {
-    unsafe extern "C" {
-        #[linkage = "extern_weak"]
-        static perry_fnrec_bounds: *const FunctionRecordBounds;
+    // Mach-O cannot bind this reference: the `.weak` definition above is ELF-only,
+    // and an extern_weak with no definition is a hard undefined symbol there.
+    // Apple images fall through to the allocation-free scan.
+    #[cfg(target_vendor = "apple")]
+    {
+        return None;
     }
-    // SAFETY: an undefined weak reference is null; a definition is the
-    // local image's immutable, linker-bounded record section.
-    unsafe { perry_fnrec_bounds.as_ref() }
+    #[cfg(not(target_vendor = "apple"))]
+    {
+        unsafe extern "C" {
+            #[linkage = "extern_weak"]
+            static perry_fnrec_bounds: *const FunctionRecordBounds;
+        }
+        // SAFETY: an undefined weak reference is null; a definition is the
+        // local image's immutable, linker-bounded record section.
+        unsafe { perry_fnrec_bounds.as_ref() }
+    }
 }
 fn visit_image(image: ImageRecords, visit: &mut dyn FnMut(usize, &'static [u8]) -> bool) -> bool {
     match image {
