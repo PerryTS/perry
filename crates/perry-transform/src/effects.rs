@@ -39,7 +39,8 @@ use perry_hir::{Class, Expr, Module, Stmt};
 #[path = "effects_fate.rs"]
 mod fate;
 pub use fate::{
-    body_fates, direct_target, BodyOnly, Fate, FateProof, Fates, FnFates, ParamFate, Proof,
+    body_fates, direct_target, BodyOnly, Fate, FateProof, Fates, FnFates, Name, ParamFate, Proof,
+    Why,
 };
 
 /// A closed function: see the module comment.

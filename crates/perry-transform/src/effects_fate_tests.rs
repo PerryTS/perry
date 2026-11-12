@@ -12,6 +12,8 @@ use perry_hir::{BinaryOp, CompareOp, Expr, Function, Param, Stmt};
 struct TestProof {
     reads: HashSet<(FuncId, &'static str)>,
     bets: HashMap<(FuncId, &'static str), u64>,
+    /// `<any>.<key>(..)` calls resolved to one body.
+    methods: Vec<(&'static str, FuncId)>,
 }
 
 impl TestProof {
@@ -41,6 +43,11 @@ impl FateProof for TestProof {
         None
     }
     fn targets(&self, callee: &Expr) -> Option<(Vec<FuncId>, Proof)> {
+        if let Expr::PropertyGet { property, .. } = callee {
+            if let Some((_, f)) = self.methods.iter().find(|(k, _)| k == property) {
+                return Some((vec![*f], Proof::Proven));
+            }
+        }
         direct_target(callee)
     }
 }
@@ -403,4 +410,181 @@ fn this_of_a_reading_method_drops() {
     let m = func(1, &[], vec![ret(get(Expr::This, "x"))]);
     let f = fates(&[m], &TestProof::reading(&[(1, "x")]));
     assert!(f.of_fn(1).unwrap().this.proven_dropped());
+}
+
+// ─── Why a parameter is `Kept`: the first keeping use (data only) ───────
+
+fn why(f: &Fates, id: FuncId, i: usize) -> String {
+    let p = f.of_fn(id).expect("function has fates").params[i];
+    assert_eq!(p.fate, Fate::Kept, "only Kept carries a reason");
+    p.why.expect("Kept has a reason").to_string()
+}
+
+fn this_why(f: &Fates, id: FuncId) -> String {
+    let p = f.of_fn(id).expect("function has fates").this;
+    assert_eq!(p.fate, Fate::Kept);
+    p.why.expect("Kept has a reason").to_string()
+}
+
+fn closure(body: Vec<Stmt>, captures_this: bool) -> Expr {
+    Expr::Closure {
+        func_id: 2,
+        params: vec![],
+        return_type: Type::Any,
+        body,
+        captures: vec![],
+        mutable_captures: vec![],
+        captures_this,
+        captures_new_target: false,
+        enclosing_class: None,
+        is_arrow: true,
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+    }
+}
+
+#[test]
+fn why_below_kept_is_none() {
+    let f = fates(&[score()], &TestProof::reading(&[(1, "x"), (1, "y")]));
+    assert_eq!(f.of_fn(1).unwrap().params[0].why, None);
+}
+
+#[test]
+fn why_not_ordinary_names_the_part() {
+    let mut f1 = func(1, &[10], vec![]);
+    f1.is_async = true;
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "not-ordinary(async)");
+    let mut f2 = func(1, &[10], vec![]);
+    f2.params[0].is_rest = true;
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "not-ordinary(rest)");
+}
+
+#[test]
+fn why_use_names_the_parent_node() {
+    let f1 = func(1, &[10], vec![ret(add(lg(10), Expr::Number(1.0)))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Binary)");
+    let f2 = func(1, &[10], vec![if_(lg(10), vec![])]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "use(If)");
+    let f3 = func(1, &[10], vec![let_(11, lg(10))]);
+    assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(Let)");
+}
+
+#[test]
+fn why_first_use_wins() {
+    let f1 = func(
+        1,
+        &[10],
+        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
+    );
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Let)");
+}
+
+#[test]
+fn why_read_names_the_key() {
+    let f = fates(&[score()], &TestProof::reading(&[(1, "x")]));
+    assert_eq!(why(&f, 1, 0), "read(y)");
+}
+
+#[test]
+fn why_store_keeps_this() {
+    let f1 = func(1, &[10], vec![Stmt::Expr(set(Expr::This, "v", Expr::Number(1.0)))]);
+    assert_eq!(this_why(&fates(&[f1], &TestProof::default()), 1), "store(v)");
+}
+
+#[test]
+fn why_receiver_of_unknown_method() {
+    let f1 = func(1, &[10], vec![Stmt::Expr(call(get(lg(10), "slice"), vec![]))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "receiver(slice)");
+}
+
+#[test]
+fn why_receiver_kept_by_known_method() {
+    // `m` keeps its `this` (stores it in a module variable).
+    let m = func(2, &[], vec![Stmt::Expr(Expr::LocalSet(901, Box::new(Expr::This)))]);
+    let f1 = func(1, &[10], vec![Stmt::Expr(call(get(lg(10), "m"), vec![]))]);
+    let proof = TestProof {
+        methods: vec![("m", 2)],
+        ..TestProof::default()
+    };
+    let f = fates(&[f1, m], &proof);
+    assert_eq!(this_why(&f, 2), "use(LocalSet)");
+    assert_eq!(why(&f, 1, 0), "receiver-kept");
+}
+
+#[test]
+fn why_argument_of_unresolved_call() {
+    let f1 = func(1, &[10], vec![push(lg(10))]);
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "arg-unresolved(PropertyGet.push)"
+    );
+}
+
+#[test]
+fn why_argument_to_a_known_keeper_and_call_arg_carries_its_reason() {
+    let g = func(2, &[20], vec![push(lg(20))]);
+    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))]);
+    let f = fates(&[f1, g], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "arg-to(Kept)");
+    let at = f.call_arg(&[2], 0);
+    assert_eq!(at.why.map(|w| w.to_string()).as_deref(), Some("arg-unresolved(PropertyGet.push)"));
+}
+
+#[test]
+fn why_argument_to_a_returner() {
+    let g = func(2, &[20], vec![ret(lg(20))]);
+    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))]);
+    assert_eq!(why(&fates(&[f1, g], &TestProof::default()), 1, 0), "arg-to(Returned)");
+}
+
+#[test]
+fn why_argument_of_a_body_without_fates() {
+    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(77), vec![lg(10)]))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-no-fate");
+}
+
+#[test]
+fn why_argument_of_new_unknown_class() {
+    let n = Expr::New {
+        class_name: "Elsewhere".into(),
+        args: vec![lg(10)],
+        type_args: vec![],
+        byte_offset: 0,
+        byte_end: 0,
+        cap_args_appended: 0,
+    };
+    let f1 = func(1, &[10], vec![Stmt::Expr(n)]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "new-unknown(Elsewhere)");
+}
+
+#[test]
+fn why_captured_and_captures_this() {
+    let f1 = func(1, &[10], vec![ret(closure(vec![ret(lg(10))], true))]);
+    let f = fates(&[f1], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "captured");
+    assert_eq!(this_why(&f, 1), "captures-this");
+}
+
+#[test]
+fn why_reassigned_updated_mutated() {
+    let f1 = func(1, &[10], vec![Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0))))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "reassigned");
+    let up = Expr::Update {
+        id: 10,
+        op: perry_hir::UpdateOp::Increment,
+        prefix: false,
+    };
+    let f2 = func(1, &[10], vec![Stmt::Expr(up)]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "updated");
+    let f3 = func(1, &[10], vec![Stmt::Expr(Expr::ArrayPop(10))]);
+    assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "mutated(ArrayPop)");
+}
+
+#[test]
+fn name_of_expr_is_the_variant() {
+    assert_eq!(Name::of_expr(&Expr::Null).as_str(), "Null");
+    assert_eq!(Name::of_expr(&lg(3)).as_str(), "LocalGet");
+    assert_eq!(Name::of_expr(&get(lg(3), "k")).as_str(), "PropertyGet");
+    assert_eq!(Name::new(&"x".repeat(40)).as_str().len(), 31);
 }
