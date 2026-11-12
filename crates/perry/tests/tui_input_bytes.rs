@@ -3,9 +3,18 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::FromRawFd;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
 
 #[test]
 fn native_tui_input_bytes_preserves_split_utf8_and_paste() {
@@ -42,6 +51,8 @@ console.log("RESULT", valid && JSON.stringify(received) === JSON.stringify(expec
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))
         .args(["compile"])
         .arg(&source)
+        .arg("--no-auto-optimize")
+        .arg("--no-cache")
         .arg("-o")
         .arg(&binary)
         .output()
@@ -70,12 +81,14 @@ console.log("RESULT", valid && JSON.stringify(received) === JSON.stringify(expec
         unsafe { (File::from_raw_fd(master_fd), File::from_raw_fd(slave_fd)) };
     let mut before: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(slave_fd, &mut before) }, 0);
-    let mut child = Command::new(&binary)
-        .stdin(Stdio::from(slave.try_clone().unwrap()))
-        .stdout(Stdio::from(slave.try_clone().unwrap()))
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(&binary)
+            .stdin(Stdio::from(slave.try_clone().unwrap()))
+            .stdout(Stdio::from(slave.try_clone().unwrap()))
+            .stderr(Stdio::from(slave.try_clone().unwrap()))
+            .spawn()
+            .unwrap(),
+    );
     let mut reader = master.try_clone().unwrap();
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
@@ -94,8 +107,6 @@ console.log("RESULT", valid && JSON.stringify(received) === JSON.stringify(expec
         }
     }
     if !output.windows(5).any(|part| part == b"READY") {
-        let _ = child.kill();
-        let _ = child.wait();
         panic!("TUI did not render READY");
     }
     let payload = [
@@ -107,12 +118,10 @@ console.log("RESULT", valid && JSON.stringify(received) === JSON.stringify(expec
         std::thread::sleep(Duration::from_millis(20));
     }
     let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
+        if let Some(status) = child.0.try_wait().unwrap() {
             break status;
         }
         if Instant::now() > deadline {
-            let _ = child.kill();
-            let _ = child.wait();
             panic!("TUI did not finish input");
         }
         std::thread::sleep(Duration::from_millis(10));
