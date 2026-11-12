@@ -532,6 +532,19 @@ fn codegen_proof_stores_are_facts_store() {
     assert_eq!(p.store(5, "x"), None);
 }
 
+#[test]
+fn codegen_proof_primitive_is_number_inputs() {
+    use perry_transform::effects::{FateProof, Proof};
+    let mut facts = ElisionFacts::default();
+    facts.number_inputs.insert(3);
+    facts.undef_number_inputs.insert(4);
+    let p = CodegenProof { facts: &facts };
+    assert_eq!(p.primitive(1, 3), Some(Proof::Proven));
+    // Number or undefined is not the predicate; nor is no fact.
+    assert_eq!(p.primitive(1, 4), None);
+    assert_eq!(p.primitive(1, 5), None);
+}
+
 /// A binding without a receiver fact: `no-facts:module` (no facts at all),
 /// `escaped` (facts, but no receiver or class facts in the module),
 /// `unreached-body` (the solve gave other bindings a representation, not
