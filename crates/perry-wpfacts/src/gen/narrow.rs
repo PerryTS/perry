@@ -937,10 +937,11 @@ fn implied<'p>(
 /// for a body with its own `this` binding; no local has this id).
 pub(crate) const THIS_LOCAL: u32 = u32::MAX - 1;
 
-/// `PERRY_WPF_THIS_HOST`: `bool` makes `this` a narrowing host of rule G1
-/// only; `all` (and unset) of G1 and G2.
+/// `this` is a narrowing host of rule G1 only (`this.f === b`), not of
+/// rule G2 (`if (this.f)`); `PERRY_WPF_THIS_HOST=all` makes it a host of
+/// both.
 fn this_host_bool() -> bool {
-    std::env::var("PERRY_WPF_THIS_HOST").is_ok_and(|v| v == "bool")
+    !std::env::var("PERRY_WPF_THIS_HOST").is_ok_and(|v| v == "all")
 }
 
 /// The host of a field test `host.key`: a local, or `this` of the body the
@@ -1135,8 +1136,8 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            // `PERRY_WPF_THIS_HOST=bool`: `this` is a host of rule G1
-            // (`this.f === b`) only, not of rule G2 (`if (this.f)`).
+            // `this` is a host of rule G1 (`this.f === b`) only, not of
+            // rule G2 (`if (this.f)`), unless `PERRY_WPF_THIS_HOST=all`.
             if id == THIS_LOCAL
                 && matches!(&fact, Implied::Present(_, Presence::FieldTruthy(_, test))
                     if *test == crate::model::guard::TRUTHY)
