@@ -1987,8 +1987,16 @@ fn emit_annotated_set_extend(
     {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(arr_box);
-        let biased = blk.sub(I64, &bits, super::array_proto_guard::HEAP_POINTER_BAND_BASE_I64);
-        let heap = blk.icmp_ult(I64, &biased, super::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            super::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+        );
+        let heap = blk.icmp_ult(
+            I64,
+            &biased,
+            super::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+        );
         blk.cond_br(&heap, &heap_label, &other_label);
     }
     ctx.current_block = heap_idx;
