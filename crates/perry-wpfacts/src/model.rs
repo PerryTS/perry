@@ -629,6 +629,9 @@ pub struct FuncInfo {
     /// The body has an `arguments` object, the only reader of `args_all`:
     /// calls feed `args_all` only then (nobody else reads it).
     pub has_arguments: bool,
+    /// The `arguments` object: its local and whether it is unmapped
+    /// (strict code, 10.4.4.6 CreateUnmappedArgumentsObject).
+    pub arguments: Option<(NodeId, bool)>,
     /// Body-derived own-test predicate: a marker refutes it. Synthetic
     /// functions have no body evidence. Shared across closure contexts, so
     /// an invalidating context conservatively invalidates every use.
@@ -2856,6 +2859,20 @@ impl Model {
 }
 
 impl FuncInfo {
+    /// Its `arguments` object, if it has one, is a fresh object of each
+    /// call that holds only that call's arguments (10.2.11
+    /// FunctionDeclarationInstantiation step 22), so a run of the body
+    /// births its own (as for a rest array): the unmapped object of strict
+    /// code without a rest parameter. A mapped object's indices alias the
+    /// parameters (10.4.4.7), and a rest parameter beside it is a second
+    /// per-call array; such a body stays one shared body.
+    pub fn arguments_per_run(&self) -> bool {
+        // (The HIR lowers `arguments` as the rest local when the function
+        // has no rest parameter of its own.)
+        !self.has_arguments
+            || matches!(self.arguments, Some((n, true)) if self.rest.is_none_or(|r| r == n))
+    }
+
     /// The step closure of a transformed generator (`gen_proto`).
     pub fn gen_step(&self) -> bool {
         self.gen_proto.is_some()

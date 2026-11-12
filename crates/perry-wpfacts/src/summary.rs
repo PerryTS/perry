@@ -1205,11 +1205,13 @@ impl Model {
             }
         }
         // This run's rest array holds this call's arguments after the
-        // parameters (8.6.3 BindingRestElement), and none of another call.
+        // parameters (8.6.3 BindingRestElement), its `arguments` object every
+        // argument (10.4.4.6), and none of another call.
         let rest = self.sum.insts[inst as usize].rest;
         let rest_fa = (rest != NO_NODE).then(|| self.field_any_node_of_node(rest));
+        let first = if self.funcs[f as usize].has_arguments { 0 } else { terms.len() };
         if let Some(fa) = rest_fa {
-            for i in terms.len()..nargs {
+            for i in first..nargs {
                 let a = self.calls[c].args[i];
                 self.edge(a, fa);
             }

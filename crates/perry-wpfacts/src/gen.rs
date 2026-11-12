@@ -1368,6 +1368,7 @@ impl<'a> Gen<'a> {
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
+        let mut arguments = None;
         for p in params {
             let n = self.local(mi, p.id);
             // `arguments` beside a user rest parameter is no rest itself
@@ -1384,6 +1385,7 @@ impl<'a> Gen<'a> {
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
                 if let Some(ao) = &p.arguments_object {
+                    arguments = Some((n, ao.strict));
                     self.m.edge(args_all, fa);
                     // Its own `length` is the argument count until code
                     // stores another value; sloppy `callee` is the function
@@ -1459,6 +1461,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: params.iter().any(|p| p.arguments_object.is_some()),
+            arguments,
             own_test: OwnTestBody::Pending(own_test),
             token: tok,
             ctor_of: None,
@@ -1836,6 +1839,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            arguments: None,
             own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,

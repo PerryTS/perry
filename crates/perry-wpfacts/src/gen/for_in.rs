@@ -334,6 +334,7 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            arguments: None,
             own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,

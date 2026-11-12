@@ -148,6 +148,7 @@ mod locked_store;
 mod locked_top_store;
 mod written_prim_method_receiver;
 mod escaped_active;
+mod arguments_instances;
 mod escaped_fn_own_return;
 mod locked_top_define;
 mod internal_slot_no_property;
@@ -1545,6 +1546,7 @@ fn a_parameter_node_holds_its_argument_marker() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
@@ -1617,6 +1619,7 @@ fn a_store_into_a_marker_makes_no_field_of_it() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
@@ -1678,6 +1681,7 @@ fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,
@@ -1733,6 +1737,7 @@ fn marker_model() -> crate::model::Model {
         ret,
         args_all: args,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token,
         ctor_of: None,

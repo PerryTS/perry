@@ -222,7 +222,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         }
     }
     for t in holders.keys() {
-        for map in [&m.all_fields, &m.proto_node] {
+        for map in [&m.all_fields, &m.proto_node, &m.named_any] {
             if let Some(&n) = map.get(t) {
                 own_of.insert(n, *t);
             }
@@ -247,6 +247,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         if !cand[f as usize] {
             continue;
         }
+        // What every call passes reaches the `arguments` object through
+        // `args_all`; a run binds its own call's arguments instead.
+        let args_all = m.funcs[f as usize].args_all;
         let hs = &holders[&t];
         if hs.iter().any(|&h| m.node_fn[h as usize] != f) {
             continue;
@@ -258,27 +261,31 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             .collect();
         own.sort_unstable();
         let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
-        // An array's named-key node (a computed-key store fills it) has no
-        // birth key, so a token holding one is not born from the summary.
-        // The prototype node's chain closure (and the raise of the code it
-        // may run) is the token's own lookup cache, which every born token
+        // An array's named-key node (`named_any`) has no birth key: a born
+        // token makes its own, empty, so the template's may hold nothing
+        // (no writer, checked below). The prototype node's chain closure and
+        // its values under a key (`cv_of`; and the raise of the code they
+        // may run) are the token's own lookup cache, which every born token
         // makes for itself on its first lookup (`Model::cp`): no effect of
         // the body.
         let pn = m.proto_node.get(&t).copied();
         let cache = |n: NodeId, c: &Cons| {
-            Some(n) == pn && matches!(c, Cons::ProtoClosure { .. } | Cons::Raise { .. })
+            Some(n) == pn
+                && match c {
+                    Cons::ProtoClosure { .. } | Cons::Raise { .. } => true,
+                    Cons::ChainUnion { of, .. } => *of == t,
+                    _ => false,
+                }
         };
-        let mut ok = own
-            .iter()
-            .all(|&n| m.nodes[n as usize].cons.iter().all(|c| cache(n, c)))
-            && !m.named_any.contains_key(&t);
+        let own_cons = |n: NodeId| m.nodes[n as usize].cons.iter().all(|c| cache(n, c));
+        let mut ok = own.iter().all(|&n| own_cons(n));
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
         fl.sort_unstable_by_key(|x| x.1);
         for (k, n) in fl {
             let mut ws = Vec::new();
             for &p in preds.get(&n).map(|v| v.as_slice()).unwrap_or(&[]) {
-                if is_own(p) {
+                if is_own(p) || p == args_all {
                     continue;
                 }
                 let pf = m.node_fn[p as usize];
@@ -290,7 +297,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             fields.push((k, n, ws, m.nodes[n as usize].prim));
         }
         // Only the template's own nodes reach its other nodes.
-        for map in [&m.all_fields, &m.proto_node] {
+        for map in [&m.all_fields, &m.proto_node, &m.named_any] {
             if let Some(&n) = map.get(&t) {
                 if preds.get(&n).is_some_and(|v| v.iter().any(|&p| !is_own(p))) {
                     ok = false;
@@ -752,7 +759,7 @@ pub(super) fn build_summaries(m: &mut Model) {
     let cand: Vec<bool> = m
         .funcs
         .iter()
-        .map(|fi| !fi.no_summary && !fi.has_arguments)
+        .map(|fi| !fi.no_summary && fi.arguments_per_run())
         .collect();
     // Closure values: the generation node holding a closure's token in its
     // parent's body.
@@ -1341,7 +1348,10 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     }
     s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
     s.ret = enc(m.funcs[f as usize].ret);
-    if let Some(r) = m.funcs[f as usize].rest {
+    // A run's fresh rest array, or its `arguments` object (no rest beside
+    // it, `arguments_per_run`): both take the run's own call arguments.
+    let fi = &m.funcs[f as usize];
+    if let Some(r) = fi.rest.or(fi.arguments.map(|a| a.0)) {
         s.rest = enc(r);
         if matches!(s.rest, Operand::Absolute(_)) {
             s.rest = Operand::Absolute(NO_NODE);

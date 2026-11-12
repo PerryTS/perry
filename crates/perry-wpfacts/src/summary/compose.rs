@@ -134,7 +134,11 @@ pub(super) fn compose(
                     let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
                         .map(|i| m.capture_param(g, i))
                         .collect();
-                    let rest_store = (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site()));
+                    // `arguments` takes every argument, a rest array those
+                    // after the parameters.
+                    let first = if m.funcs[g as usize].has_arguments { 0 } else { sg.params.len() };
+                    let rest_store =
+                        (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site(), first));
                     expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store);
                     any = true;
                     n += 1;
@@ -162,7 +166,7 @@ pub(super) fn expand(
     g: &Summary,
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
-    rest_store: Option<(Key, SiteId)>,
+    rest_store: Option<(Key, SiteId, usize)>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -243,9 +247,9 @@ pub(super) fn expand(
     }
     // The callee run's fresh rest array takes this call's arguments after
     // the parameters and its spread elements (8.6.3 BindingRestElement).
-    let rest = rest_store.map(|(key, site)| (tr(g.rest), key, site));
-    if let Some((r, key, site)) = rest {
-        for i in g.params.len()..call.args.len() {
+    let rest = rest_store.map(|(key, site, first)| (tr(g.rest), key, site, first));
+    if let Some((r, key, site, first)) = rest {
+        for i in first..call.args.len() {
             if call.args[i] != NO_NODE {
                 s.cons.push((r, Cons::Store { key, src: call.args[i], site }));
             }
@@ -260,7 +264,7 @@ pub(super) fn expand(
                 dst: elems,
             },
         ));
-        if let Some((r, key, site)) = rest {
+        if let Some((r, key, site, _)) = rest {
             s.cons.push((r, Cons::Store { key, src: elems, site }));
         }
         for (i, ds) in dsts.iter().enumerate() {

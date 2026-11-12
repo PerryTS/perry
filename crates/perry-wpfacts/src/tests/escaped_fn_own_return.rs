@@ -132,15 +132,34 @@ fn a_returned_module_value_escapes() {
     assert!(!p, "unknown callers get secret\n{dump}");
 }
 
-/// Control: a field of `this` (`return this.registry`, the registry a
-/// module object): read through the known receiver, the source is a load,
-/// sunk as before.
+/// Unknown code holds only `N.prototype.get`: a call of it on an object of
+/// its own returns that object's field, and `a` (the only holder of
+/// `registry`) never reaches it. The program's own `a.get()` runs in its
+/// own instance (a strict `arguments` is per run), so `registry` stays.
+#[test]
+fn a_returned_field_of_this_stays_with_a_receiver_unknown_code_never_holds() {
+    let src = "export {};
+        class Reg { r = 1; }
+        const registry = new Reg();
+        class N { registry = registry; get() { if (arguments.length > 1) return 0; return this.registry; } }
+        const a = new N();
+        a.get();
+        new Function(process.argv[2])(N.prototype.get);
+        console.log(/*A*/ registry.r);";
+    let (p, dump) = proven_at(src, "r", "/*A*/");
+    assert!(p, "unknown code never holds `a`\n{dump}");
+}
+
+/// Control (open twin): a rest parameter beside `arguments` keeps one shared
+/// body, whose escape run's `this` is every receiver: a field of `this`
+/// (`return this.registry`, the registry a module object), read through the
+/// known receiver, is sunk as before.
 #[test]
 fn a_returned_field_of_this_escapes() {
     let src = "export {};
         class Reg { r = 1; }
         const registry = new Reg();
-        class N { registry = registry; get() { if (arguments.length > 1) return 0; return this.registry; } }
+        class N { registry = registry; get(...xs: any[]) { if (arguments.length > xs.length) return 0; return this.registry; } }
         const a = new N();
         a.get();
         new Function(process.argv[2])(N.prototype.get);
