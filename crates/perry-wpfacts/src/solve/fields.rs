@@ -37,6 +37,19 @@ impl Model {
     pub(crate) fn enum_key_mark(&mut self, n: NodeId, t: Tok, a: Atom) {
         if !self.nodes[n as usize].enum_key {
             self.nodes[n as usize].enum_key = true;
+            if super::own_read::enum_diag()
+                && matches!(self.toks[t as usize], TokKind::ObjectProto | TokKind::NativeProto(_))
+            {
+                static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                if SEEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 6 {
+                    eprintln!(
+                        "perry: wpfacts enumdiag-mark tok={} key={} node={n}\n{}",
+                        self.tok_name(t),
+                        self.atoms[a as usize],
+                        std::backtrace::Backtrace::force_capture()
+                    );
+                }
+            }
             self.enum_key_gained(t, a);
         }
     }
