@@ -70,6 +70,7 @@ mod ctor_return;
 mod dce_reach;
 mod dead_dynamic_import;
 mod declared_effects;
+mod declared_getter_results;
 mod default_params;
 pub(crate) mod delivery_boundaries;
 mod descriptor_reads;
