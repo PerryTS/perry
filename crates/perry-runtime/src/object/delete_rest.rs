@@ -847,10 +847,45 @@ pub extern "C" fn js_object_delete_field(
 /// at `[ptr-8]` is read.
 #[inline]
 /// An object receiver: a heap object (`POINTER_TAG`) or a native registry
-/// id (`HANDLE_TAG`, whose own properties are its expandos).
+/// id (`HANDLE_TAG`, whose own properties are its expandos). A Symbol is a
+/// `POINTER_TAG` cell but a primitive: its header is no `ObjectHeader`.
 fn delete_receiver_is_pointer(obj_value: f64) -> bool {
     let value = crate::value::JSValue::from_bits(obj_value.to_bits());
-    value.is_reference()
+    value.is_reference() && unsafe { crate::symbol::js_is_symbol(obj_value) } == 0
+}
+
+/// `[[Delete]]` of `key` on ToObject(`obj_value`), a primitive receiver
+/// (ECMA-262 13.5.1.2: the base is converted, its wrapper discarded). A
+/// String wrapper owns `length` and one index key per UTF-16 code unit, all
+/// non-configurable: `0` (`false`, a TypeError in strict code through
+/// `js_delete_result`). A Symbol, Number, Boolean or BigInt wrapper owns no
+/// property: `1`.
+fn primitive_receiver_delete(obj_value: f64, key: f64) -> i32 {
+    use crate::value::JSValue;
+    if !JSValue::from_bits(obj_value.to_bits()).is_any_string() {
+        return 1;
+    }
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let len = match crate::string::str_bytes_from_jsvalue(obj_value, &mut scratch) {
+        Some((ptr, blen)) if !ptr.is_null() => crate::string::compute_utf16_len(ptr, blen),
+        _ => 0,
+    };
+    let k = JSValue::from_bits(key.to_bits());
+    if k.is_any_string() {
+        let mut key_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(bytes) = (unsafe { crate::string::js_string_key_bytes(k, &mut key_buf) }) else {
+            return 1;
+        };
+        let own = bytes == b"length"
+            || super::field_get_set::canonical_array_index_bytes(bytes).is_some_and(|i| i < len);
+        return i32::from(!own);
+    }
+    if k.is_number() || k.is_int32() {
+        // ToPropertyKey: an integral Number in range names an index (`-0` is "0").
+        let n = k.to_number();
+        return i32::from(!(n >= 0.0 && n.fract() == 0.0 && n < f64::from(len)));
+    }
+    1
 }
 
 /// `[[Delete]]` of class `class_id`'s own string key `name` (the class
@@ -894,7 +929,11 @@ pub extern "C" fn js_object_delete_field_value(
         return js_object_delete_field(class_id as usize as *mut ObjectHeader, key);
     }
     if !delete_receiver_is_pointer(obj_value) {
-        return 1;
+        if key.is_null() {
+            return 1;
+        }
+        let key_value = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+        return primitive_receiver_delete(obj_value, key_value);
     }
     // A native namespace's members live in its module tables and the
     // override table, not in its keys.
@@ -940,7 +979,7 @@ pub(crate) fn delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
         return js_object_delete_dynamic(class_id as usize as *mut ObjectHeader, key);
     }
     if !delete_receiver_is_pointer(obj_value) {
-        return 1;
+        return primitive_receiver_delete(obj_value, key);
     }
     let obj = crate::value::js_nanbox_get_pointer(obj_value) as *mut ObjectHeader;
     js_object_delete_dynamic(obj, key)
@@ -1726,3 +1765,7 @@ unsafe fn squeeze_holes_and_delete(
 #[cfg(test)]
 #[path = "rest_undefined_tests.rs"]
 mod rest_undefined_tests;
+
+#[cfg(test)]
+#[path = "delete_rest/primitive_receiver_tests.rs"]
+mod primitive_receiver_tests;
