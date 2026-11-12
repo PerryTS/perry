@@ -1607,6 +1607,15 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call(
         if let Some(value) = redirect_call(recv, &name, args, argc) {
             return value;
         }
+        // The Get selected a WeakMap / WeakSet builtin: its dispatcher, which
+        // the native tower reaches only after arms that refuse the cell
+        // (a WeakMap behind a `Map` annotation answered `value is not a
+        // function` for `get` / `has`).
+        if let Some(value) = std::str::from_utf8(&name).ok().and_then(|method| {
+            super::try_weak_method_dispatch(std::ptr::null(), recv, method, args, argc)
+        }) {
+            return value;
+        }
         return super::js_native_call_method(recv, name.as_ptr().cast(), name.len(), args, argc);
     };
     // The method actually there — still the builtin, too, run as the
