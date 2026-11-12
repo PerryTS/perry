@@ -489,51 +489,51 @@ pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",
-        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true, effects = { reads(field(this, hasIndices), field(this, global), field(this, ignoreCase), field(this, multiline), field(this, dotAll), field(this, unicode), field(this, unicodeSets), field(this, sticky)); returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "source",
-        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "global",
-        crate::fn_info!(#[realm("RegExp.prototype.global.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_global_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.global.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_global_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "ignoreCase",
-        crate::fn_info!(#[realm("RegExp.prototype.ignoreCase.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_ignore_case_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.ignoreCase.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_ignore_case_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "multiline",
-        crate::fn_info!(#[realm("RegExp.prototype.multiline.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_multiline_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.multiline.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_multiline_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "dotAll",
-        crate::fn_info!(#[realm("RegExp.prototype.dotAll.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_dot_all_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.dotAll.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_dot_all_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "sticky",
-        crate::fn_info!(#[realm("RegExp.prototype.sticky.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_sticky_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.sticky.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_sticky_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicode",
-        crate::fn_info!(#[realm("RegExp.prototype.unicode.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_unicode_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.unicode.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_unicode_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicodeSets",
-        crate::fn_info!(#[realm("RegExp.prototype.unicodeSets.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_unicode_sets_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.unicodeSets.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_unicode_sets_getter, 0; with_declared(0)),
     );
     install_getter(
         proto_obj,
         "hasIndices",
-        crate::fn_info!(#[realm("RegExp.prototype.hasIndices.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_has_indices_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.hasIndices.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_has_indices_getter, 0; with_declared(0)),
     );
 }
