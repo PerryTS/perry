@@ -228,7 +228,9 @@ fn lower_stmts_from(
     // (`binding_cell::ReadyCellRoots`).
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
+    crate::verify_facts::life::list_begin(ctx, stmts);
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    crate::verify_facts::life::list_end(ctx, stmts, lowered.is_ok());
     // N2: a function-level base installed in this lowering of the list ends
     // with it.
     fn_base::end_list(ctx, stmts);
@@ -570,6 +572,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
             }
             let v = lower_return_expr(ctx, e)?;
+            let v = crate::verify_facts::life::at_return(ctx, v)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
             // js_promise_resolved (whose Promise.resolve(p) === p identity
@@ -776,6 +779,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .last()
                 .map(|(_c, b, d)| (b.clone(), *d))
                 .ok_or_else(|| anyhow!("break statement outside any loop"))?;
+            let exit = ctx.loop_targets.len().checked_sub(1);
+            crate::verify_facts::life::at_exit(ctx, exit);
             // Pop any `try` frames this break jumps OUT of so WASI's setjmp
             // handler stack stays balanced. The loop recorded the try_depth
             // at its entry; any frames opened since (the difference) are
@@ -806,6 +811,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 .ok_or_else(|| anyhow!("continue statement outside any loop"))?;
             let cont_label = crate::expr::resume_locals::direct_dispatch_target(ctx, loop_index)
                 .unwrap_or(cont_label);
+            crate::verify_facts::life::at_exit(ctx, Some(loop_index));
             // Pop try frames escaped by jumping back to the loop header
             // (see Stmt::Break / Stmt::Return for the balancing rationale).
             for _ in target_depth..ctx.try_depth {
@@ -896,6 +902,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(_c, b, d)| (b.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?
                 };
+            let exit = ctx.loop_targets.iter().rposition(|(_c, b, _d)| *b == target);
+            crate::verify_facts::life::at_exit(ctx, exit);
             // Pop any try frames escaped by this labeled break (the target
             // loop/label may sit outside one or more open `try` frames —
             // e.g. a state-machine suspend `break`s out of the dispatch
@@ -920,6 +928,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(c, _b, d)| (c.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
                 };
+            let exit = ctx.loop_targets.iter().rposition(|(c, _b, _d)| *c == target);
+            crate::verify_facts::life::at_exit(ctx, exit);
             for _ in target_depth..ctx.try_depth {
                 try_stmt::emit_try_end(ctx);
             }

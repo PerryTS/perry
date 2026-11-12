@@ -121,6 +121,8 @@ unsafe fn rewrite_with(module: LLVMModuleRef, builder: LLVMBuilderRef) -> Result
                             | "perry_verify_facts_record_identity"
                             | "perry_verify_facts_record_array"
                             | "perry_verify_facts_entry"
+                            | "perry_verify_facts_life_dead"
+                            | "perry_verify_facts_life_arg_dead"
                     ) {
                         let pointer_index = first + count - 2;
                         let pointer = LLVMGetOperand(call, pointer_index);
