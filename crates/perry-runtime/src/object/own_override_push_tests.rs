@@ -179,10 +179,17 @@ fn an_object_receiver_runs_its_own_push_through_the_method_entry_only() {
         let mut own = u32::MAX;
         let bits = js_array_push_f64_spec_or_method(recv, 7.0, &mut own);
         assert_eq!(own, 1, "the object's own `push` must take the own exit");
-        assert_eq!(f64::from_bits(bits), 70.0, "the value is the method's return");
+        assert_eq!(
+            f64::from_bits(bits),
+            70.0,
+            "the value is the method's return"
+        );
 
         let (_, own) = push_or_own(recv, 7.0);
-        assert_eq!(own, 0, "the Array-only entry never reads an object's `push`");
+        assert_eq!(
+            own, 0,
+            "the Array-only entry never reads an object's `push`"
+        );
     }
 }
 

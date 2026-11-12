@@ -1026,11 +1026,10 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                             crate::expr::array_proto_guard::emit_array_method_admission(
                                 blk, &obj_flags,
                             );
-                        let has_named =
-                            crate::expr::array_proto_guard::emit_array_has_named_layout(
-                                blk,
-                                &arr_handle,
-                            );
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk,
+                            &arr_handle,
+                        );
                         let no_named = blk.xor(I1, &has_named, "true");
                         let plain = blk.and(I1, &default_proto, &no_named);
                         blk.cond_br(&plain, &plain_label, &fallback_label);
