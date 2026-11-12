@@ -158,5 +158,36 @@ fn a_map_or_closure_receiver_needs_the_get_at_an_array_site() {
             0,
         );
         assert_eq!(js_array_method_needs_get(boxed(f), key(b"at")), 1);
+
+/// A String (heap or inline), a boolean or a BigInt behind an Array
+/// annotation is no address: the site performs the real `Get` (a String has
+/// its own `at`, `indexOf`, `slice`, ...), where the builtin read an inline
+/// string's BYTES as an Array header.
+#[test]
+fn a_string_boolean_or_bigint_receiver_needs_the_get() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let short = f64::from_bits(0x7FF9_0200_0000_6261); // "ab", inline
+        let heap = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+            "abcdefghijklmnopqrstuvwxyz0123456789".as_ptr(),
+            36,
+        ) as i64);
+        let bigint = f64::from_bits(0x7FFA_0000_0000_0000 | 0x1000);
+        for recv in [
+            short,
+            heap,
+            bigint,
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_FALSE),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        ] {
+            assert_eq!(
+                js_array_method_needs_get(recv, key(b"at")),
+                1,
+                "{:#018x} must take the real Get",
+                recv.to_bits()
+            );
+        }
     }
 }

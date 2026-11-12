@@ -666,6 +666,15 @@ unsafe fn array_slow(recv: &mut f64, name: &[u8], args: &mut [f64], out: &mut f6
     if array_admits(recv, name, args) {
         return false;
     }
+    // A primitive behind the Array annotation (a String, a boolean, ...): its
+    // `Get` selects its own kind's member, which may be a builtin too
+    // (`String.prototype.slice`): run it as itself.
+    if recv.to_bits() & !POINTER_MASK != POINTER_TAG
+        && super::own_override::array_site_nullish_receiver(*recv)
+    {
+        *out = super::builtin_proto::complete_call(*recv, name, args);
+        return true;
+    }
     match redirect_or_refresh(recv, name, args) {
         Some(value) => {
             *out = value;

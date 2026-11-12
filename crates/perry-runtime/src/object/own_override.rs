@@ -716,9 +716,10 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_method(
     push_or_own_declined(arr, value, own_out)
 }
 
-/// The `Get(recv, "push")` + `Call` of a receiver that is a live ordinary
-/// object (`GC_TYPE_OBJECT`), not an Array. `None` when the receiver is
-/// anything else, or when the selected method is the builtin.
+/// The `Get(recv, "push")` + `Call` of a receiver that is a live cell but no
+/// Array (an ordinary object, a Map, a Set, a Date, a closure, a Symbol, a
+/// typed array). `None` for an Array, a Proxy or a forwarded head, or when the
+/// selected method is the builtin.
 #[cold]
 #[inline(never)]
 unsafe fn push_object_method(
@@ -726,11 +727,22 @@ unsafe fn push_object_method(
     value: f64,
     own_out: *mut u32,
 ) -> Option<u64> {
-    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if !crate::gc_type_is_object!(header.obj_type)
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
+    // A typed array or buffer has no GC header (its registries answer): it
+    // has no `push` (node: TypeError).
+    let registered = crate::buffer::is_registered_buffer(arr as usize)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some();
+    if !registered {
+        let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+        // An Array (or a lazy one) and a Proxy are the callers' own; any other
+        // cell (an ordinary object, a Map, a Set, a Date, a closure, a Symbol)
+        // reads `push` from its own chain.
+        if crate::gc_type_is_array!(header.obj_type)
+            || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            || header.obj_type == crate::gc::GC_TYPE_PROXY
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
     }
     let recv = crate::value::js_nanbox_pointer(arr as i64);
     let args = [value];
