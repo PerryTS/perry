@@ -598,6 +598,9 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
         {
             false
         }
+        // Any other cell kind behind the Array annotation (a Map, a Date, a
+        // closure, a typed array, ...): the real `Get`.
+        _ if super::own_override::array_site_object_receiver(*recv) => false,
         _ => {
             super::own_override::PERRY_OWN_NAMED_PROP_INSTALLED
                 .load(std::sync::atomic::Ordering::Relaxed)
