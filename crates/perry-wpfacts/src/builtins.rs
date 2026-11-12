@@ -2663,11 +2663,29 @@ fn ns_method_inner(
             let fa = m.field_any(arr);
             // ECMA-262 27.2.4.1 ff.: the iterable is iterated
             // (GetIterator); its values are the items.
-            let vals = all_arg_values(m, call);
-            let items = iterate(m, call, vals);
+            // `Promise.all([e0, …, en-1])` over a literal: the literal is
+            // fresh, only the iteration holds it and %ArrayIteratorPrototype%
+            // is locked, so item `i` is `ei`; its resolve element function
+            // writes index `i` of the result only (27.2.4.1.2 step 8, 27.2.4.1.3).
+            let lit = match (name, m.calls[call as usize].spread.is_empty(), arg(m, call, 0)) {
+                ("all", true, Some(a)) => m.lit_elems_at(call, a),
+                _ => None,
+            };
             let settled = m.node_l("settled");
-            adopt(m, call, items, settled);
-            m.edge(settled, fa);
+            if let Some(els) = lit {
+                for (i, e) in els.into_iter().enumerate() {
+                    let s = m.node_l("settled");
+                    adopt(m, call, e, s);
+                    m.edge(s, settled);
+                    let slot = m.index_slot(arr, i as u32);
+                    m.edge(s, slot);
+                }
+            } else {
+                let vals = all_arg_values(m, call);
+                let items = iterate(m, call, vals);
+                adopt(m, call, items, settled);
+                m.edge(settled, fa);
+            }
             if name == "allSettled" {
                 // {status, value|reason} records
                 let rec = site_tmpl(m, call, "settledRecord");

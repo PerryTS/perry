@@ -1714,11 +1714,15 @@ impl<'a> Gen<'a> {
                 }
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 let fa = self.m.field_any(t);
+                let mut vs = Vec::with_capacity(elems.len());
                 for el in elems {
                     let v = self.expr_zs(fx, el);
                     self.m.edge(v, fa);
+                    vs.push(v);
                 }
-                self.tok_node(t)
+                let n = self.tok_node(t);
+                self.m.arr_lit_elems.insert(n, vs);
+                n
             }
             Expr::ArraySpread(elems) => {
                 let dense = !elems.iter().any(|e| matches!(e, ArrayElement::Hole));

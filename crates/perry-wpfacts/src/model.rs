@@ -1704,6 +1704,11 @@ pub struct Model {
     /// The elements of an array literal template whose elements may all be
     /// constant Numbers (`const_arrays::literal_elems`).
     pub arr_const: FxHashMap<TmplId, Vec<crate::const_arrays::Elem>>,
+    /// The element value nodes of an array literal `[e0, …, en-1]` by the
+    /// node that holds its token: what a builtin that iterates that literal
+    /// as its argument sees at each index (`Promise.all`, 27.2.4.1.2: the
+    /// result's index `i` is item `i`).
+    pub arr_lit_elems: FxHashMap<NodeId, Vec<NodeId>>,
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,

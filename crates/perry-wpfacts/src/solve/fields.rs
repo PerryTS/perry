@@ -719,11 +719,12 @@ impl Model {
     /// now on any index may hold any element, so each slot holds them all
     /// (monotone: a constant read then sees what a numeric read sees).
     pub(crate) fn index_slots_merge(&mut self, t: Tok) {
-        for i in 0..2u32 {
-            let a = self.atom(&format!("[[Index{i}]]"));
-            if let Some(&s) = self.fields.get(&(t, a)) {
-                let fa = self.field_any(t);
-                self.edge(fa, s);
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if self.atoms[a as usize].starts_with("[[Index") {
+                if let Some(&s) = self.fields.get(&(t, a)) {
+                    let fa = self.field_any(t);
+                    self.edge(fa, s);
+                }
             }
         }
     }
@@ -734,7 +735,7 @@ impl Model {
     pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);
-        if self.labels[key as usize] != "NUMLIT" || lo != hi || !(0..=1).contains(&lo) {
+        if self.labels[key as usize] != "NUMLIT" || lo != hi || lo < 0 || lo > u32::MAX as i64 {
             return None;
         }
         let a = self.atom(&format!("[[Index{lo}]]"));

@@ -75,6 +75,7 @@ mod const_numbers;
 mod key_strings;
 mod map_values;
 mod map_entry_pairs;
+mod promise_all_positions;
 mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;
