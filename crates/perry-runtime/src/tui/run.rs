@@ -77,10 +77,9 @@ pub extern "C" fn js_perry_tui_run(component: i64) -> f64 {
     run_frames(|| {
         let widget_v = component_closure
             .across_const::<ClosureHeader, _>(|| {
-                js_closure_call0(
-                    component_closure.get_raw_const_ptr(),
-                    crate::closure::plain_call_receiver(),
-                )
+                component_closure.with_const_ptr(|pointer| {
+                    js_closure_call0(pointer, crate::closure::plain_call_receiver())
+                })
             })
             .0;
         let widget_handle = super::handle_object::tui_widget_id_from_bits(widget_v.to_bits());
