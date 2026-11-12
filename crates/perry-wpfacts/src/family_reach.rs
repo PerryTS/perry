@@ -325,7 +325,8 @@ fn first_name(set: FamilySet) -> &'static str {
 
 /// The member of `members` key `key` may name.
 fn observe_members(m: &mut Model, members: &'static [Member], key: Key) {
-    if members.is_empty() {
+    // An element or iteration key names no member.
+    if members.is_empty() || m.is_elem_key(key) || m.is_iter_key(key) {
         return;
     }
     for &(k, set, entry) in members {
