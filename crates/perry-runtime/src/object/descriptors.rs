@@ -190,9 +190,14 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 /// TAG_UNDEFINED if the property doesn't exist.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
-    // A Number has no own property, whichever Number it is: one with clear
-    // top 16 bits must not reach the raw-pointer decodes below.
-    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
+    // A Number has no own property, whichever Number it is. The decodes
+    // below read the low 48 bits of some Numbers as an address (clear top 16
+    // bits; a negative denormal), so every Number takes one placeholder.
+    let obj_value = if crate::JSValue::from_bits(obj_value.to_bits()).is_number() {
+        1.0
+    } else {
+        obj_value
+    };
     unsafe {
         own_property(obj_value, key_value)
             .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |property| {
