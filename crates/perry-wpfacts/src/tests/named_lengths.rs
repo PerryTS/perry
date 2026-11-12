@@ -55,7 +55,7 @@ function own(n: number): number {
   return xs.length;
 }
 function guarded(n: number): number {
-  const xs: number[] | undefined = n > 0 ? [1, 2, 3] : undefined;
+  const xs = [n, 2, 3];
   let s = 0;
   if (xs) { for (let i = 0; i < xs.length; i++) { xs[i] = i; s += xs.length; } }
   return s;
