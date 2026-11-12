@@ -102,6 +102,13 @@ pub(crate) fn collect(
     let mut events: FxHashMap<Tok, Vec<Event>> = FxHashMap::default();
     for &(t, at, call, recv) in &m.len_events {
         let (f, recv) = match (at, call) {
+            // A storeless rule (`pop`) of a summary instance's copy of its
+            // receiver: the site is the receiver's (`len_index_sites`).
+            (u32::MAX, false) if recv != NO_NODE => {
+                let orig = orig_of.get(&recv).copied().unwrap_or(recv);
+                let site = m.len_index_sites.get(&orig);
+                (site.and_then(|&site| site_fn(m, site)), recv)
+            }
             (u32::MAX, _) => (None, NO_NODE),
             (_, true) => (
                 call_fn(m, at),

@@ -552,7 +552,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
-                        self.len_event(t, u32::MAX, false);
+                        self.len_event_through(t, u32::MAX, false, NO_NODE);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {

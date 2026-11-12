@@ -99,9 +99,13 @@ function reader(): number {
   for (let i = 0; i < xs.length; i++) { out[i] = xs[i] ?? 0; s += out.length; }
   return s;
 }
+function popper(a: number[], out: number[]): number {
+  for (let i = 0; i < a.length; i++) { out.pop(); out.push(a[i] ?? 0); }
+  return out.length;
+}
 const same = [1, 2, 3, 4];
 console.log(own(3), guarded(1), picked(), pair(same, same), apart([1, 2], [3, 4]),
-  new Bag().walk(), reader());
+  new Bag().walk(), reader(), popper([1, 2, 3], [9]), popper([4], [5, 6]));
 "#;
 
 #[test]
@@ -144,6 +148,14 @@ fn an_event_in_a_function_that_cannot_name_the_local_is_none() {
     // `elsewhere` pushes onto the Array, but while a loop of `reader`
     // without calls runs, `elsewhere` does not; `out` is another Array.
     assert!(named("reader", "xs"));
+}
+
+#[test]
+fn a_pop_through_a_parameter_is_placed_in_its_function() {
+    // `out.pop()` has no store: its rule is placed by its receiver's site,
+    // in a summary instance too.
+    assert!(named("popper", "out"));
+    assert!(named("popper", "a"));
 }
 
 #[test]
