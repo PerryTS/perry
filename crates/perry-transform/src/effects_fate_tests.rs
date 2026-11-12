@@ -457,7 +457,7 @@ fn why_not_ordinary_names_the_part() {
     assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "not-ordinary(async)");
     let mut f2 = func(1, &[10], vec![]);
     f2.params[0].is_rest = true;
-    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "not-ordinary(rest)");
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "rest");
 }
 
 #[test]
@@ -599,4 +599,79 @@ fn name_of_expr_is_the_variant() {
     assert_eq!(Name::of_expr(&lg(3)).as_str(), "LocalGet");
     assert_eq!(Name::of_expr(&get(lg(3), "k")).as_str(), "PropertyGet");
     assert_eq!(Name::new(&"x".repeat(40)).as_str().len(), 31);
+}
+
+// ─── FATE2 rule a: bodies with default and rest parameters are walked ───
+
+/// `function f(a, b = a.x) { return b.x }`.
+fn with_default(default: Expr, body: Vec<Stmt>) -> Function {
+    let mut f = func(1, &[10, 11], body);
+    f.params[1].default = Some(default);
+    f
+}
+
+#[test]
+fn a_default_that_reads_drops() {
+    let f = with_default(get(lg(10), "x"), vec![ret(get(lg(11), "x"))]);
+    assert!(!super::ordinary(&f), "effects.rs still sees a default as not ordinary");
+    let f = fates(&[f], &TestProof::reading(&[(1, "x")]));
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    assert!(f.of_fn(1).unwrap().params[1].proven_dropped());
+}
+
+#[test]
+fn a_default_that_keeps_keeps() {
+    // `b = kept.push(a)`: the default runs in the callee and keeps `a`.
+    let f = with_default(call(get(lg(900), "push"), vec![lg(10)]), vec![]);
+    let f = fates(&[f], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "arg-unresolved(PropertyGet.push)");
+    // `b = a; kept.push(b)`: `a` flows into `b`.
+    let f = with_default(lg(10), vec![push(lg(11))]);
+    let f = fates(&[f], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "use(Default)");
+    assert_eq!(fate(&f, 1, 1), Fate::Kept);
+}
+
+#[test]
+fn a_call_in_a_default_is_an_edge() {
+    // `g(q) { kept.push(q) }`, `f(a, b = g(a)) {}`: `a` is kept through g.
+    let g = func(2, &[20], vec![push(lg(20))]);
+    let f = with_default(call(Expr::FuncRef(2), vec![lg(10)]), vec![]);
+    let f = fates(&[f, g], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "arg-to(Kept)");
+}
+
+#[test]
+fn a_rest_parameter_keeps_what_it_collects_and_the_body_is_walked() {
+    // `function f(a, ...r) { return a.x }`
+    let mut f = func(1, &[10, 11], vec![ret(get(lg(10), "x"))]);
+    f.params[1].is_rest = true;
+    let f = fates(&[f], &TestProof::reading(&[(1, "x")]));
+    let ff = f.of_fn(1).unwrap();
+    assert!(ff.params[0].proven_dropped());
+    assert_eq!(why(&f, 1, 1), "rest");
+    for i in 1..5 {
+        assert_eq!(ff.arg(i).fate, Fate::Kept, "argument {i} lands in the rest array");
+    }
+}
+
+#[test]
+fn arguments_past_the_parameters_reach_arguments() {
+    // `function f(a) { ... arguments ... }`: HIR appends the hidden
+    // `arguments` parameter; an argument past it is still `arguments[i]`.
+    let mut f = func(1, &[10, 11], vec![]);
+    f.params[1].is_rest = true;
+    f.params[1].arguments_object = Some(perry_hir::ArgumentsObjectMeta {
+        strict: false,
+        simple_parameters: true,
+        mapped_parameter_ids: vec![(0, 10)],
+        restricted_callee: false,
+    });
+    let f = fates(&[f], &TestProof::default());
+    let ff = f.of_fn(1).unwrap();
+    assert_eq!(ff.params[0].fate, Fate::Kept, "sloppy arguments[0] aliases a");
+    assert_eq!(ff.arg(7).fate, Fate::Kept);
+    // Without rest or `arguments` an extra argument reaches no binding.
+    let f = fates(&[func(1, &[10], vec![])], &TestProof::default());
+    assert!(f.of_fn(1).unwrap().arg(3).proven_dropped());
 }
