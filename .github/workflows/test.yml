@@ -1333,7 +1333,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_lean_dependencies.py
-          cargo test --locked -p perry-base64 -p perry-hex -p perry-uuid --all-features
+          cargo test --locked -p perry-base64 -p perry-hex --all-features
+          # The moved perry-uuid inline tests run through perry-stdlib's crypto
+          # feature; fail if the filter matched nothing.
+          uuid_test_output=$(cargo test --locked -p perry-stdlib --features crypto --lib crypto::uuid 2>&1)
+          echo "$uuid_test_output"
+          echo "$uuid_test_output" | grep -E 'test result: ok\. [1-9][0-9]* passed' \
+            || { echo '::error::crypto::uuid inline tests did not run'; exit 1; }
           cargo test --locked -p perry --bin perry --features apple-api cli::
           cargo check --locked -p perry-stdlib --no-default-features
           cargo check --locked -p perry --no-default-features --features dev-cli

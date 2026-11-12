@@ -1,9 +1,8 @@
-//! The two UUID versions Perry generates. Features default to empty: mail
-//! selects v4; node:crypto selects v4+v7. Entropy comes from the OS, drawn
+//! The two UUID versions Perry generates. Entropy comes from the OS, drawn
 //! through a per-thread cache the way Node's `randomUUID` buffers it (#10523):
 //! one `getrandom` fills 128 UUIDs' worth of bytes instead of one syscall per
 //! UUID. `v4_uncached` is Node's `{ disableEntropyCache: true }`.
-#[cfg(any(feature = "v4", feature = "v7"))]
+#[cfg(feature = "crypto")]
 mod entropy {
     use std::cell::RefCell;
 
@@ -59,10 +58,10 @@ mod entropy {
     }
 }
 /// A UUID in its 36-byte hyphenated form, formatted without allocating.
-#[cfg(any(feature = "v4", feature = "v7"))]
+#[cfg(feature = "crypto")]
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Hyphenated([u8; 36]);
-#[cfg(any(feature = "v4", feature = "v7"))]
+#[cfg(feature = "crypto")]
 impl Hyphenated {
     fn new(bytes: [u8; 16]) -> Self {
         const HEX: &[u8; 16] = b"0123456789abcdef";
@@ -88,39 +87,39 @@ impl Hyphenated {
         &self.0
     }
 }
-#[cfg(any(feature = "v4", feature = "v7"))]
+#[cfg(feature = "crypto")]
 impl std::fmt::Display for Hyphenated {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
 }
-#[cfg(any(feature = "v4", feature = "v7"))]
+#[cfg(feature = "crypto")]
 impl std::fmt::Debug for Hyphenated {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self.as_str(), f)
     }
 }
-#[cfg(feature = "v4")]
+#[cfg(feature = "crypto")]
 fn v4_from(mut bytes: [u8; 16]) -> Hyphenated {
     bytes[6] = (bytes[6] & 15) | 0x40;
     bytes[8] = (bytes[8] & 63) | 0x80;
     Hyphenated::new(bytes)
 }
-#[cfg(feature = "v4")]
+#[cfg(feature = "crypto")]
 pub fn v4() -> Hyphenated {
     v4_from(entropy::cached())
 }
-#[cfg(feature = "v4")]
+#[cfg(feature = "crypto")]
 pub fn v4_uncached() -> Hyphenated {
     v4_from(entropy::fresh())
 }
-#[cfg(feature = "v7")]
+#[cfg(feature = "crypto")]
 #[derive(Default)]
 struct Sequence {
     millis: u64,
     counter: u64,
 }
-#[cfg(feature = "v7")]
+#[cfg(feature = "crypto")]
 impl Sequence {
     // A 42-bit randomly seeded counter occupies rand_a and the high 30 bits
     // of rand_b. Keep the low 32 bits random. Roll the logical timestamp
@@ -145,7 +144,7 @@ impl Sequence {
         bytes
     }
 }
-#[cfg(feature = "v7")]
+#[cfg(feature = "crypto")]
 pub fn v7() -> Hyphenated {
     use std::{
         sync::Mutex,
@@ -165,7 +164,7 @@ pub fn v7() -> Hyphenated {
 }
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "v4")]
+    #[cfg(feature = "crypto")]
     fn assert_v4_layout(s: &str) {
         assert_eq!(s.len(), 36);
         assert_eq!(&s[14..15], "4");
@@ -180,7 +179,7 @@ mod tests {
     }
     // #10523: the table-driven formatter writes every byte's digits in RFC
     // 9562 order around the four hyphens; `as_bytes` is `as_str`'s bytes.
-    #[cfg(any(feature = "v4", feature = "v7"))]
+    #[cfg(feature = "crypto")]
     #[test]
     fn hyphenated_layout_is_exact() {
         let bytes: [u8; 16] = std::array::from_fn(|i| (i as u8) * 17);
@@ -191,7 +190,7 @@ mod tests {
             super::Hyphenated::new([0xf0, 0x0f, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 0xff]);
         assert_eq!(h.as_str(), "f00f0102-0304-0506-0708-090a0b0c0dff");
     }
-    #[cfg(feature = "v4")]
+    #[cfg(feature = "crypto")]
     #[test]
     fn v4_layout_and_fresh_entropy() {
         let a = super::v4();
@@ -205,7 +204,7 @@ mod tests {
     // refills, and the uncached path never consumes the pool. Runs on its own
     // thread so the pool and counter start empty whatever the test harness
     // reuses.
-    #[cfg(feature = "v4")]
+    #[cfg(feature = "crypto")]
     #[test]
     fn v4_draws_one_refill_per_128_uuids() {
         std::thread::spawn(|| {
@@ -231,7 +230,7 @@ mod tests {
         .join()
         .unwrap();
     }
-    #[cfg(feature = "v7")]
+    #[cfg(feature = "crypto")]
     #[test]
     fn v7_clock_rollback_and_counter_overflow() {
         let mut seq = super::Sequence::default();
