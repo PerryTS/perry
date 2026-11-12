@@ -114,13 +114,18 @@ fn throw_unknown_encoding(value: f64) -> ! {
 
 /// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
 /// target, answered from the one view classification
-/// ([`super::view_brand::view_brand`]). `copy` (`any_view`) takes every
-/// `ArrayBufferView` (node's `ArrayBuffer.isView`); `compare`/`equals` take
-/// node's `isUint8Array` set: a `Buffer` or a `Uint8Array`. An `ArrayBuffer`,
-/// key material and every non-view are rejected by both.
+/// ([`super::view_brand::view_brand`]), and only for a view that carries the
+/// byte storage the copy and compare routines then read
+/// ([`super::view_brand::ViewBrand::has_storage`]). `copy` (`any_view`)
+/// takes every `ArrayBufferView` (node's `ArrayBuffer.isView`), subclass
+/// instances included; `compare`/`equals` take node's `isUint8Array` set: a
+/// `Buffer`, a `Uint8Array` or an instance of a subclass of either. An
+/// `ArrayBuffer`, key material, an object without view storage and every
+/// non-view are rejected by both.
 fn is_buffer_target(value: f64, any_view: bool) -> bool {
     super::view_brand::view_brand(value).is_some_and(|brand| {
-        any_view || brand.typed_array_kind() == Some(crate::typedarray_hook_slots::KIND_UINT8)
+        (any_view && brand.has_storage())
+            || brand.typed_array_kind() == Some(crate::typedarray_hook_slots::KIND_UINT8)
     })
 }
 

@@ -191,7 +191,8 @@ crate::realm_decl! { "node:util/types.isDataView", effects = { returns(prim(bool
 #[no_mangle]
 pub extern "C" fn js_util_types_is_data_view(value: f64) -> f64 {
     nanbox_bool(
-        super::view_brand::view_brand(value) == Some(super::view_brand::ViewBrand::DataView),
+        super::view_brand::view_brand(value)
+            .is_some_and(super::view_brand::ViewBrand::is_data_view),
     )
 }
 
