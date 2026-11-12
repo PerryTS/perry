@@ -913,7 +913,11 @@ impl<'a> Gen<'a> {
                 // A module outside the program that is no builtin is unseen
                 // code run at load: it may write any key of the global
                 // object (rule G reads an unresolved global as `native_written`
-                // then). In per-unit mode a missing target is another unit.
+                // then). It holds the global object as unknown code does, so
+                // every built-in is in its reach by name and a store into ⊤
+                // may write one (`global_in_top`, as for the global object
+                // given to unknown code). In per-unit mode a missing target
+                // is another unit.
                 if target.is_none()
                     && !self.m.unit_mode
                     && !crate::builtins::is_builtin_module(&imp.source)
@@ -921,6 +925,7 @@ impl<'a> Gen<'a> {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let what = format!("module {} runs unseen", imp.source);
                     crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                    crate::builtins::note_global_in_top(&mut self.m);
                 }
                 for spec in &imp.specifiers {
                     let (local, node) = match (spec, target) {

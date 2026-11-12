@@ -354,20 +354,43 @@ fn a_store_into_top_writes_no_locked_native_member() {
     }
 }
 
-/// E23: an accessor on `Object.prototype` is a program-wide kill.
+/// E23: an accessor on `Object.prototype` is a program-wide kill, but not
+/// of a final read (DEC 250): `Array.prototype.indexOf` is an image member
+/// the runtime lock never lets be replaced, and the lookup finds it before
+/// `Object.prototype`, so the accessor changes no `a.indexOf`. An add on
+/// `Object.prototype` (`zz`) is refused (the define throws a TypeError);
+/// `constructor` is exempt from the lock and the accessor is installed.
 #[test]
 fn an_object_prototype_accessor_is_no_native_member() {
     for units in [false, true] {
-        let pf = one(
-            r#"
-            Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });
-            function main() { const a: any = [1, 2]; return a.indexOf(0); }
-            console.log(main());
-        "#,
-            units,
-        );
-        let v = verdicts_in(&pf, 0, "indexOf", true);
-        assert!(none_native(&v), "units={units}: {v:?}");
+        for (define, kill) in [
+            ("", false),
+            (r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#, true),
+            (
+                r#"Object.defineProperty(Object.prototype, "constructor", { get() { return 1; } });"#,
+                true,
+            ),
+        ] {
+            let pf = one(
+                &format!(
+                    r#"
+                {define}
+                class P {{ x = 1; }}
+                const p = new P();
+                function main() {{ const a: any = [1, 2]; return a.indexOf(0); }}
+                console.log(main(), p.x);
+            "#
+                ),
+                units,
+            );
+            let v = verdicts_in(&pf, 0, "indexOf", true);
+            assert!(native(&v), "units={units} {define}: {v:?}");
+            let e = tmpl(&pf, "P").escape.clone();
+            assert_eq!(e.is_some(), kill, "units={units} {define}: {e:?}");
+            if kill && !units {
+                assert!(e.unwrap().contains("E23"), "units={units} {define}");
+            }
+        }
     }
 }
 
