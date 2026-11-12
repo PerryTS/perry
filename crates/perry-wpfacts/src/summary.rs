@@ -787,6 +787,9 @@ impl Model {
             if self.protocol_calls.contains(t) {
                 self.protocol_calls.insert(id);
             }
+            if let Some(&brand) = self.name_fold_calls.get(t) {
+                self.name_fold_calls.insert(id, brand);
+            }
             if lay != LAY_NONE {
                 self.sum.call_lay.insert(id, lay);
             }
