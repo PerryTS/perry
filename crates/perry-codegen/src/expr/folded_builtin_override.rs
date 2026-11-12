@@ -113,12 +113,15 @@ fn native_push_call<'a>(ctx: &FnCtx<'_>, expr: &'a Expr) -> Option<FoldedCall<'a
 /// Its guard then reads the Array header behind a heap-pointer test
 /// (`own_override_guard::emit_annotated_array_branch`) instead of the global
 /// install flag, which no Array arms. `PERRY_ARRAY_METHOD_TIERS=0` keeps the
-/// flag.
+/// flag. With the method-site facts (`PERRY_FACTS_ARRAY_METHOD_SITES`) every
+/// Array node the facts do not prove takes this guard: the function's own
+/// analysis is no proof of the value, and a `null` or `undefined` behind the
+/// annotation must reach the ordinary call, not a header read.
 fn annotated_array_receiver(
     receiver_is_array: bool,
     family: crate::builtin_proto::BuiltinProto,
 ) -> bool {
-    !receiver_is_array
+    (!receiver_is_array || crate::method_site::array_sites_enabled())
         && family == crate::builtin_proto::BuiltinProto::Array
         && super::array_proto_guard::method_tiers_enabled()
 }
@@ -177,6 +180,19 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     if SUPPRESSED_NODE.with(|s| s.get()) == node {
         return Ok(None);
     }
+    match expr {
+        Expr::ArrayPush { array_id, .. } => crate::method_site::census_inline_tier(
+            ctx,
+            Some(perry_hir::folded_call::Site::Local(*array_id)),
+            "push",
+        ),
+        Expr::ArrayPop(id) => crate::method_site::census_inline_tier(
+            ctx,
+            Some(perry_hir::folded_call::Site::Local(*id)),
+            "pop",
+        ),
+        _ => {}
+    }
     let native_push = native_push_call(ctx, expr);
     let is_native_push = native_push.is_some();
     let Some(call) = native_push.or_else(|| guarded_call(expr)) else {
@@ -208,6 +224,44 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         call.method,
     )? {
         return emit_generic(ctx, receiver_expr, call.method, &call.args).map(Some);
+    }
+    // An Array method node whose site the facts prove (`method_site`: every
+    // receiver value an Array, the member the realm's built-in on each) is
+    // the plain fold, with no test of its receiver. Check mode runs the
+    // dropped test on the receiver value first.
+    let array_family =
+        is_native_push || folded_family(expr) == Some(crate::builtin_proto::BuiltinProto::Array);
+    if array_family
+        && crate::method_site::array_member_proven(
+            ctx,
+            perry_hir::folded_call::receiver_site(&call.receiver),
+            call.method,
+        )
+    {
+        if !crate::verify_facts::enabled() {
+            crate::method_site::witness_array_member(ctx, "", call.method);
+            return Ok(None);
+        }
+        let key = receiver_expr as *const Expr as usize;
+        let method = call.method;
+        let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
+            let recv = match rooting::materialized_receiver_reread(ctx, key) {
+                Some(value) => value,
+                None => lower_expr(ctx, receiver_expr)?,
+            };
+            crate::method_site::witness_array_member(ctx, &recv, method);
+            let _suppressed = Suppressed::enter(node);
+            lower_expr(ctx, expr)
+        };
+        let free_reread = matches!(call.receiver, Receiver::Local(_))
+            || matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
+        let value = if free_reread {
+            emit(ctx)?
+        } else {
+            let receiver_value = lower_expr(ctx, receiver_expr)?;
+            rooting::with_materialized_receiver(ctx, key, &receiver_value, emit)?
+        };
+        return Ok(Some(value));
     }
     // A local receiver (and a fold that captured one) is already in a slot the
     // collector rewrites, so re-lowering it IS the re-read the rooting

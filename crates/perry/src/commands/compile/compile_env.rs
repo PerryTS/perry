@@ -63,6 +63,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_ARRAY_FIELDS",
     "PERRY_FACTS_ARRAY_FLOOR",
     "PERRY_FACTS_ARRAY_LENGTHS",
+    "PERRY_FACTS_ARRAY_METHOD_SITES",
     "PERRY_FACTS_ARRAY_REPS",
     "PERRY_FACTS_ARRAY_STORE",
     "PERRY_FACTS_ARRAY_TIER",
@@ -870,7 +871,7 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ),
     (
         "PERRY_METHOD_SITE_DIAG",
-        "Prints the method-site verdict per annotated typed-array call to stderr; no emitted instructions depend on the report.",
+        "Prints the method-site verdict per by-name Array or typed-array method call to stderr; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_REST_DIAG",

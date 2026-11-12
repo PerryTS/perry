@@ -1146,6 +1146,7 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("tasite"),
+        cfg.sabotage.as_deref() == Some("arraysite"),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2447,6 +2448,12 @@ pub fn quiet_sites_enabled() -> bool {
 /// off (`method_sites`).
 pub fn typed_array_sites_enabled() -> bool {
     method_sites::typed_array_enabled()
+}
+
+/// `PERRY_FACTS_ARRAY_METHOD_SITES=0` turns the Array-member fact off
+/// (`method_sites`).
+pub fn array_method_sites_enabled() -> bool {
+    method_sites::array_member_enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).
