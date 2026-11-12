@@ -481,10 +481,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
         if let Some(index) = numeric_key_i32_index(idx) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
             return;
         }
