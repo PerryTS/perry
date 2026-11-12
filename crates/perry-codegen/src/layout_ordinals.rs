@@ -270,12 +270,14 @@ mod tests {
         );
         for band in 0..3 {
             for kind in 0..4 {
-                let word = encode_layout_word((1 << 26) - 1, band, kind).unwrap();
-                assert_eq!(word & 0x03ffffff, (1 << 26) - 1);
+                let word = encode_layout_word((1 << 25) - 1, band, kind).unwrap();
+                assert_eq!(word & 0x03ffffff, (1 << 25) - 1);
+                assert_eq!(word & perry_abi::LAYOUT_ROW_PENDING, 0);
                 assert_eq!((word >> 28) & 3, u32::from(band));
                 assert_eq!((word >> 26) & 3, u32::from(kind));
             }
         }
+        assert!(encode_layout_word(1 << 25, 0, 0).is_err());
         assert!(encode_layout_word(1 << 26, 0, 0).is_err());
         assert!(encode_layout_word(0, 3, 0).is_err());
         assert!(encode_layout_word(0, 0, 4).is_err());

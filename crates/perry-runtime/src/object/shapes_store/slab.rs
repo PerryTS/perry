@@ -189,7 +189,12 @@ impl ShapeSlab {
         if requested.row().0 >= self.static_rows {
             return Err(PublishError::InvalidWord);
         }
-        if Self::word_for(identity, requested.row().0, &record)? != requested {
+        // Image construction bounds static_rows by DYNAMIC_BASE_ROWS, whose
+        // ABI cap is const-asserted. The row check above already proves this
+        // row fits; validate the header without repeating the ABI row check.
+        debug_assert!(requested.row().0 < crate::codegen_abi::LAYOUT_ROW_LIMIT);
+        let header = Self::word_for(identity, 0, &record)?;
+        if LayoutWord(header.0 | requested.row().0) != requested {
             return Err(PublishError::InvalidWord);
         }
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);

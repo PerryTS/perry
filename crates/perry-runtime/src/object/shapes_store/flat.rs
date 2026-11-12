@@ -161,6 +161,7 @@ const _: () = {
         i += 1;
     }
     assert!((super::DYNAMIC_BASE_ROWS as usize) < MIN_CAPACITY);
+    assert!(MIN_CAPACITY <= LAYOUT_ROW_LIMIT as usize);
 };
 
 /// Reserve the largest share of `want` rows that the address space accepts,
@@ -171,6 +172,11 @@ fn reserve_with(
     want: usize,
     mut try_reserve: impl FnMut(usize) -> *mut u8,
 ) -> (*mut ShapeRecord, usize) {
+    // Reservations only shrink, so every returned capacity obeys the ABI cap.
+    assert!(
+        want <= LAYOUT_ROW_LIMIT as usize,
+        "shape Region capacity exceeds the ABI row limit"
+    );
     let mut rows = want;
     loop {
         let base = try_reserve(rows * RECORD);

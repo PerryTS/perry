@@ -51,3 +51,14 @@ header word to the object shape helpers. Resolved words held by another owner
 use the held-word helpers. The ordinary receiver path remains the row-bound
 comparison; the cold path retains the address for image resolution. These
 reads do not name realm members or introduce EXEC events.
+
+Layout word ABI 5 reserves row bit 25 as `LAYOUT_ROW_PENDING`. Issued rows
+are strictly below `1 << 25`; encoding rejects the cap and larger rows, and
+the native static table is const-checked. Program layout ordinals validate
+each row during compilation. Region construction checks its capacity once;
+chunk exhaustion then prevents any dynamic row from reaching the cap.
+Static publication relies on those bounds without repeating the row check.
+The dynamic encoder retains its checked encoding. A pending word
+keeps its band and kind and fails ordinary receiver admission. Image binding
+rejects any layout word ABI version other than 5. This stage reserves the bit;
+the single image resolver owns its eventual interpretation.

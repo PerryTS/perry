@@ -98,7 +98,9 @@ pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo], live_inline: u32) -> Optio
 #[inline(never)]
 #[optimize(size)]
 pub(crate) fn tail_constfn_slot(infos: &[ConstFnSlotInfo], slot: u32) -> bool {
-    infos.binary_search_by_key(&slot, |entry| entry.slot).is_ok()
+    infos
+        .binary_search_by_key(&slot, |entry| entry.slot)
+        .is_ok()
 }
 
 /// Does the sorted body list reach a slot >= 32?
@@ -672,9 +674,10 @@ impl ShapeRecord {
         }
         // SAFETY: the extension is owned by this live record.
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
-        extras.tail_to_any.get(word).map_or(0, |w| {
-            w.load(std::sync::atomic::Ordering::Acquire)
-        })
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
     }
 
     /// Any learned deprecation, word 0 or tail, is pending.
@@ -1912,6 +1915,17 @@ pub(crate) const DYNAMIC_BASE_ROWS: u32 = if cfg!(target_pointer_width = "64") {
     1 << 14
 };
 
+// Every dynamic row lies below the ABI row limit, which leaves the row
+// field's top bit (`LAYOUT_ROW_PENDING`) to the realm image; chunks tile the
+// space up to the limit exactly.
+const _: () = {
+    use crate::codegen_abi::LAYOUT_ROW_LIMIT;
+    assert!(crate::codegen_abi::NATIVE_LAYOUT_ROWS <= DYNAMIC_BASE_ROWS);
+    assert!(DYNAMIC_BASE_ROWS % DYNAMIC_CHUNK_ROWS == 0);
+    assert!(LAYOUT_ROW_LIMIT % DYNAMIC_CHUNK_ROWS == 0);
+    assert!(DYNAMIC_BASE_ROWS + DYNAMIC_CHUNK_ROWS <= LAYOUT_ROW_LIMIT);
+};
+
 /// The process-wide chunk space. Allocator state, not a cache: `next` hands
 /// out never-used chunks (one atomic per 32 rows); `free` records the chunks
 /// of dead agents but is never handed out (see `claim`): a word keeps naming
@@ -1929,8 +1943,11 @@ impl ChunkAllocator {
     }
 
     /// Claim a chunk; returns its first row. `capacity` is the Region's rows.
+    /// Region construction proves `capacity <= LAYOUT_ROW_LIMIT`; exhaustion
+    /// refuses a chunk before it reaches the pending bit.
     pub(super) fn claim(&self, capacity: usize) -> Result<u32, PublishError> {
         use std::sync::atomic::Ordering::Relaxed;
+        debug_assert!(capacity <= crate::codegen_abi::LAYOUT_ROW_LIMIT as usize);
         let fresh = self.next.try_update(Relaxed, Relaxed, |k| {
             let end =
                 u64::from(DYNAMIC_BASE_ROWS) + (u64::from(k) + 1) * u64::from(DYNAMIC_CHUNK_ROWS);

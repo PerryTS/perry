@@ -6,12 +6,19 @@ pub const LAYOUT_BAND_MASK: u32 = 0x3000_0000;
 pub const LAYOUT_KIND_SHIFT: u32 = 26;
 pub const LAYOUT_KIND_MASK: u32 = 0x0c00_0000;
 pub const LAYOUT_ROW_MASK: u32 = 0x03ff_ffff;
-pub const LAYOUT_ROW_LIMIT: u32 = 1 << 26;
+/// Row numbers lie below this limit (ABI v5). The row field's top bit is
+/// [`LAYOUT_ROW_PENDING`], so no issued row ever carries it.
+pub const LAYOUT_ROW_LIMIT: u32 = 1 << 25;
+/// The row field's top bit: a realm-image cell whose row this agent has not
+/// bound yet (lazy bind; a property of the cell's word only). Above every row
+/// number, so a pending word fails the receiver's row-bound compare and
+/// `ordinary_row`; band and kind stay those of the bound word.
+pub const LAYOUT_ROW_PENDING: u32 = 1 << 25;
 pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;
 pub const LAYOUT_PROBE_INDEX_MASK: u32 = 0xb3ff_ffff;
-pub const LAYOUT_WORD_ABI_VERSION: u32 = 4;
+pub const LAYOUT_WORD_ABI_VERSION: u32 = 5;
 pub const LAYOUT_KIND_PLAIN: u32 = 0;
 pub const LAYOUT_KIND_WORD: u32 = 1;
 pub const LAYOUT_KIND_NULL: u32 = 2;
@@ -19,6 +26,19 @@ pub const LAYOUT_KIND_MIXED: u32 = 3;
 pub const LAYOUT_BAND_ORDINARY: u32 = 0;
 pub const LAYOUT_BAND_DICTIONARY: u32 = 1;
 pub const LAYOUT_BAND_EXOTIC: u32 = 2;
+// The pending bit is the row field's top bit, outside every other field and
+// above every row number: the limit is its value, the row numbers and the bit
+// fill the row field exactly, and `ordinary_row`'s probe keeps the bit.
+const _: () = {
+    assert!(LAYOUT_ROW_PENDING & LAYOUT_ROW_MASK == LAYOUT_ROW_PENDING);
+    assert!(
+        LAYOUT_ROW_PENDING & (LAYOUT_TAG | LAYOUT_SHADOW_BIT | LAYOUT_BAND_MASK | LAYOUT_KIND_MASK)
+            == 0
+    );
+    assert!(LAYOUT_ROW_LIMIT == LAYOUT_ROW_PENDING);
+    assert!((LAYOUT_ROW_LIMIT - 1) | LAYOUT_ROW_PENDING == LAYOUT_ROW_MASK);
+    assert!(LAYOUT_PROBE_INDEX_MASK & LAYOUT_ROW_PENDING != 0);
+};
 
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -439,6 +459,7 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "WRITABLE_STATE_PROTO",
 ];
 pub const NATIVE_LAYOUT_ROWS: u32 = 11 + NATIVE_LAYOUT_DESCRIPTORS.len() as u32;
+const _: () = assert!(NATIVE_LAYOUT_ROWS <= LAYOUT_ROW_LIMIT);
 /// Const lookup used only by native declaration initializers / compiler planning.
 pub const fn native_layout_row(name: &str) -> LayoutRow {
     let mut i = 0;
@@ -489,6 +510,22 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_word_abi_five_rejects_mismatched_images() {
+        assert_eq!(LAYOUT_WORD_ABI_VERSION, 5);
+        let image = PerryLayoutImageV1::RUNTIME;
+        assert!(unsafe { image.valid() });
+        for abi_version in [0, 4, 6, u32::MAX] {
+            assert!(!unsafe {
+                PerryLayoutImageV1 {
+                    abi_version,
+                    ..image
+                }
+                .valid()
+            });
+        }
+    }
 
     #[test]
     fn lazy_descriptor_span_is_checked_without_overflow() {
@@ -566,6 +603,13 @@ mod tests {
             None
         );
         assert_eq!(LayoutWord::new(LayoutRow(LAYOUT_ROW_LIMIT), 0, 0), None);
+        assert_eq!(LayoutWord::new(LayoutRow(LAYOUT_ROW_PENDING), 0, 0), None);
+        assert_eq!(LayoutWord::new(LayoutRow(1 << 26), 0, 0), None);
+        let last = LayoutWord::new(LayoutRow(LAYOUT_ROW_LIMIT - 1), 0, 0).unwrap();
+        assert_eq!(last.0 & LAYOUT_ROW_PENDING, 0);
+        let pending = LayoutWord(last.0 | LAYOUT_ROW_PENDING);
+        assert_eq!(pending.ordinary_row(LAYOUT_ROW_LIMIT as usize), None);
+        assert_eq!((pending.band(), pending.kind()), (last.band(), last.kind()));
         assert_eq!(LayoutWord::new(LayoutRow(0), 3, 0), None);
         assert_eq!(LayoutWord::new(LayoutRow(0), 0, 4), None);
     }

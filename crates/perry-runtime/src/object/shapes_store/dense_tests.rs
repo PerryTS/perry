@@ -163,6 +163,47 @@ fn images_with_different_static_counts_never_share_a_chunk_row() {
     }
 }
 
+/// ABI v5: rows end at `LAYOUT_ROW_LIMIT`, the value of the row field's
+/// pending bit. Region construction refuses a reservation past the limit,
+/// and the claim at each admitted capacity refuses the next chunk: row
+/// `1 << 25` is never issued.
+#[test]
+fn the_chunk_claim_refuses_at_the_abi_row_cap() {
+    use super::{ChunkAllocator, DYNAMIC_BASE_ROWS as BASE, DYNAMIC_CHUNK_ROWS as C};
+    use crate::codegen_abi::{LAYOUT_ROW_LIMIT as LIMIT, LAYOUT_ROW_PENDING};
+    assert_eq!(LIMIT, 1 << 25);
+    let region = ShapeSlab::new().region.capacity();
+    assert!(
+        region <= LIMIT as usize,
+        "the Region reserves {region} rows, past the ABI row limit {LIMIT}"
+    );
+    for capacity in [
+        (BASE + C) as usize,
+        super::flat::MIN_CAPACITY,
+        region,
+        LIMIT as usize,
+    ] {
+        let alloc = ChunkAllocator::new();
+        let mut end = BASE;
+        while let Ok(start) = alloc.claim(capacity) {
+            assert_eq!(start, end, "chunks are handed out in order");
+            assert!(
+                start + C <= LIMIT,
+                "chunk at {start} reaches past the row limit"
+            );
+            assert_eq!(start & LAYOUT_ROW_PENDING, 0);
+            end = start + C;
+        }
+        let cap = capacity as u32;
+        assert_eq!(end, BASE + (cap - BASE) / C * C);
+        assert_eq!(
+            alloc.claim(capacity),
+            Err(PublishError::Capacity),
+            "the claim at the cap refuses"
+        );
+    }
+}
+
 #[test]
 fn dead_agents_chunks_are_never_handed_out_again() {
     use super::{ChunkAllocator, DYNAMIC_BASE_ROWS as BASE, DYNAMIC_CHUNK_ROWS as C};
