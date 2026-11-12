@@ -190,6 +190,9 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 /// TAG_UNDEFINED if the property doesn't exist.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
+    // A Number has no own property, whichever Number it is: one with clear
+    // top 16 bits must not reach the raw-pointer decodes below.
+    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
     unsafe {
         own_property(obj_value, key_value)
             .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |property| {
@@ -1193,6 +1196,9 @@ fn real_array_receiver(value: f64) -> bool {
 }
 
 fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
+    // A Number has no own property names, whichever Number it is: one with
+    // clear top 16 bits must not reach the raw-pointer decodes below.
+    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());

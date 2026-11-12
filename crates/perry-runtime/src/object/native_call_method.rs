@@ -594,8 +594,12 @@ unsafe fn native_call_method_value_inner(
     // a numerically-named vtable method (`class C { 3() {} }`) keeps working.
     if !is_symbol_key {
         if let Some(index) = numeric_index_key(key_jsval) {
+            // The index entry takes a receiver HANDLE (clear top 16 bits =
+            // a raw pointer); a Number receiver with that shape is handed
+            // over as a Number the entry cannot read as an address.
+            let receiver = crate::value::addr_class::number_receiver_for_dispatch(object);
             let field =
-                crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
+                crate::object::js_object_get_index_polymorphic(receiver.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
             // An undefined answer may still name a numerically-named vtable
             // method below; an array has none, so its element read is the
