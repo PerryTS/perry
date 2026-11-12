@@ -4,8 +4,9 @@
 //! `Object.prototype` only, where an absent key is final (DEC 250) even
 //! once a store into ⊤ under a computed key may have written every other
 //! builtin prototype; an `Object.groupBy` result has no chain at all. A
-//! `Map.groupBy` Map, an undescribed method's result (`primbox`), a given
-//! prototype and the exempt `constructor` keep the opaque answer.
+//! `Map.groupBy` result is a Map, read as a Map born from an iterable is.
+//! An undescribed method's result (`primbox`), a given prototype and the
+//! exempt `constructor` keep the opaque answer.
 //! (three.core.js `PropertyBinding.sanitizeNodeName`: `name.replace(..)` on
 //! a GLTF JSON field.)
 
@@ -65,16 +66,27 @@ fn a_written_primitive_method_does_not_take_the_objects_of_the_receiver_node() {
 }
 
 #[test]
-fn an_object_group_by_result_has_no_chain_a_map_group_by_result_keeps_its_own() {
-    for (make, closed) in [("Object.groupBy", true), ("Map.groupBy", false)] {
-        let src = held(&format!(
-            "const g: any = {make}([1, 2], (x: number) => (x > 1 ? 'k' : 'j'));
+fn an_object_group_by_result_has_no_chain_a_map_group_by_result_is_a_map() {
+    let body = |make: &str| {
+        held(&format!(
+            "const g: any = {make};
              g.held = a;
              try {{ console.log(g.replace('x')); }} catch (e) {{ console.log('TypeError'); }}"
-        ));
-        let pf = facts(&src);
-        assert_eq!(proven(&pf, "a"), closed, "{src}\n{}", pf.dump_text());
-    }
+        ))
+    };
+    let src = body("Object.groupBy([1, 2], (x: number) => (x > 1 ? 'k' : 'j'))");
+    let pf = facts(&src);
+    assert!(proven(&pf, "a"), "{src}\n{}", pf.dump_text());
+    // A `Map.groupBy` Map is a Map born from an iterable: the same answer.
+    let map = body("new Map([[1, [1]], [2, [2]]])");
+    let src = body("Map.groupBy([1, 2], (x: number) => (x > 1 ? 'k' : 'j'))");
+    let (pm, pf) = (facts(&map), facts(&src));
+    assert_eq!(
+        proven(&pf, "a"),
+        proven(&pm, "a"),
+        "{src}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// Controls: what may still be found. `constructor` is the one key the

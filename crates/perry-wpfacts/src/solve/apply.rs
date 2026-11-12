@@ -702,6 +702,7 @@ impl Model {
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
                     self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.note_unnamed_set(target);
                 }
             }
             Cons::CreateProto { reason } => {
