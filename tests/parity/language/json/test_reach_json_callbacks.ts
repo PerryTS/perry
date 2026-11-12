@@ -78,24 +78,21 @@
   console.log("helper:", sum(q));
 }
 
-// Array elements, an int32 array at rest among them.
+// Array elements, an int32 array at rest among them; a typed helper reads.
 {
   const a = [1, 2, 3];
   JSON.stringify({ a }, function (this: any, k: string, v: any) {
     if (k === "1") this[1] = "two";
     return v;
   });
-  let t: any = 0;
-  for (let i = 0; i < a.length; i++) t = t + a[i];
   const b: number[] = [];
   for (let i = 0; i < 8; i++) b.push(i | 0);
   JSON.stringify(b, (k: string, v: any) => {
     if (Array.isArray(v)) v[3] = "three";
     return v;
   });
-  let s: any = 0;
-  for (let i = 0; i < b.length; i++) s = s + b[i];
-  console.log("elements:", t, s);
+  const rd = (x: number[], i: number): number => x[i] * 2;
+  console.log("elements:", a[1] * 2, a[0] + a[2], b[3] * 2, b[2] + b[4], typeof b[3], rd(a, 1), rd(b, 3));
 }
 
 // What the replacer returns is visited; what toJSON returns is the value.
