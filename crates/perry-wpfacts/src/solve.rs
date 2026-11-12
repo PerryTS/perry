@@ -306,6 +306,8 @@ impl Model {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
+                | Cons::NotBuffer { .. }
+                | Cons::ProtoObjects { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
                 | Cons::RuntimeStore { .. }
@@ -1830,6 +1832,8 @@ impl Model {
             Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
+            Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
+            Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

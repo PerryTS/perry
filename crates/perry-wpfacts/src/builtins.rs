@@ -49,10 +49,10 @@ pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
-    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
+    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write, WriteValue,
     require_parts, settle_native_given,
 };
-use native_protocol::{native_method, native_skips};
+use native_protocol::{native_method, native_skips, opaque_written};
 
 /// The NativeError constructors (ECMA-262 20.5.5.1-6), each its own
 /// namespace ([`BuiltinNs::NativeError`]).
@@ -914,7 +914,7 @@ fn intrinsic_miss(m: &mut Model, a: Atom, miss: NativeMiss) -> bool {
         _ => native_written(m, op, a),
     };
     if written {
-        return false;
+        return native_protocol::answer_stored(m, op, a, miss);
     }
     if let NativeMiss::Lookup(dst, setter) = miss {
         native_accessor_known(m, op, a, dst, setter);
@@ -1976,10 +1976,9 @@ fn namespace_getter_load(
     if m.unit_mode || !namespace_receiver_getter(m, holder, &m.atoms[a as usize]) {
         return false;
     }
-    if native_written(m, holder, a) {
+    if opaque_written(m, holder, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     } else {
-        m.native_missing.push((holder, a, NativeMiss::Load(dst)));
         m.add_tok(dst, origin);
     }
     true
@@ -2023,10 +2022,9 @@ pub(crate) fn native_own_load(
             {
                 return false;
             }
-            if native_written(m, holder, a) {
+            if opaque_written(m, holder, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
             } else {
-                m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
                     let value = m.tok(TokKind::BuiltinFn(Native::Member {
                         identity,
@@ -2363,12 +2361,11 @@ fn ns_method_inner(
         (BuiltinNs::GlobalThis, n) if global_function(m, n) => {
             let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let a = m.atom(n);
-            if native_written(m, g, a) {
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
                 let prev = m.cur_this.replace(g);
                 unknown_method(m, call, &format!("argument of builtin GlobalThis.{n}"));
                 m.cur_this = prev;
             } else {
-                m.native_missing.push((g, a, NativeMiss::Call(g, call)));
                 ns_method(m, BuiltinNs::Other, Some(n), call);
             }
         }
@@ -2379,12 +2376,11 @@ fn ns_method_inner(
             let e = effects::declared_function(n).expect("the guard found it");
             let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let a = m.atom(n);
-            if native_written(m, g, a) {
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
                 let prev = m.cur_this.replace(g);
                 unknown_method(m, call, &format!("argument of builtin Other.{n}"));
                 m.cur_this = prev;
             } else {
-                m.native_missing.push((g, a, NativeMiss::Call(g, call)));
                 effects::run_function(m, e, call);
             }
         }

@@ -121,6 +121,11 @@ pub fn map_cons(
         Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
+        ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
+        NotBuffer { shared, dst } => NotBuffer {
+            shared,
+            dst: n(dst),
+        },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -523,6 +528,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | FieldTruthy { .. }
             | Fulfil { .. }
             | Falsy { .. }
+            | NotBuffer { .. }
+            | ProtoObjects { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }

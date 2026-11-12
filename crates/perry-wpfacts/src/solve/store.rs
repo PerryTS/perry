@@ -479,7 +479,13 @@ impl Model {
         if !theirs {
             self.census_store_ctx(Some((site, self.store_at)));
             if !builtins::builtin_function(self, t) {
-                builtins::note_native_data_write(self, t, Some(wkey), &what);
+                builtins::note_native_data_write(
+                    self,
+                    t,
+                    Some(wkey),
+                    &what,
+                    builtins::WriteValue::Value(src),
+                );
             }
             self.census_store_ctx(None);
         }
@@ -498,9 +504,10 @@ impl Model {
                 self.given_prototype(t, src);
             }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                self.cons(src, Cons::ParentGiven { of: t });
+                let objs = self.proto_objects(src);
+                self.cons(objs, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
-                self.edge(src, parent);
+                self.edge(objs, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
                 let reason = self.reason("E6 possible computed superclass write");
                 self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);

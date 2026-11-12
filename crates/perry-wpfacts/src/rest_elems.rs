@@ -270,6 +270,7 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
         | Cons::Guard { .. }
         | Cons::Defined { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }
         | Cons::RetInto { .. }

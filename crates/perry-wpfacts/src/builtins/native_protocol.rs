@@ -288,9 +288,11 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
         || name.starts_with(WK_PREFIX)
         || name == crate::STAR_KEY
         || native_proto_keys(native).contains(&name)
-        || native_written(m, np, a)
     {
         return false;
+    }
+    if native_written(m, np, a) {
+        return answer_stored(m, np, a, miss);
     }
     m.native_missing.push((np, a, miss));
     true
@@ -300,30 +302,55 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
 /// prototype itself; `key` `None` (or computed): every key. Lookups that
 /// passed it under a now-written key run as opaque members.
 pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
-    note_write(m, t, key, what, true, None)
+    note_write(m, t, key, what, true, None, WriteValue::Opaque)
+}
+
+/// What a write onto a native prototype stored
+/// ([`crate::model::NativeWrite`]): a program node's values (a plain store,
+/// ECMA-262 10.1.9.2), nothing (a delete: the key may be missing), or a
+/// value the solver does not name (every other writer).
+#[derive(Clone, Copy, Debug)]
+pub enum WriteValue {
+    Opaque,
+    Value(NodeId),
+    Absent,
 }
 
 /// [`note_native_write`] for a known getter (setter if `setter`) `f`
 /// installed by a definition through ⊤ (ECMA-262 10.1.6.3): an accessor
 /// query that may reach it returns `f`, not an unknown value.
 pub fn note_native_accessor(m: &mut Model, t: Tok, key: Option<Key>, f: Tok, setter: bool) {
-    note_write(m, t, key, "accessor", false, Some((f, setter)))
+    note_write(m, t, key, "accessor", false, Some((f, setter)), WriteValue::Opaque)
 }
 
 /// [`note_native_write`] for a plain store ([[Set]], ECMA-262 10.1.9.2) or a
-/// delete: it makes, changes or removes a data property, never an accessor.
-pub fn note_native_data_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
-    note_write(m, t, key, what, false, None)
+/// delete: it makes, changes or removes a data property, never an accessor;
+/// `value` is what it stored.
+pub fn note_native_data_write(
+    m: &mut Model,
+    t: Tok,
+    key: Option<Key>,
+    what: &str,
+    value: WriteValue,
+) {
+    note_write(m, t, key, what, false, None, value)
 }
 
 /// Does a recorded write already cover a write of `t`'s key `k` (an
-/// accessor-capable one only if `accessor`)?
-fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool) -> bool {
-    [(t, None), (t, k)].iter().any(|w| {
-        m.native_writes
-            .get(w)
-            .is_some_and(|x| x.accessor || !accessor)
-    })
+/// accessor-capable one only if `accessor`) storing `value`?
+fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool, value: WriteValue) -> bool {
+    let covers = |x: &crate::model::NativeWrite| {
+        (x.accessor || !accessor)
+            && (x.opaque
+                || match value {
+                    WriteValue::Opaque => false,
+                    WriteValue::Value(n) => x.stored.contains(&n),
+                    WriteValue::Absent => x.absent,
+                })
+    };
+    [(t, None), (t, k)]
+        .iter()
+        .any(|w| m.native_writes.get(w).is_some_and(covers))
 }
 
 fn note_write(
@@ -333,6 +360,7 @@ fn note_write(
     what: &str,
     accessor: bool,
     known: Option<(Tok, bool)>,
+    value: WriteValue,
 ) {
     if t != TOP
         && !matches!(
@@ -359,7 +387,7 @@ fn note_write(
             .get(&(t, k))
             .is_some_and(|w| if setter { &w.setters } else { &w.getters }.contains(&f))
     });
-    if !new_fn && write_covered(m, t, k, accessor) {
+    if !new_fn && write_covered(m, t, k, accessor, value) {
         return;
     }
     let fresh = !m.native_writes.contains_key(&(t, k));
@@ -386,8 +414,20 @@ fn note_write(
             accessor,
             getters: Vec::new(),
             setters: Vec::new(),
+            opaque: false,
+            stored: Vec::new(),
+            absent: false,
         });
     w.accessor |= accessor;
+    match value {
+        WriteValue::Opaque => w.opaque = true,
+        WriteValue::Value(n) => {
+            if !w.stored.contains(&n) {
+                w.stored.push(n);
+            }
+        }
+        WriteValue::Absent => w.absent = true,
+    }
     if let Some((f, setter)) = known {
         let fns = if setter {
             &mut w.setters
@@ -423,7 +463,7 @@ pub fn settle_native_given(m: &mut Model) -> bool {
             false => vec![None],
         };
         for k in ks {
-            if write_covered(m, t, k, true) {
+            if write_covered(m, t, k, true, WriteValue::Opaque) {
                 continue;
             }
             more = true;
@@ -563,7 +603,7 @@ pub fn note_global_in_top(m: &mut Model) {
 /// Lookups that passed a native prototype (or read a program-owned global)
 /// under a key that may now be written: they take the opaque member.
 pub(super) fn replay_native_missing(m: &mut Model) {
-    if m.native_missing.is_empty() {
+    if m.native_missing.is_empty() && m.native_answered.is_empty() {
         return;
     }
     let pending = std::mem::take(&mut m.native_missing);
@@ -586,112 +626,230 @@ pub(super) fn replay_native_missing(m: &mut Model) {
                 keep.push((np, a, miss));
                 continue;
             }
-            let saved_gate = m
-                .diagnostic
-                .as_mut()
-                .and_then(|d| d.census.as_mut())
-                .map(|c| {
-                    let old = c.active_gate;
-                    c.active_gate = Some((np, a));
-                    old
-                });
-            match miss {
-                NativeMiss::Lookup(dst, _) => {
-                    m.add_top(dst, |_| {
-                        "accessor descriptor of a written intrinsic key".into()
-                    });
-                }
-                NativeMiss::Load(dst) => {
-                    m.add_top(dst, |_| {
-                        "member of a builtin prototype written through ⊤".into()
-                    });
-                    m.add_prim(dst, prim::ALL);
-                }
-                NativeMiss::Global(dst, f) => {
-                    let name = m.atoms[a as usize].clone();
-                    if m.explain && !m.shared_replay {
-                        let ws: Vec<String> = m
-                            .native_writes
-                            .iter()
-                            .map(|((w, k), r)| {
-                                format!(
-                                    "{}/{:?}: {}",
-                                    m.tok_name(*w),
-                                    k.map(|x| m.atoms[x as usize].clone()),
-                                    m.reasons[r.reason as usize]
-                                )
-                            })
-                            .collect();
-                        eprintln!(
-                            "perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}",
-                            m.global_in_top
-                        );
-                    }
-                    m.add_top(dst, |_| {
-                        format!("globalThis.{name} written by unmodeled code")
-                    });
-                    m.add_prim(dst, prim::ALL);
-                    // Unmodeled code may also read what the program stored.
-                    let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
-                    m.sink_node(f, r);
-                }
-                NativeMiss::Store(src, site) => {
-                    let prev = m.store_at.take();
-                    m.store_into(np, Key::Named(a), src, site);
-                    m.store_at = prev;
-                }
-                NativeMiss::Call(origin, call) => {
-                    let native = m.tok_name(np);
-                    let name = m.atoms[a as usize].clone();
-                    if m.explain && !m.shared_replay && name.starts_with(super::WK_PREFIX) {
-                        let ws: Vec<String> = m
-                            .native_writes
-                            .iter()
-                            .filter(|((_, k), _)| k.is_none() || *k == Some(a))
-                            .map(|((w, k), r)| {
-                                format!(
-                                    "{}/{:?}: {}",
-                                    m.tok_name(*w),
-                                    k.map(|x| m.atoms[x as usize].clone()),
-                                    m.reasons[r.reason as usize]
-                                )
-                            })
-                            .collect();
-                        eprintln!(
-                            "perry: wpfacts explain: replay call {native}.{name} by {:?} in_top {} handed {} writes {ws:?}",
-                            native_written_by(m, np, a),
-                            m.global_in_top,
-                            handed_to_unknown(m, np)
-                        );
-                    }
-                    let prev = m.cur_this.replace(origin);
-                    unknown_method(m, call, &format!("argument of native {native}.{name}"));
-                    m.cur_this = prev;
-                }
-                NativeMiss::PrimCall(_, call) => {
-                    let name = m.atoms[a as usize].clone();
-                    unknown_prim_method(
-                        m,
-                        call,
-                        &format!("argument of a written primitive method {name}"),
-                    );
-                }
-                NativeMiss::New(call) => {
-                    let name = m.atoms[a as usize].clone();
-                    let prev = m.cur_this.take();
-                    unknown_method(m, call, &format!("argument of written constructor {name}"));
-                    m.cur_this = prev;
-                }
+            if answer_stored(m, np, a, miss) {
+                continue;
             }
-            if let Some(old) = saved_gate {
-                let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
-                c.active_gate = old;
-                c.pending_gate = None;
+            answer_opaque(m, np, a, miss);
+        }
+        // Lookups answered by what the writes stored: refilled, or run as
+        // opaque members once an opaque write reaches their key.
+        let answered: Vec<_> = m.native_answered.iter().map(|(&k, &w)| (k, w)).collect();
+        for ((np, a, miss), w) in answered {
+            match stored_values(m, np, a) {
+                Some((stored, absent)) => fill_stored(m, w, &stored, absent),
+                None => {
+                    m.native_answered.remove(&(np, a, miss));
+                    answer_opaque(m, np, a, miss);
+                }
             }
         }
     });
     keep.append(&mut m.native_missing);
     m.native_missing = keep;
+}
+
+/// The values the writes that may have written native prototype `np`'s key
+/// `a` stored, and whether one of them removed it (a delete): `None` when
+/// one of those writes stored a value no record names (opaque).
+fn stored_values(m: &Model, np: Tok, a: Atom) -> Option<(Vec<NodeId>, bool)> {
+    let (top, own) = written_by(m, np, a, false, &|w| w.opaque);
+    if top || own {
+        return None;
+    }
+    let mut out: Vec<NodeId> = Vec::new();
+    let mut absent = false;
+    for w in m.native_writes.values() {
+        if w.stored.is_empty() && !w.absent {
+            continue;
+        }
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            for &n in &w.stored {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            absent |= w.absent;
+        }
+    }
+    Some((out, absent))
+}
+
+fn fill_stored(m: &mut Model, w: NodeId, stored: &[NodeId], absent: bool) {
+    for &n in stored {
+        m.edge(n, w);
+    }
+    if absent {
+        m.add_prim(w, prim::UNDEF);
+    }
+}
+
+/// A read or a method call of native prototype `np`'s key `a` that writes
+/// may have written, each with a known stored value: the key holds what a
+/// store stored (ECMA-262 10.1.9.2), `undefined` after a delete, or what
+/// the chain holds where no write happened (the caller continues the
+/// lookup: true). A read yields the stored values; a call calls them, with
+/// the receiver as `this` (a primitive receiver: that primitive), and one
+/// of a value that is not callable throws (ECMA-262 7.3.14 Call), handing
+/// its arguments to no one. False: a write that stored a value no record
+/// names (opaque) may have written the key, or the lookup is of another
+/// kind; the caller runs today's opaque member.
+pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -> bool {
+    if !matches!(
+        miss,
+        NativeMiss::Load(_) | NativeMiss::Call(..) | NativeMiss::PrimCall(..)
+    ) {
+        return false;
+    }
+    let Some((stored, absent)) = stored_values(m, np, a) else {
+        return false;
+    };
+    if m.native_answered.contains_key(&(np, a, miss)) {
+        return true;
+    }
+    let w = m.node_l("written-value");
+    match miss {
+        NativeMiss::Load(dst) => m.edge(w, dst),
+        NativeMiss::Call(origin, call) => m.cons(w, Cons::CallThis { call, this: origin }),
+        NativeMiss::PrimCall(p, call) => {
+            let c = m.calls[call as usize].clone();
+            let this = m.node_l("written-prim-this");
+            m.add_prim(this, p);
+            let call2 = m.solver_call(
+                call,
+                crate::model::CallSite {
+                    this: crate::model::ThisArg::Node(this),
+                    ..c
+                },
+            );
+            m.cons(w, Cons::Call { call: call2 });
+        }
+        _ => unreachable!(),
+    }
+    fill_stored(m, w, &stored, absent);
+    m.native_answered.insert((np, a, miss), w);
+    true
+}
+
+/// A lookup of native prototype `np`'s key `a` that the caller answers
+/// from the intrinsic's description: parked until a write reaches the key
+/// (`replay_native_missing`), or, written already, answered by what the
+/// writes stored as well ([`answer_stored`]). True: a write of a value no
+/// record names may have written the key: the caller runs today's opaque
+/// answer instead.
+pub(super) fn opaque_written(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -> bool {
+    if !native_written(m, np, a) {
+        m.native_missing.push((np, a, miss));
+        return false;
+    }
+    !answer_stored(m, np, a, miss)
+}
+
+/// Today's opaque member for a lookup whose key a write of an unnamed value
+/// may have written.
+fn answer_opaque(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) {
+    let saved_gate = m
+        .diagnostic
+        .as_mut()
+        .and_then(|d| d.census.as_mut())
+        .map(|c| {
+            let old = c.active_gate;
+            c.active_gate = Some((np, a));
+            old
+        });
+    match miss {
+        NativeMiss::Lookup(dst, _) => {
+            m.add_top(dst, |_| {
+                "accessor descriptor of a written intrinsic key".into()
+            });
+        }
+        NativeMiss::Load(dst) => {
+            m.add_top(dst, |_| {
+                "member of a builtin prototype written through ⊤".into()
+            });
+            m.add_prim(dst, prim::ALL);
+        }
+        NativeMiss::Global(dst, f) => {
+            let name = m.atoms[a as usize].clone();
+            if m.explain && !m.shared_replay {
+                let ws: Vec<String> = m
+                    .native_writes
+                    .iter()
+                    .map(|((w, k), r)| {
+                        format!(
+                            "{}/{:?}: {}",
+                            m.tok_name(*w),
+                            k.map(|x| m.atoms[x as usize].clone()),
+                            m.reasons[r.reason as usize]
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}",
+                    m.global_in_top
+                );
+            }
+            m.add_top(dst, |_| {
+                format!("globalThis.{name} written by unmodeled code")
+            });
+            m.add_prim(dst, prim::ALL);
+            // Unmodeled code may also read what the program stored.
+            let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
+            m.sink_node(f, r);
+        }
+        NativeMiss::Store(src, site) => {
+            let prev = m.store_at.take();
+            m.store_into(np, Key::Named(a), src, site);
+            m.store_at = prev;
+        }
+        NativeMiss::Call(origin, call) => {
+            let native = m.tok_name(np);
+            let name = m.atoms[a as usize].clone();
+            if m.explain && !m.shared_replay && name.starts_with(super::WK_PREFIX) {
+                let ws: Vec<String> = m
+                    .native_writes
+                    .iter()
+                    .filter(|((_, k), _)| k.is_none() || *k == Some(a))
+                    .map(|((w, k), r)| {
+                        format!(
+                            "{}/{:?}: {}",
+                            m.tok_name(*w),
+                            k.map(|x| m.atoms[x as usize].clone()),
+                            m.reasons[r.reason as usize]
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "perry: wpfacts explain: replay call {native}.{name} by {:?} in_top {} handed {} writes {ws:?}",
+                    native_written_by(m, np, a),
+                    m.global_in_top,
+                    handed_to_unknown(m, np)
+                );
+            }
+            let prev = m.cur_this.replace(origin);
+            unknown_method(m, call, &format!("argument of native {native}.{name}"));
+            m.cur_this = prev;
+        }
+        NativeMiss::PrimCall(_, call) => {
+            let name = m.atoms[a as usize].clone();
+            unknown_prim_method(
+                m,
+                call,
+                &format!("argument of a written primitive method {name}"),
+            );
+        }
+        NativeMiss::New(call) => {
+            let name = m.atoms[a as usize].clone();
+            let prev = m.cur_this.take();
+            unknown_method(m, call, &format!("argument of written constructor {name}"));
+            m.cur_this = prev;
+        }
+    }
+    if let Some(old) = saved_gate {
+        let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+        c.active_gate = old;
+        c.pending_gate = None;
+    }
 }
 
 /// The `cache` and `extensions` objects of [`BuiltinNs::Require`].

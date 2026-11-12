@@ -406,6 +406,17 @@ impl Model {
                 }
             }
             Cons::Guard { test, from, dst } => {
+                // The intrinsic buffer constructor a failed `instanceof`
+                // narrows by (`Cons::NotBuffer`): any other value admits.
+                let ctor = match test {
+                    guard::NOT_BUFFER_CTOR => {
+                        Some(self.tok(TokKind::Builtin(BuiltinNs::ArrayBuffer)))
+                    }
+                    guard::NOT_SHARED_BUFFER_CTOR => {
+                        Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
+                    }
+                    _ => None,
+                };
                 // A marker beside its values is no value (DECISIONS 74):
                 // the test waits for them, and fires if the marker leaves
                 // (75). A marker with none beside it holds anything.
@@ -414,6 +425,8 @@ impl Model {
                         t == TOP
                             || if self.is_marker(t) {
                                 !self.beside_values(t)
+                            } else if let Some(c) = ctor {
+                                t != c
                             } else if test == guard::NOT_CALLABLE {
                                 !crate::builtins::surely_callable(self, t)
                             } else {
@@ -444,6 +457,39 @@ impl Model {
                     let strs = self.nodes[n as usize].strs;
                     let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim & !strip, strs);
+                    self.cur_range = saved;
+                }
+            }
+            Cons::ProtoObjects { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & prim::NULL != 0 {
+                    self.add_prim(dst, prim::NULL);
+                }
+            }
+            Cons::NotBuffer { shared, dst } => {
+                let kind = if shared {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                for &t in toks {
+                    let buffer = match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => matches!(
+                            self.tmpls[tm as usize].kind,
+                            TmplKind::BObj { what, .. } if what == kind
+                        ),
+                        _ => false,
+                    };
+                    if !buffer {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
                     self.cur_range = saved;
                 }
             }
@@ -593,7 +639,13 @@ impl Model {
                         // included, and no other key.
                         let k = Some(Key::Named(key));
                         self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
-                        builtins::note_native_data_write(self, TOP, k, "E7 delete");
+                        builtins::note_native_data_write(
+                            self,
+                            TOP,
+                            k,
+                            "E7 delete",
+                            builtins::WriteValue::Absent,
+                        );
                         self.top_reshape(Some(key));
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
@@ -694,6 +746,7 @@ impl Model {
                                 TOP,
                                 k,
                                 "E5 Object.defineProperty",
+                                builtins::WriteValue::Opaque,
                             );
                             self.reshape(Some(key));
                             // DECISIONS 234: in every unit, as an accessor
@@ -2157,8 +2210,18 @@ impl Model {
             }
         }
     }
+    /// What of `src` a prototype change gives: its objects (⊤ included) and
+    /// `null`, never another primitive ([`Cons::ProtoObjects`]).
+    pub(super) fn proto_objects(&mut self, src: NodeId) -> NodeId {
+        let objs = self.node_l("given-prototype-objects");
+        self.cons(src, Cons::ProtoObjects { dst: objs });
+        objs
+    }
+
     /// Both prototype-change spellings contribute the same chain relation.
-    pub(super) fn given_prototype(&mut self, t: Tok, src: NodeId) {
+    /// Only an object (or `null`) is given: `src` is filtered first.
+    pub(super) fn given_prototype(&mut self, t: Tok, given: NodeId) {
+        let src = self.proto_objects(given);
         if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.cons(src, Cons::ParentGiven { of: t });
         }
@@ -2173,10 +2236,10 @@ impl Model {
         // never `src`. A builtin function value keeps the `proto_node` link
         // below, which the model walks.
         if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
-            && !self.native_given.contains(&(t, src))
+            && !self.native_given.contains(&(t, given))
         {
-            self.native_given.push((t, src));
-            self.census_given(t, src);
+            self.native_given.push((t, given));
+            self.census_given(t, given);
             let members = self.node_l("given-prototype-members");
             self.cons(
                 src,
