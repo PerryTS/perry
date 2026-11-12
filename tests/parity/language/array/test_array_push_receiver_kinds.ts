@@ -113,3 +113,30 @@ for (const k of ["arr", "date", "fn", "u8", "proxy"]) {
 { const v = new Set<number>(); v.add(1); try { mapSet(v as any); } catch (e) { } console.log("mapSet set | " + show(v)); }
 { const m = new Map<number, string>(); m.set(0, "z"); console.log("mapReal", mapSet(m), mapGet(m)); }
 { const s = new Set<number>(); s.add(0); console.log("setReal", setAdd(s), setHas(s)); }
+
+// `arr.length = v` in strict code, an element store into a field / module binding, and by-name methods behind
+// the annotation, given primitives and other cells. A String runs its own `String.prototype` method.
+class LenSet { k: number[] = []; clear(): number { this.k.length = 0; return 1; } put(): number { this.k[0] = 9; return this.k[0]; } }
+let GS: number[] = [];
+function storeG(): any { GS[0] = 9; return GS[0]; }
+function atP(a: number[]): any { return a.at(0); }
+function indexOfP(a: number[]): any { return a.indexOf(98 as any); }
+function sliceP(a: number[]): any { return a.slice(0, 1); }
+function popP(a: number[]): any { return a.pop(); }
+function concatP(a: number[]): any { return a.concat([9]); }
+function joinP(a: number[]): any { return a.join("-"); }
+for (const k of ["null", "undef", "true", "hstr", "sstr", "bigint", "obj", "cls", "map", "proxy", "arr"]) {
+  { const v = mk(k); const h = new LenSet(); h.k = v; row("lenset " + k, v, () => h.clear()); }
+  { const v = mk(k); const h = new LenSet(); h.k = v; row("Fstore " + k, v, () => h.put()); }
+}
+for (const k of ["true", "hstr", "sstr", "arr"]) {
+  { const v = mk(k); GS = v; row("Gstore " + k, v, () => storeG()); }
+}
+for (const k of ["null", "undef", "true", "hstr", "sstr", "bigint", "arr"]) {
+  { const v = mk(k); row("at " + k, v, () => atP(v)); }
+  { const v = mk(k); row("indexOf " + k, v, () => indexOfP(v)); }
+  { const v = mk(k); row("slice " + k, v, () => sliceP(v)); }
+  { const v = mk(k); row("pop " + k, v, () => popP(v)); }
+  { const v = mk(k); row("concat " + k, v, () => concatP(v)); }
+  { const v = mk(k); row("join " + k, v, () => joinP(v)); }
+}
