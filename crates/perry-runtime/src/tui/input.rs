@@ -249,20 +249,16 @@ fn dispatch_input_bytes(handler: i64, bytes: &[u8]) {
             )
         });
         let array = scope.root_raw_mut_ptr(array);
-        for (index, byte) in chunk.iter().enumerate() {
-            crate::typedarray::js_uint8array_set(
-                array.get_raw_mut_ptr(),
-                index as i32,
-                i32::from(*byte),
-            );
-        }
-        let arg = f64::from_bits(JSValue::pointer(array.get_raw_const_ptr::<u8>()).bits());
+        array.with_mut_ptr(|pointer| {
+            for (index, byte) in chunk.iter().enumerate() {
+                crate::typedarray::js_uint8array_set(pointer, index as i32, i32::from(*byte));
+            }
+        });
+        let arg = array.with_const_ptr(|pointer| f64::from_bits(JSValue::pointer(pointer).bits()));
         handler.across_const::<ClosureHeader, _>(|| {
-            js_closure_call1(
-                handler.get_raw_const_ptr(),
-                crate::closure::plain_call_receiver(),
-                arg,
-            )
+            handler.with_const_ptr(|pointer| {
+                js_closure_call1(pointer, crate::closure::plain_call_receiver(), arg)
+            })
         });
     }
 }
