@@ -222,6 +222,10 @@ fn a_recorded_order_is_the_layout_and_a_stale_list_is_harmless() {
     // Same named code as the ordinary link: layout cannot introduce clones.
     let mut plain_set = plain_symbols.clone();
     let mut ordered_set = symbols.clone();
+    // The plain build carries the runtime's default hot-text run and its
+    // bound symbols (`link/hot_text_order.rs`); a `--function-order` link
+    // replaces that layout, so they are no code of the program's.
+    plain_set.retain(|n| !n.starts_with("__perry_rt_hot_text_"));
     plain_set.sort();
     ordered_set.retain(|n| !n.contains("hot_text") && !n.contains("thp_enabled"));
     ordered_set.sort();
