@@ -16,11 +16,13 @@
 //! Symbol and internal keys birth no child: a JSON object has no own
 //! property under them.
 //!
-//! FOLD: a class is keyed by its parse root and the LAST TWO steps of its
-//! path (the root and its direct children by their whole, shorter path;
-//! `Model::json_class`). Every object whose path ends in the same two steps
-//! shares the class's tokens: a merge of copies, never a dropped flow. The
+//! FOLD: a class is keyed by its parse root and the LAST step of its path
+//! (`Model::json_class`): every object whose path ends in the same step
+//! shares the class's tokens, a merge of copies, never a dropped flow. The
 //! set is finite: steps are the atoms the program names plus `*` and `[]`.
+//! (Keyed by the last TWO steps, the three.js skin solve ran out of memory:
+//! BATCHB27 m18.) Fields stay per class: a store into `j.a.x` is not read
+//! from `j.b.x`, while `j.a.c` and `j.b.c` are one class.
 use super::*;
 
 impl Model {
@@ -47,7 +49,7 @@ impl Model {
         let Some(&pos) = self.json_pos.get(&p) else {
             return;
         };
-        let key = (pos.root, pos.step, step);
+        let key = (pos.root, step);
         let (o, a) = match self.json_class.get(&key) {
             Some(&pair) => pair,
             None => self.json_birth(key),
@@ -57,8 +59,8 @@ impl Model {
         self.add_prim(n, prim::ALL);
     }
 
-    fn json_birth(&mut self, key: (Tok, JsonStep, JsonStep)) -> (Tok, Tok) {
-        let (root, last, step) = key;
+    fn json_birth(&mut self, key: (Tok, JsonStep)) -> (Tok, Tok) {
+        let (root, step) = key;
         let JsonPos { obj, arr, .. } = self.json_pos[&root];
         let (ctx, base) = match self.toks[root as usize] {
             TokKind::Obj(tm, c) => (c, self.tmpls[tm as usize].display.clone()),
@@ -70,10 +72,7 @@ impl Model {
             JsonStep::Elem => "[]".to_string(),
             JsonStep::Root => String::new(),
         };
-        let path = match last {
-            JsonStep::Root => format!("{base}{}", label(self, step)),
-            _ => format!("{base}~{}{}", label(self, last), label(self, step)),
-        };
+        let path = format!("{base}~{}", label(self, step));
         let o = self.json_clone(obj, ctx, path.clone());
         let a = self.json_clone(arr, ctx, format!("{path}:arr"));
         let pos = JsonPos {

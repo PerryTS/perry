@@ -1674,9 +1674,9 @@ pub struct Model {
     /// JSON token stands for. A fact of the token, keyed by the token.
     pub json_pos: FxHashMap<Tok, JsonPos>,
     /// JSON position classes by key (`solve::json_pos` FOLD): (root object
-    /// token, the parent class's step, the step) -> the class's object and
-    /// array tokens. Compiler-internal: nothing of it reaches the binary.
-    pub json_class: FxHashMap<(Tok, JsonStep, JsonStep), (Tok, Tok)>,
+    /// token, the last step) -> the class's object and array tokens.
+    /// Compiler-internal: nothing of it reaches the binary.
+    pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
     /// A module namespace's values every name reads (DECISIONS 215).
