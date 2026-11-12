@@ -59,7 +59,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 as *const crate::gc::GcHeader;
             if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                return array_values_or_entries(arr, true);
+                return array_own_enumerable(arr, ArrayEnum::Entries);
             }
         }
     }
@@ -192,7 +192,15 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
     }
 }
 
-/// `Object.values` (`entries == false`) / `Object.entries` of a plain Array:
+/// What [`array_own_enumerable`] collects of each own enumerable property.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ArrayEnum {
+    Keys,
+    Values,
+    Entries,
+}
+
+/// `Object.keys` / `Object.values` / `Object.entries` of a plain Array:
 /// EnumerableOwnProperties in OrdinaryOwnPropertyKeys order. The present index
 /// elements ascending (the store's, then the far ones a sparse Array keeps in
 /// its named layout), then the enumerable named keys in insertion order; each
@@ -202,9 +210,9 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
 ///
 /// # Safety
 /// `arr` is a live, forwarding-resolved plain Array.
-pub(super) unsafe fn array_values_or_entries(
+pub(super) unsafe fn array_own_enumerable(
     arr: *const crate::array::ArrayHeader,
-    entries: bool,
+    mode: ArrayEnum,
 ) -> *mut crate::array::ArrayHeader {
     use crate::array::{clean_arr_ptr, ArrayHeader};
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -221,8 +229,13 @@ pub(super) unsafe fn array_values_or_entries(
         result.set_raw_mut_ptr(grown);
     };
     let emit = |key: &str, value: f64| {
-        if !entries {
+        if mode == ArrayEnum::Values {
             push(value);
+            return;
+        }
+        if mode == ArrayEnum::Keys {
+            let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            push(f64::from_bits(JSValue::string_ptr(key).bits()));
             return;
         }
         // One scope per pair: the handles of a pair die with it.
@@ -243,7 +256,13 @@ pub(super) unsafe fn array_values_or_entries(
         }
         let slot = *(crate::array::array_elements_ptr(live) as *const u64).add(index as usize);
         if slot != crate::value::TAG_HOLE {
-            let value = f64::from_bits(crate::array::js_array_get(live, index).bits());
+            // `Get` only when the value is wanted: a getter runs for
+            // values / entries, never for keys.
+            let value = if mode == ArrayEnum::Keys {
+                0.0
+            } else {
+                f64::from_bits(crate::array::js_array_get(live, index).bits())
+            };
             emit(&index.to_string(), value);
         }
         index += 1;
@@ -252,6 +271,8 @@ pub(super) unsafe fn array_values_or_entries(
         let live = clean_arr_ptr(source.get_raw_const_ptr::<ArrayHeader>());
         if let Some(value) = crate::array::array_named_property_get_by_name(live, name) {
             emit(name, value);
+        } else if mode == ArrayEnum::Keys && crate::object::canonical_array_index(name).is_none() {
+            emit(name, 0.0);
         }
     }
     result.get_raw_mut_ptr::<ArrayHeader>()
