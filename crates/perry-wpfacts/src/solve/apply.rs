@@ -743,13 +743,13 @@ impl Model {
                         }
                     }
                     let f = match key {
-                        Key::Named(a) => self.field(q, a),
+                        Key::Named(a) => self.field_r(q, a),
                         Key::Any(_) => self.key_fields(q, key),
                     };
                     self.edge(f, dst);
                     for x in self.class_id_holders(of, q) {
                         let f = match key {
-                            Key::Named(a) => self.field(x, a),
+                            Key::Named(a) => self.field_r(x, a),
                             Key::Any(_) => self.key_fields(x, key),
                         };
                         self.edge(f, dst);

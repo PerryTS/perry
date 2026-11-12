@@ -136,3 +136,21 @@ fn for_in_key_store_any_store_covers_named_stores() {
     let name = &field(m, "name").kind;
     assert!(name.top || name.prims & crate::model::prim::NUM != 0, "mat.name {name:?}");
 }
+
+#[test]
+fn for_in_key_store_skips_names_read_through_a_builtin_chain() {
+    // A primitive read under `valueOf`, `toString`, `byteLength` looks the
+    // key up its chain up to Object.prototype: a [[Get]] makes no property
+    // there (ECMA-262 10.1.8.1 OrdinaryGet), so a for-in over a literal,
+    // whose chain is Object.prototype, still yields only `color`.
+    let ta = "const p: any = process.argv.length; console.log(p.valueOf(), p.toString(), `${p}`, p.byteLength);";
+    let st = "for (const k in v) { this[k] = new Function(process.argv[3])(); }";
+    let pf = mat(st, "{ color: 1 }", ta);
+    assert_eq!(tmpl(&pf, "Mat").escape, None, "a name only read on a builtin chain was stored");
+    // Control: a program store onto Object.prototype is an enumerable key
+    // of every literal's chain (unknown code writing there is DEC 250's).
+    let c1 = mat(st, "{ color: 1 }", &format!("{ta} (Object.prototype as any).valueOf = () => 1;"));
+    let e1 = tmpl(&c1, "Mat").escape.clone();
+    eprintln!("controls {e1:?}");
+    assert!(e1.is_some());
+}
