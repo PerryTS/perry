@@ -157,9 +157,14 @@ impl Model {
                 orig.insert(c, o);
             });
         }
-        for (&(k, l, t, _), &i) in self.sum.inst_key.iter() {
+        // The last field is the run's value (`Inst::val`): `-` for the
+        // shared run.
+        for (&(k, l, t, v), &i) in self.sum.inst_key.iter() {
             let f = self.sum.insts[i as usize].f;
-            let _ = writeln!(p.out, "I {i} {k} {f} {t} {l}");
+            let _ = match v {
+                crate::summary::NO_VAL => writeln!(p.out, "I {i} {k} {f} {t} {l} -"),
+                v => writeln!(p.out, "I {i} {k} {f} {t} {l} {v}"),
+            };
         }
         for n in 0..self.nodes.len() {
             let f = self.node_fn.get(n).copied().unwrap_or(crate::model::NO_FN);
