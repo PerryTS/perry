@@ -784,13 +784,30 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
         .then(|| m.call_lit.get(&call).copied())
         .flatten()
         .unwrap_or_else(|| m.atom(crate::STAR_KEY));
+    // B.2.2.2 / B.2.2.3: O = ToObject(this), DefinePropertyOrThrow(O, key,
+    // accessor): the accessor is an own property of the receiver itself.
     // Object.prototype is a modeled holder: the define records the accessor
     // there as defineProperty does (an accessor on it is E23), under a
-    // computed key too (the AccessorInstall any-key branch).
-    if accessor_receiver(m, origin, key) || matches!(m.toks[origin as usize], TokKind::ObjectProto)
-    {
+    // computed key too (the AccessorInstall any-key branch). Any other
+    // object that is not a builtin prototype (⊤ may be one; a receiver
+    // marker stands for other units' objects) gets an own accessor on that
+    // one object: a receiver whose keys have no modeled holder group (a
+    // builtin function or namespace under a key it declares or a computed
+    // one, `Object.prototype`'s method stand-in) as the any-key accessor
+    // (every read of it may run the getter); no prototype is redefined.
+    let objproto = matches!(m.toks[origin as usize], TokKind::ObjectProto);
+    let modeled = accessor_receiver(m, origin, key) || objproto;
+    let own = !modeled && origin != TOP && !m.is_marker(origin) && !m.is_chain_proto(origin);
+    if modeled || own {
+        let key = if own { m.atom(crate::STAR_KEY) } else { key };
         let holder = m.node_l("annexb-holder");
         m.add_tok(holder, origin);
+        if own {
+            // The getter / setter runs with `this` = the receiver.
+            for &f in c.args.iter().skip(1).take(1).chain(&c.spread) {
+                m.cons(f, Cons::ThisFrom { recv: holder });
+            }
+        }
         // Spread positions are not retained in CallSite: any direct or
         // spread value may be argument 1, and its key is not known here.
         let direct = if c.spread.is_empty() {
