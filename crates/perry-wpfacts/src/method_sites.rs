@@ -32,7 +32,7 @@
 //! `PERRY_FACTS_SABOTAGE=tasite` claims every site a typed-array receiver.
 //! The dump (`PERRY_FACTS_DUMP`) prints one `# method_site` line per site:
 //! `module= site=callee:N|recv:N|local:N key= typed_array=1`, or
-//! `typed_array=0 refused=<why>`.
+//! `typed_array=0(<why>)`.
 
 use crate::bindings::ModuleBindings;
 use crate::gen::Gen;
@@ -144,9 +144,9 @@ pub(crate) fn collect(
             let site = site_text(site);
             p.push(match why {
                 None => format!("# method_site module={mi} site={site} key={key} typed_array=1"),
-                Some(why) => format!(
-                    "# method_site module={mi} site={site} key={key} typed_array=0 refused={why}"
-                ),
+                Some(why) => {
+                    format!("# method_site module={mi} site={site} key={key} typed_array=0({why})")
+                }
             });
         }
         if let (None, Some(mb)) = (why, bindings.get_mut(mi as usize)) {
