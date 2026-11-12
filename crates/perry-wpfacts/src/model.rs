@@ -1926,6 +1926,15 @@ pub struct Model {
 
     /// The relations dump, if requested: one line per primitive relation.
     pub relations: Option<Vec<String>>,
+    /// First-arrival provenance (`PERRY_FACTS_PROVENANCE=1`, `provenance.rs`):
+    /// diagnostic only, never read by facts.
+    pub(crate) prov: Option<Box<crate::provenance::Prov>>,
+    /// How the current arrival is delivered (`provenance::PM_*`).
+    pub(crate) prov_mode: u8,
+    /// The constraint being applied (provenance only).
+    pub(crate) prov_rule: Option<(NodeId, Cons)>,
+    /// The call being bound, plus one (0: none; provenance only).
+    pub(crate) prov_call: u32,
     /// Relation phase tag: b'G' generation (inputs), b'S' solver rules
     /// (re-derived by the checker), b'B' builtin summaries (axioms).
     pub rel_phase: u8,

@@ -104,6 +104,10 @@ impl Batch {
     pub(crate) fn len(&self) -> usize {
         self.0.len
     }
+    /// The batch's tokens in order (provenance diagnostic, `provenance.rs`).
+    pub(crate) fn each_token(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.chunks.iter().flat_map(|c| c.iter().copied())
+    }
     #[cfg(test)]
     pub(crate) fn tokens(&self) -> Tokens<'_> {
         Tokens::Chunks(&self.0)

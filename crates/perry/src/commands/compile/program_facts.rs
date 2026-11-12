@@ -122,8 +122,9 @@ pub(crate) fn run(
     }
     let started = std::time::Instant::now();
     let dump = std::env::var_os("PERRY_FACTS_DUMP").map(PathBuf::from);
-    let relations =
-        dump.is_some() && std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1");
+    let relations = dump.is_some()
+        && (std::env::var("PERRY_FACTS_RELATIONS").is_ok_and(|v| v == "1")
+            || std::env::var("PERRY_FACTS_PROVENANCE").is_ok_and(|v| v == "1"));
     let cfg = perry_wpfacts::FactsConfig {
         verify_facts: perry_codegen::verify_facts::enabled(),
         dce_bodies: perry_codegen::verify_facts::dce_enabled(),

@@ -694,6 +694,15 @@ impl Model {
     /// receiver, and the call's arguments and result once per (call,
     /// instance).
     pub(crate) fn bind_layout(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.bind_layout_bound(call, ft, x, prim);
+        self.prov_call = pc;
+    }
+
+    pub(crate) fn bind_layout_bound(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
         let f = self.tok_fn(ft);
         if call != NO_NODE && self.composed_away(call, f) {
             return;
@@ -847,7 +856,10 @@ impl Model {
                 src if src != NO_NODE && self.literal_strings => self.nodes[src as usize].strs,
                 _ => crate::model::STRS_TOP,
             };
+            let pm = self.prov_mode;
+            self.prov_mode = crate::provenance::PM_SEED;
             self.add_s(base[slot as usize], toks, prim, strs);
+            self.prov_mode = pm;
             self.cur_range = saved_range;
             if refuted {
                 self.refute_own_test(base[slot as usize]);
@@ -949,6 +961,15 @@ impl Model {
 
     /// Arguments and result of `call` into instance `inst`.
     fn wire_args(&mut self, call: CallId, inst: u32) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.wire_args_bound(call, inst);
+        self.prov_call = pc;
+    }
+
+    fn wire_args_bound(&mut self, call: CallId, inst: u32) {
         let f = self.sum.insts[inst as usize].f;
         let terms = self.sum.insts[inst as usize].params.clone();
         let fparams = self.funcs[f as usize].params.clone();

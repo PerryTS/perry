@@ -242,6 +242,10 @@ impl Model {
                 self.charge_work(before as u64);
             }
         }
+        if self.prov.is_some() && !fresh.is_empty() {
+            let at = std::panic::Location::caller();
+            self.prov_arrivals(n, &mut fresh.iter().copied(), false, at);
+        }
         self.fresh = fresh;
         self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
@@ -789,7 +793,12 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = n;
         self.cur_why = u32::MAX;
+        let pv = (self.prov_mode, self.prov_rule);
+        if self.prov.is_some() {
+            (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+        }
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        (self.prov_mode, self.prov_rule) = pv;
         (self.cur_src, self.cur_why) = saved;
         self.bufs.push(toks);
     }
@@ -917,6 +926,9 @@ impl Model {
             // A value-copy edge delivers the source's Numbers with their
             // interval (`add_tokens`).
             self.cur_range = Some(self.rg(n));
+            if self.prov.is_some() {
+                (self.prov_mode, self.prov_rule) = (crate::provenance::PM_COPY, None);
+            }
             let mut i = 0;
             while i < self.nodes[n as usize].succ.len() {
                 let s = self.nodes[n as usize].succ[i];
@@ -985,12 +997,16 @@ impl Model {
                 }
                 self.cur_src = n;
                 self.cur_why = u32::MAX;
+                if self.prov.is_some() {
+                    (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
+                }
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
             }
             delta.clear();
         }
         self.cur_src = NO_NODE;
         self.cur_why = u32::MAX;
+        (self.prov_mode, self.prov_rule) = (crate::provenance::PM_ADD, None);
         #[cfg(debug_assertions)]
         self.assert_shadowed_complete();
     }

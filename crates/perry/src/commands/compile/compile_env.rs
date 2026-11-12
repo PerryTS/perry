@@ -517,6 +517,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
         "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),
     (
+        "PERRY_FACTS_PROVENANCE",
+        "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
+    ),
+    (
         "PERRY_FACTS_RELATIONS",
         "Diagnostics/analysis-only output of the program-facts pass; emitted code does not depend on it.",
     ),

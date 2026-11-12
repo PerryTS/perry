@@ -46,6 +46,7 @@ mod literal_strings;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+mod provenance;
 mod push_fills;
 pub mod records;
 mod rest_elems;
@@ -2355,7 +2356,10 @@ fn compute_act<'a>(
         interp_guard,
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
-        relations: g.m.relations.take(),
+        relations: {
+            g.m.prov_finish();
+            g.m.relations.take()
+        },
         rep_probe,
         zero_sign_tolerated,
         tok_names,

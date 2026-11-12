@@ -289,6 +289,15 @@ impl Model {
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
     pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.bind_args_bound(call, t);
+        self.prov_call = pc;
+    }
+
+    pub(crate) fn bind_args_bound(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;

@@ -1927,6 +1927,15 @@ impl Model {
     /// namespace value runs per (call, receiver) as before (`BuiltinCallee`).
     /// The result is the same as one `CallThis` per (callee, call, origin).
     pub(super) fn bind_via(&mut self, callee: NodeId, call: CallId, origin: Tok) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.bind_via_bound(callee, call, origin);
+        self.prov_call = pc;
+    }
+
+    pub(super) fn bind_via_bound(&mut self, callee: NodeId, call: CallId, origin: Tok) {
         if !self.callthis_done.insert((callee, call, origin)) {
             return;
         }

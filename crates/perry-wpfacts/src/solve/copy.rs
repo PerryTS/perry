@@ -13,6 +13,7 @@ impl Model {
     }
 
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
+    #[track_caller]
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Edge(a, b)) {
@@ -23,10 +24,12 @@ impl Model {
 
     /// `edge` without a relation line: internal relays the checker derives
     /// from a logged rule (`bind_via`).
+    #[track_caller]
     pub(super) fn edge_quiet(&mut self, a: NodeId, b: NodeId) {
         self.edge_impl(a, b, false);
     }
 
+    #[track_caller]
     fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
         if a == b {
             return;
@@ -64,6 +67,9 @@ impl Model {
                 }
             }
             node.succ.push(b);
+        }
+        if self.prov.is_some() {
+            self.prov_edge(a, b, std::panic::Location::caller());
         }
         if !self.cell_watch.is_empty() && self.cell_watch.remove(&a) {
             self.cell_woken.push(a);
@@ -107,7 +113,10 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = a;
         self.cur_why = u32::MAX;
+        let pm = self.prov_mode;
+        self.prov_mode = crate::provenance::PM_COPY;
         self.copy_to(a, b, Tokens::Slice(&toks), prim, strs);
+        self.prov_mode = pm;
         (self.cur_src, self.cur_why) = saved;
         self.cur_range = saved_range;
         self.bufs.push(toks);
@@ -219,6 +228,13 @@ impl Model {
                     }
                 }
             }
+        }
+        if self.prov.is_some() {
+            let saved = self.cur_src;
+            self.cur_src = src;
+            let at = std::panic::Location::caller();
+            self.prov_arrivals(dst, &mut batch.each_token(), true, at);
+            self.cur_src = saved;
         }
         let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);

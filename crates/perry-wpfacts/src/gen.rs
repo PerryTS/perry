@@ -594,6 +594,7 @@ impl<'a> Gen<'a> {
         }
         if relations {
             m.relations = Some(Vec::new());
+            m.prov = crate::provenance::Prov::from_env();
         }
         let top = m.tok(TokKind::Top);
         debug_assert_eq!(top, TOP);
