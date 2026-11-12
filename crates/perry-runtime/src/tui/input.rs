@@ -8,8 +8,9 @@
 //! dispatches to the registered `useInput` handler.
 //!
 //! Mode toggle is process-wide and reversible — the cooked-mode
-//! termios is saved on first enable so disable can restore.
+//! termios is saved on enable so disable can restore.
 
+#[cfg(not(unix))]
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Mutex;
@@ -24,14 +25,17 @@ use crate::value::JSValue;
 
 /// Bytes waiting for the main thread to dispatch.
 static PENDING_BYTES: Mutex<Vec<u8>> = Mutex::new(Vec::new());
+#[cfg(unix)]
+#[path = "input/reader_unix.rs"]
+mod reader_unix;
+#[cfg(unix)]
+static READER: Mutex<Option<reader_unix::Reader>> = Mutex::new(None);
+
 /// Whether the reader thread has been spawned.
+#[cfg(not(unix))]
 static READER_STARTED: AtomicBool = AtomicBool::new(false);
-/// Whether we should keep reading. Cleared on `disable_raw_mode` so
-/// the thread can exit cleanly (it'll observe this between bytes).
-/// Note: `read()` is blocking so an in-flight read doesn't see the
-/// flag until the next byte arrives — fine for our shutdown path
-/// which is typically driven by the user pressing 'q' (which IS a
-/// byte).
+/// Whether the non-Unix reader should continue after its current read.
+#[cfg(not(unix))]
 static READING: AtomicBool = AtomicBool::new(false);
 /// Registered useInput handler — at most one for v1. Multiple-handler
 /// dispatch lands in Phase 2.5. Stored as the raw closure pointer.
@@ -90,9 +94,13 @@ mod termios_impl {
 
     pub fn disable() -> bool {
         unsafe {
-            let saved = SAVED.lock().unwrap();
-            if let Some(t) = saved.as_ref() {
-                libc::tcsetattr(0, libc::TCSANOW, t) == 0
+            let mut saved = SAVED.lock().unwrap();
+            if let Some(settings) = saved.as_ref() {
+                if libc::tcsetattr(0, libc::TCSANOW, settings) != 0 {
+                    return false;
+                }
+                *saved = None;
+                true
             } else {
                 true
             }
@@ -138,6 +146,23 @@ mod termios_impl {
 
 /// Enable raw mode + spawn the reader thread (idempotent). Called from
 /// the render-loop entry.
+#[cfg(unix)]
+pub fn enable_raw_mode() {
+    let mut reader = READER.lock().unwrap();
+    if reader.as_ref().is_some_and(|reader| !reader.is_finished()) {
+        return;
+    }
+    drop(reader.take());
+    let _ = termios_impl::enable();
+    match reader_unix::Reader::start(0) {
+        Ok(started) => *reader = Some(started),
+        Err(_) => {
+            let _ = termios_impl::disable();
+        }
+    }
+}
+
+#[cfg(not(unix))]
 pub fn enable_raw_mode() {
     let _ = termios_impl::enable();
     // WASI cannot spawn the reader thread: no terminal input.
@@ -168,9 +193,15 @@ pub fn enable_raw_mode() {
     }
 }
 
-/// Restore cooked-mode termios. The reader thread is left running
-/// (can't safely cancel a blocking `read`); subsequent enable_raw_mode
-/// calls will pick it back up.
+#[cfg(unix)]
+pub fn disable_raw_mode() {
+    let mut reader = READER.lock().unwrap();
+    drop(reader.take());
+    PENDING_BYTES.lock().unwrap().clear();
+    let _ = termios_impl::disable();
+}
+
+#[cfg(not(unix))]
 pub fn disable_raw_mode() {
     let _ = termios_impl::disable();
     READING.store(false, Ordering::Release);
@@ -311,7 +342,7 @@ mod tests {
     /// alive for the duration of the test; making it the return value
     /// of `reset()` ensures no test can clear globals without first
     /// taking the lock.
-    fn reset() -> std::sync::MutexGuard<'static, ()> {
+    pub(super) fn reset() -> std::sync::MutexGuard<'static, ()> {
         let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         PENDING_BYTES.lock().unwrap().clear();
         INPUT_HANDLER.store(0, Ordering::Release);
@@ -349,3 +380,7 @@ mod tests {
         assert_eq!(INPUT_HANDLER.load(Ordering::Acquire), 0xDEADBEEF);
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "input/reader_tests.rs"]
+mod reader_tests;
