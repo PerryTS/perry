@@ -383,7 +383,7 @@ fn build_iterator_prototypes() {
         shared,
     );
     let string_proto = build_family_proto(
-        crate::fn_info!(#[realm("%StringIteratorPrototype%.next")] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%StringIteratorPrototype%.next", effects = { returns(fresh(Object.prototype, fields = {value: prim(str | undefined), done: prim(bool)})) })] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "String Iterator",
         shared,
     );

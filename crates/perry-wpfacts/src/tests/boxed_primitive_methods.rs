@@ -71,3 +71,39 @@ fn a_wrapper_value_of_hands_neither_the_wrapper_nor_its_fields() {
         assert!(proven(&pf, "a"), "{s}\n{}", pf.dump_text());
     }
 }
+
+/// `String.prototype[@@iterator]` (ECMA-262 22.1.3.36) does
+/// RequireObjectCoercible + ToString of `this` and returns a fresh String
+/// Iterator over that string (22.1.5.1 CreateStringIterator); its `next`
+/// (22.1.5.2.1) yields fresh `{ value: string | undefined, done }` results.
+/// Neither hands the wrapper or what it holds to anything.
+#[test]
+fn a_wrapper_iterator_hands_neither_the_wrapper_nor_its_fields() {
+    for wrap in ["new String(\"ab\")", "new Number(3)", "new Boolean(true)"] {
+        let s = format!(
+            "class A {{ a = 1; }}
+             const a = new A();
+             const w: any = {wrap};
+             w.held = a;
+             try {{ const it = w[Symbol.iterator](); console.log(it.next().value); }} catch (e) {{ console.log(\"TypeError\"); }}
+             console.log(a.a);"
+        );
+        let pf = facts(&s);
+        assert!(proven(&pf, "a"), "{s}\n{}", pf.dump_text());
+    }
+}
+
+/// Control: unknown code replaces `String.prototype[@@iterator]`; the
+/// wrapper call runs it, which may take the wrapper and its fields.
+#[test]
+fn a_written_wrapper_iterator_takes_the_wrapper() {
+    let s = "class A { a = 1; }
+         (String.prototype as any)[Symbol.iterator] = new Function(process.argv[2])();
+         const a = new A();
+         const w: any = new String(\"ab\");
+         w.held = a;
+         const it = w[Symbol.iterator]();
+         console.log(it, a.a);";
+    let pf = facts(s);
+    assert!(!proven(&pf, "a"), "{s}\n{}", pf.dump_text());
+}

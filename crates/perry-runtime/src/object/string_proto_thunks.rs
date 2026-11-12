@@ -232,7 +232,7 @@ fn install_string_iterator_symbol(proto_obj: *mut ObjectHeader) {
     if iter.is_null() {
         return;
     }
-    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]")] export crate::object::string_proto_thunks::string_proto_symbol_iterator_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm("String.prototype[\"@@iterator\"]", effects = { coerce(this, ToPrimitive); returns(fresh("%StringIteratorPrototype%")) })] export crate::object::string_proto_thunks::string_proto_symbol_iterator_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     if closure.is_null() {
         return;
