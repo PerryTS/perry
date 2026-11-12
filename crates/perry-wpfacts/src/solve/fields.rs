@@ -174,8 +174,11 @@ impl Model {
         // (`store_into`): the setters on the target's chain run with the
         // target as `this` (ECMA-262 20.1.2.1 step 4.b.iii.2), once the
         // source has such a key (an unmodeled source may have any).
+        // It is a write of the target under some key as well: onto a
+        // builtin prototype, every key of it (`note_native_write`).
         if opaque {
             self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s));
+            self.note_unnamed_set(d);
         } else {
             self.cons(fa_s, Cons::UnnamedSet { target: d });
         }
@@ -188,6 +191,14 @@ impl Model {
         let act = ChainAct::Load(fa_d);
         self.any_walk_holders.entry(s).or_default().push((s, act));
         self.accessor_hit(s, s, Key::any(), act);
+    }
+
+    /// A copied key the model does not name was [[Set]] on `t`
+    /// (`spread_into`): a store under some key, as `store_into` notes one.
+    pub(super) fn note_unnamed_set(&mut self, t: Tok) {
+        if !builtins::builtin_function(self, t) {
+            builtins::note_native_write(self, t, None, "copy of an unnamed key");
+        }
     }
 
     /// DECISIONS 241: the join's values of function token `t`'s own
