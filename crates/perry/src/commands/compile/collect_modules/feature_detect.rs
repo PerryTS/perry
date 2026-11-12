@@ -710,6 +710,11 @@ fn detect_optional_feature_usage_with_capabilities(
         || ["MessageChannel", "MessagePort", "BroadcastChannel"]
             .iter()
             .any(|name| hir_debug.contains(name));
+    // The global `BroadcastChannel` reaches other channels of its name only
+    // through the stdlib's channel registry (`worker_threads::broadcast_channel`,
+    // registered by the stdlib's init): without the stdlib its runtime object
+    // has no transport, and `postMessage` delivered nothing.
+    ctx.needs_stdlib |= hir_debug.contains(r#""BroadcastChannel""#);
     ctx.uses_os |= global_object::may_escape(hir_module)
         || hir_debug
             .as_bytes()
