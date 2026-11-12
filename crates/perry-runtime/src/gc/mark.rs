@@ -105,6 +105,7 @@ pub(super) fn classifier_valid_object_start(addr: usize) -> bool {
 
 /// #6179: differential-verification mode for the page-metadata classifier.
 /// A `gc-instruments` knob (#10572): constant `false` without the feature.
+#[cfg(any(test, debug_assertions))]
 pub(super) fn classifier_verify_enabled() -> bool {
     #[cfg(not(perry_gc_instruments))]
     return false;

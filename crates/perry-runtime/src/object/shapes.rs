@@ -650,7 +650,14 @@ impl ShapeRecordRef {
         }
     }
 
-    /// A ConstFn lane at slot >= 32 exists.
+    /// A ConstFn lane at slot >= 32 exists. Only the field-representation
+    /// verifier asks, so it exists in the same configurations.
+    #[cfg(any(
+        test,
+        debug_assertions,
+        feature = "field-rep-assert",
+        perry_gc_instruments
+    ))]
     #[inline]
     pub(crate) fn has_tail_constfn(self) -> bool {
         // SAFETY: a live slab record (type docs).
