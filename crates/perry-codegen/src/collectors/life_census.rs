@@ -201,6 +201,7 @@ impl ModuleCensus {
         functions.extend(callers.closures.iter());
         let classes_ref: Vec<&perry_hir::Class> = hir.classes.iter().collect();
         let fates = Fates::compute(&functions, &classes_ref, &CodegenProof { facts });
+        write_params(&hir.name, &functions, &classes_ref, &fates, &callers);
         let mut bodies = HashMap::new();
         let mut note = |f: &perry_hir::Function, label: String, direct: bool| {
             bodies.insert(
@@ -604,6 +605,89 @@ fn kind(e: &Expr) -> String {
         .next()
         .unwrap_or("?")
         .to_string()
+}
+
+/// `<census>.params.tsv`: one row per parameter (and `this` of a method or
+/// constructor) of every body with a fate: module, body, function id,
+/// `<index>:<name>` or `this`, called directly here (`direct`) / referenced
+/// other than as a callee (`escapes`), and the fate with its reason.
+fn write_params(
+    module: &str,
+    functions: &[&perry_hir::Function],
+    classes: &[&perry_hir::Class],
+    fates: &Fates,
+    callers: &sides::Callers,
+) {
+    let Some(out) = path() else { return };
+    let text = params_text(module, functions, classes, fates, callers);
+    if text.is_empty() {
+        return;
+    }
+    static WRITE: Mutex<()> = Mutex::new(());
+    let _w = WRITE.lock().expect("census params write");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(format!("{out}.params.tsv"))
+    {
+        let _ = f.write_all(text.as_bytes());
+    }
+}
+
+/// The rows of `write_params`.
+fn params_text(
+    module: &str,
+    functions: &[&perry_hir::Function],
+    classes: &[&perry_hir::Class],
+    fates: &Fates,
+    callers: &sides::Callers,
+) -> String {
+    let mut bodies: Vec<(String, &perry_hir::Function, bool)> =
+        functions.iter().map(|f| (f.name.clone(), *f, false)).collect();
+    for c in classes {
+        if let Some(k) = &c.constructor {
+            bodies.push((format!("{}.constructor", c.name), k, true));
+        }
+        for m in &c.methods {
+            bodies.push((format!("{}.{}", c.name, m.name), m, true));
+        }
+        for m in &c.static_methods {
+            bodies.push((format!("{}.static.{}", c.name, m.name), m, false));
+        }
+    }
+    let mut text = String::new();
+    for (label, f, this) in bodies {
+        let Some(ff) = fates.of_fn(f.id) else { continue };
+        let use_ = match (callers.sites.contains_key(&f.id), callers.escapes.contains(&f.id)) {
+            (true, true) => "direct+escapes",
+            (true, false) => "direct",
+            (false, true) => "escapes",
+            (false, false) => "-",
+        };
+        let mut row = |param: String, p: ParamFate| {
+            text.push_str(&format!(
+                "{module}\t{label}\t{}\t{param}\t{use_}\t{}\n",
+                f.id,
+                fate_why(p)
+            ));
+        };
+        for (i, (p, pf)) in f.params.iter().zip(&ff.params).enumerate() {
+            row(format!("{i}:{}", p.name), *pf);
+        }
+        if this {
+            row("this".to_string(), ff.this);
+        }
+    }
+    text
+}
+
+/// Column 9's fate: `fate_word`, and for `Kept` its first keeping use in
+/// the body (`Kept:<why>`).
+fn fate_why(f: ParamFate) -> String {
+    match (f.fate, f.why) {
+        (Fate::Kept, Some(w)) => format!("Kept:{w}"),
+        _ => fate_word(f).to_string(),
+    }
 }
 
 fn fate_word(f: ParamFate) -> &'static str {

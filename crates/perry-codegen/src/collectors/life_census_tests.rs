@@ -426,14 +426,14 @@ fn census_reports_receiving_sides() {
     let sides: HashSet<&str> = rows.iter().map(|r| r.6.as_str()).collect();
     for want in [
         "compiled:direct:Dropped",
-        "compiled:direct:Kept",
+        "compiled:direct:Kept:use(PutValueSet)",
         "compiled:field-bodies:Dropped",
         "compiled:local-bodies:Dropped",
         "builtin:global.log",
         "builtin:ObjectKeys",
         "builtin:ArrayFrom",
         "new:kept-by-new-object",
-        "new:Kept",
+        "new:Kept:use(PutValueSet)",
         "unknown-target:receiver-no-facts",
         "unknown-target:receiver-guarded",
         "unknown-target:other-module",
@@ -445,6 +445,26 @@ fn census_reports_receiving_sides() {
     ] {
         assert!(sides.contains(want), "missing {want}: {rows:#?}");
     }
+    // `<census>.params.tsv`: one row per parameter and `this`, with the
+    // first keeping use of a `Kept` one.
+    let mut functions: Vec<&perry_hir::Function> = m.functions.iter().collect();
+    functions.extend(census.callers.closures.iter());
+    let classes: Vec<&perry_hir::Class> = m.classes.iter().collect();
+    let params = super::params_text("m", &functions, &classes, &census.fates, &census.callers);
+    let row = |body: &str, param: &str| -> String {
+        params
+            .lines()
+            .find(|l| {
+                let c: Vec<&str> = l.split('\t').collect();
+                c[1] == body && c[3] == param
+            })
+            .unwrap_or_else(|| panic!("no row {body} {param}: {params}"))
+            .to_string()
+    };
+    assert!(row("drop1", "0:o").ends_with("\tdirect\tDropped"), "{params}");
+    assert!(row("keep1", "0:o").ends_with("\tdirect\tKept:use(PutValueSet)"), "{params}");
+    assert!(row("Box.constructor", "0:v").ends_with("\tKeptByReceiver"), "{params}");
+    assert!(row("M.run", "this").contains("\tthis\t"), "{params}");
     assert!(
         sides.iter().any(|s| s.starts_with("compiled:static")),
         "{rows:#?}"
