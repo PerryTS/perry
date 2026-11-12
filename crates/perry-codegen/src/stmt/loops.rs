@@ -4,6 +4,7 @@ mod accumulator_scope;
 pub(crate) mod bounded_poll;
 mod i32_counter;
 mod iterator_record;
+mod named_len;
 mod rest_counter;
 mod walk_bound;
 pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
@@ -86,6 +87,9 @@ struct LengthHoist {
     op: perry_hir::CompareOp,
     lhs_addend: i32,
     buffer_bounds_width_units: Option<u32>,
+    /// The walker kept the loop only with the facts' word that no store
+    /// through another name reaches the receiver (`named_len`).
+    named: bool,
 }
 
 /// #9254 phase 3: prove the dynamic extent in which an ordinary
@@ -5590,11 +5594,17 @@ fn match_packed_f64_versioned_loop(
     if !ctx.pending_labels.is_empty() {
         return packed_loop_reject("pending_labels");
     }
-    let ordinary_hoist =
-        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    // Check mode: a loop kept by a named length is witnessed in the
+    // ordinary loop's condition block only (`named_len`).
+    let unwitnessed = |hoist: &LengthHoist| hoist.named && crate::verify_facts::enabled();
+    let ordinary_hoist = condition
+        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        .filter(|hoist| !unwitnessed(hoist));
     let hoist = ordinary_hoist
         .or_else(|| {
-            condition.and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+            condition
+                .and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+                .filter(|hoist| !unwitnessed(hoist))
         })
         .or_else(|| {
             // #9253 flagged this as the one SILENT gate in the matcher: a loop
@@ -7849,8 +7859,14 @@ fn lower_for_after_init_impl(
     // A precomputed bound replaces only the emitted length LOAD. Keep the
     // structural classification: bounded-index facts, buffer-width facts and
     // the counter's i32 slot are independent proofs consumed inside clones.
-    let raw_hoist_classification: Option<LengthHoist> =
-        condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
+        || !ctx.stable_packed_loop_facts.is_empty()
+        || precomputed_i32_bound.is_some();
+    let raw_hoist_classification: Option<LengthHoist> = condition
+        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        // Check mode: a loop kept by a named length is one whose condition
+        // block holds the witness (`named_len::witness`).
+        .filter(|hoist| !(hoist.named && in_call_free_clone && crate::verify_facts::enabled()));
     // The facts hold the length where the walker stops (`held_len`).
     let held_by_facts = if raw_hoist_classification.is_none()
         && precomputed_i32_bound.is_none()
@@ -7868,6 +7884,7 @@ fn lower_for_after_init_impl(
             op: perry_hir::CompareOp::Lt,
             lhs_addend: 0,
             buffer_bounds_width_units: None,
+            named: false,
         }));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
@@ -7929,9 +7946,6 @@ fn lower_for_after_init_impl(
     // i32 counter slot below are proofs and storage, not emitted work, and the
     // clone's other lowering may depend on them; suppressing those too would
     // trade one silent loss for another.
-    let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
-        || !ctx.stable_packed_loop_facts.is_empty()
-        || precomputed_i32_bound.is_some();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
         let hoisted_slot = if in_call_free_clone {
             None
@@ -8256,6 +8270,9 @@ fn lower_for_after_init_impl(
         let go_label = ctx.block_label(go_idx);
         ctx.block().cond_br(&overflowed, &exit_label, &go_label);
         ctx.current_block = go_idx;
+    }
+    if let Some(hoist) = hoist_classification.filter(|hoist| hoist.named) {
+        named_len::witness(ctx, hoist.arr_id, hoisted_length_slot.as_deref())?;
     }
     let used_precomputed_i32_cond = if let Some((counter_id, bound_i32)) = &precomputed_i32_bound {
         // #6011: range-versioned fast copy — the caller already materialized
@@ -9109,7 +9126,11 @@ fn classify_for_length_hoist_impl(
     if !receiver_is_eligible {
         return None;
     }
-    let guarded_aliases = guarded_array_aliases_for_loop(ctx, arr_id, update, body);
+    let mut names = named_len::Names::new(
+        ctx,
+        arr_id,
+        guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+    );
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
         Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
@@ -9137,22 +9158,26 @@ fn classify_for_length_hoist_impl(
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
-    if !body.iter().all(|s| {
-        stmt_preserves_array_length(
-            ctx,
-            s,
-            arr_id,
-            bounded_idx_id,
-            has_strict_bound,
-            &guarded_aliases,
-        )
-    }) {
-        return None;
-    }
-    if update.is_some_and(|e| {
-        !expr_preserves_array_length(ctx, e, arr_id, u32::MAX, false, &guarded_aliases)
-    }) {
-        return None;
+    let preserved = |names: &named_len::Names| {
+        body.iter().all(|s| {
+            stmt_preserves_array_length(ctx, s, arr_id, bounded_idx_id, has_strict_bound, names)
+        }) && update
+            .is_none_or(|e| expr_preserves_array_length(ctx, e, arr_id, u32::MAX, false, names))
+    };
+    // First with every other receiver feared; a loop refused that way is
+    // asked again with the facts' word on them (`named_len`).
+    let mut named = false;
+    if !preserved(&names) {
+        let cleared = names.ask(ctx, arr_id)?;
+        if !preserved(&names) {
+            return None;
+        }
+        if !cleared {
+            named_len::diag(ctx, arr_id, "refused:no-fact");
+            return None;
+        }
+        named_len::diag(ctx, arr_id, "named");
+        named = true;
     }
     let buffer_bounds_width_units = match op {
         CompareOp::Lt => i64::from(lhs_addend).checked_add(1),
@@ -9167,6 +9192,7 @@ fn classify_for_length_hoist_impl(
         op,
         lhs_addend,
         buffer_bounds_width_units,
+        named,
     })
 }
 
@@ -9224,7 +9250,12 @@ fn classify_for_length_hoist_rejection(
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
-    let guarded_aliases = guarded_array_aliases_for_loop(ctx, arr_id, update, body);
+    let guarded_aliases = named_len::Names::new(
+        ctx,
+        arr_id,
+        guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+    )
+    .asked(ctx, arr_id);
     let body_effect = stmts_array_length_effect(
         ctx,
         body,
@@ -9654,7 +9685,7 @@ fn stmts_array_length_effect(
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
-    aliases: &std::collections::HashSet<u32>,
+    aliases: &named_len::Names,
 ) -> LoopArrayLengthEffect {
     first_blocking_loop_effect(stmts.iter().map(|stmt| {
         stmt_array_length_effect(ctx, stmt, arr_id, bounded_idx_id, has_strict_bound, aliases)
@@ -9667,7 +9698,7 @@ fn stmt_array_length_effect(
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
-    aliases: &std::collections::HashSet<u32>,
+    aliases: &named_len::Names,
 ) -> LoopArrayLengthEffect {
     use perry_hir::Stmt;
     match s {
@@ -9887,7 +9918,7 @@ fn expr_array_length_effect(
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
-    aliases: &std::collections::HashSet<u32>,
+    aliases: &named_len::Names,
 ) -> LoopArrayLengthEffect {
     use perry_hir::{ArrayElement, Expr};
     let walk = |sub: &Expr| {
@@ -9897,14 +9928,14 @@ fn expr_array_length_effect(
         Expr::ArrayPush {
             array_id, value, ..
         } => {
-            if local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) {
+            if aliases.local_may_be(ctx, arr_id, *array_id) {
                 LoopArrayLengthEffect::AliasLengthMutation
             } else {
                 walk(value)
             }
         }
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-            if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
+            if aliases.local_may_be(ctx, arr_id, *id) {
                 LoopArrayLengthEffect::AliasLengthMutation
             } else {
                 LoopArrayLengthEffect::Preserves
@@ -9916,7 +9947,7 @@ fn expr_array_length_effect(
             delete_count,
             items,
         } => {
-            if local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) {
+            if aliases.local_may_be(ctx, arr_id, *array_id) {
                 LoopArrayLengthEffect::AliasLengthMutation
             } else {
                 first_blocking_loop_effect(
@@ -9933,7 +9964,7 @@ fn expr_array_length_effect(
             ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
-                if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
+                if aliases.local_may_be(ctx, arr_id, *id) {
                     if has_strict_bound
                         && matches!(index.as_ref(), Expr::LocalGet(idx_id) if *idx_id == bounded_idx_id)
                     {
@@ -9941,6 +9972,9 @@ fn expr_array_length_effect(
                     }
                     return LoopArrayLengthEffect::ArrayLengthMutation;
                 }
+            }
+            if aliases.store_may_reach(ctx, arr_id, object) {
+                return LoopArrayLengthEffect::AliasLengthMutation;
             }
             first_blocking_loop_effect([walk(object), walk(index), walk(value)])
         }
@@ -9951,8 +9985,8 @@ fn expr_array_length_effect(
             receiver,
             ..
         } => {
-            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
-            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if aliases.local_may_be(ctx, arr_id, *id));
+            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if aliases.local_may_be(ctx, arr_id, *id));
             if target_is_arr || receiver_is_arr {
                 if target_is_arr
                     && receiver_is_arr
@@ -9962,6 +9996,11 @@ fn expr_array_length_effect(
                     return walk(value);
                 }
                 return LoopArrayLengthEffect::DynamicPropertyWrite;
+            }
+            if aliases.store_may_reach(ctx, arr_id, target)
+                || aliases.store_may_reach(ctx, arr_id, receiver)
+            {
+                return LoopArrayLengthEffect::AliasLengthMutation;
             }
             first_blocking_loop_effect([walk(target), walk(key), walk(value), walk(receiver)])
         }
@@ -10065,7 +10104,7 @@ fn expr_array_length_effect(
         | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
         Expr::Array(elements, _) => first_blocking_loop_effect(elements.iter().map(|expr| {
-            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) {
+            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, &aliases.ids) {
                 LoopArrayLengthEffect::AggregateAliasEscape
             } else {
                 walk(expr)
@@ -10074,7 +10113,7 @@ fn expr_array_length_effect(
         Expr::ArraySpread(elements) => {
             first_blocking_loop_effect(elements.iter().map(|el| match el {
                 ArrayElement::Expr(e) => {
-                    if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, aliases) {
+                    if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, &aliases.ids) {
                         LoopArrayLengthEffect::AggregateAliasEscape
                     } else {
                         walk(e)
@@ -10085,7 +10124,7 @@ fn expr_array_length_effect(
             }))
         }
         Expr::Object(fields) => first_blocking_loop_effect(fields.iter().map(|(_, value)| {
-            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, aliases) {
+            if expr_may_resolve_to_guarded_array_alias(ctx, arr_id, value, &aliases.ids) {
                 LoopArrayLengthEffect::AggregateAliasEscape
             } else {
                 walk(value)
@@ -10111,7 +10150,7 @@ pub(crate) fn stmt_preserves_array_length(
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
-    aliases: &std::collections::HashSet<u32>,
+    aliases: &named_len::Names,
 ) -> bool {
     use perry_hir::Stmt;
     match s {
@@ -10344,7 +10383,7 @@ pub(crate) fn expr_preserves_array_length(
     arr_id: u32,
     bounded_idx_id: u32,
     has_strict_bound: bool,
-    aliases: &std::collections::HashSet<u32>,
+    aliases: &named_len::Names,
 ) -> bool {
     use perry_hir::{ArrayElement, Expr};
     let walk = |sub: &Expr| {
@@ -10353,9 +10392,9 @@ pub(crate) fn expr_preserves_array_length(
     match e {
         Expr::ArrayPush {
             array_id, value, ..
-        } => !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases) && walk(value),
+        } => !aliases.local_may_be(ctx, arr_id, *array_id) && walk(value),
         Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-            !local_may_alias_guarded_array(ctx, arr_id, *id, aliases)
+            !aliases.local_may_be(ctx, arr_id, *id)
         }
         Expr::ArraySplice {
             array_id,
@@ -10363,7 +10402,7 @@ pub(crate) fn expr_preserves_array_length(
             delete_count,
             items,
         } => {
-            !local_may_alias_guarded_array(ctx, arr_id, *array_id, aliases)
+            !aliases.local_may_be(ctx, arr_id, *array_id)
                 && walk(start)
                 && delete_count.as_ref().is_none_or(|e| walk(e))
                 && items.iter().all(&walk)
@@ -10379,7 +10418,7 @@ pub(crate) fn expr_preserves_array_length(
             // guard. With `i <= arr.length`, `i == length` can extend
             // the array and invalidate a hoisted length.
             if let Expr::LocalGet(id) = object.as_ref() {
-                if local_may_alias_guarded_array(ctx, arr_id, *id, aliases) {
+                if aliases.local_may_be(ctx, arr_id, *id) {
                     if has_strict_bound {
                         if let Expr::LocalGet(idx_id) = index.as_ref() {
                             if *idx_id == bounded_idx_id {
@@ -10390,7 +10429,10 @@ pub(crate) fn expr_preserves_array_length(
                     return false;
                 }
             }
-            walk(object) && walk(index) && walk(value)
+            !aliases.store_may_reach(ctx, arr_id, object)
+                && walk(object)
+                && walk(index)
+                && walk(value)
         }
         Expr::PutValueSet {
             target,
@@ -10399,8 +10441,8 @@ pub(crate) fn expr_preserves_array_length(
             receiver,
             ..
         } => {
-            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
-            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if local_may_alias_guarded_array(ctx, arr_id, *id, aliases));
+            let target_is_arr = matches!(target.as_ref(), Expr::LocalGet(id) if aliases.local_may_be(ctx, arr_id, *id));
+            let receiver_is_arr = matches!(receiver.as_ref(), Expr::LocalGet(id) if aliases.local_may_be(ctx, arr_id, *id));
             if target_is_arr || receiver_is_arr {
                 if target_is_arr && receiver_is_arr && has_strict_bound {
                     if let Expr::LocalGet(idx_id) = key.as_ref() {
@@ -10411,7 +10453,12 @@ pub(crate) fn expr_preserves_array_length(
                 }
                 return false;
             }
-            walk(target) && walk(key) && walk(value) && walk(receiver)
+            !aliases.store_may_reach(ctx, arr_id, target)
+                && !aliases.store_may_reach(ctx, arr_id, receiver)
+                && walk(target)
+                && walk(key)
+                && walk(value)
+                && walk(receiver)
         }
         // Reassigning the bounded index would invalidate the bound.
         // Reassigning the array variable would also invalidate (we'd
@@ -10531,17 +10578,17 @@ pub(crate) fn expr_preserves_array_length(
         | Expr::MathSign(a)
         | Expr::MathF16round(a) => walk(a),
         Expr::Array(elements, _) => elements.iter().all(|expr| {
-            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, aliases) && walk(expr)
+            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, expr, &aliases.ids) && walk(expr)
         }),
         Expr::ArraySpread(elements) => elements.iter().all(|el| match el {
             ArrayElement::Expr(e) => {
-                !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, aliases) && walk(e)
+                !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, e, &aliases.ids) && walk(e)
             }
             ArrayElement::Spread(e) => walk(e),
             ArrayElement::Hole => true,
         }),
         Expr::Object(fields) => fields.iter().all(|(_, v)| {
-            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, v, aliases) && walk(v)
+            !expr_may_resolve_to_guarded_array_alias(ctx, arr_id, v, &aliases.ids) && walk(v)
         }),
         Expr::LocalGet(_)
         | Expr::GlobalGet(_)

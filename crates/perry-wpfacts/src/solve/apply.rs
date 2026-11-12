@@ -51,7 +51,7 @@ impl Model {
                 };
                 for &t in toks {
                     if let Some(at) = at {
-                        self.len_event(t, at, false);
+                        self.len_event_through(t, at, false, n);
                     }
                     self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
