@@ -627,7 +627,7 @@ pub fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{folded_call, Receiver};
+    use super::{folded_call, native_array_push, Receiver};
     use crate::Expr;
 
     fn lit(n: f64) -> Expr {
