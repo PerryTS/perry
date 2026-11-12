@@ -95,15 +95,6 @@ fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
     }
 }
 
-/// A legacy raw-I64 receiver has no NaN-box tag proving it came from a managed
-/// allocation. Validate membership without dereferencing it before asking for
-/// a `GcHeader`; the old magnitude-only `is_valid_obj_ptr` check admitted any
-/// aligned address in the platform heap range, including unmapped addresses.
-#[inline(always)]
-fn raw_i64_receiver_is_managed(addr: usize) -> bool {
-    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()
-}
-
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
     let bits = index.to_bits();
     if is_int32_bits(bits) {
@@ -782,18 +773,10 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     }
     let raw_ptr = if jsval.is_pointer() {
         (bits & POINTER_MASK) as usize
-    } else if !obj.is_nan()
-        && bits != 0
-        && bits < 0x0001_0000_0000_0000
-        && (bits & 0x3) == 0
-        && bits >= 0x10000
-        // A raw word is also what a subnormal number looks like. The buffer and
-        // typed-array probes below read the cell's header (#10694: the brand
-        // is the type byte), so the allocator must vouch for a raw word first.
-        && crate::buffer::header_is_owned(bits as usize)
-    {
-        bits as usize
     } else {
+        // A primitive receiver: the store has no effect. A word whose top
+        // 16 bits are clear is a Number (a denormal, or +0), never a raw
+        // object pointer, whether or not its bits equal a live address.
         return value;
     };
     if raw_ptr < crate::gc::GC_HEADER_SIZE + 0x1000 {
@@ -864,11 +847,6 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
                 i32::from(byte),
             );
         }
-        return value;
-    }
-    // A raw-I64 fallback is only a heuristic until arena/malloc membership
-    // proves it. Do this before `receiver_gc_tag`, which reads addr - 8.
-    if !jsval.is_pointer() && !raw_i64_receiver_is_managed(raw_ptr) {
         return value;
     }
     // #7865: reuse the header byte the array/object split below needs. Plain

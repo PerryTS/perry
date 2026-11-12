@@ -540,15 +540,18 @@ mod tests {
     }
 
     #[test]
-    fn raw_object_keys_keep_the_relocation_stable_hash() {
+    fn a_number_with_an_objects_address_as_bits_does_not_hash_as_that_object() {
         unsafe {
+            // A word with clear top 16 bits is a Number (a denormal) in value
+            // context: it hashes by its bits, never by the identity of the
+            // object that happens to live at that address.
             let object = crate::object::js_object_alloc(0, 0) as usize;
             let id = key_identity(object, true).unwrap();
-            let mut expected = crate::fast_hash::PtrHasher.build_hasher();
-            (0u64, id).hash(&mut expected);
-            assert_eq!(
+            let mut identity = crate::fast_hash::PtrHasher.build_hasher();
+            (0u64, id).hash(&mut identity);
+            assert_ne!(
                 existing_hash(f64::from_bits(object as u64)),
-                Some(expected.finish() as u32)
+                Some(identity.finish() as u32)
             );
         }
     }
