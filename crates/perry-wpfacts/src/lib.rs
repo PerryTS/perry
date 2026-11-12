@@ -578,6 +578,8 @@ fn generate<'a>(
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
     g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
+    g.m.reach_new_target =
+        reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
     g.m.reach_step_done =
         reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
     g.unit_in = published;
