@@ -126,7 +126,9 @@ fn an_array_like_without_the_method_is_not_served_the_array_algorithm() {
     unsafe {
         let obj = array_like(0.0);
         let args = [7.0];
-        for name in ["push", "pop", "shift", "unshift", "reverse", "splice", "sort", "concat"] {
+        for name in [
+            "push", "pop", "shift", "unshift", "reverse", "splice", "sort", "concat",
+        ] {
             assert!(
                 crate::array::try_object_arraylike_mutator(boxed(obj), name, args.as_ptr(), 1)
                     .is_none(),

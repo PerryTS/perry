@@ -110,7 +110,10 @@ console.log(b.add(3));"#;
 #[test]
 fn a_folded_pop_runs_an_own_method() {
     for (name, body) in [
-        ("own data pop", "const a = [1]; (a as any).pop = hit; return a.pop();"),
+        (
+            "own data pop",
+            "const a = [1]; (a as any).pop = hit; return a.pop();",
+        ),
         (
             "own accessor pop",
             r#"const a = [1];
