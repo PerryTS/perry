@@ -320,6 +320,18 @@ pub fn try_lower_property_get_method_call(
             return Ok(None);
         }
     }
+    // A receiver annotated a typed array whose values the facts do not prove
+    // typed arrays (`method_site`): the ordinary method call, before any arm
+    // binds the call to a built-in from the annotation.
+    if crate::method_site::unproven_typed_array_call(
+        ctx,
+        perry_hir::folded_call::callee_site(callee),
+        object,
+        property,
+    ) {
+        return own_override_guard::emit_dispatcher(ctx, object, property, args, call_byte_offset)
+            .map(Some);
+    }
     if property == "apply"
         && args.len() == 2
         && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),

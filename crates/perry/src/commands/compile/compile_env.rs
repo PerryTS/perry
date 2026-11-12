@@ -112,6 +112,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_SITE_ARGS",
     "PERRY_FACTS_SLICE_BIRTHS",
     "PERRY_FACTS_SUPPRESS_BIRTH",
+    "PERRY_FACTS_TYPED_ARRAY_SITES",
     "PERRY_FACTS_TYPED_SIGNATURES",
     "PERRY_FACTS_UNITS",
     "PERRY_FACTS_VALUE_RECORDS",
@@ -860,6 +861,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_FACTS_ZERO_SIGN_WHY",
         "Prints why one node's zero sign is unknown; the trace reads the solved facts and changes none.",
+    ),
+    (
+        "PERRY_METHOD_SITE_DIAG",
+        "Prints the method-site verdict per annotated typed-array call to stderr; no emitted instructions depend on the report.",
     ),
     (
         "PERRY_REST_DIAG",
