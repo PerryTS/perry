@@ -446,8 +446,13 @@ impl Model {
         }
         self.add_top(fi.args_all, why);
         // A constructor's `this` is the instance it makes, whoever calls:
-        // its result escapes as before.
-        if fi.ctor_of.is_some() {
+        // its result escapes as before. The activation pass (DECISIONS 225)
+        // is the coarser analysis whose escapes cover the final solve's:
+        // there no function has a summary, so the final solve's summarized
+        // escapes (`escape_summarized`) have no counterpart, and an escaped
+        // function's whole shared result escapes: what the final solve
+        // treats as escaped was walked.
+        if fi.ctor_of.is_some() || self.act.as_ref().is_some_and(|a| !a.fixed) {
             self.sink_node(fi.ret, reason);
         } else {
             self.sink_own_return(f, reason);
@@ -479,6 +484,22 @@ impl Model {
     /// `a` is the receiver of non-arrow `f` or one of its parameters, and
     /// `f`'s body (or a function nested in it) never writes it: it holds
     /// what each call passes and nothing else.
+    /// DECISIONS 225, checked at the end of the final solve: the escaped
+    /// functions whose body was not walked (unknown code may call them, so
+    /// each must be active). 0 when the activation pass covers the solve.
+    pub(crate) fn escaped_inactive(&self) -> usize {
+        if !self.act.as_ref().is_some_and(|a| a.fixed) {
+            return 0;
+        }
+        self.escaped
+            .keys()
+            .filter(|&&t| match self.toks[t as usize] {
+                TokKind::Func(f, _) => !self.body_active(f),
+                _ => false,
+            })
+            .count()
+    }
+
     pub(crate) fn callers_own(&self, f: FnIdx, a: NodeId) -> bool {
         let fi = &self.funcs[f as usize];
         let term = (a == fi.this && !fi.lexical_this)

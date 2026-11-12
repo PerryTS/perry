@@ -296,6 +296,9 @@ pub struct ProgramFacts {
     pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
+    /// DECISIONS 225: escaped functions of the final solve whose body was
+    /// not walked (`Model::escaped_inactive`); must be 0.
+    pub escaped_inactive: Option<usize>,
     /// Diagnostic-only export of the activation pass's seen body classifications.
     pub verification_bodies: Option<std::collections::BTreeMap<(String, u32, String), bool>>,
     /// Completed whole-program reach, or an incomplete conservative view
@@ -872,6 +875,7 @@ fn compute_act<'a>(
         g.m.solve();
     }
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    let escaped_inactive = g.m.act.is_some().then(|| g.m.escaped_inactive());
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
     g.m.prof_mark(crate::model::NO_NODE, "after solve");
@@ -2351,6 +2355,7 @@ fn compute_act<'a>(
         diagnostics,
         diagnostic_sites,
         activation,
+        escaped_inactive,
         body_reach,
         super_unrelinked,
         fnproto_bind_written,
