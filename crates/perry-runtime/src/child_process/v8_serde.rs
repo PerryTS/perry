@@ -896,9 +896,12 @@ impl<'a> Deserializer<'a> {
             }
             let key = self.read_value()?;
             let val = self.read_value()?;
-            // Only integer keys land as dense indices; ignore named props.
+            // Only integer keys land as indices; ignore named props. The store
+            // is the ordinary `arr[key] = val`: a far index goes to the sparse
+            // layout and the gap stays holes (the dense extend filled it with
+            // `undefined`, so `i in clone` was true for every i).
             if JSValue::from_bits(key.to_bits()).is_number() {
-                crate::array::js_array_set_f64_extend(arr, key as u32, val);
+                crate::value::js_dyn_index_set(boxed, key, val);
             }
         }
         Some(boxed)
