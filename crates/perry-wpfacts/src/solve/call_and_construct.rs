@@ -68,7 +68,7 @@ impl Model {
                     let f = self.node_fn[ret as usize];
                     let why = format!(
                         "receiver of a call of an unknown function value ({} callee in {}, call {call}{}, receiver {})",
-                        if t == TOP { "⊤".to_string() } else { self.tok_name(t) },
+                        self.callee_name(t),
                         self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str()),
                         if self.protocol_calls.contains(&call) { ", protocol" } else { "" },
                         self.tok_name(x)

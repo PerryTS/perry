@@ -2001,7 +2001,7 @@ impl Model {
                         .collect();
                     let why = format!(
                         "receiver of a call of an unknown function value ({} callee, receiver {}, calls [{}])",
-                        if t == TOP { "⊤" } else { "builtin-fn" },
+                        self.callee_name(t),
                         self.tok_name(origin),
                         fs.join(", ")
                     );

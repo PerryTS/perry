@@ -353,6 +353,16 @@ impl Model {
         }
     }
 
+    /// An unknown callee as an explain reason names it: `⊤`, or the
+    /// built-in function with its native identity.
+    pub fn callee_name(&self, t: Tok) -> String {
+        match &self.toks[t as usize] {
+            TokKind::Top => "⊤".into(),
+            TokKind::BuiltinFn(n) => format!("builtin-fn:{n:?}"),
+            _ => self.tok_name(t),
+        }
+    }
+
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
