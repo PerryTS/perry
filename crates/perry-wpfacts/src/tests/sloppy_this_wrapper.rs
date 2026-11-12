@@ -4,11 +4,21 @@
 //! store `this.x = a` is a store on that wrapper. A strict function's
 //! `this` stays the primitive (step 5). (three.js `Material.call(v)` with a
 //! JSON-parsed `v`.)
+//!
+//! The file is `t.cts`, CommonJS by its extension (Node never loads a
+//! `.cts`/`.cjs` file as an ES module). A relative `t.ts` takes its module
+//! goal from the nearest `package.json` above the working directory; the
+//! workspace root's `"type": "module"` makes it an ES module, whose code is
+//! strict (ECMA-262 11.2.2), where `this` stays the primitive and
+//! `this.x = a` throws (10.1.9.2 OrdinarySetWithOwnDescriptor step 2.c
+//! returns false for a primitive receiver; 6.2.5.6 PutValue step 5.d
+//! throws in strict code). So, run from the workspace root, none of these
+//! tests would test what it names.
 
 use super::*;
 
 fn whole(src: &str) -> ProgramFacts {
-    let path = "t.ts".to_string();
+    let path = "t.cts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
     crate::compute(&[(path, &hir)], &FactsConfig::default())
@@ -17,9 +27,9 @@ fn whole(src: &str) -> ProgramFacts {
 fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
     pf.templates
         .iter()
-        .filter(|t| t.display.starts_with("t.ts"))
+        .filter(|t| t.display.starts_with("t.cts"))
         .find(|t| t.fields.iter().any(|f| f.key == key))
-        .unwrap_or_else(|| panic!("no t.ts template with field {key}\n{}", pf.dump_text()))
+        .unwrap_or_else(|| panic!("no t.cts template with field {key}\n{}", pf.dump_text()))
         .escape
         .clone()
 }
