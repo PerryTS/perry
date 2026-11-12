@@ -125,6 +125,7 @@ mod locked_store;
 mod logical_and;
 mod map_identity_ops;
 mod memo_context;
+mod name_folds;
 mod named_accessors;
 mod named_method_on_class_value;
 mod native_accessor_get;

@@ -50,6 +50,7 @@ pub mod native_effects;
 pub mod pts;
 mod push_fills;
 mod quiet_sites;
+mod reach;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -576,6 +577,7 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
+    g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
