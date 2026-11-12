@@ -94,14 +94,17 @@ fn navigator_language() -> String {
         });
     }
 
-    crate::effect!(host_read, locale);
-    std::env::var("LC_ALL")
-        .ok()
-        .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
-        .or_else(|| std::env::var("LANG").ok())
-        .as_deref()
-        .and_then(normalize_navigator_locale)
-        .unwrap_or_else(|| "en-US".to_string())
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, locale);
+        std::env::var("LC_ALL")
+            .ok()
+            .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
+            .or_else(|| std::env::var("LANG").ok())
+            .as_deref()
+            .and_then(normalize_navigator_locale)
+            .unwrap_or_else(|| "en-US".to_string())
+    }
 }
 
 /// Build the `navigator` object: Node's shape, no own properties. Every
