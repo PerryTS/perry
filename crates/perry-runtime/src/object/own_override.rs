@@ -294,14 +294,27 @@ pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
         && !crate::array::is_array_subclass_instance(recv)
 }
 
-/// `null` or `undefined` behind an Array annotation: `Get` on it throws the
-/// call's TypeError, which only the real `Get` does.
+/// A primitive behind an Array annotation that only the real `Get` answers
+/// for: `null` / `undefined` (the call's TypeError), a boolean, a String
+/// (heap or inline: `String.prototype` has its own `at`, `indexOf`,
+/// `slice`, `concat`, ...) or a BigInt. None of them is an address: handed to
+/// a builtin as one, a short string's payload is its BYTES, read as an Array
+/// header (SIGSEGV). A Number keeps the builtin, as before (a native handle
+/// id is a Number).
 #[inline]
 pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
-    matches!(
-        recv.to_bits(),
-        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
-    )
+    let bits = recv.to_bits();
+    if matches!(
+        bits,
+        crate::value::TAG_NULL
+            | crate::value::TAG_UNDEFINED
+            | crate::value::TAG_TRUE
+            | crate::value::TAG_FALSE
+    ) {
+        return true;
+    }
+    // STRING_TAG 0x7FFF, SHORT_STRING_TAG 0x7FF9, BIGINT_TAG 0x7FFA.
+    matches!(bits >> 48, 0x7FFF | 0x7FF9 | 0x7FFA)
 }
 
 /// THE predicate of every Array method site: must `recv.<key>(..)` perform
