@@ -134,6 +134,9 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        if self.is_num_atom(a) {
+            self.enum_index_field(t, n);
+        }
         self.field_shaped(t, a, n);
         if let Some(&nf) = self.num_fields.get(&t) {
             if self.is_num_atom(a) {
@@ -311,6 +314,7 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
+        self.enum_index_field(t, n);
         if let Some(&numeric) = self.num_fields.get(&t) {
             self.edge(n, numeric);
         }
@@ -662,7 +666,7 @@ impl Model {
         n
     }
 
-    fn is_num_atom(&self, a: Atom) -> bool {
+    pub(super) fn is_num_atom(&self, a: Atom) -> bool {
         let s = &self.atoms[a as usize];
         numeric_key(s) || s == ELEM || s == NUM_KEY
     }

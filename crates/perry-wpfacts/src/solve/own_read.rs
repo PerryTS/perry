@@ -281,8 +281,10 @@ impl Model {
     /// ENUM2: what `t` holds under the keys a for-in over it yields: its
     /// enumerable own fields (`Node::enum_key`, the one predicate the
     /// keyed store of ENUM3 uses too; a key marked later joins,
-    /// `enum_key_mark`) and what it holds under keys no name lists
-    /// (`enum_key_watch`). Not a non-enumerable own property: a class
+    /// `enum_key_mark`), its index keys (an element: every write of one,
+    /// [[Set]] or CreateDataProperty, makes an enumerable data property,
+    /// 10.1.9.2, 7.3.5; `enum_index_field`) and what it holds under keys
+    /// no name lists (`enum_key_watch`). Not a non-enumerable own property: a class
     /// prototype's `constructor` and methods (ECMA-262 15.7.14
     /// ClassDefinitionEvaluation, MakeConstructor 10.2.5; 10.2.8
     /// DefineMethodProperty, enumerable false), which `all_fields` holds.
@@ -294,6 +296,12 @@ impl Model {
         self.enum_key_fields.insert(t, n);
         let w = self.enum_key_watch(t);
         self.edge(w, n);
+        // An element array's elements are its any-key field (its
+        // non-index keys, `named_any`, are in `w`).
+        if self.is_elem_array(t) {
+            let fa = self.field_any(t);
+            self.edge(fa, n);
+        }
         // DECISIONS 241: what the units stored, by key (enumerability not
         // carried): every key, as `all_fields` reads it.
         if let Some(j) = self.joined_of(t) {
@@ -303,11 +311,19 @@ impl Model {
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.fields[&(t, a)];
-            if self.nodes[f as usize].enum_key {
+            if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
                 self.edge(f, n);
             }
         }
         n
+    }
+
+    /// ENUM2: index field `f` of `t` (an element key, or the element node)
+    /// made after `enum_key_fields(t)`: one of its enumerable keys.
+    pub(super) fn enum_index_field(&mut self, t: Tok, f: NodeId) {
+        if let Some(&e) = self.enum_key_fields.get(&t) {
+            self.edge(f, e);
+        }
     }
 
     /// ENUM3: key `a` appeared on token `t`: the keyed stores `t`'s
