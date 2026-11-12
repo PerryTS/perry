@@ -893,6 +893,7 @@ pub(super) fn compile_closure(
     // wrapper's IIFE makes every module-level `function` declaration one — so
     // the served classification has to be told, exactly as
     // `codegen/function.rs` tells it. Read by nothing but the report.
+    let _life_scope = crate::collectors::life_census::compiling(Some(func_id));
     let _opt_report_scope = crate::opt_report::enter_closure(
         &opt_report_name,
         func_id,

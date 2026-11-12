@@ -216,6 +216,7 @@ pub(super) fn compile_module_init(
         .copied()
         .collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(None);
     let _opt_report_scope =
         crate::opt_report::enter_region("module_init", crate::opt_report::RegionKind::ModuleInit);
     let init_native_facts = crate::collectors::collect_native_region_fact_graph(

@@ -622,6 +622,7 @@ pub(super) fn dropped(t: &mut Table, i: u32) {
 /// from its next boundary on; in the turn's own full, a marked one waiting
 /// for the turn is alive at it.
 pub(super) fn full_marked() {
+    super::life_regions::full_marked();
     let _ = with(|t| {
         let m = &mut t.measure;
         let turn_full = !m.full.is_empty();
@@ -651,6 +652,13 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     let fp = caller_fp();
     if crate::arena::alloc_life::on() {
         crate::arena::alloc_life::birth(bits as u64);
+    }
+    if super::life_regions::on() {
+        // LIFE I3: regions replace the per-birth probes.
+        if keep() {
+            super::life_regions::keep_birth(bits as u64);
+        }
+        return;
     }
     let bits = bits as u64;
     let sampled = table(|t| {
@@ -752,6 +760,9 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_enter(body: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::enter(body as u64, fp);
+    }
     // No probe here (the body's arguments are not rooted across this call):
     // activations a throw left deeper than this frame stay below the new one
     // and are popped, late, by the next hook of a shallower frame. An inlined
@@ -766,6 +777,9 @@ pub extern "C" fn perry_life_enter(body: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_return() {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::ret(fp);
+    }
     pop_deeper(fp);
     let top = table(|t| t.measure.acts.last().filter(|a| a.fp == fp).map(|a| a.body)).flatten();
     if let Some(body) = top {
@@ -787,6 +801,9 @@ pub extern "C" fn perry_life_depth() -> i64 {
 #[inline(never)]
 pub extern "C" fn perry_life_loop(id: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::loop_start(id as u64, fp);
+    }
     let _ = table(|t| {
         let m = &mut t.measure;
         let act = m.acts.iter().rposition(|a| a.fp >= fp).map_or(0, |i| i + 1);
@@ -803,6 +820,9 @@ pub extern "C" fn perry_life_loop(id: i64) {
 pub extern "C" fn perry_life_catch(depth: i64) {
     let loops = (depth as u64 >> 32) as usize;
     let depth = (depth as u64 & 0xFFFF_FFFF) as usize;
+    if super::life_regions::on() {
+        super::life_regions::catch(depth, loops, caller_fp());
+    }
     while table(|t| t.measure.acts.len() > depth) == Some(true) {
         let _ = table(|t| late(t, 2));
         pop_top(true);
@@ -815,6 +835,9 @@ pub extern "C" fn perry_life_catch(depth: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_iter(loop_id: i64) {
     let fp = caller_fp();
+    if super::life_regions::on() {
+        super::life_regions::iter(loop_id as u64, fp);
+    }
     pop_deeper(fp);
     // The dynamic boundary: this loop's iteration in progress in this frame
     // ends (with any inner one a labelled jump or stale frame left above it).
@@ -883,6 +906,9 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_turn() {
+    if super::life_regions::on() {
+        super::life_regions::turn();
+    }
     // The JS stack is unwound: every activation still listed returned.
     while table(|t| !t.measure.acts.is_empty()) == Some(true) {
         let _ = table(|t| late(t, 4));
