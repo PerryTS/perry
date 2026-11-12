@@ -836,6 +836,7 @@ pub(super) fn compile_module_entry(
             .copied()
             .collect();
         // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _life_scope = crate::collectors::life_census::compiling(None);
         let _opt_report_scope = crate::opt_report::enter_region(
             "module_init",
             crate::opt_report::RegionKind::ModuleInit,

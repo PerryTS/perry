@@ -121,7 +121,10 @@ pub(crate) fn on() -> bool {
 
 /// `PERRY_LIFE_ALLOC=<path>`: on, with the sampling interval (bytes).
 pub(crate) fn init_from_env() -> usize {
-    let Some(path) = std::env::var("PERRY_LIFE_ALLOC").ok().filter(|p| !p.is_empty()) else {
+    // LIFE I3: the region measurement numbers objects at the census's event,
+    // so it arms the census (no census file unless `PERRY_LIFE_ALLOC` names one).
+    let path = std::env::var("PERRY_LIFE_ALLOC").ok().filter(|p| !p.is_empty());
+    let Some(path) = path.or_else(|| crate::wpfacts_check::life_regions_on().then(String::new)) else {
         return 0;
     };
     let interval = std::env::var("PERRY_LIFE_ALLOC_SAMPLE")
@@ -192,6 +195,10 @@ fn settle(s: &mut State, state: u8, x: Sample) {
 /// An object allocated in this epoch, at user address `addr`. An entry
 /// already there is an object that died unclaimed (its slot was reused).
 fn enter(s: &mut State, addr: usize, x: Sample) {
+    // LIFE I3: the same event numbers the object for the region measurement.
+    if crate::wpfacts_check::life_regions_on() {
+        crate::wpfacts_check::life_regions_born(addr, x.bytes, x.n);
+    }
     if let Some(old) = s.epoch.insert(addr, x) {
         settle(s, UNCOVERED, old);
     }
@@ -308,7 +315,10 @@ pub(crate) fn old_birth(header: usize, total: usize, t: u8) {
 
 /// The old-page defragmentation moved an object (its new home went through
 /// [`old_birth`]): a move, not a birth.
-pub(crate) fn evacuated(total: usize, t: u8) {
+pub(crate) fn evacuated(total: usize, t: u8, old: usize, new: usize) {
+    if crate::wpfacts_check::life_regions_on() {
+        crate::wpfacts_check::life_regions_evacuated(old, new, total as u32);
+    }
     let _ = with(|s| {
         let k = (t as usize).min(TYPES - 1);
         s.runtime[k][0] = s.runtime[k][0].saturating_sub(1);
@@ -471,10 +481,25 @@ fn type_name(t: usize) -> String {
     crate::gc::gc_type_info(t as u8).map_or_else(|| format!("type{t}"), |i| i.name.to_string())
 }
 
+/// LIFE I3: a region hook's point: every object allocated so far has been
+/// seen (the inline slow call flushed, the pending inline burst walked).
+pub(crate) fn sync_point() {
+    if on() {
+        flush_slow();
+        walk_pending_inline(true);
+    }
+}
+
+/// The byte-sample interval.
+pub(crate) fn interval() -> usize {
+    INTERVAL.load(Ordering::Relaxed)
+}
+
 /// Process exit: write the TSV.
 pub(crate) fn write() {
     flush_slow();
     walk_pending_inline(false);
+    crate::wpfacts_check::life_regions_exit();
     minor();
     let base = image_base();
     let (arena, large) = super::allocation_totals();
@@ -527,7 +552,9 @@ pub(crate) fn write() {
             }
             out.push('\n');
         }
-        let _ = std::fs::write(&s.path, out);
+        if !s.path.is_empty() {
+            let _ = std::fs::write(&s.path, out);
+        }
     });
 }
 

@@ -149,6 +149,7 @@ fn install() {
 
 /// A copied minor starts: every claim is a from-space object.
 fn before_minor() {
+    super::life_regions::before_minor();
     let _ = with(|t| {
         sync(t);
         // A minor neither reaches nor frees an object outside the nursery
@@ -163,6 +164,7 @@ fn before_minor() {
 
 /// The copied minor ended: every claim it did not reach is freed.
 fn after_minor() {
+    super::life_regions::after_minor();
     let _ = with(|t| {
         bump(&totals::CHECKED_MINORS, 1);
         let died: Vec<u32> = t
@@ -183,6 +185,7 @@ fn after_minor() {
 
 /// The copied minor reached the object at `old` (now at `new`).
 fn reached(old: usize, new: usize) {
+    super::life_regions::reached(old, new);
     let hit = with(|t| {
         let c = t.from.remove(&old)?;
         match c.state {

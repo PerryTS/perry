@@ -55,6 +55,15 @@ pub(crate) fn write_sites<'a>(keys: impl Iterator<Item = &'a str>) {
     }
 }
 
+/// LIFE I3: the stable id of the loop with body address `at` (its `loop` row
+/// in the site file; 0: in no loop).
+fn loop_id(ctx: &FnCtx<'_>, at: usize) -> u64 {
+    if at == 0 {
+        return 0;
+    }
+    ctx.life_claims.loop_ids.get(&at).copied().unwrap_or(at as u64)
+}
+
 fn on(ctx: &FnCtx<'_>) -> bool {
     ctx.life_claims.body != 0
 }
@@ -72,7 +81,7 @@ pub(crate) fn birth(ctx: &mut FnCtx<'_>, e: &Expr, value: &str) {
     }
     let site = (site_id(&key) as i64).to_string();
     let bits = ctx.block().bitcast_double_to_i64(value);
-    let loop_id = (loop_body as u64 as i64).to_string();
+    let loop_id = (loop_id(ctx, loop_body) as i64).to_string();
     ctx.block().call_void("perry_life_birth", &[(I64, &bits), (I64, &site), (I64, &loop_id)]);
 }
 
@@ -87,7 +96,7 @@ pub(crate) fn list_begin(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) {
         let body = (ctx.life_claims.body_id as i64).to_string();
         ctx.block().call_void("perry_life_enter", &[(I64, &body)]);
     } else if !stmts.is_empty() && ctx.life_claims.loops.contains(&at) {
-        let loop_id = (at as u64).to_string();
+        let loop_id = (loop_id(ctx, at) as i64).to_string();
         ctx.block().call_void("perry_life_loop", &[(I64, &loop_id)]);
     }
 }
@@ -140,7 +149,7 @@ pub(crate) fn iteration(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
     if !on(ctx) || body.is_empty() || !ctx.life_claims.loops.contains(&at) || ctx.block().is_terminated() {
         return;
     }
-    let loop_id = (at as u64).to_string();
+    let loop_id = (loop_id(ctx, at) as i64).to_string();
     ctx.block().call_void("perry_life_iter", &[(I64, &loop_id)]);
 }
 
