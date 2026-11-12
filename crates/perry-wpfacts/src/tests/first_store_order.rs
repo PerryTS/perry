@@ -58,3 +58,45 @@ fn a_reservation_an_early_return_skips_is_not_definite() {
     assert!(field(tmpl(&pf, "Early"), "a").definite, "{}", pf.dump_text());
     assert!(!field(tmpl(&pf, "Early"), "b").definite, "{}", pf.dump_text());
 }
+
+/// A run may add keys out of the layout's order (`c` before `b` in one arm,
+/// a parent's key late in a subclass, a key a loop's earlier iteration
+/// skipped): the runtime orders that object by an overflow from then on, and
+/// a key added at or after that point gets an entry there. Such a key is no
+/// definite key (its store takes the checked route, its read the hole
+/// compare); keys added before it, and classes whose every run adds in
+/// order, keep theirs. A subclass of a constructor that may leave an
+/// out-of-order add behind keeps no definite key of its own.
+#[test]
+fn a_key_a_run_may_add_out_of_order_is_not_definite() {
+    let pf = facts(
+        r#"
+        class Mixed { constructor(m: number) { this.a = 1; if (m === 0) { this.b = 0; this.c = 0; } else { this.c = 1; this.b = 1; } this.d = m; } }
+        class Late { constructor(n: number) { this.p = 1; for (let i = 0; i < n; i++) { if (i === 1) { this.opt = i; } this.q = i; } this.r = 2; } }
+        class InOrder { constructor(m: number) { this.a = 1; if (m) { this.b = 1; } this.c = 1; for (let i = 0; i < m; i++) { this.d = i; } this.e = 1; } }
+        class Child extends Mixed { constructor(m: number) { super(m); this.own = 1; } }
+        class PBase { constructor(c: boolean) { if (c) { this.bk = 1; } this.bt = 1; } }
+        class PSub extends PBase { constructor(c: boolean) { super(c); if (!c) { this.bk = 2; } this.st = 2; } }
+        class DoBreak { constructor(n: number) { this.s = 0; do { if (n === 0) break; this.dw = n; } while (false); this.e = n; } }
+        class DoOnce { constructor(n: number) { this.s = 0; do { this.dw = n; } while (false); this.e = n; } }
+        const x = new Mixed(1); const y = new Late(3); const z = new InOrder(2); const w = new Child(0); const v = new PSub(false);
+        const u = new DoBreak(0); const t = new DoOnce(1);
+        console.log(x.d, y.r, z.e, w.own, v.st, u.dw, t.dw);
+    "#,
+    );
+    let definite = |c: &str, k: &str| field(tmpl(&pf, c), k).definite;
+    assert!(definite("Mixed", "a"), "{}", pf.dump_text());
+    // `c` is added first on either arm (in order); `b` after `c` on one.
+    assert!(definite("Mixed", "c"), "{}", pf.dump_text());
+    assert!(!definite("Mixed", "b"), "{}", pf.dump_text());
+    assert!(!definite("Mixed", "d"), "{}", pf.dump_text());
+    assert!(!definite("Late", "r"), "{}", pf.dump_text());
+    for k in ["a", "c", "e"] {
+        assert!(definite("InOrder", k), "{k}: {}", pf.dump_text());
+    }
+    assert!(!definite("Child", "own"), "{}", pf.dump_text());
+    assert!(!definite("PSub", "st"), "{}", pf.dump_text());
+    // A do-while body runs once, but a `break` before a store skips it.
+    assert!(!definite("DoBreak", "dw"), "{}", pf.dump_text());
+    assert!(definite("DoBreak", "e") && definite("DoOnce", "dw"), "{}", pf.dump_text());
+}
