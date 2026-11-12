@@ -50,11 +50,7 @@ pub(crate) fn js_util_deep_strict_equal_bool(
         return left.to_bits() == right.to_bits();
     }
     let has_tagged_heap_operand = left_value.is_pointer() || right_value.is_pointer();
-    let has_raw_heap_operand =
-        looks_like_raw_heap_pointer(left) || looks_like_raw_heap_pointer(right);
-    if has_raw_heap_operand {
-        false
-    } else if has_tagged_heap_operand {
+    if has_tagged_heap_operand {
         // #2934: Node's default deepStrictEqual is prototype-sensitive — two
         // objects with the same own properties but different `[[Prototype]]`
         // are not equal. Gate before comparing the formatted body.
