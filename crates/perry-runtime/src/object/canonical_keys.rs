@@ -1431,6 +1431,10 @@ pub(crate) unsafe fn extend_key_with_entry(
 /// # Safety
 /// `keys` is a live list with `count` initialized slots; the caller has
 /// rooted what it holds: this allocates.
+// Every instantiation has exactly one call site (each caller passes its own
+// closure type), so inlining duplicates no code. Stated, so the rebuild inside
+// `apply_edits` does not depend on where the inliner's cost margin falls.
+#[inline(always)]
 pub(crate) unsafe fn rebuild_with_entries(
     proof: &SharedLayout,
     keys: crate::object::ObjectKeys,
