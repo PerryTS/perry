@@ -286,7 +286,10 @@ impl Scan<'_, '_, '_> {
             {
                 self.receivers.insert(addr(x));
             }
-            Expr::Call { callee, .. } | Expr::NewDynamic { callee, .. }
+            Expr::Call { callee, .. }
+            | Expr::CallSpread { callee, .. }
+            | Expr::NewDynamic { callee, .. }
+            | Expr::NewDynamicSpread { callee, .. }
                 if self.named_global(callee).is_some() =>
             {
                 self.used_in_place.insert(addr(callee));
