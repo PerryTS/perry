@@ -278,6 +278,38 @@ impl Model {
         w
     }
 
+    /// ENUM2: what `t` holds under the keys a for-in over it yields: its
+    /// enumerable own fields (`Node::enum_key`, the one predicate the
+    /// keyed store of ENUM3 uses too; a key marked later joins,
+    /// `enum_key_mark`) and what it holds under keys no name lists
+    /// (`enum_key_watch`). Not a non-enumerable own property: a class
+    /// prototype's `constructor` and methods (ECMA-262 15.7.14
+    /// ClassDefinitionEvaluation, MakeConstructor 10.2.5; 10.2.8
+    /// DefineMethodProperty, enumerable false), which `all_fields` holds.
+    pub(crate) fn enum_key_fields(&mut self, t: Tok) -> NodeId {
+        if let Some(&n) = self.enum_key_fields.get(&t) {
+            return n;
+        }
+        let n = self.node_l("enum-key-fields");
+        self.enum_key_fields.insert(t, n);
+        let w = self.enum_key_watch(t);
+        self.edge(w, n);
+        // DECISIONS 241: what the units stored, by key (enumerability not
+        // carried): every key, as `all_fields` reads it.
+        if let Some(j) = self.joined_of(t) {
+            for (_, v) in j.keys {
+                self.edge(v, n);
+            }
+        }
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            let f = self.fields[&(t, a)];
+            if self.nodes[f as usize].enum_key {
+                self.edge(f, n);
+            }
+        }
+        n
+    }
+
     /// ENUM3: key `a` appeared on token `t`: the keyed stores `t`'s
     /// enumerated keys decide store under it too.
     pub(super) fn enum_key_gained(&mut self, t: Tok, a: Atom) {
@@ -328,7 +360,7 @@ impl Model {
     pub(super) fn enum_fields(&mut self, of: Tok, t: Tok, key: Key, dst: NodeId) {
         let f = match key {
             Key::Named(a) => self.field_r(t, a),
-            Key::Any(_) => self.all_fields(t),
+            Key::Any(_) => self.enum_key_fields(t),
         };
         self.edge(f, dst);
         if !self.is_builtin_proto(t) {

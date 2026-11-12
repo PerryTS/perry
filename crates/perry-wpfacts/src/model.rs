@@ -1845,6 +1845,9 @@ pub struct Model {
     /// ENUM3: a for-in subject (or chain link) token -> the node its
     /// unknown-key writes reach (`Model::enum_key_watch`).
     pub enum_key_watch: FxHashMap<Tok, NodeId>,
+    /// ENUM2: a chain link token -> what it holds under its enumerable
+    /// String keys (`Model::enum_key_fields`), for an enumerable-key read.
+    pub enum_key_fields: FxHashMap<Tok, NodeId>,
     pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Object literals with spreads (`{ a, ...s }`): which keys they surely
     /// hold (`LitSpread`), by template, and their spread sites.

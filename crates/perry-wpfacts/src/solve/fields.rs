@@ -52,6 +52,9 @@ impl Model {
                     );
                 }
             }
+            if let Some(&e) = self.enum_key_fields.get(&t) {
+                self.edge(n, e);
+            }
             self.enum_key_gained(t, a);
         }
     }
@@ -260,7 +263,7 @@ impl Model {
 
     /// DECISIONS 241: the join's values of function token `t`'s own
     /// properties (`fn_joined`).
-    fn joined_of(&self, t: Tok) -> Option<crate::model::FnJoined> {
+    pub(super) fn joined_of(&self, t: Tok) -> Option<crate::model::FnJoined> {
         if self.fn_joined.is_empty() {
             return None;
         }
