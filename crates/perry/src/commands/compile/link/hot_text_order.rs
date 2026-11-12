@@ -142,18 +142,15 @@ pub(super) fn symbol_key(symbol: &str) -> String {
 }
 
 /// The list: key -> rank (0 is placed first; the first occurrence decides),
-/// and how many keys the first tier holds (a `# tier` line starts a tier).
-fn parse_order(text: &str) -> (HashMap<&str, u32>, u32) {
+/// and the rank each tier starts at (a `# tier` line starts a tier; the first
+/// tier is the core every program runs).
+fn parse_order(text: &str) -> (HashMap<&str, u32>, Vec<u32>) {
     let mut ranks = HashMap::new();
-    let mut tiers = 0;
-    let mut core = None;
+    let mut tiers = Vec::new();
     for line in text.lines() {
         let key = line.trim();
         if key.starts_with("# tier ") {
-            tiers += 1;
-            if tiers == 2 {
-                core = Some(ranks.len() as u32);
-            }
+            tiers.push(ranks.len() as u32);
         }
         if key.is_empty() || key.starts_with('#') {
             continue;
@@ -161,8 +158,10 @@ fn parse_order(text: &str) -> (HashMap<&str, u32>, u32) {
         let next = ranks.len() as u32;
         ranks.entry(key).or_insert(next);
     }
-    let core = core.unwrap_or(ranks.len() as u32);
-    (ranks, core)
+    if tiers.first() != Some(&0) {
+        tiers.insert(0, 0);
+    }
+    (ranks, tiers)
 }
 
 /// A section name may enter a linker pattern only as a literal.
@@ -173,8 +172,8 @@ fn literal_section(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.$".contains(&b))
 }
 
-/// What the archives hold of the list: `(rank, input section)` in placement
-/// order, and how many listed keys resolved.
+/// What the archives hold of the list: the input sections in placement
+/// order, and how many listed keys resolved (of all, and of the core tier).
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Placement {
     sections: Vec<String>,
@@ -184,30 +183,46 @@ struct Placement {
     core_resolved: usize,
 }
 
-/// Rank every `(function symbol, its input section)` pair the list names.
+/// A function of an archive: its symbol, its input section and that section's
+/// alignment.
+type ArchiveFunction<'a> = (&'a str, &'a str, u64);
+
+/// Place every function the list names: by tier, and by rank within a tier,
+/// except that a tier's sections with less than the usual 16-byte alignment
+/// (cold stubs and tiny functions) close the tier together, widest alignment
+/// first. Spread among the others, each one changes the padding in front of
+/// its successor; together they pack as tightly as the unordered layout packs
+/// them, so the order does not grow `.text` by padding.
 fn place<'a>(
     ranks: &HashMap<&str, u32>,
-    core: u32,
-    symbols: impl Iterator<Item = (&'a str, &'a str)>,
+    tiers: &[u32],
+    functions: impl Iterator<Item = ArchiveFunction<'a>>,
 ) -> Placement {
-    let mut placed: BTreeSet<(u32, String)> = BTreeSet::new();
+    let core = tiers.get(1).copied().unwrap_or(ranks.len() as u32);
+    let mut placed: BTreeSet<(usize, std::cmp::Reverse<u64>, u32, String)> = BTreeSet::new();
     let mut hit: BTreeSet<u32> = BTreeSet::new();
-    for (symbol, section) in symbols {
+    for (symbol, section, align) in functions {
         if !literal_section(section) {
             continue;
         }
         let key = symbol_key(symbol);
         if let Some(&rank) = ranks.get(key.as_str()) {
             hit.insert(rank);
-            placed.insert((rank, section.to_string()));
+            let tier = tiers.partition_point(|&start| start <= rank);
+            placed.insert((
+                tier,
+                std::cmp::Reverse(align.max(1).min(16)),
+                rank,
+                section.to_string(),
+            ));
         }
     }
-    // A section holds one function; two keys naming it keep the first rank.
+    // A section holds one function; two keys naming it keep the first place.
     let mut seen = BTreeSet::new();
     let sections = placed
         .into_iter()
-        .filter(|(_, section)| seen.insert(section.clone()))
-        .map(|(_, section)| section)
+        .filter(|(.., section)| seen.insert(section.clone()))
+        .map(|(.., section)| section)
         .collect();
     Placement {
         sections,
@@ -246,8 +261,8 @@ fn script(placement: &Placement) -> String {
 }
 
 /// Read the function symbols of every ELF member of `archive` with the name
-/// of the input section each one lives in.
-fn archive_functions(archive: &Path, out: &mut Vec<(String, String)>) -> Option<()> {
+/// and the alignment of the input section each one lives in.
+fn archive_functions(archive: &Path, out: &mut Vec<(String, String, u64)>) -> Option<()> {
     let data = std::fs::read(archive).ok()?;
     let file = ArchiveFile::parse(&*data).ok()?;
     for member in file.members() {
@@ -268,14 +283,14 @@ fn archive_functions(archive: &Path, out: &mut Vec<(String, String)>) -> Option<
             let Some(index) = symbol.section_index() else {
                 continue;
             };
-            let (Ok(name), Ok(section)) = (
-                symbol.name(),
-                object.section_by_index(index).and_then(|s| s.name()),
-            ) else {
+            let (Ok(name), Ok(section)) = (symbol.name(), object.section_by_index(index)) else {
                 continue;
             };
-            if section.starts_with(".text.") {
-                out.push((name.to_string(), section.to_string()));
+            let Ok(section_name) = section.name() else {
+                continue;
+            };
+            if section_name.starts_with(".text.") {
+                out.push((name.to_string(), section_name.to_string(), section.align()));
             }
         }
     }
@@ -325,15 +340,17 @@ pub(super) fn link_script(cache: &Path, archives: &[&Path], verbose: u8) -> Opti
     let dir = cache.join("function-order");
     let path = dir.join(format!("hot-text-{fingerprint:016x}.v1.ld"));
     if !path.is_file() {
-        let (ranks, core) = parse_order(DEFAULT_ORDER);
+        let (ranks, tiers) = parse_order(DEFAULT_ORDER);
         let mut functions = Vec::new();
         for archive in archives {
             archive_functions(archive, &mut functions)?;
         }
         let placement = place(
             &ranks,
-            core,
-            functions.iter().map(|(n, s)| (n.as_str(), s.as_str())),
+            &tiers,
+            functions
+                .iter()
+                .map(|(n, s, a)| (n.as_str(), s.as_str(), *a)),
         );
         if placement.sections.is_empty() {
             return None;
@@ -408,27 +425,29 @@ mod tests {
 
     #[test]
     fn listed_functions_are_placed_in_list_order_whatever_the_hashes() {
-        let (ranks, core) = parse_order(
+        let (ranks, tiers) = parse_order(
             "# tier core\n_RNvNtCs_13perry_runtime1b3two\n# tier common\njs_one\n\ngone_function\n_RNvNtCs_13perry_runtime1b3two\n",
         );
-        assert_eq!((ranks.len(), core), (3, 1));
+        assert_eq!((ranks.len(), tiers.as_slice()), (3, &[0, 1][..]));
         let symbols = [
-            ("js_unlisted", ".text.js_unlisted"),
-            ("js_one", ".text.js_one"),
+            ("js_unlisted", ".text.js_unlisted", 16),
+            ("js_one", ".text.js_one", 16),
             (
                 "_RNvNtCsAAAAAAAAAAA_13perry_runtime1b3two",
                 ".text._RNvNtCsAAAAAAAAAAA_13perry_runtime1b3two",
+                16,
             ),
             // The same function in a second archive built with another hash.
             (
                 "_RNvNtCsBBBBBBBBBB_13perry_runtime1b3two",
                 ".text.unlikely._RNvNtCsBBBBBBBBBB_13perry_runtime1b3two",
+                16,
             ),
             // Not a function section of its own: cannot be placed.
-            ("js_one", ".text"),
-            ("js_one", ".text.a*b"),
+            ("js_one", ".text", 16),
+            ("js_one", ".text.a*b", 16),
         ];
-        let placement = place(&ranks, core, symbols.iter().copied());
+        let placement = place(&ranks, &tiers, symbols.iter().copied());
         assert_eq!(
             placement.sections,
             [
@@ -457,10 +476,33 @@ mod tests {
     }
 
     #[test]
+    fn a_tiers_low_aligned_sections_close_it_widest_first() {
+        let (ranks, tiers) = parse_order("# tier core\na\nb\nc\nd\n# tier common\ne\nf\n");
+        assert_eq!(tiers, [0, 4]);
+        let symbols = [
+            ("a", ".text.a", 1),
+            ("b", ".text.b", 16),
+            ("c", ".text.c", 8),
+            ("d", ".text.d", 32),
+            ("e", ".text.e", 4),
+            ("f", ".text.f", 16),
+        ];
+        let placement = place(&ranks, &tiers, symbols.iter().copied());
+        assert_eq!(
+            placement.sections,
+            [".text.b", ".text.d", ".text.c", ".text.a", ".text.f", ".text.e"]
+        );
+        assert_eq!((placement.core_listed, placement.core_resolved), (4, 4));
+    }
+
+    #[test]
     fn the_checked_in_order_is_a_list_of_keys() {
-        let (ranks, core) = parse_order(DEFAULT_ORDER);
+        let (ranks, tiers) = parse_order(DEFAULT_ORDER);
         assert!(ranks.len() > 500, "the default order is not a stub");
-        assert!(core > 100 && (core as usize) < ranks.len(), "tiers: {core}");
+        assert!(
+            tiers.len() > 1 && tiers[1] > 100 && (tiers[1] as usize) < ranks.len(),
+            "tiers: {tiers:?}"
+        );
         for key in ranks.keys() {
             assert_eq!(symbol_key(key), *key, "not a hash-free key: {key}");
             assert!(
