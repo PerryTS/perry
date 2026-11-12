@@ -246,42 +246,13 @@ impl RealmReach {
             self.whole.clone_from(&self.names);
             return;
         }
-        if !self.chain_keys.is_empty() && self.may_set_prototype() {
-            for key in std::mem::take(&mut self.chain_keys) {
-                for kind in PRIMITIVE_KINDS {
-                    if index.has(kind) {
-                        self.own(kind);
-                    }
-                }
-                for name in index.prototype_members(&PRIMITIVE_KINDS, key.as_deref()) {
-                    self.own(name);
-                }
-                match key {
-                    Some(key) => {
-                        self.receiver_keys.insert(key);
-                    }
-                    None => self.any_receiver_key = true,
-                }
-            }
-        }
-        if !self.own_keys.is_empty() && self.may_read_prototype() {
-            for key in self.own_keys.clone() {
-                for kind in PRIMITIVE_KINDS {
-                    if index.has(kind) {
-                        self.own(kind);
-                    }
-                }
-                for name in index.prototype_members(&PRIMITIVE_KINDS, key.as_deref()) {
-                    self.own(name);
-                }
-            }
-        }
         self.names.extend(self.own_names.iter().cloned());
         self.names.extend(self.chain_roots.iter().cloned());
         // Starting at own_names makes WHOLE the least fixpoint of the same
         // monotone predicate used for the final partition.
         self.whole.extend(self.own_names.iter().cloned());
         loop {
+            self.prototype_observations(index);
             let before = (
                 self.names.clone(),
                 self.whole.clone(),
@@ -352,6 +323,41 @@ impl RealmReach {
             }
         }
         self.structure = self.names.difference(&self.whole).cloned().collect();
+    }
+
+    // A held setPrototypeOf member may be discovered during this very close.
+    // Apply the same observation rule on every round of the monotone close.
+    fn prototype_observations(&mut self, index: &RealmIndex) {
+        if !self.chain_keys.is_empty() && self.may_set_prototype() {
+            for key in std::mem::take(&mut self.chain_keys) {
+                for kind in PRIMITIVE_KINDS {
+                    if index.has(kind) {
+                        self.own(kind);
+                    }
+                }
+                for name in index.prototype_members(&PRIMITIVE_KINDS, key.as_deref()) {
+                    self.own(name);
+                }
+                match key {
+                    Some(key) => {
+                        self.receiver_keys.insert(key);
+                    }
+                    None => self.any_receiver_key = true,
+                }
+            }
+        }
+        if !self.own_keys.is_empty() && self.may_read_prototype() {
+            for key in self.own_keys.clone() {
+                for kind in PRIMITIVE_KINDS {
+                    if index.has(kind) {
+                        self.own(kind);
+                    }
+                }
+                for name in index.prototype_members(&PRIMITIVE_KINDS, key.as_deref()) {
+                    self.own(name);
+                }
+            }
+        }
     }
 
     fn birth_roles(&self, index: &RealmIndex) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -495,7 +501,7 @@ impl RealmReach {
     /// `Object.setPrototypeOf`). An unknown computed key is
     /// never `"__proto__"`.
     fn may_set_prototype(&self) -> bool {
-        self.any_receiver_key
+        (self.any_receiver_key && self.names.contains("Object.setPrototypeOf"))
             || ["setPrototypeOf", "__proto__"]
                 .iter()
                 .any(|key| self.receiver_keys.contains(*key))
@@ -510,15 +516,14 @@ impl RealmReach {
     /// slot called `prototype` only keeps that slot; it observes no members
     /// of the value stored there (OrdinaryHasInstance compares its identity).
     fn may_read_prototype(&self) -> bool {
-        self.any_receiver_key
-            || [
-                "__proto__",
-                "getPrototypeOf",
-                "isPrototypeOf",
-                "setPrototypeOf",
-            ]
-            .iter()
-            .any(|key| self.receiver_keys.contains(*key))
+        [
+            "__proto__",
+            "getPrototypeOf",
+            "isPrototypeOf",
+            "setPrototypeOf",
+        ]
+        .iter()
+        .any(|key| self.receiver_keys.contains(*key))
             || self.own_names.iter().any(|name| {
                 name.ends_with(".getPrototypeOf")
                     || name.ends_with(".isPrototypeOf")
@@ -542,7 +547,7 @@ impl RealmReach {
                         // A prototype slot read observes the cell's identity,
                         // not the members/body of the value stored there.
                         && key != "prototype"
-                        && (self.any_receiver_key
+                        && ((self.any_receiver_key && key != "__proto__")
                             || (setter && self.any_setter_key)
                             || holder.runtime_layout_holder()
                             || (self.whole.contains(holder.name())

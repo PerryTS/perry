@@ -393,3 +393,149 @@ fn a_declared_prototype_key_keeps_the_slot_without_owning_its_value() {
     assert!(r.keeps_member(&index, holder, "prototype", "Ctor.prototype", false));
     r.assert_whole_fixpoint(&index);
 }
+
+#[test]
+fn unknown_receiver_key_keeps_members_without_exposing_a_prototype() {
+    const METHODS: &[RealmOwn] = &[RealmOwn {
+        key: "m",
+        symbol: false,
+        value: RealmOwnValue::Reference("String.prototype.m"),
+    }];
+    let index = RealmIndex::new(&[
+        RealmEntry {
+            proto: None,
+            ..row(
+                "String",
+                RealmKind::Constructor,
+                &["String.prototype"],
+                &[RealmOwn {
+                    key: "prototype",
+                    symbol: false,
+                    value: RealmOwnValue::Reference("String.prototype"),
+                }],
+                r#"{"constructor":{}}"#,
+            )
+        },
+        RealmEntry {
+            proto: Some("Object.prototype"),
+            ..row(
+                "String.prototype",
+                RealmKind::Prototype,
+                &["String.prototype.m"],
+                METHODS,
+                "{}",
+            )
+        },
+        row(
+            "Object.prototype",
+            RealmKind::Prototype,
+            &["Object.prototype.__proto__.<get>"],
+            &[RealmOwn {
+                key: "__proto__",
+                symbol: false,
+                value: RealmOwnValue::Reference("Object.prototype.__proto__.<get>"),
+            }],
+            "{}",
+        ),
+        row("String.prototype.m", RealmKind::Method, &[], &[], "{}"),
+        row(
+            "Object.prototype.__proto__.<get>",
+            RealmKind::Method,
+            &[],
+            &[],
+            "{}",
+        ),
+    ]);
+    let ast =
+        perry_parser::parse_typescript("function f(o,k) { return o[k]; }", "unknown.ts").unwrap();
+    let mut r = scan(&ast, &index);
+    r.chain_roots.insert("String.prototype".into());
+    r.close(&index);
+    assert!(r.any_receiver_key);
+    assert!(r.structure.contains("String.prototype"), "{r:?}");
+    assert!(!r.whole.contains("String.prototype"));
+    assert!(r.whole.contains("String.prototype.m"));
+    assert!(!r.names.contains("Object.prototype.__proto__.<get>"));
+    r.assert_whole_fixpoint(&index);
+    let once = r.clone();
+    r.close(&index);
+    assert_eq!(r, once);
+    r.receiver_keys.insert("__proto__".into());
+    r.close(&index);
+    assert!(r.whole.contains("String.prototype"));
+    assert!(r.whole.contains("Object.prototype.__proto__.<get>"));
+}
+
+#[test]
+fn unknown_key_on_named_holder_keeps_every_declared_member_f5() {
+    const MEMBERS: &[RealmOwn] = &[
+        RealmOwn {
+            key: "from",
+            symbol: false,
+            value: RealmOwnValue::Reference("Buffer.from"),
+        },
+        RealmOwn {
+            key: "alloc",
+            symbol: false,
+            value: RealmOwnValue::Reference("Buffer.alloc"),
+        },
+    ];
+    let index = RealmIndex::new(&[
+        row(
+            "Buffer",
+            RealmKind::Namespace,
+            &["Buffer.from", "Buffer.alloc"],
+            MEMBERS,
+            "{}",
+        ),
+        row("Buffer.from", RealmKind::Method, &[], &[], "{}"),
+        row("Buffer.alloc", RealmKind::Method, &[], &[], "{}"),
+    ]);
+    let ast =
+        perry_parser::parse_typescript("function f(k) { return Buffer[k]; }", "f5.ts").unwrap();
+    let r = scan(&ast, &index);
+    let holder = index.last("Buffer").unwrap();
+    for (key, symbol, value) in holder.members() {
+        assert!(r.whole.contains(value));
+        assert!(r.keeps_member(
+            &index,
+            holder,
+            key,
+            value,
+            holder.member_enumerable(key, symbol)
+        ));
+    }
+}
+
+#[test]
+fn unknown_key_can_set_a_prototype_only_after_setprototypeof_is_held() {
+    const SET: &[RealmOwn] = &[RealmOwn {
+        key: "setPrototypeOf",
+        symbol: false,
+        value: RealmOwnValue::Reference("Object.setPrototypeOf"),
+    }];
+    let index = RealmIndex::new(&[
+        row(
+            "Object",
+            RealmKind::Constructor,
+            &["Object.setPrototypeOf"],
+            SET,
+            "{}",
+        ),
+        row("Object.setPrototypeOf", RealmKind::Method, &[], &[], "{}"),
+    ]);
+    let mut r = RealmReach::default();
+    r.any_receiver_key = true;
+    r.chain_keys.insert(Some("next".into()));
+    r.close(&index);
+    assert!(!r.chain_keys.is_empty());
+    assert!(!r.receiver_keys.contains("next"));
+    r.names.insert("Object".into());
+    r.close(&index);
+    assert!(r.names.contains("Object.setPrototypeOf"));
+    assert!(r.chain_keys.is_empty());
+    assert!(r.receiver_keys.contains("next"));
+    let once = r.clone();
+    r.close(&index);
+    assert_eq!(r, once);
+}
