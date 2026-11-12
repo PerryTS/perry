@@ -2078,6 +2078,7 @@ mod navigator_decl;
 mod navigator_store;
 mod object_prototype_method_calls;
 mod spread_from_census;
+mod optimistic_json_key;
 mod peelk18;
 mod peelk19;
 mod peelk20;

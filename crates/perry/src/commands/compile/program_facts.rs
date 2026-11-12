@@ -194,6 +194,8 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_FORIN_PATH").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()
+            == Ok("1"),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),
@@ -1105,6 +1107,8 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_FORIN_PATH").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        optimistic_json_key: std::env::var("PERRY_FACTS_OPTIMISTIC_JSON_KEY").as_deref()
+            == Ok("1"),
         sabotage: std::env::var("PERRY_FACTS_SABOTAGE")
             .ok()
             .filter(|s| !s.is_empty()),

@@ -1876,6 +1876,16 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
     n
 }
 
+/// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the
+/// intrinsic chain of `t`: no member, no `constructor`; only what a store
+/// into ⊤ may have written there (`family_any`'s unlocked case).
+pub(crate) fn chain_written_only(m: &mut Model, t: Tok, dst: NodeId) {
+    let star = m.atom(crate::STAR_KEY);
+    if !locked_chain_read(m, t, star) {
+        any_written(m, dst);
+    }
+}
+
 fn any_written(m: &mut Model, dst: NodeId) {
     let star = m.atom(crate::STAR_KEY);
     if !intrinsic_miss(m, star, NativeMiss::Load(dst)) {

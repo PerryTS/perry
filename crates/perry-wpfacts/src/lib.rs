@@ -141,6 +141,9 @@ pub struct FactsConfig {
     /// that re-reads the loop subject path `P` (`gen::for_in::SubjPath`)
     /// is a plain computed read again.
     pub no_forin_path: bool,
+    /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12;
+    /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`): `Model::json_key_optimistic`.
+    pub optimistic_json_key: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -580,6 +583,7 @@ fn generate<'a>(
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
     g.forin_path = !cfg.no_forin_path;
+    g.m.optimistic_json_key = cfg.optimistic_json_key;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());

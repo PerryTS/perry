@@ -873,7 +873,14 @@ impl Model {
                         };
                         self.edge(f, dst);
                     }
-                    self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                    if self.json_key_optimistic(of, key) {
+                        // OPTIMISTIC (`json_key_optimistic`): no built-in
+                        // member of the link, only what a store into ⊤ may
+                        // have written there.
+                        self.with_b(|m| builtins::chain_written_only(m, q, dst));
+                    } else {
+                        self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                    }
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));

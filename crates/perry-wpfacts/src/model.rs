@@ -1399,6 +1399,14 @@ pub struct Model {
     /// without widening (`solve::grow_rule_range`); only copy targets widen.
     /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
     pub exact_rules: bool,
+    /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12):
+    /// `json_key_optimistic`. NOT Node semantics: an assumption on the
+    /// program's input data.
+    pub optimistic_json_key: bool,
+    /// Diagnostic of the optimistic JSON-key rule: the read results and
+    /// store sources it applied to (`true`: a store), reported with the
+    /// solve profile.
+    pub json_key_fired: Vec<(bool, NodeId)>,
     /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold

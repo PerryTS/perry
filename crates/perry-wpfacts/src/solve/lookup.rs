@@ -137,6 +137,32 @@ impl Model {
     /// The key a lookup of `key` on `t` finds as an own data property of
     /// every object `t` denotes (`shadows`), where it stops: a read and a
     /// method call's callee lookup alike (both are a [[Get]]).
+    /// OPTIMISTIC rule (owner 2026-11-12, measurement only; off unless
+    /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`), form B: a computed key (not a
+    /// compile-time constant) on a receiver that is a `JSON.parse` object
+    /// or a program object literal or Array names no member of a built-in
+    /// prototype and none of `constructor`, `__proto__`, `prototype`: the
+    /// read finds the receiver's own properties and what the program wrote
+    /// on its chain; the store writes an own property. Node finds the
+    /// built-in member for such a key (`{}["toString"]`); the rule assumes
+    /// the program's data never spells one. The one predicate of the rule.
+    pub(crate) fn json_key_optimistic(&self, t: Tok, key: Key) -> bool {
+        self.optimistic_json_key
+            && matches!(key, Key::Any(_))
+            && t != TOP
+            && !self.is_marker(t)
+            && match &self.toks[t as usize] {
+                TokKind::Obj(tm, _) => matches!(
+                    self.tmpls[*tm as usize].kind,
+                    TmplKind::Lit { .. }
+                        | TmplKind::Class { literal_shape: true, .. }
+                        | TmplKind::Arr { .. }
+                        | TmplKind::BObj { what: "json", .. }
+                ),
+                _ => false,
+            }
+    }
+
     pub(crate) fn shadow_key(&self, t: Tok, key: Key) -> Option<Atom> {
         match key {
             Key::Named(a) if !self.is_proto_key(key) && self.shadows(t, a) => Some(a),
@@ -662,7 +688,14 @@ impl Model {
         let shadow = shadow_key.is_some();
         let own_members = !(self.is_marker(t) && self.beside_values(t));
         if own_members && !shadow {
-            self.with_b(|m| builtins::tok_load(m, t, key, chain));
+            if self.json_key_optimistic(t, key) {
+                // OPTIMISTIC (`json_key_optimistic`): no built-in member,
+                // only what a store into ⊤ may have written on the chain.
+                self.json_key_fired.push((false, dst));
+                self.with_b(|m| builtins::chain_written_only(m, t, chain));
+            } else {
+                self.with_b(|m| builtins::tok_load(m, t, key, chain));
+            }
         }
         if let Some(a) = shadow_key {
             self.note_shadowed(t, a, ChainAct::Load(dst), own_members);
