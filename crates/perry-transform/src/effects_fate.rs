@@ -31,6 +31,13 @@
 //! * argument `i` of a call all of whose bodies ([`FateProof::targets`])
 //!   drop their parameter `i`, or of `new C(...)` whose constructor drops it.
 //!
+//! Assigning the binding (`q = v`) keeps nothing of the value it held: `v`
+//! flows into `q`'s binding and is read wherever `q` is read (a tracked
+//! binding assigned into another one keeps the assigned one). A copy
+//! `let r = q` whose `r` is never written in the function (the writes-only
+//! occurrence census `scoped_copies` folds copies by) is `q` under another
+//! name: every read of `r`, a capture included, is a read of `q`.
+//!
 //! `return q` makes it `Returned`; a store `this.k = q` the proof accepts
 //! ([`FateProof::store`]) makes it `KeptByReceiver`. Everything else keeps
 //! it: assignment to any local, field, element or global, capture, `throw`,
@@ -517,6 +524,7 @@ pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates
     let mut walk = Walk {
         func: f.id,
         params: f.params.iter().map(|p| p.id).collect(),
+        aliases: aliases(f),
         out: FnFates::all(f, ParamFate::DROPPED),
         proof,
         known,
@@ -541,7 +549,7 @@ pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates
 }
 
 /// Which tracked binding an expression is: a parameter, or `this`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Slot {
     Param(usize),
     This,
@@ -558,6 +566,8 @@ enum Parent<'e> {
 struct Walk<'a, 'e> {
     func: FuncId,
     params: Vec<LocalId>,
+    /// Never-written copies of a parameter: (copy, parameter index).
+    aliases: Vec<(LocalId, usize)>,
     out: FnFates,
     proof: &'a dyn FateProof,
     known: &'a Fates,
@@ -574,7 +584,11 @@ impl<'e> Walk<'_, 'e> {
     }
 
     fn param(&self, id: LocalId) -> Option<Slot> {
-        self.params.iter().position(|p| *p == id).map(Slot::Param)
+        self.params
+            .iter()
+            .position(|p| *p == id)
+            .or_else(|| self.aliases.iter().find(|(q, _)| *q == id).map(|(_, i)| *i))
+            .map(Slot::Param)
     }
 
     fn fate_mut(&mut self, slot: Slot) -> &mut ParamFate {
@@ -652,6 +666,12 @@ impl<'e> Walk<'_, 'e> {
                 }
             },
             Stmt::Return(None) => {}
+            // A copy's declaration: the copy is the parameter.
+            Stmt::Let {
+                id,
+                init: Some(Expr::LocalGet(_)),
+                ..
+            } if self.aliases.iter().any(|(q, _)| q == id) => {}
             Stmt::Let { init, .. } => {
                 self.at("Let");
                 self.opt(init)
@@ -780,6 +800,30 @@ impl<'e> Walk<'_, 'e> {
             }
         }
         self.sub(parent, e);
+    }
+
+    /// `value` assigned to the binding of `s`: what can flow into it from
+    /// `s` itself stays `s`'s; anything else is walked as a use.
+    fn into(&mut self, parent: &'e Expr, s: Slot, value: &'e Expr) {
+        if self.slot(value) == Some(s) {
+            return;
+        }
+        match value {
+            Expr::Logical { left, right, .. } => {
+                self.into(value, s, left);
+                self.into(value, s, right);
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(value, condition);
+                self.into(value, s, then_expr);
+                self.into(value, s, else_expr);
+            }
+            _ => self.sub(parent, value),
+        }
     }
 
     /// One use of `arg` as argument `i` of `call` whose position fate is
@@ -973,10 +1017,10 @@ impl<'e> Walk<'_, 'e> {
             // The variants that name a local by id rather than through a
             // `LocalGet` child: a reassignment, `q++` (which runs `valueOf`),
             // an array or set mutation of it.
-            Expr::LocalSet(id, value) => {
-                self.keep_id(*id, Why::Reassigned);
-                self.sub(e, value);
-            }
+            Expr::LocalSet(id, value) => match self.param(*id) {
+                Some(s) => self.into(e, s, value),
+                None => self.sub(e, value),
+            },
             Expr::Update { id, .. } => self.keep_id(*id, Why::Updated),
             Expr::ArrayPop(id) => self.keep_id(*id, Why::Mutated("ArrayPop")),
             Expr::ArrayShift(id) => self.keep_id(*id, Why::Mutated("ArrayShift")),
@@ -1010,6 +1054,79 @@ impl<'e> Walk<'_, 'e> {
             self.sub(e, c);
         }
     }
+}
+
+/// The never-written copies `let r = q` of a parameter (or of an earlier
+/// copy) in `f`'s statement lists, outside closures: (copy, parameter
+/// index). Never written: no `LocalSet`/`Update` of `r` anywhere in `f`,
+/// its defaults or its closures (`local_occurrences`' writes census).
+fn aliases(f: &Function) -> Vec<(LocalId, usize)> {
+    fn scan(
+        stmts: &[Stmt],
+        f: &Function,
+        writes: &HashMap<LocalId, usize>,
+        out: &mut Vec<(LocalId, usize)>,
+    ) {
+        for s in stmts {
+            match s {
+                Stmt::Let {
+                    id,
+                    init: Some(Expr::LocalGet(p)),
+                    ..
+                } if !writes.contains_key(id) && f.params.iter().all(|q| q.id != *id) => {
+                    let i = f
+                        .params
+                        .iter()
+                        .position(|q| q.id == *p)
+                        .or_else(|| out.iter().find(|(q, _)| q == p).map(|(_, i)| *i));
+                    if let Some(i) = i {
+                        out.push((*id, i));
+                    }
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    scan(then_branch, f, writes, out);
+                    if let Some(b) = else_branch {
+                        scan(b, f, writes, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => scan(body, f, writes, out),
+                Stmt::For { init, body, .. } => {
+                    if let Some(s) = init {
+                        scan(std::slice::from_ref(s.as_ref()), f, writes, out);
+                    }
+                    scan(body, f, writes, out);
+                }
+                Stmt::Labeled { body, .. } => scan(std::slice::from_ref(body.as_ref()), f, writes, out),
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    scan(body, f, writes, out);
+                    if let Some(c) = catch {
+                        scan(&c.body, f, writes, out);
+                    }
+                    if let Some(b) = finally {
+                        scan(b, f, writes, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        scan(&c.body, f, writes, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let writes = crate::local_occurrences::count_function_writes(f);
+    let mut out = Vec::new();
+    scan(&f.body, f, &writes, &mut out);
+    out
 }
 
 /// Which part of a store `child` is: `.object` (stored into), `.value`

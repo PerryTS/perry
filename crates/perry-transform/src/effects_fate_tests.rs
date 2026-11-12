@@ -471,7 +471,11 @@ fn why_use_names_the_parent_node() {
     assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Binary)");
     let f2 = func(1, &[10], vec![Stmt::Throw(get(lg(10), "x"))]);
     assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "read(x)");
-    let f3 = func(1, &[10], vec![let_(11, lg(10))]);
+    let f3 = func(
+        1,
+        &[10],
+        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::Number(1.0))))],
+    );
     assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(Let)");
 }
 
@@ -492,9 +496,9 @@ fn why_first_use_wins() {
     let f1 = func(
         1,
         &[10],
-        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
+        vec![Stmt::Throw(lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
     );
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Let)");
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Throw)");
 }
 
 #[test]
@@ -585,8 +589,17 @@ fn why_captured_and_captures_this() {
 
 #[test]
 fn why_reassigned_updated_mutated() {
-    let f1 = func(1, &[10], vec![Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0))))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "reassigned");
+    // `q = 1` keeps nothing of q's value (rule c); `q = v; kept.push(q)`
+    // keeps q's binding, so the incoming value is (conservatively) kept.
+    let f1 = func(
+        1,
+        &[10],
+        vec![
+            Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0)))),
+            push(lg(10)),
+        ],
+    );
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
     let up = Expr::Update {
         id: 10,
         op: perry_hir::UpdateOp::Increment,
@@ -793,4 +806,72 @@ fn a_conversion_drops_a_proven_number_only() {
         let f = fates(&[func(1, &[10], vec![let_(12, e)])], &TestProof::default());
         assert_eq!(why(&f, 1, 0), w);
     }
+}
+
+// ─── FATE2 rule c: reassignment and never-written copies ────────────────
+
+fn assign(id: u32, v: Expr) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(id, Box::new(v)))
+}
+
+#[test]
+fn reassigning_a_parameter_keeps_nothing() {
+    use perry_hir::LogicalOp::{Coalesce, Or};
+    // a = a || {}; b = b ?? (c ? b : 0); return a.x + b.x
+    let body = vec![
+        assign(10, logical(Or, lg(10), Expr::Object(vec![]))),
+        assign(11, logical(Coalesce, lg(11), cond(lg(12), lg(11), Expr::Number(0.0)))),
+        ret(add(get(lg(10), "x"), get(lg(11), "x"))),
+    ];
+    let f = fates(&[func(1, &[10, 11, 12], body)], &TestProof::reading(&[(1, "x")]));
+    for i in 0..3 {
+        assert!(f.of_fn(1).unwrap().params[i].proven_dropped(), "param {i}");
+    }
+}
+
+#[test]
+fn assigning_one_parameter_into_another_keeps_it() {
+    // a = b || a; kept.push(a): b flows into a's binding.
+    let body = vec![
+        assign(10, logical(perry_hir::LogicalOp::Or, lg(11), lg(10))),
+        push(lg(10)),
+    ];
+    let f = fates(&[func(1, &[10, 11], body)], &TestProof::default());
+    assert_eq!(why(&f, 1, 1), "use(Logical)");
+    assert_eq!(fate(&f, 1, 0), Fate::Kept);
+}
+
+#[test]
+fn a_never_written_copy_is_the_parameter() {
+    // const q = a; const r = q; if (r) {} return q.x
+    let body = vec![
+        let_(20, lg(10)),
+        let_(21, lg(20)),
+        if_(lg(21), vec![]),
+        ret(get(lg(20), "x")),
+    ];
+    let f = fates(&[func(1, &[10], body)], &TestProof::reading(&[(1, "x")]));
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+}
+
+#[test]
+fn a_copy_that_keeps_keeps_the_parameter() {
+    // const q = a; kept.push(q)
+    let f1 = func(1, &[10], vec![let_(20, lg(10)), push(lg(20))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+    // const g = () => q; const q = a: the capture reads the copy.
+    let mut c = closure(vec![ret(lg(20))], false);
+    if let Expr::Closure { captures, .. } = &mut c {
+        captures.push(20);
+    }
+    let f2 = func(1, &[10], vec![let_(30, c), let_(20, lg(10))]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "captured");
+    // let q = a; q = b; return q.x: q is written, so it is a plain local.
+    let f3 = func(1, &[10, 11], vec![let_(20, lg(10)), assign(20, lg(11)), ret(get(lg(20), "x"))]);
+    let f3 = fates(&[f3], &TestProof::reading(&[(1, "x")]));
+    assert_eq!(why(&f3, 1, 0), "use(Let)");
+    assert_eq!(why(&f3, 1, 1), "use(LocalSet)");
+    // a copy inside a nested list counts too: if (c) { const q = a; kept.push(q) }
+    let f4 = func(1, &[10, 11], vec![if_(lg(11), vec![let_(20, lg(10)), push(lg(20))])]);
+    assert_eq!(why(&fates(&[f4], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
 }
