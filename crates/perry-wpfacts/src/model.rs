@@ -1821,6 +1821,10 @@ pub struct Model {
     /// An iteration consumer reads `done` of each step result
     /// (`Model::step_done`, `reach::step_done`).
     pub reach_step_done: bool,
+    /// A `JSON.stringify` replacer function is called with the values
+    /// serialized and their holders (`Model::json_replacer_calls`,
+    /// `reach::json_replacer`).
+    pub reach_json_replacer: bool,
     /// A generator object has the members it inherits
     /// (`builtins::gen_members`, `reach::gen_members`).
     pub reach_gen_members: bool,

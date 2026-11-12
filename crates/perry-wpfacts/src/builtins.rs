@@ -2149,6 +2149,11 @@ fn ns_method_inner(
                     },
                 );
             }
+            // A replacer function is called back (`json_replacer_calls`).
+            if m.reach_json_replacer && (c.args.len() > 1 || !c.spread.is_empty()) {
+                let holder = site_tmpl(m, call, "json");
+                m.json_replacer_builtin_call(call, holder);
+            }
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
         (BuiltinNs::Json, "parse") => {

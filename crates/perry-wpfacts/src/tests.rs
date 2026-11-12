@@ -167,6 +167,7 @@ mod protocol_keys;
 mod held_lengths;
 mod instance_nodes;
 mod iter_close;
+mod json_callbacks;
 mod key_signs;
 mod list_caps;
 mod literal_strings;
