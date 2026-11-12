@@ -11,7 +11,8 @@ enum BufferSetSource {
 
 #[inline]
 fn js_value_to_number(value: f64) -> f64 {
-    crate::value::JSValue::from_bits(value.to_bits()).to_number()
+    // ToNumber: an object's `valueOf` / `toString` / `Symbol.toPrimitive` runs.
+    crate::builtins::js_number_coerce(value)
 }
 
 #[inline]
@@ -30,11 +31,9 @@ fn to_integer_or_zero(value: f64) -> i64 {
 
 #[inline]
 fn to_uint8(value: f64) -> u8 {
-    let number = js_value_to_number(value);
-    if !number.is_finite() || number == 0.0 {
-        return 0;
-    }
-    (number.trunc() as i64).rem_euclid(256) as u8
+    // The shared element conversion: ToNumber (a BigInt or a Symbol throws),
+    // then ToUint8.
+    crate::typedarray_hook_slots::jsvalue_to_uint8(value)
 }
 
 #[inline]

@@ -365,12 +365,12 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
             // out-of-bounds coercion on a non-plain-number value so the hot
             // in-bounds and primitive-value paths are untouched (test262
             // Set/tonumber-value-throws, key-is-out-of-bounds-*).
-            if value_needs_coercion_side_effect(value) {
-                if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
-                    let _ = bigint::to_bigint_for_store(value);
-                } else {
-                    let _ = jsvalue_to_f64(value);
-                }
+            // A BigInt view converts every value: ToBigInt of a Number, a
+            // string or a Boolean is a TypeError (or a parse) too.
+            if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+                let _ = bigint::to_bigint_for_store(value);
+            } else if value_needs_coercion_side_effect(value) {
+                let _ = jsvalue_to_f64(value);
             }
             return;
         }
