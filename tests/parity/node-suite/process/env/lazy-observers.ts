@@ -8,6 +8,7 @@ import * as util from "node:util";
 const modes = [
   "keys", "forin", "spread", "rest", "json", "clone", "inspect", "entries",
   "values", "assign", "names", "ownkeys", "in", "has", "get",
+  "jsonnest", "jsonarr", "jsonpretty", "jsonreplacer", "jsonlist",
 ];
 
 function observe(mode: string): Record<string, unknown> | string {
@@ -18,6 +19,11 @@ function observe(mode: string): Record<string, unknown> | string {
     case "spread": return { ...e };
     case "rest": { const { SNAPENV_NOPE, ...r } = e; return r; }
     case "json": return JSON.parse(JSON.stringify(e));
+    case "jsonnest": return JSON.parse(JSON.stringify({ e })).e;
+    case "jsonarr": return JSON.parse(JSON.stringify([e]))[0];
+    case "jsonpretty": return JSON.parse(JSON.stringify(e, null, 2));
+    case "jsonreplacer": return JSON.parse(JSON.stringify({ e }, (_k, v) => v)).e;
+    case "jsonlist": return JSON.parse(JSON.stringify(e, ["SNAPENV_K", "SNAPENV_W"]));
     case "clone": return structuredClone(e);
     case "inspect": return util.inspect(e, { depth: 0, maxArrayLength: null, breakLength: Infinity });
     case "entries": return Object.fromEntries(Object.entries(e));
