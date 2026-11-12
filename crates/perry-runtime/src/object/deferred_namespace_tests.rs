@@ -285,11 +285,7 @@ fn deferred_namespace_is_classified_after_the_receiver_header() {
             js_object_get_field_by_name(word, name).is_undefined(),
             "{n}"
         );
-        assert_eq!(
-            js_object_delete_field(word as *mut ObjectHeader, name),
-            1,
-            "{n}"
-        );
+        assert_eq!(js_object_delete_field_value(n, name), 1, "{n}");
     }
     let ns = fixture();
     let raw = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
