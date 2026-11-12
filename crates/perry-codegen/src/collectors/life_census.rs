@@ -129,6 +129,12 @@ impl FateProof for CodegenProof<'_> {
     fn targets(&self, callee: &Expr) -> Option<(Vec<FuncId>, Proof)> {
         direct_target(callee)
     }
+    /// `ElisionFacts::number_inputs`: the binding holds only Numbers, the
+    /// predicate codegen's Number lowering takes unguarded (the driver
+    /// fills it only for bindings no interpreted code reaches).
+    fn primitive(&self, _: FuncId, local: perry_hir::types::LocalId) -> Option<Proof> {
+        self.facts.number_inputs.contains(&local).then_some(Proof::Proven)
+    }
 }
 
 struct ModuleCensus {

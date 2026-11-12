@@ -14,6 +14,8 @@ struct TestProof {
     bets: HashMap<(FuncId, &'static str), u64>,
     /// `<any>.<key>(..)` calls resolved to one body.
     methods: Vec<(&'static str, FuncId)>,
+    /// Locals proven to hold only Numbers.
+    numbers: HashSet<u32>,
 }
 
 impl TestProof {
@@ -49,6 +51,9 @@ impl FateProof for TestProof {
             }
         }
         direct_target(callee)
+    }
+    fn primitive(&self, _: FuncId, local: u32) -> Option<Proof> {
+        self.numbers.contains(&local).then_some(Proof::Proven)
     }
 }
 
@@ -464,8 +469,8 @@ fn why_not_ordinary_names_the_part() {
 fn why_use_names_the_parent_node() {
     let f1 = func(1, &[10], vec![ret(add(lg(10), Expr::Number(1.0)))]);
     assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Binary)");
-    let f2 = func(1, &[10], vec![if_(lg(10), vec![])]);
-    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "use(If)");
+    let f2 = func(1, &[10], vec![Stmt::Throw(get(lg(10), "x"))]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "read(x)");
     let f3 = func(1, &[10], vec![let_(11, lg(10))]);
     assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(Let)");
 }
@@ -674,4 +679,118 @@ fn arguments_past_the_parameters_reach_arguments() {
     // Without rest or `arguments` an extra argument reaches no binding.
     let f = fates(&[func(1, &[10], vec![])], &TestProof::default());
     assert!(f.of_fn(1).unwrap().arg(3).proven_dropped());
+}
+
+// ─── FATE2 rule b: typeof, truthiness and conversions of a primitive ────
+
+fn logical(op: perry_hir::LogicalOp, l: Expr, r: Expr) -> Expr {
+    Expr::Logical {
+        op,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
+}
+
+fn not(e: Expr) -> Expr {
+    Expr::Unary {
+        op: perry_hir::UnaryOp::Not,
+        operand: Box::new(e),
+    }
+}
+
+fn cond(c: Expr, t: Expr, e: Expr) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(c),
+        then_expr: Box::new(t),
+        else_expr: Box::new(e),
+    }
+}
+
+#[test]
+fn typeof_and_truthiness_drop() {
+    use perry_hir::LogicalOp::{And, Coalesce, Or};
+    let body = vec![
+        // if (typeof a === "string") {}
+        if_(eq(Expr::TypeOf(Box::new(lg(10))), Expr::String("string".into())), vec![]),
+        // if (a) {}  while (!a) {}
+        if_(lg(10), vec![]),
+        Stmt::While {
+            condition: not(lg(10)),
+            body: vec![Stmt::Break],
+        },
+        // let x = a ? 1 : 2; let y = Boolean(b)
+        let_(12, cond(lg(10), Expr::Number(1.0), Expr::Number(2.0))),
+        let_(13, Expr::BooleanCoerce(Box::new(lg(11)))),
+        // if (a || b && (a ?? b)) {}  a && b;
+        if_(logical(Or, lg(10), logical(And, lg(11), logical(Coalesce, lg(10), lg(11)))), vec![]),
+        Stmt::Expr(logical(And, lg(10), lg(11))),
+        Stmt::Expr(lg(11)),
+    ];
+    let f = fates(&[func(1, &[10, 11], body)], &TestProof::default());
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    assert!(f.of_fn(1).unwrap().params[1].proven_dropped());
+}
+
+#[test]
+fn a_value_that_flows_on_from_a_test_keeps() {
+    use perry_hir::LogicalOp::{Coalesce, Or};
+    // let x = a || {}; kept.push(x): the result of `||` is `a` itself.
+    let f1 = func(1, &[10], vec![let_(12, logical(Or, lg(10), Expr::Object(vec![]))), push(lg(12))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Logical)");
+    // kept.push(a ?? b)
+    let f2 = func(1, &[10, 11], vec![push(logical(Coalesce, lg(10), lg(11)))]);
+    let f2 = fates(&[f2], &TestProof::default());
+    assert_eq!(why(&f2, 1, 0), "use(Logical)");
+    assert_eq!(why(&f2, 1, 1), "use(Logical)");
+    // return c ? a : 0, in value position
+    let f3 = func(1, &[10, 11], vec![push(cond(lg(11), lg(10), Expr::Number(0.0)))]);
+    let f3 = fates(&[f3], &TestProof::default());
+    assert_eq!(why(&f3, 1, 0), "use(Conditional)");
+    assert!(f3.of_fn(1).unwrap().params[1].proven_dropped(), "the condition is only tested");
+}
+
+#[test]
+fn a_conversion_drops_a_proven_number_only() {
+    let numbers = TestProof {
+        numbers: [10].into_iter().collect(),
+        ..TestProof::default()
+    };
+    let lt = |l, r| Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let loose = |l, r| Expr::Compare {
+        op: CompareOp::LooseEq,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let body = || {
+        vec![
+            let_(12, add(lg(10), Expr::Number(1.0))),
+            let_(13, lt(lg(10), Expr::Number(3.0))),
+            let_(14, loose(lg(10), Expr::Number(3.0))),
+            let_(15, Expr::TemplateStringCoerce(Box::new(lg(10)))),
+            let_(
+                16,
+                Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(lg(10)),
+                },
+            ),
+        ]
+    };
+    let f = fates(&[func(1, &[10], body())], &numbers);
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    // Not proven: `a + 1`, `a < 3`, `a == 3`, `${a}`, `-a` call user code.
+    let f = fates(&[func(1, &[10], body())], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "use(Binary)");
+    for (e, w) in [
+        (lt(lg(10), Expr::Number(3.0)), "use(Compare)"),
+        (loose(lg(10), Expr::Number(3.0)), "use(Compare)"),
+        (Expr::TemplateStringCoerce(Box::new(lg(10))), "use(TemplateStringCoerce)"),
+    ] {
+        let f = fates(&[func(1, &[10], vec![let_(12, e)])], &TestProof::default());
+        assert_eq!(why(&f, 1, 0), w);
+    }
 }

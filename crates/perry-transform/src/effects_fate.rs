@@ -16,6 +16,18 @@
 //!   inherited or absent key. The shape proves it, never a declared type;
 //! * an operand of `===`/`!==`, or of `==`/`!=` against `null`/`undefined`
 //!   (an address compare: no code runs);
+//! * the operand of `typeof`, or a value only tested for truthiness or
+//!   discarded: an `if`/`while`/`for` condition, `!q`, `Boolean(q)`, the
+//!   condition of `?:`, an operand of `&&`/`||`/`??` whose result is itself
+//!   only tested, an expression statement. Neither `typeof` nor ToBoolean
+//!   runs code, on any value (a proxy has no trap for either);
+//! * an operand of an operator that converts it (ToPrimitive, ToNumeric,
+//!   ToString: arithmetic, bitwise, unary `-`/`+`/`~`, `<`/`<=`/`>`/`>=`,
+//!   `==`/`!=` against anything but `null`/`undefined`, a template
+//!   substitution, `String(q)`, `Number(q)`) when the proof says the
+//!   binding holds only Numbers ([`FateProof::primitive`]). On an object
+//!   these call `valueOf`/`toString`/`Symbol.toPrimitive` with `q` as
+//!   `this`, which keeps it;
 //! * argument `i` of a call all of whose bodies ([`FateProof::targets`])
 //!   drop their parameter `i`, or of `new C(...)` whose constructor drops it.
 //!
@@ -46,7 +58,7 @@
 use std::collections::HashMap;
 
 use perry_hir::types::{FuncId, LocalId};
-use perry_hir::{Class, CompareOp, Expr, Function, Stmt};
+use perry_hir::{Class, CompareOp, Expr, Function, Stmt, UnaryOp};
 
 /// See the module comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -305,6 +317,12 @@ pub trait FateProof {
     fn store(&self, func: FuncId, property: &str) -> Option<Proof>;
     /// Every body a call to `callee` can run, or `None` when not all known.
     fn targets(&self, callee: &Expr) -> Option<(Vec<FuncId>, Proof)>;
+    /// Does the binding `local` of `func` hold only primitives that are no
+    /// heap object (Numbers), so no conversion of it runs code? `None` when
+    /// not proven.
+    fn primitive(&self, _func: FuncId, _local: LocalId) -> Option<Proof> {
+        None
+    }
 }
 
 /// The answers known without whole-program facts: no read or store is
@@ -640,7 +658,7 @@ impl<'e> Walk<'_, 'e> {
             }
             Stmt::Expr(e) => {
                 self.at("Expr");
-                self.expr(e)
+                self.test(e)
             }
             Stmt::Throw(e) => {
                 self.at("Throw");
@@ -652,7 +670,7 @@ impl<'e> Walk<'_, 'e> {
                 else_branch,
             } => {
                 self.at("If");
-                self.expr(condition);
+                self.test(condition);
                 self.stmts(then_branch);
                 if let Some(b) = else_branch {
                     self.stmts(b);
@@ -660,7 +678,7 @@ impl<'e> Walk<'_, 'e> {
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 self.at("While");
-                self.expr(condition);
+                self.test(condition);
                 self.stmts(body);
             }
             Stmt::For {
@@ -673,7 +691,9 @@ impl<'e> Walk<'_, 'e> {
                     self.stmt(s);
                 }
                 self.at("For");
-                self.opt(condition);
+                if let Some(c) = condition {
+                    self.test(c);
+                }
                 self.at("For");
                 self.opt(update);
                 self.stmts(body);
@@ -712,6 +732,54 @@ impl<'e> Walk<'_, 'e> {
             | Stmt::PreallocateTdzBoxes(_)
             | Stmt::ReleaseBoxes(_) => {}
         }
+    }
+
+    /// `e` whose value is only tested for truthiness or discarded: a
+    /// binding there drops (ToBoolean runs no code), and so does each value
+    /// `&&`/`||`/`??`/`?:` can yield.
+    fn test(&mut self, e: &'e Expr) {
+        if let Some(s) = self.slot(e) {
+            self.raise(s, Fate::Dropped, Proof::Proven);
+            return;
+        }
+        match e {
+            Expr::Logical { left, right, .. } => {
+                self.test_sub(e, left);
+                self.test_sub(e, right);
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(e, condition);
+                self.test_sub(e, then_expr);
+                self.test_sub(e, else_expr);
+            }
+            _ => self.expr(e),
+        }
+    }
+
+    /// [`Self::test`] of `e` as a child of `parent`.
+    fn test_sub(&mut self, parent: &'e Expr, e: &'e Expr) {
+        let saved = std::mem::replace(&mut self.parent, Parent::Expr(parent));
+        self.test(e);
+        self.parent = saved;
+    }
+
+    /// `e`, the operand of an operator that converts it (and on an object
+    /// calls its `valueOf`/`toString`/`Symbol.toPrimitive`): a binding the
+    /// proof says holds only Numbers drops, anything else is walked.
+    fn converted(&mut self, parent: &'e Expr, e: &'e Expr) {
+        if let Expr::LocalGet(id) = e {
+            if let Some(s) = self.param(*id) {
+                if let Some(p) = self.proof.primitive(self.func, *id) {
+                    self.raise(s, Fate::Dropped, p);
+                    return;
+                }
+            }
+        }
+        self.sub(parent, e);
     }
 
     /// One use of `arg` as argument `i` of `call` whose position fate is
@@ -802,10 +870,36 @@ impl<'e> Walk<'_, 'e> {
                 for side in [left, right] {
                     match self.slot(side) {
                         Some(s) if address => self.raise(s, Fate::Dropped, Proof::Proven),
-                        _ => self.sub(e, side),
+                        _ => self.converted(e, side),
                     }
                 }
             }
+            Expr::TypeOf(x) => match self.slot(x) {
+                Some(s) => self.raise(s, Fate::Dropped, Proof::Proven),
+                None => self.sub(e, x),
+            },
+            Expr::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.test_sub(e, operand),
+            Expr::BooleanCoerce(x) => self.test_sub(e, x),
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(e, condition);
+                self.sub(e, then_expr);
+                self.sub(e, else_expr);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.converted(e, left);
+                self.converted(e, right);
+            }
+            Expr::Unary { operand, .. }
+            | Expr::TemplateStringCoerce(operand)
+            | Expr::StringCoerce(operand)
+            | Expr::NumberCoerce(operand) => self.converted(e, operand),
             Expr::Call { callee, args, .. } => {
                 let targets = self.proof.targets(callee);
                 // The callee itself: a method call keeps its receiver unless
