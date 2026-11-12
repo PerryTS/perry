@@ -406,21 +406,15 @@ const SYNC_GLOBAL_PROPS: &[&str] = &[
 ];
 
 /// Built-in constructors `New { class_name }` may name beyond the globals
-/// above: constructing one schedules nothing and hands out no promise.
+/// above: constructing one schedules nothing and hands out no promise. Most
+/// built-ins have their own variant (`UrlNew`, `ProxyNew`, `TypedArrayNew`,
+/// ...) or construct through `NewDynamic` over a `GlobalGet`; only a name
+/// that really reaches `New` belongs here.
 ///
 /// Deliberately absent: `Promise`, `MessageChannel`, `BroadcastChannel`,
-/// `Worker`, `WebSocket`, `EventSource`, the stream and fetch classes
-/// (`ReadableStream`, `Response`, `Blob`, ...), `FinalizationRegistry`,
-/// `AbortController` (its signal feeds timers and fetch), `Function`.
-const SYNC_CONSTRUCTORS: &[&str] = &[
-    "Proxy",
-    "SharedArrayBuffer",
-    "TextDecoder",
-    "TextEncoder",
-    "URL",
-    "URLSearchParams",
-    "WeakRef",
-];
+/// `Worker`, `WebSocket`, `EventSource`, the stream and fetch classes,
+/// `AbortController`, and every name nobody has vouched for.
+const SYNC_CONSTRUCTORS: &[&str] = &["SharedArrayBuffer"];
 
 /// Runtime externs the HIR names directly that are synchronous.
 const SYNC_EXTERNS: &[&str] = &[
@@ -830,7 +824,13 @@ mod tests {
                 Some(format!("constructor {class}")),
             );
         }
-        for class in ["Map", "Error", "Float64Array", "URL", "Proxy", "WeakRef"] {
+        for class in [
+            "Array",
+            "WeakMap",
+            "Float64Array",
+            "DataView",
+            "SharedArrayBuffer",
+        ] {
             assert_eq!(why_module_not_synchronous(&new(class)), None, "{class}");
         }
         // A class of the module, or an imported one, is checked as program code.
