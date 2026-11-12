@@ -884,6 +884,9 @@ pub(super) fn build_summaries(m: &mut Model) {
             .collect()
     };
     let (ncomposed, nsccs) = compose(m, &obs_of);
+    // The parameter bindings of every function: an edge into one is a call
+    // passing an argument (rule M3, `keyed_param`).
+    let param_nodes: FxHashSet<NodeId> = m.funcs.iter().flat_map(|g| g.params.iter().copied()).collect();
     for (f, s) in m.sum.of.iter_mut() {
         let s = Rc::make_mut(s);
         bind_written_params(s);
@@ -893,7 +896,7 @@ pub(super) fn build_summaries(m: &mut Model) {
         // Rule M3: a parameter used only as a computed key runs per string
         // value, as a switch parameter does, with no clauses to select.
         if s.switch.is_none() && s.called.is_none() {
-            s.switch = keyed_param(s).map(|j| (j, Vec::new()));
+            s.switch = keyed_param(s, &param_nodes).map(|j| (j, Vec::new()));
         }
         if s.switch.is_none() {
             s.edge_reach = Default::default();
@@ -1015,11 +1018,14 @@ fn switch_param(s: &Summary, w: Option<&(u32, Vec<Option<crate::model::Atom>>)>)
 }
 
 /// Rule M3: a parameter the body uses only as the key of computed reads
-/// and stores (`IdxLoad`, `StoreIndexed`), never written, passed, stored,
-/// returned or captured: what each run reads or writes depends on that
-/// key's string alone (ECMA-262 7.1.19 ToPropertyKey, 10.2.1 binding).
-/// GLTFLoader `GLTFRegistry.get(key)`, `add(key, object)`.
-fn keyed_param(s: &Summary) -> Option<u32> {
+/// and stores (`IdxLoad`, `StoreIndexed`), as call arguments and as a
+/// receiver of reads and method calls, never written, stored, returned or
+/// captured: what each run reads or writes
+/// depends on that key's string alone (ECMA-262 7.1.19 ToPropertyKey, 10.2.1
+/// binding; an argument passes the string itself). GLTFLoader
+/// `GLTFRegistry.get(key)`, `add(key, object)`; three.js `Cache.get(key)`,
+/// `add(key, file)` (`isBlobURL(key)`).
+fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
     // The parameter and the locals only it writes (the body's binding of
     // the parameter is a copy of it): each is a key and nothing else.
     let copies_of = |p: NodeId| -> Option<Vec<NodeId>> {
@@ -1030,6 +1036,10 @@ fn keyed_param(s: &Summary) -> Option<u32> {
             i += 1;
             for &(a, b) in &s.edges {
                 if a != x || k.contains(&b) {
+                    continue;
+                }
+                // A known callee's parameter: the call passes the string.
+                if !is_slot(b) && param_nodes.contains(&b) {
                     continue;
                 }
                 if !is_slot(b)
@@ -1074,6 +1084,14 @@ fn keyed_param(s: &Summary) -> Option<u32> {
                         ..
                     } => {}
                     Cons::Raise { .. } => {}
+                    // The key as a receiver (`key.slice(i)`, `key.length`;
+                    // three.js `isBlobURL(key)` composed into Cache.get/add):
+                    // the read binds `this` to the same value and changes
+                    // nothing of it (ECMA-262 7.3.2 GetV, 10.2.1), so the
+                    // run's key is still that one value at every use. The
+                    // call's result and operands are checked below.
+                    Cons::MCall { .. } => {}
+                    Cons::Load { dst, .. } if !k.contains(dst) => {}
                     _ => return false,
                 }
             } else if super::map::cons_fields(c).0.iter().any(|x| k.contains(x)) {
@@ -1085,13 +1103,15 @@ fn keyed_param(s: &Summary) -> Option<u32> {
                 }
             }
         }
+        // An argument or receiver is passed by value (ECMA-262 10.2.1): a
+        // key the run passes on is still that one value, the callee binds
+        // its own copy. A spread, the call's result or its region is not a
+        // key.
         for (_, cs) in &s.calls {
-            let mut seen = false;
-            super::map::map_call(cs, |x| {
-                seen |= k.contains(&x);
-                x
-            });
-            if seen {
+            if cs.spread.iter().any(|x| k.contains(x))
+                || k.contains(&cs.ret)
+                || k.contains(&cs.region)
+            {
                 return false;
             }
         }

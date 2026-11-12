@@ -149,6 +149,7 @@ mod locked_top_store;
 mod locked_top_define;
 mod internal_slot_no_property;
 mod registry_prefix_runs;
+mod cache_key_runs;
 mod promise_adopts_thenable;
 mod logical_and;
 mod map_identity_ops;
