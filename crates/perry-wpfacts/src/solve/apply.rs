@@ -1734,6 +1734,35 @@ impl Model {
             Cons::ArrayLenArg { dst } => {
                 self.add_tokens(dst, toks, prim & !prim::NUM);
             }
+            Cons::ViewedBuffer { view, fresh, share } => {
+                let a = self.atom(VIEWED_BUFFER);
+                let f = self.field(view, a);
+                let mut made = prim != 0;
+                for &t in toks {
+                    if t == TOP {
+                        self.add_top(f, |_| "buffer of a view over a value of unknown code".into());
+                        continue;
+                    }
+                    let what = match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
+                            TmplKind::BObj { what, .. } => what,
+                            _ => "",
+                        },
+                        _ => "",
+                    };
+                    match (share, what) {
+                        (true, "TypedArray" | "Buffer" | "DataView") => {
+                            let src = self.field(t, a);
+                            self.edge(src, f);
+                        }
+                        (false, "ArrayBuffer" | "SharedArrayBuffer") => self.add_tok(f, t),
+                        _ => made = true,
+                    }
+                }
+                if let (true, false, Some(fresh)) = (made, share, fresh) {
+                    self.add_tok(f, fresh);
+                }
+            }
             Cons::ShareBuffer { ta } => {
                 for &t in toks {
                     let shared = t == TOP

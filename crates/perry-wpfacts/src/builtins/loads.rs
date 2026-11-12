@@ -858,7 +858,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         // transferred, detached or wrapped by another view).
                         let r = m.reason("B1 .buffer read");
                         m.mark_hard(t, Hard::B1Exposed, r);
-                        m.add_tok(dst, t);
+                        // 23.2.3.2 / 25.3.4.1: [[ViewedArrayBuffer]], an
+                        // ArrayBuffer, never the view (a Buffer is a
+                        // Uint8Array).
+                        let f = super::viewed_buffer(m, t);
+                        m.edge(f, dst);
                     }
                     (_, Some("byteOffset"))
                         if matches!(what, "TypedArray" | "Buffer" | "DataView") =>

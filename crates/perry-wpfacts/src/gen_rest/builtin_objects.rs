@@ -358,10 +358,34 @@ impl<'a> Gen<'a> {
                     Expr::FsReadFileBinary(..) => "Buffer",
                     _ => "TypedArray",
                 };
-                let (t, n) = self.bobj(mi, what);
+                let (t, n) = self.bobj_view(mi, what);
+                // Its buffer (`VIEWED_BUFFER`): `Buffer.alloc` allocates one
+                // (lib/buffer.js `new FastBuffer(size)`); `Buffer.from` of an
+                // ArrayBuffer views it; the rest may view the pool.
+                let pool = crate::builtins::buffer_pool(&mut self.m);
+                let born = match e {
+                    Expr::BufferAlloc { .. } => Some(self.bobj_view(mi, "ArrayBuffer").0),
+                    Expr::BufferFrom { .. } => None,
+                    _ => Some(pool),
+                };
+                if let Some(ab) = born {
+                    let f = crate::builtins::viewed_buffer(&mut self.m, t);
+                    self.m.add_tok(f, ab);
+                }
                 let owner = self.begin_indexed_owner(mi, t, e);
+                let mut first = born.is_none();
                 for k in ks {
                     let v = self.expr(fx, k);
+                    if std::mem::take(&mut first) {
+                        self.m.cons(
+                            v,
+                            Cons::ViewedBuffer {
+                                view: t,
+                                fresh: Some(pool),
+                                share: false,
+                            },
+                        );
+                    }
                     if owner {
                         if let TokKind::Obj(tm, _) = self.m.toks[t as usize] {
                             self.m.ta_birth_input.insert(tm, v);
@@ -389,12 +413,35 @@ impl<'a> Gen<'a> {
             | Expr::BufferConcat(..)
             | Expr::BufferConcatWithLength { .. } => {
                 let ks = kids(e);
+                let mut vs = Vec::new();
                 for k in ks {
                     let v = self.expr(fx, k);
                     let it = self.iterate(v);
                     let _ = it;
+                    vs.push(v);
                 }
-                let (t, n) = self.bobj(mi, "TypedArray");
+                let (t, n) = self.bobj_view(mi, "TypedArray");
+                // Its buffer (`VIEWED_BUFFER`): `Buffer.from(ab, ...)` views
+                // ab, a Buffer slice its receiver's, a concatenation may
+                // view the pool (lib/buffer.js `allocUnsafe`).
+                let pool = crate::builtins::buffer_pool(&mut self.m);
+                match (e, vs.first()) {
+                    (Expr::BufferFromArrayBuffer { .. } | Expr::BufferSlice { .. }, Some(&v)) => {
+                        let share = matches!(e, Expr::BufferSlice { .. });
+                        self.m.cons(
+                            v,
+                            Cons::ViewedBuffer {
+                                view: t,
+                                fresh: (!share).then_some(pool),
+                                share,
+                            },
+                        );
+                    }
+                    _ => {
+                        let f = crate::builtins::viewed_buffer(&mut self.m, t);
+                        self.m.add_tok(f, pool);
+                    }
+                }
                 let fa = self.m.field_any(t);
                 self.m.add_prim(fa, prim::NUM);
                 n

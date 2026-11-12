@@ -472,7 +472,39 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
 
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
+    let t = site_tmpl_born(m, call, what, false, false);
+    // A view born without a buffer argument allocates its own
+    // (23.2.5.1.1 AllocateTypedArray, 23.2.5.1.6 AllocateTypedArrayBuffer):
+    // one ArrayBuffer per birth site.
+    if matches!(what, "TypedArray" | "Buffer" | "DataView") {
+        let ab = site_tmpl_born(m, call, "ArrayBuffer", false, false);
+        let f = viewed_buffer(m, t);
+        m.add_tok(f, ab);
+    }
+    t
+}
+
+/// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
+/// birth writes itself (`Cons::ViewedBuffer`).
+fn site_view(m: &mut Model, call: CallId, what: &'static str) -> Tok {
     site_tmpl_born(m, call, what, false, false)
+}
+
+/// The view `t`'s [[ViewedArrayBuffer]] (`VIEWED_BUFFER`): the ArrayBuffer
+/// its birth made or was given, which `.buffer` returns (23.2.3.2,
+/// 25.3.4.1), never the view itself.
+pub(crate) fn viewed_buffer(m: &mut Model, t: Tok) -> NodeId {
+    let a = m.atom(VIEWED_BUFFER);
+    m.field(t, a)
+}
+
+/// The ArrayBuffer of Node's Buffer pool (lib/buffer.js `allocPool`):
+/// `Buffer.from(string | array | buffer)`, `Buffer.allocUnsafe`,
+/// `Buffer.concat` and `fs.readFileSync` may all view the same pool, so
+/// one token stands for it and for the buffer a larger such birth makes.
+pub(crate) fn buffer_pool(m: &mut Model) -> Tok {
+    let tm = site_template(m, CallId::MAX, "ArrayBuffer", false, false);
+    m.tok(TokKind::Obj(tm, NO_CTX))
 }
 
 /// A per-call-site Array born without holes: the builtin that makes it
@@ -512,11 +544,22 @@ fn site_tmpl_born(
     // Keyed by the SOURCE call site: calls derived while solving (bindings
     // through relays, protocol touches) share their origin's template.
     let site = m.calls[call as usize].site;
+    let tm = site_template(m, site, what, hole_free, plain);
+    let ctx = m.birth_ctx(call);
+    m.site_tok(tm, ctx)
+}
+
+/// The template of `what` born at source site `site` (`site_tmpl_born`).
+fn site_template(
+    m: &mut Model,
+    site: CallId,
+    what: &'static str,
+    hole_free: bool,
+    plain: bool,
+) -> TmplId {
     let key = (site, what, plain);
     if let Some(&t) = m.site_tmpls.get(&key) {
-        let tm = m.tmpl_of(t).expect("site template");
-        let ctx = m.birth_ctx(call);
-        return m.site_tok(tm, ctx);
+        return m.tmpl_of(t).expect("site template");
     }
     let tm = m.tmpls.len() as TmplId;
     let kind = if what == "Array" || hole_free {
@@ -565,9 +608,7 @@ fn site_tmpl_born(
     }
     let t = m.tok(TokKind::Obj(tm, NO_CTX));
     m.site_tmpls.insert(key, t);
-    let ctx = m.birth_ctx(call);
-    let t = m.site_tok(tm, ctx);
-    t
+    tm
 }
 
 /// A synthetic resolver function: its first parameter flows into `dst`.

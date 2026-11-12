@@ -1000,6 +1000,15 @@ impl Model {
             });
             self.add_prim(v, prim::ALL);
         }
+        // Its buffer is what unknown code reads as `.buffer` (`VIEWED_BUFFER`).
+        if self.array_buffer_view(t) {
+            let a = self.atom(VIEWED_BUFFER);
+            let v = self.field(t, a);
+            self.add_top(v, |m| {
+                format!("buffer of an escaped view: {}", m.reasons[reason as usize])
+            });
+            self.cons(v, Cons::TopSink { reason });
+        }
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }

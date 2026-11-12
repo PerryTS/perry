@@ -559,6 +559,12 @@ pub enum Cons {
     /// The node holds the source of a typed array `ta`: a buffer or view
     /// there means `ta` shares (and so exposes) that buffer (B1).
     ShareBuffer { ta: Tok },
+    /// The node holds the source of view `view`'s [[ViewedArrayBuffer]]
+    /// (`VIEWED_BUFFER`). `share`: a view of the same memory (`subarray`,
+    /// Buffer `slice`): the source view's buffer. Otherwise a constructor
+    /// argument: an ArrayBuffer is the buffer (23.2.5.1.3, 25.3.2.1), any
+    /// other value makes `fresh` (`None`: the birth throws).
+    ViewedBuffer { view: Tok, fresh: Option<Tok>, share: bool },
     /// The node holds the methods a lookup found on receiver `origin`:
     /// each runs with `origin` as `this` (the `this` half of `CallThis`,
     /// shared by every call site that looks the same key up on `origin`).
@@ -749,6 +755,7 @@ impl Cons {
             Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
+            Cons::ViewedBuffer { .. } => "viewedbuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",
             Cons::RetInto { .. } => "retinto",

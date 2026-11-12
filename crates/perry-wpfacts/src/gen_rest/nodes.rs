@@ -13,7 +13,24 @@ impl<'a> Gen<'a> {
         // followed by numeric element conversion, not escape.
         let args: Vec<_> = kids(e).iter().map(|k| self.expr(fx, k)).collect();
         let (call, _) = self.new_call(ThisArg::Undef, args.clone(), vec![]);
-        let (t, n) = self.bobj(mi, "TypedArray");
+        let (t, n) = self.bobj_view(mi, "TypedArray");
+        // Its buffer: an ArrayBuffer argument of the constructor (23.2.5.1.3),
+        // else the one it allocates; `from` always copies (23.2.2.1).
+        let (ab, _) = self.bobj_view(mi, "ArrayBuffer");
+        match args.first() {
+            Some(&v) if !matches!(e, Expr::Uint8ArrayFrom(..)) => self.m.cons(
+                v,
+                Cons::ViewedBuffer {
+                    view: t,
+                    fresh: Some(ab),
+                    share: false,
+                },
+            ),
+            _ => {
+                let f = crate::builtins::viewed_buffer(&mut self.m, t);
+                self.m.add_tok(f, ab);
+            }
+        }
         let owner = self.begin_indexed_owner(mi, t, e);
         if let Some(&v) = args.first() {
             let vals = crate::builtins::typed_array_methods::source(&mut self.m, call, v);
@@ -103,6 +120,19 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn bobj(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
+        let (t, n) = self.bobj_view(mi, what);
+        // A view born without a buffer argument allocates its own
+        // (23.2.5.1.6 AllocateTypedArrayBuffer): one per birth site.
+        if matches!(what, "TypedArray" | "Buffer" | "DataView") {
+            let (ab, _) = self.bobj_view(mi, "ArrayBuffer");
+            let f = crate::builtins::viewed_buffer(&mut self.m, t);
+            self.m.add_tok(f, ab);
+        }
+        (t, n)
+    }
+
+    /// `bobj` of a view whose [[ViewedArrayBuffer]] the caller writes.
+    pub(crate) fn bobj_view(&mut self, mi: u32, what: &'static str) -> (Tok, NodeId) {
         let tm = self.new_bobj_template(mi, what);
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         let n = self.tok_node(t);

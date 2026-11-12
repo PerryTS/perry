@@ -71,11 +71,9 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
 }
 
 /// `slice(start, end)` of a Buffer. `Buffer.prototype.slice` is a view of
-/// the same memory (Node lib/buffer.js: `subarray`'s result, a Buffer); the
-/// token also stands for its [[ViewedArrayBuffer]] (`.buffer` reads the view
-/// token, `loads.rs`), whose `slice` is `ArrayBuffer.prototype.slice`: a
-/// fresh ArrayBuffer (ECMA-262 25.1.6.7). Both convert start and end
-/// (ToIntegerOrInfinity); neither result is a primitive.
+/// the same memory (Node lib/buffer.js: `subarray`'s result, a Buffer): its
+/// [[ViewedArrayBuffer]] is the receiver's. It converts start and end
+/// (ToIntegerOrInfinity).
 pub(super) fn buffer_view_slice(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
     for &a in c.args.iter().take(2) {
@@ -83,17 +81,42 @@ pub(super) fn buffer_view_slice(m: &mut Model, t: Tok, call: CallId) {
     }
     let recv = m.node_l("buffer-receiver");
     m.add_tok(recv, t);
-    let view = site_tmpl(m, call, "Buffer");
+    let view = site_view(m, call, "Buffer");
     let fa = m.field_any(view);
     m.add_prim(fa, prim::NUM);
     ret_tok(m, call, view);
     m.cons(recv, Cons::ShareBuffer { ta: view });
-    let ab = site_tmpl(m, call, "ArrayBuffer");
-    ret_tok(m, call, ab);
+    m.cons(
+        recv,
+        Cons::ViewedBuffer {
+            view,
+            fresh: None,
+            share: true,
+        },
+    );
 }
 
 fn fresh(m: &mut Model, call: CallId) -> Tok {
     let out = site_tmpl(m, call, "TypedArray");
+    typed_result(m, call, out)
+}
+
+/// A typed array of the same memory as the receiver (`subarray`, 23.2.3.29):
+/// its [[ViewedArrayBuffer]] is the receiver's.
+fn same_memory(m: &mut Model, call: CallId, recv: NodeId) -> Tok {
+    let out = site_view(m, call, "TypedArray");
+    m.cons(
+        recv,
+        Cons::ViewedBuffer {
+            view: out,
+            fresh: None,
+            share: true,
+        },
+    );
+    typed_result(m, call, out)
+}
+
+fn typed_result(m: &mut Model, call: CallId, out: Tok) -> Tok {
     let fa = m.field_any(out);
     m.add_prim(fa, prim::NUM | prim::BIGINT);
     ret_tok(m, call, out);
@@ -142,7 +165,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                     species(m, t, call, vec![num]);
                 }
                 _ => {
-                    let out = fresh(m, call);
+                    let out = same_memory(m, call, recv);
                     m.cons(recv, Cons::ShareBuffer { ta: out });
                     // Internal [[ViewedArrayBuffer]], offset and length:
                     // represented by the same shared owner token.

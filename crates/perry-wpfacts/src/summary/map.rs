@@ -398,6 +398,7 @@ pub fn map_cons(
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         ShareBuffer { ta } => ShareBuffer { ta },
+        ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
         BoundCall { reason, bound } => BoundCall { reason, bound },
         ThisTo { origin } => ThisTo { origin },
         CallArgs { call } => CallArgs { call: k(call) },
@@ -545,6 +546,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NewTargetHard { .. }
             | NativeParent { .. }
             | ShareBuffer { .. }
+            | ViewedBuffer { .. }
             | BoundCall { .. }
             | AnnexBDefine { .. }
             | AnnexBLookup { .. }

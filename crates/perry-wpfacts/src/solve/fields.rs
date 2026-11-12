@@ -14,6 +14,19 @@ impl Model {
         self.atoms[a as usize] == MAP_VALUES && self.keyed_collection(t)
     }
 
+    /// `t` is a typed array, a Buffer or a DataView: it views an ArrayBuffer
+    /// (`VIEWED_BUFFER`).
+    pub(crate) fn array_buffer_view(&self, t: Tok) -> bool {
+        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[*tm as usize].kind,
+                TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. }))
+    }
+
+    /// `a` names the buffer the view `t` views (`VIEWED_BUFFER`).
+    pub(crate) fn viewed_buffer_field(&self, t: Tok, a: Atom) -> bool {
+        self.atoms[a as usize] == VIEWED_BUFFER && self.array_buffer_view(t)
+    }
+
     /// ECMA-262 22.2.3.1 RegExpAlloc: every RegExp object holds `lastIndex`
     /// as an own data property, `[[Configurable]]: false`, from birth: no
     /// delete or defineProperty removes it or makes it an accessor, so a
@@ -76,6 +89,12 @@ impl Model {
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
+        // A view's [[ViewedArrayBuffer]] is an internal slot, no property:
+        // only its birth writes it and only `.buffer` reads it; no key
+        // lists, copies or reads it (`VIEWED_BUFFER`).
+        if self.viewed_buffer_field(t, a) {
+            return n;
+        }
         self.field_keys.entry(t).or_default().push(a);
         // A RegExp object's `lastIndex` is the Number 0 from birth
         // (`regexp_last_index`).

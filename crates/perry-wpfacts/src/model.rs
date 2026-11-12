@@ -22,6 +22,12 @@ pub type SiteId = u32;
 /// (`builtins::collections::map_values`).
 pub(crate) const MAP_VALUES: &str = "[[MapData]]";
 
+/// [[ViewedArrayBuffer]] (ECMA-262 23.2.3.2, 25.3.4.1): the ArrayBuffer a
+/// typed array, a Buffer or a DataView views, a field of the view object
+/// itself. The view's birth writes it, `.buffer` reads it
+/// (`builtins::viewed_buffer`); no store ever does.
+pub(crate) const VIEWED_BUFFER: &str = "[[ViewedArrayBuffer]]";
+
 pub const ELEM: &str = "#elem";
 /// The key an element store (`push`, `set.add`) writes on a value that may
 /// be a builtin prototype: an index, or no property at all (a collection's

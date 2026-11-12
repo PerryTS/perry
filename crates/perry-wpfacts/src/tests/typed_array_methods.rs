@@ -156,3 +156,81 @@ fn typed_absent_method_runs_nothing() {
 fn typed_absent_method_written_by_unknown_code_escapes() {
     check("new Function(process.argv[2])(a); a.traverse(o)", false);
 }
+/// ECMA-262 23.2.3.2: `.buffer` of a typed array is its
+/// [[ViewedArrayBuffer]], an ArrayBuffer, never the view: a key written on
+/// the buffer is no key of the view.
+#[test]
+fn view_buffer_is_not_the_view() {
+    check("const u: any = new Uint8Array(8); u.buffer.q = o; u.q.leak();", true);
+    check(
+        "const fs = require(\"fs\"); const b: any = fs.readFileSync(process.argv[1]); \
+         b.buffer.q = o; b.q.leak();",
+        true,
+    );
+}
+/// A view constructed over an ArrayBuffer views that ArrayBuffer
+/// (23.2.5.1.3 InitializeTypedArrayFromArrayBuffer, 25.3.2.1 DataView,
+/// Node `Buffer.from(arrayBuffer)`); `subarray` and a Buffer `slice` view
+/// their receiver's buffer (23.2.3.29).
+#[test]
+fn view_over_array_buffer_returns_it() {
+    for v in [
+        "new Uint8Array(ab)",
+        "new Float32Array(ab, 0, 1)",
+        "new DataView(ab)",
+        "Buffer.from(ab)",
+        "new Uint8Array(ab).subarray(1)",
+        "Buffer.from(ab).slice(1)",
+    ] {
+        check(
+            &format!("const ab: any = new ArrayBuffer(8); ab.q = o; const v: any = {v}; v.buffer.q.leak();"),
+            false,
+        );
+    }
+}
+/// A view born without a buffer allocates its own (23.2.5.1.6): it is not
+/// another ArrayBuffer.
+#[test]
+fn view_without_buffer_argument_has_its_own() {
+    for v in ["new Uint8Array(4)", "new Uint8Array([1, 2])", "new Uint8Array(ab).slice(0)", "Buffer.alloc(4)"] {
+        check(
+            &format!("const ab: any = new ArrayBuffer(8); ab.q = o; const v: any = {v}; v.buffer.q.leak();"),
+            true,
+        );
+    }
+}
+/// Node's Buffer pool: two small Buffers may view the same ArrayBuffer
+/// (lib/buffer.js `allocPool`).
+#[test]
+fn pooled_buffers_may_share_their_buffer() {
+    check(
+        "const b: any = Buffer.from(\"x\"); b.buffer.q = o; Buffer.from(\"y\").buffer.q.leak();",
+        false,
+    );
+}
+/// The skin input: the slice of a Buffer's `.buffer` is a fresh
+/// ArrayBuffer (25.1.6.7), not a Buffer: a Buffer method is absent on it.
+#[test]
+fn buffer_buffer_slice_is_an_array_buffer() {
+    check(
+        "const fs = require(\"fs\"); const b: any = fs.readFileSync(process.argv[1]); \
+         const s: any = b.buffer.slice(0, 2); s.q = o; b.q.leak(); b.buffer.q.leak();",
+        true,
+    );
+}
+/// Control: unknown code holding the view: its buffer is unknown code's.
+#[test]
+fn view_held_by_unknown_code_has_unknown_buffer() {
+    check(
+        "const u: any = new Uint8Array(4); new Function(process.argv[2])(u); u.buffer.q(o);",
+        false,
+    );
+}
+/// Control: the buffer of a view unknown code holds is unknown code's too.
+#[test]
+fn buffer_of_view_held_by_unknown_code_escapes() {
+    check(
+        "const ab: any = new ArrayBuffer(8); ab.q = o; const u: any = new Uint8Array(ab); new Function(process.argv[2])(u);",
+        false,
+    );
+}

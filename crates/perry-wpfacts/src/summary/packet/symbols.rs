@@ -469,6 +469,10 @@ impl Model {
             Cons::ShareBuffer { ta } => {
                 format!("ShareBuffer ta={:?}", self.packet_token(ta, packet))
             }
+            Cons::ViewedBuffer { view, fresh, share } => format!(
+                "ViewedBuffer view={:?} fresh={fresh:?} share={share}",
+                self.packet_token(view, packet)
+            ),
             Cons::ThisTo { origin } => {
                 format!("ThisTo origin={:?}", self.packet_token(origin, packet))
             }

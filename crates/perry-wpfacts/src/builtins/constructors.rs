@@ -184,7 +184,25 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     }
                 }
             }
-            let o = site_tmpl(m, call, what);
+            let o = match buffer {
+                true => site_tmpl(m, call, what),
+                false => site_view(m, call, what),
+            };
+            // A view's buffer: an ArrayBuffer argument (23.2.5.1.3
+            // InitializeTypedArrayFromArrayBuffer, 25.3.2.1 DataView), else
+            // one AllocateTypedArray allocates (a DataView needs one).
+            if !buffer {
+                let fresh = (what == "TypedArray").then(|| site_tmpl(m, call, "ArrayBuffer"));
+                match m.calls[call as usize].args.first().copied() {
+                    Some(src) => m.cons(src, Cons::ViewedBuffer { view: o, fresh, share: false }),
+                    None => {
+                        if let Some(ab) = fresh {
+                            let f = viewed_buffer(m, o);
+                            m.add_tok(f, ab);
+                        }
+                    }
+                }
+            }
             // A typed array's elements; a buffer or a DataView has none.
             if what == "TypedArray" {
                 let fa = m.field_any(o);
