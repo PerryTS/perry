@@ -5600,13 +5600,19 @@ fn match_packed_f64_versioned_loop(
     // Check mode: a loop kept by a named length is witnessed in the
     // ordinary loop's condition block only (`named_len`).
     let unwitnessed = |hoist: &LengthHoist| hoist.named && crate::verify_facts::enabled();
+    // The clone this match builds is entered only when no call survived in
+    // its emitted blocks (`fast_clone_not_call_free`): that scan, not the
+    // walker, is its proof that no program code runs, so the walker does
+    // not ask (`crate::quiet`).
     let ordinary_hoist = condition
-        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        .and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, false, false))
         .filter(|hoist| !unwitnessed(hoist));
     let hoist = ordinary_hoist
         .or_else(|| {
             condition
-                .and_then(|cond| classify_for_length_hoist_impl(ctx, cond, update, body, true))
+                .and_then(|cond| {
+                    classify_for_length_hoist_impl(ctx, cond, update, body, true, false)
+                })
                 .filter(|hoist| !unwitnessed(hoist))
         })
         .or_else(|| {
@@ -7865,8 +7871,13 @@ fn lower_for_after_init_impl(
     let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
         || precomputed_i32_bound.is_some();
+    // Inside a versioned clone the emitted blocks are scanned for calls and
+    // the clone is dropped when one survived: the walker asks the facts
+    // about program code (`crate::quiet`) only for the ordinary loop.
     let raw_hoist_classification: Option<LengthHoist> = condition
-        .and_then(|cond| classify_for_length_hoist(ctx, cond, update, body))
+        .and_then(|cond| {
+            classify_for_length_hoist_impl(ctx, cond, update, body, false, !in_call_free_clone)
+        })
         // Check mode: a loop kept by a named length is one whose condition
         // block holds the witness (`named_len::witness`).
         .filter(|hoist| !(hoist.named && in_call_free_clone && crate::verify_facts::enabled()));
@@ -9081,21 +9092,17 @@ fn collect_guarded_array_aliases_in_expr(
 /// about one local id; accepting `const alias = arr; alias.push(...)` would let
 /// a length mutation bypass both the cached-length slot and the derived
 /// bounded-index facts.
-fn classify_for_length_hoist(
-    ctx: &crate::expr::FnCtx<'_>,
-    cond: &perry_hir::Expr,
-    update: Option<&perry_hir::Expr>,
-    body: &[perry_hir::Stmt],
-) -> Option<LengthHoist> {
-    classify_for_length_hoist_impl(ctx, cond, update, body, false)
-}
-
+///
+/// `ask_quiet`: the walker asks of every read, store and operator whether
+/// it runs program code (`crate::quiet`). Off for a versioned clone, whose
+/// emitted blocks are scanned for calls instead.
 fn classify_for_length_hoist_impl(
     ctx: &crate::expr::FnCtx<'_>,
     cond: &perry_hir::Expr,
     update: Option<&perry_hir::Expr>,
     body: &[perry_hir::Stmt],
     allow_materialization_hazard: bool,
+    ask_quiet: bool,
 ) -> Option<LengthHoist> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
@@ -9139,6 +9146,7 @@ fn classify_for_length_hoist_impl(
         ctx,
         arr_id,
         guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+        ask_quiet,
     );
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
@@ -9281,6 +9289,7 @@ fn classify_for_length_hoist_rejection(
         ctx,
         arr_id,
         guarded_array_aliases_for_loop(ctx, arr_id, update, body),
+        true,
     )
     .asked(ctx, arr_id);
     let body_effect = stmts_array_length_effect(

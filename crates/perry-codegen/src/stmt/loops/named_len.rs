@@ -67,7 +67,8 @@ pub(super) struct Names {
     /// whether it runs program code (`crate::quiet`): code that is not
     /// the loop's may change the receiver's length whatever the loop's own
     /// stores do. Not asked for a receiver whose length nothing changes,
-    /// nor with `PERRY_FACTS_QUIET_SITES=0`.
+    /// inside a versioned clone (dropped when a call survived in its
+    /// emitted blocks), nor with `PERRY_FACTS_QUIET_SITES=0`.
     pub(super) quiet: bool,
 }
 
@@ -106,8 +107,14 @@ pub(super) fn diag(ctx: &FnCtx<'_>, arr: u32, verdict: &str) {
 
 impl Names {
     /// The names of `arr_id` with `ids` its aliases by the text, before the
-    /// facts are asked.
-    pub(super) fn new(ctx: &FnCtx<'_>, arr_id: u32, ids: std::collections::HashSet<u32>) -> Self {
+    /// facts are asked. `ask_quiet`: the loop is no versioned clone, so the
+    /// walker asks whether its sites run program code.
+    pub(super) fn new(
+        ctx: &FnCtx<'_>,
+        arr_id: u32,
+        ids: std::collections::HashSet<u32>,
+        ask_quiet: bool,
+    ) -> Self {
         let object = Expr::LocalGet(arr_id);
         let fixed = ctx.sealed_buffer_locals.contains(&arr_id)
             || crate::expr::proven_view_receiver(ctx, &object).is_some();
@@ -118,7 +125,7 @@ impl Names {
         Names {
             ids,
             others,
-            quiet: crate::quiet::enabled() && !fixed,
+            quiet: ask_quiet && crate::quiet::enabled() && !fixed,
         }
     }
 

@@ -15,6 +15,9 @@
 //!   that holds only Strings and ordinary Arrays;
 //! - an element read, store or update: its site is a quiet element site
 //!   (plain program Arrays under a Number key, nothing defined on them);
+//! - a store `o.k = v`: such an element site, or the facts' store rule on
+//!   the receiver binding (`wpfacts_access::quiet_store`: `k` is a data
+//!   birth field of every class `o` may hold; an accessor key is none);
 //! - an operator or conversion: every operand it converts is a primitive
 //!   ([`primitive`]): a literal, an operator's own result, a local, named
 //!   read or element read the facts give only primitives, or a value
@@ -139,9 +142,26 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }),
         Expr::IndexGet { element_offset, .. }
         | Expr::IndexSet { element_offset, .. }
-        | Expr::IndexUpdate { element_offset, .. }
-        | Expr::PutValueSet { element_offset, .. } => {
+        | Expr::IndexUpdate { element_offset, .. } => {
             facts(ctx).is_some_and(|f| f.quiet_elements.contains(element_offset))
+        }
+        // `o.k = v`: an element site, or a store of a data field of every
+        // class the receiver binding may hold.
+        Expr::PutValueSet {
+            target,
+            key,
+            receiver,
+            element_offset,
+            ..
+        } => {
+            facts(ctx).is_some_and(|f| f.quiet_elements.contains(element_offset))
+                || match (target.as_ref(), key.as_ref(), receiver.as_ref()) {
+                    (Expr::LocalGet(a), Expr::String(k), Expr::LocalGet(b)) if a == b => {
+                        field_store(ctx, target, k)
+                    }
+                    (Expr::This, Expr::String(k), Expr::This) => field_store(ctx, target, k),
+                    _ => false,
+                }
         }
         Expr::Binary { left, right, .. } => primitive(ctx, left) && primitive(ctx, right),
         // Strict equality converts nothing.
@@ -222,4 +242,10 @@ fn native_view(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     ctx.sealed_buffer_locals.contains(id)
         || crate::expr::proven_view_receiver(ctx, object).is_some()
         || facts(ctx).is_some_and(|f| f.indexed_owners.contains_key(id))
+}
+
+/// The facts' store rule for `object.key = v` (`wpfacts_access::quiet_store`),
+/// when the facts may be read.
+fn field_store(ctx: &FnCtx<'_>, object: &Expr, key: &str) -> bool {
+    facts(ctx).is_some() && crate::expr::wpfacts_access::quiet_store(ctx, object, key)
 }

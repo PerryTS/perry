@@ -141,6 +141,7 @@ def main():
         ("literal-string-negative", "litstr", "literal string"),
         ("held-length-negative", "heldlen", "held length"),
         ("named-length-negative", "namedlen", "named length"),
+        ("quiet-sites-negative", "quiet", "quiet sites"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
