@@ -495,7 +495,11 @@ impl<'a> Gen<'a> {
             let mut ls = scope_locals(params, body);
             // `this` of a body with its own binding (not an arrow's, which
             // is its enclosing body's).
-            if !self.m.funcs[f as usize].lexical_this {
+            // PERRY_WPF_NO_THIS_HOST: diagnostic switch (default off) that
+            // leaves `this` out of the narrowing hosts.
+            if !self.m.funcs[f as usize].lexical_this
+                && std::env::var_os("PERRY_WPF_NO_THIS_HOST").is_none()
+            {
                 ls.insert(THIS_LOCAL);
             }
             ls.extend(
