@@ -14,6 +14,16 @@
 //! integer, never past `Number.MAX_VALUE`); `Mul` of a `BIG` operand may
 //! overflow to an infinity: ⊤.
 //!
+//! The bounds of an interval are those of doubles ([`Iv::int`]): the near
+//! bound of an interval that lies wholly past ±2^53 is ±2^53 itself (the
+//! exact integer a rule computes there may round to a neighbouring double,
+//! and no rule reasons about such a value by integer arithmetic), the far
+//! one is ±[`BIG`]. So `lo` is `-BIG` or lies in `[-2^53, 2^53]`, `hi` is
+//! `BIG` or lies there too, and a rule over Numbers never gives the empty
+//! interval: only a loop test's clip does (no value passes). Every rule
+//! computes its bounds through [`hull`]: a bound whose `i64` arithmetic
+//! overflows is ⊤, never a wrapped value.
+//!
 //! Fail closed: a Number that reaches a node any other way than a value-copy
 //! edge, a literal or a [`Cons::Range`](super::Cons::Range) rule makes its
 //! interval ⊤ (`Model::add_tokens`). A node that is a rule's result
@@ -28,6 +38,21 @@ const SAFE: i64 = 1 << 53;
 
 /// An unbounded integral bound: past ±2^53, up to `Number.MAX_VALUE`.
 pub const BIG: i64 = 1 << 60;
+
+/// The bounds of doubles ([`Iv::int`]). `PERRY_FACTS_INT_BOUNDS=0` (`off`,
+/// `false`) restores the bounds before that rule, which are unsound: a
+/// lower bound past 2^53 kept its exact value, so an interval wholly past
+/// 2^60 came out with `lo > hi`, the empty interval, and the binding such a
+/// product was assigned to kept the interval of its other values.
+fn sound_bounds() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_INT_BOUNDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
 
 /// Growths of one node's interval before its bounds widen to the next
 /// threshold ([`widen`]); past `WIDEN_LIMIT` growths it is ⊤.
@@ -187,15 +212,29 @@ impl Iv {
         self == Iv::TOP
     }
 
-    /// An integer interval with checked bounds; a bound past ±2^53 is
-    /// ±[`BIG`]. Only for a result that is an integer and finite whatever
-    /// its magnitude (`eval` decides).
+    /// The interval of the integers a rule bounds by `lo` and `hi`, each
+    /// the exact integer the rule computed: a bound past ±2^53 away from
+    /// zero is ±[`BIG`], one past ±2^53 on the near side is ±2^53 (the
+    /// module docs). `lo > hi` is the empty interval. Only for a result
+    /// that is an integer and finite whatever its magnitude (`eval`
+    /// decides).
     pub fn int(lo: i64, hi: i64) -> Iv {
+        Iv::bounded(lo, hi, sound_bounds())
+    }
+
+    /// [`Iv::int`]; `sound` off is the rule before `PERRY_FACTS_INT_BOUNDS`
+    /// (`sound_bounds`).
+    fn bounded(lo: i64, hi: i64, sound: bool) -> Iv {
         if lo > hi {
             return Iv::EMPTY;
         }
-        let lo = if lo < -SAFE { -BIG } else { lo };
-        let hi = if hi > SAFE { BIG } else { hi };
+        let (near_lo, near_hi) = if sound {
+            (lo.min(SAFE), hi.max(-SAFE))
+        } else {
+            (lo, hi)
+        };
+        let lo = if lo < -SAFE { -BIG } else { near_lo };
+        let hi = if hi > SAFE { BIG } else { near_hi };
         Iv { lo, hi, nz: false }
     }
 
@@ -368,6 +407,31 @@ fn to_int32(a: Iv) -> Iv {
     }
 }
 
+/// The interval of a rule's result from the candidate bounds it computed
+/// over its operands' bounds, each with checked `i64` arithmetic: their
+/// hull ([`Iv::int`]), ⊤ when one overflowed.
+fn hull<const N: usize>(bounds: [Option<i64>; N]) -> Iv {
+    let (mut lo, mut hi) = (i64::MAX, i64::MIN);
+    for b in bounds {
+        let Some(b) = b else {
+            return Iv::TOP;
+        };
+        lo = lo.min(b);
+        hi = hi.max(b);
+    }
+    Iv::int(lo, hi)
+}
+
+/// The products of the operands' bounds ([`hull`]).
+fn products(l: Iv, r: Iv) -> Iv {
+    hull([
+        l.lo.checked_mul(r.lo),
+        l.lo.checked_mul(r.hi),
+        l.hi.checked_mul(r.lo),
+        l.hi.checked_mul(r.hi),
+    ])
+}
+
 /// The smallest `2^k - 1` at or above `v` (`v >= 0`).
 fn mask_above(v: i64) -> i64 {
     let mut m: i64 = 0;
@@ -413,22 +477,14 @@ pub fn eval_with(op: RangeOp, l: Iv, r: Iv, tol: bool) -> Iv {
     let (ls, rs) = (l.strip(), r.strip());
     match op {
         RangeOp::Mul if !l.is_top() && !r.is_top() && !l.big() && !r.big() => {
-            let ps = [
-                l.lo.checked_mul(r.lo),
-                l.lo.checked_mul(r.hi),
-                l.hi.checked_mul(r.lo),
-                l.hi.checked_mul(r.hi),
-            ];
-            if ps.iter().any(Option::is_none) {
-                return Iv::TOP;
-            }
-            let ps: Vec<i64> = ps.into_iter().flatten().collect();
-            let iv = Iv::int(*ps.iter().min().unwrap(), *ps.iter().max().unwrap());
+            let iv = products(l, r);
             // `-0 * x` (x ≥ 0 or -0), `0 * negative`: -0.
             let nz = l.nz || r.nz || (l.has_zero() && r.lo < 0) || (r.has_zero() && l.lo < 0);
             iv.with_nz(nz)
         }
-        RangeOp::Neg if !l.is_top() => Iv::int(-l.hi, -l.lo).with_nz(l.has_zero()),
+        RangeOp::Neg if !l.is_top() => {
+            hull([l.hi.checked_neg(), l.lo.checked_neg()]).with_nz(l.has_zero())
+        }
         // The result has the dividend's sign and is smaller than the
         // divisor in magnitude; `-4 % 2` and `-0 % 3` are -0. A zero
         // divisor is NaN.
@@ -473,25 +529,19 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
     match op {
         // At most one unbounded operand: no sum reaches an infinity.
         RangeOp::Add | RangeOp::Sub if l.big() && r.big() => Iv::TOP,
-        RangeOp::Add if !l.is_top() && !r.is_top() => Iv::int(l.lo + r.lo, l.hi + r.hi),
-        RangeOp::Sub if !l.is_top() && !r.is_top() => Iv::int(l.lo - r.hi, l.hi - r.lo),
+        RangeOp::Add if !l.is_top() && !r.is_top() => {
+            hull([l.lo.checked_add(r.lo), l.hi.checked_add(r.hi)])
+        }
+        RangeOp::Sub if !l.is_top() && !r.is_top() => {
+            hull([l.lo.checked_sub(r.hi), l.hi.checked_sub(r.lo)])
+        }
         RangeOp::Mul if l.big() || r.big() => Iv::TOP,
         RangeOp::Mul if !l.is_top() && !r.is_top() => {
             // `0 * negative` is -0.
             if (l.has_zero() && r.lo < 0) || (r.has_zero() && l.lo < 0) {
                 return Iv::TOP;
             }
-            let ps = [
-                l.lo.checked_mul(r.lo),
-                l.lo.checked_mul(r.hi),
-                l.hi.checked_mul(r.lo),
-                l.hi.checked_mul(r.hi),
-            ];
-            if ps.iter().any(Option::is_none) {
-                return Iv::TOP;
-            }
-            let ps: Vec<i64> = ps.into_iter().flatten().collect();
-            Iv::int(*ps.iter().min().unwrap(), *ps.iter().max().unwrap())
+            products(l, r)
         }
         // A non-negative dividend keeps its sign (never -0); a zero divisor
         // is NaN.
@@ -499,10 +549,17 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
             let m = r.lo.unsigned_abs().max(r.hi.unsigned_abs()) as i64 - 1;
             Iv::int(0, l.hi.min(m))
         }
-        RangeOp::Neg if !l.is_top() && !l.has_zero() => Iv::int(-l.hi, -l.lo),
+        RangeOp::Neg if !l.is_top() && !l.has_zero() => {
+            hull([l.hi.checked_neg(), l.lo.checked_neg()])
+        }
         RangeOp::Step(d) if !l.is_top() => {
             let d = d as i64;
-            Iv::int(l.lo.min(l.lo + d), l.hi.max(l.hi + d))
+            hull([
+                Some(l.lo),
+                Some(l.hi),
+                l.lo.checked_add(d),
+                l.hi.checked_add(d),
+            ])
         }
         RangeOp::BitAnd => {
             let (a, b) = (to_int32(l), to_int32(r));
@@ -549,10 +606,12 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
             if r.is_top() {
                 return l;
             }
+            // The one rule whose result may be empty (no value passes the
+            // test); its bounds are an operand's, or one beside it.
             match k {
-                CLIP_LT => Iv::int(l.lo, l.hi.min(r.hi - 1)),
+                CLIP_LT => Iv::int(l.lo, l.hi.min(r.hi.saturating_sub(1))),
                 CLIP_LE => Iv::int(l.lo, l.hi.min(r.hi)),
-                CLIP_GT => Iv::int(l.lo.max(r.lo + 1), l.hi),
+                CLIP_GT => Iv::int(l.lo.max(r.lo.saturating_add(1)), l.hi),
                 _ => Iv::int(l.lo.max(r.lo), l.hi),
             }
         }
@@ -560,9 +619,9 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
             if l.lo >= 0 {
                 l
             } else if l.hi <= 0 {
-                Iv::int(-l.hi, -l.lo)
+                hull([l.hi.checked_neg(), l.lo.checked_neg()])
             } else {
-                Iv::int(0, (-l.lo).max(l.hi))
+                hull([Some(0), Some(l.hi), l.lo.checked_neg()])
             }
         }
         RangeOp::Min if !l.is_top() && !r.is_top() => Iv::int(l.lo.min(r.lo), l.hi.min(r.hi)),
@@ -574,7 +633,7 @@ fn eval_strict(op: RangeOp, l: Iv, r: Iv) -> Iv {
         RangeOp::Shl => Iv::I32,
         RangeOp::BitNot => {
             let a = to_int32(l);
-            Iv::int(-a.hi - 1, -a.lo - 1)
+            hull([(-a.hi).checked_sub(1), (-a.lo).checked_sub(1)])
         }
         _ => Iv::TOP,
     }
@@ -654,6 +713,253 @@ mod tests {
             (RangeOp::UShr, p(-6), p(3)),
         ] {
             assert!(eval_exact(op, l, r).unwrap().within(eval(op, l, r)));
+        }
+    }
+
+    #[test]
+    fn a_bound_past_2_53_is_the_bound_of_a_double() {
+        let big = 1_406_932_606i64 * 1_406_932_606;
+        // Wholly past 2^60: the rule before `PERRY_FACTS_INT_BOUNDS` kept
+        // the exact lower bound beside the `BIG` upper one, the empty
+        // interval.
+        assert!(big > BIG && Iv::bounded(big, big, false).is_empty());
+        let up = Iv::bounded(big, big, true);
+        assert_eq!((up.lo, up.hi), (SAFE, BIG));
+        let down = Iv::bounded(-big, -big, true);
+        assert_eq!((down.lo, down.hi), (-BIG, -SAFE));
+        // Between 2^53 and 2^60 the exact bound may round down to a
+        // neighbouring double: 2^53 + 1 is 2^53.
+        assert_eq!(Iv::bounded(SAFE + 1, SAFE + 1, false).lo, SAFE + 1);
+        assert_eq!(Iv::bounded(SAFE + 1, SAFE + 1, true).lo, SAFE);
+        assert_eq!(Iv::bounded(-SAFE - 1, -SAFE - 1, true).hi, -SAFE);
+        assert_eq!(
+            Iv::bounded(BIG, BIG, true),
+            Iv::bounded(SAFE + 1, BIG, true)
+        );
+        // Inside ±2^53 nothing changes, and an empty request stays empty.
+        for (lo, hi) in [(-SAFE, SAFE), (0, 7), (-5, SAFE + 9), (-SAFE - 9, 5)] {
+            assert_eq!(Iv::bounded(lo, hi, true), Iv::bounded(lo, hi, false));
+        }
+        assert!(Iv::bounded(1, 0, true).is_empty());
+    }
+
+    #[test]
+    fn a_product_past_2_60_widens_its_binding() {
+        // `let h = 1406932606; h *= h; h *= h;`: the binding joins the
+        // literal and each product.
+        let lit = Iv::int(1_406_932_606, 1_406_932_606);
+        let first = eval(RangeOp::Mul, lit, lit);
+        assert_eq!((first.lo, first.hi), (SAFE, BIG));
+        let h = lit.join(first);
+        assert_eq!((h.lo, h.hi), (1_406_932_606, BIG));
+        assert!(!h.within(Iv::I32));
+        assert!(eval(RangeOp::Mul, h, h).is_top());
+        assert!(eval(RangeOp::Mul, first, first).is_top());
+        // Still an integer, so a wrapping consumer of it is bounded.
+        assert_eq!(eval(RangeOp::BitNot, h, Iv::EMPTY), Iv::I32);
+        assert_eq!(eval(RangeOp::Mod, h, Iv::int(7, 7)), Iv::int(0, 6));
+        // int32 x int32 is exact below 2^53 and an integer below 2^62.
+        let sq = eval(RangeOp::Mul, Iv::int(-46340, 46340), Iv::int(1, 46340));
+        assert_eq!((sq.lo, sq.hi), (-2_147_395_600, 2_147_395_600));
+        let wide = eval(RangeOp::Mul, Iv::int(1, i32::MAX as i64), Iv::I32.join(lit));
+        assert_eq!((wide.lo, wide.hi), (-BIG, BIG));
+        // uint32 x uint32 leaves i64 at the bounds: no wrapped bound.
+        let u = Iv::int(1, SAFE);
+        assert!(eval(RangeOp::Mul, u, u).is_top());
+    }
+
+    fn js_int32(v: f64) -> i32 {
+        if !v.is_finite() {
+            return 0;
+        }
+        v.trunc().rem_euclid(4294967296.0) as u32 as i32
+    }
+
+    /// What the operator computes for doubles `a` and `b` (the values a
+    /// `Step` node holds are both the old and the new one).
+    fn js(op: RangeOp, a: f64, b: f64) -> Vec<f64> {
+        let (x, y) = (js_int32(a), js_int32(b));
+        let k = (y as u32) & 31;
+        let zero_min = |pick_neg: bool| {
+            let neg = (a.is_sign_negative(), b.is_sign_negative());
+            if (pick_neg && (neg.0 || neg.1)) || (neg.0 && neg.1) {
+                -0.0
+            } else {
+                0.0
+            }
+        };
+        vec![match op {
+            RangeOp::Add => a + b,
+            RangeOp::Sub => a - b,
+            RangeOp::Mul => a * b,
+            RangeOp::Mod => a % b,
+            RangeOp::BitAnd => f64::from(x & y),
+            RangeOp::BitOr => f64::from(x | y),
+            RangeOp::BitXor => f64::from(x ^ y),
+            RangeOp::Shl => f64::from(x.wrapping_shl(k)),
+            RangeOp::Shr => f64::from(x >> k),
+            RangeOp::UShr => f64::from((x as u32) >> k),
+            RangeOp::Neg => -a,
+            RangeOp::BitNot => f64::from(!x),
+            RangeOp::Step(d) => return vec![a, a + f64::from(d)],
+            RangeOp::Abs => a.abs(),
+            RangeOp::Min if a == 0.0 && b == 0.0 => zero_min(true),
+            RangeOp::Max if a == 0.0 && b == 0.0 => zero_min(false),
+            RangeOp::Min => a.min(b),
+            RangeOp::Max => a.max(b),
+            RangeOp::Integral => a,
+            RangeOp::Sign if a == 0.0 => a,
+            RangeOp::Sign => a.signum(),
+            RangeOp::Clz32 => f64::from((x as u32).leading_zeros()),
+            RangeOp::Imul => f64::from(x.wrapping_mul(y)),
+            RangeOp::Clip(kind) => {
+                let pass = match kind {
+                    CLIP_LT => a < b,
+                    CLIP_LE => a <= b,
+                    CLIP_GT => a > b,
+                    _ => a >= b,
+                };
+                return if pass { vec![a] } else { vec![] };
+            }
+            RangeOp::ToNumber | RangeOp::SClip(_) => unreachable!(),
+        }]
+    }
+
+    /// `v` is one of the Numbers `iv` stands for.
+    fn holds(iv: Iv, v: f64) -> bool {
+        if iv.is_top() {
+            return true;
+        }
+        if iv.is_empty() || !v.is_finite() || v.fract() != 0.0 {
+            return false;
+        }
+        if v == 0.0 && v.is_sign_negative() {
+            return iv.nz;
+        }
+        (iv.lo == -BIG || v >= iv.lo as f64) && (iv.hi == BIG || v <= iv.hi as f64)
+    }
+
+    /// Every operator over every pair of intervals with bounds at the
+    /// representation boundaries: what it computes for doubles of the
+    /// operand intervals lies in the rule's result, strict and tolerant.
+    #[test]
+    fn every_rule_holds_what_the_operator_computes_at_the_boundaries() {
+        let i31 = 1i64 << 31;
+        let bounds = [
+            -(1i64 << 62),
+            -SAFE,
+            -i31 - 1,
+            -i31,
+            -3,
+            0,
+            2,
+            46341,
+            i31 - 1,
+            1 << 32,
+            1_406_932_606,
+            3_037_000_500,
+            SAFE - 1,
+            SAFE,
+            1 << 62,
+        ];
+        let mut pool: Vec<f64> = vec![-0.0, 1e300, -1e300, f64::MAX, -f64::MAX];
+        for b in bounds {
+            for d in [-2i64, -1, 0, 1, 2] {
+                pool.push((b + d) as f64);
+            }
+        }
+        for e in [54, 60, 63, 64, 100] {
+            pool.push(2f64.powi(e));
+            pool.push(-(2f64.powi(e)));
+        }
+        let mut ivs = Vec::new();
+        for (i, &lo) in bounds.iter().enumerate() {
+            for &hi in &bounds[i..] {
+                let iv = Iv::int(lo, hi);
+                assert!(!iv.is_empty(), "[{lo}, {hi}]");
+                assert!(iv.lo == -BIG || (-SAFE..=SAFE).contains(&iv.lo), "{iv:?}");
+                assert!(iv.hi == BIG || (-SAFE..=SAFE).contains(&iv.hi), "{iv:?}");
+                if !ivs.contains(&iv) {
+                    ivs.push(iv);
+                }
+                if iv.has_zero() {
+                    ivs.push(iv.with_nz(true));
+                }
+            }
+        }
+        let samples: Vec<Vec<f64>> = ivs
+            .iter()
+            .map(|&iv| pool.iter().copied().filter(|&v| holds(iv, v)).collect())
+            .collect();
+        let binary = [
+            RangeOp::Add,
+            RangeOp::Sub,
+            RangeOp::Mul,
+            RangeOp::Mod,
+            RangeOp::BitAnd,
+            RangeOp::BitOr,
+            RangeOp::BitXor,
+            RangeOp::Shl,
+            RangeOp::Shr,
+            RangeOp::UShr,
+            RangeOp::Min,
+            RangeOp::Max,
+            RangeOp::Imul,
+            RangeOp::Clip(CLIP_LT),
+            RangeOp::Clip(CLIP_LE),
+            RangeOp::Clip(CLIP_GT),
+            RangeOp::Clip(CLIP_GE),
+        ];
+        let unary = [
+            RangeOp::Neg,
+            RangeOp::BitNot,
+            RangeOp::Step(1),
+            RangeOp::Step(-1),
+            RangeOp::Abs,
+            RangeOp::Integral,
+            RangeOp::Sign,
+            RangeOp::Clz32,
+        ];
+        let check = |op: RangeOp, l: Iv, r: Iv, a: f64, b: f64, tol: bool| {
+            let out = eval_with(op, l, r, tol);
+            if !matches!(op, RangeOp::Clip(_)) {
+                assert!(!out.is_empty(), "{op:?} {l:?} {r:?} tol={tol}");
+            }
+            for v in js(op, a, b) {
+                assert!(
+                    holds(out, v),
+                    "{op:?} of {a:e} in {l:?} and {b:e} in {r:?} is {v:e}, outside {out:?} (tol={tol})"
+                );
+            }
+            if let Some(exact) = eval_exact(op, l, r).filter(|_| !l.nz && !r.nz) {
+                for v in js(op, a, b) {
+                    assert!(holds(exact, v), "exact {op:?} {a:e} {b:e}: {v:e} {exact:?}");
+                }
+            }
+        };
+        for (li, &l) in ivs.iter().enumerate() {
+            for tol in [false, true] {
+                if l.nz && !tol {
+                    continue;
+                }
+                for op in unary {
+                    for &a in &samples[li] {
+                        check(op, l, Iv::EMPTY, a, 0.0, tol);
+                    }
+                }
+                for (ri, &r) in ivs.iter().enumerate() {
+                    if r.nz && !tol {
+                        continue;
+                    }
+                    for op in binary {
+                        for &a in &samples[li] {
+                            for &b in &samples[ri] {
+                                check(op, l, r, a, b, tol);
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
