@@ -67,7 +67,7 @@ pub extern "C" fn js_array_splice(
         if (*arr).length > (*arr).capacity {
             // A sparse Array keeps a short store under its length: the reads
             // and the tail move below work on `length` raw slots.
-            let dense = densify_sparse_receiver(arr, items, items_count);
+            let (dense, items) = densify_sparse_receiver(arr, items, items_count);
             if (*dense).length > (*dense).capacity {
                 // A frozen, sealed or non-extensible Array's store does not
                 // grow.
@@ -75,7 +75,19 @@ pub extern "C" fn js_array_splice(
                     "Cannot splice a sparse array that is not extensible",
                 );
             }
-            return js_array_splice(dense, start, delete_count, items, items_count, out_arr);
+            let items_ptr = if items.is_empty() {
+                std::ptr::null()
+            } else {
+                items.as_ptr()
+            };
+            return js_array_splice(
+                dense,
+                start,
+                delete_count,
+                items_ptr,
+                items.len() as u32,
+                out_arr,
+            );
         }
         let len = (*arr).length as i32;
 
@@ -313,15 +325,16 @@ pub extern "C" fn js_array_splice(
 /// the growth's forwarding. A length the allocator cannot back throws
 /// `RangeError: Invalid array length` and leaves the receiver as it was.
 ///
-/// The growth allocates, so the caller's items are rooted across it and
-/// written back to the caller's buffer.
+/// The growth allocates and the caller's item buffer is raw storage a moving
+/// collection cannot rewrite, so the items are rooted across it and returned
+/// as they are afterwards.
 #[cold]
 #[inline(never)]
 unsafe fn densify_sparse_receiver(
     arr: *mut ArrayHeader,
     items: *const f64,
     items_count: u32,
-) -> *mut ArrayHeader {
+) -> (*mut ArrayHeader, Vec<f64>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let item_handles = if items.is_null() || items_count == 0 {
         Vec::new()
@@ -329,12 +342,11 @@ unsafe fn densify_sparse_receiver(
         scope.root_nanbox_f64_slice(std::slice::from_raw_parts(items, items_count as usize))
     };
     let dense = js_array_grow(arr, (*arr).length);
-    for (i, handle) in item_handles.iter().enumerate() {
-        // The buffer is caller-owned raw storage a moving collection cannot
-        // rewrite: hand the (possibly moved) values back.
-        ptr::write((items as *mut f64).add(i), handle.get_nanbox_f64());
-    }
-    dense
+    let items = item_handles
+        .iter()
+        .map(|handle| handle.get_nanbox_f64())
+        .collect();
+    (dense, items)
 }
 
 fn array_slice_value_to_index(value: f64) -> i32 {
