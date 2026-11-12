@@ -636,10 +636,10 @@ pub fn app_run(_app_handle: i64) {
 /// (when `PERRY_UI_SCREENSHOT_PATH` is set) and exits the process cleanly.
 /// This lets doc-example programs be verified in CI without a human.
 fn install_test_mode_exit_timer() {
-    if !perry_ui_testkit::is_test_mode() {
+    if !perry_ui::test_mode::is_test_mode() {
         return;
     }
-    let delay_secs = perry_ui_testkit::exit_delay_ms() as f64 / 1000.0;
+    let delay_secs = perry_ui::test_mode::exit_delay_ms() as f64 / 1000.0;
     unsafe {
         let target = PerryTestExitTarget::new();
         let sel = Sel::register(c"testExit:");
@@ -666,11 +666,11 @@ define_class!(
     impl PerryTestExitTarget {
         #[unsafe(method(testExit:))]
         fn test_exit(&self, _sender: &AnyObject) {
-            if let Some(path) = perry_ui_testkit::screenshot_path() {
+            if let Some(path) = perry_ui::test_mode::screenshot_path() {
                 let mut len: usize = 0;
                 let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                 if !ptr.is_null() && len > 0 {
-                    perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                    perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                     unsafe { libc::free(ptr as *mut libc::c_void); }
                 }
             }

@@ -40,6 +40,13 @@ mod element_shape_loop;
 #[cfg(test)]
 mod element_shape_loop_tests;
 mod element_shape_native;
+pub(crate) mod field_base;
+#[cfg(test)]
+mod field_base_tests;
+pub(crate) mod fn_base;
+mod held_len;
+#[cfg(test)]
+mod fn_base_tests;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
@@ -50,6 +57,7 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
+pub(crate) use loops::bounded_poll;
 pub(crate) use loops::this_field_fast_off;
 pub(crate) use crate::expr::index_get::descriptor_read;
 pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
@@ -77,7 +85,7 @@ mod stable_packed_loop_tests;
 mod stable_packed_typed_array;
 mod string_length_loop;
 mod switch_stmt;
-mod try_stmt;
+pub(crate) mod try_stmt;
 mod unused_expr;
 mod versioned_indexed_loop;
 mod wasm_eh;
@@ -86,7 +94,7 @@ pub(crate) use if_stmt::lower_if;
 pub(crate) use let_stmt::lower_let;
 pub(crate) use loops::{emit_js_value_is_number, lower_do_while, lower_for, lower_while};
 pub(crate) use switch_stmt::lower_switch;
-pub(crate) use try_stmt::lower_try;
+pub(crate) use try_stmt::{emit_throw, lower_try};
 
 pub(crate) fn record_boxed_slot_js_value_bits(
     ctx: &mut FnCtx<'_>,
@@ -221,6 +229,9 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    // N2: a function-level base installed in this lowering of the list ends
+    // with it.
+    fn_base::end_list(ctx, stmts);
     // A class-guard run never outlives its statement list.
     crate::expr::class_guard_memo::close(ctx);
     crate::expr::map_entry_fusion::close_list(ctx, stmts);
@@ -241,6 +252,8 @@ fn lower_stmts_list(
     // table (`closure_births::try_lower_let_run`).
     let mut born_until = 0;
     while i < stmts.len() {
+        // N2: the held suffix of a method body starts here.
+        fn_base::at_stmt(ctx, stmts, i)?;
         ctx.ready_cell_roots.discard_notes();
         // A typed array this statement may expose is untrusted from here on,
         // and no run lowered as one unit may reach past the next statement
@@ -314,7 +327,9 @@ fn lower_stmts_list(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) = (!born)
+        // I32 at rest: the region's fast copy reads element words raw.
+        let rest = crate::expr::rest_elems::in_loop(ctx, &[], &stmts[i..limit]);
+        if let Some(region) = (!born && !rest)
             .then(|| masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit]))
             .flatten()
         {
@@ -550,6 +565,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
+            // DESIGN-p4l4 VR-3b: a record `$sig` returns its result lanes.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
+            }
             let v = lower_return_expr(ctx, e)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
@@ -602,6 +621,11 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 }
                 ctx.block().br(&target.after_label);
                 return Ok(());
+            }
+            // DESIGN-p4l4 VR-3b: `return;` of a record `$sig` is the absent
+            // record.
+            if let Some(r) = ctx.sig_record_return {
+                return crate::codegen::record_sig::lower_return(ctx, r, None);
             }
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
@@ -662,16 +686,25 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             {
                 ctx.typed_element_locals.insert(*id);
             }
-            crate::expr::snap_env_site::note_let(ctx, *id, init.as_ref());
             // A binding a later loop pushes into births its `[]` with the
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
-            ctx.pushed_array_birth = ctx.loop_pushed_arrays.reserve.contains(id)
-                && matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty());
+            ctx.pushed_array_birth =
+                if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty()) {
+                    crate::expr::inline_birth::list_slots(ctx, *id)
+                } else {
+                    0
+                };
+            let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
-            ctx.pushed_array_birth = false;
+            ctx.snap_lowering = snap_frame;
+            ctx.pushed_array_birth = 0;
             lowered?;
+            // A `const` the body uses as a bitwise operand: its ToInt32 once.
+            if !*mutable && init.is_some() {
+                crate::expr::int32_shadow::materialize(ctx, *id)?;
+            }
             // Object model step 1: a family prototype's birth.
             crate::layout_desc::create_families::lower_binding(ctx, *id)?;
             crate::codegen::global_transfer::emit_publish(ctx, *id);
@@ -692,19 +725,47 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             condition,
             update,
             body,
-        } => lower_for(
-            ctx,
-            init.as_deref(),
-            condition.as_ref(),
-            update.as_ref(),
-            body,
-        ),
+        } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::For {
+                    condition: condition.as_ref(),
+                    update: update.as_ref(),
+                    body,
+                },
+            );
+            let lowered = lower_for(
+                ctx,
+                init.as_deref(),
+                condition.as_ref(),
+                update.as_ref(),
+                body,
+            );
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `while (cond) { body }` — same CFG as for-loop without init/update.
-        Stmt::While { condition, body } => lower_while(ctx, condition, body),
+        Stmt::While { condition, body } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::While { condition, body },
+            );
+            let lowered = lower_while(ctx, condition, body);
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `do { body } while (cond)` — body runs at least once, then cond.
-        Stmt::DoWhile { body, condition } => lower_do_while(ctx, body, condition),
+        Stmt::DoWhile { body, condition } => {
+            let polls = loops::bounded_poll::begin(
+                ctx,
+                loops::bounded_poll::Loop::DoWhile { body, condition },
+            );
+            let lowered = lower_do_while(ctx, body, condition);
+            loops::bounded_poll::end(ctx, polls);
+            lowered
+        }
 
         // `break;` — branch to the innermost loop's exit block. The
         // current block becomes terminated; subsequent statements in
@@ -897,8 +958,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 blk.ret(DOUBLE, &boxed);
             } else {
                 crate::expr::resume_locals::write_back(ctx)?;
-                ctx.block().call_void("js_throw", &[(DOUBLE, &val)]);
-                ctx.block().unreachable();
+                try_stmt::emit_throw(ctx, &val);
             }
             Ok(())
         }

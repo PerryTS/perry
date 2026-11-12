@@ -142,8 +142,6 @@ REGISTRY: list[Restatement] = [
      "guard: exact ShapeId refuses numeric proof; the write side adds frozen"),
 
     # --- the element-shape guard's fused masks -------------------------------
-    ("crates/perry-codegen/src/expr/element_shape_guard.rs", "GC_TYPE_ARRAY",
-     "GC_TYPE_ARRAY", "element guard: obj_type byte"),
     ("crates/perry-codegen/src/expr/element_shape_guard.rs", "ELEM_HEADER_MASK",
      "0xFF | (GC_FLAG_FORWARDED << 8) | (OBJ_FLAG_HAS_DESCRIPTORS << 16)",
      "element guard: one fused 32-bit mask over all three header bytes"),

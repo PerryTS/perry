@@ -1,0 +1,1 @@
+Archive member symbol rewriting batches LLVM objcopy arguments to avoid a process per symbol while preserving ELF panic/unwind exclusions, COFF linkage names and relocations. Large argument lists are split conservatively; indivisible oversized symbols retain singleton behavior.

@@ -20,6 +20,7 @@ fn shared_intrinsic_families_keep_their_abi_slots() {
         (BuiltinProto::Error, 13),
         (BuiltinProto::WeakMap, 14),
         (BuiltinProto::WeakSet, 15),
+        (BuiltinProto::Buffer, 16),
     ];
     for (family, byte) in expected {
         assert_eq!(family as u8, byte);
@@ -202,8 +203,13 @@ fn the_lock_set_is_the_builtin_prototype_families() {
         assert!(locked_family(family), "{family}");
         assert!(!add_locked(family), "{family}");
     }
+    // DEC 250 locks the ECMA intrinsics; Buffer.prototype stays patchable.
     for (family, _) in BuiltinProto::ALL {
-        assert!(locked_family(family as usize), "{family:?}");
+        assert_eq!(
+            locked_family(family as usize),
+            family.realm_intrinsic(),
+            "{family:?}"
+        );
     }
     for name in ["Math", "JSON", "Date", "Object", "Array", "Reflect"] {
         let family = perry_abi::builtin_namespace_family(name).unwrap();
@@ -219,15 +225,15 @@ fn object_prototype_withdraws_every_family() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
-        let protos: Vec<_> = BuiltinProto::ALL.iter().map(|(f, _)| sealed_with_constructor(*f)).collect();
+        let protos: Vec<_> = BuiltinProto::REALM.iter().map(|(f, _)| sealed_with_constructor(*f)).collect();
         // A definition that adds no key (a value refresh) withdraws nothing; a
         // definition ADD withdraws (a_definition_add_on_an_add_locked_prototype_…).
         super::super::own_override::as_builtin_definition(|| add_key(protos[0], b"k", 1.5));
-        for (family, _) in BuiltinProto::ALL {
+        for (family, _) in BuiltinProto::REALM {
             assert!(pristine(family), "{family:?}: a definition that adds nothing withdraws nothing");
         }
         add_key(protos[0], b"constructor", 2.0);
-        for (family, _) in BuiltinProto::ALL {
+        for (family, _) in BuiltinProto::REALM {
             assert!(!pristine(family), "{family:?} inherits Object.prototype");
         }
     }

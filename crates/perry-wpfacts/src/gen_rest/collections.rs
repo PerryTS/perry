@@ -6,7 +6,9 @@ impl<'a> Gen<'a> {
     /// The receiver of a generic in-place permutation (`reverse`,
     /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
     /// length floor on (`solve::arr_len`).
-    fn permuted_len(&mut self, r: NodeId) {
+    fn permuted_len(&mut self, fx: &Fx, r: NodeId) {
+        self.len_index_site(fx, r, "permuted");
+        self.m.arr_permuted.insert(r);
         if !self.m.arr_floor_off {
             self.m.cons(
                 r,
@@ -18,6 +20,16 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Where the storeless `Cons::LenIndex` of receiver `r` runs
+    /// (`Model::len_index_sites`). One site per node: a second function's
+    /// rule on a node the first owns is a capture, which ends the fact.
+    fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
+        if self.m.held_lengths && !self.m.len_index_sites.contains_key(&r) {
+            let site = self.store_site(fx.module, fx.f, what.into(), None, false);
+            self.m.len_index_sites.insert(r, site);
+        }
+    }
+
     pub(super) fn expr_rest_collections(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -26,11 +38,13 @@ impl<'a> Gen<'a> {
                 let a = self.local(mi, *array_id);
                 let s = self.expr(fx, source);
                 let it = self.iterate(s);
+                self.list_push(a, None);
                 self.elem_store(fx, a, it, "push...");
                 self.prim_node(prim::NUM)
             }
             Expr::ArrayPop(id) => {
                 let a = self.local(mi, *id);
+                self.len_index_site(fx, a, "pop");
                 // `pop` sets `length` (ArraySetLength): the array's length
                 // moves (`solve::arr_len`).
                 self.m.cons(
@@ -50,7 +64,7 @@ impl<'a> Gen<'a> {
             // every array receiver, as `pop` does.
             Expr::ArrayReverseValue { receiver } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 r
             }
             Expr::ArrayCopyWithinValue {
@@ -60,7 +74,7 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 let _ = self.prim_op(
                     fx,
                     &[target, start],
@@ -102,7 +116,11 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::MapNew => {
+                let (t, n) = self.bobj(mi, "Map");
+                self.m.map_born(t, true);
+                n
+            }
             Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
@@ -113,13 +131,6 @@ impl<'a> Gen<'a> {
                 let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
-                // AddEntriesFromIterable (24.1.1.2 step 4.f): each value is
-                // Get(entry, "1"), held in the entry values (`MAP_VALUES`),
-                // as the constructor call does (`constructors.rs`).
-                let one = Key::Named(self.m.atom("1"));
-                let val = self.load(it, one);
-                let mv = crate::builtins::map_values(&mut self.m, t);
-                self.m.edge(val, mv);
                 n
             }
             Expr::SetNewFromArray(x) => {

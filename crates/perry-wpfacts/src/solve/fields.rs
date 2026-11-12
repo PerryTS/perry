@@ -3,17 +3,6 @@
 use super::*;
 
 impl Model {
-    /// `t` is a Map or a WeakMap: its entries' values are its `MAP_VALUES` field.
-    pub(crate) fn keyed_collection(&self, t: Tok) -> bool {
-        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
-            if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "Map" | "WeakMap", .. }))
-    }
-
-    /// `a` names the entry values of the Map or WeakMap `t` (`MAP_VALUES`).
-    pub(crate) fn map_values_field(&self, t: Tok, a: Atom) -> bool {
-        self.atoms[a as usize] == MAP_VALUES && self.keyed_collection(t)
-    }
-
     /// `t` is a typed array, a Buffer or a DataView: it views an ArrayBuffer
     /// (`VIEWED_BUFFER`).
     pub(crate) fn array_buffer_view(&self, t: Tok) -> bool {
@@ -120,19 +109,13 @@ impl Model {
             // (`field_any`) are read under an index only (`named_any`). A
             // module namespace's named key is resolved by name (DECISIONS
             // 215): it never reads the namespace's other keys.
-            // A Map's or WeakMap's entry values are no property: only its
-            // `set` and its constructor write them (`MAP_VALUES`), never a
-            // key write, so the any-key field (which holds the keys `set`
-            // stores) does not feed them.
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
                 || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
-            if !self.map_values_field(t, a) {
-                let any = match named {
-                    true => self.named_any(t),
-                    false => self.field_any(t),
-                };
-                self.edge(any, n);
-            }
+            let any = match named {
+                true => self.named_any(t),
+                false => self.field_any(t),
+            };
+            self.edge(any, n);
             // A Number-valued key can name this field, including NaN,
             // Infinity and exponent forms. Other named fields never read
             // numeric-only writes. The range is a value fact, not a type.
@@ -179,6 +162,7 @@ impl Model {
     /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
     /// keys unknown; an unmodeled target takes `s`'s values.
     pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
+        self.rest_used(s);
         if !self.spread_done.insert((s, d)) {
             return;
         }
@@ -205,6 +189,7 @@ impl Model {
         let opaque = !self.own_props_modelled(s);
         // Any key of the source may be an index of an Array target.
         self.mark_hole(d);
+        self.map_open(d);
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
         if opaque && self.explain {
@@ -495,6 +480,7 @@ impl Model {
 
     /// dst ⊇ the values of `t`'s own properties (`Cons::OwnValues`).
     pub(crate) fn own_values_of(&mut self, t: Tok, dst: NodeId) {
+        self.rest_used(t);
         let opaque = !self.own_props_modelled(t);
         if opaque {
             self.add_top(dst, |_| "own values of an unmodeled object".into());

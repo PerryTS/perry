@@ -98,8 +98,12 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 // P2 (DESIGN-p2 §3.2): a typed method is `M$sig` plus its
                 // boxed entry; no other tier is emitted for it.
                 if let Some(tm) = cross_module.typed_methods.get(&method.id) {
-                    let body = super::signature_entry::sig_function(method, &tm.plan.sig_defaults)
-                        .expect("a selected typed method's prologue");
+                    let body = super::record_sig::sig_body(
+                        method,
+                        &tm.plan.sig_defaults,
+                        tm.plan.record.as_ref(),
+                    )
+                    .expect("a selected typed method's prologue");
                     compile_method(
                         llmod,
                         class,

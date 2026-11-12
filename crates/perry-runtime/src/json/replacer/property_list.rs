@@ -22,136 +22,81 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
-    let obj = ptr as *const crate::ObjectHeader;
-    let Some(keys_view) = super::super::stringify::object_keys_array_checked(obj) else {
-        // Not an ObjectHeader after all (a Promise / WeakMap / ArrayBuffer that
-        // reached here via a static TYPE_OBJECT hint). Node serializes those as
-        // `{}`; walking the slot as an ArrayHeader would fault.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_const_ptr(ptr as *const crate::ObjectHeader);
+    if object
+        .with_const_ptr(|obj| super::super::stringify::object_keys_array_checked(obj).is_none())
+    {
+        // Native cells without ObjectHeader storage have no ordinary members.
         buf.push_str("{}");
+        STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
         return;
-    };
-    // A layout that keeps its own storage slots reads each key through them.
-    let slotted = crate::object::key_attrs::keys_have_slots(keys_view.arr(), keys_view.count());
-    if !slotted {
-        crate::object::key_attrs::debug_assert_positional(keys_view.arr(), keys_view.count());
-    }
-    let keys_len = keys_view.count();
-    let keys_elements = crate::object::keys_array_dense_slots(keys_view.arr()).0;
-    let fields_ptr =
-        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
-        crate::meta_slots_of!(crate::meta_obj_runtime_born!(ptr as *mut _)) as *const f64;
-    // Iterate keys_len, not min(...): ≥9-field objects keep overflow values in
-    // OVERFLOW_FIELDS (see the function-replacer walk above / plain #307 fix).
-    let alloc_limit = crate::object::object_inline_capacity(ptr as *const crate::ObjectHeader);
-    let actual_fields = keys_len;
-
-    // Build a map of key_name -> field_value for the object. An own accessor
-    // (`get key()`) holds no value in its raw slot, so resolve it through the
-    // getter — matching the function-replacer walk (test262
-    // replacer-array-duplicates, whose whitelisted key is a getter).
-    // A per-object attribute (a builtin accessor installs no process gate)
-    // must filter too: an accessor key's slot holds its accessor pair
-    // (`accessor_pair.rs`), never a value to serialize.
-    let filter_non_enum =
-        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
-            & crate::object::key_attrs::SUMMARY_KEY_BITS
-            != 0;
-    // An own key is hidden only on a class instance or a shape with a private
-    // entry (#11791); the shape answers once for the whole walk.
-    let hide_private =
-        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
-    let mut field_map: Vec<(String, f64)> = Vec::new();
-    // OrdinaryOwnPropertyKeys order: array indices ascending, then strings.
-    let key_order = crate::object::ecma_own_key_order(keys_view);
-    for j in 0..actual_fields {
-        let f = key_order.as_ref().map_or(j, |order| order[j as usize]);
-        // #9398: tombstoned slot from an O(1) delete — not a key, not
-        // serialized. See `tombstoned_key_slot`.
-        if tombstoned_key_slot(*keys_elements.add(f as usize))
-            || super::super::stringify::is_symbol_value((*keys_elements.add(f as usize)).to_bits())
-        {
-            continue;
-        }
-        // #11232: physical class capture/private slots are not JS properties.
-        // Filter before reading the value or invoking getters/replacers.
-        if hide_private
-            && crate::object::instance_private_key_hidden(
-                obj,
-                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-            )
-        {
-            continue;
-        }
-        let mut field_val = if f < alloc_limit && !slotted {
-            *fields_ptr.add(f as usize)
-        } else {
-            f64::from_bits(crate::object::field_get_set::js_object_get_key_field(obj, f).bits())
-        };
-        if filter_non_enum && f < keys_len {
-            if let Some(gv) =
-                crate::object::json_object_getter_value(obj, *keys_elements.add(f as usize))
-            {
-                field_val = gv;
-            }
-        }
-        let key_name = if f < keys_len {
-            let key_f64 = *keys_elements.add(f as usize);
-            let key_bits = key_f64.to_bits();
-            let key_tag = key_bits & 0xFFFF_0000_0000_0000;
-            let key_ptr = if key_tag == STRING_TAG || key_tag == POINTER_TAG {
-                (key_bits & POINTER_MASK) as *const StringHeader
-            } else {
-                key_bits as *const StringHeader
-            };
-            str_from_header(key_ptr)
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("field{}", f))
-        } else {
-            format!("field{}", f)
-        };
-        field_map.push((key_name, field_val));
     }
 
     buf.push('{');
     let mut first = true;
     for allowed_key in allowed_keys {
-        if let Some((_, field_val)) = field_map.iter().find(|(k, _)| k == allowed_key) {
-            let field_bits = field_val.to_bits();
-            if field_bits == TAG_UNDEFINED || is_closure_value(field_bits) {
-                continue;
-            }
-            if !first {
-                buf.push(',');
-            }
-            first = false;
-            if use_pretty {
-                buf.push('\n');
-                let inner_indent_count = depth + 1;
-                for _ in 0..inner_indent_count {
-                    buf.push_str(indent);
+        let member_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            member_scope.root_raw_const_ptr(crate::string::canonical_key(allowed_key.as_bytes()));
+        // PropertyList determines which Get operations run, and their order.
+        // Read each value immediately before serializing it: an earlier getter
+        // or nested serialization can change a later property or move storage.
+        let field_val = key.with_const_ptr(|key: *const StringHeader| {
+            object.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                if crate::object::instance_private_key_hidden(
+                    obj,
+                    JSValue::string_ptr(key.cast_mut()),
+                ) {
+                    JSValue::undefined()
+                } else {
+                    crate::object::js_object_get_field_by_name(obj, key)
                 }
-                write_escaped_string(buf, allowed_key);
-                buf.push_str(": ");
-                stringify_value_with_array_replacer(
-                    *field_val,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    inner_indent_count,
-                    true,
-                );
-            } else {
-                write_escaped_string(buf, allowed_key);
-                buf.push(':');
-                stringify_value_with_array_replacer(
-                    *field_val,
-                    allowed_keys,
-                    buf,
-                    indent,
-                    depth,
-                    false,
-                );
+            })
+        });
+        let field_val = member_scope.root_nanbox_f64(f64::from_bits(field_val.bits()));
+        let field_key =
+            key.with_const_ptr(|key: *const StringHeader| nanbox_string_f64(key.cast_mut()));
+        // SerializeJSONProperty step 2: `toJSON` runs on the property value --
+        // before it is filtered out or serialized -- and receives the key.
+        let field_val = member_scope.root_nanbox_f64(super::apply_to_json_keyed(
+            field_val.get_nanbox_f64(),
+            field_key,
+        ));
+        if !serializable_member(field_val.get_nanbox_f64()) {
+            continue;
+        }
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        if use_pretty {
+            buf.push('\n');
+            let inner_indent_count = depth + 1;
+            for _ in 0..inner_indent_count {
+                buf.push_str(indent);
             }
+            write_escaped_string(buf, allowed_key);
+            buf.push_str(": ");
+            stringify_value_with_array_replacer(
+                field_val.get_nanbox_f64(),
+                allowed_keys,
+                buf,
+                indent,
+                inner_indent_count,
+                true,
+            );
+        } else {
+            write_escaped_string(buf, allowed_key);
+            buf.push(':');
+            stringify_value_with_array_replacer(
+                field_val.get_nanbox_f64(),
+                allowed_keys,
+                buf,
+                indent,
+                depth + 1,
+                false,
+            );
         }
     }
     if use_pretty && !first {
@@ -162,6 +107,16 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     }
     buf.push('}');
     STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
+}
+
+/// A member with no JSON text: `undefined`, a function, a symbol, or a proxy
+/// that wraps a callable. Shared with the root, which serializes to `undefined`.
+pub(super) unsafe fn serializable_member(value: f64) -> bool {
+    let bits = value.to_bits();
+    !(bits == TAG_UNDEFINED
+        || is_closure_value(bits)
+        || super::super::stringify::is_symbol_value(bits)
+        || crate::proxy_hooks::proxy_wraps_callable(value))
 }
 
 /// Serialize one value while an array replacer (PropertyList) is active. Per
@@ -194,7 +149,7 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             && crate::builtins::boxed_primitive_json_value(val).is_none()
         {
             match gc_obj_type(ptr) {
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     stringify_array_with_array_replacer(
                         ptr,
                         allowed_keys,
@@ -220,6 +175,9 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
             }
         }
     }
+    // The ordinary serializer probes `toJSON` on an object it is handed; the
+    // one-shot guard tells that probe the step already ran for `val`.
+    arm_to_json_result_guard(val);
     if use_pretty {
         stringify_value_pretty(val, TYPE_UNKNOWN, buf, indent, depth);
     } else {
@@ -255,9 +213,9 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
 
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length;
-    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_raw_const_ptr(ptr as *const crate::ArrayHeader);
+    let len = array.with_const_ptr(|arr: *const crate::ArrayHeader| (*arr).length);
     if len == 0 {
         buf.push_str("[]");
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
@@ -275,13 +233,31 @@ pub(crate) unsafe fn stringify_array_with_array_replacer(
                 buf.push_str(indent);
             }
         }
-        let elem = *elements.add(i as usize);
+        // A nested value can grow this array, so read each element from the
+        // live header instead of one pointer captured before the first one.
+        let elem = array.with_const_ptr(|arr: *const crate::ArrayHeader| {
+            let arr = crate::array::clean_arr_ptr(arr);
+            *(crate::array::array_elements_ptr(arr) as *const f64).add(i as usize)
+        });
+        // TAG_HOLE: a sparse hole surfaces to `toJSON` as `undefined`.
+        let elem = if elem.to_bits() == crate::value::TAG_HOLE {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            elem
+        };
+        // Root before the index key allocates, then run `toJSON` on the element
+        // with its stringified index, as the function-replacer walk does.
+        let elem = scope.root_nanbox_f64(elem);
+        let index = i.to_string();
+        let index_ptr = js_string_from_bytes(index.as_ptr(), index.len() as u32);
+        let elem = scope.root_nanbox_f64(super::apply_to_json_keyed(
+            elem.get_nanbox_f64(),
+            nanbox_string_f64(index_ptr),
+        ));
+        let elem = elem.get_nanbox_f64();
         let elem_bits = elem.to_bits();
-        // TAG_HOLE: sparse-array holes serialize as null, same as undefined.
-        if elem_bits == TAG_UNDEFINED
-            || elem_bits == crate::value::TAG_HOLE
-            || is_closure_value(elem_bits)
-        {
+        // Undefined, function and hole elements serialize as null.
+        if elem_bits == TAG_UNDEFINED || is_closure_value(elem_bits) {
             buf.push_str("null");
         } else {
             stringify_value_with_array_replacer(
@@ -310,24 +286,44 @@ pub(crate) unsafe fn extract_string_array(ptr: *const u8) -> Vec<String> {
     // #7269: the PropertyList replacer array (`JSON.stringify(v, ['a','b'])`)
     // is exactly as susceptible to the GC_FLAG_FORWARDED array-growth stub as
     // any other array pointer in this file — resolve before the header read.
-    let ptr = crate::array::clean_arr_ptr(ptr as *const crate::ArrayHeader) as *const u8;
-    if ptr.is_null() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let array = scope.root_raw_const_ptr(crate::array::clean_arr_ptr(
+        ptr as *const crate::ArrayHeader,
+    ));
+    if array.with_const_ptr(|arr: *const crate::ArrayHeader| arr.is_null()) {
         return Vec::new();
     }
-    let arr = ptr as *const crate::ArrayHeader;
-    let len = (*arr).length;
-    let elements = crate::array::array_elements_ptr(arr as *const crate::ArrayHeader) as *const f64;
-    let mut result: Vec<String> = Vec::new();
+    // The initial length bounds the walk even if user code grows the array.
+    let len = array.with_const_ptr(|arr: *const crate::ArrayHeader| (*arr).length);
+    // Coerce in array order before deduplicating: wrapper conversion can run
+    // user code even when its resulting name already appears in the list.
+    let mut keys = Vec::new();
     for i in 0..len {
-        let elem = *elements.add(i as usize);
-        // Per ECMA-262 SerializeJSONObject: a PropertyList item is kept when it
-        // is a String, a Number, or a String/Number wrapper object (Numbers and
-        // wrappers coerce to their canonical string form). Duplicate names are
-        // dropped — first occurrence wins.
-        if let Some(key) = json_property_list_key(elem) {
-            if !result.contains(&key) {
-                result.push(key);
-            }
+        // That user code can grow the array into a new allocation, so resolve
+        // the live header and its elements for each element instead of reusing
+        // one pointer captured before the first coercion.
+        let element = array.with_const_ptr(|arr: *const crate::ArrayHeader| {
+            let arr = crate::array::clean_arr_ptr(arr);
+            let elements = crate::array::array_elements_ptr(arr) as *const f64;
+            *elements.add(i as usize)
+        });
+        if let Some(key) = json_property_list_key(element) {
+            keys.push(key);
+        }
+    }
+    collect_property_list_keys(keys.into_iter())
+}
+
+/// Keep the first occurrence of each coerced key without changing read order.
+/// Membership is indexed separately so distinct keys do not scan the prefix.
+fn collect_property_list_keys<K: Clone + Eq + std::hash::Hash>(
+    keys: impl Iterator<Item = K>,
+) -> Vec<K> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for key in keys {
+        if seen.insert(key.clone()) {
+            result.push(key);
         }
     }
     result
@@ -378,3 +374,7 @@ pub(super) unsafe fn json_property_list_key(elem: f64) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+#[path = "property_list_tests.rs"]
+mod tests;

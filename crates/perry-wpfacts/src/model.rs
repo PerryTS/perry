@@ -16,12 +16,6 @@ pub type CallId = u32;
 pub type SiteId = u32;
 
 /// The atom of the element key (`Model::elem_key`).
-/// The key of a Map's or WeakMap's entry values: the [[Value]]s of its
-/// [[MapData]] (ECMA-262 24.1.3.6, 24.3.3.3), a field of the map object
-/// itself. `set` and the constructor write it, `get` reads it
-/// (`builtins::collections::map_values`).
-pub(crate) const MAP_VALUES: &str = "[[MapData]]";
-
 /// [[ViewedArrayBuffer]] (ECMA-262 23.2.3.2, 25.3.4.1): the ArrayBuffer a
 /// typed array, a Buffer or a DataView views, a field of the view object
 /// itself. The view's birth writes it, `.buffer` reads it
@@ -512,7 +506,8 @@ pub struct Template {
     /// Birth keys reserved for a constructor store
     /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
     /// can observe the instance before the constructor stores them (a method
-    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// call on `this`, ...), or a run skips the store (a branch, a loop body,
+    /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
@@ -1254,6 +1249,21 @@ pub struct Node {
     pub int_use: bool,
     /// One of its values can reach an int consumer (`demand::solve`).
     pub int_demand: bool,
+    /// −0 tolerance (`zero_sign`): every use of the node's value is one the
+    /// solve sees (an expression the generator classified, a copy, a rule, a
+    /// field or element slot, a function's result). A node without it is
+    /// used by code the solve does not see, so the sign of a zero it holds
+    /// counts as observed.
+    pub zs_known: bool,
+    /// −0 tolerance: a use observes the sign of a zero the node holds (a
+    /// division, `Object.is`, a native argument, any unclassified use).
+    pub zs_use: bool,
+    /// −0 tolerance: one of its values can reach a use that observes the
+    /// sign of a zero (`zero_sign::solve`).
+    pub zsign: bool,
+    /// −0 tolerance: the node keeps its integer interval although it may
+    /// hold `-0`, which no use observes (`zero_sign::solve`).
+    pub zs_tol: bool,
 }
 
 /// A store site: where, and whether it is a construction-phase writer for
@@ -1370,6 +1380,36 @@ pub struct Model {
     /// `+` interval rule drops its right operand, a wrong transfer the
     /// int32 witnesses must catch.
     pub range_sabotage: bool,
+    /// R1: a `Cons::Range` result takes the join of its rule's evaluations
+    /// without widening (`solve::grow_rule_range`); only copy targets widen.
+    /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
+    pub exact_rules: bool,
+    /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
+    /// rules give `0 * negative`, `-x` and `%` their integer hull with the
+    /// `-0` bit, and a node may keep an integer interval while it may hold
+    /// `-0` when no use observes the sign. `PERRY_FACTS_ZERO_SIGN=0`: the
+    /// strict rules (such a result is ⊤).
+    pub zero_sign: bool,
+    /// −0 tolerance: the builtin running in `with_native` declared its
+    /// arguments absorbing (ToString'd / ToIntegerOrInfinity'd only).
+    pub zs_absorbing: bool,
+    /// −0 tolerance: calls a builtin declared absorbing (`with_native`).
+    pub zs_absorbed: crate::pts::FxHashSet<CallId>,
+    /// PR D: `"lit".indexOf(..)` / `"lit".lastIndexOf(..)` calls on a String
+    /// literal receiver, with the literal's length in code units: the
+    /// native's result is in `[-1, len]` (`string_methods`).
+    pub str_index_len: FxHashMap<CallId, i64>,
+    /// −0 tolerance: spread argument arrays of calls whose callee observes
+    /// its arguments: every element of every token they hold is observed.
+    pub zs_spread: Vec<NodeId>,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=zerosign`): a division's
+    /// operands are no sign-observing uses, a wrong classification the
+    /// sign witness must catch.
+    pub zero_sign_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=exactrule`): with the exact
+    /// rule results, a sum is the hull of its operands instead of their
+    /// sum, a claim too narrow that the witnesses must catch.
+    pub exact_rule_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrlen`): every index store
     /// counts as one inside its array's birth length (`arr_len_index`).
     pub arr_len_sabotage: bool,
@@ -1380,7 +1420,7 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
     /// takes a key that reaches the length's lower bound as below it.
     pub elem_undef_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
@@ -1438,6 +1478,26 @@ pub struct Model {
     /// Immutable Arrays and constant contents (`const_arrays`;
     /// `PERRY_FACTS_CONST_ARRAYS=0` turns them off).
     pub const_arrays: bool,
+    /// Value records (DESIGN-p4l4; `PERRY_FACTS_VALUE_RECORDS=1`): identity
+    /// observations are recorded (`Cons::Identity`). Off, the model is the
+    /// one without the lever.
+    pub value_records: bool,
+    /// A record crosses a program call in a `Record` signature slot
+    /// (DESIGN-p4l4 §5.2, VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
+    /// off: such a call slot then rejects the template, as in VR-3a).
+    pub record_signatures: bool,
+    /// The admitted value-record templates (`TemplateFacts::record` is
+    /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
+    pub records: crate::pts::FxHashSet<TmplId>,
+    /// The admitted record arrays (VR-4b): Arr template -> the record
+    /// template of its elements. Set with `records`; such an Array is no
+    /// plain program Array (`bindings::arr_rep`), it is a
+    /// `GC_TYPE_RECORD_ARRAY` only the record-array intrinsics touch.
+    pub record_arrays: FxHashMap<TmplId, TmplId>,
+    /// S0 negative control `vrarrjoin` (DESIGN-p4l4 §10.3): a holder of a
+    /// record array and of other Arrays is typed a record array (R6's join
+    /// ignored), a wrong claim the receiver witness must catch.
+    pub record_array_join_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
@@ -1451,6 +1511,111 @@ pub struct Model {
     /// representation ignores the `null` and `undefined` it also holds, a
     /// wrong claim the witness at the field read must catch.
     pub arr_field_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restfield`): a Number
+    /// field's representation is I32 whatever its interval (I32 at rest,
+    /// PR A), a wrong claim the witness at the field read must catch.
+    pub rest_field_sabotage: bool,
+    /// I32 at rest, PR B (`rest_elems`; `PERRY_REST_ELEMS=0` turns it off).
+    pub rest_elems: bool,
+    /// The at-rest capacity reservation (`rest_elems::reserve`;
+    /// `PERRY_REST_CAPACITY=0` turns it off).
+    pub rest_capacity: bool,
+    /// Fill births (`fill_births`; `PERRY_ARRAY_FILL_BIRTH=0` turns them off).
+    pub fill_births: bool,
+    /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
+    pub rest_fields: bool,
+    /// The key signs (`element_keys::collect_signs`;
+    /// `PERRY_FACTS_KEY_SIGN=0` turns them off).
+    pub key_sign: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=keysign`): every int32 key
+    /// is claimed non-negative, a wrong claim the witness at the element
+    /// site must catch.
+    pub key_sign_sabotage: bool,
+    /// A `slice` of an Array bears a plain Array (`builtins::
+    /// site_slice_arr`; `PERRY_FACTS_SLICE_BIRTHS=0` turns it off).
+    pub slice_births: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=slicebirth`): a `slice`
+    /// birth is claimed a plain Array whatever its species constructor (an
+    /// `Object` species makes a Number object), a wrong claim the array rep
+    /// witness must catch.
+    pub slice_birth_sabotage: bool,
+    /// The wide keys (`element_keys::collect_wide`;
+    /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
+    pub wide_keys: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=widekey`): a key past int32
+    /// that may be negative is claimed non-negative, a wrong claim the
+    /// witness at the element site must catch.
+    pub wide_key_sabotage: bool,
+    /// Literal strings (`literal_strings`;
+    /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
+    pub literal_strings: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=litstr`): every binding and
+    /// field that may hold a String is claimed to hold only literals'
+    /// values, a wrong claim the witness at the store or alias must catch.
+    pub literal_strings_sabotage: bool,
+    /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
+    /// them off): the solve records who changes an Array's length.
+    pub held_lengths: bool,
+    /// Every event that may change Array token `.0`'s length or move its
+    /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
+    /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
+    /// can place.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool)>,
+    /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
+    pub len_index_stores: crate::pts::FxHashSet<NodeId>,
+    /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
+    /// with no store) -> a store site that names its function.
+    pub len_index_sites: FxHashMap<NodeId, SiteId>,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
+    /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
+    /// claim the proven store's witness must catch.
+    pub rest_lane_sabotage: bool,
+    /// Object tokens a generic reader may touch (`Model::rest_obj_used`):
+    /// their class gets no I32 lane.
+    pub obj_used: crate::pts::FxHashSet<Tok>,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restelem`): a builtin
+    /// method's use of an Array is not recorded (`Model::rest_used`), so an
+    /// Array a native writes may be admitted at rest, a wrong claim the
+    /// at-rest load witness must catch.
+    pub rest_elem_sabotage: bool,
+    /// Array tokens a generic reader may touch (`Model::rest_used`): never
+    /// at rest.
+    pub arr_used: crate::pts::FxHashSet<Tok>,
+    /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
+    pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// DESIGN-p4l4 VR-4b: an array literal that is the whole value of a
+    /// `let`, of a local assignment, of a named store or of a class field
+    /// initializer: the holder codegen births it for
+    /// (`records::ArrBirth`).
+    pub(crate) arr_birth_holder: FxHashMap<TmplId, crate::records::ArrBirth>,
+    /// VR-4b: the bindings of a for-of's source and of its iterator arm's
+    /// temporaries (`perry_hir::lower::for_of_guard`), whose iteration
+    /// protocol uses are the for-of intrinsic's.
+    pub(crate) for_of_relays: crate::pts::FxHashSet<NodeId>,
+    /// VR-4b: the receivers of a generic in-place permutation
+    /// (`Gen::permuted_len`), whose `Cons::LenIndex` is not a `pop`'s.
+    pub(crate) arr_permuted: crate::pts::FxHashSet<NodeId>,
+    /// The receiver relays `array_method` makes for a fused fill's call.
+    pub rest_fill_relays: Vec<NodeId>,
+    /// Push-filled births (`push_fills`; `PERRY_REST_PUSH_FILL=0` turns them
+    /// off), and the negative control `PERRY_FACTS_SABOTAGE=restpush`.
+    pub push_fills: bool,
+    pub push_fill_sabotage: bool,
+    /// Each fill's final length, by its index (`push_fills::Fills::lens`).
+    pub push_fill_lens: Vec<u32>,
+    /// The templates a fill births (`push_fills::born`), with the fill.
+    pub push_fill_tmpls: FxHashMap<TmplId, u32>,
+    /// The store sites of fill pushes, with the fill: no append and no
+    /// generic use for an Array of that fill.
+    pub push_fill_sites: FxHashMap<SiteId, u32>,
+    /// `new Array()` call sites that are a fill's birth, with the fill.
+    pub push_fill_new_sites: FxHashMap<SiteId, u32>,
+    /// The fill pushes the generator walked.
+    pub(crate) push_fill_pushes: Vec<crate::push_fills::FillPush>,
+    /// The templates admitted at rest (`rest_elems::admit`), and why each
+    /// other candidate was not (`rest_elems::probe`).
+    pub rest_tmpls: crate::pts::FxHashSet<TmplId>,
+    pub rest_refused: FxHashMap<TmplId, String>,
     pub max_work: u64,
     pub max_nodes: usize,
     pub atoms: Vec<String>,
@@ -1488,11 +1653,47 @@ pub struct Model {
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,
+    /// `Map.prototype.get` reads a Map's values, not its keys
+    /// (`solve/map_vals.rs`; `PERRY_FACTS_MAP_VALUES=0` turns it off).
+    pub map_values: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=mapvals`): `set`'s key is
+    /// taken for its value, a wrong claim about what `get` returns.
+    pub map_values_sabotage: bool,
+    /// The value node of each Map `get` or `set` ran on (`Model::map_vals`).
+    pub map_vals: FxHashMap<Tok, NodeId>,
+    /// Maps the program's `new Map(...)` bore (`Model::map_born`).
+    pub map_seen: crate::pts::FxHashSet<Tok>,
+    /// Maps whose every content write is a modelled `set`
+    /// (`Model::map_born`, `Model::map_open`).
+    pub map_closed: crate::pts::FxHashSet<Tok>,
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
+    /// Store sites of `a[k] = v` whose key gen proved at most the length
+    /// of the Array the local `a` holds there (`gen/in_bounds.rs`): the
+    /// store overwrites an element or appends, so it leaves no hole in an
+    /// Array whose length never shrinks (`Cons::IndexKept`).
+    pub inbounds_sites: crate::pts::FxHashSet<SiteId>,
+    /// Arrays whose length may shrink: every event that makes a length ⊤
+    /// (`Model::arr_len_top`: a `length` store, `pop`, `shift`, `splice`,
+    /// an escape, a HARD marker, ...). An Array of this unit that is not
+    /// here only ever grows.
+    pub arr_shrunk: crate::pts::FxHashSet<Tok>,
+    /// Arrays an in-bounds store kept hole-free (`Cons::IndexKept`): a
+    /// later shrink marks the hole it withheld (`Model::arr_len_top`).
+    pub inbounds_kept: crate::pts::FxHashSet<Tok>,
+    /// In-bounds index stores leave no hole (`gen/in_bounds.rs`;
+    /// `PERRY_FACTS_INBOUNDS_STORE=0` turns it off).
+    pub inbounds_store: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=inbounds`): every index
+    /// store under a Number key counts as in bounds, a wrong claim the
+    /// element read's witness must catch (a hole read as a Number).
+    pub inbounds_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
+    /// `(call, specifier value)` a computed `require` already resolved
+    /// (`Cons::RequireSpec`; `None`: a value no constant spells).
+    pub require_spec_done: crate::pts::FxHashSet<(CallId, Option<Atom>)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.
     pub arr_iterated: FxHashMap<Tok, NodeId>,
     /// `builtins::species_from`: the `constructor` ArraySpeciesCreate
@@ -2560,6 +2761,15 @@ mod token_values;
 impl Model {
     pub(crate) fn charge_work(&self, amount: u64) {
         self.work.set(self.work.get() + amount);
+    }
+
+    /// The program observes the identity of what `n` holds (DESIGN-p4l4
+    /// §2.2). Recorded only with value records on, so the model without the
+    /// lever is unchanged.
+    pub(crate) fn identity(&mut self, n: NodeId, route: IdentityRoute) {
+        if self.value_records && n != NO_NODE {
+            self.cons(n, Cons::Identity { route });
+        }
     }
 }
 

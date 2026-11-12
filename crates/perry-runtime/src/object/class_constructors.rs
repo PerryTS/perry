@@ -605,14 +605,6 @@ pub unsafe extern "C-unwind" fn js_super_construct_apply(
 
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let this_raw = (this_value.to_bits() & crate::value::POINTER_MASK) as i64;
-    if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
-        eprintln!(
-            "super_apply child={} this_bits={:#x} args_bits={:#x}",
-            child_cid,
-            this_value.to_bits(),
-            args_array.to_bits()
-        );
-    }
     if this_raw == 0 {
         return undef;
     }
@@ -684,12 +676,6 @@ pub unsafe extern "C-unwind" fn js_super_construct_apply(
             return undef;
         }
         if let Some((ctor_ptr, total_params, sig_caps)) = lookup_class_constructor(cur) {
-            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
-                eprintln!(
-                    "super_apply resolved ancestor cid={} total={} sig_caps={}",
-                    cur, total_params, sig_caps
-                );
-            }
             let caps = class_capture_values(cur).unwrap_or_default();
             // #5957: split user/cap slots from the SIGNATURE cap count, NOT the
             // decl-site snapshot length. A dynamic-parent ctor compiles a
@@ -1111,17 +1097,6 @@ pub(crate) unsafe fn run_class_constructor_on_this_flat(
             // forwarded user args survive.
             let caps = class_capture_values(cur).unwrap_or_default();
             let user_params = (total_params as usize).saturating_sub(sig_caps as usize);
-            if std::env::var_os("PERRY_SUPER_DEBUG").is_some() {
-                eprintln!(
-                    "flat_super cid={} total={} sig_caps={} snapshot={} args_len={} rest={:?}",
-                    cur,
-                    total_params,
-                    sig_caps,
-                    caps.len(),
-                    args_len,
-                    lookup_class_constructor_flags(cur).2
-                );
-            }
             let mut final_args = constructor_user_arg_slots(cur, user_params, args_ptr, args_len);
             for slot in 0..sig_caps as usize {
                 final_args.push(caps.get(slot).map(|b| f64::from_bits(*b)).unwrap_or(undef));

@@ -720,7 +720,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 if gc_type == crate::gc::GC_TYPE_ERROR {
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
                     errors::format_error_value(error_ptr, depth)
-                } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                } else if crate::gc_type_is_array!(gc_type) {
                     // A grown array's old head is a forwarding stub; inspect the
                     // live header (and key the cycle check on it) instead.
                     let ptr = crate::array::clean_arr_ptr(ptr);
@@ -1515,7 +1515,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     if gc_type == crate::gc::GC_TYPE_ERROR {
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
                         errors::format_error_value(error_ptr, depth)
-                    } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                    } else if crate::gc_type_is_array!(gc_type) {
                         // A grown array's old head is a forwarding stub; inspect the
                         // live header (and key the cycle check on it) instead.
                         let ptr = crate::array::clean_arr_ptr(ptr);

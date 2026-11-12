@@ -133,7 +133,7 @@ pub(crate) fn create_list_from_array_like(value: f64) -> Vec<f64> {
         // no other guard before the deref below -- a handle reached
         // `addr - GC_HEADER_SIZE` unconditionally.
         if let Some(gc) = unsafe { crate::value::addr_class::try_read_gc_header(ptr) } {
-            if gc.obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!(gc.obj_type) {
                 let arr = ptr as *const crate::array::ArrayHeader;
                 let len = crate::array::js_array_length(arr) as usize;
                 let mut out = Vec::with_capacity(len);

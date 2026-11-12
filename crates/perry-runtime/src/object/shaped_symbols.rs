@@ -433,7 +433,7 @@ pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
         let pos = object_keys(obj).storage_slot(pos);
         if pos == crate::object::runtime_layouts::ARRAY_PROTOTYPE_ITERATOR_SLOT
             && crate::value::addr_class::try_read_tracked_gc_header(addr)
-                .is_some_and(|header| header.as_ref().obj_type == crate::gc::GC_TYPE_ARRAY)
+                .is_some_and(|header| crate::gc_type_is_array!(header.as_ref().obj_type))
         {
             let _no_move = crate::gc::GcSuppressScope::new();
             set_entry(addr, symbol, 0);

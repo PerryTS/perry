@@ -60,7 +60,13 @@ pub fn analyze(c: &Class) -> CtorPhase {
         .fields
         .iter()
         .map(|f| {
-            let named = (!f.is_private && f.key_expr.is_none()).then_some(f.name.as_str());
+            // Only a definition creates its key at field-init time. A
+            // reservation (`ClassFieldOrigin::is_reservation`) is created by
+            // its store, which a run can skip (a branch, a loop body, an
+            // early `return`): the body walk below decides whether every
+            // exit path stores it.
+            let named = (!f.is_private && f.key_expr.is_none() && f.origin.is_definition())
+                .then_some(f.name.as_str());
             (&f.init, named)
         })
         .collect();

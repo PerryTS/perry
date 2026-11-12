@@ -27,7 +27,7 @@ unsafe fn array_pointer(bits: u64) -> Option<*const crate::ArrayHeader> {
     };
     let header = crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)?;
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
@@ -98,7 +98,7 @@ pub(super) unsafe fn template_candidate(obj: *const crate::ObjectHeader, count: 
 unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
     // `array_pointer` has already validated this exact tracked header.
     let header = &*crate::gc::header_from_trusted_user_ptr(arr.cast());
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
         || (*arr).length > (*arr).capacity

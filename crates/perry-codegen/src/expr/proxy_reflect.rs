@@ -937,8 +937,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
             strict,
+            element_offset,
             ..
         } => {
+            // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+            super::record_witness::store_into_copy(ctx, target)?;
+            // Check mode: a store the facts took to be in bounds.
+            super::index_get::array_rep::witness_in_bounds_store(
+                ctx,
+                target,
+                key,
+                *element_offset,
+            )?;
+            // I32 at rest: the store of an at-rest element (`rest_elems`);
+            // `receiver` is `target` cloned (one evaluation of the base).
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, target, key, value, floor);
+            }
             if matches!(receiver.as_ref(), Expr::This) {
                 if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                     ctx, target, key, value, *strict,
@@ -1020,7 +1035,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
-                        element_offset: 0,
+                        // The store's own site: its key facts apply
+                        // (`index_key::store_key_fact`). An at-rest store
+                        // was taken above (`rest_elems::write_floor`).
+                        element_offset: *element_offset,
                         byte_offset: 0,
                         byte_end: 0,
                     },

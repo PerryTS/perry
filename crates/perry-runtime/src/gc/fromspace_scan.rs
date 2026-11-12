@@ -242,7 +242,7 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
     // false root cause before the owner dump exposed it. Bound the scan by
     // the same length the collector uses; the bound is counted so a
     // shrinking scan cannot silently read as a cleaner heap.
-    if (*header).obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!((*header).obj_type) {
         let arr = user as *const crate::array::ArrayHeader;
         let live_words = std::mem::size_of::<crate::array::ArrayHeader>() / 8
             + crate::array::array_front_offset(arr)
@@ -413,7 +413,7 @@ fn payload_preview(r: &FromSpaceRef) -> String {
             (*owner).size,
             (*owner).gc_flags
         ));
-        if (*owner).obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!((*owner).obj_type) {
             let arr = (r.owner_header + GC_HEADER_SIZE) as *const crate::array::ArrayHeader;
             out.push_str(&format!(
                 " array_len={} capacity={}",

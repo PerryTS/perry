@@ -32,17 +32,17 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             };
             let c = site_tmpl(m, call, what);
             let fa = m.field_any(c);
+            if ns == BuiltinNs::Map {
+                // Born without an iterable, its contents are what `set`
+                // stores (`solve/map_vals.rs`).
+                m.map_born(c, arg(m, call, 0).is_none());
+            }
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
                 if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
                     // Entries `[key, value]`: the collection holds both.
                     let ek = m.elem_key();
                     m.cons(vals, Cons::Load { key: ek, dst: fa });
-                    // AddEntriesFromIterable (24.1.1.2 step 4.f): the value
-                    // is Get(entry, "1").
-                    let one = m.atom("1");
-                    let mv = super::collections::map_values(m, c);
-                    m.cons(vals, Cons::Load { key: Key::Named(one), dst: mv });
                 } else {
                     m.edge(vals, fa);
                 }

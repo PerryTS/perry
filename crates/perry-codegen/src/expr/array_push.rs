@@ -1194,7 +1194,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 let gc_type_addr = blk.sub(I64, &arr_handle, "8");
                 let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
                 let gc_type = blk.load(I8, &gc_type_ptr);
-                let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+                let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
                 let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
                 let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                 let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -1259,7 +1259,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let array_receiver = if owned {
                         "true".to_string()
                     } else {
-                        blk.icmp_eq(I8, &gc_type, "1")
+                        crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type)
                     };
                     blk.cond_br(&array_receiver, &nofwd_label, &elem_meta_label);
                 }
@@ -1304,7 +1304,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let gc_type_addr = blk.sub(I64, &elem_store, "8");
                     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
                     let store_type = blk.load(I8, &gc_type_ptr);
-                    let store_is_array = blk.icmp_eq(I8, &store_type, "1");
+                    let store_is_array =
+                        crate::target_layout::emit_gc_type_is_array(blk, I8, &store_type);
                     let gc_flags_addr = blk.sub(I64, &elem_store, "7");
                     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                     let store_flags = blk.load(I8, &gc_flags_ptr);

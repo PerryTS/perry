@@ -47,13 +47,14 @@ testing = []
 
 [dependencies]
 perry-hir.workspace = true
+# The module-wide LocalId bound of the value-record rewrite (`value_records`).
+perry-transform.workspace = true
 perry-realm-table.workspace = true
 # The sidecar table rows (`GcEffects::from_sidecar`); the format only, no analyzer.
 perry-gc-effects.workspace = true
 perry-dispatch.workspace = true
 perry-abi.workspace = true
 perry-api-manifest.workspace = true
-perry-runtime-manifest.workspace = true
 
 anyhow.workspace = true
 aho-corasick.workspace = true

@@ -602,7 +602,7 @@ pub extern "C" fn js_arguments_bundle_index_get(raw_args: f64, key: f64) -> f64 
     // Forwarded or descriptor-bearing inputs keep the complete getter below.
     unsafe {
         if let Some(header) = crate::value::addr_class::try_read_gc_header(raw as usize) {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && !crate::array::array_has_element_descriptors_resolved(raw)
                 && (*raw).length <= (*raw).capacity

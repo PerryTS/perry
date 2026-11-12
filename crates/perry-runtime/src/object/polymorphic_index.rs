@@ -320,7 +320,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         }
     }
 
-    if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+    if crate::gc_type_is_array!(gc_type) || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         if let Some(index) = numeric_key_u32_index(idx) {
             return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
         }
@@ -515,7 +515,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         *(gc_header_addr as *const u8)
     };
 
-    if gc_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(gc_type) {
         if let Some(index) = numeric_key_u32_index(idx) {
             // Includes lazy/forwarded — js_array_set_f64_extend_strict's clean_arr_ptr_mut
             // walks the forwarding chain and routes buffers/typed-arrays through

@@ -250,7 +250,7 @@ pub(crate) unsafe fn keys_array_len_capped_to_capacity(arr: *const ArrayHeader) 
     if let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) {
         if matches!(
             header.obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_OVERFLOW
         ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*arr).length <= (*arr).capacity
         {
@@ -298,7 +298,7 @@ pub(crate) unsafe fn keys_array_slot(
     index: u32,
 ) -> crate::value::JSValue {
     if let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) {
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && !super::array_has_element_descriptors_resolved(keys)
             && index < (*keys).length

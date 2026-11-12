@@ -774,6 +774,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_verify_facts_call", PTR, &[DOUBLE, I64, I64, I64]);
         module.declare_function("perry_verify_facts_call_miss", I32, &[PTR, I64, I64]);
         module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
+        // Value records (DESIGN-p4l4 B7): the birth claim and the identity
+        // witness of a compiled comparison.
+        module.declare_function("perry_verify_facts_record_claim", crate::types::VOID, &[DOUBLE]);
+        module.declare_function(
+            "perry_verify_facts_record_identity",
+            I32,
+            &[DOUBLE, DOUBLE, I64, I64],
+        );
+        // VR-4b: the receiver of a record-array intrinsic.
+        module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
     }
     // #8655: guarded packed-array / dense Array-subclass read before the
@@ -968,6 +978,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // SNAP census site hook (`expr/snap_env_site.rs`): instrumented compiles only.
     if crate::expr::snap_env_site::census_compile() {
         module.declare_function("js_snap_env_site", VOID, &[I32]);
+        module.declare_function("js_snap_argv_site", VOID, &[I32, I64]);
+        module.declare_function("js_snap_compare_literal", VOID, &[I32, DOUBLE, DOUBLE, I32]);
         module.declare_function("js_snap_require_edge", VOID, &[I32]);
     }
     // #1344: process.env.X = v / delete process.env.X.

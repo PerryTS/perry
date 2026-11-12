@@ -6,7 +6,7 @@
 //! effects  := "{" effect (";" effect)* ";"? "}"
 //! effect   := reads(slot, ...) | coerce(slot, Protocol) | stores(slot -> slot) | stores(fresh)
 //!           | calls(slot, this = operand, args = [operand, ...])
-//!           | returns(operand) | open | path(slot)
+//!           | returns(operand) | identity(slot) | open | path(slot)
 //! slot     := this | result | arg(N) | rest(N) | returned(N) | elems(slot) | field(slot, key)
 //! operand  := value ("|" value)*
 //! value    := slot | prim(kind | kind ...) | native(Realm.path)
@@ -308,6 +308,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
             tagged("reads", Value::Array(read))
         }
         "escapes" => tagged("escapes", slot(inner()?)?),
+        "identity" => tagged("identity", slot(inner()?)?),
         "async_resource" => tagged("async_resource", slot(inner()?)?),
         "coerce" => {
             let parts = info::split(inner()?, ",");
@@ -383,7 +384,7 @@ fn effect(ts: &[Token<'_>]) -> Result<Value, String> {
         "returns" => tagged("returns", operand(inner()?)?),
         _ => {
             return Err(format!(
-                "unknown effect `{}` (reads, coerce, calls, stores, returns, open, path)",
+                "unknown effect `{}` (reads, coerce, calls, stores, returns, identity, open, path)",
                 info::text(ts)
             ))
         }
@@ -528,6 +529,10 @@ mod tests {
             r#"[{"returns":{"prim":["num","undefined"]}},{"returns":{"fresh":{"elems":[{"slot":{"root":"this","steps":["elems"]}}],"fields":[],"proto":"Array.prototype"}}},{"returns":{"slot":{"root":"this","steps":[{"field":"k"}]}}}]"#
         );
         assert_eq!(parse_text("{ open }").unwrap(), r#"["open"]"#);
+        assert_eq!(
+            parse_text("{ identity(arg(0)); identity(elems(this)) }").unwrap(),
+            r#"[{"identity":{"root":{"arg":0},"steps":[]}},{"identity":{"root":"this","steps":["elems"]}}]"#
+        );
         assert_eq!(
             parse_text("{ coerce(arg(0), ShallowInspect) }").unwrap(),
             r#"[{"coerce":{"protocol":"shallow_inspect","slot":{"root":{"arg":0},"steps":[]}}}]"#

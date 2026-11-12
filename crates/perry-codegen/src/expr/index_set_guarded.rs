@@ -26,6 +26,18 @@
 //! element kind is settled before the value is written
 //! ([`emit_array_store_kind_value`]).
 //!
+//! # The number-over-number arm
+//!
+//! A store whose value is statically a Number (`value_is_numeric`) first
+//! tests two words: the slot's old value and the new one are both plain
+//! doubles ([`number_arm`]). Then nothing but the slot changes: no pointer
+//! is retired or stored (no layout note, no barrier, no string addref), a
+//! plain double is right for either element kind once a NaN is the canonical
+//! one, and the old value was no hole (no prototype question). The arm is
+//! the NaN select, the raw store and the frontier row. Any other pair (a
+//! hole fill, a pointer or an INT32 box on either side) takes the general
+//! arm below, unchanged. `PERRY_NUMBER_STORE_ARM=0` emits no such arm.
+//!
 //! The slot write itself reuses the store emitters of `lower_index_set_fast`'s
 //! in-bounds arm, and both paths settle the element kind through the same
 //! [`emit_array_store_kind_value`], so the string addref, the GC layout note,
@@ -58,8 +70,12 @@ use super::{
 /// `INT32_TAG`-boxed integer (a loop counter that was boxed on the way in).
 /// The conversion never feeds `fptosi` an out-of-range or NaN input, which
 /// would be poison.
+///
+/// N10: the guard's one bound is `idx <u capacity`, so a widened native
+/// index enters as it is: a negative one is at least 2^31 unsigned and
+/// declines onto the same arm as `-1` (`index_key::normalize_unsigned`).
 pub(super) fn emit_canonical_element_index_i32(ctx: &mut FnCtx<'_>, idx_double: &str) -> String {
-    super::index_key::normalize(ctx, idx_double, None)
+    super::index_key::normalize_unsigned(ctx, idx_double, None)
 }
 
 /// The raw-f64 element-kind bits in `_reserved`: `GC_ARRAY_RAW_F64_LAYOUT`
@@ -165,6 +181,95 @@ pub(super) fn emit_array_store_kind_value(
     )
 }
 
+/// `PERRY_NUMBER_STORE_ARM=0` (`off`, `false`): no guarded store has the
+/// number-over-number arm (module docs).
+pub(crate) fn number_arm_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_NUMBER_STORE_ARM").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// `PERRY_STORE_ARM_DIAG=1`: one stderr line per guarded store that gets the
+/// number-over-number arm, with whether its value needs the run-time test.
+fn number_arm_diag(ctx: &FnCtx<'_>, block_prefix: &str, tested: bool) {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *ON.get_or_init(|| std::env::var("PERRY_STORE_ARM_DIAG").as_deref() == Ok("1")) {
+        eprintln!(
+            "[perry store arm] {} {} arm=number value={}",
+            ctx.func.name,
+            block_prefix,
+            if tested { "tested" } else { "int" }
+        );
+    }
+}
+
+/// The number-over-number arm of a guarded store (module docs), emitted in
+/// the block that holds the admitted slot: `old_bits` is the word the probe
+/// loaded from `element_addr`, a slot of the live array `arr_handle` below
+/// its capacity. A pair of plain doubles is stored here and leaves for
+/// `merge_label`; the block that is current on return holds every other
+/// pair, with nothing written.
+#[allow(clippy::too_many_arguments)]
+fn number_arm(
+    ctx: &mut FnCtx<'_>,
+    arr_handle: &str,
+    element_addr: &str,
+    idx_i32: &str,
+    old_bits: &str,
+    val_double: &str,
+    block_prefix: &str,
+    merge_label: &str,
+) {
+    // A value widened from a native i32 is a plain double, never NaN.
+    let int_value = ctx
+        .func
+        .blocks()
+        .iter()
+        .rev()
+        .any(|b| b.widened_i32_source(val_double).is_some());
+    number_arm_diag(ctx, block_prefix, !int_value);
+    let num_idx = ctx.new_block(&format!("{}.num", block_prefix));
+    let general_idx = ctx.new_block(&format!("{}.general", block_prefix));
+    let num_label = ctx.block_label(num_idx);
+    let general_label = ctx.block_label(general_idx);
+    {
+        let blk = ctx.block();
+        let mut both = crate::codegen::emit_plain_number_bits_test(blk, old_bits);
+        if !int_value {
+            let val_bits = blk.bitcast_double_to_i64(val_double);
+            let new_plain = crate::codegen::emit_plain_number_bits_test(blk, &val_bits);
+            both = blk.and(I1, &both, &new_plain);
+        }
+        blk.cond_br(&both, &num_label, &general_label);
+    }
+    ctx.current_block = num_idx;
+    super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
+    let value_bits = {
+        let blk = ctx.block();
+        let stored = if int_value {
+            val_double.to_string()
+        } else {
+            // An F64 slot holds one NaN, the canonical one.
+            let is_nan = blk.fcmp("uno", val_double, val_double);
+            let nan = blk.bitcast_i64_to_double(CANONICAL_NAN_I64);
+            blk.select(I1, &is_nan, DOUBLE, &nan, val_double)
+        };
+        let element_ptr = blk.inttoptr(I64, element_addr);
+        // GC_STORE_AUDIT(POINTER_FREE): a plain double over a plain double
+        // (both tested above): no edge is created or retired, so no barrier
+        // and no layout note; the element kind admits it either way.
+        blk.store(DOUBLE, &stored, &element_ptr);
+        blk.bitcast_double_to_i64(&stored)
+    };
+    ctx.note_ek_frontier(arr_handle, idx_i32, &value_bits);
+    ctx.block().br(merge_label);
+    ctx.current_block = general_idx;
+}
+
 /// Emit the guarded diamond. `fallback` emits the original slow arm (the
 /// runtime call plus whatever bookkeeping it owns) into the block that is
 /// current when it runs.
@@ -216,9 +321,10 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     block_prefix: &str,
     layout_note_needed: bool,
     write_barrier_needed: bool,
-    // Unused since the kind is settled before the store for every value
-    // (`emit_array_store_kind_value`); kept for the callers' signature.
-    _value_is_numeric: bool,
+    // The value is statically a Number: the store gets the
+    // number-over-number arm (module docs). The general arm settles the kind
+    // before the store for every value (`emit_array_store_kind_value`).
+    value_is_numeric: bool,
     fallback: impl FnOnce(&mut FnCtx<'_>) -> Result<()>,
 ) -> Result<()> {
     // An operand may have emitted a throw + unreachable. LlBlock drops
@@ -288,7 +394,7 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             blk.inttoptr(I64, &addr)
         };
         let gc_type = blk.load(I8, &gc_type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1"); // GC_TYPE_ARRAY
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let gc_flags_ptr = {
             let addr = blk.sub(I64, &arr_handle, "7");
             blk.inttoptr(I64, &addr)
@@ -364,7 +470,7 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
     // slot past `length`) is an add: admit only holes below length whose
     // default prototype chain is proven free of indexed properties.
     ctx.current_block = probe_idx;
-    let element_addr = {
+    let (element_addr, old_bits) = {
         let blk = ctx.block();
         let idx_i64 = blk.zext(I32, idx_i32, I64);
         let byte_offset = blk.shl(I64, &idx_i64, "3");
@@ -388,10 +494,22 @@ pub(super) fn emit_guarded_inbounds_array_store_keyed(
             super::array_proto_guard::emit_array_default_prototype_chain(blk, &reserved);
         let can_fill = blk.and(I1, &within_length, &default_chain);
         blk.cond_br(&can_fill, &fast_label, &slow_label);
-        element_addr
+        (element_addr, old)
     };
 
     ctx.current_block = fast_idx;
+    if value_is_numeric && number_arm_enabled() {
+        number_arm(
+            ctx,
+            &live_handle,
+            &element_addr,
+            idx_i32,
+            &old_bits,
+            val_double,
+            block_prefix,
+            &merge_label,
+        );
+    }
     super::store_census::bump(ctx, super::store_census::ELEM_STORE_INBOUNDS);
     // #7715 B3: the barrier is emitted separately, behind an inline live test
     // of the stored VALUE and then of the parent array's generation, so the

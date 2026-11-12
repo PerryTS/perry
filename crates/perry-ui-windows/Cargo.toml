@@ -13,7 +13,6 @@ crate-type = ["rlib", "staticlib"]
 [target.'cfg(target_os = "windows")'.dependencies]
 perry-ffi.workspace = true
 perry-ui = { path = "../perry-ui" }
-perry-ui-testkit = { workspace = true }
 perry-audio-miniaudio = { workspace = true }
 perry-runtime = { path = "../perry-runtime", default-features = false, features = ["stdlib"] }
 perry-base64.workspace = true

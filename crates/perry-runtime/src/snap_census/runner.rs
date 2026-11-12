@@ -35,6 +35,8 @@
 //!
 //! Linux x86_64 only (the reservation, `REG_ERR`, the trap flag).
 
+#[path = "input_record.rs"]
+pub(super) mod input_record;
 use super::Effect;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicUsize, Ordering::Relaxed};
 
@@ -83,9 +85,60 @@ pub(super) fn on() -> bool {
     ANCHOR.on.load(Relaxed)
 }
 
+// Const-initialized native TLS needs neither lazy initialization nor allocation.
+// It lives outside the generated program's tracked TLS pages.
+#[thread_local]
+static LOGGING_DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0);
+
+/// Allocator callbacks must be rejected before formatting or borrowing State.
+pub(super) fn inputs_on() -> bool {
+    on() && LOGGING_DEPTH.get() == 0
+}
+pub(super) fn logging_scope(enter: bool) {
+    let depth = LOGGING_DEPTH.get();
+    LOGGING_DEPTH.set(if enter { depth + 1 } else { depth - 1 });
+}
+
 /// Collection is held until the boundary (not in the weights run).
 pub(super) fn holds_collection() -> bool {
     on() && !state().noprotect
+}
+
+// Native helper threads are visible in the syscall companion, but must not
+// borrow the main thread's census buffers.
+pub(super) fn on_main_thread() -> bool {
+    let p = ANCHOR.state.load(Relaxed);
+    !p.is_null() && unsafe { (*p).main_tid == libc::syscall(libc::SYS_gettid) }
+}
+
+unsafe fn foreign_input(operation: &[u8], argument: &[u8], value: &[u8]) {
+    let header = b"SNAP21_FOREIGN_INPUT";
+    let mut rows = [
+        libc::iovec {
+            iov_base: header.as_ptr() as *mut _,
+            iov_len: header.len(),
+        },
+        libc::iovec {
+            iov_base: operation.as_ptr() as *mut _,
+            iov_len: operation.len(),
+        },
+        libc::iovec {
+            iov_base: argument.as_ptr() as *mut _,
+            iov_len: argument.len(),
+        },
+        libc::iovec {
+            iov_base: value.as_ptr() as *mut _,
+            iov_len: value.len(),
+        },
+    ];
+    let saved_errno = *libc::__errno_location();
+    libc::syscall(
+        libc::SYS_writev,
+        -1 as libc::c_int,
+        rows.as_mut_ptr(),
+        rows.len(),
+    );
+    *libc::__errno_location() = saved_errno;
 }
 
 fn state() -> &'static mut State {
@@ -430,6 +483,8 @@ struct Init {
     /// The entry module's own evaluation (a program with a worker evaluates
     /// its entry as a module): the entry body. The check run runs it.
     entry_module: bool,
+    /// SNAPK2a P-entry: this init's first (a)/(b) hit is logged.
+    p_entry_hit: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -450,6 +505,9 @@ struct Birth {
     addr: usize,
     size: u32,
     init: u32,
+    /// The ordered input record's seq when the birth happened (SNAPK2a scans
+    /// date a held pointer no earlier than its holder's and target's births).
+    seq: u64,
 }
 
 /// Page flags (one byte per page).
@@ -488,6 +546,7 @@ impl PageMap {
 }
 
 struct State {
+    inputs: input_record::Record,
     out: String,
     inits: Vec<Init>,
     frames: Vec<Frame>,
@@ -648,6 +707,12 @@ struct State {
     /// `js_snap_entry_module`: the next evaluation is the entry module's own
     /// (its body is the entry body, design §2.3).
     entry_module_next: bool,
+    /// The entry module's async module record (`js_async_module_entry`), whose
+    /// body is the entry body in a program evaluated as async module records.
+    entry_record: usize,
+    /// The walk origin of the async module evaluation now in progress
+    /// (0: none, else `WALK_*` in snap_census.rs).
+    walk_origin: u8,
     /// Global root slots on no tracked page that are not the runtime's own
     /// thread-locals (a program slot the census does not watch): must be 0.
     untracked_slots: u64,
@@ -755,6 +820,44 @@ struct State {
     /// (`PERRY_SNAP_WD`, by logical name).
     wd_names: std::collections::HashSet<(u64, usize)>,
     entry_init: u32,
+    /// SNAPK2a (DESIGN27 §1.3, §2). Host values (`PERRY_SNAP_HOST=0` off):
+    /// a `process.argv`/`process.execPath` read is live in the entry and a
+    /// STOP anywhere else; a word outside entry state that holds a pointer
+    /// into a host value is a STOP.
+    host_rule: bool,
+    /// P-entry (`PERRY_SNAP_PENTRY=0` off): no imaged init reads a word an
+    /// entry wrote (a), writes a word an entry read (b), or holds a pointer
+    /// to an entry birth (c).
+    p_entry_rule: bool,
+    /// P-reach (`PERRY_SNAP_PREACH=0` off): an init an entry reaches by
+    /// `import()`/`require` names the entry's inputs read before it.
+    p_reach_rule: bool,
+    /// SNAPK2b (DESIGN27 §1.1, §1.2, §1.5, §3), each with its off knob:
+    /// `compare_literal` predicate rows and the P-reach argv narrowing
+    /// (`PERRY_SNAP_CMPLIT=0`), the `stdout_style_bit` row
+    /// (`PERRY_SNAP_STYLE=0`), the job-queue check (`PERRY_SNAP_JOBQ=0`),
+    /// the open-frame row (`PERRY_SNAP_OPENF=0`), the runtime-pc STOP
+    /// (`PERRY_SNAP_RTPC=0`) and the worker-flag STOP (`PERRY_SNAP_WORKER=0`).
+    pub(super) cmplit_rule: bool,
+    pub(super) style_rule: bool,
+    jobq_rule: bool,
+    openf_rule: bool,
+    pub(super) rtpc_rule: bool,
+    worker_rule: bool,
+    /// Words an entry read (P-entry (b)).
+    er: WordSet,
+    /// Words whose last writer is an entry (P-entry (a)). `w`/`wby` cannot
+    /// say it: outside D they record only a conflicting init's accesses.
+    ew: WordSet,
+    /// First (a)/(b) hit per init: (init, rule, word, pc, input seq).
+    /// Pushed in signal context: the capacity is reserved up front.
+    p_entry_log: Vec<(u32, u8, usize, usize, u64)>,
+    /// The open host-value scope (1 argv, 2 execPath; 0 none) and the births
+    /// made inside one: (start, end, what, input seq).
+    host_what: u8,
+    host_targets: Vec<(usize, usize, u8, u64)>,
+    /// The entry's input rows since the last reach point: (seq, op).
+    entry_rows: Vec<(u64, String)>,
     mark: bool,
     /// R5 (`PERRY_SNAP_RSET=1`): after the boundary, the imaged cells stay
     /// write-protected and their writes are counted until exit.
@@ -827,6 +930,7 @@ unsafe fn start_census(out: String) {
     );
     let tls_block = (fs.saturating_sub(executable_tls_size()), fs);
     let mut st = Box::new(State {
+        inputs: input_record::Record::default(),
         out,
         inits: Vec::with_capacity(4096),
         frames: Vec::with_capacity(256),
@@ -917,6 +1021,8 @@ unsafe fn start_census(out: String) {
         meta_owned: 0,
         marks: 0,
         entry_module_next: false,
+        entry_record: 0,
+        walk_origin: 0,
         untracked_slots: 0,
         untracked_first: 0,
         runtime_tls_roots: 0,
@@ -992,6 +1098,21 @@ unsafe fn start_census(out: String) {
             })
             .unwrap_or_default(),
         entry_init: 0,
+        host_rule: !std::env::var("PERRY_SNAP_HOST").is_ok_and(|v| v == "0"),
+        p_entry_rule: !std::env::var("PERRY_SNAP_PENTRY").is_ok_and(|v| v == "0"),
+        p_reach_rule: !std::env::var("PERRY_SNAP_PREACH").is_ok_and(|v| v == "0"),
+        cmplit_rule: !std::env::var("PERRY_SNAP_CMPLIT").is_ok_and(|v| v == "0"),
+        style_rule: !std::env::var("PERRY_SNAP_STYLE").is_ok_and(|v| v == "0"),
+        jobq_rule: !std::env::var("PERRY_SNAP_JOBQ").is_ok_and(|v| v == "0"),
+        openf_rule: !std::env::var("PERRY_SNAP_OPENF").is_ok_and(|v| v == "0"),
+        rtpc_rule: !std::env::var("PERRY_SNAP_RTPC").is_ok_and(|v| v == "0"),
+        worker_rule: !std::env::var("PERRY_SNAP_WORKER").is_ok_and(|v| v == "0"),
+        er: WordSet::new(24),
+        ew: WordSet::new(24),
+        p_entry_log: Vec::with_capacity(CHECK_FAIL_MAX),
+        host_what: 0,
+        host_targets: Vec::new(),
+        entry_rows: Vec::new(),
         mark: std::env::var("PERRY_SNAP_MARK").is_ok_and(|v| v == "1"),
         rset: std::env::var("PERRY_SNAP_RSET").is_ok_and(|v| v == "1"),
         rset_active: false,
@@ -1006,6 +1127,7 @@ unsafe fn start_census(out: String) {
     st.last_ir = read_ir(st.perf_fd);
     ANCHOR.state.store(&mut *st as *mut State, Relaxed);
     std::mem::forget(st);
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     // Nothing moves until the boundary. The weights run (no protection)
     // collects as production does: its Ir per init includes the collections.
@@ -1021,6 +1143,7 @@ unsafe fn start_census(out: String) {
             addr: header as usize,
             size: size as u32,
             init: 0,
+            seq: 0,
         });
     });
     crate::arena::snap_reservation_regions(|base, end| st.regions.push((base, end)));
@@ -1059,8 +1182,28 @@ unsafe fn start_census(out: String) {
             }
         }
     }
+    st.inputs.watch_enabled = !std::env::var("PERRY_SNAP22_WATCH").is_ok_and(|v| v == "0");
+    C25.store(
+        !std::env::var("PERRY_SNAP25").is_ok_and(|v| v == "0"),
+        Relaxed,
+    );
+    st.inputs.allocated_bytes = st.births.as_slice().iter().map(|b| b.size as u64).sum();
+    input_record::open(st).expect("cannot open ordered input record");
     install_handlers();
     ANCHOR.on.store(true, Relaxed);
+    let _input_logging = input_record::Scope::enter();
+    input_record::event(st, "census_start", String::new());
+    let mut raw_env = Vec::<Vec<u8>>::new();
+    let mut env_entry = environ;
+    while !env_entry.is_null() && !(*env_entry).is_null() {
+        raw_env.push(std::ffi::CStr::from_ptr(*env_entry).to_bytes().to_vec());
+        env_entry = env_entry.add(1);
+    }
+    input_record::event(
+        st,
+        "initial_environment",
+        input_record::Value::input_value(&raw_env),
+    );
     crate::arena::refresh_inline_allocation_limit();
 }
 
@@ -1130,6 +1273,7 @@ fn blank_init(addr: usize, parent: u32, reach: Reach) -> Init {
         faults: 0,
         skipped: false,
         entry_module: false,
+        p_entry_hit: false,
     }
 }
 
@@ -1226,16 +1370,69 @@ fn set_mode_for_top(st: &mut State) {
         };
     }
     let want = top != 0 && st.inits[top].in_d && !st.noprotect;
-    if want != st.d_mode {
+    let watching = input_record::watch(st);
+    if want != st.d_mode || watching != st.inputs.watching {
+        st.inputs.watching = watching;
         st.d_mode = want;
         unsafe { apply_protection(st) };
     }
 }
 
 pub(super) fn init_enter(addr: usize) {
+    init_enter_with(addr, None);
+}
+
+/// An async module record's body starts (the guarded path's `init_enter` for
+/// a program evaluated as records): `origin` is the walk that first reached
+/// the record (`WALK_*`). Static order is no longer call nesting there, so the
+/// reach comes from the origin, not from the frame heuristic. The entry
+/// record's body is the entry body.
+pub(super) fn record_enter(record: usize, body: usize, origin: u8) {
     if !on() && !start_if_requested() {
         return;
     }
+    let st = state();
+    if record == st.entry_record {
+        st.entry_module_next = false;
+        entry_body();
+        return;
+    }
+    let forced = match origin {
+        super::WALK_ENTRY => Some(Reach::EntryEager),
+        super::WALK_IMPORT => Some(Reach::DynImport),
+        super::WALK_REQUIRE => Some(Reach::Require),
+        _ => None,
+    };
+    init_enter_with(body, forced);
+    init_guard(body, record);
+}
+
+pub(super) fn entry_record(addr: usize) {
+    if on() || start_if_requested() {
+        state().entry_record = addr;
+    }
+}
+
+pub(super) fn walk_origin(origin: u8) -> u8 {
+    if !on() {
+        return 0;
+    }
+    std::mem::replace(&mut state().walk_origin, origin)
+}
+
+pub(super) fn walk_origin_now() -> u8 {
+    if on() {
+        state().walk_origin
+    } else {
+        0
+    }
+}
+
+fn init_enter_with(addr: usize, forced: Option<Reach>) {
+    if !on() && !start_if_requested() {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
     let parent = st.frames.last().copied();
@@ -1250,10 +1447,13 @@ pub(super) fn init_enter(addr: usize) {
         }
     };
     let edge = st.require_edge.take() == Some(parent_id);
-    let entry_module = std::mem::take(&mut st.entry_module_next)
+    let entry_module = forced.is_none()
+        && std::mem::take(&mut st.entry_module_next)
         && st.entry_init != 0
         && parent_id == st.entry_init;
-    let reach = if entry_module {
+    let reach = if let Some(reach) = forced {
+        reach
+    } else if entry_module {
         Reach::EntryEager
     } else if st.require_depth > 0 || edge {
         Reach::Require
@@ -1266,6 +1466,32 @@ pub(super) fn init_enter(addr: usize) {
     } else {
         Reach::DynImport
     };
+    // P-reach (DESIGN27 §2): the entry reached this init by control flow;
+    // what the entry read before it are required guard members. The row
+    // follows `init_enter`: the charge's counter read must stay the last one
+    // before `init_enter` (the exact Ir accounting joins them).
+    let reach_row = (st.p_reach_rule
+        && !entry_module
+        && matches!(reach, Reach::DynImport | Reach::Require)
+        && is_entry(st, parent_id))
+    .then(|| {
+        let rows: Vec<(u64, String)> = st.entry_rows.drain(..).collect();
+        // SNAPK2b (DESIGN27 §2, §3): when the entry compared argv strings
+        // with constants, those predicates are the members its argv escape
+        // (the copy dispatch reads) stood for; without one it stays whole-argv.
+        let narrowed = st.cmplit_rule && rows.iter().any(|(_, op)| op == "compare_literal.argv");
+        let members: Vec<String> = rows
+            .iter()
+            .filter(|(_, op)| !(narrowed && (op == "argv.escape" || op == "host_value.argv")))
+            .map(|(s, op)| format!("{s}:{op}"))
+            .collect();
+        format!(
+            "reach_init={};addr={addr:x};argv={};members={}",
+            st.inits.len(),
+            if narrowed { "predicate" } else { "whole" },
+            members.join(",")
+        )
+    });
     st.seq += 1;
     let id = st.inits.len() as u32;
     assert!((id as usize) < MAX_INITS, "snap census: too many inits");
@@ -1311,12 +1537,20 @@ pub(super) fn init_enter(addr: usize) {
         init: id,
         kind: FrameKind::Init,
     });
+    crate::object::shapes::snap22::snapshot("init_enter", addr as u64);
+    input_record::event(st, "init_enter", format!("{addr:x}"));
+    if let Some(row) = reach_row {
+        input_record::event(st, "p_reach", row);
+    }
+    k2b_enter_rows(st);
     set_mode_for_top(st);
 }
 
 pub(super) fn init_exit(threw: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
+    input_record::event(st, "init_exit", format!("threw={threw}"));
     let Some(f) = st.frames.pop() else {
         return;
     };
@@ -1340,6 +1574,7 @@ pub(super) fn init_guard(addr: usize, guard: usize) {
 }
 
 pub(super) fn init_part() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if let Some(f) = st.frames.last() {
         if f.kind == FrameKind::Init {
@@ -1347,6 +1582,8 @@ pub(super) fn init_part() {
             i.parts = i.parts.saturating_add(1);
         }
     }
+    input_record::event(st, "init_part", String::new());
+    set_mode_for_top(st);
 }
 
 pub(super) fn require_depth(delta: i32) {
@@ -1357,6 +1594,7 @@ pub(super) fn require_depth(delta: i32) {
 /// target's init guard, 0 after it (the target was already evaluated, so no
 /// evaluation took the mark).
 pub(super) fn require_edge(on: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.require_edge = on.then(|| top_init(st));
 }
@@ -1376,17 +1614,21 @@ pub(super) fn bookkeeping_depth(delta: i32) {
 }
 
 pub(super) fn job_enter(owner: u32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     charge(st);
     st.frames.push(Frame {
         init: owner,
         kind: FrameKind::Job,
     });
+    input_record::event(st, "job_enter", owner.to_string());
     set_mode_for_top(st);
 }
 
 pub(super) fn job_exit() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
+    input_record::event(st, "job_exit", String::new());
     charge(st);
     if st.frames.last().is_some_and(|f| f.kind == FrameKind::Job) {
         st.frames.pop();
@@ -1395,6 +1637,7 @@ pub(super) fn job_exit() {
 }
 
 pub(super) fn entry_body() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.entry_body_seq == 0 {
         st.seq += 1;
@@ -1416,6 +1659,7 @@ pub(super) fn entry_body() {
         });
         st.inits.push(init);
         st.entry_init = id;
+        input_record::event(st, "entry_body", String::new());
         st.frames.push(Frame {
             init: id,
             kind: FrameKind::Init,
@@ -1425,14 +1669,28 @@ pub(super) fn entry_body() {
 }
 
 /// The entry module's evaluation is next (`js_snap_entry_module`).
-pub(super) fn entry_module() {
-    state().entry_module_next = true;
+pub(super) fn entry_module(worker: bool) {
+    let st = state();
+    st.entry_module_next = true;
+    // Codegen emits this hook for a program whose entry runs in its init
+    // (entry.rs `entry_in_init`: a worker or top-level await); `worker` tells
+    // which. A worker program's init flags are thread-local, which an image
+    // cannot initialize (DESIGN27 §1.5), so the cut is 0.
+    if worker && st.worker_rule && inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        input_record::event(
+            st,
+            "worker_flag",
+            "program_has_worker=1;cut=0;policy=STOP".to_owned(),
+        );
+    }
 }
 
 /// `object_meta_ensure` stores a fresh (all-zero) record into the owner's
 /// meta word at `slot`: an empty meta behaves as no meta, so the store is
 /// representation, like the string alias hint (design §2.10.11).
 pub(super) fn meta_install(slot: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.meta_rule {
         st.meta_slot = slot & !7;
@@ -1443,6 +1701,7 @@ pub(super) fn meta_install(slot: usize) {
 /// written into it later is a write of the owner: under rule 4 the record
 /// of a pre-existing owner is pre-existing too.
 pub(super) fn meta_installed(slot: usize, meta: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.meta_slot = 0;
     st.meta_installs += 1;
@@ -1478,6 +1737,7 @@ pub(super) fn global_key<'a>(
     obj: usize,
     key: impl FnOnce() -> Option<&'a [u8]>,
 ) -> Option<(u64, [u8; GKEY_NAME], u8)> {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.gkey_rule {
         return None;
@@ -1505,11 +1765,13 @@ pub(super) fn global_key<'a>(
 
 /// The keyed operation [`global_key`] opened is over.
 pub(super) fn global_key_end(prev: (u64, [u8; GKEY_NAME], u8)) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     (st.gkey, st.gkey_name, st.gkey_len) = prev;
 }
 
 pub(super) fn representation(delta: i32) -> bool {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.meta_rule {
         return false;
@@ -1523,6 +1785,7 @@ pub(super) fn representation(delta: i32) -> bool {
 }
 
 pub(super) fn attached(obj: usize, cells: &[usize]) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.transparent.is_empty() {
         return;
@@ -1545,6 +1808,7 @@ pub(super) fn attached(obj: usize, cells: &[usize]) {
 }
 
 pub(super) fn dyn_code(kind: u8) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let top = st.frames.last().map_or(0, |f| f.init) as usize;
     if top == 0 {
@@ -1563,8 +1827,39 @@ pub(super) fn dyn_code(kind: u8) {
     }
 }
 
-pub(super) fn host(class: Effect, what: &'static str) {
+pub(super) fn input_scope(delta: i32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
+    if delta > 0 {
+        st.inputs.call_depth += 1;
+    } else {
+        st.inputs.call_depth -= 1;
+    }
+    set_mode_for_top(st);
+}
+
+pub(super) fn input_event(op: &str, value: String) -> u64 {
+    let _input_logging = input_record::Scope::enter();
+    input_record::event(state(), op, value)
+}
+
+pub(super) fn host(class: Effect, what: &'static str) {
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    let input_top = top_init(st) as usize;
+    if class != Effect::TargetFact
+        && st.inputs.call_depth == 0
+        && input_top != 0
+        && st.inputs.writes.get(input_top).is_some_and(Option::is_none)
+    {
+        input_record::remember_write(st, 0, 0);
+        st.inputs.watching = false;
+        unsafe {
+            apply_protection(st);
+        }
+    }
+
+    input_record::event(st, "effect", format!("{class:?}:{what}"));
     if st.sabotage_env && what == "env" {
         return;
     }
@@ -1636,7 +1931,9 @@ fn object_start(st: &State, word: usize) -> Option<usize> {
 }
 
 pub(super) fn birth(addr: usize, size: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
+    st.inputs.allocated_bytes += size as u64;
     // Memory handed out again (a free-list slot, a rewound bump) holds new
     // locations: an earlier birth there and what members of D did to its
     // words are gone.
@@ -1650,6 +1947,8 @@ pub(super) fn birth(addr: usize, size: usize) {
         for w in (addr..addr + size).step_by(8) {
             st.w.remove(w as u64);
             st.r.remove(w as u64);
+            st.er.remove(w as u64);
+            st.ew.remove(w as u64);
         }
         if let (Some(a), Some(b)) = (start_bit(st, addr), start_bit(st, addr + size - 1)) {
             for i in a..=b {
@@ -1669,13 +1968,19 @@ pub(super) fn birth(addr: usize, size: usize) {
         addr,
         size: size as u32,
         init: top,
+        seq: st.inputs.seq,
     });
+    if st.host_what != 0 {
+        st.host_targets
+            .push((addr, addr + size, st.host_what, st.inputs.seq));
+    }
     let i = &mut st.inits[top as usize];
     i.births += 1;
     i.birth_bytes += size as u64;
 }
 
 pub(super) fn region_mapped(base: usize, len: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if unsafe { libc::syscall(libc::SYS_gettid) } != st.main_tid {
         return;
@@ -1688,6 +1993,7 @@ pub(super) fn region_mapped(base: usize, len: usize) {
 }
 
 pub(super) fn global_root(slot: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     // A slot registered again is one address linked into several modules
     // (codegen registers a class-static global in its defining module and in
@@ -1702,10 +2008,7 @@ pub(super) fn global_root(slot: usize) {
     // That member is skipped here, so the first registration this run sees
     // is an importer's duplicate: bookkeeping as above, and the slot stays
     // D's binding, owned by no imaged init.
-    if st.slot_owner_rule
-        && !st.skip.is_empty()
-        && st.env_words.get(slot as u64) == Some(POISON)
-    {
+    if st.slot_owner_rule && !st.skip.is_empty() && st.env_words.get(slot as u64) == Some(POISON) {
         return;
     }
     count_unwatched_root(st, slot);
@@ -1725,11 +2028,12 @@ pub(super) fn global_root(slot: usize) {
     }
     let page = slot & !(PAGE - 1);
     if st.d_mode && page_flags(st, page).is_some() {
-        unsafe { libc::mprotect(page as *mut _, PAGE, libc::PROT_NONE) };
+        unsafe { libc::mprotect(page as *mut _, PAGE, policy(st, page)) };
     }
 }
 
 fn mark_tracked(lo: usize, hi: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let mut p = lo & !(PAGE - 1);
     while p < hi {
@@ -1801,6 +2105,11 @@ fn tls_slot(st: &State, addr: usize) -> Option<*mut u8> {
 // ---------------------------------------------------------------------------
 
 fn policy(st: &State, page: usize) -> i32 {
+    if input_record::watch(st)
+        && page_flags(st, page).is_some_and(|f| unsafe { *f & PF_TRACKED != 0 })
+    {
+        return libc::PROT_READ;
+    }
     // The weights run (`PERRY_SNAP_NOPROTECT=1`) takes no fault: its Ir per
     // init is the program's, not the census's.
     if st.noprotect {
@@ -1858,7 +2167,15 @@ unsafe fn for_each_tracked_range(st: &State, mut f: impl FnMut(usize, usize)) {
 }
 
 unsafe fn apply_protection(st: &mut State) {
-    if st.top_mode {
+    if input_record::watch(st) {
+        for_each_tracked_range(st, |b, e| {
+            libc::mprotect(b as *mut _, e - b, libc::PROT_READ);
+        });
+        return;
+    }
+    // Ending the first-write watcher restores RW in the weights run,
+    // even if a conflict has set d_mode. Bulk protection agrees with policy.
+    if st.top_mode || st.noprotect {
         for_each_tracked_range(st, |b, e| {
             libc::mprotect(b as *mut _, e - b, libc::PROT_READ | libc::PROT_WRITE);
         });
@@ -2100,6 +2417,7 @@ extern "C" fn on_segv(sig: libc::c_int, info: *mut libc::siginfo_t, ctx: *mut li
             (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
             return;
         }
+        let _input_logging = input_record::Scope::enter();
         if st.in_handler > 0 {
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
@@ -2142,7 +2460,16 @@ unsafe fn on_segv_inner(
             return;
         }
         let tracked = page_flags(st, page).is_some_and(|f| *f & PF_TRACKED != 0);
-        if !tracked || policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
+        // A tracked page whose policy is open now but whose protection is
+        // still a bulk protect of an earlier mode (the watch ended while the
+        // page stayed read-only): bring the page to its policy and retry. An
+        // extra closed page only costs a fault; it never hides a write.
+        if tracked && policy(st, page) == libc::PROT_READ | libc::PROT_WRITE {
+            libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+            st.faults_ignored += 1;
+            return;
+        }
+        if !tracked {
             let uc = ctx as *mut libc::ucontext_t;
             let pc = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
             let flags = page_flags(st, page).map_or(0xff, |f| *f as u64);
@@ -2179,7 +2506,11 @@ unsafe fn on_segv_inner(
         let word = addr & !7;
         match st.stores.iter_mut().find(|s| s.0 == 0) {
             Some(slot) if write => *slot = (word, *(word as *const u64), pc),
-            _ => note_access(st, word, write, pc),
+            _ => {
+                if note_access(st, word, write, pc) {
+                    end_watch(st);
+                }
+            }
         }
         gregs[libc::REG_EFL as usize] |= EFLAGS_TF;
     }
@@ -2212,7 +2543,12 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
         if st_ptr.is_null() || (*st_ptr).pending[0] == 0 {
             return chain(std::ptr::addr_of!(PREV_TRAP.0).cast(), sig);
         }
+        let _input_logging = input_record::Scope::enter();
         let st = &mut *st_ptr;
+        // A fault in this handler (SIGTRAP is blocked here) must not open a
+        // page and set TF: the single step would be a blocked SIGTRAP, which
+        // kills the process silently. on_segv reports it instead (0xdead).
+        st.in_handler += 1;
         let pending = st.pending;
         if st.rset_active {
             let w = std::mem::replace(&mut st.rset_word, 0);
@@ -2231,20 +2567,25 @@ extern "C" fn on_trap(sig: libc::c_int, _info: *mut libc::siginfo_t, ctx: *mut l
             // A store that left the word's value as it was is no write
             // (nothing anyone reads changed); it still read the word.
             let stores = std::mem::replace(&mut st.stores, [(0, 0, 0); 4]);
+            let mut watch_ended = false;
             for &(word, before, pc) in stores.iter().take_while(|s| s.0 != 0) {
                 let changed = *(word as *const u64) != before;
                 if !changed {
                     st.silent_stores += 1;
                 }
                 st.store_before = Some(before);
-                note_access(st, word, changed, pc);
+                watch_ended |= note_access(st, word, changed, pc);
                 st.store_before = None;
+            }
+            if watch_ended {
+                apply_protection(st);
             }
             for &page in pending.iter().take_while(|p| **p != 0) {
                 libc::mprotect(page as *mut _, PAGE, policy(st, page));
             }
         }
         st.pending = [0; 8];
+        st.in_handler -= 1;
         let uc = ctx as *mut libc::ucontext_t;
         (*uc).uc_mcontext.gregs[libc::REG_EFL as usize] &= !EFLAGS_TF;
     }
@@ -2291,7 +2632,29 @@ fn transparent_cell(st: &mut State, h: usize, ty: u8) -> bool {
     found
 }
 
-fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
+/// True when this access ended the first-write watch: the caller re-applies
+/// the bulk protection once the fault is recorded (`end_watch`).
+#[must_use]
+fn note_access(st: &mut State, word: usize, write: bool, pc: usize) -> bool {
+    let mut watch_ended = false;
+    note_access_at(st, word, write, pc, &mut watch_ended);
+    watch_ended
+}
+
+/// The end of the first-write watch re-protects every tracked page. It runs
+/// after the fault's records: they read the stored words and cell headers on
+/// the open pages, and a fault inside on_trap is a blocked SIGTRAP, which
+/// kills the process.
+unsafe fn end_watch(st: &mut State) {
+    apply_protection(st);
+    // The pages of the instruction being stepped stay open until on_trap
+    // restores their policy.
+    for &page in st.pending.iter().take_while(|p| **p != 0) {
+        libc::mprotect(page as *mut _, PAGE, libc::PROT_READ | libc::PROT_WRITE);
+    }
+}
+
+fn note_access_at(st: &mut State, word: usize, write: bool, pc: usize, watch_ended: &mut bool) {
     if st.r1 {
         // The census's own bookkeeping (a root registration, a key's bytes)
         // is no access; a representation scope or a meta install is one, of
@@ -2326,6 +2689,13 @@ fn note_access(st: &mut State, word: usize, write: bool, pc: usize) {
     {
         st.faults_ignored += 1;
         return;
+    }
+    if write && input_record::watch(st) {
+        input_record::changed_word(st, word, pc);
+        if !input_record::watch(st) {
+            st.inputs.watching = false;
+            *watch_ended = true;
+        }
     }
     if st.transp_globals.contains(word as u64) {
         st.transparent_hits += 1;
@@ -2526,6 +2896,34 @@ fn note_loc(st: &mut State, top: usize, word: usize, w: u64, write: bool, pc: us
         unsafe { apply_protection(st) };
         return;
     }
+    if st.p_entry_rule && top != 0 {
+        if is_entry(st, top as u32) {
+            if write {
+                st.ew.insert(w);
+            } else {
+                st.er.insert(w);
+            }
+        } else {
+            let rule = if st.inits[top].p_entry_hit {
+                None
+            } else if write {
+                st.er.contains(w).then_some(b'b')
+            } else {
+                st.ew.contains(w).then_some(b'a')
+            };
+            if write {
+                // The word's last writer is no longer an entry.
+                st.ew.remove(w);
+            }
+            if let Some(rule) = rule {
+                if st.p_entry_log.len() < st.p_entry_log.capacity() {
+                    st.inits[top].p_entry_hit = true;
+                    let seq = st.inputs.seq;
+                    st.p_entry_log.push((top as u32, rule, word, pc, seq));
+                }
+            }
+        }
+    }
     if st.d_mode {
         // A member (seeded, or joined earlier in this run) still names the
         // first earlier member it conflicts with: the edge of the cascade
@@ -2622,6 +3020,7 @@ unsafe extern "C" {
 /// knobs, C libraries), not only the entries that declare `env`.
 #[no_mangle]
 pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char {
+    let saved_errno = *libc::__errno_location();
     if name.is_null() {
         return std::ptr::null_mut();
     }
@@ -2638,19 +3037,37 @@ pub unsafe extern "C" fn getenv(name: *const libc::c_char) -> *mut libc::c_char 
             e = e.add(1);
         }
     }
-    if on() {
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
         let st = state();
-        let top = st.frames.last().map_or(0, |f| f.init);
-        if st.env_reads.len() < 1 << 20 {
-            let value = (!found.is_null()).then(|| {
-                std::ffi::CStr::from_ptr(found)
-                    .to_string_lossy()
-                    .into_owned()
-            });
-            st.env_reads
-                .push((top, String::from_utf8_lossy(key).into_owned(), value));
+        let op = if c25() && FUNNEL.get() == 7 {
+            "getenv.program"
+        } else {
+            "getenv"
+        };
+        if found.is_null() {
+            input_record::native_event(st, op, format_args!("{}=unset", input_record::Hex(key)));
+        } else {
+            input_record::native_event(
+                st,
+                op,
+                format_args!(
+                    "{}={}",
+                    input_record::Hex(key),
+                    input_record::Hex(std::ffi::CStr::from_ptr(found).to_bytes())
+                ),
+            );
         }
     }
+    if inputs_on() && !on_main_thread() {
+        let value = if found.is_null() {
+            b"<unset>".as_slice()
+        } else {
+            std::ffi::CStr::from_ptr(found).to_bytes()
+        };
+        foreign_input(b"getenv", key, value);
+    }
+    *libc::__errno_location() = saved_errno;
     found
 }
 
@@ -2665,10 +3082,12 @@ pub(super) fn skip_collection() -> bool {
 }
 
 pub(super) fn boundary(at: &'static str) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.boundary_seq != 0 {
         return;
     }
+    input_record::event(st, "boundary", at.to_owned());
     charge(st);
     st.seq += 1;
     st.boundary_seq = st.seq;
@@ -2682,6 +3101,7 @@ pub(super) fn boundary(at: &'static str) {
     }
     crate::arena::refresh_inline_allocation_limit();
     write_report(st);
+    input_record::write(st).expect("write ordered input record");
     // The check run proves the image at the boundary; what runs after it
     // reads bindings of the skipped members of D, so the run ends here.
     if !st.skip.is_empty() {
@@ -2743,6 +3163,7 @@ fn heap_pointer(st: &State, v: u64) -> bool {
 }
 
 extern "C" fn rset_report() {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.rset_active {
         return;
@@ -2848,6 +3269,11 @@ pub(super) fn after_boundary_collection() {
 }
 
 fn write_report(st: &mut State) {
+    if st.host_rule || st.p_entry_rule {
+        k2a_rows(st);
+    }
+    st.env_reads =
+        input_record::env_rows(st).expect("cannot read durable environment observations");
     use std::io::Write;
     let Ok(mut f) = std::fs::File::create(&st.out) else {
         return;
@@ -3019,7 +3445,11 @@ fn write_report(st: &mut State) {
             match g.obj_type {
                 crate::gc::GC_TYPE_STRING => 1,
                 crate::gc::GC_TYPE_REGEX_PROGRAM => 2,
-                crate::gc::GC_TYPE_ARRAY if g.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 => 3,
+                crate::gc_array_type_pat!()
+                    if g.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 =>
+                {
+                    3
+                }
                 crate::gc::GC_TYPE_REGEX_CACHE => 4,
                 _ => 0,
             }
@@ -3809,6 +4239,245 @@ struct EnvObs {
     by_pc: usize,
 }
 
+/// The entry's state (DESIGN27 §2): the entry pseudo-init or the entry
+/// module's own evaluation. It re-runs live; nothing it holds is imaged.
+fn is_entry(st: &State, id: u32) -> bool {
+    id != 0 && (id == st.entry_init || st.inits[id as usize].entry_module)
+}
+
+fn host_name(what: u8) -> &'static str {
+    match what {
+        1 => "argv",
+        2 => "exec_path",
+        _ => "entry_birth",
+    }
+}
+
+/// A host value is materialized next (`HostValueScope`): one `host_value`
+/// row; the births until `host_value_exit` are its targets.
+pub(super) fn host_value_enter(what: u8) -> bool {
+    if !(inputs_on() && on_main_thread()) {
+        return false;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.host_rule || st.host_what != 0 {
+        return false;
+    }
+    let top = top_init(st);
+    let by = if top == 0 {
+        "runtime"
+    } else if is_entry(st, top) {
+        "entry"
+    } else {
+        "imaged"
+    };
+    let policy = if by == "entry" { "live" } else { "STOP" };
+    input_record::event(
+        st,
+        "host_value",
+        format!("what={};by={by};policy={policy}", host_name(what)),
+    );
+    st.host_what = what;
+    true
+}
+
+pub(super) fn host_value_exit() {
+    state().host_what = 0;
+}
+
+/// SNAPK2a scan at the boundary (DESIGN27 §1.3 and P-entry (c)): every word
+/// outside entry state (births that are neither the entry's nor a host
+/// value's, module-global slots no entry owns) that holds a pointer into a
+/// host value or into an entry birth is a STOP. The store is no earlier than
+/// both births, so the row is dated at the later one (`at_seq`). Then the
+/// P-entry (a)/(b) hits logged during the run.
+fn k2a_rows(st: &mut State) {
+    let mut t: Vec<(usize, usize, u8, u64, u32)> = Vec::new();
+    if st.host_rule {
+        t.extend(st.host_targets.iter().map(|&(a, e, w, s)| (a, e, w, s, 0)));
+    }
+    if st.p_entry_rule {
+        for b in st.births.as_slice() {
+            if is_entry(st, b.init) {
+                t.push((b.addr, b.addr + b.size as usize, 255, b.seq, b.init));
+            }
+        }
+    }
+    t.sort_unstable();
+    // Owned storage (meta rule: a meta record's words are its owner's; its
+    // spill, overflow, elements, expando and owned-state arrays are child
+    // edges that move and die with the owner): an entry birth reached
+    // through such an edge of a non-entry holder is that holder's
+    // representation, grown by the entry's write to the holder (named by
+    // key as P-entry (a)/(b)), not an entry value. It is no (c) target, and
+    // its words are scanned as the holder's. Edges into adopted storage
+    // (an entry-born meta's spill) are followed to a fixpoint.
+    let owned: Vec<(usize, usize, u32)> = if st.p_entry_rule {
+        let hs = crate::gc::GC_HEADER_SIZE;
+        let meta_edges = [
+            std::mem::offset_of!(crate::object::ObjectMeta, spill),
+            std::mem::offset_of!(crate::object::ObjectMeta, overflow),
+            std::mem::offset_of!(crate::object::ObjectMeta, elements),
+            std::mem::offset_of!(crate::object::ObjectMeta, expando),
+            std::mem::offset_of!(crate::object::ObjectMeta, owned_state),
+        ];
+        let obj_meta = std::mem::offset_of!(crate::object::ObjectHeader, meta);
+        let entry_at = |v: u64| -> Option<usize> {
+            let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+            let i = t.partition_point(|x| x.0 <= a);
+            (a != 0 && i > 0 && t[i - 1].2 == 255 && (a == t[i - 1].0 || a == t[i - 1].0 + hs))
+                .then(|| i - 1)
+        };
+        let mut adopted: Vec<Option<u32>> = vec![None; t.len()];
+        let mut work: Vec<(usize, u32)> = st
+            .births
+            .as_slice()
+            .iter()
+            .filter(|b| !is_entry(st, b.init))
+            .map(|b| (b.addr, b.init))
+            .collect();
+        while let Some((h, init)) = work.pop() {
+            let ty = unsafe { (h as *const u8).read() };
+            let edges: &[usize] = match ty {
+                crate::gc::GC_TYPE_OBJECT_META => &meta_edges,
+                crate::gc::GC_TYPE_OBJECT => std::slice::from_ref(&obj_meta),
+                _ => &[],
+            };
+            for &e in edges {
+                let v = unsafe { ((h + hs + e) as *const u64).read() };
+                if let Some(k) = entry_at(v) {
+                    if adopted[k].is_none() {
+                        adopted[k] = Some(init);
+                        work.push((t[k].0, init));
+                    }
+                }
+            }
+        }
+        let mut keep = Vec::with_capacity(t.len());
+        let mut owned = Vec::new();
+        for (k, x) in t.iter().enumerate() {
+            match adopted[k] {
+                Some(init) => owned.push((x.0, x.1, init)),
+                None => keep.push(*x),
+            }
+        }
+        t = keep;
+        owned
+    } else {
+        Vec::new()
+    };
+    let find = |v: u64| -> Option<usize> {
+        let hi = v >> 48;
+        if !(hi == 0 || (0x7FFC..=0x7FFF).contains(&hi)) {
+            return None;
+        }
+        let a = (v & 0xFFFF_FFFF_FFFF) as usize;
+        let i = t.partition_point(|x| x.0 <= a);
+        (a != 0 && i > 0 && a < t[i - 1].1).then(|| i - 1)
+    };
+    let is_target = |a: usize| {
+        let i = t.partition_point(|x| x.0 <= a);
+        i > 0 && t[i - 1].0 == a
+    };
+    let mut rows: Vec<(&'static str, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut held = 0u64;
+    let row = |rows: &mut Vec<(&'static str, String)>, k: usize, holder: String, at: u64| {
+        let (op, rule) = if t[k].2 == 255 {
+            ("p_entry", "rule=c;")
+        } else {
+            ("host_value.held", "")
+        };
+        rows.push((
+            op,
+            format!(
+                "{rule}what={};{holder};target_init={};target_seq={};at_seq={at};policy=STOP",
+                host_name(t[k].2),
+                t[k].4,
+                t[k].3
+            ),
+        ));
+    };
+    if !t.is_empty() {
+        let holders = st
+            .births
+            .as_slice()
+            .iter()
+            .filter(|b| !is_entry(st, b.init))
+            .map(|b| (b.addr, b.size as usize, b.init, b.seq))
+            .chain(owned.iter().map(|&(a, e, init)| (a, e - a, init, 0)));
+        for (addr, size, init, seq) in holders {
+            if is_target(addr) {
+                continue;
+            }
+            let b = Birth {
+                addr,
+                size: size as u32,
+                init,
+                seq,
+            };
+            for off in (8..b.size as usize).step_by(8) {
+                let v = unsafe { ((b.addr + off) as *const u64).read() };
+                if let Some(k) = find(v) {
+                    held += 1;
+                    if seen.insert((b.addr, k)) && rows.len() < CHECK_FAIL_MAX {
+                        row(
+                            &mut rows,
+                            k,
+                            format!(
+                                "holder=birth;holder_init={};holder_type={};holder_seq={};holder_addr={:x};off={off}",
+                                b.init,
+                                unsafe { (b.addr as *const u8).read() },
+                                b.seq,
+                                b.addr
+                            ),
+                            b.seq.max(t[k].3),
+                        );
+                    }
+                }
+            }
+        }
+        for (n, &slot) in st.globals_log.iter().enumerate() {
+            let owner = st.slot_owner.get(n).copied().unwrap_or(0);
+            if is_entry(st, owner) {
+                continue;
+            }
+            let v = unsafe { (slot as *const u64).read() };
+            if let Some(k) = find(v) {
+                held += 1;
+                if seen.insert((slot, k)) && rows.len() < CHECK_FAIL_MAX {
+                    row(
+                        &mut rows,
+                        k,
+                        format!("holder=slot;holder_init={owner};slot={}", slot_name(slot)),
+                        t[k].3,
+                    );
+                }
+            }
+        }
+    }
+    for &(init, rule, word, pc, seq) in &st.p_entry_log {
+        rows.push((
+            "p_entry",
+            format!(
+                "rule={};init={init};word={word:x};pc={pc:x};at_seq={seq};policy=STOP",
+                rule as char
+            ),
+        ));
+    }
+    let summary = format!(
+        "host_targets={};entry_births={};held_words={held};p_entry_ab={}",
+        st.host_targets.len(),
+        t.iter().filter(|x| x.2 == 255).count(),
+        st.p_entry_log.len()
+    );
+    for (op, v) in rows {
+        input_record::event(st, op, v);
+    }
+    input_record::event(st, "k2a", summary);
+}
+
 fn top_init(st: &State) -> u32 {
     st.frames.last().map_or(0, |f| f.init)
 }
@@ -3836,11 +4505,13 @@ pub(super) fn births_len() -> usize {
 }
 
 pub(super) fn env_site(kind: i32) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     st.env_site = Some((top_init(st), kind as u8));
 }
 
 pub(super) fn env_object(bits: u64) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if !st.env_rule {
         return host(Effect::HostRead, "env");
@@ -3862,6 +4533,7 @@ pub(super) fn env_object(bits: u64) {
 }
 
 pub(super) fn env_storage(begin: usize, obj: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     let h = obj - crate::gc::GC_HEADER_SIZE;
     let new: Vec<(usize, usize)> = st.births.as_slice()[begin.min(st.births.len)..]
@@ -3882,7 +4554,9 @@ pub(super) fn env_storage(begin: usize, obj: usize) {
 }
 
 pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
+    input_record::event(st, "env_get", format!("{name:?}={value:?}"));
     let top = top_init(st);
     let site = st.env_site.take().filter(|s| s.0 == top).map(|s| s.1);
     if !st.env_rule {
@@ -3914,7 +4588,9 @@ pub(super) fn env_var(name: &str, value: Option<&str>, ptr: usize) {
 }
 
 pub(super) fn env_has(name: &str, present: bool) {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
+    input_record::event(st, "env_has", format!("{name:?}={present}"));
     if !st.env_rule {
         return host(Effect::HostRead, "env");
     }
@@ -3981,6 +4657,7 @@ fn env_word_access(st: &mut State, v: u32, word: usize, write: bool, pc: usize) 
 
 /// The check run: the evaluation now on top is a member of D.
 pub(super) fn skip_body() -> bool {
+    let _input_logging = input_record::Scope::enter();
     let st = state();
     if st.skip.is_empty() {
         return false;
@@ -4221,8 +4898,9 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
             _ => {}
         }
     }
+    let program = input_record::program_env_names(st);
     for (init, name, value) in &st.env_reads {
-        if name.starts_with("PERRY_") || name.starts_with("RUST_") {
+        if (name.starts_with("PERRY_") || name.starts_with("RUST_")) && !program.contains(name) {
             let _ = writeln!(f, "#knob\t{name}\t{init}");
             continue;
         }
@@ -4291,5 +4969,613 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
                 }
             }
         }
+    }
+}
+
+// Calling the kernel directly also covers libc callers that would otherwise
+// read the vDSO without a syscall visible to the companion native trace.
+#[no_mangle]
+pub unsafe extern "C" fn clock_gettime(
+    clock: libc::clockid_t,
+    out: *mut libc::timespec,
+) -> libc::c_int {
+    let rc = libc::syscall(libc::SYS_clock_gettime, clock, out) as libc::c_int;
+    let saved_errno = *libc::__errno_location();
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        if rc == 0 && !out.is_null() {
+            input_record::native_event(
+                state(),
+                "native.clock_gettime",
+                format_args!(
+                    "clock={clock};sec={};nsec={}",
+                    (*out).tv_sec,
+                    (*out).tv_nsec
+                ),
+            );
+        } else {
+            input_record::native_event(
+                state(),
+                "native.clock_gettime",
+                format_args!("clock={clock};rc={rc};errno={saved_errno}"),
+            );
+        }
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn gettimeofday(
+    out: *mut libc::timeval,
+    zone: *mut libc::c_void,
+) -> libc::c_int {
+    let rc = libc::syscall(libc::SYS_gettimeofday, out, zone) as libc::c_int;
+    let saved_errno = *libc::__errno_location();
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        if rc == 0 && !out.is_null() {
+            input_record::native_event(
+                state(),
+                "native.gettimeofday",
+                format_args!("sec={};usec={}", (*out).tv_sec, (*out).tv_usec),
+            );
+        } else {
+            input_record::native_event(
+                state(),
+                "native.gettimeofday",
+                format_args!("rc={rc};errno={saved_errno}"),
+            );
+        }
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn time(out: *mut libc::time_t) -> libc::time_t {
+    let rc = libc::syscall(libc::SYS_time, out) as libc::time_t;
+    let saved_errno = *libc::__errno_location();
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        input_record::native_event(
+            state(),
+            "native.time",
+            format_args!("seconds={rc};errno={saved_errno}"),
+        );
+    }
+    *libc::__errno_location() = saved_errno;
+    rc
+}
+
+// Environment mutations have no syscall and must not disappear from native
+// evidence. Resolve the libc operation afresh; this is instruments-only.
+#[no_mangle]
+pub unsafe extern "C" fn unsetenv(name: *const libc::c_char) -> libc::c_int {
+    let saved_errno = *libc::__errno_location();
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        let key = if name.is_null() {
+            b"<null>".as_slice()
+        } else {
+            std::ffi::CStr::from_ptr(name).to_bytes()
+        };
+        let was = if c25() {
+            if name.is_null() || getenv(name).is_null() {
+                ";was=unset"
+            } else {
+                ";was=set"
+            }
+        } else {
+            ""
+        };
+        input_record::native_event(
+            state(),
+            "native.unsetenv",
+            format_args!("{}{was}", input_record::Hex(key)),
+        );
+        host(Effect::HostWrite, "env");
+    }
+    let next = libc::dlsym(libc::RTLD_NEXT, c"unsetenv".as_ptr());
+    assert!(!next.is_null(), "libc unsetenv missing");
+    let call: unsafe extern "C" fn(*const libc::c_char) -> libc::c_int = std::mem::transmute(next);
+    *libc::__errno_location() = saved_errno;
+    call(name)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn setenv(
+    name: *const libc::c_char,
+    value: *const libc::c_char,
+    overwrite: libc::c_int,
+) -> libc::c_int {
+    let saved_errno = *libc::__errno_location();
+    if inputs_on() && on_main_thread() {
+        let _input_logging = input_record::Scope::enter();
+        let key = if name.is_null() {
+            b"<null>".as_slice()
+        } else {
+            std::ffi::CStr::from_ptr(name).to_bytes()
+        };
+        let val = if value.is_null() {
+            b"<null>".as_slice()
+        } else {
+            std::ffi::CStr::from_ptr(value).to_bytes()
+        };
+        input_record::native_event(
+            state(),
+            "native.setenv",
+            format_args!(
+                "{}={};overwrite={overwrite}{}",
+                input_record::Hex(key),
+                input_record::Hex(val),
+                if !c25() {
+                    ""
+                } else if getenv(name).is_null() {
+                    ";was=unset"
+                } else {
+                    ";was=set"
+                }
+            ),
+        );
+        host(Effect::HostWrite, "env");
+    }
+    let next = libc::dlsym(libc::RTLD_NEXT, c"setenv".as_ptr());
+    assert!(!next.is_null(), "libc setenv missing");
+    let call: unsafe extern "C" fn(
+        *const libc::c_char,
+        *const libc::c_char,
+        libc::c_int,
+    ) -> libc::c_int = std::mem::transmute(next);
+    *libc::__errno_location() = saved_errno;
+    call(name, value, overwrite)
+}
+
+// ---------------------------------------------------------------------------
+// SNAP25: funnels, per-read argv, executable text (census only)
+// ---------------------------------------------------------------------------
+
+/// `PERRY_SNAP25=0` is the off arm: the census rows are exactly SNAP23's.
+static C25: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(super) fn c25() -> bool {
+    C25.load(Relaxed)
+}
+
+#[thread_local]
+static FUNNEL: std::cell::Cell<u8> = std::cell::Cell::new(0);
+#[thread_local]
+static ARGV_SITE: std::cell::Cell<(i32, i64)> = std::cell::Cell::new((-1, 0));
+
+pub(super) fn funnel() -> u8 {
+    FUNNEL.get()
+}
+#[cfg(test)]
+pub(super) fn funnel_set_for_test(id: u8) -> u8 {
+    FUNNEL.replace(id)
+}
+pub(super) fn funnel_name(id: u8) -> &'static str {
+    match id {
+        1 => "exec_path",
+        2 => "stack_maps",
+        3 => "stack_bounds",
+        4 => "parse",
+        5 => "parallelism",
+        6 => "gc",
+        7 => "exec_argv",
+        8 => "style_bit",
+        9 => "unwind",
+        _ => "none",
+    }
+}
+/// The syscall companion tags every later syscall of this thread with `id`.
+fn funnel_marker(id: u8) {
+    unsafe {
+        let saved = *libc::__errno_location();
+        libc::syscall(
+            libc::SYS_lseek,
+            -1 as libc::c_int,
+            u64::from(id),
+            0x5323 as libc::c_int,
+        );
+        *libc::__errno_location() = saved;
+    }
+}
+pub(crate) struct FunnelScope(u8, bool);
+impl FunnelScope {
+    #[inline(always)]
+    pub(crate) fn enter(id: u8) -> Self {
+        if !(on() && c25()) {
+            return Self(0, false);
+        }
+        let prev = FUNNEL.replace(id);
+        funnel_marker(id);
+        Self(prev, true)
+    }
+}
+impl Drop for FunnelScope {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if self.1 {
+            FUNNEL.set(self.0);
+            funnel_marker(self.0);
+        }
+    }
+}
+
+pub(super) fn argv_site(kind: i32, index: i64) {
+    ARGV_SITE.set((kind, index));
+}
+
+/// One `process.argv` read: `length=N`, `index=I;value=V` or `escape`.
+pub(super) fn argv_read(value: f64) {
+    let (kind, index) = ARGV_SITE.replace((-1, 0));
+    if !(c25() && inputs_on() && on_main_thread()) {
+        return;
+    }
+    let bits = value.to_bits();
+    let arr = if bits >> 48 == 0x7ffd {
+        (bits & 0x0000_ffff_ffff_ffff) as *mut crate::ArrayHeader
+    } else {
+        std::ptr::null_mut()
+    };
+    let text = {
+        let _scope = input_record::Scope::enter();
+        if arr.is_null() {
+            format!("escape;site={kind};value=non_array:{bits:016x}")
+        } else {
+            let len = unsafe { (*arr).length };
+            match kind {
+                1 => format!("length={len}"),
+                2 if index >= 0 && (index as u64) < u64::from(len) => {
+                    let e = unsafe {
+                        (crate::array::array_elements_ptr(arr) as *const f64)
+                            .add(index as usize)
+                            .read()
+                            .to_bits()
+                    };
+                    let v = if e >> 48 == 0x7fff {
+                        input_record::Value::input_value(
+                            &((e & 0x0000_ffff_ffff_ffff) as *mut crate::StringHeader),
+                        )
+                    } else {
+                        format!("bits:{e:016x}")
+                    };
+                    format!("index={index};value={v}")
+                }
+                2 => format!("index={index};value=undefined;length={len}"),
+                _ => format!("escape;site={kind};length={len}"),
+            }
+        }
+    };
+    let _scope = input_record::Scope::enter();
+    input_record::event(state(), "argv.read", text);
+}
+
+static EXE_TEXT: [std::sync::atomic::AtomicUsize; 3] = [
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+    std::sync::atomic::AtomicUsize::new(0),
+];
+/// (EXEC image, text lo, text hi) of the main executable: its executable
+/// PT_LOAD; EXEC when the loader applied no bias (non-PIE).
+pub(super) fn exe_text() -> (bool, usize, usize) {
+    if EXE_TEXT[2].load(Relaxed) == 0 {
+        unsafe extern "C" fn each(
+            info: *mut libc::dl_phdr_info,
+            _size: libc::size_t,
+            data: *mut libc::c_void,
+        ) -> libc::c_int {
+            let out = &mut *(data as *mut (usize, usize, usize));
+            let info = &*info;
+            for i in 0..info.dlpi_phnum as usize {
+                let ph = &*info.dlpi_phdr.add(i);
+                if ph.p_type == libc::PT_LOAD && ph.p_flags & libc::PF_X != 0 {
+                    let lo = info.dlpi_addr as usize + ph.p_vaddr as usize;
+                    out.0 = usize::from(info.dlpi_addr == 0);
+                    out.1 = lo;
+                    out.2 = lo + ph.p_memsz as usize;
+                    break;
+                }
+            }
+            1 // the first object is the executable
+        }
+        let mut r = (0usize, 0usize, 0usize);
+        unsafe { libc::dl_iterate_phdr(Some(each), &mut r as *mut _ as *mut libc::c_void) };
+        EXE_TEXT[0].store(r.0, Relaxed);
+        EXE_TEXT[1].store(r.1, Relaxed);
+        EXE_TEXT[2].store(r.2.max(1), Relaxed);
+    }
+    (
+        EXE_TEXT[0].load(Relaxed) == 1,
+        EXE_TEXT[1].load(Relaxed),
+        EXE_TEXT[2].load(Relaxed),
+    )
+}
+
+/// SNAPK2b runtime-pc STOP (DESIGN27 §1.1): an Error's captured pc is imaged
+/// as (program function symbol, offset); one outside the JS text section is
+/// runtime code, which the runner links as the `_instr` runtime and
+/// production does not, so it STOPs at the capturing init.
+/// `PERRY_SNAP_RTPC_JS=none` (diagnostic) empties the program range: every
+/// pc is a runtime pc (F13's STOP arm).
+pub(super) fn runtime_pcs(pcs: &[usize], (lo, hi): (usize, usize)) {
+    let st = state();
+    if !st.rtpc_rule {
+        return;
+    }
+    let (lo, hi) = if std::env::var("PERRY_SNAP_RTPC_JS").is_ok_and(|v| v == "none") {
+        (0, 0)
+    } else {
+        (lo, hi)
+    };
+    let rt: Vec<usize> = pcs
+        .iter()
+        .copied()
+        .filter(|&pc| pc < lo || pc >= hi)
+        .collect();
+    let top = top_init(st);
+    let row = match rt.first() {
+        Some(pc) => format!(
+            "init={top};rt={};n={};pc={pc:x};js={lo:x}-{hi:x};policy=STOP",
+            rt.len(),
+            pcs.len()
+        ),
+        None => format!(
+            "init={top};rt=0;n={};js={lo:x}-{hi:x};policy=symbol",
+            pcs.len()
+        ),
+    };
+    input_record::event(st, "stack.runtime_pc", row);
+}
+
+/// SNAPK2b `stdout_style_bit` funnel row (DESIGN27 §3 member 6): the guard
+/// member is the bit, not the env values or the tty probe it came from.
+pub(super) fn style_bit(bit: bool, tty: bool, depth: u8) {
+    if !(inputs_on() && on_main_thread()) {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.style_rule {
+        return;
+    }
+    let by = match top_init(st) {
+        0 => "runtime",
+        t if is_entry(st, t) => "entry",
+        _ => "imaged",
+    };
+    input_record::event(
+        st,
+        "stdout_style_bit",
+        format!(
+            "bit={};tty={};depth={depth};by={by};member=predicate",
+            bit as u8, tty as u8
+        ),
+    );
+}
+
+/// The text of a string value (heap or inline), or None.
+fn string_text(bits: u64) -> Option<String> {
+    let v = crate::value::JSValue::from_bits(bits);
+    if v.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = v.short_string_to_buf(&mut buf);
+        return Some(String::from_utf8_lossy(&buf[..n]).into_owned());
+    }
+    let p = (bits & 0x0000_ffff_ffff_ffff) as *const crate::StringHeader;
+    if bits >> 48 != 0x7fff || p.is_null() {
+        return None;
+    }
+    // The text itself, not the K2a value encoding: a short and a heap string
+    // with equal text compare equal, and the row holds the text.
+    let bytes =
+        unsafe { std::slice::from_raw_parts(p.add(1).cast::<u8>(), (*p).byte_len as usize) };
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
+/// Where a string operand came from: a host value's birth (argv element,
+/// execPath) or an env read's string, else None.
+fn compare_source(st: &State, bits: u64) -> Option<String> {
+    if bits >> 48 != 0x7fff {
+        return None;
+    }
+    let p = (bits & 0x0000_ffff_ffff_ffff) as usize;
+    let h = p.wrapping_sub(crate::gc::GC_HEADER_SIZE);
+    if let Some(&(_, _, w, s)) = st
+        .host_targets
+        .iter()
+        .find(|t| (h >= t.0 && h < t.1) || (p >= t.0 && p < t.1))
+    {
+        return Some(format!("{}@{s}", host_name(w)));
+    }
+    st.env_obs
+        .iter()
+        .rev()
+        .find(|o| o.ptr != 0 && o.ptr == p)
+        .map(|o| format!("env:{}", o.name))
+}
+
+/// SNAPK2b `compare_literal` (DESIGN27 §3): an equality compare of a host
+/// value or env string with another string is one predicate row; the
+/// guard member is "the value compares so", not the value. P-reach narrows
+/// an entry's argv escape to these rows (`init_enter`).
+pub(super) fn compare_literal(op: i32, left: u64, right: u64, literal: i32) {
+    if !(c25() && inputs_on() && on_main_thread()) {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.cmplit_rule {
+        return;
+    }
+    let (src, other, lit) = match (compare_source(st, left), compare_source(st, right)) {
+        (Some(s), None) => (s, right, literal & 2 != 0),
+        (None, Some(s)) => (s, left, literal & 1 != 0),
+        _ => return,
+    };
+    let Some(text) = string_text(other) else {
+        return;
+    };
+    let value = string_text(if other == right { left } else { right });
+    let eq = value.as_deref() == Some(text.as_str());
+    let result = if op & 1 == 0 { eq } else { !eq };
+    let opn = ["===", "!==", "==", "!="][(op & 3) as usize];
+    let by = match top_init(st) {
+        0 => "runtime",
+        t if is_entry(st, t) => "entry",
+        _ => "imaged",
+    };
+    input_record::event(
+        st,
+        "compare_literal",
+        format!(
+            "op={opn};literal={};lit_kind={};src={src};result={};by={by};member=predicate",
+            input_record::hex(text.as_bytes()),
+            if lit { "const" } else { "value" },
+            result as u8
+        ),
+    );
+}
+
+/// SNAPK3c: the `jobs=` field of a `job_queue` row, one
+/// `kind:owner:code` entry per queued job in queue order (`owner` = the init
+/// that queued it, `code` = the callback's code address in hex, 0 for a
+/// reaction without a callback). The first 64 jobs; `+N` counts the rest.
+fn pending_jobs_field() -> String {
+    const SHOWN: usize = 64;
+    let Some(jobs) = crate::promise::snap_pending_job_list() else {
+        return "busy".to_owned();
+    };
+    let mut out: Vec<String> = jobs
+        .iter()
+        .take(SHOWN)
+        .map(|j| format!("{}:{}:{:x}", j.kind, j.owner, j.code))
+        .collect();
+    if jobs.len() > SHOWN {
+        out.push(format!("+{}", jobs.len() - SHOWN));
+    }
+    out.join(",")
+}
+
+/// SNAPK4: the first 64 entries of a queue row's list field, `+N` counting
+/// the rest; `busy` while the store is being changed.
+fn shown_field(entries: Option<Vec<String>>) -> (String, String) {
+    const SHOWN: usize = 64;
+    let Some(entries) = entries else {
+        return ("busy".to_owned(), "busy".to_owned());
+    };
+    let n = entries.len();
+    let mut out: Vec<String> = entries.into_iter().take(SHOWN).collect();
+    if n > SHOWN {
+        out.push(format!("+{}", n - SHOWN));
+    }
+    (n.to_string(), out.join(","))
+}
+
+/// SNAPK4 rows at a candidate cut for the run queues beside TASK_QUEUE, each
+/// read from its own store, one row per non-empty store (SNAP_DESIGN
+/// §2.10.21). The nextTick queue (`tick_queue`, `tick:owner:code`) and the
+/// scheduled resolutions (`scheduled_resolves`, `resolve:owner:0`) are imaged
+/// with the task queue by the same FIFO-prefix rule (`policy=image`). A timer,
+/// immediate or native completion (`timer_queue`,
+/// `kind:owner:code:delay_ms:repeat`) waits on the host clock or host I/O:
+/// a blocker (`policy=STOP`).
+fn k4_queue_rows(st: &mut State) {
+    let init = st.frames.last().map_or(0, |f| f.init);
+    let ticks = crate::builtins::snap_pending_ticks()
+        .map(|t| t.iter().map(|(o, c)| format!("tick:{o}:{c:x}")).collect());
+    if ticks.as_ref().is_none_or(|t: &Vec<String>| !t.is_empty()) {
+        let (n, list) = shown_field(ticks);
+        input_record::event(
+            st,
+            "tick_queue",
+            format!("init={init};pending={n};policy=image;ticks={list}"),
+        );
+    }
+    let resolves = crate::promise::snap_scheduled_resolves()
+        .map(|r| r.iter().map(|(o, c)| format!("resolve:{o}:{c:x}")).collect());
+    if resolves.as_ref().is_none_or(|r: &Vec<String>| !r.is_empty()) {
+        let (n, list) = shown_field(resolves);
+        input_record::event(
+            st,
+            "scheduled_resolves",
+            format!("init={init};pending={n};policy=image;resolves={list}"),
+        );
+    }
+    let timers = crate::timer::snap_pending_timers().map(|t| {
+        t.iter()
+            .map(|e| {
+                format!(
+                    "{}:{}:{:x}:{}:{}",
+                    e.kind, e.owner, e.code, e.delay_ms, e.repeat as u8
+                )
+            })
+            .collect()
+    });
+    if timers.as_ref().is_none_or(|t: &Vec<String>| !t.is_empty()) {
+        let (n, list) = shown_field(timers);
+        input_record::event(
+            st,
+            "timer_queue",
+            format!("init={init};pending={n};policy=STOP;timers={list}"),
+        );
+    }
+}
+
+/// SNAPK2b checks at a candidate cut, `init_enter` of the init just pushed
+/// (DESIGN27 §1.1, §1.2). Open frames: every open ancestor resumes at its
+/// flag test (R1: static dependency or eager entry import, before the
+/// parent's body) or at its `import()` (R2); K4 images their flags 0. A
+/// require edge or a job frame below the cut has no such resume point
+/// (STOP). Job queue: at the cut no promise job may be queued (a TLA
+/// suspended before it, or any other job, would run before the cut's
+/// continuation in the build run and after the adopted image in the real
+/// one), so a queued job STOPs.
+fn k2b_enter_rows(st: &mut State) {
+    if st.openf_rule && st.frames.len() >= 2 {
+        let mut kinds = Vec::with_capacity(st.frames.len() - 1);
+        let mut stop = false;
+        for w in st.frames.windows(2) {
+            let (a, c) = (w[0], w[1]);
+            let k = if a.kind == FrameKind::Job || c.kind == FrameKind::Job {
+                "job"
+            } else {
+                match st.inits[c.init as usize].reach {
+                    Reach::EntryEager | Reach::StaticDep => "R1",
+                    Reach::DynImport => "R2",
+                    Reach::Require => "require",
+                }
+            };
+            stop |= k == "job" || k == "require";
+            kinds.push(format!("{}:{k}", a.init));
+        }
+        input_record::event(
+            st,
+            "open_frames",
+            format!(
+                "init={};open={};flags=0;policy={}",
+                st.frames.last().map_or(0, |f| f.init),
+                kinds.join(","),
+                if stop { "STOP" } else { "resume" }
+            ),
+        );
+    }
+    if st.jobq_rule {
+        match crate::promise::snap_pending_jobs() {
+            Some(0) => {}
+            n => {
+                input_record::event(
+                    st,
+                    "job_queue",
+                    format!(
+                        "init={};pending={};policy=STOP;jobs={}",
+                        st.frames.last().map_or(0, |f| f.init),
+                        n.map_or("busy".to_owned(), |n| n.to_string()),
+                        pending_jobs_field()
+                    ),
+                );
+            }
+        }
+        k4_queue_rows(st);
     }
 }

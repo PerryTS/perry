@@ -111,6 +111,8 @@ pub(crate) const OVERRIDES: &[(&str, GcCallEffect, &str)] = &[
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
     ("perry_birth_empty_array_16", GcCallEffect::AllocNoReentry,
      "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
+    ("perry_birth_empty_array_n", GcCallEffect::AllocNoReentry,
+     "Codegen-defined shared birth: only slow_alloc can collect; initialization and seeding are leaf"),
 ];
 
 /// The runtime call-effect facts one compilation reads.

@@ -124,6 +124,8 @@ pub(crate) mod dyn_eval_hooks;
 pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
+/// The array-type predicates, defined once in `perry_abi::array_type`.
+pub use perry_abi::{gc_array_type_pat, gc_type_is_array, gc_type_is_not_array};
 /// The object-type predicates, defined once in `perry_abi::object_type`.
 pub use perry_abi::{
     gc_object_type_pat, gc_type_is_not_object, gc_type_is_object, object_has_meta_word,
@@ -184,6 +186,7 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+pub mod layout_slot;
 pub mod loop_interrupt;
 pub mod macos_bundle;
 pub mod map;
@@ -252,6 +255,7 @@ pub mod promise;
 pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
+pub mod record_array;
 pub mod regex;
 pub mod registry_latch;
 #[cfg(test)]

@@ -21,7 +21,7 @@ pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let bag = if create {
                 crate::array::array_property_bag_ensure(addr as *mut crate::array::ArrayHeader)
             } else {
@@ -154,7 +154,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
             } else if matches!(
                 kind,
                 crate::gc_object_type_pat!()
-                    | crate::gc::GC_TYPE_ARRAY
+                    | crate::gc_array_type_pat!()
                     | crate::gc::GC_TYPE_CLOSURE
                     | crate::gc::GC_TYPE_PROMISE
                     | crate::gc::GC_TYPE_ERROR

@@ -88,7 +88,7 @@ fn is_array_value(value: f64) -> bool {
     unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }.is_some_and(|header| {
         matches!(
             header.obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     })
 }

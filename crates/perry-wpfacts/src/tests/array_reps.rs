@@ -9,7 +9,7 @@ use crate::{ElementOp, FactsConfig};
 use std::collections::HashMap;
 
 /// `name -> rep` of every `let`/`const` of `t.ts` under `cfg`.
-fn reps_with(src: &str, cfg: FactsConfig) -> HashMap<String, Rep> {
+pub(super) fn reps_with(src: &str, cfg: FactsConfig) -> HashMap<String, Rep> {
     let pf = facts_with(src, cfg);
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
@@ -61,6 +61,7 @@ const SAMPLES: [Rep; 7] = [
         dense: true,
         fixed: true,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::F64,
@@ -68,6 +69,7 @@ const SAMPLES: [Rep; 7] = [
         dense: false,
         fixed: true,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::Boxed,
@@ -75,6 +77,7 @@ const SAMPLES: [Rep; 7] = [
         dense: false,
         fixed: false,
         im: false,
+        at_rest: false,
     }),
     Rep::Arr(ArrRep {
         elem: ElemRep::I32,
@@ -82,6 +85,7 @@ const SAMPLES: [Rep; 7] = [
         dense: true,
         fixed: false,
         im: false,
+        at_rest: false,
     }),
 ];
 
@@ -122,6 +126,7 @@ fn two_arrays_join_to_what_both_have() {
             dense: true,
             fixed: false,
             im: false,
+            at_rest: false,
         })
     );
     let j = Rep::join(SAMPLES[3], SAMPLES[4]);
@@ -133,6 +138,7 @@ fn two_arrays_join_to_what_both_have() {
             dense: false,
             fixed: true,
             im: false,
+            at_rest: false,
         })
     );
 }
@@ -144,6 +150,7 @@ fn an_array_slot_is_encoded_boxed() {
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
             Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
         };
         assert_eq!(r.encoding(), want);
     }
@@ -233,7 +240,49 @@ fn a_json_array_is_not_plain() {
 fn a_runtime_born_array_is_not_plain() {
     let src = "const o = { a: 1, b: 2 };\nconst K = Object.keys(o);\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
-    let src = "const L = [3, 1, 2];\nconst K = L.slice();\nconsole.log(K[0]);";
+    let src = "const L = [3, 1, 2];\nconst K = L.concat([4]);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = L.toReversed();\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+}
+
+/// A `slice` of an Array bears a plain Array (`builtins::site_slice_arr`):
+/// floor 0, not dense, not fixed, with the elements it holds.
+#[test]
+fn a_slice_of_an_array_is_plain() {
+    let src = "const L = [3, 1, 2];\nconst K = L.slice();\nK[1] = 7;\nconsole.log(K[0]);";
+    let k = arr(src, "K");
+    assert_eq!(
+        (k.floor, k.dense, k.fixed, k.im, k.at_rest),
+        (0, false, false, false, false)
+    );
+    assert_ne!(k.elem, ElemRep::Boxed);
+    // A string stored into the copy makes its elements Boxed; the source's
+    // stay Numbers.
+    let src = "const L = [3, 1, 2];\nconst K: any[] = L.slice();\nK[1] = \"s\";\nconsole.log(K[0], L[0]);";
+    assert_eq!(arr(src, "K").elem, ElemRep::Boxed);
+    assert_ne!(arr(src, "L").elem, ElemRep::Boxed);
+}
+
+/// Negative controls: a species constructor that is not `%Array%` (the
+/// result may be no Array), an array-like receiver, an escaped copy, and the
+/// switch's sabotage.
+#[test]
+fn a_slice_with_another_species_or_receiver_is_not_plain() {
+    let src = "const L: any = [3, 1, 2];\nL.constructor = { [Symbol.species]: Object };\n\
+               const K = L.slice();\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let cfg = FactsConfig {
+        sabotage: Some("slicebirth".to_string()),
+        ..Default::default()
+    };
+    assert!(matches!(rep_with(src, "K", cfg), Rep::Arr(_)));
+    let src = "const o: any = { length: 2, 0: 1, 1: 2 };\n\
+               const K = Array.prototype.slice.call(o);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = L.slice();\n(globalThis as any).hostTake(K);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = Object.freeze(L.slice());\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
 }
 

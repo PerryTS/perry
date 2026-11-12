@@ -80,6 +80,20 @@ fn normalize_navigator_locale(locale: &str) -> Option<String> {
 }
 
 fn navigator_language() -> String {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("locale.navigator", &format!("{:?}", ()), || {
+            crate::effect!(host_read, locale);
+            std::env::var("LC_ALL")
+                .ok()
+                .filter(|locale| !locale.is_empty() && locale != "C" && locale != "POSIX")
+                .or_else(|| std::env::var("LANG").ok())
+                .as_deref()
+                .and_then(normalize_navigator_locale)
+                .unwrap_or_else(|| "en-US".to_string())
+        });
+    }
+
     crate::effect!(host_read, locale);
     std::env::var("LC_ALL")
         .ok()
@@ -241,9 +255,23 @@ extern "C" fn get_hardware_concurrency(
 /// Node `getAvailableParallelism()`: the recommended parallelism (>= 1).
 fn available_parallelism() -> f64 {
     crate::effect!(host_read, parallelism);
-    std::thread::available_parallelism()
-        .map(|n| n.get() as f64)
-        .unwrap_or(1.0)
+    // The affinity mask and cpu cgroup reads are the Parallelism funnel; the
+    // value is a recorded host input (SNAP C2/C3).
+    crate::snap_funnel!(Parallelism);
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        crate::snap_census::input_call("navigator.hardwareConcurrency", "()", || {
+            std::thread::available_parallelism()
+                .map(|n| n.get() as f64)
+                .unwrap_or(1.0)
+        })
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as f64)
+            .unwrap_or(1.0)
+    }
 }
 
 /// `userAgent`: `"Node.js/<major>"`, a constant.

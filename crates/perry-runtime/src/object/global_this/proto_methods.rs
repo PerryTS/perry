@@ -634,7 +634,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
@@ -644,7 +644,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "includes",
-                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];

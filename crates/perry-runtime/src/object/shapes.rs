@@ -664,6 +664,19 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).lane_is_constfn(slot) }
     }
 
+    /// The I32 lanes of this shape (`field_rep::i32_lane_slots`), one bit per
+    /// slot below 32 (I32 at rest, PR C).
+    #[inline]
+    pub(crate) fn i32_lanes(self) -> u32 {
+        super::field_rep::i32_lane_slots(self.rep(), self.special_constfn_mask())
+    }
+
+    /// Is `slot` an I32 lane of this shape?
+    #[inline]
+    pub(crate) fn lane_is_i32(self, slot: u32) -> bool {
+        slot < super::field_rep::REP_SLOTS && self.i32_lanes() & (1u32 << slot) != 0
+    }
+
     #[inline]
     pub(crate) fn deprecate_special_to_any(self, slot: u32) -> bool {
         // SAFETY: a live slab record (type docs), with an atomic learned bit.
@@ -1859,9 +1872,10 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
     let keys = shape_keys.arr();
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -2115,9 +2129,10 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     integrity_flags: u16,
 ) -> Result<LayoutWord, ShapeDescriptorError> {
     let shape_keys: ShapeKeys = keys.into();
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     shape_descriptor_intern_with_special(
         shape_keys,
         logical_key_count,
@@ -2207,13 +2222,13 @@ fn shape_descriptor_intern_with_special_mode(
     if !super::field_rep::is_valid_with_special(rep, mask) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
-    // Every SPECIAL lane in Step 5C names a ConstFn body. P5's optional
-    // NoPointer producer needs its own mask and remains gated by census.
-    // A requested ConstFn id is only legal through the body-aware static
-    // birth/seed entry points; generic dynamic callers fail closed.
-    if mask != super::field_rep::special_lane_slots(rep)
-        || (requested.is_some() && !infos.is_empty() && !static_constfn)
-    {
+    // A SPECIAL lane names a ConstFn body (`mask`) or is an I32 lane (I32
+    // at rest, PR C: the complement, `field_rep::i32_lane_slots`). P5's
+    // optional NoPointer producer needs its own mask beside these and
+    // remains gated by census. A requested ConstFn id is only legal through
+    // the body-aware static birth/seed entry points; generic dynamic callers
+    // fail closed.
+    if requested.is_some() && !infos.is_empty() && !static_constfn {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     let keys_id = keys as usize as u64;
@@ -2456,7 +2471,11 @@ fn shape_descriptor_mint_fresh(
     // complete descriptor.
     // SAFETY: no slab reference is held; `slab()` above went out of scope.
     let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
-        .map_err(|_| ShapeDescriptorError::IdExhausted)?
+        .map_err(|_error| {
+            #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+            snap22::snapshot("publish_error", _error as u64 + 1);
+            ShapeDescriptorError::IdExhausted
+        })?
         .word
         .0;
     // `id` was just handed out by `alloc_shape_id`, which never reuses a
@@ -2730,6 +2749,8 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
 #[optimize(size)]
 #[inline(never)]
 fn shape_id_exhausted_abort() -> ! {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    snap22::snapshot("abort", 0);
     eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
     std::process::abort()
 }
@@ -4564,7 +4585,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep_born(
             else {
                 return old_id;
             };
-            if (*gc.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_not_array!((*gc.as_ptr()).obj_type) {
                 return old_id;
             }
             let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
@@ -4878,6 +4899,11 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         }
     }
     if !added {
+        return false;
+    }
+    // An I32 lane (I32 at rest, PR C) would become `Any` below while its
+    // word stays I32: a shape with one learns no ConstFn lane.
+    if super::field_rep::i32_lane_slots(current.rep, current.special_constfn_mask) != 0 {
         return false;
     }
     // The other lanes keep their representation; every ConstFn lane is SPECIAL.
@@ -6016,8 +6042,7 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
 /// copies first. So one index serves every list on it.
 pub(crate) unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
     crate::value::addr_class::try_read_gc_header(keys as usize).is_some_and(|gc| {
-        gc.obj_type == crate::gc::GC_TYPE_ARRAY
-            && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+        crate::gc_type_is_array!(gc.obj_type) && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
     })
 }
 
@@ -6309,7 +6334,7 @@ fn shape_keys_address_is_recycled(addr: usize) -> bool {
     unsafe {
         crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
             let obj_type = (*header.as_ptr()).obj_type;
-            obj_type != crate::gc::GC_TYPE_ARRAY && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_type_is_not_array!(obj_type) && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
         })
     }
 }
@@ -6770,7 +6795,7 @@ fn shape_keys_entry_is_minor_relevant(
         let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
             return false;
         };
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type) {
             return false;
         }
         let (slots, len) = super::keys_array_dense_slots(addr as *const ArrayHeader);
@@ -7405,3 +7430,7 @@ pub(crate) fn recompute_record_handle_carriers() {
         }
     }
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[path = "shapes_snap22.rs"]
+pub(crate) mod snap22;

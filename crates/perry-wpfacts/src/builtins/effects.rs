@@ -206,7 +206,9 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             slot(callee) || operand(this) || args.iter().any(operand)
         }
         RealmEffect::Stores { src, dst } => slot(src) || slot(dst),
-        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) => slot(s),
+        RealmEffect::Escapes(s) | RealmEffect::AsyncResource(s) | RealmEffect::Identity(s) => {
+            slot(s)
+        }
         RealmEffect::Returns(o) => operand(o),
         RealmEffect::StoresFresh | RealmEffect::Open => false,
     })
@@ -395,6 +397,8 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             RealmEffect::Stores { src, dst } => slot(src) && slot(dst),
             RealmEffect::StoresFresh => true,
+            // An observation of the slot's values: no flow to model.
+            RealmEffect::Identity(_) => true,
             RealmEffect::Escapes(s) => slot(s),
             RealmEffect::AsyncResource(s) => slot(s),
             RealmEffect::Returns(RealmOperand::Bound) => true,
@@ -1071,6 +1075,27 @@ fn run(
                 }
             }
             RealmEffect::StoresFresh => {}
+            // The body compares the slot's values by identity (DESIGN-p4l4
+            // §2.2): recorded for the value-record derive only.
+            RealmEffect::Identity(s) if m.value_records => {
+                let v = run.slot(m, s);
+                for n in v.nodes {
+                    m.identity(n, IdentityRoute::Native);
+                }
+                if !v.spread.is_empty() {
+                    let n = m.node_l("native-identity");
+                    flow(
+                        m,
+                        &Vals {
+                            nodes: vec![],
+                            spread: v.spread,
+                        },
+                        n,
+                    );
+                    m.identity(n, IdentityRoute::Native);
+                }
+            }
+            RealmEffect::Identity(_) => {}
             RealmEffect::AsyncResource(s) => {
                 if let Some(n) = run.node(m, s) {
                     super::async_resource(m, n, entry.name);
@@ -1167,6 +1192,7 @@ fn run(
                 // A store into the receiver's elements writes the Array.
                 if let (RealmSlotRoot::This, Some(t)) = (dst.root, run.t) {
                     m.arr_written(t);
+                    m.len_event(t, run.call, true);
                 }
                 let v = run.slot(m, src);
                 if let Some(d) = run.node(m, dst) {

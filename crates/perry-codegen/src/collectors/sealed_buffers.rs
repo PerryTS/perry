@@ -29,7 +29,7 @@
 //! the EXPOSED set; consumers combine "not exposed" with their own binding
 //! proof (single immutable `let`, fresh construction).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use perry_hir::{BinaryOp, Expr, Module, Stmt};
 
@@ -49,8 +49,15 @@ pub(crate) struct BufferExposure {
     pub remote: HashSet<u32>,
 }
 
-pub(crate) fn buffer_exposure(hir: &Module) -> BufferExposure {
-    let mut scan = Scan::default();
+/// `native_member_calls`: the module's proven method sites
+/// (`builtin_proto::native_member_site_proven`). Only a proven Buffer read
+/// keeps the buffer sealed: an unproven one may run a patched
+/// `Buffer.prototype` reader with the buffer as `this`.
+pub(crate) fn buffer_exposure(hir: &Module, native_member_calls: &BTreeSet<u32>) -> BufferExposure {
+    let mut scan = Scan {
+        proven: Some(native_member_calls),
+        ..Scan::default()
+    };
     scan.walk_module(hir);
     let never_string = never_string_locals(hir, &scan);
 
@@ -146,18 +153,23 @@ pub(crate) fn buffer_exposure(hir: &Module) -> BufferExposure {
 /// never a string on its face, a `.length` read or a Buffer read intrinsic.
 /// It flags every exposing use the module scan found (and more: a key or a
 /// call argument whose proof needs module facts counts as exposing here).
-pub(crate) fn stmt_may_expose(stmt: &Stmt, id: u32) -> bool {
-    let mut probe = Probe { id, found: false };
+pub(crate) fn stmt_may_expose(stmt: &Stmt, id: u32, native_member_calls: &BTreeSet<u32>) -> bool {
+    let mut probe = Probe {
+        id,
+        found: false,
+        proven: native_member_calls,
+    };
     probe.stmt(stmt);
     probe.found
 }
 
-struct Probe {
+struct Probe<'p> {
     id: u32,
     found: bool,
+    proven: &'p BTreeSet<u32>,
 }
 
-impl Probe {
+impl Probe<'_> {
     fn stmts(&mut self, stmts: &[Stmt]) {
         for s in stmts {
             self.stmt(s);
@@ -317,6 +329,13 @@ impl Probe {
                 object, property, ..
             } if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)) => {}
             Expr::Uint8ArrayLength(array) if matches!(array.as_ref(), Expr::LocalGet(_)) => {}
+            // A proven `Buffer.prototype.equals` on two locals keeps neither.
+            Expr::Call { callee, args, .. }
+                if crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                    self.proven,
+                    callee,
+                    args,
+                ) => {}
             Expr::Call { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
@@ -325,7 +344,7 @@ impl Probe {
                             && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
                                 property,
                             )
-                ) =>
+                ) && crate::builtin_proto::native_member_site_proven(self.proven, callee) =>
             {
                 for arg in args {
                     self.expr(arg);
@@ -342,6 +361,8 @@ impl Probe {
 
 #[derive(Default)]
 struct Scan<'a> {
+    /// The module's proven method sites (`buffer_exposure`).
+    proven: Option<&'a BTreeSet<u32>>,
     /// The body being walked: the module init, a function, a class member or
     /// a closure each get their own id.
     body: u32,
@@ -700,12 +721,22 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
+                // A proven `Buffer.prototype.equals` on two locals keeps neither.
+                Expr::PropertyGet { .. }
+                    if self.proven.is_some_and(|p| {
+                        crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                            p, callee, args,
+                        )
+                    }) => {}
                 Expr::PropertyGet {
                     object, property, ..
                 } if matches!(object.as_ref(), Expr::LocalGet(_))
                     && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
                         property,
-                    ) =>
+                    )
+                    && self.proven.is_some_and(|p| {
+                        crate::builtin_proto::native_member_site_proven(p, callee)
+                    }) =>
                 {
                     for arg in args {
                         self.walk_expr(arg);
@@ -909,3 +940,53 @@ fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> NeverString {
 #[cfg(test)]
 #[path = "sealed_buffers_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod proven_read_tests {
+    //! Only a reader site the whole-program facts prove keeps its buffer
+    //! sealed: an unproven one may run a patched `Buffer.prototype` reader
+    //! with the buffer as `this` (which may read `.buffer` and transfer it).
+    use super::*;
+    use perry_hir::types::Type;
+
+    const SITE: u32 = 41;
+
+    fn module() -> Module {
+        let mut hir = Module::new("sealed_proven_read");
+        hir.init.push(Stmt::Let {
+            id: 1,
+            name: "buf".to_string(),
+            ty: Type::Named("Buffer".to_string()),
+            mutable: false,
+            init: Some(Expr::BufferAlloc {
+                size: Box::new(Expr::Number(8.0)),
+                fill: None,
+                encoding: None,
+            }),
+        });
+        hir.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: SITE,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "readInt32BE".to_string(),
+            }),
+            args: vec![Expr::Number(0.0)],
+            type_args: Vec::new(),
+            byte_offset: SITE,
+        }));
+        hir
+    }
+
+    #[test]
+    fn only_a_proven_buffer_read_keeps_the_buffer_sealed() {
+        let hir = module();
+        let none = BTreeSet::new();
+        let proven: BTreeSet<u32> = [SITE].into_iter().collect();
+        assert!(buffer_exposure(&hir, &none).exposed.contains(&1));
+        assert!(!buffer_exposure(&hir, &proven).exposed.contains(&1));
+        assert!(stmt_may_expose(&hir.init[1], 1, &none));
+        assert!(!stmt_may_expose(&hir.init[1], 1, &proven));
+    }
+}

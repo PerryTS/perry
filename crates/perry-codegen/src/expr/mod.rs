@@ -81,6 +81,7 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
+pub(crate) mod record_witness;
 pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
@@ -100,11 +101,19 @@ pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod family_slot;
+pub(crate) mod facts_string;
+pub(crate) mod fill_birth;
+#[cfg(test)]
+mod fill_birth_tests;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
+pub(crate) mod snap_argv_site;
+pub(crate) mod snap_compare_site;
+pub(crate) mod rest_elems;
+pub(crate) mod rest_fields;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -180,6 +189,7 @@ pub(crate) use helpers::{
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
     store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
 };
+pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
     can_lower_expr_as_i32, can_lower_expr_as_i32_in_current_region, flat_const_index_get_target,
     imul_operand_i32_lowerable_in_current_region, is_known_i32_range, lower_expr_as_i32,
@@ -216,6 +226,7 @@ pub(crate) use range_facts::{
     record_int_facts_for_update, record_local_value_alias_for_write, while_condition_range_fact,
     IntRange, IntRangeFact,
 };
+pub(crate) use range_facts::{facts_local_range, facts_local_ranges};
 pub(crate) use strings::emit_string_literal_global;
 pub(crate) use typed_feedback::{
     emit_typed_feedback_record_call, emit_typed_feedback_register_site, native_region_slug,
@@ -417,6 +428,13 @@ pub(crate) struct FnCtx<'a> {
     /// Set while lowering the generic arm of a guarded proof (decision 150):
     /// that arm is the site's complete operation without the facts.
     pub wpfacts_off: bool,
+    /// While a b1 call lowers its body's read here: that read's offset (the
+    /// body module's) and its at-rest floor (`expr::rest_elems`).
+    pub rest_b1: Option<(u32, Option<u32>)>,
+    /// I32 at rest B2: (counter, at-rest local, scope) pairs a counter
+    /// entry check proved in the floor in the loop copy being lowered
+    /// (`stmt::loops::lower_counter_versions`, `expr::rest_elems`).
+    pub rest_counter: Vec<(u32, u32, u32)>,
     pub program_has_worker: bool,
     pub program_has_tla: bool,
     pub program_has_thread_agents: bool,
@@ -523,6 +541,11 @@ pub(crate) struct FnCtx<'a> {
     /// reading the field, because they consult it *after* lowering their
     /// operands, by which point the field has been taken again.
     pub discard_this_expr: bool,
+    /// SNAP census frame: the two innermost expressions `lower_expr` is
+    /// lowering, saved and restored by each lowering. A `process.env` /
+    /// `process.argv` read takes its census kind from its own parent
+    /// (`snap_env_site`, `snap_argv_site`).
+    pub snap_lowering: snap_env_site::Lowering,
     /// A chunked literal birth's own arguments are being lowered
     /// (`literal_chunks`): a chunked argument is the birth's `undefined`
     /// fill, and anywhere else it is an invariant violation.
@@ -847,8 +870,10 @@ pub(crate) struct FnCtx<'a> {
     /// (`collectors::loop_pushed_arrays`): their `[]` is born with the larger
     /// append reserve.
     pub loop_pushed_arrays: &'a crate::collectors::PushedArrays,
-    /// Set by `lower_let` while it lowers such a binding's `[]` initializer.
-    pub pushed_array_birth: bool,
+    /// Set by `lower_let` while it lowers such a binding's `[]` initializer:
+    /// the slots the birth reserves (0: the plain empty birth), from the
+    /// facts (`ElisionFacts::list_capacities`) or the collector's sixteen.
+    pub pushed_array_birth: u64,
     /// Set while lowering `<id>.length`: that read of `id` cannot hand the
     /// string anywhere, so it skips the unique-owner demote.
     pub string_length_read_of: Option<u32>,
@@ -933,6 +958,7 @@ pub(crate) struct FnCtx<'a> {
     /// a cross-module call rather than an object method call.
     pub namespace_imports: &'a std::collections::HashSet<String>,
     pub namespace_source_prefixes: &'a std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: &'a std::collections::HashSet<String>,
     /// Issue #680: per-namespace member resolution. Keyed by
     /// `(namespace_local_name, member_name)` → `source_prefix`. Consulted
     /// by namespace member access lowering to disambiguate when the same
@@ -1318,6 +1344,15 @@ pub(crate) struct FnCtx<'a> {
     /// buffer views. Lookup, nested-scope teardown and boundary validation
     /// live in that table instead of independent `FnCtx` maps.
     pub receiver_descriptors: crate::collectors::ReceiverDescriptorTable,
+    /// N2: the planned function-level element bases of the method body
+    /// (`stmt::fn_base`).
+    pub fn_base: crate::stmt::fn_base::Pending,
+    /// The loops that hold an Array local's length by the facts
+    /// (`expr::held_len`), innermost last.
+    pub held_lens: Vec<held_len::HeldLen>,
+    /// The loops being lowered and the polls each may take back
+    /// (`stmt::loops::bounded_poll`).
+    pub loop_polls: crate::stmt::bounded_poll::Scopes,
     /// When set, `emit_armed_gc_loop_safepoint` gates its VOLATILE armed
     /// load on `(counter & 63) == 0`, so the poll's serialization cost (and
     /// the receiver-cache re-derive it forces on every element) is paid once
@@ -1526,6 +1561,9 @@ pub(crate) struct FnCtx<'a> {
     /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
     /// mode witnesses every returned value against it (§5).
     pub sig_return: Option<crate::codegen::FactsRep>,
+    /// DESIGN-p4l4 VR-3b: the value record this typed entry returns as its
+    /// lanes (`codegen::record_sig::lower_return`).
+    pub sig_record_return: Option<crate::codegen::FactsRecRep>,
     /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).
     pub typed_methods:
         &'a std::collections::HashMap<u32, crate::codegen::signature_entry::TypedMethod>,
@@ -1871,12 +1909,6 @@ pub(crate) struct FnCtx<'a> {
     /// Benchmark/debug switch that forces tracked buffers through the existing
     /// helper fallback instead of native GEP/load/store lowering.
     pub disable_buffer_fast_path: bool,
-    /// #6405: this module assigns a Buffer numeric read-method name as an own
-    /// property somewhere (`buf.readUInt8 = fn`), so an own prop may shadow the
-    /// prototype method. When set, `try_emit_buffer_read_intrinsic` deopts the
-    /// inline byte-load fold to the own-prop-aware runtime dispatch. False for
-    /// every program that never shadows a Buffer method (the common case).
-    pub program_shadows_buffer_read_method: bool,
     /// This module contains a shape barrier such as `Object.defineProperty`.
     /// Native Buffer/TypedArray views normally read `.length` straight from
     /// their header, but a barrier can install an own `length` property that
@@ -1899,6 +1931,11 @@ pub(crate) struct FnCtx<'a> {
     /// remain HIR expressions so loop-local range facts can be applied at the
     /// eventual access site.
     pub int_range_aliases: std::collections::HashMap<u32, perry_hir::Expr>,
+    /// Locals of this body worth an i32 shadow of their ToInt32
+    /// (`int32_shadow::plan`).
+    pub int32_shadow_plan: std::collections::HashSet<u32>,
+    /// Local id → the i32 slot holding its ToInt32 (`int32_shadow`).
+    pub int32_shadows: std::collections::HashMap<u32, String>,
     /// Scoped local integer ranges derived from loop/while guards.
     pub int_range_facts: Vec<IntRangeFact>,
     /// Monotonic source for loop-local proof scopes. Loop exit removes only
@@ -3342,7 +3379,13 @@ pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
 #[cfg(test)]
 mod index_get_claim_tests;
-mod index_key;
+pub(crate) mod index_key;
+pub(crate) mod int32_key;
+pub(crate) mod int32_operand;
+pub(crate) mod int32_shadow;
+pub(crate) mod held_len;
+pub(crate) mod int_product;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
 #[cfg(test)]
@@ -3383,6 +3426,7 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
+mod index_set_rep;
 mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
@@ -3400,7 +3444,7 @@ mod js_runtime;
 mod literals_vars;
 pub(crate) mod private_resume_frame;
 pub(crate) mod resume_locals;
-pub(crate) use literals_vars::{bind_lowered_value_to_local, note_born_local_write};
+pub(crate) use literals_vars::{bind_local, bind_lowered_value_to_local, note_born_local_write};
 mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;
@@ -3413,6 +3457,7 @@ mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
+pub(crate) mod short_string;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
 pub(crate) use named_accessor::contained_number_get;
@@ -4319,6 +4364,24 @@ fn lower_compare_value(
             "Compare",
             None,
             "ordinary_expr_value.typed_element_relational_i1",
+            &lowered,
+            None,
+            None,
+            None,
+            false,
+            false,
+            vec![format!("op={op:?}")],
+        );
+        return Ok(Some(lowered));
+    }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers (`int_product`).
+    if let Some(bit) = int_product::try_lower_compare(ctx, op, left, right)? {
+        let lowered = LoweredValue::i1(bit);
+        ctx.record_lowered_value(
+            "Compare",
+            None,
+            "ordinary_expr_value.int_product_i1",
             &lowered,
             None,
             None,

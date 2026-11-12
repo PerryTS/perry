@@ -97,14 +97,14 @@ pub extern "C" fn js_value_length_f64(value: f64) -> f64 {
         // length but the lower 32 bits of the forwarding pointer.
         // Follow the chain via the unified array-pointer cleaner so
         // `samples.length` after a grow returns the real length.
-        if obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(obj_type)
             && unsafe { (*gc_header).gc_flags } & crate::gc::GC_FLAG_FORWARDED != 0
         {
             let cleaned = crate::array::js_array_get_length(handle as i64);
             return cleaned as f64;
         }
         match obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_STRING => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_STRING => {
                 return unsafe { *(handle as *const u32) } as f64;
             }
             // Issue #179 Phase 2: lazy arrays also have `length` at

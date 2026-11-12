@@ -112,6 +112,8 @@ pub struct Import {
     /// but do NOT pin the target as eager — if no static edge reaches it
     /// the target is `Deferred`. `specifiers` is empty for these.
     pub is_dynamic: bool,
+    /// Static `import defer` binds a namespace without evaluating its module.
+    pub is_deferred: bool,
     /// Issue #1672: this source is the target of at least one dynamic
     /// `import()` site in the module, but the edge could NOT be a
     /// dedicated `is_dynamic` synthetic edge because a *static* import of

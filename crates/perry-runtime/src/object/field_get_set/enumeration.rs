@@ -133,6 +133,9 @@ pub(super) unsafe fn native_module_enum(
 #[no_mangle]
 pub extern "C" fn js_object_keys_value(value: f64) -> *mut ArrayHeader {
     let value = crate::process::refresh_process_env(value);
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(value) {
+        return result;
+    }
     let jv = JSValue::from_bits(value.to_bits());
     // #2818: ToObject(null/undefined) throws TypeError, matching Node.
     if jv.is_null() || jv.is_undefined() {
@@ -1109,8 +1112,7 @@ pub(crate) unsafe fn keys_contain_array_index(keys_view: crate::object::ObjectKe
         if aligned {
             let keys_gc =
                 (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*keys_gc).obj_type == crate::gc::GC_TYPE_ARRAY && (*keys).length <= (*keys).capacity
-            {
+            if crate::gc_type_is_array!((*keys_gc).obj_type) && (*keys).length <= (*keys).capacity {
                 // The receiver's own count, a prefix of the array.
                 let len = ((*keys).length as usize).min(keys_view.count() as usize);
                 let elements =
@@ -1177,6 +1179,11 @@ pub(crate) use buffers::registered_buffer_own_keys;
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(
+        crate::value::js_nanbox_pointer(obj as i64),
+    ) {
+        return result;
+    }
     if let Some(keys) = ordinary_keys::try_keys(obj) {
         return keys;
     }
@@ -1300,7 +1307,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Issue #233: a grown array installs a forwarding pointer at the
                 // old location; a binding written before the grow still holds it.
                 // Resolve the chain so we read the live header (without this,
@@ -1760,7 +1767,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {

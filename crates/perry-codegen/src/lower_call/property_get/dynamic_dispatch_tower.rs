@@ -204,14 +204,26 @@ pub(super) fn emit_tower_pshape_call(
     let generic_label = ctx.block_label(generic_idx);
     let join_label = ctx.block_label(join_idx);
 
-    crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
-        ctx,
-        recv_handle,
-        &expected_shape_id,
-        &proven_label,
-        &generic_label,
-        family_id.as_deref(),
-    );
+    if crate::expr::rest_fields::lanes_of(ctx, owner) != 0 {
+        // I32 at rest (PR C): an instance of a class with I32 lanes carries
+        // the lanes' successor of the static layout (`js_object_rest_lanes`):
+        // the same keys and slots, so the clone serves it; check mode tests
+        // the receiver's class id (no class extends one with lanes).
+        let blk = ctx.block();
+        let ptr = blk.inttoptr(I64, recv_handle);
+        let cid_word = blk.load(I32, &ptr);
+        let ok = blk.icmp_eq(I32, &cid_word, &cid.to_string());
+        blk.cond_br(&ok, &proven_label, &generic_label);
+    } else {
+        crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
+            ctx,
+            recv_handle,
+            &expected_shape_id,
+            &proven_label,
+            &generic_label,
+            family_id.as_deref(),
+        );
+    }
 
     ctx.current_block = proven_idx;
     let v_proven = ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);

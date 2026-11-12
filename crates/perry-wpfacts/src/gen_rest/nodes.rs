@@ -73,7 +73,10 @@ impl<'a> Gen<'a> {
             perry_hir::folded_call::Receiver::Expr(x) => self.expr(fx, x),
             perry_hir::folded_call::Receiver::Local(id) => self.local(fx.module, id),
         };
-        let args = call.args.iter().map(|x| self.expr(fx, x)).collect();
+        let args: Vec<NodeId> = call.args.iter().map(|x| self.expr(fx, x)).collect();
+        if call.method == "push" {
+            self.list_push(recv, Some(args.len() as u32));
+        }
         let a = self.m.atom(call.method);
         self.mcall(recv, Key::Named(a), args, vec![])
     }
@@ -102,7 +105,8 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let s = self.expr(fx, string);
         crate::builtins::string_methods::to_prim(&mut self.m, s, "string method receiver ToString");
-        let args: Vec<NodeId> = operands.iter().map(|o| self.expr(fx, o)).collect();
+        // The method classifies its operands (`zero_sign`, `with_native`).
+        let args: Vec<NodeId> = operands.iter().map(|o| self.expr_zs(fx, o)).collect();
         let recv = self.prim_node(prim::STR);
         let a = self.m.atom(name);
         self.mcall(recv, Key::Named(a), args, vec![])
@@ -176,6 +180,38 @@ impl<'a> Gen<'a> {
     pub(super) fn elem_store(&mut self, fx: &Fx, recv: NodeId, v: NodeId, what: &str) {
         let ek = self.m.elem_key();
         self.store(fx, recv, ek, v, what.to_string(), None, false);
+    }
+
+    /// The fill push `e` (`push_fills`) of fill `fill`: the element store
+    /// of `v` into what `recv` holds, at a site marked as that fill's.
+    pub(super) fn fill_push(&mut self, fx: &Fx, e: &Expr, recv: NodeId, v: NodeId, fill: u32) {
+        let ek = self.m.elem_key();
+        let site = self.store_site(fx.module, fx.f, "push".to_string(), None, false);
+        self.m.push_fill_sites.insert(site, fill);
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key: ek,
+                src: v,
+                site,
+            },
+        );
+        let offset = match e {
+            Expr::NativeMethodCall {
+                object: Some(object),
+                ..
+            } => match object.as_ref() {
+                Expr::PropertyGet { byte_offset, .. } => *byte_offset,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        self.m.push_fill_pushes.push(crate::push_fills::FillPush {
+            module: fx.module,
+            offset,
+            recv,
+            fill,
+        });
     }
 
     /// An operation without a rule of its own runs code on `n` once ⊤ is

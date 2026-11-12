@@ -124,6 +124,7 @@ js_array_entries	ptr	ptr
 js_array_entries_iter_obj	i64	ptr
 js_array_every	f64	ptr,ptr
 js_array_fill	ptr	ptr,f64
+js_array_fill_birth	ptr	i32u,i32u,f64,i32u
 js_array_fill_f64_const_extend	ptr	ptr,i32u,f64
 js_array_fill_f64_const_len_extend	ptr	ptr,f64
 js_array_fill_f64_iota_extend	ptr	ptr,i32u
@@ -250,6 +251,11 @@ js_array_record_stack_enter	i32s	ptr,i32u,i32u
 js_array_reduce	f64	ptr,ptr,i32s,f64
 js_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_array_refresh_local_head	f64	f64
+js_array_rest_encode	f64	f64
+js_array_rest_get	f64	f64,f64
+js_array_rest_push	ptr	ptr,f64,i32u
+js_array_rest_reserve	f64	f64,i32u
+js_array_rest_set	void	f64,f64,f64
 js_array_reverse	ptr	ptr
 js_array_reverse_value	f64	f64
 js_array_set	void	ptr,i32u,i64
@@ -466,6 +472,7 @@ js_bigint_warn	void	ptr
 js_bigint_xor	ptr	ptr,ptr
 js_blob_array_buffer	ptr	f64
 js_blob_bytes	ptr	f64
+js_blob_from_raw_bytes_v1	f64	ptr,usize,ptr,usize
 js_blob_new	f64	f64,f64
 js_blob_size	f64	f64
 js_blob_slice	f64	f64,f64,f64,ptr
@@ -2731,6 +2738,7 @@ js_object_array_keytable_write_guard	i32s	f64,f64,i32u,i32u,ptr
 js_object_array_numeric_write2_guard	i64	f64,f64,f64,i32u
 js_object_array_numeric_write_guard	i64	f64,f64,f64,f64,f64,i32u,i32u
 js_object_array_numeric_write_range_guard	i64	f64,f64,f64,f64,f64,i32u,i32u,i32u
+js_object_assign_fresh	f64	f64
 js_object_assign_one	f64	f64,f64
 js_object_assign_validate_target	f64	f64
 js_object_clone_with_extra	ptr	f64,i32u,ptr,i32u
@@ -2811,6 +2819,9 @@ js_object_property_is_enumerable	f64	f64,f64
 js_object_record_get_by_bytes	i64	ptr,ptr,usize
 js_object_record_set_by_bytes	i32s	ptr,ptr,usize,i64
 js_object_rest	ptr	ptr,ptr
+js_object_rest_get	f64	f64,f64
+js_object_rest_lanes	f64	f64,i32s
+js_object_rest_set	f64	f64,f64,f64,i32s
 js_object_seal	f64	f64
 js_object_set_field	void	ptr,i32u,i64
 js_object_set_field_by_index	void	ptr,ptr,i32u,f64
@@ -2832,8 +2843,8 @@ js_object_shape_id_for_class_keys	i32u	i64,i32u,i32u,i64
 js_object_shape_id_for_class_keys_live	i32u	i64,i32u,i32u,i32u,i64
 js_object_shape_id_for_class_keys_static	i32u	i64,i32u,i32u,i32u,i32u,i64
 js_object_shape_id_for_keys	i32u	i64,i32u
-js_object_spread_fresh	f64	f64,f64
-js_object_spread_fresh_leading	f64	f64,f64
+js_object_spread_fresh	f64	f64,f64,i32u
+js_object_spread_fresh_leading	f64	f64,f64,i32u
 js_object_super_call	f64	f64,f64,f64,ptr,usize
 js_object_super_get	f64	f64,f64,f64
 js_object_super_put_value_set	f64	f64,f64,f64,f64,i32s
@@ -3527,6 +3538,7 @@ js_register_path_module	void	f64,f64
 js_register_path_module_partial	void	f64,f64,f64
 js_register_prototype_method	void	i32u,ptr,usize,f64
 js_register_readable_handle_predicate	void	ptr
+js_register_sea_profile	void	
 js_register_set_text_handler	void	ptr
 js_register_show_toast_handler	void	ptr
 js_register_stdin_flow_ops	void	ptr,ptr
@@ -3670,6 +3682,7 @@ js_sea_get_asset	f64	f64,f64
 js_sea_get_asset_as_blob	f64	f64,f64
 js_sea_get_asset_keys	f64	
 js_sea_get_raw_asset	f64	f64
+js_sea_install_blob_factory	void	usize
 js_sea_is_sea	f64	
 js_segments_view_code_point_at	f64	f64,f64
 js_segments_view_next	f64	f64
@@ -4198,6 +4211,7 @@ js_throw_error_with_code	void	ptr,usize,ptr,usize,i32s
 js_throw_eval_syntax_error	f64	f64
 js_throw_illegal_constructor_type_error	f64	
 js_throw_json_constructor_type_error	f64	
+js_throw_local	void	f64
 js_throw_math_constructor_type_error	f64	
 js_throw_not_a_constructor	f64	
 js_throw_reference_error_super_delete	f64	
@@ -5286,7 +5300,10 @@ perry_verify_facts_entry	void	i64,i64
 perry_verify_facts_field	i32s	f64,f64,i64,i64,i64,i64,i32s,i32s,i32s,i32s,i64,i64
 perry_verify_facts_init	void	
 perry_verify_facts_miss	i32s	f64,i64,i64
+perry_verify_facts_record_claim	void	f64
+perry_verify_facts_record_identity	i32s	f64,f64,i64,i64
 perry_verify_facts_tick	void	
+perry_vfs_read_file_v1	i32s	ptr,usize,ptr,ptr
 perry_watchos_classes_registered	void	
 perry_wpfacts_check_call	ptr	f64,i64,i64
 perry_wpfacts_check_call_miss	i32s	ptr,i64

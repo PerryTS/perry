@@ -3,6 +3,8 @@ use super::*;
 impl Model {
     pub(super) fn apply_inner(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         match *c {
+            // An observation for the value-record derive: no flow.
+            Cons::Identity { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being
@@ -39,14 +41,30 @@ impl Model {
                 }
             }
             Cons::LenIndex { lo, hi } => {
+                // An index store's rule comes with its `Cons::Store`, which
+                // records the event; `pop` and a generic permutation have
+                // only this rule (`held_lengths`).
+                let at = match self.len_index_sites.get(&n) {
+                    _ if self.len_index_stores.contains(&n) => None,
+                    Some(&site) => Some(site),
+                    None => Some(u32::MAX),
+                };
                 for &t in toks {
-                    self.arr_len_index(t, Iv { lo, hi });
+                    if let Some(at) = at {
+                        self.len_event(t, at, false);
+                    }
+                    self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
             }
             Cons::LenPermuted { t } => self.arr_len_permuted_check(n, t),
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);
+                }
+            }
+            Cons::IndexKept => {
+                for &t in toks {
+                    self.index_kept(t);
                 }
             }
             Cons::OwnValues { dst } => {
@@ -122,7 +140,7 @@ impl Model {
                 // the container is a value of its own at every ⊤ site the
                 // result reaches: one per call site, each with field storage.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
-                    self.with_b(|m| builtins::prim_method(m, prim, key, call));
+                    self.with_native(call, |m| builtins::prim_method(m, prim, key, call));
                 }
                 for &t in toks {
                     self.method_on(t, key, call);
@@ -461,6 +479,24 @@ impl Model {
                     }
                 }
             }
+            Cons::RequireSpec { call } => {
+                // R-SPEC: each string constant resolves once, as that
+                // literal does; any string, a token or ⊤ once as a value
+                // no constant spells.
+                let strs = self.nodes[n as usize].strs;
+                let any_str = prim & prim::STR != 0 && strs == STRS_TOP;
+                if prim & prim::STR != 0 && !any_str {
+                    let atoms = self.str_atoms(strs).to_vec();
+                    for a in atoms {
+                        if self.require_spec_done.insert((call, Some(a))) {
+                            self.with_b(|m| builtins::require_by_spec(m, call, Some(a)));
+                        }
+                    }
+                }
+                if (any_str || !toks.is_empty()) && self.require_spec_done.insert((call, None)) {
+                    self.with_b(|m| builtins::require_by_spec(m, call, None));
+                }
+            }
             Cons::TopIfTop { dst, reason } => {
                 if toks.contains(&TOP) {
                     self.add_top(dst, |m| m.reasons[reason as usize].clone());
@@ -516,6 +552,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
+                        self.len_event(t, u32::MAX, false);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
@@ -792,7 +829,7 @@ impl Model {
                         self.toks[q as usize],
                         TokKind::ObjectProto | TokKind::NativeProto(_)
                     ) {
-                        self.with_b(|m| builtins::proto_method(m, q, origin, key, call));
+                        self.with_native(call, |m| builtins::proto_method(m, q, origin, key, call));
                     }
                 }
             }
@@ -827,7 +864,9 @@ impl Model {
                         },
                     );
                     if self.tmpls[class as usize].native_parent.is_some() {
-                        self.with_b(|m| crate::builtins::native_parent_ctor(m, class, call, t));
+                        self.with_native(call, |m| {
+                            crate::builtins::native_parent_ctor(m, class, call, t)
+                        });
                     }
                 }
             }
@@ -926,15 +965,15 @@ impl Model {
             }
             Cons::AnnexBDefine { call, setter } => {
                 for &t in toks {
-                    self.with_b(|m| builtins::annexb_define(m, t, call, setter));
+                    self.with_native(call, |m| builtins::annexb_define(m, t, call, setter));
                 }
             }
             Cons::AnnexBLookup { call, setter } => {
                 for &t in toks {
-                    self.with_b(|m| builtins::annexb_lookup(m, Some(t), call, setter));
+                    self.with_native(call, |m| builtins::annexb_lookup(m, Some(t), call, setter));
                 }
                 if prim & !(prim::NULL | prim::UNDEF) != 0 {
-                    self.with_b(|m| builtins::annexb_lookup(m, None, call, setter));
+                    self.with_native(call, |m| builtins::annexb_lookup(m, None, call, setter));
                 }
             }
             Cons::AccessorInstall {
@@ -1327,7 +1366,7 @@ impl Model {
                 // Primitive receivers (`MCall`'s rule): a number key calls
                 // a key a store into ⊤ wrote on their prototype.
                 if prim != 0 && !self.nodes[n as usize].pts.contains_tok(TOP) {
-                    self.with_b(|m| builtins::prim_plain_key(m, prim, call));
+                    self.with_native(call, |m| builtins::prim_plain_key(m, prim, call));
                     let p = prim & !(prim::NULL | prim::UNDEF);
                     if p != 0 && self.idx_done.insert((idx, TOP, call, IDX_MCALL_PRIM | p)) {
                         self.cons(
@@ -1381,8 +1420,9 @@ impl Model {
                 };
                 if named && self.idx_done.insert((n, obj, call, rule)) {
                     match obj {
-                        TOP => self
-                            .with_b(|m| builtins::prim_method(m, recv_prim, Key::Any(shape), call)),
+                        TOP => self.with_native(call, |m| {
+                            builtins::prim_method(m, recv_prim, Key::Any(shape), call)
+                        }),
                         _ => self.method_on(obj, Key::Any(shape), call),
                     }
                 }
@@ -1548,6 +1588,7 @@ impl Model {
                 len_ivs.extend(index_strs.iter().map(|&v| Iv::int(v, v)));
                 for iv in len_ivs {
                     self.indexed_store_sites.insert(site);
+                    self.len_index_stores.insert(o);
                     if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
                         self.cons(
                             o,
@@ -1561,8 +1602,26 @@ impl Model {
                 if index && self.index_store_done.insert((n, site, 1)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
-                    // `a[i] = v` may write past the end; `push` appends.
-                    self.cons(o, Cons::IndexHole);
+                }
+                if index {
+                    // `a[i] = v` may write past the end; `push` appends. At
+                    // a site whose key is at most the length
+                    // (`inbounds_sites`) it does not, while the key is a
+                    // Number and nothing else (a key that may be anything
+                    // else was not what gen compared).
+                    let node = &self.nodes[n as usize];
+                    let kept = self.inbounds_store
+                        && (self.inbounds_sabotage || self.inbounds_sites.contains(&site))
+                        && node.prim == prim::NUM
+                        && node.pts.is_empty()
+                        && index_strs.is_empty();
+                    let (kind, c) = match kept {
+                        true => (3, Cons::IndexKept),
+                        false => (4, Cons::IndexHole),
+                    };
+                    if self.index_store_done.insert((n, site, kind)) {
+                        self.cons(o, c);
+                    }
                 }
                 // A key that may be no String (an object to ToPrimitive, a
                 // symbol, a BigInt) keeps the any-key store; any String
@@ -1657,14 +1716,26 @@ impl Model {
                     let (l, r) = if right { (ot, me) } else { (me, ot) };
                     if self.range_sabotage && op == RangeOp::Add {
                         l
+                    } else if self.exact_rule_sabotage && op == RangeOp::Add {
+                        // Negative control (`exactrule`): a sum is the hull
+                        // of its operands, not their sum.
+                        l.join(r)
                     } else {
                         self.const_numbers
                             .then(|| crate::model::range::eval_exact(op, l, r))
                             .flatten()
-                            .unwrap_or_else(|| crate::model::range::eval(op, l, r))
+                            .unwrap_or_else(|| {
+                                crate::model::range::eval_with(op, l, r, self.zero_sign)
+                            })
                     }
                 };
-                if crate::solve::grow_range(&mut self.nodes[dst as usize], iv) {
+                let d = &mut self.nodes[dst as usize];
+                let grew = if self.exact_rules {
+                    crate::solve::grow_rule_range(d, iv)
+                } else {
+                    crate::solve::grow_range(d, iv)
+                };
+                if grew {
                     let d = &mut self.nodes[dst as usize];
                     if !d.in_wl {
                         d.in_wl = true;
@@ -1824,6 +1895,7 @@ impl Model {
                 for &d in toks {
                     // A copy into an Array (`Object.assign`) may write any
                     // index, past its end too.
+                    self.len_event(d, site, false);
                     self.arr_len_top(d);
                     self.spread_into(src, d, site, from);
                 }

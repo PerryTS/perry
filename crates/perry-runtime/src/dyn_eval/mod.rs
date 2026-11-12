@@ -688,6 +688,7 @@ fn script_statements(script: &InterpFn) -> &[ast::Stmt] {
 }
 
 fn parse_script_statements(source: &str) -> Vec<ast::Stmt> {
+    crate::snap_funnel!(Parse);
     let mut cache = perry_diagnostics_cache();
     let parsed =
         perry_parser::parse_typescript_with_cache(source, "perry-vm-script.cjs", &mut cache)
@@ -778,6 +779,7 @@ fn prepare_source(source: &str) -> f64 {
     // on sloppy semantics (find-my-way assigns the undeclared `value`), and
     // module auto-detection must not kick in on `import(`-looking substrings.
     let mut cache = perry_diagnostics_cache();
+    crate::snap_funnel!(Parse);
     let parsed =
         match perry_parser::parse_typescript_with_cache(source, "perry-dyn-fn.cjs", &mut cache) {
             Ok(p) => p,

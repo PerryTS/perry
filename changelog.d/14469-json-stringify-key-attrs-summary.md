@@ -1,0 +1,1 @@
+JSON.stringify reads an ordinary object's own-key attributes from its shape summary: when no key is non-enumerable or an accessor, the per-key by-bytes descriptor and getter lookups are skipped, so class instances with optional or private fields serialize without them. Output is unchanged.

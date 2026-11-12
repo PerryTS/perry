@@ -339,6 +339,14 @@ pub(super) fn compile_method(
         llvm_name
     };
     let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
+    let sig_record_return = sig
+        .and_then(|tm| tm.plan.record.as_ref())
+        .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((crate::types::PTR, super::record_sig::RESULT_PARAM.to_string()));
+    }
     let lf = llmod.define_function(
         &llvm_name,
         super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
@@ -708,6 +716,7 @@ pub(super) fn compile_method(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -725,6 +734,8 @@ pub(super) fn compile_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -778,7 +789,7 @@ pub(super) fn compile_method(
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
         loop_pushed_arrays: &cross_module.loop_pushed_arrays,
-        pushed_array_birth: false,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -802,6 +813,7 @@ pub(super) fn compile_method(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -863,6 +875,9 @@ pub(super) fn compile_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -890,6 +905,7 @@ pub(super) fn compile_method(
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
         sig_return,
+        sig_record_return,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
@@ -986,7 +1002,6 @@ pub(super) fn compile_method(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -994,7 +1009,12 @@ pub(super) fn compile_method(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
-        int_range_facts: Vec::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(method_body),
+        int32_shadows: std::collections::HashMap::new(),
+        int_range_facts: match sig {
+            Some(tm) => super::signature_entry::param_range_facts(method, &tm.plan),
+            None => Vec::new(),
+        },
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: nonnegative_param_ids,
         elided_arguments: HashMap::new(),
@@ -1061,6 +1081,9 @@ pub(super) fn compile_method(
         Some(method_body),
         super::arguments::ArgumentsCallee::Undefined,
     );
+    for p in &method.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
 
     // Constructors emitted as standalone cross-module LLVM functions (named
     // `<prefix>__<class>_constructor`) must bake the field initializers into
@@ -1750,9 +1773,14 @@ pub(super) fn compile_method(
             )
         })?;
     } else {
+        // N2: the held suffix of a plain method body (`stmt::fn_base`).
+        if !is_constructor_method && !method.is_generator {
+            stmt::fn_base::plan(&mut ctx, method_body);
+        }
         stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
             format!("lowering body of method '{}::{}'", class.name, method.name)
         })?;
+        stmt::fn_base::finish(&mut ctx);
     }
 
     // #8648: pre-#8630 this symbol ended in `ret undefined`, and every caller
@@ -1776,6 +1804,12 @@ pub(super) fn compile_method(
         ctx.current_block = *after_idx;
     }
 
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
     if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
         // P2: the facts prove an I32 entry never completes normally.
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

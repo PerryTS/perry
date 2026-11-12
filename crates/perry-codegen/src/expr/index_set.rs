@@ -303,9 +303,20 @@ fn lower_array_index_set_via_runtime_key(
     // #9394: the assignment's own `Throw` flag, carried to the runtime helper
     // so a rejected element write is a TypeError only in strict code.
     assignment_strict: bool,
+    // Key signs: what the facts prove of this store's key (`index_key::
+    // store_key_fact`).
+    key: Option<super::index_key::KeyFact>,
+    // The receiver's rep when the rep-keyed store takes the site
+    // (`index_set_rep::fact`).
+    rep: Option<super::index_get::proven_array::RepRead>,
 ) -> Result<String> {
     let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
-    let value_is_numeric = is_numeric_expr(ctx, value);
+    // A value the facts prove a Number (`a[j] ?? 0` over an Array of
+    // Numbers whose static type says nothing) selects the guarded store's
+    // number-over-number arm as a statically numeric one does: the arm
+    // tests the value itself, so this is a choice of code, not a proof.
+    let value_is_numeric = is_numeric_expr(ctx, value)
+        || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number);
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
@@ -320,7 +331,13 @@ fn lower_array_index_set_via_runtime_key(
         &[object],
         &[index, value],
         |ctx| {
-            let idx_double = lower_expr(ctx, index)?;
+            // A key the range proofs bound to int32 is lowered as that i32
+            // (`int32_key`): the guarded store takes it as a native key.
+            let idx_double = if super::int32_key::proven(ctx, index) {
+                super::int32_key::lower(ctx, index)?
+            } else {
+                lower_expr(ctx, index)?
+            };
             let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
             let (val_double, val_bits) = lower_value_for_dynamic_index_set(
                 ctx,
@@ -339,30 +356,49 @@ fn lower_array_index_set_via_runtime_key(
             // side has done this since #7286 (`aidx.canonical`). A rejected key
             // becomes index -1, which the guarded in-bounds store declines
             // onto the same helper arm, so the helper is emitted once.
-            let guard_idx_i32 = super::index_key::normalize(ctx, &idx_double, Some(index));
-            super::index_set_guarded::emit_guarded_inbounds_array_store(
-                ctx,
-                &arr_box,
-                &guard_idx_i32,
-                &val_double,
-                "idxset.runtime_key",
-                layout_note_needed,
-                value_needs_barrier,
-                value_is_numeric,
-                |ctx| {
-                    emit_array_runtime_key_store(
-                        ctx,
-                        object,
-                        &arr_box,
-                        &idx_double,
-                        &val_double,
-                        &val_bits,
-                        value_needs_barrier,
-                        source_label,
-                        assignment_strict,
-                    )
-                },
-            )?;
+            // N10: every arm of that store is behind `idx <u capacity`, and
+            // every decline takes this one helper with the original key, so
+            // a widened native index needs no sign test in front of it.
+            // Key signs: a key the facts prove an int32 is that `i32` with
+            // no normalizer; a negative one declines as above.
+            let guard_idx_i32 = match key {
+                Some(fact) => super::index_key::exact_i32(ctx, &idx_double, fact),
+                None => super::index_key::normalize_unsigned(ctx, &idx_double, Some(index)),
+            };
+            let exact = |ctx: &mut FnCtx<'_>| {
+                emit_array_runtime_key_store(
+                    ctx,
+                    object,
+                    &arr_box,
+                    &idx_double,
+                    &val_double,
+                    &val_bits,
+                    value_needs_barrier,
+                    source_label,
+                    assignment_strict,
+                )
+            };
+            match rep {
+                Some(read) => super::index_set_rep::emit(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    read,
+                    exact,
+                )?,
+                None => super::index_set_guarded::emit_guarded_inbounds_array_store(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    "idxset.runtime_key",
+                    layout_note_needed,
+                    value_needs_barrier,
+                    value_is_numeric,
+                    exact,
+                )?,
+            }
             Ok(val_double)
         },
     )
@@ -534,6 +570,9 @@ pub(crate) fn lower(
             value,
             ..
         } => {
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, object, index, value, floor);
+            }
             if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                 ctx,
                 object,
@@ -1047,6 +1086,8 @@ pub(crate) fn lower(
                     value.as_ref(),
                     "array[dynamic_numeric_index]",
                     assignment_strict,
+                    super::index_key::store_key_fact(ctx, expr),
+                    super::index_set_rep::fact(ctx, object.as_ref(), expr),
                 );
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
@@ -1169,6 +1210,8 @@ pub(crate) fn lower(
                                 value.as_ref(),
                                 "array[dynamic_numeric_index]",
                                 assignment_strict,
+                                super::index_key::store_key_fact(ctx, expr),
+                                super::index_set_rep::fact(ctx, object.as_ref(), expr),
                             );
                         };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);

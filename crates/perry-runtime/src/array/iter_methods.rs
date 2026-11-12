@@ -85,7 +85,7 @@ impl<'s> RootedIterArray<'s> {
         let live = unsafe {
             let header =
                 (rooted as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!((*header).obj_type)
                 && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 rooted

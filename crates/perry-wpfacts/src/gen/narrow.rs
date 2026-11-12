@@ -35,6 +35,27 @@
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
 //!
+//! ## Writes on a leaving path
+//!
+//! A write ends the start reads for the code it can reach, not for the
+//! program text after it. A branch of an `if` that always leaves
+//! (`always_exits`) reaches the code after the `if` only through its jumps,
+//! so after the branch each narrowing's `written` is what it was before it
+//! when every way out of the branch lands outside the narrowing's code
+//! (`jumps_leave`):
+//! - an unlabeled `break`/`continue` out of the branch, with no loop or
+//!   `switch` between the `if` and the narrowing (`Gen::jumps`): it lands at
+//!   the narrowed loop's update (which reads the end node) or past the
+//!   guarded code;
+//! - a `return` or `throw`, and any exception, with no `try` between them
+//!   (`Gen::tries`): no `catch` or `finally` of the narrowing's code runs
+//!   after it;
+//! - no labeled jump (where it lands is not followed).
+//!
+//! The write still reaches the end node and the local, so the update and
+//! every read the jump reaches see it. `PERRY_FACTS_LEAVING_WRITES=0` ends
+//! the start reads at the first write in the text again.
+//!
 //! The rule only applies where no other code can write `i` during the loop:
 //! `i` is declared by the loop's `init` and no closure appears in the loop.
 //! A nested loop that writes `i` ends the start reads before it (its body
@@ -55,6 +76,37 @@ pub(crate) struct Narrow {
     /// The update is walked: it reads the end node, and its write (which
     /// runs after the body) reaches only the counter.
     in_update: bool,
+    /// `Gen::jumps` and `Gen::tries` where the narrowed code starts (for a
+    /// loop, inside it): "Writes on a leaving path".
+    jumps: u32,
+    tries: u32,
+    /// The test implies `local < a.length` for this local `a`
+    /// (`gen/in_bounds.rs`).
+    below_length: Option<u32>,
+}
+
+impl Narrow {
+    /// (module, local, function body).
+    pub(crate) fn key(&self) -> (u32, u32, FnIdx) {
+        (self.mi, self.id, self.f)
+    }
+
+    /// The local still holds the value the test saw.
+    pub(crate) fn unwritten(&self) -> bool {
+        !self.written
+    }
+
+    pub(crate) fn below_length_of(&self) -> Option<u32> {
+        self.below_length
+    }
+}
+
+/// The local `a` of a clip `< a.length`.
+fn below_length(kind: u8, bound: &Bound) -> Option<u32> {
+    match bound {
+        Bound::Length(a) if kind == crate::model::range::CLIP_LT => Some(*a),
+        _ => None,
+    }
 }
 
 fn expr_has(e: &Expr, p: &mut impl FnMut(&Expr) -> bool) -> bool {
@@ -143,14 +195,18 @@ impl<'a> Gen<'a> {
         let i = self.local(mi, id);
         // One clip per comparison, chained: the reads see their meet.
         let mut start = i;
+        let mut below = None;
         for (kind, bound) in clips {
+            below = below.or(below_length(kind, &bound));
             let b = self.bound_node(mi, bound);
             let dst = self.tmp("narrow");
+            self.zs_carrier(dst);
             self.m.edge(start, dst);
             self.range_rule(crate::model::RangeOp::Clip(kind), start, Some(b), dst);
             start = dst;
         }
         let end = self.tmp("narrow-end");
+        self.zs_carrier(end);
         self.m.edge(start, end);
         self.narrow.push(Narrow {
             mi,
@@ -160,6 +216,9 @@ impl<'a> Gen<'a> {
             end,
             written: false,
             in_update: false,
+            jumps: self.jumps,
+            tries: self.tries,
+            below_length: below,
         });
         true
     }
@@ -202,6 +261,34 @@ impl<'a> Gen<'a> {
             .collect();
         for e in ends {
             self.m.edge(vn, e);
+        }
+    }
+
+    /// Before walking a branch of an `if`: each narrowing's `written`.
+    pub(crate) fn narrow_snapshot(&self) -> Vec<bool> {
+        if !self.leaving_writes {
+            return Vec::new();
+        }
+        self.narrow.iter().map(|n| n.written).collect()
+    }
+
+    /// After walking `branch` (`pre` from `narrow_snapshot` before it): a
+    /// write in a branch that always leaves past a narrowing's code does
+    /// not reach the reads after the `if` (module docs, "Writes on a
+    /// leaving path").
+    pub(crate) fn narrow_leave(&mut self, branch: &[Stmt], pre: Vec<bool>) {
+        if pre.is_empty() {
+            return;
+        }
+        let sabotage = self.leaving_write_sabotage;
+        if !sabotage && !(always_exits(branch) && jumps_leave(branch)) {
+            return;
+        }
+        let (f, jumps, tries) = (self.m.cur_fn, self.jumps, self.tries);
+        for (n, w) in self.narrow.iter_mut().zip(pre) {
+            if n.f == f && (sabotage || (n.jumps == jumps && n.tries == tries)) {
+                n.written = w;
+            }
         }
     }
 
@@ -383,6 +470,11 @@ pub(crate) struct Scope {
     saved: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
     mi: u32,
     own: Vec<u32>,
+    /// The enclosing body's in-bounds state (`gen/in_bounds.rs`).
+    in_bounds: (
+        Option<super::in_bounds::BodyLocals>,
+        Vec<super::in_bounds::Derived>,
+    ),
 }
 
 impl<'a> Gen<'a> {
@@ -407,14 +499,17 @@ impl<'a> Gen<'a> {
             self.narrow_consts.extend(own.iter().map(|&c| (mi, c)));
             (f, ls)
         });
+        let in_bounds = self.in_bounds_enter_body(f, params, body);
         Scope {
             saved: std::mem::replace(&mut self.narrow_scope, scope),
             mi,
             own,
+            in_bounds,
         }
     }
 
     pub(crate) fn narrow_exit_body(&mut self, s: Scope) {
+        self.in_bounds_exit_body(s.in_bounds);
         for &id in &s.own {
             self.narrow_consts.remove(&(s.mi, id));
         }
@@ -435,6 +530,37 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
                 | Stmt::LabeledContinue(_)
         )
     )
+}
+
+/// Whether every jump out of `ss` lands where an unlabeled jump at the
+/// statement around `ss` lands, or leaves the function: no labeled `break`
+/// or `continue` (where it lands is not followed). A `break` inside a loop
+/// or `switch` of `ss`, and a `continue` inside a loop of it, stay in `ss`.
+/// Nested function bodies are expressions: not walked.
+pub(crate) fn jumps_leave(ss: &[Stmt]) -> bool {
+    ss.iter().all(|s| match s {
+        Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => false,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => jumps_leave(then_branch) && else_branch.as_deref().is_none_or(jumps_leave),
+        Stmt::While { body, .. } | Stmt::DoWhile { body, .. } | Stmt::For { body, .. } => {
+            jumps_leave(body)
+        }
+        Stmt::Switch { cases, .. } => cases.iter().all(|c| jumps_leave(&c.body)),
+        Stmt::Try {
+            body,
+            catch,
+            finally,
+        } => {
+            jumps_leave(body)
+                && catch.as_ref().is_none_or(|c| jumps_leave(&c.body))
+                && finally.as_deref().is_none_or(jumps_leave)
+        }
+        Stmt::Labeled { body, .. } => jumps_leave(std::slice::from_ref(body)),
+        _ => true,
+    })
 }
 
 /// Whether running `ss` may reach its end: a function body that does
@@ -806,6 +932,7 @@ impl<'a> Gen<'a> {
                 let an = self.bound_node(mi, a);
                 let bn = b2.map(|b2| self.bound_node(mi, b2));
                 let dst = self.tmp("narrow-bound");
+                self.zs_carrier(dst);
                 self.range_rule(op, an, bn, dst);
                 self.m.add_prim(dst, prim::NUM);
                 dst
@@ -827,6 +954,7 @@ impl<'a> Gen<'a> {
                     .narrowed_read(mi, o)
                     .unwrap_or_else(|| self.local(mi, o));
                 let len = self.tmp("narrow-length");
+                self.zs_carrier(len);
                 let key = crate::model::Key::Named(self.m.atom("length"));
                 self.m.cons(on, crate::model::Cons::Load { key, dst: len });
                 len
@@ -899,8 +1027,11 @@ impl<'a> Gen<'a> {
                 .narrowed_read(mi, id)
                 .unwrap_or_else(|| self.local(mi, id));
             let start = self.tmp("guard");
+            self.zs_carrier(start);
+            let mut below = None;
             match fact {
                 Implied::Clip(_, kind, bound) => {
+                    below = below_length(kind, &bound);
                     let is_char = matches!(bound, Bound::Char(_));
                     let b = self.bound_node(mi, bound);
                     let op = match is_char {
@@ -920,6 +1051,7 @@ impl<'a> Gen<'a> {
                 }
             }
             let end = self.tmp("guard-end");
+            self.zs_carrier(end);
             self.m.edge(start, end);
             self.narrow.push(Narrow {
                 mi,
@@ -929,6 +1061,9 @@ impl<'a> Gen<'a> {
                 end,
                 written: false,
                 in_update: false,
+                jumps: self.jumps,
+                tries: self.tries,
+                below_length: below,
             });
             pushed += 1;
         }

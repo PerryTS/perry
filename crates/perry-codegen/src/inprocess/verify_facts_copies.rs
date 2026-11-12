@@ -118,6 +118,8 @@ unsafe fn rewrite_with(module: LLVMModuleRef, builder: LLVMBuilderRef) -> Result
                             | "perry_verify_facts_call"
                             | "perry_verify_facts_call_miss"
                             | "perry_verify_facts_miss"
+                            | "perry_verify_facts_record_identity"
+                            | "perry_verify_facts_record_array"
                             | "perry_verify_facts_entry"
                     ) {
                         let pointer_index = first + count - 2;

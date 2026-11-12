@@ -18,6 +18,7 @@
 
 pub mod bindings;
 mod builtins;
+pub mod call_kinds;
 pub mod canonical_numbers;
 mod const_arrays;
 mod const_numbers;
@@ -30,6 +31,7 @@ mod diagnostics;
 mod dump;
 mod element_floors;
 mod element_keys;
+mod fill_births;
 pub mod field_read_calls;
 mod gen;
 mod gen_call;
@@ -37,10 +39,17 @@ mod gen_cjs;
 mod gen_const;
 mod gen_expr;
 mod gen_rest;
+mod held_lengths;
 mod ledger;
+pub mod list_caps;
+mod literal_strings;
 pub mod model;
 pub mod native_effects;
 pub mod pts;
+mod push_fills;
+pub mod records;
+mod rest_elems;
+mod rest_fields;
 mod rooted;
 pub mod signatures;
 mod solve;
@@ -48,8 +57,11 @@ mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
+mod zero_sign;
 
-pub use bindings::{ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, Rep};
+pub use bindings::{
+    ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
+};
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
@@ -89,9 +101,27 @@ pub struct FactsConfig {
     /// No immutable Arrays and no constant contents
     /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
     pub no_const_arrays: bool,
+    /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
+    /// set until VR-6): identity observations become `Cons::Identity`.
+    pub value_records: bool,
+    /// No record signature slots (`PERRY_FACTS_RECORD_SIGNATURES=0`,
+    /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
+    /// rejects its template.
+    pub no_record_signatures: bool,
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
+    /// R1: a `Cons::Range` result widens like any node again, after
+    /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
+    /// `solve::grow_rule_range`).
+    pub no_exact_rules: bool,
+    /// −0 tolerance off (`PERRY_FACTS_ZERO_SIGN=0`, PR D, `zero_sign`): the
+    /// strict interval rules, a possible `-0` makes the result ⊤.
+    pub no_zero_sign: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves ends
+    /// the narrowed reads after the branch again (`PERRY_FACTS_LEAVING_WRITES=0`;
+    /// `gen::narrow`, "Writes on a leaving path").
+    pub no_leaving_writes: bool,
     /// An element read's past-the-end `undefined` is unconditional again
     /// (`PERRY_FACTS_ELEM_UNDEF=0`, PR-C1: `Cons::ElemUndef`).
     pub no_elem_undef: bool,
@@ -267,6 +297,9 @@ pub struct ProgramFacts {
     pub body_reach: BodyReach,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
+    /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
+    /// the `records` ledger.
+    pub record_arrays: Vec<records::RecordArray>,
     pub sites: Vec<SiteFacts>,
     /// Computed member sites in a whole-program solve. Per-unit facts do
     /// not publish values whose token/template ids belong to separate solves.
@@ -306,6 +339,15 @@ pub struct ProgramFacts {
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     pub sabotage: Option<String>,
     pub relations: Option<Vec<String>>,
+    /// The dump's `# rep` probe lines (`bindings::rep_probe`), with the
+    /// dump only.
+    pub rep_probe: Vec<String>,
+    /// −0 tolerance (PR D, `zero_sign`): Number nodes that keep an integer
+    /// interval although they may hold `-0`, which no use can observe.
+    /// Check mode's int32 witnesses admit `-0` when it is nonzero (a
+    /// tolerated value computed as a double is `-0`, and that is no false
+    /// proof); the sign witness is codegen's.
+    pub zero_sign_tolerated: u32,
     pub tok_names: Vec<String>,
     /// Receiver facts per binding, per module (slice 2: codegen elision).
     pub bindings: Vec<ModuleBindings>,
@@ -494,8 +536,39 @@ fn generate<'a>(
     g.m.arr_front_sabotage = cfg.sabotage.as_deref() == Some("arrfront");
     g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
+    g.m.value_records = cfg.value_records;
+    g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
+    g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
+    g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_capacity = rest_elems::capacity_enabled();
+    g.m.fill_births = fill_births::enabled();
+    g.m.push_fills = push_fills::enabled();
+    g.m.push_fill_sabotage = cfg.sabotage.as_deref() == Some("restpush");
+    g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
+    g.m.rest_fields = rest_fields::enabled();
+    g.m.key_sign = element_keys::sign_enabled();
+    g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
+    g.m.wide_keys = element_keys::wide_enabled();
+    g.m.slice_births = builtins::slice_births_enabled();
+    g.m.inbounds_store = gen::in_bounds::enabled();
+    g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
+    g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
+    g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.map_values = solve::map_vals::enabled();
+    g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
+    g.m.literal_strings = literal_strings::enabled();
+    g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");
+    g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
+    g.m.exact_rules = !cfg.no_exact_rules;
+    g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
+    g.m.zero_sign =
+        !cfg.no_zero_sign && !cfg.no_int_ranges && !cfg.unit && demand::at_rest_demand();
+    g.m.zero_sign_sabotage = cfg.sabotage.as_deref() == Some("zerosign");
+    g.leaving_writes = !cfg.no_leaving_writes;
+    g.leaving_write_sabotage = cfg.sabotage.as_deref() == Some("leavingwrite");
     g.int_ranges = !cfg.no_int_ranges;
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
@@ -904,20 +977,89 @@ fn compute_act<'a>(
     }
     let t2 = std::time::Instant::now();
     g.resolve_param_guards();
+    // I32 at rest (PR A): a field's representation (`FieldFacts::rep`, a
+    // Number field's I32 or an `Arr` field's `elem`) reads int demand, so
+    // demand is solved before the derive. It reads only the solved graph.
+    // −0 tolerance (PR D): settle every interval that may hold `-0` before
+    // anything reads one (demand, the derive, the bindings).
+    let zero_sign_tolerated = if g.m.aborted {
+        0
+    } else {
+        zero_sign::solve(&mut g.m)
+    };
+    let demand_first = demand::at_rest_demand();
+    if demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
+        demand::solve(&mut g.m);
+    }
     let (mut templates, mut sites) = if g.m.aborted {
         (Vec::new(), Vec::new())
     } else {
         derive::derive(&mut g)
     };
+    // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
+    // the templates and sites, before any representation reads them.
+    g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
+    let record_arrays = records::derive(
+        &g,
+        &mut templates,
+        &sites,
+        interp_guard.as_deref(),
+        cfg.sabotage.as_deref(),
+    );
+    g.m.records = templates
+        .iter()
+        .filter(|t| t.record.is_ok())
+        .map(|t| t.id)
+        .collect();
+    g.m.record_arrays = record_arrays
+        .iter()
+        .filter(|a| a.verdict.is_ok() && g.m.records.contains(&a.elems_of))
+        .map(|a| (a.tmpl, a.elems_of))
+        .collect();
+    records::mark_fields(&g.m, &mut templates);
+    if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
+        for l in records::ledger_lines(&templates, &record_arrays) {
+            eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));
+        }
+    }
     let mut elements = if g.m.aborted {
         Vec::new()
     } else {
         derive::element_facts(&g)
     };
-    if !g.m.aborted && g.int_ranges && demand::enabled() {
+    if !demand_first && !g.m.aborted && g.int_ranges && demand::enabled() {
         demand::solve(&mut g.m);
     }
+    // I32 at rest (PR B): the at-rest templates, which `ArrRep::at_rest`
+    // (`bindings::collect`) reads. After demand: an element rep reads it.
+    if !g.m.aborted {
+        let (rest, refused) = rest_elems::admit(&g, interp_guard.is_some());
+        (g.m.rest_tmpls, g.m.rest_refused) = (rest, refused);
+        rest_elems::mark_fields(&g.m, &mut templates);
+    }
     let mut bindings = bindings::collect(&g);
+    rest_elems::export(&g, &mut bindings);
+    records::export(&g, &mut bindings);
+    fill_births::export(&g.m, &mut bindings);
+    push_fills::export(&g.m, &mut bindings);
+    // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
+    let rest_lanes = if g.m.aborted {
+        Vec::new()
+    } else {
+        rest_fields::admit(&g, &mut templates, interp_guard.is_some())
+    };
+    rest_fields::export_reads(&g, &templates, &mut bindings);
+    let mut rep_probe = if cfg.diagnostics && !g.m.aborted {
+        let mut p = bindings::rep_probe(&g);
+        p.extend(rest_lanes);
+        p.extend(literal_strings::probe(&g, &templates));
+        if g.m.zero_sign {
+            p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
+        }
+        p
+    } else {
+        Vec::new()
+    };
     if !g.m.aborted && field_read_calls::enabled() {
         field_read_calls::collect(
             &g,
@@ -929,8 +1071,26 @@ fn compute_act<'a>(
         );
     }
     if canonical_numbers::enabled() {
-        canonical_numbers::collect(&g, &mut bindings);
+        canonical_numbers::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
     }
+    if call_kinds::enabled() {
+        call_kinds::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
+    }
+    list_caps::collect(
+        &g,
+        &mut bindings,
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
@@ -938,7 +1098,17 @@ fn compute_act<'a>(
         const_numbers::collect(&g, &mut bindings);
     }
     const_arrays::collect(&g, &mut bindings);
+    held_lengths::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("heldlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
     element_keys::collect(&g, &mut bindings);
+    element_keys::collect_signs(&g, &mut bindings);
+    element_keys::collect_wide(&g, &mut bindings);
+    gen::in_bounds::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
@@ -946,6 +1116,7 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
     if g.m.aborted {
@@ -2177,6 +2348,7 @@ fn compute_act<'a>(
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
+        record_arrays,
         sites,
         elements,
         stats,
@@ -2184,6 +2356,8 @@ fn compute_act<'a>(
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         relations: g.m.relations.take(),
+        rep_probe,
+        zero_sign_tolerated,
         tok_names,
         bindings,
         indexed_metadata_unwritten: !g.m.aborted && g.m.native_writes.is_empty(),

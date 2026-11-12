@@ -43,8 +43,11 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `bindings.rs:589` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:682` | read/map | read: tests or masks the fact, seeds nothing |
 | `bindings.rs:683` | read/map | read: tests or masks the fact, seeds nothing |
+| `bindings.rs:746` | read/map | read: tests or masks the fact, seeds nothing (I32 at rest: a Number field's rep) |
+| `bindings.rs:850` | read/map | read: tests or masks the fact, seeds nothing (I32 at rest: the `# rest` probe) |
 | `signatures.rs:389` | read/map | read: tests or masks the fact, seeds nothing |
 | `dump.rs:470` | read/map | read: tests or masks the fact, seeds nothing |
+| `records.rs:448` | read/map | read: R3's immediate-field mask (value records), seeds nothing |
 | `solve/arr_len.rs:42` | seed | array birth length `new Array(k)`: the header length `uitofp` |
 | `solve/lookup.rs:1289` | seed | array `.length` through the chain: header length `uitofp` (array/indexing.rs js_array_length -> u32) |
 | `solve/fields.rs:40` | seed | RegExp `lastIndex` at birth: the Number 0 |
@@ -136,6 +139,8 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `gen_rest/collections.rs:213` | seed | callback index (from/forEach): as above |
 | `canonical_numbers.rs:49` | read/map | read: tests or masks the fact, seeds nothing (P3 B1's element-value test) |
 | `canonical_numbers.rs:50` | read/map | read: tests or masks the fact, seeds nothing (P3 B1's element-value test) |
+| `zero_sign.rs:420` | read/map | read: a node holding Numbers whose uses the generator does not see is a zero-sign seed; seeds nothing (PR D) |
+| `zero_sign.rs:527` | read/map | read: counts the tolerated Number nodes; seeds nothing (PR D) |
 
 ## INT32-box producers claimed by code comments (CWN, P3 B1)
 Two runtime comments claimed live INT32-tagged Number producers. Neither is live: no code path writes an INT32 word for

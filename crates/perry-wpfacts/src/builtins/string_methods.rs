@@ -263,6 +263,9 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf"
         | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
             coerce_operands(m, call, "string method operand");
+            // −0 tolerance (`Model::with_native`): ToString and
+            // ToIntegerOrInfinity give `-0` and `0` the same result.
+            m.zs_absorbing = true;
             let r = match name {
                 "at" => prim::STR | prim::UNDEF,
                 "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
@@ -270,11 +273,17 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 _ => prim::STR,
             };
             // `charAt` and `at` read one code unit (or none: `""`,
-            // `undefined`).
+            // `undefined`); `"lit".indexOf(..)` is in `[-1, len]` (PR D,
+            // `Model::str_index_len`).
             let one_unit = matches!(name, "charAt" | "at");
-            let saved = one_unit.then(|| {
+            let index_len = m
+                .str_index_len
+                .get(&call)
+                .copied()
+                .filter(|_| matches!(name, "indexOf" | "lastIndexOf"));
+            let saved = (one_unit || index_len.is_some()).then(|| {
                 m.cur_range.replace(crate::model::Rg {
-                    num: crate::model::Iv::TOP,
+                    num: index_len.map_or(crate::model::Iv::TOP, |l| crate::model::Iv::int(-1, l)),
                     chr: crate::model::range::CHAR_ANY,
                 })
             });

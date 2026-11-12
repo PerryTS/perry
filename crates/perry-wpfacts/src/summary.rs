@@ -306,6 +306,7 @@ impl Model {
             | Cons::SuperCtor { call, .. }
             | Cons::SuperCtorParent { call, .. }
             | Cons::CallArgs { call }
+            | Cons::RequireSpec { call }
             | Cons::ForInBody { call, .. }
             | Cons::ForInKeys { call, .. } => call,
             Cons::Chain {
@@ -810,6 +811,9 @@ impl Model {
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
             }
+            if let Some(&l) = self.str_index_len.get(t) {
+                self.str_index_len.insert(id, l);
+            }
             kmap.push(id);
         }
         for &(i, g) in &s.expanded {
@@ -827,7 +831,15 @@ impl Model {
             // grows).
             let saved_range = self.cur_range;
             self.cur_range = (self.cur_src != NO_NODE).then(|| self.rg(self.cur_src));
-            self.add(base[slot as usize], toks, prim);
+            // Its Strings likewise: that node's constants cover them
+            // (`Node::strs` only grows). A seed without an original node (a
+            // birth field's) is any string, as before, and so is every
+            // seed with literal strings off (`literal_strings`).
+            let strs = match self.cur_src {
+                src if src != NO_NODE && self.literal_strings => self.nodes[src as usize].strs,
+                _ => crate::model::STRS_TOP,
+            };
+            self.add_s(base[slot as usize], toks, prim, strs);
             self.cur_range = saved_range;
             if refuted {
                 self.refute_own_test(base[slot as usize]);
@@ -1385,7 +1397,7 @@ impl Model {
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => {
-                    self.with_b(|m| crate::builtins::native_method_at(m, r, key, call))
+                    self.with_native(call, |m| crate::builtins::native_method_at(m, r, key, call))
                 }
             }
         }

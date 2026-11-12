@@ -75,7 +75,7 @@ mod func_ref;
 pub(crate) mod index_split;
 #[cfg(test)]
 mod pipeline_call_tests;
-mod proven_call;
+pub(crate) mod proven_call;
 #[cfg(test)]
 mod proven_call_tests;
 /// #8770: an under-applied same-module direct call must pad the missing
@@ -143,7 +143,7 @@ mod ui_styling;
 mod ui_tables;
 mod web_storage;
 
-use buffer_intrinsic::try_emit_buffer_read_intrinsic;
+use buffer_intrinsic::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 use builtin::lower_builtin_new;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 // `options/` (#1099): the options-object-literal lowering family,
@@ -598,6 +598,10 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
     // b1: a call the facts prove a field element read is that read.
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // DESIGN-p4l4 VR-3b: a typed call of a record `$sig` (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_lower_value_call(ctx, callee, args)? {
         return Ok(value);
     }
     // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).

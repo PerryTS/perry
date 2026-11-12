@@ -1,8 +1,11 @@
 //! `Stmt::For`, `Stmt::While`, `Stmt::DoWhile` lowering and supporting helpers.
 
 mod accumulator_scope;
+pub(crate) mod bounded_poll;
 mod i32_counter;
 mod iterator_record;
+mod rest_counter;
+mod walk_bound;
 pub(crate) use accumulator_scope::flush_packed_accumulator_locals;
 use accumulator_scope::{emit_packed_numeric_accumulator_admission, PackedAccumulatorScope};
 
@@ -3046,7 +3049,7 @@ fn emit_packed_range_receiver_forwarding_repair(ctx: &mut FnCtx<'_>, array_id: u
         let type_addr = blk.sub(I64, &handle, "8");
         let type_ptr = blk.inttoptr(I64, &type_addr);
         let gc_type = blk.load(I8, &type_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, "1");
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         let flags_addr = blk.sub(I64, &handle, "7");
         let flags_ptr = blk.inttoptr(I64, &flags_addr);
         let flags = blk.load(I8, &flags_ptr);
@@ -6776,7 +6779,21 @@ pub(crate) fn lower_for(
     if let Some(init_stmt) = init {
         lower_stmt(ctx, init_stmt)?;
     }
+    // PR-D: the element bases this loop holds (`stmt::field_base`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    let based = super::field_base::begin(ctx, condition, &controls, body)?;
+    let lowered = lower_for_after_bases(ctx, init, condition, update, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
 
+fn lower_for_after_bases(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     if iterator_record::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
@@ -6798,6 +6815,17 @@ pub(super) fn lower_for_tiers(
     update: Option<&perry_hir::Expr>,
     body: &[Stmt],
 ) -> Result<()> {
+    // I32 at rest: the tiers below read element words raw; a loop with an
+    // at-rest site keeps only the counter tiers (`expr::rest_elems`).
+    let controls: Vec<&perry_hir::Expr> = condition.into_iter().chain(update).collect();
+    if crate::expr::rest_elems::in_loop(ctx, &controls, body) {
+        return lower_static_counter_versioned(ctx, init, condition, update, body, &mut |ctx| {
+            match i32_counter::lower(ctx, init, condition, update, body)? {
+                true => Ok(()),
+                false => lower_for_after_init(ctx, init, condition, update, body, "for"),
+            }
+        });
+    }
     // A byte loop over a Buffer/Uint8Array parameter whose body cannot run
     // JS: one receiver admission proves the whole loop (`byte_view_loop`).
     if super::byte_view_loop::lower(ctx, init, condition, update, body)? {
@@ -6977,7 +7005,7 @@ fn lower_static_counter_versioned(
     // gets no entry check, not even a dead one.
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
-    if views.is_empty() {
+    if views.is_empty() && rest_counter::collect(ctx, body, counter_id).is_empty() {
         return lower_copy(ctx);
     }
     let Some(entry) = counter_entry_check(ctx, counter_id, None, condition, Some(update), body)?
@@ -7006,6 +7034,9 @@ fn lower_counter_versions(
 
     ctx.current_block = fast_idx;
     let scope_id = ctx.next_loop_proof_scope_id();
+    for &(local, _) in &entry.rest {
+        ctx.rest_counter.push((counter_id, local, scope_id));
+    }
     for buffer_local_id in &entry.views {
         ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
             index_local_id: counter_id,
@@ -7017,7 +7048,9 @@ fn lower_counter_versions(
             },
         });
     }
-    lower_copy(ctx, true)?;
+    let lowered = lower_copy(ctx, true);
+    ctx.rest_counter.retain(|&(_, _, scope)| scope != scope_id);
+    lowered?;
     ctx.bounded_buffer_index_pairs
         .retain(|fact| fact.scope_id != scope_id);
     if !ctx.block().is_terminated() {
@@ -7391,6 +7424,9 @@ struct CounterEntryCheck {
     passed: String,
     /// Buffer views the body indexes by the counter itself.
     views: Vec<u32>,
+    /// At-rest locals the body indexes by the counter, with their floor
+    /// (I32 at rest B2, `rest_counter::collect`).
+    rest: Vec<(u32, u32)>,
 }
 
 /// Build the entry check that licenses the fast copy of an overflow-exit
@@ -7403,7 +7439,10 @@ struct CounterEntryCheck {
 ///   the step runs only after `counter <= B` held this iteration, so it
 ///   cannot overflow;
 /// * `B + 1 <= length` (`B <= length` under `<`) for every fixed-length view
-///   indexed by the counter: every index the guard admits is in bounds.
+///   indexed by the counter: every index the guard admits is in bounds;
+/// * `B + 1 <= floor` (`B <= floor` under `<`) for every at-rest local the
+///   body indexes by the counter (I32 at rest B2): every index the guard
+///   admits is a present slot.
 ///
 /// `B` and the step must be loop-invariant int32 slots or literals and the
 /// body must not write the counter (the overflow-exit rule already requires
@@ -7451,6 +7490,7 @@ fn counter_entry_check(
     };
     let mut views = Vec::new();
     collect_counter_indexed_views(ctx, body, counter_id, &mut views);
+    let rest = rest_counter::collect(ctx, body, counter_id);
 
     let bound_i32 = load_i32(ctx, &bound);
     let step_i32 = match step {
@@ -7480,6 +7520,7 @@ fn counter_entry_check(
         };
         lengths.push(len);
     }
+    lengths.extend(rest.iter().map(|&(_, floor)| floor.to_string()));
     let blk = ctx.block();
     let mut passed = blk.xor(I1, &overflowed, "true");
     let counter_nonneg = blk.icmp_sge(I32, &counter, "0");
@@ -7502,7 +7543,11 @@ fn counter_entry_check(
         let in_bounds = blk.icmp_sle(I64, &end, len);
         passed = blk.and(I1, &passed, &in_bounds);
     }
-    Ok(Some(CounterEntryCheck { passed, views }))
+    Ok(Some(CounterEntryCheck {
+        passed,
+        views,
+        rest,
+    }))
 }
 
 /// The views a body indexes by exactly `counter` (or `counter | 0`): element
@@ -7806,6 +7851,24 @@ fn lower_for_after_init_impl(
     // the counter's i32 slot are independent proofs consumed inside clones.
     let raw_hoist_classification: Option<LengthHoist> =
         condition.and_then(|cond| classify_for_length_hoist(ctx, cond, update, body));
+    // The facts hold the length where the walker stops (`held_len`).
+    let held_by_facts = if raw_hoist_classification.is_none()
+        && precomputed_i32_bound.is_none()
+        && ctx.element_shape_loop_facts.is_empty()
+        && ctx.stable_packed_loop_facts.is_empty()
+    {
+        condition.and_then(|cond| super::held_len::classify(ctx, cond, update, body))
+    } else {
+        None
+    };
+    let raw_hoist_classification =
+        raw_hoist_classification.or(held_by_facts.map(|h| LengthHoist {
+            arr_id: h.arr,
+            counter_id: h.counter,
+            op: perry_hir::CompareOp::Lt,
+            lhs_addend: 0,
+            buffer_bounds_width_units: None,
+        }));
     let hoist_rejection = if raw_hoist_classification.is_none() && precomputed_i32_bound.is_none() {
         condition.and_then(|cond| classify_for_length_hoist_rejection(ctx, cond, update, body))
     } else {
@@ -7824,17 +7887,23 @@ fn lower_for_after_init_impl(
                 .get(&hoist.arr_id)
                 .is_some_and(|n| n.starts_with("__arr_"))
         });
+    let held_by_facts = held_by_facts.filter(|_| hoist_classification.is_some());
+    if let Some(held) = held_by_facts {
+        ctx.held_lens.push(held);
+    }
     if let Some(hoist) = hoist_classification {
         record_loop_array_length_effect(ctx, hoist.arr_id, LoopArrayLengthEffect::Preserves, true);
     } else if let Some(rejection) = hoist_rejection {
         record_loop_array_length_effect(ctx, rejection.arr_id, rejection.effect, false);
     }
     let hoisted_length_arr_id: Option<u32> = hoist_classification.map(|hoist| hoist.arr_id);
-    let hoisted_index_bounds_are_safe = hoist_classification.is_some_and(|hoist| {
-        matches!(hoist.op, perry_hir::CompareOp::Lt)
-            && hoist.lhs_addend == 0
-            && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
-    });
+    // A facts-held loop's bounded read is `held_len`'s own.
+    let hoisted_index_bounds_are_safe = held_by_facts.is_none()
+        && hoist_classification.is_some_and(|hoist| {
+            matches!(hoist.op, perry_hir::CompareOp::Lt)
+                && hoist.lhs_addend == 0
+                && loop_counter_bounds_are_safe(ctx, hoist.counter_id, update, body)
+        });
     let hoisted_buffer_bounds_width = hoist_classification.and_then(|hoist| {
         hoist.buffer_bounds_width_units.filter(|_| {
             ctx.receiver_descriptors.contains_buffer_view(hoist.arr_id)
@@ -7943,12 +8012,23 @@ fn lower_for_after_init_impl(
     // instead of `fcmp olt/ole double`. This eliminates the float counter fadd +
     // fcmp per iteration — saves ~2 instructions on the inner loop of
     // nested_loops and similar patterns.
+    // Check mode: a facts-held loop keeps the condition's read of the
+    // length, where the held length is compared with the live one
+    // (`held_len::length_read`).
+    let witnessed = held_by_facts.is_some() && crate::verify_facts::enabled();
     let i32_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
-        if let (Some(_), Some(len_dbl_slot)) = (
+        if let (false, Some(_), Some(len_dbl_slot)) = (
+            witnessed,
             ctx.i32_counter_slots.get(&hoist.counter_id).cloned(),
             hoisted_length_slot.as_ref(),
         ) {
             let len_dbl = ctx.block().load(DOUBLE, len_dbl_slot);
+            // A length past int32 has no `i32` (`held_len`): the counter's
+            // `i32` never passes `i32::MAX`, so that is its bound.
+            let len_dbl = match held_by_facts {
+                Some(_) => super::held_len::int32_bound(ctx, &len_dbl),
+                None => len_dbl,
+            };
             let len_i32 = ctx.block().fptosi(DOUBLE, &len_dbl, I32);
             let slot = ctx.func.alloca_entry(I32);
             ctx.block().store(I32, &len_i32, &slot);
@@ -7964,14 +8044,17 @@ fn lower_for_after_init_impl(
     // concrete, validate a numeric receiver once for the dynamic extent of
     // this ordinary loop. Specialized clones keep precedence and own their
     // existing descriptors; this path is for the generic counted-loop tier.
-    let ordinary_receiver_descriptor_installed =
-        if !in_call_free_clone && hoisted_length_slot.is_some() && i32_length_slot.is_some() {
-            hoist_classification.is_some_and(|hoist| {
-                materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
-            })
-        } else {
-            false
-        };
+    let ordinary_receiver_descriptor_installed = if !in_call_free_clone
+        && held_by_facts.is_none()
+        && hoisted_length_slot.is_some()
+        && i32_length_slot.is_some()
+    {
+        hoist_classification.is_some_and(|hoist| {
+            materialize_ordinary_counted_array_descriptor(ctx, hoist, update, body)
+        })
+    } else {
+        false
+    };
     // b2: cold-arm descriptors for the loop's other array reads.
     let skip = in_call_free_clone || ordinary_receiver_descriptor_installed;
     let cold_arm = super::descriptor_read::install_for(ctx, skip, condition, update, body);
@@ -8130,6 +8213,19 @@ fn lower_for_after_init_impl(
         ctx.int_range_facts.push(fact);
     }
 
+    // The loop over an immutable Number array (`walk_bound`): its counter is
+    // below the Array's length in the body, and no other tier has the bound.
+    let walk = if overflow_exit.is_none() {
+        let bound = hoist_classification.is_none()
+            && precomputed_i32_bound.is_none()
+            && local_bound_classification.is_none()
+            && dynamic_i32_bound.is_none();
+        let scope = loop_proof_scope_id;
+        walk_bound::install(ctx, init, condition, update, body, scope, bound)?
+    } else {
+        None
+    };
+
     let cond_idx = ctx.new_block(&format!("{label_prefix}.cond"));
     let body_idx = ctx.new_block(&format!("{label_prefix}.body"));
     let update_idx = ctx.new_block(&format!("{label_prefix}.update"));
@@ -8179,6 +8275,9 @@ fn lower_for_after_init_impl(
         false
     };
     let used_i32_cond = if used_precomputed_i32_cond {
+        true
+    } else if let Some(walk) = &walk {
+        walk_bound::emit_cond(ctx, walk, &body_label, &exit_label);
         true
     } else if let (Some(hoist), Some(ref len_i32_slot)) = (hoist_classification, &i32_length_slot) {
         // Existing path: `i < arr.length` / `i <= arr.length` with
@@ -8399,6 +8498,9 @@ fn lower_for_after_init_impl(
         let removed = ctx.receiver_descriptors.dematerialize_cached_length(arr_id);
         debug_assert!(removed, "loop must retire its cached-length descriptor");
     }
+    if held_by_facts.is_some() {
+        ctx.held_lens.pop();
+    }
     let _ = hoisted_length_slot;
     // Pop the i32 counter slot we inserted for the `i < n` number-bound
     // path, but only if *we* were the ones that inserted it (the Let site
@@ -8517,6 +8619,10 @@ pub(crate) fn emit_gc_loop_safepoint(
 ) {
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
+    }
+    // Check mode: the end of a body counts against the loop's trip proof.
+    if controls.is_empty() {
+        bounded_poll::witness(ctx);
     }
     // #7480 step 4: never inside a call-free-by-construction fast clone.
     //
@@ -8638,6 +8744,8 @@ pub(crate) fn emit_gc_loop_safepoint(
 /// windows are path-based, so a collection point on one arm of a diamond is
 /// still a collection point on every path through it.
 fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
+    // A loop with a trip proof may take this poll back when it is closed.
+    let revocable = bounded_poll::poll_block(ctx);
     let poll_idx = ctx.new_block("gcpoll");
     let done_idx = ctx.new_block("gcpoll.done");
     let poll_label = ctx.block_label(poll_idx);
@@ -8694,6 +8802,9 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
     }
+    // PR-D: the held element bases, from `this`'s GC-updated root.
+    crate::expr::index_get::field_base::emit_poll_refresh(ctx)
+        .expect("a held field base re-derives at the poll");
     // Cached element bases of validated windows, from their refreshed handles.
     let element_refresh: Vec<(String, String)> = ctx
         .receiver_descriptors
@@ -8719,6 +8830,9 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
 
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
+    if let Some(check) = revocable {
+        bounded_poll::poll_emitted(ctx, check, done_idx);
+    }
 }
 
 pub(crate) fn clear_loop_body_shadow_slots(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
@@ -9870,7 +9984,12 @@ fn expr_array_length_effect(
                 object, property, ..
             } = callee.as_ref()
             {
-                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                // Only a PROVEN reader or `equals` runs no program code: an
+                // unproven one may dispatch to a patched `Buffer.prototype`
+                // member.
+                if (is_buffer_numeric_read_method(property) || property == "equals")
+                    && is_static_buffer_receiver(ctx, object)
+                    && crate::builtin_proto::native_member_proven(ctx, callee)
                 {
                     return first_blocking_loop_effect(
                         std::iter::once(walk(object)).chain(args.iter().map(walk)),
@@ -9878,20 +9997,6 @@ fn expr_array_length_effect(
                 }
             }
             LoopArrayLengthEffect::UnknownCallEscape
-        }
-        Expr::NativeMethodCall {
-            object: Some(object),
-            method,
-            args,
-            ..
-        } => {
-            if is_buffer_numeric_read_method(method) && is_static_buffer_receiver(ctx, object) {
-                first_blocking_loop_effect(
-                    std::iter::once(walk(object)).chain(args.iter().map(walk)),
-                )
-            } else {
-                LoopArrayLengthEffect::UnknownCallEscape
-            }
         }
         Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => {
             LoopArrayLengthEffect::UnknownCallEscape
@@ -10326,23 +10431,15 @@ pub(crate) fn expr_preserves_array_length(
                 object, property, ..
             } = callee.as_ref()
             {
-                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                // Only a PROVEN reader runs no program code (see above).
+                if (is_buffer_numeric_read_method(property) || property == "equals")
+                    && is_static_buffer_receiver(ctx, object)
+                    && crate::builtin_proto::native_member_proven(ctx, callee)
                 {
                     return walk(object) && args.iter().all(&walk);
                 }
             }
             false
-        }
-        Expr::NativeMethodCall {
-            object: Some(object),
-            method,
-            args,
-            ..
-        } => {
-            is_buffer_numeric_read_method(method)
-                && is_static_buffer_receiver(ctx, object)
-                && walk(object)
-                && args.iter().all(&walk)
         }
         // The Error-family construction nodes allocate an error object and
         // store their own message; none of them can reach an unrelated local
@@ -10485,6 +10582,22 @@ pub(crate) fn lower_while(
     condition: &perry_hir::Expr,
     body: &[Stmt],
 ) -> Result<()> {
+    let based = super::field_base::begin(ctx, Some(condition), &[condition], body)?;
+    let lowered = lower_while_after_bases(ctx, condition, body);
+    super::field_base::end(ctx, based);
+    lowered
+}
+
+fn lower_while_after_bases(
+    ctx: &mut FnCtx<'_>,
+    condition: &perry_hir::Expr,
+    body: &[Stmt],
+) -> Result<()> {
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        return super::cold_scoped(ctx, body, &[condition], |c| {
+            lower_while_impl(c, condition, body)
+        });
+    }
     // A while loop is the same Number induction with no init/update clause.
     if super::number_local_loop::lower(ctx, None, Some(condition), None, body)? {
         return Ok(());
@@ -10578,13 +10691,25 @@ pub(crate) fn lower_do_while(
     body: &[Stmt],
     condition: &perry_hir::Expr,
 ) -> Result<()> {
-    let region = super::region_loop::begin(ctx, Some(condition), body, None)?;
-    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
-        super::cold_scoped(ctx, body, &[condition], |c| {
+    let based = super::field_base::begin(ctx, None, &[condition], body)?;
+    if crate::expr::rest_elems::in_loop(ctx, &[condition], body) {
+        let lowered = super::cold_scoped(ctx, body, &[condition], |c| {
             lower_do_while_impl(c, body, condition)
-        })
+        });
+        super::field_base::end(ctx, based);
+        return lowered;
+    }
+    let region = super::region_loop::begin(ctx, Some(condition), body, None);
+    let lowered = region.and_then(|region| {
+        let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+            super::cold_scoped(ctx, body, &[condition], |c| {
+                lower_do_while_impl(c, body, condition)
+            })
+        });
+        super::region_loop::end(ctx, region);
+        lowered
     });
-    super::region_loop::end(ctx, region);
+    super::field_base::end(ctx, based);
     lowered
 }
 

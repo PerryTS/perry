@@ -494,6 +494,10 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
         | gc::GC_TYPE_NATIVE_HANDLE
         | gc::GC_TYPE_NATIVE_POD_VIEW => "native handle",
         gc::GC_TYPE_TEMPORAL => "Temporal value",
+        // Value records (design §6.3 part 3): a clone that walks an owner's
+        // fields can meet a record array only if the compiler's facts were
+        // wrong. Reported as a false proof, in every build mode.
+        gc::GC_TYPE_RECORD_ARRAY => crate::record_array::false_proof(),
         _ => "value of an unsupported type",
     }
 }

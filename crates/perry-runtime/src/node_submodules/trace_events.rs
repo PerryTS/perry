@@ -110,7 +110,7 @@ fn array_ptr_from_value(value: f64) -> Option<*const ArrayHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_ARRAY) {
+        if gc_type_for_ptr(raw) != Some(crate::gc_array_type_pat!()) {
             return None;
         }
     }

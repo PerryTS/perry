@@ -531,7 +531,7 @@ pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
     let keys_view = crate::object::object_keys(ptr as *const ObjectHeader);
     let keys = keys_view.arr();
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
         Some(_) => return true, // unexpected shape — be conservative
         None => return false,   // no keys array — nothing own
     }
@@ -572,7 +572,7 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
     let keys = keys_view.arr();
     if !keys.is_null() {
         match crate::value::addr_class::try_read_gc_header(keys as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
             _ => return None, // corrupted keys slot — let the guarded path cope
         }
         let key_count = keys_view.count() as usize;

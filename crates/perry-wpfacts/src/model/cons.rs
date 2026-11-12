@@ -23,9 +23,58 @@ pub enum OwnGateAt {
     Value,
 }
 
+/// Where a program observes the identity of what a node holds
+/// (`Cons::Identity`; DESIGN-p4l4 §2.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IdentityRoute {
+    /// `===` / `!==` between two values neither of which is a primitive
+    /// literal (a comparison with one is a presence test).
+    StrictEq,
+    /// `==` / `!=`: object against object is identity.
+    LooseEq,
+    /// A `switch` discriminant and its case expressions (`===`).
+    Switch,
+    /// `Object.is`.
+    ObjectIs,
+    /// `Object.prototype.isPrototypeOf`: the receiver against each object on
+    /// the argument's chain.
+    IsPrototypeOf,
+    /// A Map/Set/WeakMap/WeakSet key (SameValueZero, or identity).
+    Collection,
+    /// `structuredClone` keeps the sharing of what it copies.
+    Clone,
+    /// A realm declaration's `identity(slot)`.
+    Native,
+    /// `JSON.stringify` with a replacer that is no literal `null`,
+    /// `undefined` or array: the replacer receives every value serialized,
+    /// unseen by the model (DESIGN-p4l4 finding 14).
+    JsonReplacer,
+}
+
+impl IdentityRoute {
+    pub fn name(self) -> &'static str {
+        match self {
+            IdentityRoute::StrictEq => "===",
+            IdentityRoute::LooseEq => "==",
+            IdentityRoute::Switch => "switch",
+            IdentityRoute::ObjectIs => "Object.is",
+            IdentityRoute::IsPrototypeOf => "isPrototypeOf",
+            IdentityRoute::Collection => "collection-key",
+            IdentityRoute::Clone => "structuredClone",
+            IdentityRoute::Native => "native",
+            IdentityRoute::JsonReplacer => "JSON replacer",
+        }
+    }
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
+    /// The program observes the identity of every object the node holds
+    /// (`route`). No flow and no effect on the solve: a fact the value-record
+    /// derive reads (DESIGN-p4l4 R4). Generated only under
+    /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
+    Identity { route: IdentityRoute },
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -58,6 +107,11 @@ pub enum Cons {
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
+    /// A store under an index of each Array in the node, at a site whose
+    /// key gen proved at most the Array's length there
+    /// (`Model::inbounds_sites`): it leaves no hole in an Array whose length
+    /// never shrinks (`Model::index_kept`), and may leave one in any other.
+    IndexKept,
     /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
     /// wrapper's record literal carries `__perry_cjs_record` at birth), or
     /// the published value itself for a raw publication.
@@ -157,6 +211,12 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// The specifier of `require` call `call` (R-SPEC): each string
+    /// constant that reaches the node resolves as that literal does
+    /// (`builtins::require_by_spec`); a value no constant spells (any
+    /// string, a token, ⊤) resolves as anything. Other primitives resolve
+    /// to nothing: the loader throws on a specifier that is no string.
+    RequireSpec { call: CallId },
     /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
     /// data value or a marker leaves it inert (an instance's ⊤ arrives as
     /// ⊤). The result of a rule that is unknown only when the node is: an
@@ -637,6 +697,7 @@ impl Cons {
         matches!(
             self,
             Cons::StoreIndexed { .. }
+                | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }
@@ -663,10 +724,12 @@ impl Cons {
 
     pub fn kind_name(&self) -> &'static str {
         match self {
+            Cons::Identity { .. } => "identity",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::IndexHole => "indexhole",
+            Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
@@ -688,6 +751,7 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::RequireSpec { .. } => "requirespec",
             Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",

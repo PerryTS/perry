@@ -195,6 +195,11 @@ pub enum RealmEffect {
     StoresFresh,
     /// What the call returns; several `returns` are a union.
     Returns(RealmOperand),
+    /// Compares the slot's values by identity (SameValue, SameValueZero,
+    /// IsStrictlyEqual, a Map hash of an object): the program could tell a
+    /// copy from the original there (DESIGN-p4l4 §2.2). Reads nothing,
+    /// keeps nothing.
+    Identity(RealmSlot),
     /// Unknown code: today's handling, named.
     Open,
 }
@@ -409,6 +414,8 @@ pub fn validate_effects(
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
+            // An input of the call: not its result, not a call's return.
+            RealmEffect::Identity(slot) => not_result(slot)?,
             // The runtime hands over the object it made and returns.
             RealmEffect::AsyncResource(slot) => slot.validate(at)?,
             RealmEffect::StoresFresh | RealmEffect::Open => {}
@@ -532,6 +539,7 @@ pub mod emit {
                         format!("{p}RealmEffect::AsyncResource({})", slot(p, s))
                     }
                     RealmEffect::StoresFresh => format!("{p}RealmEffect::StoresFresh"),
+                    RealmEffect::Identity(s) => format!("{p}RealmEffect::Identity({})", slot(p, s)),
 
                     RealmEffect::Open => format!("{p}RealmEffect::Open"),
                 })
@@ -548,6 +556,29 @@ fn no_slots(slots: &Cow<'static, [RealmField]>) -> bool {
 #[cfg(test)]
 mod operand_tests {
     use super::*;
+
+    #[test]
+    fn identity_names_an_input_of_the_call() {
+        let slot = |root| RealmSlot {
+            root,
+            steps: Cow::Borrowed(&[]),
+        };
+        let names = |_: &str| true;
+        for ok in [
+            RealmSlotRoot::This,
+            RealmSlotRoot::Arg(0),
+            RealmSlotRoot::Rest(1),
+        ] {
+            validate_effects("t", &[RealmEffect::Identity(slot(ok))], &names).unwrap();
+        }
+        for bad in [RealmSlotRoot::Result, RealmSlotRoot::Returned(0)] {
+            assert!(validate_effects("t", &[RealmEffect::Identity(slot(bad))], &names).is_err());
+        }
+        let e: RealmEffect =
+            serde_json::from_str(r#"{"identity":{"root":{"arg":0},"steps":["elems"]}}"#).unwrap();
+        assert!(matches!(e, RealmEffect::Identity(ref s) if s.root == RealmSlotRoot::Arg(0)));
+        assert!(super::emit::effects("p::", &[e]).contains("p::RealmEffect::Identity("));
+    }
 
     #[test]
     fn json_and_unknown_operands_parse_and_round_trip() {

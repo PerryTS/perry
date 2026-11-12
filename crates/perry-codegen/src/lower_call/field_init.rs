@@ -787,6 +787,17 @@ pub(crate) fn apply_field_initializers_recursive(
         }
     };
 
+    // I32 at rest (PR C): a root class born keyless gets its I32 lanes once
+    // its own field definitions have run here (`rest_fields::emit_lanes`); a
+    // call that defines none (an importer's construction, whose definitions
+    // run in the class's own constructor) emits nothing.
+    let mut lanes_after = chain.len() == 1
+        && chain[0] == class_name
+        && ctx
+            .classes
+            .get(class_name)
+            .is_some_and(|c| !c.is_imported_stub());
+    let mut defined = false;
     for class_name_in_chain in chain {
         if crate::verify_facts::enabled() {
             crate::verify_facts::body_entry(
@@ -969,6 +980,8 @@ pub(crate) fn apply_field_initializers_recursive(
         }
         // The run of this class's field definitions (`layout_read::field_run_plan`).
         let mut field_run = None;
+        // I32 at rest (PR C): the lanes follow definitions this call emits.
+        let defines_any = !init_pairs.is_empty();
         for (prop, init_expr, is_private, computed) in init_pairs {
             // Computed-key fields reuse the PropertyKey resolved once during
             // ClassDefinitionEvaluation. DefineField uses CreateDataProperty
@@ -1180,7 +1193,15 @@ pub(crate) fn apply_field_initializers_recursive(
             }
         }
 
+        defined |= defines_any;
         ctx.class_stack.pop();
+    }
+    lanes_after &= defined;
+    if lanes_after {
+        if let Some(slot) = ctx.this_stack.last().cloned() {
+            let this_val = ctx.block().load(DOUBLE, &slot);
+            crate::expr::rest_fields::emit_lanes(ctx, class_name, &this_val);
+        }
     }
     Ok(())
 }

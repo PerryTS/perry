@@ -331,7 +331,7 @@ impl Serializer {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
             if matches!(
                 header.obj_type,
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
             ) {
                 if self.depth >= MAX_DEPTH {
                     self.out.push(TAG_UNDEFINED);

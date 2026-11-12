@@ -89,7 +89,8 @@ impl<'a> Gen<'a> {
                 return self.call_value(c, ThisArg::Undef, vec![lit], vec![]);
             }
         }
-        let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
+        // Call arguments: the callee classifies them (`zero_sign`).
+        let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
         if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
             self.call_args_at.push((fx.module, byte_offset, a.clone()));
         }
@@ -119,11 +120,14 @@ impl<'a> Gen<'a> {
                         _ => None,
                     })
                     .collect();
+                self.zs_observe(&a);
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
         let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
-        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+        // Every call with a source offset: a method call, a direct call of
+        // a function, a call of any other callee value.
+        if byte_offset != 0 {
             self.call_results_at.push((fx.module, byte_offset, result));
         }
         result
@@ -180,9 +184,25 @@ impl<'a> Gen<'a> {
                     // its arguments were generated before its own call.
                     if let Some(site) = self.new_array_site.take() {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                        // I32 at rest (PR B): a birth an at-rest template
+                        // may have, keyed as codegen keys the call.
+                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let (module, recv) = (fx.module, o);
+                        let fill = crate::rest_elems::RestFill {
+                            module,
+                            offset,
+                            recv,
+                            site,
+                            fill_site: u32::MAX,
+                        };
+                        self.m.rest_fills.push(fill);
                     }
                 }
                 self.own_test_recv = Some(o);
+                if property == "push" {
+                    // A `push` site, for the list births it may reach.
+                    self.list_push(o, spread.is_empty().then_some(args.len() as u32));
+                }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let (off, end) = if *pb != 0 {
@@ -190,6 +210,7 @@ impl<'a> Gen<'a> {
                 } else {
                     (byte_offset, byte_end)
                 };
+                let rec = (off != 0).then(|| self.call_sites_at.len());
                 if off != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -198,6 +219,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: None,
+                        call: crate::model::NO_CTX,
                     });
                 }
                 if off != 0 {
@@ -212,9 +234,21 @@ impl<'a> Gen<'a> {
                     });
                 }
                 let (call, ret) = self.new_call(ThisArg::Node(o), args, spread);
+                if let Some(f) = self
+                    .m
+                    .rest_fills
+                    .last_mut()
+                    .filter(|f| fused_fill && f.recv == o)
+                {
+                    f.fill_site = self.m.calls[call as usize].site;
+                }
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
+                self.str_index_bound(object, property, call);
                 match private {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => self.m.cons(
@@ -288,11 +322,13 @@ impl<'a> Gen<'a> {
                 self.mcall(recv, Key::Named(key), args, spread)
             }
             Expr::ExternFuncRef { name, .. } if self.is_runtime_extern(fx.module, name) => {
+                self.zs_observe(&args);
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
+                let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
                 if byte_offset != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
@@ -301,6 +337,7 @@ impl<'a> Gen<'a> {
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: Some(c),
+                        call: crate::model::NO_CTX,
                     });
                 }
                 // A call through a value is a site: the bodies the callee
@@ -327,6 +364,9 @@ impl<'a> Gen<'a> {
                 // a callee node that already holds the callee (the program's
                 // `require` from `createRequire`) runs the call at `cons`.
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if let Some(i) = rec {
+                    self.call_sites_at[i].call = call;
+                }
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
@@ -529,6 +569,7 @@ impl<'a> Gen<'a> {
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self.m.packet_body(f);
         #[cfg(test)]
@@ -556,6 +597,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
         let _: &Vec<Stmt> = body;
     }
 
@@ -652,6 +694,12 @@ impl<'a> Gen<'a> {
             let site = self.m.calls[call as usize].site;
             if let Some(k) = birth_len {
                 self.m.arr_len_at_site.entry(site).or_default().len = Some(k);
+            }
+            // A push-filled `new Array()` (`push_fills`): born empty, so
+            // without a hole, and with its fill's final length.
+            if let Some(fill) = self.push_fill_new.take() {
+                self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                self.m.push_fill_new_sites.insert(site, fill);
             }
             // The fused fill (`call_with`) marks this birth after it.
             self.new_array_site = Some(site);

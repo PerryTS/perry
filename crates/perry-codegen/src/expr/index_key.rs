@@ -2,7 +2,7 @@
 //! numeric normalizer otherwise. Rejected keys keep their original JS value.
 use super::FnCtx;
 use crate::function::LlFunction;
-use crate::types::{DOUBLE, I1, I32};
+use crate::types::{DOUBLE, I1, I32, I64};
 use perry_hir::Expr;
 
 const NORMALIZE: &str = "perry_array_index_normalize_i32";
@@ -65,6 +65,165 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// another block. The cast's input dominates exactly the same uses as its
 /// output; signed negatives and unsigned values above i32::MAX decline.
 pub(super) fn normalize(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> String {
+    normalize_keyed(ctx, key, expr, false)
+}
+
+/// [`normalize`] for a consumer whose every element arm is behind an
+/// unsigned bound (`idx <u n`, `n < 2^31`) and whose every declined key
+/// takes one arm that reads the original key (N10, [`unsigned_bound`]):
+/// a widened native index is handed over as it is. A negative `i32` (or a
+/// `uitofp` source at or above 2^31) is at least 2^31 unsigned, so the bound
+/// declines it exactly as it declines `-1`; the select that maps it to `-1`
+/// is the sign test the bound already performs. Every other key keeps
+/// [`normalize`]'s admission (NaN, fractions, `-0`, tags and the
+/// `charCodeAt` alias are unchanged).
+pub(super) fn normalize_unsigned(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> String {
+    normalize_keyed(ctx, key, expr, unsigned_bound())
+}
+
+/// `PERRY_UNSIGNED_BOUND=0`: every element read and store keeps its sign
+/// test in front of the bound (N10 off).
+pub(crate) fn unsigned_bound() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_UNSIGNED_BOUND").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// What wpfacts proves of the key of an element site (`ElisionFacts::
+/// key_signs`, wpfacts `element_keys::collect_signs`): at every copy of the
+/// site it is an integer Number inside the int32 range, so its `i32` is the
+/// key exactly and the site needs no normalizer ([`exact_i32`]).
+///
+/// A **wide** key (`ElisionFacts::wide_keys`, wpfacts `element_keys::
+/// collect_wide`; [`split_key_fact`]) is a non-negative integer Number that
+/// may lie past the int32 range. It needs no normalizer either: its `i32`
+/// ([`exact_i32`]) is the key exactly below 2^31 and negative from there
+/// on, and a site hands a negative `i32` to its property-key arm with the
+/// original value, as it does for any int32 key that may be negative.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct KeyFact {
+    /// Its interval is inside int32 with `lo >= 0`: the key is an array
+    /// index below 2^31. The site needs no sign test and no property-key
+    /// arm.
+    pub(crate) nonneg: bool,
+    /// A wide key (never `nonneg`: the site keeps its property-key arm).
+    pub(crate) wide: bool,
+}
+
+/// `PERRY_FACTS_KEY_SIGN=0` (`off`, `false`): no element site consumes its
+/// key's interval; every site keeps its normalizer and its sign test.
+pub(crate) fn key_sign_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_KEY_SIGN").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// THE query for the key of the element site at `element_offset` (a read or
+/// a store of this module). A b1 call's synthesized read carries the body
+/// module's offset (`FnCtx::rest_b1`): this module's facts say nothing of
+/// its key.
+pub(crate) fn key_fact(ctx: &FnCtx<'_>, element_offset: u32) -> Option<KeyFact> {
+    if element_offset == 0 || ctx.wpfacts_off || !key_sign_enabled() {
+        return None;
+    }
+    if matches!(ctx.rest_b1, Some((o, _)) if o == element_offset) {
+        return None;
+    }
+    let &(lo, hi) = ctx.wpfacts.key_signs.get(&element_offset)?;
+    (lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX)).then_some(KeyFact {
+        nonneg: lo >= 0,
+        wide: false,
+    })
+}
+
+/// `PERRY_FACTS_WIDE_KEYS=0` (`off`, `false`): no element site consumes a
+/// wide key; each keeps its normalizer.
+pub(crate) fn wide_keys_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_WIDE_KEYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// [`key_fact`] for a site that keeps a property-key arm for a negative
+/// `i32` (the canonical key split of a read, the runtime-key store): a wide
+/// key is admitted too. It leans on the unsigned bound (N10): the element
+/// tier declines a negative `i32` onto the arm that reads the original key.
+pub(crate) fn split_key_fact(ctx: &FnCtx<'_>, element_offset: u32) -> Option<KeyFact> {
+    if let Some(fact) = key_fact(ctx, element_offset) {
+        return Some(fact);
+    }
+    if element_offset == 0 || ctx.wpfacts_off || !wide_keys_enabled() || !unsigned_bound() {
+        return None;
+    }
+    if matches!(ctx.rest_b1, Some((o, _)) if o == element_offset) {
+        return None;
+    }
+    let &(lo, _) = ctx.wpfacts.wide_keys.get(&element_offset)?;
+    (lo >= 0).then_some(KeyFact {
+        nonneg: false,
+        wide: true,
+    })
+}
+
+/// [`split_key_fact`] for the element store `e` (`a[k] = v` as an
+/// `IndexSet`).
+pub(crate) fn store_key_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<KeyFact> {
+    match e {
+        Expr::IndexSet { element_offset, .. } => split_key_fact(ctx, *element_offset),
+        _ => None,
+    }
+}
+
+/// The `i32` of the key `key` (a double) under `fact`: the native integer it
+/// was widened from, else one `fptosi` (exact: the key is an integer inside
+/// the int32 range; `-0` is index 0, as its property key `"0"` is). Check
+/// mode (`PERRY_VERIFY_FACTS=1`) tests the claim first ([`witness_sign`]).
+///
+/// A wide key (`fact.wide`): the key clamped to 2^32 - 1 and converted
+/// unsigned, two instructions and no call. Below 2^31 that is the index;
+/// from there on the `i32` is negative (`-1` for every key at or past
+/// 2^32 - 1), which the site's unsigned bound declines onto the arm that
+/// holds the original key.
+pub(crate) fn exact_i32(ctx: &mut FnCtx<'_>, key: &str, fact: KeyFact) -> String {
+    if fact.wide {
+        return wide_i32(ctx, key);
+    }
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::KeySign,
+        || serde_json::json!({ "nonneg": fact.nonneg }),
+    );
+    crate::facts_consumed::used();
+    if crate::verify_facts::enabled() {
+        witness_sign(ctx, key, fact);
+    }
+    let source = ctx
+        .func
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|b| b.widened_i32_source(key));
+    source.unwrap_or_else(|| ctx.block().fptosi(DOUBLE, key, I32))
+}
+
+/// [`exact_i32`] of a wide key.
+fn wide_i32(ctx: &mut FnCtx<'_>, key: &str) -> String {
+    crate::verify_facts::consumed(crate::verify_facts::Fact::WideKey, || serde_json::json!({}));
+    crate::facts_consumed::used();
+    if crate::verify_facts::enabled() {
+        witness_wide(ctx, key);
+    }
     let source = ctx
         .func
         .blocks()
@@ -72,6 +231,116 @@ pub(super) fn normalize(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>) -> 
         .rev()
         .find_map(|b| b.widened_i32_source(key));
     if let Some(index) = source {
+        return index;
+    }
+    let blk = ctx.block();
+    // Ordered: the key is never NaN, so the select is `min(key, 2^32 - 1)`.
+    let below = blk.fcmp("olt", key, "4294967295.0");
+    let clamped = blk.select(I1, &below, DOUBLE, key, "4294967295.0");
+    blk.fptoui(DOUBLE, &clamped, I32)
+}
+
+/// Check mode: the wide key `key` is a non-negative integer Number (a
+/// finite double with no fraction; `-0` is none). A miss reports the false
+/// proof ("wide key") and exits 86.
+fn witness_wide(ctx: &mut FnCtx<'_>, key: &str) {
+    crate::verify_facts::covered(crate::verify_facts::Fact::WideKey, || serde_json::json!({}));
+    let blk = ctx.block();
+    let ge = blk.fcmp("oge", key, "0.0");
+    let finite = blk.fcmp("olt", key, "0x7FF0000000000000");
+    let inside = blk.and(I1, &ge, &finite);
+    // A double at or past 2^53 has no fraction; below it the round trip
+    // through i64 is exact for an integer only. Sanitize before `fptosi`.
+    let small = blk.fcmp("olt", key, "9007199254740992.0");
+    let convertible = blk.and(I1, &inside, &small);
+    let safe = blk.select(I1, &convertible, DOUBLE, key, "0.5");
+    let int = blk.fptosi(DOUBLE, &safe, I64);
+    let back = blk.sitofp(I64, &int, DOUBLE);
+    let exact = blk.fcmp("oeq", &back, key);
+    let big = blk.xor(I1, &small, "true");
+    let integral = blk.or(I1, &exact, &big);
+    let positive_zero = {
+        let bits = blk.bitcast_double_to_i64(key);
+        blk.icmp_ne(I64, &bits, "-9223372036854775808")
+    };
+    let ok = blk.and(I1, &inside, &integral);
+    let ok = blk.and(I1, &ok, &positive_zero);
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("widekey.verify_miss");
+    let next = ctx.new_block("widekey.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        "an element key that is no non-negative integer",
+        crate::verify_facts::Fact::WideKey,
+        &[],
+    );
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, key)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+}
+
+/// Check mode: the key `key` is an integer Number inside the int32 range
+/// and, under `fact.nonneg`, not negative. A miss reports the false proof
+/// ("key sign") and exits 86.
+fn witness_sign(ctx: &mut FnCtx<'_>, key: &str, fact: KeyFact) {
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::KeySign,
+        || serde_json::json!({ "nonneg": fact.nonneg }),
+    );
+    let blk = ctx.block();
+    let low = if fact.nonneg { "0.0" } else { "-2147483648.0" };
+    let ge = blk.fcmp("oge", key, low);
+    let le = blk.fcmp("ole", key, "2147483647.0");
+    let inside = blk.and(I1, &ge, &le);
+    // Sanitize before `fptosi`: a rejected conversion must not poison.
+    let safe = blk.select(I1, &inside, DOUBLE, key, "0.5");
+    let int = blk.fptosi(DOUBLE, &safe, I32);
+    let back = blk.sitofp(I32, &int, DOUBLE);
+    let exact = blk.fcmp("oeq", &back, key);
+    let ok = blk.and(I1, &inside, &exact);
+    crate::verify_facts::tick(ctx);
+    let miss = ctx.new_block("keysign.verify_miss");
+    let next = ctx.new_block("keysign.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    ctx.block().cond_br(&ok, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let what = if fact.nonneg {
+        "an element key that is no non-negative int32"
+    } else {
+        "an element key that is no int32"
+    };
+    let site = crate::verify_facts::site_arg(ctx, what, crate::verify_facts::Fact::KeySign, &[]);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, key)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+}
+
+fn normalize_keyed(ctx: &mut FnCtx<'_>, key: &str, expr: Option<&Expr>, wrap: bool) -> String {
+    let source = ctx
+        .func
+        .blocks()
+        .iter()
+        .rev()
+        .find_map(|b| b.widened_i32_source(key));
+    if let Some(index) = source {
+        if wrap {
+            return index;
+        }
         let valid = ctx.block().icmp_sge(I32, &index, "0");
         return ctx.block().select(I1, &valid, I32, &index, "-1");
     }
@@ -131,6 +400,10 @@ fn publish(ctx: &mut FnCtx<'_>) {
     f.create_block("reject").ret(I32, "-1");
     ctx.pending_helpers.push(f);
 }
+
+#[cfg(test)]
+#[path = "index_key_sign_tests.rs"]
+mod sign_tests;
 
 #[cfg(test)]
 mod tests {
@@ -515,5 +788,83 @@ mod tests {
                 "{ir}"
             );
         }
+    }
+
+    /// `key | 0`: a native i32 widened to the key's double.
+    fn int_key() -> Expr {
+        Expr::Binary {
+            op: BinaryOp::BitOr,
+            left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
+            right: Box::new(Expr::Integer(0)),
+        }
+    }
+
+    /// N10: a widened native key enters the bounded tier as it is. No
+    /// select maps it to -1 and the split does not branch on its sign; the
+    /// tier's miss arm sends a negative key to the runtime-key arm.
+    #[test]
+    fn widened_key_read_has_its_sign_test_on_the_miss_arm_only() {
+        let ir = read_ir(int_key(), vec![]);
+        assert!(!ir.contains(", i32 -1"), "the -1 select is gone: {ir}");
+        let entry = ir
+            .split_once("define double @")
+            .and_then(|(_, f)| f.split("\naidx.canonical.").next())
+            .unwrap_or_else(|| panic!("no split: {ir}"));
+        assert!(!entry.contains("icmp sge i32"), "{entry}");
+        // The miss arm's exit: a negative key to the runtime-key arm, the
+        // rest to the tier's cold read.
+        let exit = ir
+            .lines()
+            .find(|l| l.contains("label %aidx.runtime_key.") && l.contains("label %ubound.cold."))
+            .unwrap_or_else(|| panic!("no negative exit: {ir}"));
+        let cond = exit
+            .split_whitespace()
+            .nth(2)
+            .map(|c| c.trim_end_matches(','))
+            .unwrap_or_else(|| panic!("{exit}"));
+        assert!(
+            ir.contains(&format!("{cond} = icmp slt i32")),
+            "the exit tests the sign: {ir}"
+        );
+    }
+
+    /// N10, negative controls: a key the normalizer admits still declines
+    /// NaN, fractions and tags as -1 (now behind the unsigned bound), and
+    /// the runtime-key arm keeps the original double.
+    #[test]
+    fn number_key_keeps_its_normalizer_and_the_exact_runtime_arm() {
+        let ir = read_ir(Expr::LocalGet(2), vec![]);
+        assert!(
+            ir.contains("call i32 @perry_array_index_normalize_i32"),
+            "{ir}"
+        );
+        assert!(ir.contains("ubound.cold"), "{ir}");
+        let runtime_block = ir
+            .split_once("\naidx.runtime_key.")
+            .map(|(_, rest)| rest.split("\n\n").next().unwrap_or(rest))
+            .unwrap_or_else(|| panic!("no runtime-key block: {ir}"));
+        // Mode 0: the original key, the exact property-key read.
+        assert!(
+            runtime_block.contains("call double @perry_array_read_cold_shared(")
+                && runtime_block.contains(", i64 0)"),
+            "{runtime_block}"
+        );
+    }
+
+    /// N10 on the store side: the guarded store's one bound is
+    /// `idx <u capacity`, so a widened key is handed over unselected.
+    #[test]
+    fn widened_key_store_has_no_sign_select() {
+        let store = Stmt::Expr(Expr::IndexSet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(int_key()),
+            value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
+            element_offset: 0,
+        });
+        let ir = read_ir(Expr::Integer(0), vec![store]);
+        assert!(!ir.contains(", i32 -1"), "{ir}");
+        assert!(ir.contains("icmp ult i32"), "{ir}");
     }
 }

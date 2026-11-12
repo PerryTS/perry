@@ -117,6 +117,17 @@ pub struct FieldFacts {
     /// `PERRY_FACTS_ARRAY_FIELDS=0`. A read of the field is a value of this
     /// representation (PR-C3: codegen's `FieldProof::array`).
     pub rep: crate::bindings::Rep,
+    /// −0 tolerance (PR D): one of the field's nodes keeps its int32 interval
+    /// although it may hold `-0`, which no use observes (`Node::zs_tol`).
+    pub zero_tol: bool,
+    /// I32 at rest, PR C (`rest_fields::admit`): the field is an I32 lane of
+    /// its class, stored as an I32 word in every instance for its life.
+    pub rest: bool,
+    /// The field may hold a String, and every String any store of any unit
+    /// puts there is the value of a program string literal
+    /// (`literal_strings`, over every token of the template): never with an
+    /// escaped template or a ⊤ kind.
+    pub literal_strings: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -140,6 +151,15 @@ pub struct TemplateFacts {
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
+    /// Value records (DESIGN-p4l4 §2, `records`): the template's instances
+    /// are their fields by value, or the reason they are heap objects.
+    /// `Off` unless `PERRY_FACTS_VALUE_RECORDS=1`.
+    pub record: Result<crate::records::RecordLayout, crate::records::Rejected>,
+    /// The Arr templates born as record arrays of this template (§1.4, R6):
+    /// every holder of their tokens holds them as `Arr{Record}`. The
+    /// design's `record_elems` per Arr template, kept on the element
+    /// template because an Arr template has no `TemplateFacts`.
+    pub record_elems: Vec<TmplId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -261,6 +281,7 @@ impl FieldFacts {
         self.writers_ctor = self.writers_ctor.max(o.writers_ctor);
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
+        self.literal_strings &= o.literal_strings;
         self.ta_stable &= o.ta_stable;
         // The join, not the meet: the row must hold for either class.
         self.rep = crate::bindings::Rep::join(self.rep, o.rep);
@@ -919,8 +940,37 @@ fn template_facts(
         } else {
             crate::bindings::Rep::Boxed
         };
+        // I32 at rest (RFC §10.7, PR A): a whole-life field that holds only
+        // Numbers has the Number representation of its joined nodes.
+        let mut zero_tol = false;
+        let rep = if rep == crate::bindings::Rep::Boxed
+            && definite
+            && !is_accessor
+            && escape.is_none()
+            && hard.is_none()
+            && crate::demand::at_rest_demand()
+        {
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            zero_tol = nodes.iter().any(|&n| m.nodes[n as usize].zs_tol);
+            crate::bindings::number_rep_of_nodes(m, &nodes)
+        } else {
+            rep
+        };
+        let literal_strings = !kind.top && !is_accessor && {
+            let nodes: Vec<NodeId> = ts
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            crate::literal_strings::holds(m, &nodes)
+        };
         fields.push(FieldFacts {
             rep,
+            zero_tol,
+            rest: false,
+            literal_strings,
             fns,
             ta_stable,
             ta_kind,
@@ -972,6 +1022,8 @@ fn template_facts(
         fields,
         statics: constant_statics(m, tm),
         sabotaged: false,
+        record: Err(crate::records::Rejected::off()),
+        record_elems: Vec::new(),
         ancestors: {
             let mut v = Vec::new();
             let mut cur = tpl.parent;
@@ -1714,7 +1766,8 @@ fn judge(
 ///
 /// 1. One family: every primitive a String and no object, or every object
 ///    an Array exotic object ([`exact_array`]), or every object a
-///    collection of one kind, or every object a RegExp; closed markers are skipped (their callers'
+///    collection of one kind, or every object a RegExp, or every object a
+///    Buffer (a method `Buffer.prototype` owns); closed markers are skipped (their callers'
 ///    values are beside them), ⊤ and other markers are none.
 /// 2. The family's intrinsic chain defines the key: a function for a call,
 ///    a function or a data member for a read (`builtins::native_described`).
@@ -1762,6 +1815,9 @@ fn native_member(
                         ..
                     } => NativeFamily::Collection(w),
                     TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
+                    // The per-unit solve misses a write onto `Buffer.prototype`
+                    // through `Object.assign`: it proves no Buffer member.
+                    TmplKind::BObj { what: "Buffer", .. } if !m.unit_mode => NativeFamily::Buffer,
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -1779,7 +1835,7 @@ fn native_member(
         return Err(None);
     };
     let a = s.key;
-    if !crate::builtins::native_described(fam, &m.atoms[a as usize], s.is_call) {
+    if !crate::builtins::native_described(m, fam, &m.atoms[a as usize], s.is_call) {
         return Err(None);
     }
     for &t in toks {
@@ -1846,8 +1902,20 @@ fn builtin_protos_unwritten(
     }
     // DEC 250: a final read (the runtime refuses every write that would
     // change it) is written by no store, the program's or one through ⊤.
+    let locked = fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a));
+    // Interpreted code (DEC 150's summary node: `new Function`, direct and
+    // indirect eval, any solved call that may be the Function constructor)
+    // holds every global, so every builtin prototype, and writes under any
+    // key. A NativeMember site runs its member with no test (codegen's
+    // `native_member_calls` takes no interp guard word), so only a final
+    // read survives it.
+    if fam.is_some() && !locked && m.interp_runs {
+        return Err(
+            "native member: interpreted code may write the key onto a builtin prototype".into(),
+        );
+    }
     let (through_top, own) = match objproto {
-        _ if fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a)) => (false, false),
+        _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
         None => (crate::builtins::native_written(m, TOP, a), false),
     };
@@ -1934,7 +2002,8 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// facts are the writes themselves: no named store of the key on its
 /// template (`writers`), no store under a computed key or `__proto__`
 /// (`super_relink`), no escape, no hard operation, no accessor. A RegExp's
-/// facts are its writes in the same way (its own `lastIndex` is no method).
+/// facts are its writes in the same way (its own `lastIndex` is no method),
+/// and so are a Buffer's (its elements are no named key).
 fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Atom) -> bool {
     use crate::builtins::NativeFamily;
     let empty = |n: Option<&NodeId>| {
@@ -1951,7 +2020,7 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
             Some(n) => empty(Some(n)),
             None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
         },
-        NativeFamily::Collection(_) | NativeFamily::RegExp => {
+        NativeFamily::Collection(_) | NativeFamily::RegExp | NativeFamily::Buffer => {
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };

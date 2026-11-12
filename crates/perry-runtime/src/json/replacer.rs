@@ -134,7 +134,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
         // `keys_array`). Buffer/TypedArray have no `GcHeader`, so exclude
         // them first — `gc_obj_type` would otherwise misread their raw bytes
         // as a GC_TYPE_ARRAY tag (see `stringify_value`'s matching guards).
-        if gc_obj_type(ptr) == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(gc_obj_type(ptr))
             && !crate::buffer::is_registered_buffer(ptr as usize)
             && crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize).is_none()
         {
@@ -298,7 +298,7 @@ pub(super) unsafe fn dispatch_pointer_with_replacer(
         return;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             // #5989: an array grown past its capacity leaves a GC_FLAG_FORWARDED
             // stub at the OLD location (`js_array_grow`, issue #233) — its first
             // 8 bytes now hold the forwarding pointer to the grown array, so
@@ -1200,7 +1200,7 @@ pub(crate) unsafe fn stringify_array_pretty(
     // and the `(*arr).length` read below would fault.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         ptr as usize,
-        crate::gc::GC_TYPE_ARRAY,
+        crate::gc_array_type_pat!(),
     )
     .is_none()
     {
@@ -1285,7 +1285,7 @@ pub(crate) unsafe fn is_array_value(bits: u64) -> bool {
 #[inline]
 unsafe fn is_dense_array_header(resolved: *const crate::ArrayHeader) -> bool {
     !resolved.is_null()
-        && gc_obj_type(resolved as *const u8) == crate::gc::GC_TYPE_ARRAY
+        && crate::gc_type_is_array!(gc_obj_type(resolved as *const u8))
         && (*resolved).length <= (*resolved).capacity
 }
 
@@ -1503,8 +1503,26 @@ pub unsafe extern "C" fn js_json_stringify_full(
         // (`JSON.stringify([1, {a:2}], [])` → "[1,{}]"). The shared dispatcher
         // routes objects/arrays into the whitelist-aware walks and everything
         // else into the plain serializer.
+        //
+        // The root is a property too (key ""): its `toJSON` runs first, and a
+        // result that has no JSON text makes `JSON.stringify` return undefined.
+        // The result is rooted: `toJSON` can hand back a fresh object and the
+        // walk below allocates.
+        reset_to_json_key();
+        let root_scope = crate::gc::RuntimeHandleScope::new();
+        let value_after_to_json = root_scope.root_nanbox_f64(apply_to_json(value));
+        if !property_list::serializable_member(value_after_to_json.get_nanbox_f64()) {
+            STRINGIFY_STACK.with(|s| s.borrow_mut().clear());
+            restore_stringify_buf(buf);
+            match saved_cache {
+                Some(s) => restore_shape_cache(s),
+                None => clear_shape_cache(),
+            }
+            STRINGIFY_DEPTH.with(|d| d.set(d.get() - 1));
+            return TAG_UNDEFINED as i64;
+        }
         stringify_value_with_array_replacer(
-            value,
+            value_after_to_json.get_nanbox_f64(),
             allowed_keys,
             &mut buf,
             &indent_str,

@@ -56,7 +56,7 @@ fn value_is_array(value: f64) -> bool {
     // bands nor foreign allocations.
     let addr = jv.as_pointer::<u8>() as usize;
     unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-        .is_some_and(|header| unsafe { header.as_ref() }.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(unsafe { header.as_ref() }.obj_type))
 }
 
 pub(super) fn is_callable_value(value: f64) -> bool {

@@ -25,7 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 
-use super::try_emit_buffer_read_intrinsic;
+use super::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 
 #[path = "console_promise/util_types.rs"]
 mod util_types;
@@ -1240,7 +1240,18 @@ pub fn try_lower_native_method_str_dispatch(
                 if ctx.receiver_descriptors.byte_view_param(*id).is_some_and(|access|
                     access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
             if is_buffer_class || guarded_buffer_param {
-                if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)?
+                if let Some(lowered) =
+                    try_emit_buffer_equals_intrinsic(ctx, callee, object, property, args)?
+                {
+                    let materialized = crate::expr::materialize_js_value(
+                        ctx,
+                        lowered,
+                        crate::native_value::MaterializationReason::FunctionAbi,
+                    );
+                    return Ok(Some(materialized));
+                }
+                if let Some(lowered) =
+                    try_emit_buffer_read_intrinsic(ctx, callee, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(
                         ctx,

@@ -34,6 +34,8 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        IndexKept => IndexKept,
+        Identity { route } => Identity { route },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -122,10 +124,8 @@ pub fn map_cons(
             from: n(from),
             reason,
         },
-        TopIfTop { dst, reason } => TopIfTop {
-            dst: n(dst),
-            reason,
-        },
+        RequireSpec { call } => RequireSpec { call: k(call) },
+        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -485,7 +485,8 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
     use Cons::*;
     matches!(
         c,
-        Load { .. }
+        Identity { .. }
+            | Load { .. }
             | ProtoKey { .. }
             | OwnValues { .. }
             | CjsPublish { .. }
@@ -506,6 +507,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | RequireSpec { .. }
             | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }

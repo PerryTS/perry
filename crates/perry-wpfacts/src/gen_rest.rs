@@ -154,6 +154,7 @@ impl<'a> Gen<'a> {
                     // `push_field_single` checks the receiver and runs its own
                     // `push` otherwise, which is the method call itself.
                     let push = self.m.atom("push");
+                    self.list_push(o, Some(a.len() as u32));
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
                     // The array push the HIR folds for a receiver it proved an
@@ -163,8 +164,19 @@ impl<'a> Gen<'a> {
                     // holder stores the same array.
                     match o {
                         Some(o) => {
+                            self.list_push(o, Some(a.len() as u32));
+                            // A fill push (`push_fills`): its site is marked
+                            // before the store exists (the solve is online).
+                            let fill = self
+                                .push_fill
+                                .pushes
+                                .get(&(e as *const Expr as usize))
+                                .copied();
                             for v in a {
-                                self.elem_store(fx, o, v, "push");
+                                match fill {
+                                    Some(fill) => self.fill_push(fx, e, o, v, fill),
+                                    None => self.elem_store(fx, o, v, "push"),
+                                }
                             }
                         }
                         None => {
@@ -726,15 +738,21 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            // The predicates that convert nothing: `Array.isArray` reads only
+            Expr::ObjectIs(a, b) => self.prim_op_identity(
+                fx,
+                &[a, b],
+                prim::BOOL,
+                "primitive builtin operand",
+                IdentityRoute::ObjectIs,
+            ),
+                        // The predicates that convert nothing: `Array.isArray` reads only
             // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
             // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
             // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`
             // predicates test the operand's type (21.1.2.2-21.1.2.5) and the
             // undefined-or-NaN test compares. No key is read on an object
             // operand and nothing is called on it.
-            Expr::ObjectIs(..)
-            | Expr::ArrayIsArray(..)
+            Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
             | Expr::IsUndefinedOrBareNan(..)
             | Expr::NumberIsNaN(..)

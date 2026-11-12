@@ -21,6 +21,8 @@ pub(crate) use element_kind::{
     ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
+mod fill_birth;
+pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
 mod flat_clone;
 mod forwarding;
@@ -231,6 +233,7 @@ pub use self::indexing::{
 };
 pub(crate) use self::indexing::{
     js_array_set_f64_extend_sloppy, js_array_set_index_or_string_with_strictness,
+    perry_array_read_cold_shared,
 };
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
@@ -322,6 +325,7 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::reserve_capacity;
 #[cfg(test)]
 pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};

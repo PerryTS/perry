@@ -45,9 +45,11 @@ pub const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 /// a cleared family field reads as family 0, `Object`, which withdraws every
 /// family.
 pub const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
-/// Shift of the sealed intrinsic's family (6 bits): a `BuiltinProto`
-/// (0..16), a builtin namespace (16..31, `builtin_namespace`), the realm
-/// global (31), or a runtime prototype (32, `builtin_proto::RUNTIME_FAMILY`).
+/// Shift of the sealed intrinsic's family (6 bits): a realm `BuiltinProto`
+/// (0..16; the host family Buffer is sealed as a runtime prototype), a
+/// builtin namespace (17..32, `builtin_namespace`), the realm
+/// global (32), the locked iterator/generator prototypes (33..41), or a
+/// runtime prototype (41, `builtin_proto::RUNTIME_FAMILY`).
 pub const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 /// Mask of the sealed intrinsic's family after the shift.
 pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;

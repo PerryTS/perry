@@ -606,13 +606,6 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
     it
 }
 
-/// The entry values of the Map or WeakMap `t` (`MAP_VALUES`): what `set`
-/// and the constructor stored as values, never a key.
-pub(crate) fn map_values(m: &mut Model, t: Tok) -> NodeId {
-    let a = m.atom(MAP_VALUES);
-    m.field(t, a)
-}
-
 /// The `[key, value]` pairs of an `entries()` iterator: one array template
 /// per call site holding `values` (plus the index for arrays).
 pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
@@ -984,6 +977,12 @@ fn non_array_this(m: &mut Model, t: Tok, name: &str, call: CallId) {
 }
 
 pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    // I32 at rest (PR B): a builtin method touches the elements undecoded,
+    // but the fused fill of an at-rest birth (`rest_elems`) and the negative
+    // control `restelem`.
+    if !m.rest_elem_sabotage && !crate::rest_elems::fused_fill(m, call) {
+        m.rest_used(t);
+    }
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
             let owner = if matches!(members::member(Family::Object, name), Some(Mem::Fn)) {
@@ -1042,6 +1041,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if !crate::const_arrays::method_reads_only(name) {
         m.arr_written(t);
     }
+    if !keeps_length {
+        // `push` included: it is no `keeps_length` name (`held_lengths`).
+        m.len_event(t, call, true);
+    }
     if name == Some("push") {
         m.arr_len_append(t);
     } else if !keeps_length {
@@ -1061,6 +1064,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     m.add_prim(num, prim::NUM);
     let recv = m.node_l("arr-recv");
     m.add_tok(recv, t);
+    if crate::rest_elems::fused_fill(m, call) {
+        // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
+        m.rest_fill_relays.push(recv);
+    }
     let this_arg = |i: usize| match c.args.get(i) {
         Some(&n) => ThisArg::Node(n),
         None => ThisArg::Undef,
@@ -1137,7 +1144,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             // `flat` keep the general birth.
             let dense =
                 matches!(name, Some("slice" | "toReversed" | "with" | "toSpliced")) && m.is_arr(t);
-            let out = if dense {
+            // `slice` of an Array bears a plain Array (`site_slice_arr`).
+            let plain_copy = name == Some("slice") && m.slice_births && dense;
+            let out = if plain_copy {
+                site_slice_arr(m, call)
+            } else if dense {
                 site_dense_arr(m, call)
             } else {
                 site_tmpl(m, call, "Array")
@@ -1390,64 +1401,43 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
-            // `[Symbol.iterator]()`: Map entries or Set values. Map.prototype
-            // [@@iterator] is Map.prototype.entries (ECMA-262 24.1.3.12): its
-            // iterator yields CreateArrayFromList(« key, value ») only
-            // (24.1.5.1), never a key or a value itself; Set.prototype
-            // [@@iterator] is values (24.2.3.11): the elements.
-            let vals = match m.keyed_collection(t) {
-                true => entry_pairs(m, call, elems, false),
-                false => {
-                    let pairs = entry_pairs(m, call, elems, false);
-                    let vals = m.node_l("coll-iter");
-                    m.edge(elems, vals);
-                    m.edge(pairs, vals);
-                    vals
-                }
-            };
+            // `[Symbol.iterator]()`: Map entries or Set values.
+            let pairs = entry_pairs(m, call, elems, false);
+            let vals = m.node_l("coll-iter");
+            m.edge(elems, vals);
+            m.edge(pairs, vals);
             let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
         (_, None) => ret_tok(m, call, t),
         ("Collection", Some("set" | "add")) => {
+            // The key is compared by SameValueZero (identity for objects).
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
             for &a in &c.args {
                 m.edge(a, elems);
             }
-            // Map.prototype.set(key, value) (24.1.3.9, 24.3.3.5): the
-            // entry's value is the second argument, undefined if absent.
-            if name == Some("set") && m.keyed_collection(t) {
-                let vals = map_values(m, t);
-                match (c.spread.is_empty(), c.args.get(1)) {
-                    (true, Some(&v)) => m.edge(v, vals),
-                    (true, None) => m.add_prim(vals, prim::UNDEF),
-                    (false, _) => {
-                        for &a in &c.args {
-                            m.edge(a, vals);
-                        }
-                        m.add_prim(vals, prim::UNDEF);
-                    }
-                }
+            if kind == "Map" && name == Some("set") {
+                m.map_set(t, &c.args, !c.spread.is_empty());
             }
             ret_tok(m, call, t);
         }
-        // Map.prototype.get (24.1.3.6, 24.3.3.3): the [[Value]] of the
-        // matching entry, or undefined; never a key.
-        ("Collection", Some("get")) if m.keyed_collection(t) => {
-            let vals = map_values(m, t);
+        ("Collection", Some("get")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
+            // A Map's values, not its keys (`solve/map_vals.rs`).
+            let vals = if kind == "Map" { m.map_vals(t) } else { elems };
             m.edge(vals, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
-        ("Collection", Some("get")) => {
-            m.edge(elems, c.ret);
-            ret_prim(m, call, prim::UNDEF);
+        ("Collection", Some("has" | "delete")) => {
+            if let Some(&k) = c.args.first() {
+                m.identity(k, IdentityRoute::Collection);
+            }
+            ret_prim(m, call, prim::BOOL)
         }
-        // Map.prototype.values (24.1.3.11): the entries' values only.
-        ("Collection", Some("values")) if m.keyed_collection(t) => {
-            let vals = map_values(m, t);
-            let it = iter_over(m, call, members::collection_iterator(kind), vals);
-            ret_tok(m, call, it);
-        }
-        ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
         ("Collection", Some("keys" | "values")) => {
             let it = iter_over(m, call, members::collection_iterator(kind), elems);
@@ -1466,13 +1456,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     Some(&n) => ThisArg::Node(n),
                     None => ThisArg::Undef,
                 };
-                // Map.prototype.forEach (24.1.3.5) calls back with (value,
-                // key, map); a Set's value is its key (24.2.3.6).
-                let first = match m.keyed_collection(t) {
-                    true => map_values(m, t),
-                    false => elems,
-                };
-                let _ = cb_call(m, call, cb, this, vec![first, elems, recv]);
+                let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }

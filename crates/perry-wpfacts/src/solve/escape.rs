@@ -319,6 +319,7 @@ impl Model {
         }
         self.escaped.insert(t, reason);
         self.arr_len_top(t);
+        self.map_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
@@ -991,15 +992,6 @@ impl Model {
             )
         });
         self.add_prim(any, prim::ALL);
-        // It may call `set` with any value (`MAP_VALUES`).
-        if self.keyed_collection(t) {
-            let a = self.atom(MAP_VALUES);
-            let v = self.field(t, a);
-            self.add_top(v, |m| {
-                format!("entry value of an escaped map: {}", m.reasons[reason as usize])
-            });
-            self.add_prim(v, prim::ALL);
-        }
         // Its buffer is what unknown code reads as `.buffer` (`VIEWED_BUFFER`).
         if self.array_buffer_view(t) {
             let a = self.atom(VIEWED_BUFFER);
@@ -1132,6 +1124,7 @@ impl Model {
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
         self.arr_len_top(t);
+        self.map_open(t);
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);

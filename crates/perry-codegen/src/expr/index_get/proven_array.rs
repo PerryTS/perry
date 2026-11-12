@@ -8,11 +8,12 @@
 //! plain program Arrays: each is a `GC_TYPE_ARRAY` for its whole life, with
 //! no element descriptor and no deleted element (no hard marker), `length`
 //! and `capacity` of at least `r.floor`, no hole below the floor when
-//! `r.dense`, storage that never moves when `r.fixed`, and, when its length
+//! `r.dense`, storage that never moves when `r.unmoved()` (a fixed length,
+//! or an at-rest Array's reserved capacity), and, when its length
 //! is defined (which `r.floor > 0` implies), elements that start at the
 //! front of its allocation. So the read needs no band test and no type
 //! test, and:
-//! - the forwarding test only when the storage may move (`!r.fixed`);
+//! - the forwarding test only when the storage may move (`!r.unmoved()`);
 //! - no bound when the key's interval lies in `[0, r.floor)` (wpfacts
 //!   `element_keys`), else `idx <u capacity`: the runtime keeps
 //!   `[length, capacity)` hole-filled (`array::storage`), so a slot past
@@ -88,10 +89,19 @@ pub(crate) struct RepRead {
     /// The floor the key is below: `rep.floor`, or a field read call's own
     /// (every Array that call can read has at least as many elements).
     pub(crate) key_floor: u32,
+    /// The key is an integer in `[0, length)` of the Array read, whatever
+    /// the floor (`walk_read`: the counter of a loop bounded by that
+    /// Array's own fixed length).
+    pub(crate) below_length: bool,
     /// The read's value is a proven Number: a plain double.
     pub(crate) number: bool,
     /// The receiver, for the check-mode report.
     pub(crate) receiver: Receiver,
+    /// The key is the bounded counter of a loop that holds the receiver's
+    /// length (`expr::held_len`): an integer in `[0, length)`, so the read
+    /// has no bound. `Some(true)`: the length is defined, so the elements
+    /// start behind the header whatever `rep.floor` is.
+    pub(crate) bounded: Option<bool>,
 }
 
 /// The receiver expression of a rep-keyed read.
@@ -112,14 +122,26 @@ impl Receiver {
 }
 
 impl RepRead {
-    /// The slot is below a dense floor: present, never a hole.
-    fn present(self) -> bool {
-        self.rep.dense && self.in_floor
+    /// The key names an own slot without a bound test: it is below the
+    /// floor, or below the length of fixed storage.
+    fn in_extent(self) -> bool {
+        self.in_floor || self.below_length && self.rep.fixed
     }
 
-    /// The read cannot miss: no test, no cold arm.
+    /// The slot is below a dense floor: present, never a hole. So is one
+    /// below the length of a dense Array of fixed length: each Array's
+    /// floor is its own length (`bindings::tok_arr_rep`).
+    fn present(self) -> bool {
+        self.rep.dense && self.in_extent()
+    }
+
+    /// The read cannot miss: no test, no cold arm. A present at-rest slot
+    /// holds an int32 Number (`expr::rest_elems`).
     pub(crate) fn total(self, numeric: bool) -> bool {
-        self.rep.fixed && self.in_floor && self.rep.dense && (!numeric || self.number)
+        self.rep.unmoved()
+            && self.in_extent()
+            && self.rep.dense
+            && (!numeric || self.number || self.rep.at_rest)
     }
 }
 
@@ -154,8 +176,10 @@ pub(crate) fn rep_read(ctx: &FnCtx<'_>, object: &Expr, element_offset: u32) -> O
         rep,
         in_floor,
         key_floor: rep.floor,
+        below_length: false,
         number,
         receiver,
+        bounded: None,
     })
 }
 
@@ -219,10 +243,36 @@ pub(crate) fn lower_in_floor(
         rep,
         in_floor: true,
         key_floor,
+        below_length: false,
         number: rep.elem != crate::codegen::FactsElemRep::Boxed,
         receiver: Receiver::Field,
+        bounded: None,
     };
-    lower_rep(ctx, arr_box, idx_i32, read, false)
+    lower_rep(ctx, arr_box, idx_i32, read, false, None)
+}
+
+/// Read `arr_box[idx_i32]` of local `id` for a key in `[0, length)`
+/// (`walk_read`, which gave `rep`: dense, of fixed length, Number
+/// elements, not at rest): a present own element, a plain double. No test
+/// and no cold arm.
+pub(super) fn lower_below_length(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    rep: FactsArrRep,
+    id: u32,
+) -> String {
+    let read = RepRead {
+        rep,
+        in_floor: false,
+        key_floor: rep.floor,
+        below_length: true,
+        number: true,
+        receiver: Receiver::Local(id),
+        bounded: None,
+    };
+    debug_assert!(read.total(true) && !rep.at_rest);
+    lower_rep(ctx, arr_box, idx_i32, read, false, None)
 }
 
 /// `e` is an element read the tier loads below a dense floor and whose
@@ -237,6 +287,12 @@ pub(crate) fn number_in_floor(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     else {
         return false;
     };
+    if crate::expr::rest_elems::tiers_enabled()
+        && crate::expr::rest_elems::read_floor(ctx, e).is_some()
+    {
+        // An at-rest read (I32 at rest B2): its own facts decide.
+        return crate::expr::rest_elems::number_read(ctx, e);
+    }
     !ctx.wpfacts_off
         && rep_read(ctx, object, *element_offset)
             .is_some_and(|read| read.in_floor && read.rep.dense && read.number)
@@ -287,25 +343,81 @@ pub(super) fn lower(
     fact: Proven,
     numeric: bool,
 ) -> String {
+    lower_bounded(ctx, arr_box, idx_i32, fact, numeric, None)
+}
+
+/// The read under `fact` has an unsigned bound in front of its load: the
+/// key is not proven below the floor (`idx <u capacity`) or below the fixed
+/// length (`idx <u len`). Such a read admits no negative key, so a caller
+/// may hand it one untested (N10, `guarded_array::unsigned_bound_covers`).
+pub(super) fn bounds_key(fact: Proven) -> bool {
     match fact {
-        Proven::Rep(read) => lower_rep(ctx, arr_box, idx_i32, read, numeric),
-        Proven::Fixed(fact) => lower_fixed(ctx, arr_box, idx_i32, fact, numeric),
+        Proven::Rep(read) => !read.in_extent(),
+        Proven::Fixed(fact) => !fact.key_in_bounds,
     }
 }
 
-/// The rep-keyed read (module docs).
-fn lower_rep(
+/// [`lower`] whose key is not sign-tested when `negative_exit` is set
+/// (`bounds_key` holds): the miss arm sends a negative key there first
+/// (`guarded_array::emit_negative_exit`).
+pub(super) fn lower_bounded(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    fact: Proven,
+    numeric: bool,
+    negative_exit: Option<&str>,
+) -> String {
+    debug_assert!(negative_exit.is_none() || bounds_key(fact));
+    match fact {
+        Proven::Rep(read) => lower_rep(ctx, arr_box, idx_i32, read, numeric, negative_exit),
+        Proven::Fixed(fact) => lower_fixed(ctx, arr_box, idx_i32, fact, numeric, negative_exit),
+    }
+}
+
+/// The rep-keyed read at the bounded counter of a loop that holds the
+/// receiver's length (`expr::held_len`): `read.bounded` is set.
+pub(crate) fn lower_held(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
     idx_i32: &str,
     read: RepRead,
     numeric: bool,
 ) -> String {
+    debug_assert!(read.bounded.is_some() && !read.rep.at_rest);
+    lower_rep(ctx, arr_box, idx_i32, read, numeric, None)
+}
+
+/// The rep-keyed read of an at-rest Array (`expr::rest_elems`, B2): `read`
+/// is `rep_read`'s for that receiver, `read.rep.at_rest`.
+pub(crate) fn lower_rest(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    read: RepRead,
+    numeric: bool,
+) -> String {
+    debug_assert!(read.rep.at_rest);
+    lower_rep(ctx, arr_box, idx_i32, read, numeric, None)
+}
+
+/// The rep-keyed read (module docs). An at-rest receiver
+/// (`FactsArrRep::at_rest`) holds I32 words: a slot that is no hole is an
+/// int32 Number, decoded by `rest_elems::decode`, and the cold read is the
+/// accessor's.
+fn lower_rep(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    read: RepRead,
+    numeric: bool,
+    negative_exit: Option<&str>,
+) -> String {
     let r = read.rep;
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     crate::verify_facts::consumed(
         crate::verify_facts::Fact::ArrayRep,
-        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "in_floor": read.in_floor }),
+        || serde_json::json!({ "receiver": read.receiver.label(), "floor": r.floor, "in_floor": read.in_floor, "below_length": read.below_length }),
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
@@ -323,7 +435,7 @@ fn lower_rep(
     };
     let bits = ctx.block().bitcast_double_to_i64(arr_box);
     let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
-    if !r.fixed {
+    if !r.unmoved() {
         // Growth moves the storage and forwards this header.
         let word = super::guarded_array::emit_array_guard_word(ctx.block(), &handle);
         let moved = ctx.block().and(I32, &word, FORWARDED_I32);
@@ -331,18 +443,33 @@ fn lower_rep(
         step(ctx, &live, "arep.live");
     }
     let mut capacity = None;
-    // In the floor `capacity >= floor > idx`: the slot exists.
-    if !read.in_floor {
+    // An at-rest Array is dense below its floor and holds an I32 word in
+    // every slot there: outside the key's proven floor, `idx <u floor` is the
+    // whole test (no capacity load, no hole test), and any other key is the
+    // accessor's cold read.
+    let rest_bound = r.at_rest && r.dense && r.floor > 0 && !read.in_extent();
+    if rest_bound {
+        let inside = ctx.block().icmp_ult(I32, idx_i32, &r.floor.to_string());
+        step(ctx, &inside, "arep.inside");
+    }
+    // In the floor `capacity >= floor > idx`: the slot exists. So does one
+    // below a fixed length (`capacity >= length`), and one at a held
+    // loop's bounded counter (`idx < length <= capacity`).
+    let front = r.floor > 0 || read.bounded == Some(true);
+    let unbounded = read.in_extent() || read.bounded.is_some();
+    if !rest_bound && !(unbounded && front) {
         let ptr = ctx.block().inttoptr(I64, &handle);
         let cap_ptr = ctx.block().gep(I8, &ptr, &[(I64, "4")]);
         let cap = ctx.block().load(I32, &cap_ptr);
-        let inside = ctx.block().icmp_ult(I32, idx_i32, &cap);
-        step(ctx, &inside, "arep.inside");
+        if !unbounded {
+            let inside = ctx.block().icmp_ult(I32, idx_i32, &cap);
+            step(ctx, &inside, "arep.inside");
+        }
         capacity = Some(cap);
     }
-    let blk = ctx.block();
-    let addr = if r.floor > 0 {
+    let addr = if front {
         // A defined length: the elements start behind the header.
+        let blk = ctx.block();
         let idx = blk.zext(I32, idx_i32, I64);
         let offset = blk.shl(I64, &idx, "3");
         let base = blk.add(
@@ -350,21 +477,36 @@ fn lower_rep(
             &handle,
             &crate::target_layout::ARRAY_HEADER_SIZE_BYTES.to_string(),
         );
-        blk.add(I64, &base, &offset)
+        let addr = blk.add(I64, &base, &offset);
+        if r.floor == 0 {
+            crate::expr::held_len::witness_front(ctx, arr_box, &handle, idx_i32, &addr);
+        }
+        addr
     } else {
         let cap = capacity.expect("no key is below a floor of 0");
-        blk.array_element_addr_with_capacity(&handle, &cap, idx_i32)
+        ctx.block()
+            .array_element_addr_with_capacity(&handle, &cap, idx_i32)
     };
+    let blk = ctx.block();
     let slot = blk.inttoptr(I64, &addr);
     let raw = blk.load(I64, &slot);
-    let value = blk.bitcast_i64_to_double(&raw);
-    if numeric && !(read.present() && read.number) {
-        let plain = crate::codegen::emit_plain_number_bits_test(blk, &raw);
-        step(ctx, &plain, "arep.number");
-    } else if !numeric && !read.present() {
-        let own = blk.icmp_ne(I64, &raw, TAG_HOLE_I64);
-        step(ctx, &own, "arep.own");
-    }
+    let value = if r.at_rest {
+        if !read.present() && !rest_bound {
+            let own = ctx.block().icmp_ne(I64, &raw, TAG_HOLE_I64);
+            step(ctx, &own, "arep.own");
+        }
+        crate::expr::rest_elems::decode(ctx, &raw, crate::expr::rest_elems::Want::Value)
+    } else {
+        let value = blk.bitcast_i64_to_double(&raw);
+        if numeric && !(read.present() && read.number) {
+            let plain = crate::codegen::emit_plain_number_bits_test(blk, &raw);
+            step(ctx, &plain, "arep.number");
+        } else if !numeric && !read.present() {
+            let own = blk.icmp_ne(I64, &raw, TAG_HOLE_I64);
+            step(ctx, &own, "arep.own");
+        }
+        value
+    };
     let Some(cold_idx) = cold_idx else {
         return value;
     };
@@ -374,17 +516,58 @@ fn lower_rep(
     ctx.block().br(&merge_label);
 
     ctx.current_block = cold_idx;
-    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
-    // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
-    let cold = super::guarded_array::emit_read_cold(
-        ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
-    );
+    super::guarded_array::emit_negative_exit(ctx, idx_i32, negative_exit);
+    let cold = if r.at_rest {
+        rest_cold(ctx, arr_box, idx_i32, numeric)
+    } else {
+        let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+        // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
+        super::guarded_array::emit_read_cold(
+            ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
+        )
+    };
     let cold_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(&value, &load_end), (&cold, &cold_end)])
+}
+
+/// The cold read of an at-rest Array (I32 at rest B2): a key at or past its
+/// length names no own slot, so it is the shared cold read a double
+/// Array's miss takes (it can meet no element word); a key below the length
+/// is an element, read through the accessor (`rest_elems::cold_read`).
+fn rest_cold(ctx: &mut FnCtx<'_>, arr_box: &str, idx_i32: &str, numeric: bool) -> String {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(arr_box);
+    let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+    let ptr = blk.inttoptr(I64, &handle);
+    let length = blk.load(I32, &ptr);
+    let element = blk.icmp_ult(I32, idx_i32, &length);
+    let acc = ctx.new_block("arep.rest_elem");
+    let miss = ctx.new_block("arep.rest_miss");
+    let done = ctx.new_block("arep.rest_done");
+    let (acc_l, miss_l, done_l) = (
+        ctx.block_label(acc),
+        ctx.block_label(miss),
+        ctx.block_label(done),
+    );
+    ctx.block().cond_br(&element, &acc_l, &miss_l);
+    ctx.current_block = acc;
+    let got = crate::expr::rest_elems::cold_read(ctx, arr_box, idx_i32, numeric);
+    let acc_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = miss;
+    let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let absent = super::guarded_array::emit_read_cold(
+        ctx, arr_box, "2", &idx_box, "0", numeric, numeric, None,
+    );
+    let miss_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    ctx.block()
+        .phi(DOUBLE, &[(&got, &acc_end), (&absent, &miss_end)])
 }
 
 /// The fixed-storage read (module docs).
@@ -394,6 +577,7 @@ fn lower_fixed(
     idx_i32: &str,
     fact: FactsElementRead,
     numeric: bool,
+    negative_exit: Option<&str>,
 ) -> String {
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_OTHER_TIER);
     crate::verify_facts::consumed(
@@ -438,6 +622,7 @@ fn lower_fixed(
     blk.cond_br(&hit, &merge_label, &cold_label);
 
     ctx.current_block = cold_idx;
+    super::guarded_array::emit_negative_exit(ctx, idx_i32, negative_exit);
     let idx_box = ctx.block().sitofp(I32, idx_i32, DOUBLE);
     // Mode 2: the exact arguments, no absence proof (`emit_read_cold`).
     let cold = super::guarded_array::emit_read_cold(

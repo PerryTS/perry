@@ -126,6 +126,23 @@ fn a_call_whose_every_callee_returns_a_number_is_a_number_call() {
     assert!(!number_call_at(src, "this.name(5)"));
 }
 
+/// A direct call of a function is a Number call on the same proof as a
+/// method call: every callee the site reaches returns only Numbers.
+#[test]
+fn a_direct_call_whose_callee_returns_a_number_is_a_number_call() {
+    let src = "function enc(a: number, b: number, c = 0): number { let r = a | (b << 7); for (let k = 0; k < c; k++) r += k; return r; }\n\
+               function mix(k: number): number | string { let r = k; for (let i = 0; i < k; i++) r += i; return r > 9 ? 'x' : r; }\n\
+               function hole(k: number): number { const a = [1, 2, 3]; let r = 0; for (let i = 0; i < 2; i++) r += i; return a[k + r] as number; }\n\
+               const out: number[] = [];\n\
+               const f = Math.random() < 2 ? enc : mix;\n\
+               for (let i = 0; i < 9; i++) { out.push(enc(i, i + 1)); console.log(mix(i), hole(i), f(i, 1)); }\n\
+               console.log(out.length);";
+    assert!(number_call_at(src, "enc(i, i + 1)"));
+    assert!(!number_call_at(src, "mix(i)"));
+    assert!(!number_call_at(src, "hole(i)"));
+    assert!(!number_call_at(src, "f(i, 1)"));
+}
+
 #[test]
 fn a_body_that_may_complete_returns_undefined() {
     // `probe` returns `this.#p` or, when the read throws, completes after
@@ -147,4 +164,38 @@ fn a_body_that_may_complete_returns_undefined() {
     assert!(number_call_at(src, "this.pick(k)"));
     // A `break` leaves the `switch`, and the body completes after it.
     assert!(!number_call_at(src, "this.open(k)"));
+}
+
+#[test]
+fn an_equality_test_against_an_int_constant_is_an_int_consumer() {
+    // N1 (`demand::compare_demand`): `d === 1` and a `switch` case are
+    // integer compares on an I32 operand; `d` and `k` meet no other int
+    // consumer. (A `while (d < 6)` counter has a ⊤ interval: no loop clip.)
+    let r = reps(
+        "let found = 0;\n\
+         for (let s = 0; s < 8; s++) {\n\
+           for (let d = 1; d < 6; d++) { if (d === 1) found++; }\n\
+           const k = s % 3;\n\
+           switch (k) { case 0: found += 2; break; case 2: found += 3; break; }\n\
+         }\n\
+         console.log(found);",
+    );
+    assert_eq!(r["d"], Rep::I32, "{r:?}");
+    assert_eq!(r["k"], Rep::I32, "{r:?}");
+}
+
+#[test]
+fn a_relational_or_fractional_test_is_no_int_consumer() {
+    // Negative controls: a loop bound (`j < 8`), a fractional constant
+    // (`x === 0.5`) and `-0` are no int consumers; such counters keep F64.
+    let r = reps(
+        "let acc = 0.5;\n\
+         for (let j = 0; j < 8; j++) { acc = acc + j * 0.25; }\n\
+         for (let x = 0; x < 3; x++) { if (x === 0.5) acc += 1; acc = acc * x; }\n\
+         for (let z = 0; z < 3; z++) { if (z === -0) acc += 1; acc = acc + z; }\n\
+         console.log(acc);",
+    );
+    assert_eq!(r["j"], Rep::F64, "{r:?}");
+    assert_eq!(r["x"], Rep::F64, "{r:?}");
+    assert_eq!(r["z"], Rep::F64, "{r:?}");
 }

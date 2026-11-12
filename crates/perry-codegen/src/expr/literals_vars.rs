@@ -440,6 +440,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // site we just load the cached NaN-boxed handle from the pool's
         // `.handle` global. ONE instruction, no per-use allocation.
         Expr::String(s) => {
+            // A marked short literal is its inline string (`short_string`).
+            if let Some(inline) = super::short_string::inline_literal(expr, s) {
+                return Ok(inline);
+            }
             let idx = ctx.strings.intern(s);
             let entry = ctx.strings.entry(idx);
             // Clone the global name out so we don't keep `entry` borrowed
@@ -1377,6 +1381,15 @@ pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) 
 /// plain-slot store with its shadow-frame mirror and i32 mirror, module
 /// globals, the arena owner, buffer views and int facts.
 ///
+/// `id = v` for a value lowering holds already (a value record lane,
+/// `codegen::record_sig`): the write obligations of the `LocalSet` arm, then
+/// the one binding. `hint` is the expression the boxed program assigns.
+pub(crate) fn bind_local(ctx: &mut FnCtx<'_>, id: u32, v: &str, hint: &Expr) -> Result<()> {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, hint);
+    bind_lowered_value_to_local(ctx, id, v, hint)
+}
+
 /// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
 /// a caller holding a value it did not lower through `lower_expr` — a
 /// region's fast arm, which loads the slot directly — binds it through the
@@ -1410,7 +1423,11 @@ pub(crate) fn bind_lowered_value_to_local(
     // A guarded scalar lane or the all-writes numeric fixed point proves
     // this alias cannot share a string buffer. An annotation alone never
     // satisfies is_numeric_expr for a local read.
-    if string_alias && !fixed_slot && !crate::type_analysis::is_numeric_expr(ctx, value) {
+    if string_alias
+        && !fixed_slot
+        && !crate::type_analysis::is_numeric_expr(ctx, value)
+        && !super::literal_strings::alias(ctx, id, value, v)
+    {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {

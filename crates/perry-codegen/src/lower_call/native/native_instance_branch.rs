@@ -330,7 +330,15 @@
         // receiver field read is guarded by the clone's exact `this` shape.
         // Route only that narrow form to the fused runtime entry. All other
         // calls retain the boxed-value push loop below.
+        // I32 at rest, a fill push of a push-filled birth
+        // (`expr::rest_elems::push_len`): one runtime append of the encoded
+        // word; the fused entry below appends a double.
+        let rest_len = match args {
+            [_] => crate::expr::rest_elems::push_len(ctx, recv),
+            _ => None,
+        };
         let u31_param = match (args, recv) {
+            _ if rest_len.is_some() => None,
             (
                 [Expr::LocalGet(id)],
                 Expr::PropertyGet {
@@ -409,6 +417,12 @@
                 &[(&fast_handle, &fast_end), (&generic_handle, &generic_end)],
             );
             Some(length_slot)
+        } else if let Some(len) = rest_len {
+            // The Array is the fresh one its field initializer bore, which
+            // nothing but this constructor has seen: no guard can fail.
+            let v = push_group.reread(ctx, push_roots[0])?;
+            arr_handle = crate::expr::rest_elems::lower_push(ctx, &arr_handle, &v, len);
+            None
         } else {
             // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
             // even when args is empty so frozen / non-writable-length throw correctly.

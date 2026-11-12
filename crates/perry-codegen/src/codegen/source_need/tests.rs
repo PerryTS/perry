@@ -261,6 +261,7 @@ fn a_dynamic_import_without_known_targets_publishes_every_namespace() {
             byte_offset: 0,
             deferred_error: None,
             synchronous: false,
+            deferred: false,
         }));
     let lib = lower("export function exported() { return 1; }", "lib.ts");
     let need = run_links(&[("entry.ts", &entry), ("lib.ts", &lib)], &[]);

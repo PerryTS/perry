@@ -23,7 +23,7 @@
 //! twice (a for…of's counted and IteratorRecord arms), or a callee the
 //! inliner copied into several callers. The site is joined over them: every
 //! copy must resolve to F, and every copy's arguments must hold F's
-//! signature (`admits`). Calls of different spans under one key are distinct
+//! signature (`refusal`). Calls of different spans under one key are distinct
 //! calls and refuse.
 
 use crate::bindings::{Enc, ModuleBindings, Rep};
@@ -44,6 +44,8 @@ pub(crate) struct CallSiteRec {
     pub spread: bool,
     /// A direct call's callee node; `None` for a method call.
     pub callee: Option<NodeId>,
+    /// The solver's call (`Model::calls`) this copy made.
+    pub call: crate::model::CallId,
 }
 
 /// A function's typed signature (module docs).
@@ -65,6 +67,14 @@ impl Signature {
         self.ret.encoding() == Enc::Boxed
             && self.this_class.is_none()
             && self.params.iter().all(|r| r.encoding() == Enc::Boxed)
+    }
+
+    /// A parameter or the result is a value record (DESIGN-p4l4 §5.2).
+    pub fn has_record(&self) -> bool {
+        self.params
+            .iter()
+            .chain(std::iter::once(&self.ret))
+            .any(|r| matches!(r, Rep::Record(_)))
     }
 }
 
@@ -125,6 +135,7 @@ pub(crate) fn collect(
     bindings: &mut [ModuleBindings],
     interpreted: bool,
     sabotage: Option<&str>,
+    mut probe: Option<&mut Vec<String>>,
 ) {
     let m = &g.m;
     if m.aborted || interpreted {
@@ -199,6 +210,15 @@ pub(crate) fn collect(
             });
             params.push(rep);
         }
+        // DESIGN-p4l4 VR-3b: a Record slot exists only with record
+        // signatures on.
+        if !m.record_signatures {
+            for p in &mut params {
+                if matches!(p, Rep::Record(_)) {
+                    *p = Rep::Boxed;
+                }
+            }
+        }
         let mut ret = rep_at(f.ret);
         let mut this_nodes = vec![f.this];
         for it in &m.sum.insts {
@@ -206,6 +226,9 @@ pub(crate) fn collect(
                 ret = Rep::join(ret, rep1(it.ret));
                 this_nodes.push(it.this);
             }
+        }
+        if !m.record_signatures && matches!(ret, Rep::Record(_)) {
+            ret = Rep::Boxed;
         }
         let this_class = one_class(g, &this_nodes);
         let sig = Signature {
@@ -220,64 +243,91 @@ pub(crate) fn collect(
         }
     }
     // Typed call sites (§2, E3).
-    let mut by_key: std::collections::BTreeMap<(u32, u32), Vec<&CallSiteRec>> = Default::default();
-    for r in &g.call_sites_at {
-        by_key.entry((r.module, r.offset)).or_default().push(r);
+    let targets = call_targets(g, sites);
+    // DESIGN-p4l4 VR-3b: a Record slot is the callee's ABI, so every call
+    // that enters the body by a source call site must be one of its typed
+    // calls, in the body's own module (codegen's typed calls are
+    // same-module). A function with a site that is not keeps its Record
+    // slots Boxed: its callers pass a materialized copy (§4.2) and its body
+    // reads the copy key by key.
+    let mut demoted: std::collections::BTreeSet<(u32, u32)> = Default::default();
+    for (key, (t, recs)) in &targets {
+        let Some(sig) = sigs.get(t) else { continue };
+        if sig.has_record()
+            && (key.0 != t.0
+                || recs
+                    .iter()
+                    .any(|r| refusal(g, &all, sig, &defaults[t], &r.args).is_some()))
+        {
+            demoted.insert(*t);
+        }
     }
-    let method_target: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = {
-        let mut out: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = Default::default();
-        for s in sites.iter().filter(|s| s.is_call) {
-            let one = (matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)
-                && s.target_fns.len() == 1)
-                .then(|| s.target_fns[0]);
-            let e = out.entry((s.module, s.byte_offset)).or_insert(one);
-            if *e != one {
-                *e = None;
+    for t in &demoted {
+        let sig = sigs.get_mut(t).expect("a demoted signature");
+        for p in sig.params.iter_mut().chain(std::iter::once(&mut sig.ret)) {
+            if matches!(p, Rep::Record(_)) {
+                *p = Rep::Boxed;
             }
         }
-        out
-    };
+        if sig.is_boxed() {
+            sigs.remove(t);
+        }
+        if let Some(mb) = bindings.get_mut(t.0 as usize) {
+            mb.record_demoted.push(t.1);
+        }
+    }
     let mut typed: Vec<((u32, u32), (u32, u32))> = Vec::new();
-    for (&(mi, offset), recs) in &by_key {
-        if offset == 0 || recs.iter().any(|r| r.spread) {
-            continue;
-        }
-        // E3: the key names one source call; its copies share its span.
-        let end = recs[0].end;
-        if recs.iter().any(|r| r.end != end) {
-            continue;
-        }
-        // Every copy is a call of the same kind.
-        let direct = recs[0].callee.is_some();
-        if recs.iter().any(|r| r.callee.is_some() != direct) {
-            continue;
-        }
-        let target = if direct {
-            // Every copy (and every instance copy of its callee node)
-            // holds exactly one body, the same one; a missing node refuses.
-            let mut one: Option<(u32, u32)> = None;
-            let mut ok = true;
-            for r in recs {
-                for c in all(r.callee.expect("a direct call")) {
-                    match live(c).then(|| single_body(g, c)).flatten() {
-                        Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
-                        _ => ok = false,
+    for (key, (t, recs)) in resolve(g, sites) {
+        let why = match t {
+            Err(why) => Some(why.to_string()),
+            Ok(t) => match sigs.get(&t) {
+                None => None,
+                Some(sig) => {
+                    let lits = &defaults[&t];
+                    let refused = recs
+                        .iter()
+                        .find_map(|r| refusal(g, &all, sig, lits, &r.args));
+                    if refused.is_none() {
+                        typed.push((key, t));
+                    }
+                    refused.map(|(i, why)| format!("argument-{i}-{why}"))
+                }
+            },
+        };
+        // The probe: each call that resolves to a body with a signature, and
+        // each call a method site names candidates for but that does not
+        // resolve to one body.
+        if let Some(out) = probe.as_deref_mut() {
+            let name = |(mi, id): (u32, u32)| {
+                hir_fn(g, mi, id).map_or_else(|| format!("{mi}:{id}"), |f| f.name.clone())
+            };
+            let (mi, offset) = key;
+            match (t, why) {
+                (Ok(t), None) if sigs.contains_key(&t) => out.push(format!(
+                    "# typed_call module={mi} call={offset} callee={} typed=1",
+                    name(t)
+                )),
+                (Ok(t), Some(why)) => out.push(format!(
+                    "# typed_call module={mi} call={offset} callee={} typed=0 why={why}",
+                    name(t)
+                )),
+                (Err(_), Some(why)) => {
+                    let mut names: Vec<String> = sites
+                        .iter()
+                        .filter(|s| s.is_call && (s.module, s.byte_offset) == key)
+                        .flat_map(|s| s.target_fns.iter().map(|t| name(*t)))
+                        .collect();
+                    names.sort();
+                    names.dedup();
+                    if !names.is_empty() {
+                        out.push(format!(
+                            "# typed_call module={mi} call={offset} callee={} typed=0 why={why}",
+                            names.join("|")
+                        ));
                     }
                 }
+                _ => {}
             }
-            if ok {
-                one
-            } else {
-                None
-            }
-        } else {
-            method_target.get(&(mi, offset)).copied().flatten()
-        };
-        let Some(t) = target else { continue };
-        let Some(sig) = sigs.get(&t) else { continue };
-        let lits = &defaults[&t];
-        if recs.iter().all(|r| admits(g, &all, sig, lits, &r.args)) {
-            typed.push(((mi, offset), t));
         }
     }
     if matches!(sabotage, Some("signature") | Some("signature-escape")) {
@@ -320,6 +370,125 @@ pub(crate) fn collect(
     }
 }
 
+/// The call sites a typed entry can serve before any signature is known
+/// (§2, E3): per source call `(module, offset)`, the one body every copy
+/// resolves to, with the copies. A call at offset 0, a spread call, copies of
+/// different spans or kinds, or a callee holding anything else is absent.
+pub(crate) fn call_targets<'g>(
+    g: &'g Gen<'_>,
+    sites: &[SiteFacts],
+) -> std::collections::BTreeMap<(u32, u32), ((u32, u32), Vec<&'g CallSiteRec>)> {
+    resolve(g, sites)
+        .into_iter()
+        .filter_map(|(key, (t, recs))| Some((key, (t.ok()?, recs))))
+        .collect()
+}
+
+/// A source call's one body, or why it has none (`target_of`).
+type Target = Result<(u32, u32), &'static str>;
+
+/// Every source call gen walked, keyed `(module, offset)`: its target
+/// (`target_of`) and its copies.
+fn resolve<'g>(
+    g: &'g Gen<'_>,
+    sites: &[SiteFacts],
+) -> std::collections::BTreeMap<(u32, u32), (Target, Vec<&'g CallSiteRec>)> {
+    let m = &g.m;
+    let mut copies: std::collections::HashMap<NodeId, Vec<NodeId>> = Default::default();
+    for inst in 0..m.sum.insts.len() as u32 {
+        m.inst_copies(inst, |orig, copy| {
+            copies.entry(orig).or_default().push(copy)
+        });
+    }
+    let all = |n: NodeId| -> Vec<NodeId> {
+        std::iter::once(n)
+            .chain(copies.get(&n).into_iter().flatten().copied())
+            .collect()
+    };
+    let mut by_key: std::collections::BTreeMap<(u32, u32), Vec<&CallSiteRec>> = Default::default();
+    for r in &g.call_sites_at {
+        by_key.entry((r.module, r.offset)).or_default().push(r);
+    }
+    let method_target: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = {
+        let mut out: std::collections::HashMap<(u32, u32), Option<(u32, u32)>> = Default::default();
+        for s in sites.iter().filter(|s| s.is_call) {
+            let one = (matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set)
+                && s.target_fns.len() == 1)
+                .then(|| s.target_fns[0]);
+            let e = out.entry((s.module, s.byte_offset)).or_insert(one);
+            if *e != one {
+                *e = None;
+            }
+        }
+        out
+    };
+    by_key
+        .into_iter()
+        .map(|((mi, offset), recs)| {
+            let t = target_of(g, &all, &method_target, mi, offset, &recs);
+            ((mi, offset), (t, recs))
+        })
+        .collect()
+}
+
+/// The one body the source call `(mi, offset)` (its copies `recs`) resolves
+/// to (§2, E3), or why it has none (the `# typed_call` probe's `why`).
+fn target_of(
+    g: &Gen<'_>,
+    all: &dyn Fn(NodeId) -> Vec<NodeId>,
+    method_target: &std::collections::HashMap<(u32, u32), Option<(u32, u32)>>,
+    mi: u32,
+    offset: u32,
+    recs: &[&CallSiteRec],
+) -> Result<(u32, u32), &'static str> {
+    let live = |n: NodeId| (n as usize) < g.m.nodes.len();
+    if offset == 0 {
+        return Err("offset-0");
+    }
+    if recs.iter().any(|r| r.spread) {
+        return Err("spread");
+    }
+    // E3: the key names one source call; its copies share its span.
+    let end = recs[0].end;
+    if recs.iter().any(|r| r.end != end) {
+        return Err("distinct-calls-share-the-key");
+    }
+    // Every copy is a call of the same kind.
+    let direct = recs[0].callee.is_some();
+    if recs.iter().any(|r| r.callee.is_some() != direct) {
+        return Err("mixed-call-kinds");
+    }
+    if direct {
+        // Every copy (and every instance copy of its callee node) holds
+        // exactly one body, the same one; a missing node refuses.
+        let mut one: Option<(u32, u32)> = None;
+        for r in recs {
+            for c in all(r.callee.expect("a direct call")) {
+                match live(c).then(|| single_body(g, c)).flatten() {
+                    Some(b) if one.is_none_or(|o| o == b) => one = Some(b),
+                    _ => return Err("callee-not-one-body"),
+                }
+            }
+        }
+        one.ok_or("callee-not-one-body")
+    } else {
+        match method_target.get(&(mi, offset)) {
+            Some(Some(t)) => Ok(*t),
+            Some(None) => Err("method-not-one-target"),
+            None => Err("no-method-site"),
+        }
+    }
+}
+
+/// Whether `(module, func_id)` may have a typed signature at all (§1): not a
+/// generator or async function, no rest parameter, no `arguments`.
+pub(crate) fn may_type(g: &Gen<'_>, f: &crate::model::FuncInfo) -> bool {
+    match hir_fn(g, f.module, f.func_id) {
+        Some(hir) => !excluded(hir) && !f.has_arguments,
+        None => false,
+    }
+}
+
 /// Each parameter's literal default when the caller applies it (§4.1, E1):
 /// a literal default with no earlier non-literal one.
 fn literal_defaults(f: &perry_hir::Function) -> Vec<Option<f64>> {
@@ -344,13 +513,15 @@ fn literal_defaults(f: &perry_hir::Function) -> Vec<Option<f64>> {
 /// interval, joined over the argument node's instance copies; an omitted or
 /// `undefined` argument of a literal-defaulted parameter is that literal.
 /// An omitted argument of any other non-Boxed parameter refuses.
-fn admits(
+/// The result is the first parameter whose argument does not hold `sig`, with
+/// the reason (the `# typed_call` probe's `why`); `None` when every one does.
+fn refusal(
     g: &Gen<'_>,
     all: &dyn Fn(NodeId) -> Vec<NodeId>,
     sig: &Signature,
     lits: &[Option<f64>],
     args: &[NodeId],
-) -> bool {
+) -> Option<(usize, &'static str)> {
     use crate::model::prim;
     // The int interval of the values joined so far: `None` before the
     // first value, `Some(None)` once one value is no int.
@@ -364,21 +535,23 @@ fn admits(
     let lit_range = |v: f64| {
         (v.fract() == 0.0 && !(v == 0.0 && v.is_sign_negative())).then_some((v as i64, v as i64))
     };
-    sig.params.iter().enumerate().all(|(i, &rep)| {
-        if rep.encoding() == Enc::Boxed {
-            return true;
+    sig.params.iter().enumerate().find_map(|(i, &rep)| {
+        // A Record slot's arguments are the parameter node's own values:
+        // tokens of its one template (and `undefined`), DESIGN-p4l4 §1.1.
+        if matches!(rep.encoding(), Enc::Boxed | Enc::Record) {
+            return None;
         }
         let lit = lits.get(i).copied().flatten();
         let mut acc: Option<Option<(i64, i64)>> = None;
         match args.get(i) {
             None => match lit {
                 Some(v) => join_range(&mut acc, lit_range(v)),
-                None => return false,
+                None => return Some((i, "omitted")),
             },
             Some(&a) => {
                 for n in all(a) {
                     if (n as usize) >= g.m.nodes.len() {
-                        return false;
+                        return Some((i, "no-node"));
                     }
                     let b = crate::bindings::facts_of_node(g, n);
                     let mut prims = b.prims;
@@ -387,7 +560,7 @@ fn admits(
                         join_range(&mut acc, lit_range(v));
                     }
                     if b.other || !b.class_ids.is_empty() || prims & !prim::NUM != 0 {
-                        return false;
+                        return Some((i, "not-a-number"));
                     }
                     if prims != 0 {
                         join_range(&mut acc, b.int_range);
@@ -398,9 +571,9 @@ fn admits(
         match (rep, acc) {
             (Rep::I32, Some(r)) => {
                 let (lo, hi) = sig.ranges[i].unwrap_or((i64::from(i32::MIN), i64::from(i32::MAX)));
-                r.is_some_and(|(a, b)| a >= lo && b <= hi)
+                (!r.is_some_and(|(a, b)| a >= lo && b <= hi)).then_some((i, "outside-the-interval"))
             }
-            _ => true,
+            _ => None,
         }
     })
 }

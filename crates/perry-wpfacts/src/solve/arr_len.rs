@@ -27,6 +27,10 @@
 //!   index below the length is ever a hole, so a permutation moves none
 //!   there; past the birth length it may.
 //!
+//! A push-filled birth (`push_fills`: `k = []` filled by `this.k.push(v)` in
+//! the constructor before anything else can see the Array) is born with its
+//! final length: its fill pushes are the steps of that birth, no appends.
+//!
 //! Every other event makes the length ⊤, and nothing narrows it again:
 //! - a store of `length`, of a numeric name, or under a computed key
 //!   (`arr_len_store`);
@@ -75,13 +79,63 @@ impl Model {
         n
     }
 
+    /// Something may change Array `t`'s length or move its elements
+    /// (`held_lengths`): a store at `at`, or with `call` the builtin method
+    /// call `at`; `u32::MAX` when the solve cannot place it.
+    pub(crate) fn len_event(&mut self, t: Tok, at: u32, call: bool) {
+        if self.held_lengths && t != TOP && self.is_arr(t) {
+            self.len_events.insert((t, at, call));
+        }
+    }
+
     /// Token `t`'s length may be any Number from now on.
     pub(crate) fn arr_len_top(&mut self, t: Tok) {
-        if t == TOP || !self.is_arr(t) || self.arr_floor_sabotage {
+        if t == TOP || !self.is_arr(t) {
+            return;
+        }
+        // Every event that lands here may shrink the Array: an in-bounds
+        // store (`index_kept`) is no proof for it from now on, and the
+        // hole it withheld is marked.
+        if self.arr_shrunk.insert(t) && self.inbounds_kept.contains(&t) {
+            self.mark_hole(t);
+        }
+        if self.arr_floor_sabotage {
             return;
         }
         let n = self.arr_len(t);
         self.arr_len_grow(n, Iv::TOP);
+    }
+
+    /// `Cons::IndexKept`: an index store into Array `t` at a site whose key
+    /// is at most `t`'s length when the store runs (gen compared the key
+    /// with the `length` the Array held earlier, `gen/in_bounds.rs`). It
+    /// overwrites an element or appends, so it leaves no hole, while `t` is
+    /// an Array of this unit whose length never shrinks: between the
+    /// comparison and the store the length only grew. Any other Array may
+    /// have been shortened in between (through another name, in a callee):
+    /// the store may land past its end.
+    pub(crate) fn index_kept(&mut self, t: Tok) {
+        if t == TOP || !self.is_arr(t) {
+            return;
+        }
+        if self.arr_grow_only(t) {
+            self.inbounds_kept.insert(t);
+        } else {
+            self.mark_hole(t);
+        }
+    }
+
+    /// Array `t` is born in this unit and no event may shrink it
+    /// (`arr_shrunk`). One unit of a per-unit solve sees the other units'
+    /// writes only through contracts: no Array is grow-only there.
+    pub(crate) fn arr_grow_only(&self, t: Tok) -> bool {
+        if self.unit_mode || self.arr_shrunk.contains(&t) || self.is_marker(t) {
+            return false;
+        }
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => !self.foreign.contains_key(&tm),
+            _ => false,
+        }
     }
 
     /// Token `t`'s length may be up to `hi` from now on (the floor).
@@ -120,7 +174,20 @@ impl Model {
             }
             Key::Any(_) => !elem || !self.indexed_store_sites.contains(&site),
         };
+        // An index store may grow the Array too (`held_lengths`).
+        if moves || matches!(key, Key::Any(_)) {
+            self.len_event(t, site, false);
+        }
         if !moves {
+            return;
+        }
+        // A fill push is one of the steps the Array is born in
+        // (`push_fills`): its birth length counts it already.
+        if elem
+            && self
+                .push_fill_of(t)
+                .is_some_and(|f| self.push_fill_sites.get(&site) == Some(&f))
+        {
             return;
         }
         // An element store at a site that is no index store appends.
@@ -128,6 +195,14 @@ impl Model {
             self.arr_len_append(t);
         } else {
             self.arr_len_top(t);
+        }
+    }
+
+    /// The fill that births Array `t` (`push_fills`), if one does.
+    pub(crate) fn push_fill_of(&self, t: Tok) -> Option<u32> {
+        match self.toks.get(t as usize) {
+            Some(&TokKind::Obj(tm, _)) => self.push_fill_tmpls.get(&tm).copied(),
+            _ => None,
         }
     }
 

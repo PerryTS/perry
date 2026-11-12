@@ -555,7 +555,7 @@ impl Writer<'_> {
             return self.pointer(POINTER_TAG | live as u64);
         }
         match header.obj_type {
-            gc::GC_TYPE_ARRAY => self.array(addr, addr),
+            crate::gc_array_type_pat!() => self.array(addr, addr),
             gc::GC_TYPE_LAZY_ARRAY => {
                 let lazy = addr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {

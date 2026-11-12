@@ -12,6 +12,7 @@ mod call_entry;
 pub(crate) mod closure_births;
 pub mod codegen;
 pub(crate) mod collectors;
+pub use collectors::life_census::enabled as life_census_enabled;
 pub(crate) mod concat_site_cache;
 pub mod debug_info;
 #[cfg(feature = "llvm-inprocess")]
@@ -105,6 +106,8 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
+// DESIGN-p4l4 VR-3a: record bindings as their fields, before lowering.
+mod value_records;
 #[cfg(feature = "target-wasi")]
 pub mod wasi_toolchain;
 #[cfg(feature = "target-wasi")]
@@ -119,8 +122,9 @@ pub use codegen::{
     AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
     CtorAbi, DefinedClassShape, ElisionFacts, ExportedObjectLiteralCapability, FactsArrRep,
     FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
-    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecv,
-    FactsRep, FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
+    FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
     ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
     ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
     ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,

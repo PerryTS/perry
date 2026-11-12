@@ -227,7 +227,7 @@ impl Model {
             }
             ChainAct::Call(call) => {
                 if own_members {
-                    self.with_b(|m| builtins::own_method(m, t, key, call));
+                    self.with_native(call, |m| builtins::own_method(m, t, key, call));
                 }
                 // Methods on the chain (shared) and builtin prototype
                 // methods.
@@ -505,19 +505,10 @@ impl Model {
                 self.index_accessors(origin, t, ChainAct::Load(dst));
                 return;
             }
-            // A Map's iteration yields a fresh `[key, value]` array per entry
-            // (ECMA-262 24.1.3.12 Map.prototype[@@iterator] is entries,
-            // 24.1.5.1 CreateArrayFromList), never a key or a value itself:
-            // the pairs come from its `@@iterator` call, which the iteration
-            // makes beside this read (`builtins::iterate`, `Gen::iterate`). A
-            // WeakMap is not iterable (24.3.3: no @@iterator).
-            if self.keyed_collection(t) {
-                return;
-            }
             // A builtin object other than an array the runtime made walks
-            // its own internal entries (a Set's list, an iterator's steps, a
-            // string's code points): no [[Get]] of an index, so no index
-            // accessor runs.
+            // its own internal entries (a Set's list, a Map's entries, an
+            // iterator's steps, a string's code points): no [[Get]] of an
+            // index, so no index accessor runs.
             if self.iterates_internal(t) {
                 let all = self.all_fields(t);
                 self.edge(all, dst);
@@ -1395,7 +1386,9 @@ impl Model {
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
-                self.with_b(|m| builtins::proto_method(m, start, origin, key, call));
+                self.with_native(call, |m| {
+                    builtins::proto_method(m, start, origin, key, call)
+                });
                 if !self.stops_at(start, key) {
                     let up = self.cv(start, key);
                     self.bind_via(up, call, origin);

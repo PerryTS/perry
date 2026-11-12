@@ -871,6 +871,11 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         }
     }
     if let Expr::IndexGet { object, index, .. } = expr {
+        if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+            let number = super::rest_elems::Want::Number;
+            let value = super::rest_elems::lower_read(ctx, expr, floor, number)?;
+            return Ok((value, true));
+        }
         if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
             return Ok((value, true));
         }
@@ -941,6 +946,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // no boxed fallback at all (the residual per-element check proves the slot
     // is a raw double before the load), so claiming one here would be a lie
     // that other consumers of that predicate would read.
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
         if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
     if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
@@ -1029,6 +1038,10 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+        if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(ctx.block().sitofp(I32, &v, DOUBLE));
+        }
         // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
         // is `l` and `r` is never evaluated. (An in-window read under a
         // packed-loop index fact, a proven raw-f64 field, a numeric local.)
@@ -1047,6 +1060,13 @@ fn lower_numeric_logical_for_number_context(
             let l = lower_operand_as_number(ctx, left)?;
             crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
             return Ok(l);
+        }
+        // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
+        // is on the read's miss arm only (`index_get::rep_default`).
+        if let Some(v) =
+            crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)?
+        {
+            return Ok(v);
         }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
@@ -1304,6 +1324,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
                 return Ok(value);
             }
+            // Operands the facts hold as int32 words (an I32 lane, an at-rest
+            // or int32 element) stay i32 through the operator.
+            if let Some(value) = super::int32_operand::try_lower_bitwise(ctx, *op, left, right)? {
+                return Ok(value);
+            }
             if matches!(op, BinaryOp::Add) {
                 // CLS D2: Numbers and primitive-kind reads the facts prove:
                 // an fadd of the two ToNumber values, no dynamic helper.
@@ -1354,6 +1379,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_declared_string_expr(ctx, right)
                 {
                     return lower_string_concat(ctx, left, right);
+                }
+                // The same pairwise concat for operands the whole-program
+                // facts call strings (a call's result kinds).
+                if super::facts_string::both_strings(ctx, left, right) {
+                    return super::facts_string::lower_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {
                     let other_known_primitive = if l_is_str {

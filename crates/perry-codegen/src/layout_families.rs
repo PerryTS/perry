@@ -1012,13 +1012,15 @@ fn own_keys(
         Some(Some(attrs)) => FamilyKey::Defined(k.to_string(), *attrs),
         _ => FamilyKey::Name(k.to_string()),
     };
-    // The reservations first, in the class's order; a stored key that is no
-    // reservation (a branch, a `switch` case, a loop body: no top-level
-    // statement creates it) follows them, as the facts' birth lists it and
-    // as an execution that adds it after every reservation orders it (one
-    // that adds it earlier gets the object's overflow). A reservation the
-    // walk sees in no statement position (stored inside another store's
-    // value) is no initialization.
+    // The reservations in the class's order: the order of the constructor's
+    // first stores, a store in a branch, `switch` case, loop body or `try`
+    // at its place in the text (`constructor_store_keys`), the order the
+    // facts' birth lists them in. A stored key that is no reservation (one
+    // HIR leaves to the chain: an inherited field, a method or accessor
+    // name, a computed string key) follows them, as an execution that adds
+    // it after every reservation orders it (one that adds it earlier gets
+    // the object's overflow). A reservation the walk sees in no statement
+    // position (stored inside another store's value) is no initialization.
     let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
     for k in &reserved {
         // A key a definition adds goes where the definition runs: before the
@@ -2244,8 +2246,8 @@ mod tests {
         // before `b`: the reservations (`settle_reservations`), the facts'
         // birth and the runtime all order the keys a, d, b, c, and a proven
         // store at d's slot must find `d` there in the family. A branch
-        // store (`if (x) this.k = 9`) is no reservation: it follows the
-        // reservations, as the facts' birth lists it.
+        // store (`if (x) this.k = 9`) is a reservation at its place in the
+        // text (`constructor_store_keys`), as the facts' birth lists it.
         let hir = lower(
             "class Later { [k: string]: any; constructor() { this.a = 1; this.b = (this.d = \"early\", 2); this.c = 3; this.d = \"late\"; } }\n\
              class Chain { [k: string]: any; constructor() { this.a = 1; this.b = this.d = 7; this.c = 3; } }\n\
@@ -2262,7 +2264,64 @@ mod tests {
         };
         assert_eq!(names("Later"), ["a", "d", "b", "c"]);
         assert_eq!(names("Chain"), ["a", "d", "b", "c"]);
-        assert_eq!(names("Br"), ["a", "b", "k"]);
+        assert_eq!(names("Br"), ["a", "k", "b"]);
+    }
+
+    /// LIFE-C3: a class's keys are in the order of the constructor's first
+    /// store of each, whether the store is at top level or in an `if`/`else`
+    /// arm, a nested branch, a loop body, a `try`, `catch` or `finally`, or
+    /// one arm only; field definitions come first, a parent's keys before a
+    /// subclass's. The semver shape (`prerelease` in both arms, then
+    /// `build`) put `build` first and cost every object an overflow table.
+    #[test]
+    fn a_constructor_lists_its_keys_in_first_store_order() {
+        let hir = lower(
+            "class IfElse { [k: string]: any; constructor(i: number) { this.raw = 1; if (i) { this.pre = []; } else { this.pre = [i]; } this.build = []; } }\n\
+             class Nested { [k: string]: any; constructor(a: boolean, b: boolean) { this.x = 1; if (a) { if (b) { this.deep = 2; } else { this.shallow = 3; } this.mid = 4; } this.y = 5; } }\n\
+             class Loop { [k: string]: any; constructor(n: number) { this.first = 0; for (let i = 0; i < n; i++) { this.count = i; } while (n-- > 0) { this.w = n; } this.last = n; } }\n\
+             class Tried { [k: string]: any; constructor(f: boolean) { this.a = 1; try { if (f) throw 1; this.ok = 1; } catch (e) { this.err = 1; } finally { this.fin = 1; } this.z = 2; } }\n\
+             class OneArm { [k: string]: any; constructor(t: boolean) { this.p = 1; if (t) { this.opt = 1; } this.q = 2; } }\n\
+             class Fields { [k: string]: any; f1 = 1; f2 = 2; constructor(c: boolean) { if (c) { this.cb = 1; } else { this.cb = 2; } this.top = 3; } }\n\
+             class Base { [k: string]: any; constructor(c: boolean) { if (c) { this.bk = 1; } this.bt = 1; } }\n\
+             class Sub extends Base { constructor(c: boolean) { super(c); if (c) { this.sk = 1; } else { this.sk = 2; } this.st = 2; } }\n\
+             class Exit { [k: string]: any; constructor(c: number) { if (c === 1) { this.r = 1; this.only = 1; return; } if (c === 2) { throw 1; } else { this.e = 1; } this.o = 1; this.r = 2; } }\n",
+        );
+        let names = |class: &str| -> Vec<String> {
+            let c = hir.classes.iter().find(|c| c.name == class).unwrap();
+            let has_parent = c.extends_name.is_some();
+            own_keys(c, has_parent, false, &literal_shapes(hir.classes.iter()))
+                .unwrap()
+                .keys
+                .into_iter()
+                .map(|(k, _)| k.name().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(names("IfElse"), ["raw", "pre", "build"]);
+        assert_eq!(names("Nested"), ["x", "deep", "shallow", "mid", "y"]);
+        assert_eq!(names("Loop"), ["first", "count", "w", "last"]);
+        assert_eq!(names("Tried"), ["a", "ok", "err", "fin", "z"]);
+        assert_eq!(names("OneArm"), ["p", "opt", "q"]);
+        assert_eq!(names("Fields"), ["f1", "f2", "cb", "top"]);
+        assert_eq!(names("Base"), ["bk", "bt"]);
+        assert_eq!(names("Sub"), ["sk", "st"]);
+        // An arm that leaves the constructor (`return`, `throw`) fixes no
+        // position: the path to the end orders `e, o, r`, and a key only that
+        // arm stores follows.
+        assert_eq!(names("Exit"), ["e", "o", "r", "only"]);
+        // The reservations themselves (the class key index and the facts'
+        // birth read them) are in the same order: one list.
+        let reserved = |class: &str| -> Vec<String> {
+            let c = hir.classes.iter().find(|c| c.name == class).unwrap();
+            c.fields
+                .iter()
+                .filter(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+                .map(|f| f.name.clone())
+                .collect()
+        };
+        assert_eq!(reserved("IfElse"), ["raw", "pre", "build"]);
+        assert_eq!(reserved("Tried"), ["a", "ok", "err", "fin", "z"]);
+        assert_eq!(reserved("Sub"), ["sk", "st"]);
+        assert_eq!(reserved("Exit"), ["e", "o", "r", "only"]);
     }
 
     /// THR3: a constructor's literal data definition is a family key with
