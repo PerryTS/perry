@@ -22,6 +22,7 @@ pub(crate) use element_kind::{
 };
 mod element_shape;
 mod exotic_snapshot;
+pub(crate) use exotic_snapshot::array_for_each_own_element;
 mod fill_birth;
 pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
