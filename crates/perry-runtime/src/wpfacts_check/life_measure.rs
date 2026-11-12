@@ -468,7 +468,7 @@ pub(super) fn full_marked() {
                 continue;
             }
             let header = (s.addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let marked = unsafe { (*header).gc_flags & crate::gc::GC_FLAG_MARKED != 0 };
+            let marked = unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 };
             if !marked {
                 m.dead_from(i, false);
             } else if turn_full && s.next as usize == TURN {
@@ -487,6 +487,10 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     let bits = bits as u64;
     let sampled = table(|t| {
         let m = &mut t.measure;
+        if m.births == 0 {
+            // `PERRY_LIFE_MEASURE_SHIFT=k`: start every site at rate 2^-k more.
+            m.global_shift = knob("PERRY_LIFE_MEASURE_SHIFT").and_then(|v| v.parse().ok()).unwrap_or(0).min(16);
+        }
         m.births += 1;
         let rand = m.next_rand();
         let global = m.global_shift;

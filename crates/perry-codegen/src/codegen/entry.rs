@@ -1384,6 +1384,7 @@ pub(super) fn compile_module_entry(
                 // `beforeExit` to emit — only Node's exit sequence. Skipping
                 // the loop drops the microtask runner and the event-loop
                 // phases from the link.
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
