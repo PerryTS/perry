@@ -266,6 +266,9 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     if let Some(a) = &pf.activation {
         out.push_str(&format!("# activation {a}\n"));
     }
+    if let Some(n) = pf.escaped_inactive {
+        out.push_str(&format!("# escaped-inactive={n}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
     out.push_str(&format!(
         "# field_truthy rules {} removing {}\n",

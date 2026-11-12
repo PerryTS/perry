@@ -471,6 +471,7 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         ret,
         args_all,
         has_arguments: false,
+        arguments: None,
         own_test: crate::model::OwnTestBody::Unknown,
         token: tok,
         ctor_of: None,

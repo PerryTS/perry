@@ -93,6 +93,16 @@ impl Model {
             }
             node.succ.push(b);
         }
+        if let Some(tp) = self.term_preds.as_mut() {
+            if let Some(v) = tp.get_mut(&b) {
+                v.push(a);
+            }
+            if let Some(&(f, r)) = self.open_rets.get(&b) {
+                if !self.callers_own(f, a) {
+                    self.sink_node(a, r);
+                }
+            }
+        }
         if self.prov.is_some() {
             self.prov_edge(a, b, std::panic::Location::caller());
         }

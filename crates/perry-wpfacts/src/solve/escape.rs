@@ -446,7 +446,120 @@ impl Model {
             return;
         }
         self.add_top(fi.args_all, why);
-        self.sink_node(fi.ret, reason);
+        // A constructor's `this` is the instance it makes, whoever calls:
+        // its result escapes as before. The activation pass (DECISIONS 225)
+        // is the coarser analysis whose escapes cover the final solve's:
+        // there no function has a summary, so the final solve's summarized
+        // escapes (`escape_summarized`) have no counterpart, and an escaped
+        // function's whole shared result escapes: what the final solve
+        // treats as escaped was walked.
+        if fi.ctor_of.is_some() || self.act.as_ref().is_some_and(|a| !a.fixed) {
+            self.sink_node(fi.ret, reason);
+        } else {
+            self.sink_own_return(f, reason);
+        }
+    }
+
+    /// Unknown code calls `f` (no summary instance): it gets its own call's
+    /// result (ECMA-262 10.2.1). A source of `f`'s shared return node that
+    /// is the caller's own `this` or argument (`callers_own`) hands that
+    /// caller back what it passed; what known calls passed went back to
+    /// them. Every other source (a field, a closure or module variable, a
+    /// birth, a callee's result) escapes. An edge into the return made later
+    /// is judged as it is made (`edge_impl`).
+    pub(crate) fn sink_own_return(&mut self, f: FnIdx, reason: u32) {
+        let ret = self.funcs[f as usize].ret;
+        if self.sunk_nodes.contains(&ret) || self.open_rets.contains_key(&ret) {
+            return;
+        }
+        self.index_term_preds();
+        self.open_rets.insert(ret, (f, reason));
+        let srcs = self.term_preds_of(ret);
+        for a in srcs {
+            if !self.callers_own(f, a) {
+                self.sink_node(a, reason);
+            }
+        }
+    }
+
+    /// `a` is the receiver of non-arrow `f` or one of its parameters, and
+    /// `f`'s body (or a function nested in it) never writes it: it holds
+    /// what each call passes and nothing else.
+    /// DECISIONS 225, checked at the end of the final solve: the escaped
+    /// functions whose body was not walked (unknown code may call them, so
+    /// each must be active). 0 when the activation pass covers the solve.
+    pub(crate) fn escaped_inactive(&self) -> usize {
+        if !self.act.as_ref().is_some_and(|a| a.fixed) {
+            return 0;
+        }
+        self.escaped
+            .keys()
+            .filter(|&&t| match self.toks[t as usize] {
+                TokKind::Func(f, _) => !self.body_active(f),
+                _ => false,
+            })
+            .count()
+    }
+
+    pub(crate) fn callers_own(&self, f: FnIdx, a: NodeId) -> bool {
+        let fi = &self.funcs[f as usize];
+        let term = (a == fi.this && !fi.lexical_this)
+            || fi
+                .params
+                .iter()
+                .enumerate()
+                .any(|(i, &p)| p == a && self.capture_param(f, i).is_none());
+        if !term {
+            return false;
+        }
+        let Some(tp) = self.term_preds.as_ref() else {
+            return false;
+        };
+        !tp.get(&a)
+            .is_some_and(|v| v.iter().any(|&x| self.body_owned(f, x)))
+    }
+
+    /// Node `x` belongs to `f`'s body or to a function nested in it.
+    fn body_owned(&self, f: FnIdx, x: NodeId) -> bool {
+        let mut g = self.node_fn[x as usize];
+        while g != NO_FN {
+            if g == f {
+                return true;
+            }
+            g = self.funcs[g as usize].parent;
+        }
+        false
+    }
+
+    fn term_preds_of(&self, n: NodeId) -> Vec<NodeId> {
+        self.term_preds
+            .as_ref()
+            .and_then(|tp| tp.get(&n).cloned())
+            .unwrap_or_default()
+    }
+
+    /// The copy predecessors of every function's return, `this` and
+    /// parameter nodes, once; `edge_impl` keeps it from then on.
+    fn index_term_preds(&mut self) {
+        if self.term_preds.is_some() {
+            return;
+        }
+        let mut tp: crate::pts::FxHashMap<NodeId, Vec<NodeId>> = Default::default();
+        for fi in &self.funcs {
+            for &n in [fi.ret, fi.this].iter().chain(fi.params.iter()) {
+                if n != NO_NODE {
+                    tp.entry(n).or_default();
+                }
+            }
+        }
+        for (a, node) in self.nodes.iter().enumerate() {
+            for b in node.succ.iter() {
+                if let Some(v) = tp.get_mut(b) {
+                    v.push(a as NodeId);
+                }
+            }
+        }
+        self.term_preds = Some(tp);
     }
 
     /// A class published to other units as a contract (design §11.2), not
