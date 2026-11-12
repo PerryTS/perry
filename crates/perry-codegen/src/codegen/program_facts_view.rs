@@ -366,6 +366,10 @@ pub struct ElisionFacts {
     /// (`ProgramFacts::zero_sign_tolerated`): check mode's int32 witnesses
     /// of elements and signatures admit `-0`.
     pub zero_sign_tolerated: bool,
+    /// The families `family_reach` says are never created or observed
+    /// (`FamilyReach::never`, a bit per family in table order); 0 without
+    /// the fact. Check mode's family claim only: no lowering reads it.
+    pub family_never: u64,
     /// (class id, key) of the fields whose nodes keep an int32 interval by
     /// −0 tolerance (wpfacts `FieldFacts::zero_tol`): the field-rep witness
     /// admits `-0` for them only.

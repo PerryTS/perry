@@ -592,6 +592,7 @@ fn generate<'a>(
         reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
     g.m.reach_gen_members =
         reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
+    g.m.reach_thenable = reach::thenable() && cfg.sabotage.as_deref() != Some("noreachthenable");
     g.m.reach_iter_close =
         reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
     g.m.reach_spread_args =
@@ -2360,8 +2361,8 @@ fn compute_act<'a>(
     } else {
         None
     };
-    let family_reach = (!cfg.unit && family_reach::enabled())
-        .then(|| family_reach::derive(&g, cfg.unit, cfg.dynamic_code.as_deref()));
+    let family_reach =
+        (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let mut pf = ProgramFacts {
         verification_bodies,
         family_reach,

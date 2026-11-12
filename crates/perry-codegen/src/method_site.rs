@@ -219,6 +219,61 @@ pub(crate) fn census_inline_tier(ctx: &FnCtx<'_>, site: Option<Site>, name: &str
     }
 }
 
+/// `PERRY_ANNOTATION_RECEIVER_TESTS=0` (`off`, `false`) restores the inline
+/// tiers that read an annotated receiver's header with no test that the
+/// receiver is a heap pointer at all (the UNSAFE lowering of main before this
+/// switch: `function f(a: number[]) { return a.push(7); } f(null as any)` read
+/// the header below address 2 and died with SIGSEGV). Read per call; a
+/// compile-cache input. It exists to measure the test's cost on one build.
+pub(crate) fn annotation_receiver_tests_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_ANNOTATION_RECEIVER_TESTS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// Must an inline Array tier (`Expr::ArrayPush`, ...) whose receiver is the
+/// local `array_id` test that the receiver is a heap pointer before it reads
+/// a header behind it? The tier was chosen from the receiver's ANNOTATION,
+/// which proves nothing about the value: `null`, a Number or a String may
+/// stand behind `number[]`. No test where the whole-program verdict of the
+/// site proves every receiver an Array (`SITE_ARRAY_MEMBER`: an Array is a
+/// heap pointer), or where the function's own birth analysis did (an owned
+/// local, `collectors::loop_pushed_arrays`: born from an Array literal here
+/// and never rebound), or with the switch off. The test is the one band
+/// compare (`HEAP_POINTER_BAND_*`); its miss is the ordinary `Get` + `Call`.
+///
+/// No check-mode witness: the facts drop a RUN-TIME test whose absence the
+/// header read itself would expose, and the header admission that follows
+/// still tests the kind.
+pub(crate) fn inline_tier_needs_pointer_test(
+    ctx: &FnCtx<'_>,
+    array_id: u32,
+    owned: bool,
+    name: &str,
+) -> bool {
+    if !annotation_receiver_tests_enabled() || owned {
+        return false;
+    }
+    let proven = !ctx.wpfacts_off
+        && ctx
+            .wpfacts
+            .method_sites
+            .get(&(Site::Local(array_id), name.to_string()))
+            .is_some_and(|flags| flags & SITE_ARRAY_MEMBER != 0);
+    if proven {
+        crate::facts_consumed::used();
+    }
+    if diag_on() {
+        eprintln!(
+            "[perry inline_receiver] fn={} key={name} local={array_id} test={}",
+            ctx.func.name,
+            if proven { "dropped:proven" } else { "band" }
+        );
+    }
+    !proven
+}
+
 /// A site that drops its run-time guard by the facts: the consumption
 /// record, and in check mode the dropped test on the receiver value `recv`
 /// (an Array that resolves `name` to the built-in), "method site".

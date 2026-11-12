@@ -487,6 +487,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         .collect();
     out.super_unrelinked = pf.super_unrelinked.clone();
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
+    out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).

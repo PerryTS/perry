@@ -96,6 +96,36 @@ pub fn life_claims_on() -> bool {
     enabled() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The family claim is on: the runtime's witnesses of it (a byte cell is
+/// born, a family's global is read) exist only in the instrumented variant,
+/// so the predicate is the life claims'. `PERRY_VERIFY_FACTS=1` alone emits
+/// no family claim.
+pub fn family_claims_on() -> bool {
+    life_claims_on()
+}
+
+/// Check mode's family claim at a compiled read of global `name`: when
+/// `family_reach` says a family of that global is never created or observed,
+/// the read itself is the false proof (verdict `family`), born or not. A
+/// program whose text names the global has the family live, so this fires
+/// only for a wrong fact.
+pub(crate) fn family_global_read(ctx: &mut FnCtx<'_>, name: &str) {
+    if !family_claims_on() {
+        return;
+    }
+    use perry_runtime_manifest::families;
+    let claimed = families::entry_families(name).unwrap_or(0) & ctx.wpfacts.family_never;
+    if claimed == 0 || families::entry_root(name) != name {
+        return;
+    }
+    let family = families::RUNTIME_FAMILIES[claimed.trailing_zeros() as usize].id;
+    let site = raw_site(ctx, "family", Some(name), &[], family);
+    ctx.block().call_void(
+        "perry_verify_facts_family_observed",
+        &[(I64, &site.pointer), (I64, site.len.as_deref().unwrap())],
+    );
+}
+
 /// The lifetime measurement is on (LIFE I1, `PERRY_LIFE_MEASURE` set at
 /// compile time): an instrument knob, so the compile links the instrumented
 /// runtime variant, the only one carrying `perry_life_*`. Codegen emits the
