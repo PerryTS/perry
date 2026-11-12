@@ -17,11 +17,14 @@
 //!
 //! Decision at the end, for a sampled instance: one forced copied minor at that
 //! point (shared by every instance ending there); a tracked inside object still
-//! present was reached (survivor; holder = the walk phase of the reach). An old
-//! inside object the minor did not reach (promoted by a collection inside the
-//! instance, or born old) is decided by a synchronous full at the same point
-//! (its mark); a full that is not observed leaves the instance `unresolved`, as
-//! does any collection the hooks did not observe. Never guessed.
+//! present was reached (survivor; holder = the walk phase of the reach) when the
+//! walk reached it from a root (`life::minor_decides`). An inside object reached
+//! only through the remembered set or another object (a dead, uncollected old
+//! object may hold it), and an old inside object the minor did not reach
+//! (promoted by a collection inside the instance, or born old), are decided by
+//! one synchronous full at the same point (its mark); with fulls off
+//! (`PERRY_LIFE_REGIONS_FULL=0`), or a full that is not observed, the instance
+//! is `unresolved`, as with any collection the hooks did not observe. Never guessed.
 //!
 //! Sampling per region id: the first 32 instances, then the rate halves each
 //! time the id's sampled count doubles (floor 2^-16; `PERRY_LIFE_REGIONS_RATE=1`:
@@ -65,6 +68,8 @@ struct Inst {
     /// Decided at its end (id-sampled, a turn, or holding a byte sample).
     decide: bool,
     unresolved: bool,
+    /// When it opened (the confirmation budget's inside time).
+    t0: std::time::Instant,
     /// Byte samples inside (born while innermost, or handed up by children).
     bs: Vec<u32>,
 }
@@ -89,6 +94,11 @@ struct Stat {
     /// Inside objects present at a decided end that are shape key/attribute
     /// storage (`life::engine_metadata`): not survivors, counted here.
     meta_objs: u64,
+    /// Confirming fulls charged to this id, their time, and the time spent
+    /// inside its decided instances (the confirmation budget).
+    confirm_fulls: u64,
+    confirm_ns: u64,
+    inside_ns: u64,
 }
 
 /// Verdicts (index into `Stat::n`).
@@ -132,6 +142,11 @@ struct Reg {
     minors: u64,
     fulls: u64,
     fulls_unseen: u64,
+    /// Confirming fulls run, and decided instances left `unresolved` because
+    /// their id was over its confirmation budget (or fulls are off).
+    confirm_fulls: u64,
+    confirm_unres: u64,
+    confirm_ns: u64,
     unobserved: u64,
     born_in_minor: u64,
     probe_ns: u64,
@@ -284,6 +299,7 @@ impl Reg {
             w,
             decide: w > 0.0,
             unresolved: false,
+            t0: std::time::Instant::now(),
             bs: Vec::new(),
         };
         self.stack.push(inst);
@@ -476,6 +492,15 @@ pub(super) fn full_marked() {
         r.full_id += 1;
         r.full_pending = true;
         let id = r.full_id;
+        // A young inside object a probe minor reached through the remembered
+        // set or another object waits for this mark (`life::minor_decides`).
+        r.young.retain(|addr, e| {
+            let alive = super::life::full_alive(*addr);
+            if alive {
+                e.full_alive = id;
+            }
+            alive
+        });
         let mut dead = Vec::new();
         for (seq, (addr, e)) in r.old.iter_mut() {
             if super::life::full_alive(*addr) {
@@ -541,25 +566,66 @@ fn end_from(k: usize, fp: usize) {
         })
         .unwrap_or(0);
     }
-    // Old inside objects the minor did not reach: a synchronous full decides them.
-    let need_full = need
-        && (why_path().is_some() || with(|r| {
-            insts.iter().any(|i| {
-                i.decide
-                    && !i.unresolved
-                    && r.seq > i.seq0
-                    && r.old.range(i.seq0 + 1..=r.seq).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a))
-            })
+    // Old inside objects the minor did not reach: a synchronous full decides
+    // them. Inside objects it reached only through the remembered set or
+    // another object (a dead old object may hold them: `life::minor_decides`)
+    // are decided by that full too; one full is shared by every instance
+    // decided here. Confirmation budget: an id's first 32 confirming fulls;
+    // then while its fulls' time is at most 4x the time inside its decided
+    // instances, or all confirming fulls' time at most 2 s plus 4x the
+    // mutator time. An instance over it with no full here is `unresolved`.
+    let (need_old, confirm_ids) = if need {
+        with(|r| {
+            let now = std::time::Instant::now();
+            let mutator = r.start.map_or(0, |t| (now.duration_since(t).as_nanos() as u64).saturating_sub(r.probe_ns));
+            let global_ok = r.confirm_ns <= 2_000_000_000 + 4 * mutator;
+            let mut need_old = false;
+            let mut ids = Vec::new();
+            for i in insts.iter().filter(|i| i.decide && !i.unresolved && r.seq > i.seq0) {
+                let range = i.seq0 + 1..=r.seq;
+                need_old |= r.old.range(range.clone()).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a));
+                let weak = r.old.range(range).any(|(_, (a, e))| {
+                    e.reached == probe_minor && !super::life::minor_decides(e.holder) && !super::life::engine_metadata(*a)
+                }) || r.young.iter().any(|(a, e)| {
+                    e.seq > i.seq0 && e.seq <= r.seq && !super::life::minor_decides(e.holder) && !super::life::engine_metadata(*a)
+                });
+                if weak {
+                    let inside = now.duration_since(i.t0).as_nanos() as u64;
+                    let ok = global_ok
+                        || r.stats.get(&(i.kind, i.id)).map_or(true, |s| {
+                            s.confirm_fulls < 32 || s.confirm_ns <= 4 * (s.inside_ns + inside)
+                        });
+                    if ok {
+                        ids.push((i.kind, i.id));
+                    }
+                }
+            }
+            (need_old, ids)
         })
-        .unwrap_or(false));
+        .unwrap_or((false, Vec::new()))
+    } else {
+        (false, Vec::new())
+    };
+    let need_full = need && (why_path().is_some() || need_old || !confirm_ids.is_empty());
     let mut full = 0;
     if need_full && (fulls_allowed() || insts.iter().any(|i| i.kind == TURN)) {
         let id = with(|r| r.full_id).unwrap_or(0);
+        let f0 = std::time::Instant::now();
         crate::gc::life_why::arm(why_path().is_some());
         crate::gc::life_collect_full();
         crate::gc::life_why::arm(false);
+        let full_ns = f0.elapsed().as_nanos() as u64;
         full = with(|r| {
             r.fulls += 1;
+            if !confirm_ids.is_empty() {
+                r.confirm_fulls += 1;
+                r.confirm_ns += full_ns;
+            }
+            for k in &confirm_ids {
+                let s = r.stats.entry(*k).or_default();
+                s.confirm_fulls += 1;
+                s.confirm_ns += full_ns;
+            }
             r.sync();
             if r.full_id != id {
                 r.full_id
@@ -590,20 +656,40 @@ fn end_from(k: usize, fp: usize) {
                             meta += 1;
                             continue;
                         }
+                        if !super::life::minor_decides(e.holder) {
+                            if full == 0 {
+                                verdict = UNRES;
+                                r.confirm_unres += 1;
+                                break;
+                            }
+                            if e.full_alive != full {
+                                // Not marked: dead (the full's `full_marked` dropped it).
+                                continue;
+                            }
+                        }
                         objs += 1;
                         sbytes += e.bytes as u64;
                         hold[e.holder as usize] += 1;
                     }
                     for (_, (a, e)) in r.old.range(inst.seq0 + 1..=seq1) {
+                        if verdict == UNRES {
+                            break;
+                        }
                         if super::life::engine_metadata(*a) {
                             meta += 1;
                             continue;
                         }
-                        if e.reached == probe_minor {
+                        if e.reached == probe_minor && super::life::minor_decides(e.holder) {
+                            hold[e.holder as usize] += 1;
+                        } else if e.reached == probe_minor && full != 0 && e.full_alive == full {
+                            // Reached through the remembered set or an object, confirmed by the full.
                             hold[e.holder as usize] += 1;
                         } else if full != 0 && e.full_alive == full {
                             hold[H_OLD as usize] += 1;
                         } else {
+                            if e.reached == probe_minor && full == 0 {
+                                r.confirm_unres += 1;
+                            }
                             verdict = UNRES;
                             break;
                         }
@@ -630,6 +716,9 @@ fn end_from(k: usize, fp: usize) {
                 }
             }
             let s = r.stats.entry((inst.kind, inst.id)).or_default();
+            if inst.decide {
+                s.inside_ns += began.duration_since(inst.t0).as_nanos() as u64;
+            }
             s.instances += 1;
             s.bytes += bytes;
             if inst.w > 0.0 {
@@ -813,7 +902,7 @@ fn write(r: &mut Reg, exit: bool) {
     }
     let elapsed = r.start.map_or(0, |s| s.elapsed().as_nanos() as u64);
     out.push_str(&format!(
-        "#totals\tinterval={}\tborn_objects={}\tborn_bytes={}\tbefore_bytes={}\tturns={}\tturn_bytes={}\ttail_bytes={}\texit={}\tdecisions={}\tminors={}\tfulls={}\tfulls_unseen={}\tunobserved={}\tborn_in_minor={}\tbusy={}\torphan_bs={}\tglobal_shift={}\tprobe_ns={}\telapsed_ns={elapsed}\n",
+        "#totals\tinterval={}\tborn_objects={}\tborn_bytes={}\tbefore_bytes={}\tturns={}\tturn_bytes={}\ttail_bytes={}\texit={}\tdecisions={}\tminors={}\tfulls={}\tfulls_unseen={}\tconfirm_fulls={}\tconfirm_unres={}\tunobserved={}\tborn_in_minor={}\tbusy={}\torphan_bs={}\tglobal_shift={}\tprobe_ns={}\telapsed_ns={elapsed}\n",
         crate::arena::alloc_life::interval(),
         r.cnt,
         r.bytes,
@@ -826,6 +915,8 @@ fn write(r: &mut Reg, exit: bool) {
         r.minors,
         r.fulls,
         r.fulls_unseen,
+        r.confirm_fulls,
+        r.confirm_unres,
         r.unobserved,
         r.born_in_minor,
         BUSY.load(Ordering::Relaxed),
