@@ -175,6 +175,7 @@ fn lower_async_rejecting_stmts_inner(
     // (Itanium landing pad vs SEH funclet) is decided in exactly one place.
     // The landing pad reads no locals; the unwind edges keep SSA values live
     // where LLVM's ordinary EH liveness says so.
+    let life_depth = crate::verify_facts::life_measure::try_depth(ctx);
     let scope = try_stmt::emit_eh_dispatch(ctx, &catch_label, &body_label);
 
     ctx.current_block = body_idx;
@@ -190,6 +191,7 @@ fn lower_async_rejecting_stmts_inner(
 
     ctx.current_block = catch_idx;
     try_stmt::emit_try_end(ctx);
+    crate::verify_facts::life_measure::caught(ctx, &life_depth);
     let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
     let handle = ctx
         .block()
