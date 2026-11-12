@@ -202,7 +202,9 @@ pub(crate) fn collect(
     for ((mi, site, key), (flags, text)) in out {
         if let Some(p) = probe.as_deref_mut() {
             let site = site_text(site);
-            p.push(format!("# method_site module={mi} site={site} key={key}{text}"));
+            p.push(format!(
+                "# method_site module={mi} site={site} key={key}{text}"
+            ));
         }
         if let (true, Some(mb)) = (flags != 0, bindings.get_mut(mi as usize)) {
             mb.method_sites.push((site, key, flags));

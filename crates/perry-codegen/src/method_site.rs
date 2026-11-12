@@ -210,7 +210,11 @@ pub(crate) fn census_inline_tier(ctx: &FnCtx<'_>, site: Option<Site>, name: &str
             ctx,
             site,
             name,
-            if proven { "inline-tier:proven" } else { "inline-tier:unproven" },
+            if proven {
+                "inline-tier:proven"
+            } else {
+                "inline-tier:unproven"
+            },
         );
     }
 }
@@ -221,9 +225,10 @@ pub(crate) fn census_inline_tier(ctx: &FnCtx<'_>, site: Option<Site>, name: &str
 pub(crate) fn witness_array_member(ctx: &mut FnCtx<'_>, recv: &str, name: &str) {
     use crate::types::{DOUBLE, I1, I32, I64};
     crate::facts_consumed::used();
-    crate::verify_facts::covered(crate::verify_facts::Fact::MethodSite, || {
-        serde_json::json!({ "key": name, "receiver": "array member" })
-    });
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::MethodSite,
+        || serde_json::json!({ "key": name, "receiver": "array member" }),
+    );
     if !crate::verify_facts::enabled() {
         return;
     }
@@ -248,7 +253,8 @@ pub(crate) fn witness_array_member(ctx: &mut FnCtx<'_>, recv: &str, name: &str) 
     ctx.block().cond_br(&holds, &next_l, &miss_l);
     ctx.current_block = miss;
     let what = format!("the receiver of .{name}() is an Array whose {name} is the built-in");
-    let site = crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
+    let site =
+        crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
     let _ = crate::verify_facts::check(
         ctx,
         I32,
