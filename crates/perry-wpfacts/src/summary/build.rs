@@ -1020,22 +1020,52 @@ fn switch_param(s: &Summary, w: Option<&(u32, Vec<Option<crate::model::Atom>>)>)
 /// key's string alone (ECMA-262 7.1.19 ToPropertyKey, 10.2.1 binding).
 /// GLTFLoader `GLTFRegistry.get(key)`, `add(key, object)`.
 fn keyed_param(s: &Summary) -> Option<u32> {
+    // The parameter and the locals only it writes (the body's binding of
+    // the parameter is a copy of it): each is a key and nothing else.
+    let copies_of = |p: NodeId| -> Option<Vec<NodeId>> {
+        let mut k = vec![p];
+        let mut i = 0;
+        while i < k.len() {
+            let x = k[i];
+            i += 1;
+            for &(a, b) in &s.edges {
+                if a != x || k.contains(&b) {
+                    continue;
+                }
+                if !is_slot(b)
+                    || s.params.contains(&b)
+                    || [s.ret, s.this, s.rest].contains(&b)
+                    || s.edges.iter().any(|&(c, d)| d == b && !k.contains(&c))
+                {
+                    return None;
+                }
+                k.push(b);
+            }
+        }
+        Some(k)
+    };
     let only_keyed = |j: usize| {
         let p = s.params[j];
         if !is_slot(p) || !s.rel[j] || [s.ret, s.this, s.rest].contains(&p) {
             return false;
         }
-        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p)
-            || s.edges.iter().any(|&(a, b)| a == p || b == p)
-            || s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
-            || s.closures.iter().any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
-            || s.births.iter().any(|&(sl, _)| SLOT | sl == p)
+        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p) {
+            return false;
+        }
+        let Some(k) = copies_of(p) else {
+            return false;
+        };
+        if s.seeds.iter().any(|(sl, ..)| k.contains(&(SLOT | *sl)))
+            || s.closures.iter().any(|(sl, _, terms, _)| {
+                k.contains(&(SLOT | *sl)) || terms.iter().any(|t| k.contains(t))
+            })
+            || s.births.iter().any(|&(sl, _)| k.contains(&(SLOT | sl)))
         {
             return false;
         }
         let mut keyed = false;
         for (h, c) in &s.cons {
-            if *h == p {
+            if k.contains(h) {
                 match c {
                     Cons::StoreIndexed { .. } => keyed = true,
                     // ToPropertyKeys ToPrimitive: a runs key is one string.
@@ -1046,9 +1076,11 @@ fn keyed_param(s: &Summary) -> Option<u32> {
                     Cons::Raise { .. } => {}
                     _ => return false,
                 }
-            } else if super::map::cons_fields(c).0.contains(&p) {
+            } else if super::map::cons_fields(c).0.iter().any(|x| k.contains(x)) {
                 match c {
-                    Cons::IdxLoad { idx, dst, .. } if *idx == p && *dst != p => keyed = true,
+                    Cons::IdxLoad { idx, dst, .. } if k.contains(idx) && !k.contains(dst) => {
+                        keyed = true
+                    }
                     _ => return false,
                 }
             }
@@ -1056,7 +1088,7 @@ fn keyed_param(s: &Summary) -> Option<u32> {
         for (_, cs) in &s.calls {
             let mut seen = false;
             super::map::map_call(cs, |x| {
-                seen |= x == p;
+                seen |= k.contains(&x);
                 x
             });
             if seen {
