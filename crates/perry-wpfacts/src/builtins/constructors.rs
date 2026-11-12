@@ -32,10 +32,10 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             };
             let c = site_tmpl(m, call, what);
             let fa = m.field_any(c);
-            if ns == BuiltinNs::Map {
-                // Born without an iterable, its contents are what `set`
-                // stores (`solve/map_vals.rs`).
-                m.map_born(c, arg(m, call, 0).is_none());
+            if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
+                // Its values are what `set` and the constructor store
+                // (`solve/map_vals.rs`).
+                m.map_born(c);
             }
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
@@ -43,6 +43,11 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // Entries `[key, value]`: the collection holds both.
                     let ek = m.elem_key();
                     m.cons(vals, Cons::Load { key: ek, dst: fa });
+                    // AddEntriesFromIterable (24.1.1.2 step 4.f, 24.3.1.1):
+                    // the value is Get(entry, "1") of each entry object.
+                    let one = Key::Named(m.atom("1"));
+                    let mv = m.map_vals(c);
+                    m.cons(vals, Cons::Load { key: one, dst: mv });
                 } else {
                     m.edge(vals, fa);
                 }

@@ -254,9 +254,11 @@ fn a_stored_string_value_reaches_the_read() {
     assert!(!sink_is_int(&d), "{d}");
 }
 
-/// Soundness: a Map born from an iterable holds what the iterable yields.
+/// Soundness: a Map born from an iterable holds what the iterable yields:
+/// element "1" of each entry is a value (24.1.1.2), so the Map stays
+/// closed and `get` reads "text".
 #[test]
-fn a_map_born_from_entries_is_open() {
+fn a_map_born_from_entries_holds_their_values() {
     let src = "function sink(m: number): number { return m & 7; }\n\
          const table = new Map<string, any>([[\"a\", \"text\"]]);\n\
          function step(k: string, n: number): number {\n\
@@ -268,7 +270,7 @@ fn a_map_born_from_entries_is_open() {
          for (let i = 0; i < 20; i++) s += step(\"k\" + String(i & 3), i * 5);\n\
          console.log(s);";
     let d = dump(src);
-    assert_eq!(closed(&d), [false], "{d}");
+    assert_eq!(closed(&d), [true], "{d}");
     assert!(!sink_is_int(&d), "{d}");
 }
 

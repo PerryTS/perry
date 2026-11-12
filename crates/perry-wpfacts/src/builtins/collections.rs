@@ -1428,7 +1428,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             for &a in &c.args {
                 m.edge(a, elems);
             }
-            if kind == "Map" && name == Some("set") {
+            if matches!(kind, "Map" | "WeakMap") && name == Some("set") {
                 m.map_set(t, &c.args, !c.spread.is_empty());
             }
             ret_tok(m, call, t);
@@ -1437,8 +1437,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             if let Some(&k) = c.args.first() {
                 m.identity(k, IdentityRoute::Collection);
             }
-            // A Map's values, not its keys (`solve/map_vals.rs`).
-            let vals = if kind == "Map" { m.map_vals(t) } else { elems };
+            // A Map's or WeakMap's values, not its keys (24.1.3.6, 24.3.3.3;
+            // `solve/map_vals.rs`).
+            let vals = match kind {
+                "Map" | "WeakMap" => m.map_vals(t),
+                _ => elems,
+            };
             m.edge(vals, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
@@ -1449,8 +1453,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_prim(m, call, prim::BOOL)
         }
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
-        ("Collection", Some("keys" | "values")) => {
-            let it = iter_over(m, call, members::collection_iterator(kind), elems);
+        ("Collection", Some(n @ ("keys" | "values"))) => {
+            // Map.prototype.values (24.1.3.11) iterates the entries' values
+            // only; a Set's values are its elements (24.2.3.10).
+            let vals = match (kind, n) {
+                ("Map", "values") => m.map_vals(t),
+                _ => elems,
+            };
+            let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
         ("Collection", Some("entries")) => {
@@ -1466,7 +1476,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     Some(&n) => ThisArg::Node(n),
                     None => ThisArg::Undef,
                 };
-                let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
+                // Map.prototype.forEach (24.1.3.5) calls back with (value,
+                // key, map); a Set's value is its key (24.2.3.6).
+                let first = match kind {
+                    "Map" => m.map_vals(t),
+                    _ => elems,
+                };
+                let _ = cb_call(m, call, cb, this, vec![first, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }

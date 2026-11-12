@@ -118,7 +118,7 @@ impl<'a> Gen<'a> {
             // ---------------------------------------------- maps and sets
             Expr::MapNew => {
                 let (t, n) = self.bobj(mi, "Map");
-                self.m.map_born(t, true);
+                self.m.map_born(t);
                 n
             }
             Expr::SetNew => self.bobj(mi, "Set").1,
@@ -131,6 +131,14 @@ impl<'a> Gen<'a> {
                 let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
+                // AddEntriesFromIterable (24.1.1.2 step 4.f): each value is
+                // Get(entry, "1"), as the constructor call does
+                // (`builtins/constructors.rs`).
+                self.m.map_born(t);
+                let one = Key::Named(self.m.atom("1"));
+                let val = self.load(it, one);
+                let mv = self.m.map_vals(t);
+                self.m.edge(val, mv);
                 n
             }
             Expr::SetNewFromArray(x) => {

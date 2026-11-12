@@ -12,7 +12,8 @@
 //! what `set` stored as a value. That is every value the Map holds only
 //! while each write of its contents is a `set` this model runs: the Map is
 //! **closed**. A Map is closed from its birth when the program's own
-//! `new Map()` (no iterable) bears it in this unit (`map_born`), and it is
+//! `new Map(..)` or `new WeakMap(..)` bears it in this unit (`map_born`;
+//! the constructor's values are element "1" of each entry), and it is
 //! **opened** for good, its value node then holding all its contents as
 //! before, by anything else that may write them:
 //! - an escape or a HARD marker (unknown code may call `set`);
@@ -20,10 +21,10 @@
 //! - a store under a computed key and a copy of another object's
 //!   properties into it (no contents by the language, but the runtime's
 //!   own helpers store through them: `js_weakmap_set`);
-//! - a birth from an iterable, or by anything but `new Map()`.
+//! - a birth by anything but `new Map(..)` / `new WeakMap(..)`.
 //!
 //! Every other Map (another unit's, a marker, a subclass instance, a
-//! WeakMap, a per-unit solve) is never closed. The contents node is
+//! per-unit solve) is never closed. The contents node is
 //! unchanged, so no other reader sees a difference.
 //!
 //! `PERRY_FACTS_MAP_VALUES=0` turns it off (`get` reads the contents).
@@ -48,18 +49,15 @@ impl Model {
             if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "Map" | "WeakMap", .. }))
     }
 
-    /// The program's `new Map(...)` bore `t` (`empty`: without an
-    /// iterable). The first empty birth of a Map of this unit closes it; a
-    /// birth from an iterable opens it.
-    pub(crate) fn map_born(&mut self, t: Tok, empty: bool) {
+    /// The program's `new Map(...)` or `new WeakMap(...)` bore `t`. The
+    /// first birth of a Map of this unit closes it; the constructor puts
+    /// element "1" of each entry of its iterable into the value node
+    /// (24.1.1.2 AddEntriesFromIterable).
+    pub(crate) fn map_born(&mut self, t: Tok) {
         if !self.map_values {
             return;
         }
         let first = self.map_seen.insert(t);
-        if !empty {
-            self.map_open(t);
-            return;
-        }
         let own = match self.toks[t as usize] {
             TokKind::Obj(tm, _) => !self.foreign.contains_key(&tm),
             _ => false,
