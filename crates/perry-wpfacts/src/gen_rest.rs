@@ -32,6 +32,16 @@ fn push_method_tiers() -> bool {
     )
 }
 
+/// `PERRY_ARRAY_METHOD_TIERS=0` (`off`, `false`): `Expr::ArrayPop` is the
+/// builtin's own effects with no method call, as codegen then lowers it (the
+/// builtin runs whatever `pop` the receiver holds).
+fn array_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_ARRAY_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));

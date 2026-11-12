@@ -75,6 +75,62 @@ pub(crate) fn emit_array_has_named_layout(blk: &mut LlBlock, arr_addr: &str) -> 
     blk.icmp_ne(crate::types::I64, &named, "0")
 }
 
+/// `PERRY_ARRAY_METHOD_TIERS=0` (`off`, `false`) keeps the by-name Array
+/// method tiers that run the builtin without resolving the method on the
+/// receiver, as before this switch existed:
+///
+/// * `pop` on a local, parameter or module-binding receiver
+///   (`Expr::ArrayPop`) and the slow arm of the inline `pop` call
+///   `js_array_pop_f64_site`, which tests the prototype but no own `pop`
+///   (default: the checked entry `js_array_m_pop0`);
+/// * a folded Array node whose receiver is annotated but not proven an Array
+///   (a module binding read inside a function) is guarded by the global
+///   install flag, which no Array arms (default: the Array header test);
+/// * the guard's question for a receiver that is no Array is "may it own the
+///   name" (`js_receiver_may_own_named_method`), which answers no for an
+///   ordinary object (default: `js_array_method_needs_get`);
+/// * `findLast`, `findLastIndex`, `with`, `entries`, `keys` and `values` on a
+///   proven Array reach their direct arm unguarded.
+///
+/// Read per call, like `PERRY_PUSH_METHOD_TIERS`; a compile-cache input.
+pub(crate) fn method_tiers_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_ARRAY_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The runtime question behind an Array site's guard: with the switch on,
+/// THE Array-site predicate (`js_array_method_needs_get`: also yes for an
+/// ordinary object behind the annotation).
+pub(crate) fn array_guard_predicate() -> &'static str {
+    if method_tiers_enabled() {
+        "js_array_method_needs_get"
+    } else {
+        "js_receiver_may_own_named_method"
+    }
+}
+
+/// `arr.pop()`'s runtime entry on the boxed receiver `recv_box` whose unboxed
+/// address is `handle`: the checked entry `js_array_m_pop0` (the receiver's
+/// own proof, else the real `Get`), or with the switch off the site entry
+/// that only tests the prototype.
+pub(crate) fn emit_array_pop_call(blk: &mut LlBlock, recv_box: &str, handle: &str) -> String {
+    if method_tiers_enabled() {
+        blk.call(
+            crate::types::DOUBLE,
+            "js_array_m_pop0",
+            &[(crate::types::DOUBLE, recv_box)],
+        )
+    } else {
+        blk.call(
+            crate::types::DOUBLE,
+            "js_array_pop_f64_site",
+            &[(crate::types::I64, handle)],
+        )
+    }
+}
+
 /// Branch to `plain_label` when the NaN-boxed `recv` is a live, unforwarded
 /// `GC_TYPE_ARRAY` head that owns no named property and reads its methods from
 /// the unmodified `%Array.prototype%` (so `recv.<method>` IS the realm's

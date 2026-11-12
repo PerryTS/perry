@@ -670,7 +670,10 @@ impl Writer<'_> {
         let capacity = (*arr).capacity as usize;
         if self.mode == CloneMode::Message {
             let data_layout = self.data_array_layout(arr);
+            // A sparse Array (`length > capacity`) has no `length` slots to
+            // copy, whatever its layout word says.
             if data_layout
+                && len <= capacity
                 && crate::array::array_numeric_layout_resolved(arr)
                     == Some(crate::array::NumericArrayLayout::RawF64)
             {

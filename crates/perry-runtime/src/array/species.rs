@@ -255,6 +255,73 @@ pub(crate) unsafe fn species_result_define(result: f64, index: usize, value: f64
     }
 }
 
+/// The result of `ArraySpeciesCreate` while a method fills it, for the
+/// callers whose receiver is not a plain Array head (an Array-subclass
+/// instance, a Proxy) or that append (`filter`, `flat`, `flatMap`): the
+/// default arm's plain Array takes slot stores and pushes, a species
+/// constructor's result takes CreateDataPropertyOrThrow. Result and pending
+/// value are rooted; every call may collect, run user code and throw.
+pub(crate) struct SpeciesSink<'s> {
+    result: crate::gc::RuntimeHandle<'s>,
+    value: crate::gc::RuntimeHandle<'s>,
+    is_default: bool,
+    next: usize,
+}
+
+impl<'s> SpeciesSink<'s> {
+    /// `ArraySpeciesCreate(original, length)`.
+    pub(crate) unsafe fn new(
+        scope: &'s crate::gc::RuntimeHandleScope,
+        original: f64,
+        length: usize,
+    ) -> Self {
+        let (result, is_default) = array_species_create(original, length);
+        Self {
+            result: scope.root_nanbox_f64(result),
+            value: scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+            is_default,
+            next: 0,
+        }
+    }
+
+    /// `CreateDataPropertyOrThrow(A, index, value)`; on the default arm
+    /// `index` is below the length the Array was created with (`map`).
+    pub(crate) unsafe fn define(&self, index: usize, value: f64) {
+        if self.is_default {
+            let arr = crate::value::js_nanbox_get_pointer(self.result.get_nanbox_f64())
+                as *mut ArrayHeader;
+            crate::array::note_array_slot(arr, index, value.to_bits());
+        } else {
+            self.value.set_nanbox_f64(value);
+            species_result_define(
+                self.result.get_nanbox_f64(),
+                index,
+                self.value.get_nanbox_f64(),
+            );
+        }
+    }
+
+    /// `CreateDataPropertyOrThrow(A, n, value)` at the running index of a
+    /// result created with length 0 (`filter`, `flat`, `flatMap`).
+    pub(crate) unsafe fn push(&mut self, value: f64) {
+        if self.is_default {
+            let arr = crate::value::js_nanbox_get_pointer(self.result.get_nanbox_f64())
+                as *mut ArrayHeader;
+            let arr = crate::array::js_array_push_f64(arr, value);
+            self.result
+                .set_nanbox_f64(f64::from_bits(JSValue::pointer(arr as *const u8).bits()));
+        } else {
+            self.define(self.next, value);
+        }
+        self.next += 1;
+    }
+
+    /// The result, at its current address.
+    pub(crate) fn finish(&self) -> f64 {
+        self.result.get_nanbox_f64()
+    }
+}
+
 /// `Set(A, "length", length, true)` on the result of a species constructor:
 /// the last step of `slice`, `splice` and `concat` (`map`, `filter`, `flat`
 /// and `flatMap` have none). A `length` setter runs; a getter-only or
