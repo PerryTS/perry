@@ -1039,3 +1039,7 @@ mod collection_tag_tests;
 #[cfg(test)]
 #[path = "dyn_index_uint8array_tests.rs"]
 mod uint8array_tests;
+
+#[cfg(test)]
+#[path = "dyn_index_non_array_receiver_tests.rs"]
+mod non_array_receiver_tests;
