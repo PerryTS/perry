@@ -34,6 +34,7 @@ mod body_packets;
 mod bound_class;
 mod bound_in_summary;
 mod box_chain;
+mod boxed_primitive_methods;
 pub(crate) mod box_computed_read;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
