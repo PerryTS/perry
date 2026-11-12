@@ -40,8 +40,8 @@ pub struct RuntimeFamily {
 pub type FamilySet = u64;
 
 const BYTE_HOLDERS: &[&str] = &[
-    "%TypedArray%",
     "%BufferSpeciesConstructor%",
+    "%TypedArray%",
     "ArrayBuffer",
     "BigInt64Array",
     "BigUint64Array",
@@ -75,7 +75,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         requires: &[],
         holders: &[],
         members: &["process.report"],
-        modules: &["v8", "bun", "inspector", "inspector/promises"],
+        modules: &["bun", "inspector", "inspector/promises", "v8"],
     },
     RuntimeFamily {
         id: "bun_cli_utils",
@@ -87,7 +87,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
     RuntimeFamily {
         id: "intl_namespace",
         requires: &["intl_datetime", "intl_locale", "intl_segmenter"],
-        holders: &["Intl", "%CollatorCompare%"],
+        holders: &["%CollatorCompare%", "Intl"],
         members: &[
             "Array.prototype.toLocaleString",
             "BigInt.prototype.toLocaleString",
@@ -136,7 +136,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         requires: &[],
         holders: &["URL", "URLPattern", "URLSearchParams"],
         members: &[],
-        modules: &["url", "module"],
+        modules: &["module", "url"],
     },
     RuntimeFamily {
         id: "string_normalize",
@@ -633,10 +633,10 @@ pub const CORE_MODULES: &[&str] = &[
     "constants",
     "domain",
     "path",
-    "path/posix",
-    "path/win32",
     "path.posix",
     "path.win32",
+    "path/posix",
+    "path/win32",
     "perry",
     "perry/gc",
     "perry/i18n",
@@ -650,8 +650,8 @@ pub const CORE_MODULES: &[&str] = &[
     "timers/promises",
     "trace_events",
     "util",
-    "util/types",
     "util.types",
+    "util/types",
 ];
 
 /// Module specifiers (without `node:`) the realm declares whose values no
