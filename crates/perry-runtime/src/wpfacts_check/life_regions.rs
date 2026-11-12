@@ -85,6 +85,9 @@ struct Stat {
     /// a back-edge `perry_life_iter`: the loop took a lowering path without
     /// the back-edge hook. Reported so such paths are visible.
     restarted: u64,
+    /// Inside objects present at a decided end that are shape key/attribute
+    /// storage (`life::engine_metadata`): not survivors, counted here.
+    meta_objs: u64,
 }
 
 /// Verdicts (index into `Stat::n`).
@@ -170,6 +173,59 @@ fn rate_one() -> bool {
 fn fulls_allowed() -> bool {
     static R: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *R.get_or_init(|| knob("PERRY_LIFE_REGIONS_FULL").as_deref() != Some("0"))
+}
+
+/// `PERRY_LIFE_REGIONS_WHY=<path>`: every decided instance gets the
+/// synchronous full, and the first `PERRY_LIFE_REGIONS_WHY_N` (default 4)
+/// dirty instances of each region id write each survivor's holder chain
+/// (`gc::life_why`) to the path.
+fn why_path() -> Option<&'static str> {
+    static R: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    R.get_or_init(|| knob("PERRY_LIFE_REGIONS_WHY")).as_deref()
+}
+
+fn why_n() -> u64 {
+    static R: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *R.get_or_init(|| knob("PERRY_LIFE_REGIONS_WHY_N").and_then(|v| v.parse().ok()).unwrap_or(4))
+}
+
+/// The holder chain of each survivor of a dirty instance, back to its root.
+fn why_dump(r: &Reg, inst: &Inst, seq1: u64, n: u64, survivors: &[(usize, Ent)]) {
+    let Some(path) = why_path() else { return };
+    let inside = |user: usize| {
+        let seq = r.young.get(&user).map(|e| e.seq).or_else(|| r.old_addr.get(&user).copied());
+        match seq {
+            Some(q) if q > inst.seq0 && q <= seq1 => "inside",
+            Some(_) => "tracked-outside",
+            None => "untracked",
+        }
+    };
+    let mut out = format!("== {}:{} instance {n} survivors {}\n", KINDS[inst.kind as usize], inst.id, survivors.len());
+    for (addr, e) in survivors {
+        out.push_str(&format!("  obj seq={} holder={} {}\n", e.seq, HOLDERS[e.holder as usize], crate::gc::life_why::label(addr - crate::gc::GC_HEADER_SIZE)));
+        let mut h = addr - crate::gc::GC_HEADER_SIZE;
+        for _ in 0..64 {
+            match crate::gc::life_why::get(h) {
+                None => {
+                    out.push_str("    <- not marked by this full\n");
+                    break;
+                }
+                Some(w) if w.parent == 0 => {
+                    out.push_str(&format!("    <- ROOT {} fn={} slot={:#x}\n", w.phase, crate::gc::life_why::symbol(w.func), w.slot));
+                    break;
+                }
+                Some(w) => {
+                    let pu = w.parent + crate::gc::GC_HEADER_SIZE;
+                    out.push_str(&format!("    <- {} {}\n", inside(pu), crate::gc::life_why::label(w.parent)));
+                    h = w.parent;
+                }
+            }
+        }
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        let _ = f.write_all(out.as_bytes());
+    }
 }
 
 fn with<R>(f: impl FnOnce(&mut Reg) -> R) -> Option<R> {
@@ -414,9 +470,7 @@ pub(super) fn full_marked() {
         let id = r.full_id;
         let mut dead = Vec::new();
         for (seq, (addr, e)) in r.old.iter_mut() {
-            let header = (*addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let flags = unsafe { (*header).gc_flags };
-            if flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 {
+            if super::life::full_alive(*addr) {
                 e.full_alive = id;
             } else {
                 dead.push((*seq, *addr));
@@ -481,19 +535,21 @@ fn end_from(k: usize, fp: usize) {
     }
     // Old inside objects the minor did not reach: a synchronous full decides them.
     let need_full = need
-        && with(|r| {
+        && (why_path().is_some() || with(|r| {
             insts.iter().any(|i| {
                 i.decide
                     && !i.unresolved
                     && r.seq > i.seq0
-                    && r.old.range(i.seq0 + 1..=r.seq).any(|(_, (_, e))| e.reached != probe_minor)
+                    && r.old.range(i.seq0 + 1..=r.seq).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a))
             })
         })
-        .unwrap_or(false);
+        .unwrap_or(false));
     let mut full = 0;
     if need_full && (fulls_allowed() || insts.iter().any(|i| i.kind == TURN)) {
         let id = with(|r| r.full_id).unwrap_or(0);
+        crate::gc::life_why::arm(why_path().is_some());
         crate::gc::life_collect_full();
+        crate::gc::life_why::arm(false);
         full = with(|r| {
             r.fulls += 1;
             r.sync();
@@ -516,17 +572,25 @@ fn end_from(k: usize, fp: usize) {
             let inside = if seq1 > inst.seq0 { cnt1.saturating_sub(inst.cnt0) } else { 0 };
             let bytes = bytes1.saturating_sub(inst.bytes0);
             let mut verdict = if inside == 0 { EMPTY } else { CLEAN };
-            let (mut objs, mut sbytes, mut hold) = (0u64, 0u64, [0u64; 8]);
+            let (mut objs, mut sbytes, mut hold, mut meta) = (0u64, 0u64, [0u64; 8], 0u64);
             if inside > 0 && inst.decide {
                 if inst.unresolved || probe_minor == 0 {
                     verdict = UNRES;
                 } else {
-                    for e in r.young.values().filter(|e| e.seq > inst.seq0 && e.seq <= seq1) {
+                    for (a, e) in r.young.iter().filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1) {
+                        if super::life::engine_metadata(*a) {
+                            meta += 1;
+                            continue;
+                        }
                         objs += 1;
                         sbytes += e.bytes as u64;
                         hold[e.holder as usize] += 1;
                     }
-                    for (_, (_, e)) in r.old.range(inst.seq0 + 1..=seq1) {
+                    for (_, (a, e)) in r.old.range(inst.seq0 + 1..=seq1) {
+                        if super::life::engine_metadata(*a) {
+                            meta += 1;
+                            continue;
+                        }
                         if e.reached == probe_minor {
                             hold[e.holder as usize] += 1;
                         } else if full != 0 && e.full_alive == full {
@@ -540,6 +604,14 @@ fn end_from(k: usize, fp: usize) {
                     }
                     if verdict != UNRES && objs > 0 {
                         verdict = DIRTY;
+                        let done = r.stats.get(&(inst.kind, inst.id)).map_or(0, |s| s.surv_inst.iter().sum::<u64>());
+                        if why_path().is_some() && done < why_n() {
+                            let mut sv: Vec<(usize, Ent)> =
+                                r.young.iter().filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1).map(|(a, e)| (*a, *e)).collect();
+                            sv.extend(r.old.range(inst.seq0 + 1..=seq1).map(|(_, (a, e))| (*a, *e)));
+                            let n = r.stats.get(&(inst.kind, inst.id)).map_or(0, |s| s.instances);
+                            why_dump(r, &inst, seq1, n, &sv);
+                        }
                     }
                 }
             }
@@ -556,6 +628,7 @@ fn end_from(k: usize, fp: usize) {
                 s.n[verdict] += 1;
                 s.w[verdict] += inst.w;
                 s.bytes_w[verdict] += inst.w * bytes as f64;
+                s.meta_objs += meta;
                 if verdict == DIRTY {
                     let b = match objs {
                         1 => 0,
@@ -691,7 +764,7 @@ pub(crate) fn exit() {
 fn write(r: &mut Reg, exit: bool) {
     let Some(path) = knob("PERRY_LIFE_REGIONS").filter(|p| p != "1") else { return };
     let mut out = String::from(
-        "kind\tid\tinstances\tbytes\ttaken\tsampled\tempty\tclean\tdirty\tunresolved\tw_empty\tw_clean\tw_dirty\tw_unresolved\tbytes_w_empty\tbytes_w_clean\tbytes_w_dirty\tbytes_w_unresolved\tsurv1\tsurv2_4\tsurv5_16\tsurv17\tsurv_bytes1\tsurv_bytes2_4\tsurv_bytes5_16\tsurv_bytes17\tsurv_objs\trestarted",
+        "kind\tid\tinstances\tbytes\ttaken\tsampled\tempty\tclean\tdirty\tunresolved\tw_empty\tw_clean\tw_dirty\tw_unresolved\tbytes_w_empty\tbytes_w_clean\tbytes_w_dirty\tbytes_w_unresolved\tsurv1\tsurv2_4\tsurv5_16\tsurv17\tsurv_bytes1\tsurv_bytes2_4\tsurv_bytes5_16\tsurv_bytes17\tsurv_objs\trestarted\tmeta_objs",
     );
     for h in HOLDERS {
         out.push_str(&format!("\th_{h}"));
@@ -711,7 +784,7 @@ fn write(r: &mut Reg, exit: bool) {
         for v in s.surv_inst.iter().chain(&s.surv_bytes) {
             out.push_str(&format!("\t{v}"));
         }
-        out.push_str(&format!("\t{}\t{}", s.surv_objs, s.restarted));
+        out.push_str(&format!("\t{}\t{}\t{}", s.surv_objs, s.restarted, s.meta_objs));
         for v in s.holders {
             out.push_str(&format!("\t{v}"));
         }

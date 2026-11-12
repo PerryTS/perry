@@ -135,6 +135,12 @@ REGIONS = {
     "r4_fn_clean": [("body", "work", None, {"sampled": 20, "clean": 20, "unresolved": 0}, {}),
                     ("loop", "work", "#0", {"sampled": 1000, "dirty": 1000}, {})],
     "r5_runtime_garbage": [("loop", "run", "#0", {"sampled": 200, "clean": 200, "unresolved": 0}, {"bytes": 20000})],
+    # LIFE I3d: promotion inside the iteration; the verdict must not depend on the sampling density
+    # (DENSITY below re-runs them sparse). r8: only shape key lists (engine metadata) outlive an iteration.
+    "r6_promote_clean": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
+    "r7_promote_keep1": [("loop", "run", "#0", {"sampled": 40, "dirty": 40, "surv1": 40, "surv_objs": 40,
+                                                "unresolved": 0}, {})],
+    "r8_shape_remint": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
 }
 
 
@@ -176,13 +182,69 @@ def check_regions(sites, tsv, tests):
     return bad
 
 
+DENSITY = ("r6_promote_clean", "r7_promote_keep1", "r8_shape_remint")
+
+
+def density(name, exe, sites, tests, go, dense_out):
+    """The same fixture decided sparsely (`PERRY_LIFE_REGIONS_SHIFT=3`: about one instance in eight): every sampled
+    instance gets the dense verdict (all clean, or all dirty with the dense survivor count per instance);
+    r8 also runs the `lifemeta` control, which counts shape key lists as JS values and must fail."""
+    failures = []
+    kind, function, ordinal, exact, _ = tests[0]
+    r, tsv = go(name, exe, {"PERRY_LIFE_REGIONS_RATE": "0", "PERRY_LIFE_REGIONS_SHIFT": "3"})
+    rows = region_rows(sites, tsv, kind, function, ordinal) if tsv.exists() else []
+    bad = []
+    if r.returncode != 0 or r.stdout != dense_out or len(rows) != 1:
+        bad.append(f"rc={r.returncode} rows={len(rows)}")
+    else:
+        x = rows[0]
+        n = x["sampled"]
+        if not 0 < n < exact["sampled"]:
+            bad.append(f"sparse sampled {n:.0f} (want 0 < n < {exact['sampled']})")
+        if x["unresolved"]:
+            bad.append(f"unresolved {x['unresolved']:.0f}")
+        if exact.get("clean") == exact["sampled"] and x["clean"] != n:
+            bad.append(f"clean {x['clean']:.0f} of {n:.0f}")
+        if exact.get("dirty") == exact["sampled"] and (x["dirty"] != n or x["surv1"] != n or x["surv_objs"] != n):
+            bad.append(f"dirty {x['dirty']:.0f} surv1 {x['surv1']:.0f} objs {x['surv_objs']:.0f} of {n:.0f}")
+    print(f"{name} sparse: sampled {rows[0]['sampled'] if rows else '-'} "
+          f"clean {rows[0]['clean'] if rows else '-'} dirty {rows[0]['dirty'] if rows else '-'}: "
+          f"{'dense == sparse' if not bad else 'DIFFERS ' + '; '.join(bad)}")
+    if bad:
+        failures.append(name + ":density")
+    if name == "r8_shape_remint":
+        r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": "lifemeta"})
+        rows2 = region_rows(sites, tsv2, kind, function, ordinal) if tsv2.exists() else []
+        meta = rows2[0]["dirty"] if rows2 else 0
+        ok = r2.returncode == 0 and meta > 0
+        print(f"control lifemeta {name}: dirty {meta:.0f} -> {'FAILS (good)' if ok else 'passes (control BROKEN)'}")
+        if not ok:
+            failures.append("control:lifemeta:regions")
+    return failures
+
+
+def region_rows(sites, tsv, kind, function, ordinal):
+    keys = {}
+    for line in sites.read_text().splitlines():
+        sid, key = line.split("\t", 1)
+        keys[sid] = key.split("\t")
+    lines = tsv.read_text().splitlines()
+    head = lines[0].split("\t")
+    rows = [dict(zip(head, l.split("\t"))) for l in lines[1:] if not l.startswith("#")]
+    return [{k: float(v) for k, v in x.items() if k not in ("kind", "id")} for x in rows
+            if x["kind"] == kind and keys.get(x["id"], ["?"])[0] == kind and keys[x["id"]][2] == function
+            and (ordinal is None or keys[x["id"]][3] == ordinal)]
+
+
 def regions(build, out, fixtures, env):
     failures = []
 
     def go(name, exe, extra=None):
         tsv = out / (name + (".keep" if extra else "") + ".regions.tsv")
         tsv.unlink(missing_ok=True)
-        r = run([str(exe)], env=dict(env, PERRY_LIFE_REGIONS=str(tsv), PERRY_LIFE_REGIONS_RATE="1", **(extra or {})))
+        e = dict(env, PERRY_LIFE_REGIONS=str(tsv), PERRY_LIFE_REGIONS_RATE="1")
+        e.update(extra or {})
+        r = run([str(exe)], env=e)
         return r, tsv
 
     for name, tests in REGIONS.items():
@@ -225,6 +287,8 @@ def regions(build, out, fixtures, env):
         if not ok:
             failures.append(name)
             (out / (name + ".stderr")).write_bytes(r.stderr)
+        if name in DENSITY:
+            failures += density(name, exe, sites, tests, go, r.stdout)
         if name == "r1_clean_loop":
             r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": "lifekeep"})
             bad2 = check_regions(sites, tsv2, tests) if tsv2.exists() else []
