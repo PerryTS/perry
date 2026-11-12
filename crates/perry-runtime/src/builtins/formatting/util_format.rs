@@ -36,9 +36,8 @@ unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -
         let ptr = jv.as_pointer::<u8>();
         return util_format_json_ptr_has_cycle(ptr, stack);
     }
-    if looks_like_raw_heap_pointer(value) {
-        return util_format_json_ptr_has_cycle(value.to_bits() as *const u8, stack);
-    }
+    // Not a POINTER_TAG value: a primitive. A word whose top 16 bits are
+    // clear is a Number (a denormal, or +0), not a raw pointer.
     false
 }
 

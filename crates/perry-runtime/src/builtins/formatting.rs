@@ -1694,19 +1694,6 @@ mod inspect_property_key_tests;
 #[cfg(test)]
 mod internal_key_hiding_tests;
 
-#[inline]
-fn looks_like_raw_heap_pointer(value: f64) -> bool {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        return false;
-    }
-    let addr = bits as usize;
-    // Compare in u64 so the 2^47 upper bound stays in range on 32-bit targets
-    // (arm64_32 watchOS, wasm32), where it's a no-op — no addresses that high.
-    (0x1000..0x8000_0000_0000u64).contains(&(addr as u64))
-        && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
-}
-
 mod deep_equal;
 pub use deep_equal::*;
 
