@@ -1332,12 +1332,11 @@ mod canonical_tests;
 unsafe fn holey_plain_array(
     arr: *mut crate::array::ArrayHeader,
 ) -> Option<*const crate::array::ArrayHeader> {
+    // Both callers hand an Array (`IsArray` or an Array GC header); the
+    // resolver answers null for anything that is no plain Array head. (A
+    // header probe here declined Arrays born outside the collected heap.)
     let arr = crate::array::clean_arr_ptr(arr);
     if arr.is_null() {
-        return None;
-    }
-    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if !crate::gc_type_is_array!(header.obj_type) {
         return None;
     }
     let len = (*arr).length;
