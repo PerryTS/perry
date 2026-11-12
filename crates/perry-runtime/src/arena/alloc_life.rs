@@ -17,14 +17,17 @@
 //! offline against the measured binary; the TSV names the image base) and
 //! is marked covered when a birth claims its address before the next
 //! collection, uncovered otherwise. A runtime-path sample learns its address
-//! where the young header is written ([`placed`]); a sample on another fresh
-//! path is `unplaced`.
+//! where its fresh header is written ([`placed`], [`old_birth`]: young bump,
+//! slow path, free-list reuse, old generation, longlived, collecting holder);
+//! one whose header no path reports stays `unplaced`.
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ON: AtomicBool = AtomicBool::new(false);
-const TYPES: usize = 32;
+/// Every collector object type (`GC_TYPE_MAX` + 1): a narrower table folds
+/// the high kinds (overflow storage, record elements, symbols, ...) together.
+const TYPES: usize = crate::gc::GC_TYPE_MAX as usize + 1;
 const DEPTH: usize = 12;
 const RING: usize = 256;
 pub(crate) const DEFAULT_INTERVAL: usize = 16 * 1024;
@@ -45,15 +48,37 @@ const UNPLACED: u8 = 2;
 #[derive(Default)]
 struct State {
     /// [count, bytes] per type: runtime path, inline path, covered.
-    runtime: [[u64; 2]; TYPES],
-    inline: [[u64; 2]; TYPES],
-    covered: [[u64; 2]; TYPES],
+    runtime: Vec<[u64; 2]>,
+    inline: Vec<[u64; 2]>,
+    covered: Vec<[u64; 2]>,
     covered_inline_samples: u64,
     births_seen: u64,
     births_other: u64,
     walk_breaks: u64,
     walk_bytes_lost: u64,
+    /// Bytes a no-collection attempt noted and then refused (its caller
+    /// retries on a collecting path, which notes the same object again).
+    refused: u64,
+    /// Fresh old-generation / holder births no runtime note announced
+    /// (counted into `runtime` by type), and the part of them that was an
+    /// old-page defragmentation move (taken back out).
+    unnoted: Vec<[u64; 2]>,
+    evacuated: u64,
+    /// Collector arena bytes already allocated when the knob armed.
+    armed_arena_bytes: u64,
     pending: Option<(usize, Sample)>,
+    /// A refused attempt's pending sample, adopted by the retry's note.
+    carry: Option<(usize, Sample)>,
+    /// The last runtime note (total, type) whose header is not yet written:
+    /// an old-generation birth matching it is that noted object.
+    noted: Option<(usize, u8)>,
+    /// The object the compiled inline path's slow call just handed out
+    /// (`js_inline_arena_slow_alloc`): address, size, sample stack if due.
+    /// The compiled caller writes its header after the call, so it is read at
+    /// the next event ([`flush_slow`]).
+    slow: Option<(usize, usize, Option<[usize; DEPTH]>)>,
+    slow_objects: u64,
+    slow_bad: u64,
     /// Samples placed, awaiting a birth: address -> (collections, sample).
     open: HashMap<usize, (u64, Sample)>,
     /// Recent births (address, collections), for inline samples found after
@@ -92,6 +117,11 @@ pub(crate) fn init_from_env() -> usize {
         s.path = path;
         s.interval = interval;
         s.born = vec![(0, 0); RING];
+        s.runtime = vec![[0; 2]; TYPES];
+        s.inline = vec![[0; 2]; TYPES];
+        s.covered = vec![[0; 2]; TYPES];
+        s.unnoted = vec![[0; 2]; TYPES];
+        s.armed_arena_bytes = super::allocation_totals().0 as u64;
     });
     ON.store(true, Ordering::Relaxed);
     interval
@@ -126,10 +156,19 @@ fn settle(s: &mut State, state: u8, x: Sample) {
 pub(crate) fn runtime(total: usize, t: u8, sampled: bool) {
     let pcs = if sampled { Some(capture()) } else { None };
     let _ = with(|s| {
+        flush(s);
+        s.noted = Some((total, t));
         let k = (t as usize).min(TYPES - 1);
         s.runtime[k][0] += 1;
         s.runtime[k][1] += total as u64;
         if let Some((_, x)) = s.pending.take() {
+            settle(s, UNPLACED, x);
+        }
+        if let Some((want, x)) = s.carry.take() {
+            if pcs.is_none() && want == total && x.t == t {
+                s.pending = Some((want, x));
+                return;
+            }
             settle(s, UNPLACED, x);
         }
         if let Some(pcs) = pcs {
@@ -138,16 +177,113 @@ pub(crate) fn runtime(total: usize, t: u8, sampled: bool) {
     });
 }
 
-/// A fresh young header was written at `header` (`total`, `t`).
+/// A fresh header was written at `header` (`total`, `t`) on a noted path:
+/// the pending sample, if it is this object, learns its address. Another
+/// object (a collection's move between the note and the header) leaves the
+/// pending sample waiting.
 pub(crate) fn placed(header: usize, total: usize, t: u8) {
     let _ = with(|s| {
-        let Some((want, x)) = s.pending.take() else { return };
-        if want != total || x.t != t {
-            settle(s, UNPLACED, x);
+        place(s, header, total, t);
+    });
+}
+
+fn place(s: &mut State, header: usize, total: usize, t: u8) -> bool {
+    let noted = s.noted.take() == Some((total, t));
+    match s.pending {
+        Some((want, x)) if want == total && x.t == t => {
+            s.pending = None;
+            let gen = collections();
+            s.open.insert(header + crate::gc::GC_HEADER_SIZE, (gen, x));
+            true
+        }
+        _ => noted,
+    }
+}
+
+/// `js_inline_arena_slow_alloc` handed `[addr, addr + size)` to compiled
+/// code, which writes the header after the call. `due`: it crossed the
+/// sampler's countdown.
+pub(crate) fn slow_alloc(addr: usize, size: usize, due: bool) {
+    let pcs = if due { Some(capture()) } else { None };
+    let _ = with(|s| {
+        flush(s);
+        s.slow = Some((addr, size, pcs));
+    });
+}
+
+/// Count the object of the last inline slow call now that its header is
+/// written: called at the next event of any kind (and before every inline
+/// write-back, which a collection does first).
+pub(crate) fn flush_slow() {
+    let _ = with(flush);
+}
+
+fn flush(s: &mut State) {
+    let Some((addr, size, pcs)) = s.slow.take() else { return };
+    if addr == 0 {
+        return;
+    }
+    let (t, total) = unsafe {
+        let h = addr as *const crate::gc::GcHeader;
+        ((*h).obj_type, (*h).size as usize)
+    };
+    if total != size {
+        s.slow_bad += 1;
+        return;
+    }
+    s.slow_objects += 1;
+    let k = (t as usize).min(TYPES - 1);
+    s.inline[k][0] += 1;
+    s.inline[k][1] += total as u64;
+    if let Some(pcs) = pcs {
+        let gen = collections();
+        s.open.insert(addr + crate::gc::GC_HEADER_SIZE, (gen, Sample { inline: true, t, bytes: total as u32, pcs }));
+    }
+}
+
+/// A fresh old-generation (or collecting-holder) header: noted when the
+/// pending note is this object, otherwise a birth no note announced, counted
+/// here.
+pub(crate) fn old_birth(header: usize, total: usize, t: u8) {
+    let _ = with(|s| {
+        if place(s, header, total, t) {
             return;
         }
-        let gen = collections();
-        s.open.insert(header + crate::gc::GC_HEADER_SIZE, (gen, x));
+        let k = (t as usize).min(TYPES - 1);
+        s.runtime[k][0] += 1;
+        s.runtime[k][1] += total as u64;
+        s.unnoted[k][0] += 1;
+        s.unnoted[k][1] += total as u64;
+    });
+}
+
+/// The old-page defragmentation moved an object (its new home went through
+/// [`old_birth`]): a move, not a birth.
+pub(crate) fn evacuated(total: usize, t: u8) {
+    let _ = with(|s| {
+        let k = (t as usize).min(TYPES - 1);
+        s.runtime[k][0] = s.runtime[k][0].saturating_sub(1);
+        s.runtime[k][1] = s.runtime[k][1].saturating_sub(total as u64);
+        s.unnoted[k][0] = s.unnoted[k][0].saturating_sub(1);
+        s.unnoted[k][1] = s.unnoted[k][1].saturating_sub(total as u64);
+        s.evacuated += total as u64;
+    });
+}
+
+/// A no-collection attempt noted `total` of `t` and returned null: the
+/// caller's collecting retry notes the same object again.
+pub(crate) fn refused(total: usize, t: u8) {
+    let _ = with(|s| {
+        let k = (t as usize).min(TYPES - 1);
+        s.runtime[k][0] = s.runtime[k][0].saturating_sub(1);
+        s.runtime[k][1] = s.runtime[k][1].saturating_sub(total as u64);
+        s.refused += total as u64;
+        if let Some((want, x)) = s.pending {
+            if want == total && x.t == t {
+                s.pending = None;
+                s.carry = Some((want, x));
+            }
+        }
     });
 }
 
@@ -183,6 +319,7 @@ pub(crate) fn inline_burst(data: *mut u8, from: usize, to: usize, mut countdown:
     }
     let pcs = if picks.is_empty() { [0usize; DEPTH] } else { capture() };
     let _ = with(|s| {
+        flush(s);
         for (t, total) in counts {
             let k = (t as usize).min(TYPES - 1);
             s.inline[k][0] += 1;
@@ -208,6 +345,7 @@ pub(crate) fn inline_burst(data: *mut u8, from: usize, to: usize, mut countdown:
 
 /// A census birth claimed `bits` (`perry_life_birth`).
 pub(crate) fn birth(bits: u64) {
+    let _ = with(flush);
     let tag = bits & 0xFFFF_0000_0000_0000;
     if tag != 0x7FFD_0000_0000_0000 && tag != 0x7FFF_0000_0000_0000 {
         let _ = with(|s| s.births_other += 1);
@@ -257,6 +395,7 @@ fn type_name(t: usize) -> String {
 
 /// Process exit: write the TSV.
 pub(crate) fn write() {
+    flush_slow();
     minor();
     let base = image_base();
     let (arena, large) = super::allocation_totals();
@@ -264,12 +403,25 @@ pub(crate) fn write() {
         if let Some((_, x)) = s.pending.take() {
             settle(s, UNPLACED, x);
         }
+        if let Some((_, x)) = s.carry.take() {
+            settle(s, UNPLACED, x);
+        }
         let mut out = format!(
-            "#meta\timage_base={base:#x}\tinterval={}\tarena_bytes={arena}\tlarge_bytes={large}\tbirths_seen={}\tbirths_other={}\twalk_breaks={}\twalk_bytes_lost={}\tcovered_inline_samples={}\tcollections={}\n",
+            "#meta\timage_base={base:#x}\tinterval={}\tarena_bytes={arena}\tlarge_bytes={large}\tbirths_seen={}\tbirths_other={}\twalk_breaks={}\twalk_bytes_lost={}\tcovered_inline_samples={}\tcollections={}\tinline_slow_objects={}\tinline_slow_bad={}\n",
             s.interval, s.births_seen, s.births_other, s.walk_breaks, s.walk_bytes_lost, s.covered_inline_samples,
-            collections()
+            collections(), s.slow_objects, s.slow_bad
         );
         out.push_str(&arena_lines(s));
+        let by = super::allocation_totals_by_arena();
+        out.push_str(&format!(
+            "#arenas\tyoung={}\told={}\tlonglived={}\tsurvivor0={}\tsurvivor1={}\tyoung_large_flag={}\told_large_flag={}\tarmed_arena_bytes={}\trefused_bytes={}\tevacuated_bytes={}\n",
+            by[0].0, by[1].0, by[2].0, by[3].0, by[4].0, by[0].1, by[1].1, s.armed_arena_bytes, s.refused, s.evacuated
+        ));
+        for t in 0..TYPES {
+            if s.unnoted[t][0] != 0 {
+                out.push_str(&format!("#unnoted\t{}\t{}\t{}\n", type_name(t), s.unnoted[t][0], s.unnoted[t][1]));
+            }
+        }
         for t in 0..TYPES {
             let (r, i, c) = (s.runtime[t], s.inline[t], s.covered[t]);
             if r[0] + i[0] + c[0] == 0 {
