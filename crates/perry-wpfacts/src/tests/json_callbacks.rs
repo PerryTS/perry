@@ -101,34 +101,12 @@ console.log(inner.n * 2);
 "#,
     ),
     (
-        "what the replacer returns is visited",
-        r#"
-class P { n: number; constructor() { this.n = 3; } }
-const made = new P();
-JSON.stringify({ k: 1 }, function (this: any, k: string, v: any) {
-  if (k === "k") return made;
-  if (k === "n") this.n = "nnn";
-  return v;
-});
-console.log(made.n * 2);
-"#,
-    ),
-    (
         "a bound replacer",
         r#"
 const p = { n: 1 };
 const ctx = { tag: "c" };
 function rep(this: any, k: string, v: any) { if (k === "p") v.n = this.tag; return v; }
 JSON.stringify({ p }, rep.bind(ctx));
-console.log(p.n * 2);
-"#,
-    ),
-    (
-        "the built-in called as a value",
-        r#"
-const p = { n: 1 };
-const ser = JSON.stringify;
-ser({ p }, (k: string, v: any) => { if (k === "p") v.n = "alias"; return v; });
 console.log(p.n * 2);
 "#,
     ),
@@ -156,6 +134,45 @@ fn a_json_callback_sees_the_values_it_is_called_with() {
             without.iter().any(|k| k == "num"),
             "{what}: the control proves `n` a Number ({without:?})"
         );
+        assert!(
+            !with.iter().any(|k| k == "num"),
+            "{what}: `n` holds a string the callback stored ({with:?})"
+        );
+    }
+}
+
+/// Unknown without the rule already: what the replacer returns escapes
+/// with its result, and so does what a call of the built-in as a value
+/// (an alias) hands it. The rule keeps them unknown.
+const ALREADY_UNKNOWN: &[(&str, &str)] = &[
+    (
+        "what the replacer returns is visited",
+        r#"
+class P { n: number; constructor() { this.n = 3; } }
+const made = new P();
+JSON.stringify({ k: 1 }, function (this: any, k: string, v: any) {
+  if (k === "k") return made;
+  if (k === "n") this.n = "nnn";
+  return v;
+});
+console.log(made.n * 2);
+"#,
+    ),
+    (
+        "the built-in called as a value",
+        r#"
+const p = { n: 1 };
+const ser = JSON.stringify;
+ser({ p }, (k: string, v: any) => { if (k === "p") v.n = "alias"; return v; });
+console.log(p.n * 2);
+"#,
+    ),
+];
+
+#[test]
+fn a_value_the_replacer_returns_or_an_alias_gets_stays_unknown() {
+    for (what, src) in ALREADY_UNKNOWN {
+        let with = n_kinds(src, true);
         assert!(
             !with.iter().any(|k| k == "num"),
             "{what}: `n` holds a string the callback stored ({with:?})"
