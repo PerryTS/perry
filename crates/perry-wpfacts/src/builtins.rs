@@ -32,7 +32,7 @@ pub use undeclared::{
 };
 pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
-pub(crate) use collections::construct_into;
+pub(crate) use collections::{construct_into, map_values};
 pub(crate) use effects::{
     declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
     run_function, run_member,

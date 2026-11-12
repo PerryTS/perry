@@ -113,6 +113,13 @@ impl<'a> Gen<'a> {
                 let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
+                // AddEntriesFromIterable (24.1.1.2 step 4.f): each value is
+                // Get(entry, "1"), held in the entry values (`MAP_VALUES`),
+                // as the constructor call does (`constructors.rs`).
+                let one = Key::Named(self.m.atom("1"));
+                let val = self.load(it, one);
+                let mv = crate::builtins::map_values(&mut self.m, t);
+                self.m.edge(val, mv);
                 n
             }
             Expr::SetNewFromArray(x) => {
