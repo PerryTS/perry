@@ -6,7 +6,10 @@
 // the site keeps its typed-array lowering, and the check-mode witness in
 // front of it must report that the receiver is no typed array ("method
 // site").
-function fillIt(a: Float64Array): any {
+// (Recursive, so that the call is not inlined: an inlined copy reads the
+// argument's own binding, which carries no typed-array annotation.)
+function fillIt(a: Float64Array, depth: number): any {
+  if (depth > 0) return fillIt(a, depth - 1);
   return a.fill(1);
 }
 const lied: any = {
@@ -14,6 +17,6 @@ const lied: any = {
     return "own fill";
   },
 };
-console.log(fillIt(lied));
+console.log(fillIt(lied, 2));
 const real = new Float64Array(2);
-console.log(fillIt(real).join(","));
+console.log(fillIt(real, 2).join(","));
