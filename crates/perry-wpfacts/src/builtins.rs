@@ -988,6 +988,7 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
 /// The opaque builtin function value; in explain mode, counted by the
 /// arm that minted it (`perry: wpfacts explain: builtin-fn minted`).
 fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
+    crate::family_reach::generic(m, why);
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
@@ -1759,6 +1760,7 @@ fn console_args(m: &mut Model, call: CallId) {
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
 }
 
@@ -2415,6 +2417,7 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {

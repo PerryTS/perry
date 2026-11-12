@@ -510,6 +510,20 @@ mod tests {
         }
     }
 
+    /// The runtime families (`perry_runtime_manifest::families`, the list the
+    /// `family_reach` fact is over) are exactly the runtime installs, in
+    /// this table's order: one list of install groups.
+    #[test]
+    fn runtime_families_are_the_runtime_installs() {
+        use perry_runtime_manifest::families::{install_symbol, RUNTIME_FAMILIES};
+        let families: Vec<String> = RUNTIME_FAMILIES.iter().map(install_symbol).collect();
+        let installs: Vec<String> = RUNTIME_INSTALLS
+            .iter()
+            .map(|(symbol, _)| symbol.to_string())
+            .collect();
+        assert_eq!(families, installs);
+    }
+
     #[test]
     fn every_runtime_install_symbol_is_defined_by_perry_runtime() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
