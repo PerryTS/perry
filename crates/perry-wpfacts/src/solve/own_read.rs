@@ -142,6 +142,9 @@ impl Model {
         prim: u16,
     ) {
         if from.is_none() && prim & !(prim::NULL | prim::UNDEF) != 0 {
+            if enum_diag() {
+                eprintln!("perry: wpfacts enumdiag site={site} reason=prim prim={prim}");
+            }
             self.enum_key_any(o, src, site);
         }
         for &t in toks {
@@ -158,6 +161,22 @@ impl Model {
                     }
                     Some(f) => self.enum_link(f, t),
                 };
+            if enum_diag() {
+                let r = if t == TOP {
+                    "top".to_string()
+                } else if covered {
+                    "exact".to_string()
+                } else if from.is_none() {
+                    "uncovered-subject".to_string()
+                } else {
+                    format!("uncovered-link from={}", self.tok_name(from.unwrap()))
+                };
+                eprintln!(
+                    "perry: wpfacts enumdiag site={site} reason={r} depth={} tok={}",
+                    from.is_some() as u8,
+                    if t == TOP { "TOP".to_string() } else { self.tok_name(t) }
+                );
+            }
             if !covered {
                 self.enum_key_any(o, src, site);
                 continue;
@@ -502,5 +521,23 @@ impl Model {
                 },
             );
         }
+    }
+}
+
+/// `PERRY_WPF_ENUMDIAG=1`: one stderr line per ENUM3 key-store decision.
+pub(super) fn enum_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_WPF_ENUMDIAG").is_some())
+}
+
+impl Model {
+    pub(super) fn enum_diag_any(&self, n: NodeId, site: SiteId, toks: crate::delta::Tokens<'_>) {
+        let t = toks.into_iter().next().copied();
+        eprintln!(
+            "perry: wpfacts enumdiag-any site={site} via={} tok={}",
+            self.labels[n as usize],
+            t.map(|t| if t == TOP { "TOP".to_string() } else { self.tok_name(t) })
+                .unwrap_or_else(|| "prim".into())
+        );
     }
 }

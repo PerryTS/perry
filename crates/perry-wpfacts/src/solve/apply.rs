@@ -1493,6 +1493,9 @@ impl Model {
             }
             Cons::EnumKeyAny { o, src, site } => {
                 if !toks.is_empty() || prim != 0 {
+                    if super::own_read::enum_diag() {
+                        self.enum_diag_any(n, site, toks);
+                    }
                     self.enum_key_any(o, src, site);
                 }
             }
