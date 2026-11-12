@@ -147,6 +147,7 @@ mod locked_delete;
 mod locked_store;
 mod locked_top_store;
 mod written_prim_method_receiver;
+mod escaped_fn_own_return;
 mod locked_top_define;
 mod internal_slot_no_property;
 mod registry_prefix_runs;

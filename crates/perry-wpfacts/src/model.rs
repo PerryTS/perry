@@ -1838,6 +1838,14 @@ pub struct Model {
     pub(crate) fresh: Vec<Tok>,
     pub(crate) fresh_seen: crate::pts::FxHashSet<Tok>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
+    /// The return nodes of escaped functions no summary instances
+    /// (`Model::sink_own_return`): the function and the escape reason. An
+    /// edge into one is judged as it is made (`edge_impl`).
+    pub(crate) open_rets: crate::pts::FxHashMap<NodeId, (FnIdx, u32)>,
+    /// The sources (copy predecessors) of every function's return, `this`
+    /// and parameter nodes, indexed at the first such escape and kept by
+    /// `edge_impl` from then on.
+    pub(crate) term_preds: Option<crate::pts::FxHashMap<NodeId, Vec<NodeId>>>,
     /// Classes linked to a parent at gen time whose `extends` expression is
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
