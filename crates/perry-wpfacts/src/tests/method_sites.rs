@@ -65,7 +65,10 @@ fn callee(pf: &crate::ProgramFacts, text: &str, key: &str) -> Option<u8> {
 fn a_typed_array_receiver_has_the_fact() {
     let pf = solve(None);
     assert_eq!(callee(&pf, "a.fill(1)", "fill"), Some(SITE_TYPED_ARRAY));
-    assert_eq!(callee(&pf, "this.k.fill(1)", "fill"), Some(SITE_TYPED_ARRAY));
+    assert_eq!(
+        callee(&pf, "this.k.fill(1)", "fill"),
+        Some(SITE_TYPED_ARRAY)
+    );
 }
 
 /// A folded node (`b.at(0)` is `Expr::ArrayAt`) has a site of its own, named

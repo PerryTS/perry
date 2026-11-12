@@ -46,11 +46,7 @@ pub(crate) fn annotated_typed_array(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 
 /// Do the facts prove that the receiver of the method site `site` named
 /// `name` holds only typed arrays? No site, no facts or no record: no.
-pub(crate) fn typed_array_receiver_proven(
-    ctx: &FnCtx<'_>,
-    site: Option<Site>,
-    name: &str,
-) -> bool {
+pub(crate) fn typed_array_receiver_proven(ctx: &FnCtx<'_>, site: Option<Site>, name: &str) -> bool {
     let Some(site) = site else {
         return false;
     };
@@ -80,8 +76,12 @@ pub(crate) fn unproven_typed_array_call(
     if !typed_array_sites_enabled() || !annotated_typed_array(ctx, object) {
         return Ok(false);
     }
-    let witnessed = !crate::verify_facts::enabled() || matches!(object, Expr::LocalGet(_) | Expr::This);
-    let proven = witnessed && typed_array_receiver_proven(ctx, site, name);
+    let witnessed =
+        !crate::verify_facts::enabled() || matches!(object, Expr::LocalGet(_) | Expr::This);
+    // `%TypedArray%.prototype` has no `concat`: the Array arm would run
+    // `Array.prototype.concat` on a typed array, where the real `Get` finds
+    // nothing and the call throws.
+    let proven = witnessed && name != "concat" && typed_array_receiver_proven(ctx, site, name);
     if std::env::var("PERRY_METHOD_SITE_DIAG").as_deref() == Ok("1") {
         eprintln!(
             "[perry method_site] fn={} kind=typed_array key={name} verdict={}",
@@ -101,9 +101,10 @@ pub(crate) fn unproven_typed_array_call(
 fn witness_typed_array(ctx: &mut FnCtx<'_>, object: &Expr, name: &str) -> anyhow::Result<()> {
     use crate::types::{DOUBLE, I32, I64};
     crate::facts_consumed::used();
-    crate::verify_facts::covered(crate::verify_facts::Fact::MethodSite, || {
-        serde_json::json!({ "key": name, "receiver": "typed array" })
-    });
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::MethodSite,
+        || serde_json::json!({ "key": name, "receiver": "typed array" }),
+    );
     if !crate::verify_facts::enabled() {
         return Ok(());
     }
@@ -112,9 +113,7 @@ fn witness_typed_array(ctx: &mut FnCtx<'_>, object: &Expr, name: &str) -> anyhow
         .block()
         .call(DOUBLE, "js_util_types_is_typed_array", &[(DOUBLE, &recv)]);
     let bits = ctx.block().bitcast_double_to_i64(&answer);
-    let holds = ctx
-        .block()
-        .icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let holds = ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
     let miss = ctx.new_block("methodsite.verify_miss");
     let next = ctx.new_block("methodsite.admitted");
     let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
@@ -122,7 +121,8 @@ fn witness_typed_array(ctx: &mut FnCtx<'_>, object: &Expr, name: &str) -> anyhow
     ctx.block().cond_br(&holds, &next_l, &miss_l);
     ctx.current_block = miss;
     let what = format!("the receiver of .{name}() holds only typed arrays");
-    let site = crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
+    let site =
+        crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
     let _ = crate::verify_facts::check(
         ctx,
         I32,
