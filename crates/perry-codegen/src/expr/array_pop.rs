@@ -536,4 +536,20 @@ mod tests {
         assert_inline_pop_tier(&ir_of(field_pop_module()), "erased field receiver");
         assert_inline_pop_tier(&ir_of(param_pop_module()), "claimed array parameter");
     }
+
+    /// The HIR's own `pop` node (`Expr::ArrayPop`, a local receiver) calls the
+    /// checked entry, which proves that `pop` is the builtin on the receiver
+    /// or performs the real `Get`; the site entry it replaces tested the
+    /// prototype only, so an own `pop` was ignored.
+    #[test]
+    fn the_folded_pop_node_calls_the_checked_entry() {
+        let mut m = param_pop_module();
+        m.functions[0].body = vec![Stmt::Return(Some(Expr::ArrayPop(5)))];
+        let ir = ir_of(m);
+        assert!(
+            ir.contains("call double @js_array_m_pop0(")
+                && !ir.contains("call double @js_array_pop_f64_site("),
+            "Expr::ArrayPop must call the checked pop entry:\n{ir}"
+        );
+    }
 }

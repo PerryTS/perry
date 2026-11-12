@@ -260,6 +260,8 @@ pub(crate) mod own_override;
 #[cfg(test)]
 mod own_override_builtin_install_tests;
 #[cfg(test)]
+mod own_override_array_site_tests;
+#[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{
     ensure_key_in_keys_array, install_builtin_accessor, install_builtin_getter,

@@ -104,6 +104,40 @@ console.log(b.add(3));"#;
     assert!(!hit_runs(src), "hit runs, nothing calls it");
 }
 
+/// `Expr::ArrayPop` (a local, parameter or module-binding receiver) is the
+/// call `a.pop()`: codegen calls the checked entry `js_array_m_pop0`, which
+/// runs the `pop` the receiver holds. node runs `hit` in each.
+#[test]
+fn a_folded_pop_runs_an_own_method() {
+    for (name, body) in [
+        ("own data pop", "const a = [1]; (a as any).pop = hit; return a.pop();"),
+        (
+            "own accessor pop",
+            r#"const a = [1];
+  Object.defineProperty(a, "pop", { get() { return hit; } });
+  return a.pop();"#,
+        ),
+        (
+            "an object behind the annotation",
+            "const o: any = { length: 0, pop: hit }; const a: number[] = o; return a.pop();",
+        ),
+    ] {
+        let src = format!(
+            "function hit(x: any) {{ return x; }}\nfunction f() {{ {body} }}\nconsole.log(f());"
+        );
+        assert!(hit_runs(&src), "{name}: hit inactive, Node runs it");
+    }
+}
+
+/// Control: `pop` on an Array with no own `pop` is the builtin.
+#[test]
+fn a_folded_pop_without_an_own_method_stays_builtin() {
+    let src = r#"function hit(x: any) { return x; }
+function f() { const a = [1, 2]; const b: any = [3]; b.other = hit; return a.pop()! + b.pop(); }
+console.log(f());"#;
+    assert!(!hit_runs(src), "hit runs, nothing calls it");
+}
+
 /// Control: folded calls on receivers without an own method run the
 /// builtin; a method stored under another key of another value is not
 /// called by them.
