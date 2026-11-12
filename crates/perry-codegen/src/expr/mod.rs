@@ -1740,6 +1740,9 @@ pub(crate) struct FnCtx<'a> {
     /// intercepts these to emit scalar-replaced field allocas.
     pub non_escaping_news: std::collections::HashMap<u32, String>,
 
+    /// LIFE G1: the body's lifetime claims (`collectors::life_claims`).
+    pub life_claims: std::sync::Arc<crate::collectors::life_claims::LifeClaims>,
+
     /// Fields that are actually observed on each scalar-replaced `new` local.
     /// For synthetic anonymous-shape classes, `Stmt::Let` can allocate only
     /// these slots while still evaluating constructor args/stores for side

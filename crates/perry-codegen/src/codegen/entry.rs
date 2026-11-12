@@ -1147,6 +1147,7 @@ pub(super) fn compile_module_entry(
             scalar_slot_shadow_slots: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
+            life_claims: main_native_facts.life_claims(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
             non_escaping_array_used_indices: main_native_facts
