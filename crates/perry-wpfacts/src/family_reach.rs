@@ -152,6 +152,10 @@ impl State {
 /// entry of one: its key, the families and the entry's name.
 type Member = (&'static str, FamilySet, &'static str);
 
+/// A prototype member by key: (the families of its holder, the families the
+/// member adds, the entry).
+pub(crate) type MemberKey = (FamilySet, FamilySet, &'static str);
+
 /// What one realm entry observes.
 #[derive(Clone, Copy, Default)]
 struct Entry {
@@ -183,10 +187,11 @@ pub(crate) struct Index {
     /// Root holder -> everything reachable below it: the families of its
     /// entries and of their declared births (the text part's closure).
     roots: FxHashMap<&'static str, FamilySet>,
-    /// Key -> the families prototype members under that key add to their
-    /// holder's (`normalize` on `String.prototype`, `toLocaleString` on
-    /// `Date.prototype`), with one such entry.
-    member_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
+    /// Key -> the prototype members under that key that add a family to
+    /// their holder's (`normalize` on `String.prototype`, `toLocaleString` on
+    /// `Date.prototype`): the holder's own families (empty for core: its
+    /// values exist in every program), what the member adds, the entry.
+    member_keys: FxHashMap<&'static str, Vec<MemberKey>>,
     /// Key -> the direct members of a family's namespace under that key
     /// (`floor` of `Math`: lowering can drop the namespace's name).
     namespace_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
@@ -321,8 +326,10 @@ pub(crate) fn index() -> &'static Index {
             let beyond = (own | reach) & !root_own;
             let prototype = holder.contains(".prototype") || holder.starts_with('%');
             if beyond != 0 && prototype && families::entry_module(e.name).is_none() {
-                let slot = ix.member_keys.entry(key).or_insert((0, e.name));
-                slot.0 |= beyond;
+                ix.member_keys
+                    .entry(key)
+                    .or_default()
+                    .push((root_own, beyond, e.name));
                 // A core prototype's values are present in every program.
                 if root_own == 0 {
                     ix.computed.push((beyond, e.name));
@@ -748,13 +755,21 @@ fn closed_world(g: &crate::gen::Gen, dynamic_code: Option<&str>) -> Verdicts {
         }
     }
     observe_tokens(m, &mut v);
-    // L3.
-    if !v.full() {
-        text::scan(g, &mut |set, why| v.mark(set, || why()));
-    }
+    // L3. A key of a prototype member of a family's holder counts once a
+    // value of that holder can exist (the holder's family is live).
+    let keys = if v.full() {
+        Vec::new()
+    } else {
+        text::scan(g, &mut |set, why| v.mark(set, || why()))
+    };
     // L4: what a live family requires.
     loop {
         let before = v.live;
+        for &(holder, adds, entry) in &keys {
+            if before & holder != 0 {
+                v.mark(adds, || format!("L3:the key of {entry}"));
+            }
+        }
         for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
             if before & (1 << i) != 0 {
                 for r in f.requires {

@@ -398,8 +398,11 @@ fn strings(text: &str, out: &mut FxHashSet<String>) {
     }
 }
 
-/// The name and static-key parts over the strings the text holds.
-fn string_rules(found: &FxHashSet<String>, mark: &mut Mark<'_>) {
+/// The name and static-key parts over the strings the text holds. Returns
+/// the keys of prototype members whose holder is of a family: they count
+/// once that family is live.
+fn string_rules(found: &FxHashSet<String>, mark: &mut Mark<'_>) -> Vec<super::MemberKey> {
+    let mut conditional = Vec::new();
     let ix = index();
     let mut sorted: Vec<&String> = found.iter().collect();
     sorted.sort_unstable();
@@ -417,10 +420,15 @@ fn string_rules(found: &FxHashSet<String>, mark: &mut Mark<'_>) {
                 &|| format!("L3:the name {s}"),
             );
         }
-        if let Some(&(set, entry)) = ix.member_keys.get(s.as_str()) {
-            mark(set, &|| format!("L3:the key {s} ({entry})"));
+        for &(holder, adds, entry) in ix.member_keys.get(s.as_str()).map_or(&[][..], |v| v) {
+            if holder == 0 {
+                mark(adds, &|| format!("L3:the key {s} ({entry})"));
+            } else {
+                conditional.push((holder, adds, entry));
+            }
         }
     }
+    conditional
 }
 
 /// Whether a body generation does not walk holds a member access under a
@@ -461,8 +469,9 @@ fn unwalked(g: &Gen, found: &mut FxHashSet<String>) -> bool {
     computed.get()
 }
 
-/// L3 over the whole program.
-pub(super) fn scan(g: &Gen, mark: &mut Mark<'_>) {
+/// L3 over the whole program. Returns the member keys that count once
+/// their holder's family is live.
+pub(super) fn scan(g: &Gen, mark: &mut Mark<'_>) -> Vec<super::MemberKey> {
     let ix = index();
     let interp_linked = g.m.interp_linked;
     let mut found = FxHashSet::default();
@@ -503,7 +512,7 @@ pub(super) fn scan(g: &Gen, mark: &mut Mark<'_>) {
             &mut found,
         );
     }
-    string_rules(&found, mark);
+    let conditional = string_rules(&found, mark);
     // Bodies generation does not walk: computed keys, and with the
     // interpreter linked the Function constructor off any function.
     let mut unwalked_strings = FxHashSet::default();
@@ -525,4 +534,5 @@ pub(super) fn scan(g: &Gen, mark: &mut Mark<'_>) {
                 .into()
         });
     }
+    conditional
 }
