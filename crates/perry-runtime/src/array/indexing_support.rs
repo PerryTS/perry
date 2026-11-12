@@ -54,6 +54,68 @@ pub(super) unsafe fn array_sparse_index_property_set(
     arr
 }
 
+/// A receiver that reached an Array element entry (a `T[]` annotation is a
+/// hint, never a layout fact) and is a GC-headed object of another kind: a
+/// Date, a Promise, an Error, a RegExp, a Map or Set, a function, a class
+/// instance. Returned NaN-boxed for the ordinary [[Get]] / [[Set]]. `None`
+/// for a real Array (also lazy or forwarded), a string, a typed array or a
+/// buffer (each has its own arm), an Array-subclass instance (its own
+/// element store) and every word the allocator does not vouch for.
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_object_receiver_word(arr: *const ArrayHeader) -> Option<f64> {
+    let addr = super::header::array_receiver_addr(arr as *mut ArrayHeader);
+    // SAFETY: the tracked probe admits the address before it reads a header.
+    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    let (obj_type, gc_flags) =
+        unsafe { ((*header.as_ptr()).obj_type, (*header.as_ptr()).gc_flags) };
+    if gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || crate::gc_type_is_array!(obj_type)
+        || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        || obj_type == crate::gc::GC_TYPE_STRING
+        || obj_type == crate::gc::GC_TYPE_OVERFLOW
+        || crate::gc::is_typed_array_type(obj_type)
+        || crate::gc::is_buffer_family_type(obj_type)
+    {
+        return None;
+    }
+    let value = crate::value::js_nanbox_pointer(addr as i64);
+    (!crate::array::subclass::is_array_subclass_value(value)).then_some(value)
+}
+
+/// `Get(O, ToString(index))` for [`non_array_object_receiver_word`].
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_receiver_index_get(arr: *const ArrayHeader, index: u32) -> Option<f64> {
+    let receiver = non_array_object_receiver_word(arr)?;
+    Some(crate::value::js_dyn_index_get(receiver, f64::from(index)))
+}
+
+/// `Set(O, ToString(index), value, strict)` for
+/// [`non_array_object_receiver_word`]: an inherited setter runs, a frozen or
+/// non-extensible receiver rejects, otherwise an own property is created.
+/// `false`: not such a receiver, nothing was stored.
+#[cold]
+#[inline(never)]
+pub(super) fn non_array_receiver_index_set(
+    arr: *mut ArrayHeader,
+    index: u32,
+    value: f64,
+    strict: bool,
+) -> bool {
+    let Some(receiver) = non_array_object_receiver_word(arr) else {
+        return false;
+    };
+    crate::proxy::js_put_value_set(
+        receiver,
+        f64::from(index),
+        value,
+        receiver,
+        i32::from(strict),
+    );
+    true
+}
+
 /// Resolve a raw array head a generated loop re-read from its root after a
 /// callback returned: the callback may have grown the array, leaving the root
 /// on a forwarding stub. Pure `clean_arr_ptr`; null for anything that is not
@@ -175,7 +237,9 @@ pub(crate) fn note_object_prototype_index_write(obj: usize) {
     if obj != 0 && obj == object_prototype_addr() && !OBJECT_PROTO_HAS_INDEX.load(Ordering::Relaxed)
     {
         // DEC 250 (i): the program never adds an index to %Object.prototype%.
-        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Object);
+        crate::object::builtin_proto::refuse_index_add(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        );
         OBJECT_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -218,7 +282,9 @@ pub(crate) fn array_iteration_facts() -> u32 {
 pub(crate) fn note_array_index_write(arr: usize) {
     if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         // DEC 250 (i): the program never adds an index to %Array.prototype%.
-        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
+        crate::object::builtin_proto::refuse_index_add(
+            crate::object::builtin_proto::BuiltinProto::Array,
+        );
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
