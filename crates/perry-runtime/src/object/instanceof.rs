@@ -1004,6 +1004,9 @@ mod primitive_lhs_native_brand_tests_11261 {
             -7.0,
             f64::NAN,
             f64::INFINITY,
+            // A word with clear top 16 bits is a Number (a denormal), not a
+            // raw pointer.
+            f64::from_bits(PROBE_HANDLE as u64),
         ];
         for v in primitives {
             assert!(
@@ -1016,8 +1019,6 @@ mod primitive_lhs_native_brand_tests_11261 {
             // A POINTER-tagged registry handle and a heap address.
             f64::from_bits(crate::value::HANDLE_TAG | PROBE_HANDLE as u64),
             f64::from_bits(crate::value::POINTER_TAG | 0x7F12_3456_7890),
-            // The raw-bitcast band is left to the downstream decoders.
-            f64::from_bits(PROBE_HANDLE as u64),
         ];
         for v in not_primitive {
             assert!(
