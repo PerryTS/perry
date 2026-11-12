@@ -112,6 +112,47 @@ fn not_typed_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
     None
 }
 
+/// Why the method call `recv.key(..)` over the receiver nodes `recvs` is no
+/// Array member (`None`: it is one): `derive::native_member`, the solver's
+/// `NativeMember` verdict as a call site at those nodes is judged,
+/// restricted to the Array family (every value an Array exotic object: no
+/// primitive, no ⊤, no marker, no other object).
+fn not_array_member(m: &Model, key: crate::model::Atom, recvs: &[NodeId]) -> Option<String> {
+    let why = |s: &str| Some(s.to_string());
+    if recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+        return why("receiver:dropped");
+    }
+    let set = crate::derive::receiver_set(m, recvs);
+    if set.prims != 0 {
+        return why("receiver:primitive");
+    }
+    if set.toks.is_empty() {
+        return why("receiver:empty");
+    }
+    if set.toks.contains(&TOP) {
+        return why("receiver:top");
+    }
+    if set.toks.iter().any(|&t| m.is_marker(t)) {
+        return why("receiver:marker");
+    }
+    if !set.toks.iter().all(|&t| crate::derive::exact_array(m, t)) {
+        return why("receiver:not-array");
+    }
+    let site = crate::gen::ReadSite {
+        module: 0,
+        byte_offset: 0,
+        key,
+        recv: recvs[0],
+        is_call: true,
+        value_call: false,
+        func: 0,
+    };
+    match crate::derive::native_member(m, &site, &set.toks, set.prims) {
+        Ok(_) => None,
+        Err(reason) => Some(reason.unwrap_or_else(|| "member:own-or-undescribed".to_string())),
+    }
+}
+
 fn site_text(site: Site) -> String {
     match site {
         Site::Callee(o) => format!("callee:{o}"),
@@ -186,9 +227,7 @@ pub(crate) fn collect(
             "array_member",
             array,
             ARRAY_MEMBER,
-            crate::derive::native_array_member_call(m, key, &nodes)
-                .err()
-                .filter(|_| !sabotage_array_member),
+            not_array_member(m, key, &nodes).filter(|_| !sabotage_array_member),
         );
         // Two atoms of one spelling (a private name and a public key) are
         // one key here: the site holds a fact only when both do.

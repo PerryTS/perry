@@ -3,7 +3,7 @@
 
 mod element;
 pub(crate) use element::element_facts;
-use element::receiver_set;
+pub(crate) use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};
 
 use crate::gen::Gen;
@@ -1778,7 +1778,7 @@ fn judge(
 ///    operation on them, no program write onto them, no store into ⊤
 ///    (which may be any of them). Per unit, other units' writes are
 ///    replayed into the same facts (`SharedWrite`).
-fn native_member(
+pub(crate) fn native_member(
     m: &Model,
     s: &crate::gen::ReadSite,
     toks: &[Tok],
@@ -1847,49 +1847,6 @@ fn native_member(
     receivers.sort();
     receivers.dedup();
     Ok(receivers)
-}
-
-/// [`native_member`] for the method call `recv.key(..)` over the receiver
-/// nodes `recvs`, restricted to the Array family (`method_sites`): every
-/// value an Array exotic object ([`exact_array`]; no primitive, no ⊤, no
-/// marker) and obligations 2 to 4 hold, as a call site at those nodes is
-/// judged. `Err`: why not.
-pub(crate) fn native_array_member_call(
-    m: &Model,
-    key: Atom,
-    recvs: &[NodeId],
-) -> Result<(), String> {
-    if recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
-        return Err("receiver:dropped".into());
-    }
-    let set = receiver_set(m, recvs);
-    if set.prims != 0 {
-        return Err("receiver:primitive".into());
-    }
-    if set.toks.is_empty() {
-        return Err("receiver:empty".into());
-    }
-    if set.toks.contains(&TOP) {
-        return Err("receiver:top".into());
-    }
-    if set.toks.iter().any(|&t| m.is_marker(t)) {
-        return Err("receiver:marker".into());
-    }
-    if !set.toks.iter().all(|&t| exact_array(m, t)) {
-        return Err("receiver:not-array".into());
-    }
-    let site = crate::gen::ReadSite {
-        module: 0,
-        byte_offset: 0,
-        key,
-        recv: recvs[0],
-        is_call: true,
-        value_call: false,
-        func: 0,
-    };
-    native_member(m, &site, &set.toks, set.prims)
-        .map(|_| ())
-        .map_err(|why| why.unwrap_or_else(|| "member:own-or-undescribed".into()))
 }
 
 /// A site whose receivers are all host objects (`builtins::host_of`):
