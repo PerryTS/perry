@@ -45,6 +45,17 @@ pub(crate) fn spread_args() -> bool {
     )
 }
 
+/// `PERRY_FACTS_REACH_ITER_CLOSE=0`: a consumer that can stop before its
+/// iterator is done (`Array.from` with a mapper, a collection constructor,
+/// `Object.fromEntries`, `groupBy`, `Promise.all` ...) never calls the
+/// iterator's `return` (`Gen::iterate_closed`, `builtins::iterate`).
+pub(crate) fn iter_close() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_REACH_ITER_CLOSE").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 impl Model {
     /// The call site of `call` as a hand-written built-in rule reads it by
     /// position (`c.args.first()`, `c.args.get(i)`): its first `n`

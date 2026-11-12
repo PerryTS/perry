@@ -574,6 +574,14 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     m.cons(r2, Cons::Load { key: va, dst: out });
     m.step_done(r1);
     m.step_done(r2);
+    // IteratorClose (ECMA-262 7.4.11): a built-in consumer that stops
+    // before the iterator is done (its callback or adder threw, an entry
+    // was no object) calls `return` on it.
+    if m.reach_iter_close {
+        let ra = Key::Named(m.atom("return"));
+        let _ = sub(m, it, ra);
+        let _ = sub(m, v, ra);
+    }
     out
 }
 
