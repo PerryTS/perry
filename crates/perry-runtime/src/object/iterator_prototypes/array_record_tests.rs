@@ -4,7 +4,7 @@ use crate::value::js_nanbox_pointer;
 unsafe fn fixture() -> (f64, f64, f64) {
     let _stable = crate::gc::GcSuppressScope::new();
     build_iterator_prototypes();
-    let proto = crate::object::builtin_prototype_value("Array");
+    let proto = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
     let sym = js_nanbox_pointer(crate::symbol::well_known_symbol("iterator") as i64);
     let original = crate::symbol::js_object_get_symbol_property(proto, sym);
     let obj =
@@ -39,7 +39,9 @@ fn array_record_shape_carrier_survives_growth_and_rejects_wrong_body() {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, proto, sym) = fixture();
         let raw = crate::value::js_nanbox_get_pointer(array) as *mut crate::array::ArrayHeader;
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(array, sym, 33.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(array, sym, 33.0)
+        });
         let owner = crate::object::shaped_symbols::owner(raw as usize).unwrap();
         assert!(super::super::shapes::object_shape_record(owner).is_some());
         let grown = crate::array::js_array_grow(crate::array::clean_arr_ptr_mut(raw), 100);
@@ -51,7 +53,9 @@ fn array_record_shape_carrier_survives_growth_and_rejects_wrong_body() {
         let next_proto =
             ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
         let wrong = f64::from_bits(super::super::js_object_get_field(next_proto, 0).bits());
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, wrong));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, wrong)
+        });
         let bag = crate::object::shaped_symbols::owner(
             crate::value::js_nanbox_get_pointer(proto) as usize
         )
@@ -59,7 +63,9 @@ fn array_record_shape_carrier_survives_growth_and_rejects_wrong_body() {
         super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == wrong.to_bits());
         let fresh = js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
         assert_eq!(crate::array::js_array_record_needs_iterator(fresh), 1);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, original)
+        });
     }
 }
 
@@ -95,7 +101,9 @@ fn array_record_alias_guard_reads_the_live_shape() {
         let raw = crate::value::js_nanbox_get_pointer(array) as *mut crate::array::ArrayHeader;
         let grown = crate::array::js_array_grow(raw, 100);
         assert_ne!(raw, grown);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(js_nanbox_pointer(grown as i64), sym, 33.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(js_nanbox_pointer(grown as i64), sym, 33.0)
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
     }
 }
@@ -109,7 +117,9 @@ fn array_record_other_members_keep_the_array_representation() {
         let raw = crate::value::js_nanbox_get_pointer(array) as *mut crate::array::ArrayHeader;
         crate::array::array_named_property_set(raw, key, 42.0);
         let symbol = js_nanbox_pointer(crate::symbol::well_known_symbol("toStringTag") as i64);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(array, symbol, 99.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(array, symbol, 99.0)
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
     }
 }
@@ -119,11 +129,13 @@ fn array_record_own_shape_guard() {
     unsafe {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, sym) = fixture();
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(
-            array,
-            sym,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(
+                array,
+                sym,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
     }
 }
@@ -134,13 +146,17 @@ fn array_record_prototype_member_guard() {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, proto, sym) = fixture();
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(
-            proto,
-            sym,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(
+                proto,
+                sym,
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, original)
+        });
     }
 }
 
@@ -152,12 +168,14 @@ fn array_record_next_accessor_shape_guard() {
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let getter = super::super::js_object_get_field(proto, 0);
         let key = crate::string::intern_ascii_literal(b"next");
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_define_accessor(
-            js_nanbox_pointer(proto as i64),
-            f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits()),
-            f64::from_bits(getter.bits()),
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_define_accessor(
+                js_nanbox_pointer(proto as i64),
+                f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits()),
+                f64::from_bits(getter.bits()),
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
     }
 }
@@ -170,7 +188,9 @@ fn array_record_next_constfn_body_guard() {
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
         let wrong = super::super::js_object_get_field(other, 0);
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(proto, 0, wrong));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(proto, 0, wrong)
+        });
         super::super::shapes::learn_object_constfn_lanes(proto, |slot, bits| {
             slot == 0 && bits == wrong.bits()
         });
@@ -188,7 +208,9 @@ fn array_record_next_shape_guard() {
         let _stable = crate::gc::GcSuppressScope::new();
         let (array, _, _) = fixture();
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(proto, 0, JSValue::undefined()));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(proto, 0, JSValue::undefined())
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
     }
 }
@@ -233,7 +255,9 @@ fn array_record_rejects_other_brands_and_custom_prototype() {
         );
         let obj = js_nanbox_pointer(js_object_alloc(0, 0) as i64);
         assert_eq!(crate::array::js_array_record_needs_iterator(obj), 1);
-        crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_prototype_of(array, obj));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::object::js_object_set_prototype_of(array, obj)
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
     }
 }
@@ -254,11 +278,13 @@ fn array_symbol_shape_carrier_is_a_rewritten_gc_child() {
         ) as i64));
         let string = crate::string::js_string_from_bytes(b"owned-edge".as_ptr(), 10);
         let string = scope.root_nanbox_f64(crate::value::js_nanbox_string(string as i64));
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(
-            array.get_nanbox_f64(),
-            symbol.get_nanbox_f64(),
-            string.get_nanbox_f64(),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(
+                array.get_nanbox_f64(),
+                symbol.get_nanbox_f64(),
+                string.get_nanbox_f64(),
+            )
+        });
         let raw = crate::value::js_nanbox_get_pointer(array.get_nanbox_f64()) as usize;
         let before = super::super::shaped_symbols::owner(raw).unwrap() as usize;
         let cycles = crate::gc::copying_minor_cycles();
@@ -345,17 +371,25 @@ fn array_record_prototype_symbol_identity_guard() {
         // The genuine `values` body moves to an unrelated member while the
         // fixed Symbol.iterator slot holds another function: the guard must
         // read that slot, not accept the body wherever it appears.
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, other, original));
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, wrong));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, other, original)
+        });
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, wrong)
+        });
         assert_eq!(
             crate::symbol::js_object_get_symbol_property(proto, other).to_bits(),
             original.to_bits(),
             "the unrelated member must carry the genuine values body"
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, original)
+        });
         assert_eq!(
-            crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_delete_symbol_property(proto, other)),
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::symbol::js_object_delete_symbol_property(proto, other)
+            }),
             1
         );
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
@@ -370,17 +404,27 @@ fn array_record_fallback_gets_inherited_iterator_after_prototype_delete() {
         let addr = crate::value::js_nanbox_get_pointer(proto) as usize;
         let symbol = crate::value::js_nanbox_get_pointer(sym) as usize;
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        let object = crate::object::builtin_prototype_value("Object");
+        let object = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
         let object_addr = crate::value::js_nanbox_get_pointer(object) as usize;
         let previous = super::super::shaped_symbols::get(object_addr, symbol);
         let attrs = super::super::shaped_symbols::entry(object_addr, symbol).unwrap_or(0);
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(object_addr, symbol, 17.0f64.to_bits(), 0));
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::delete(addr, symbol));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::define(object_addr, symbol, 17.0f64.to_bits(), 0)
+        });
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::delete(addr, symbol)
+        });
         let inherited = crate::symbol::js_object_get_symbol_property(array, sym);
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::delete(object_addr, symbol));
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(addr, symbol, original.to_bits(), 0));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::delete(object_addr, symbol)
+        });
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::define(addr, symbol, original.to_bits(), 0)
+        });
         if let Some(bits) = previous {
-            crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(object_addr, symbol, bits, attrs));
+            crate::object::own_override::as_builtin_definition(|| {
+                super::super::shaped_symbols::define(object_addr, symbol, bits, attrs)
+            });
         }
         assert_eq!(inherited, 17.0, "fallback must perform the full symbol Get");
     }
@@ -427,7 +471,7 @@ fn array_record_bootstrap_entry_has_current_shape_facts() {
     unsafe {
         // Unlike fixture(), this uses exactly production intrinsic setup,
         // without relearning facts after setup. It catches a vacuous fast path.
-        let _ = crate::object::builtin_prototype_value("Array");
+        let _ = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
         let a = js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
         assert_eq!(crate::array::js_array_record_needs_iterator(a), 0);
         assert_eq!(crate::array::js_array_record_literal_needs_iterator(1), 0);
@@ -449,7 +493,9 @@ fn array_record_entry_repairs_only_its_private_source() {
         assert_eq!(crate::value::js_nanbox_get_pointer(record), live as i64);
         assert_ne!(record.to_bits(), alias.to_bits());
         assert_eq!(crate::array::js_array_record_needs_iterator(record), 0);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(record, symbol, 33.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(record, symbol, 33.0)
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(record), 1);
         assert_eq!(crate::array::js_array_record_enter(42.0, &mut record, 1), 1);
         assert_eq!(record, 42.0);
@@ -616,7 +662,9 @@ fn array_record_counted_entry_admits_only_packed_numeric_heads() {
             0,
             "a non-numeric head keeps the indexed record without admission"
         );
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(numbers, sym, 1.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(numbers, sym, 1.0)
+        });
         assert_eq!(
             crate::array::js_array_record_enter_counted(numbers, &mut out, 1),
             1,
@@ -633,7 +681,9 @@ fn array_record_absent_close_proof_reads_the_whole_chain() {
         assert!(array_record_close_is_absent());
         let object_proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
         let key = crate::string::intern_ascii_literal(b"return");
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(object_proto, key, 1.0));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field_by_name(object_proto, key, 1.0)
+        });
         assert!(
             !array_record_close_is_absent(),
             "a return member on Object.prototype is observable at close"
@@ -656,13 +706,17 @@ fn array_record_slot_semantics_after_iteration_member_store() {
         let next_proto =
             ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
         let wrong = f64::from_bits(super::super::js_object_get_field(next_proto, 0).bits());
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, wrong));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, wrong)
+        });
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             1,
             "a store over the @@iterator lane moves the bag's ShapeId"
         );
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, original)
+        });
     }
 }
 
@@ -679,7 +733,9 @@ fn array_record_slot_semantics_after_next_store() {
         let (array, _, _) = fixture();
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(proto, 0, super::super::js_object_get_field(other, 0)));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(proto, 0, super::super::js_object_get_field(other, 0))
+        });
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             1,
@@ -702,12 +758,14 @@ fn array_record_slot_semantics_after_next_accessor() {
         let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let original = super::super::js_object_get_field(proto, 0);
         let key = crate::string::intern_ascii_literal(b"next");
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_define_accessor(
-            js_nanbox_pointer(proto as i64),
-            f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits()),
-            f64::from_bits(original.bits()),
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_define_accessor(
+                js_nanbox_pointer(proto as i64),
+                f64::from_bits(JSValue::string_ptr(key as *mut crate::StringHeader).bits()),
+                f64::from_bits(original.bits()),
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            )
+        });
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             1,
@@ -730,13 +788,17 @@ fn array_record_slot_semantics_after_iteration_member_delete() {
         let addr = crate::value::js_nanbox_get_pointer(proto) as usize;
         let symbol = crate::value::js_nanbox_get_pointer(sym) as usize;
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::delete(addr, symbol));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::delete(addr, symbol)
+        });
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             1,
             "deleting @@iterator moves the bag's ShapeId"
         );
-        crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(addr, symbol, original.to_bits(), 0));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::shaped_symbols::define(addr, symbol, original.to_bits(), 0)
+        });
     }
 }
 
@@ -759,9 +821,13 @@ fn array_record_dictionary_next_keeps_generic_iteration() {
             "overflow storage does not change the actual builtin next"
         );
         let original = super::super::js_object_get_field(next, 0);
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(next, 0, JSValue::number(3.0)));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(next, 0, JSValue::number(3.0))
+        });
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(next, 0, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(next, 0, original)
+        });
         assert_eq!(
             crate::array::js_array_record_needs_iterator(array),
             0,
@@ -813,15 +879,19 @@ fn array_record_slot_restoration_rechecks_iterator_and_next_without_a_site_word(
         let original = crate::symbol::js_object_get_symbol_property(proto, sym);
         let next = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *mut ObjectHeader;
         let original_next = super::super::js_object_get_field(next, 0);
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(
-            proto,
-            sym,
-            f64::from_bits(original_next.bits()),
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(
+                proto,
+                sym,
+                f64::from_bits(original_next.bits()),
+            )
+        });
         for _ in 0..2 {
             assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
         }
-        crate::object::own_override::as_builtin_definition(|| crate::symbol::js_object_set_symbol_property(proto, sym, original));
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::symbol::js_object_set_symbol_property(proto, sym, original)
+        });
         let bag = crate::object::shaped_symbols::owner(
             crate::value::js_nanbox_get_pointer(proto) as usize
         )
@@ -829,11 +899,15 @@ fn array_record_slot_restoration_rechecks_iterator_and_next_without_a_site_word(
         super::super::shapes::learn_object_constfn_lanes(bag, |_, bits| bits == original.to_bits());
         assert_eq!(crate::array::js_array_record_needs_iterator(array), 0);
         let other = MAP_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(next, 0, super::super::js_object_get_field(other, 0)));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(next, 0, super::super::js_object_get_field(other, 0))
+        });
         for _ in 0..2 {
             assert_eq!(crate::array::js_array_record_needs_iterator(array), 1);
         }
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field(next, 0, original_next));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field(next, 0, original_next)
+        });
         super::super::shapes::learn_object_constfn_lanes(next, |_, bits| {
             bits == original_next.bits()
         });

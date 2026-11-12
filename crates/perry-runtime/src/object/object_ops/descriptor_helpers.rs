@@ -628,7 +628,7 @@ pub(crate) unsafe fn desc_has_field(descriptor_value: f64, name: &[u8]) -> bool 
                 return true;
             }
             // Inherited from `Function.prototype` (and its own chain).
-            let fp = crate::object::builtin_prototype_value("Function");
+            let fp = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
             if value_is_object_like(fp) {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
                 let key_f64 = crate::value::JSValue::string_ptr(key).bits();
@@ -688,7 +688,7 @@ pub(crate) unsafe fn desc_read_field(descriptor_value: f64, name: &[u8]) -> crat
                 let v = crate::closure::closure_get_dynamic_prop(ptr, key_str);
                 return crate::value::JSValue::from_bits(v.to_bits());
             }
-            let fp = crate::object::builtin_prototype_value("Function");
+            let fp = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
             let fp_ptr = extract_obj_ptr(fp);
             if !fp_ptr.is_null() {
                 let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);

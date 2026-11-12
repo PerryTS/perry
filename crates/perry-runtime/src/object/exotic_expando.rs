@@ -190,7 +190,7 @@ pub(crate) unsafe fn exotic_set_property(
         let recorded = super::prototype_chain::object_static_prototype(addr);
         let proto_bits = recorded.unwrap_or_else(|| {
             let name = if matches!(kind, ExoticKind::Map) { "Map" } else { "Set" };
-            super::builtin_prototype_value(name).to_bits()
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::builtin_prototype_value(name) }.to_bits()
         });
         if (proto_bits >> 48) == 0x7FFD && proto_bits & crate::value::POINTER_MASK != 0 {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -244,7 +244,7 @@ pub(crate) unsafe fn exotic_set_property(
         let proto = if proto_name.is_empty() {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         } else {
-            super::builtin_prototype_value(proto_name)
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::builtin_prototype_value(proto_name) }
         };
         let proto_bits = proto.to_bits();
         if (proto_bits >> 48) == 0x7FFD {

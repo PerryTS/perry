@@ -423,9 +423,9 @@ fn regexp_cold_birth_keeps_the_realm_intrinsic_after_global_replacement_and_move
     register_host_roots();
     let scope = RuntimeHandleScope::new();
     let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
-    let before =
-        crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"))
-            as usize;
+    let before = crate::value::js_nanbox_get_pointer(
+        crate::realm_value_read! { "RegExp" => "RegExp.prototype"; crate::object::builtin_prototype_value("RegExp") },
+    ) as usize;
     // The intrinsic is born old and never-move (`gc::never_move`).
     assert_eq!(
         crate::arena::classify_heap_generation(before),

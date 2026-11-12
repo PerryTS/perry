@@ -441,7 +441,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     };
 
     if crate::date::is_date_value(target) {
-        let proto = crate::object::builtin_prototype_value("Date");
+        let proto = crate::realm_value_read! { "Date" => "Date.prototype"; crate::object::builtin_prototype_value("Date") };
         if let Some(proto_addr) = heap_addr(proto) {
             return proto_addr == receiver_addr;
         }
@@ -461,7 +461,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
             .is_some()
         {
             for name in ["RegExp", "Object"] {
-                let proto = crate::object::builtin_prototype_value(name);
+                let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
                 if let Some(proto_addr) = heap_addr(proto) {
                     if proto_addr == receiver_addr {
                         return true;

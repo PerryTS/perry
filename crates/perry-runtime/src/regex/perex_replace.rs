@@ -36,7 +36,9 @@ pub(super) fn callable(value: &RuntimeHandle<'_>) -> Result<bool, EngineError> {
     }
     // Function.prototype has an ordinary object representation in Perry.
     // Reacquire the candidate after possibly lazy intrinsic initialization.
-    let prototype = api::caught(|| crate::object::builtin_prototype_value("Function"))?;
+    let prototype = api::caught(
+        || crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") },
+    )?;
     Ok(prototype.to_bits() == value.get_nanbox_f64().to_bits())
 }
 

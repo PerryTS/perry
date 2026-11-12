@@ -85,7 +85,7 @@ unsafe fn read_constructor(owner: usize, kind: u8) -> f64 {
 /// constructor), so we distinguish "patched" by whether a descriptor or data
 /// field for the key exists at all.
 pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Option<f64> {
-    let proto = crate::object::builtin_prototype_value(name_for_kind(kind));
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name_for_kind(kind)) };
     let pv = JSValue::from_bits(proto.to_bits());
     if !pv.is_pointer() {
         return None;
@@ -121,7 +121,7 @@ pub(crate) unsafe fn prototype_constructor_patch(kind: u8, owner: usize) -> Opti
 
 /// The intrinsic constructor value for an element kind (`Uint8Array`, …).
 pub(crate) fn intrinsic_constructor(kind: u8) -> f64 {
-    crate::object::builtin_constructor_value(name_for_kind(kind))
+    crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_constructor_value(name_for_kind(kind)) }
 }
 
 /// `Get(C, @@species)` — runs any species getter, propagating exceptions.

@@ -161,7 +161,7 @@ fn object_prototype_builtin_invokes_to_string_without_self_redispatch() {
     // the built-in directly on Object.prototype. The thunk used to re-enter
     // the source-level `toLocaleString` dispatcher, which found the same own
     // thunk again and overflowed the native stack before reaching `toString`.
-    let receiver = crate::object::builtin_prototype_value("Object");
+    let receiver = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let result = crate::object::global_this::object_prototype_to_locale_string_thunk(
         std::ptr::null(),
         crate::closure::JsThis::from_f64(receiver),

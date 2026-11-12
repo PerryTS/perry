@@ -250,7 +250,7 @@ fn number_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
     // `Number.prototype.toString()`) must therefore see +0, not throw an
     // incompatible-receiver TypeError (test262 prototype/S15.7.3.1_A3.js,
     // S15.7.4_A1.js).
-    if receiver.to_bits() == super::global_this::builtin_prototype_value("Number").to_bits() {
+    if receiver.to_bits() == crate::realm_value_read! { "Number" => "Number.prototype"; super::global_this::builtin_prototype_value("Number") }.to_bits() {
         return 0.0;
     }
     throw_incompatible_receiver("Number.prototype", method)
@@ -269,7 +269,7 @@ fn boolean_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 
     // [[BooleanData]] is `false`. A method invoked with `this === Boolean.prototype`
     // (`Boolean.prototype.valueOf()`, or `Boolean.prototype == false` coercing via
     // valueOf) sees `false` rather than throwing (test262 prototype/valueOf/A1, S15.6.3.1_A1).
-    if receiver.to_bits() == super::global_this::builtin_prototype_value("Boolean").to_bits() {
+    if receiver.to_bits() == crate::realm_value_read! { "Boolean" => "Boolean.prototype"; super::global_this::builtin_prototype_value("Boolean") }.to_bits() {
         return f64::from_bits(crate::value::TAG_FALSE);
     }
     throw_incompatible_receiver("Boolean.prototype", method)
@@ -312,7 +312,7 @@ fn string_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
         return payload;
     }
     // `String.prototype` itself is a String exotic object with [[StringData]] = "".
-    if receiver.to_bits() == super::global_this::builtin_prototype_value("String").to_bits() {
+    if receiver.to_bits() == crate::realm_value_read! { "String" => "String.prototype"; super::global_this::builtin_prototype_value("String") }.to_bits() {
         let empty = crate::string::js_string_from_bytes(std::ptr::null(), 0);
         return f64::from_bits(crate::value::JSValue::string_ptr(empty).bits());
     }

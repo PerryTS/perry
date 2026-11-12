@@ -308,7 +308,7 @@ mod private_storage_cache_tests {
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let storage = private_storage_key_by_id(0, 0, "[[RegExpMatcher]]");
-        let site = IntrinsicPrivateReadSite::new(
+        let site = OwnPrivateReadSite::new(
             &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_MATCHER,
         );
         let spelling =
@@ -534,11 +534,11 @@ mod private_storage_cache_tests {
 /// seeded as the agent's atom for its spelling before any intrinsic is born,
 /// so a birth key list carries exactly that word and the read is one layout
 /// probe with a constant key word and hash.
-pub(crate) struct IntrinsicPrivateReadSite {
+pub(crate) struct OwnPrivateReadSite {
     atom: &'static crate::object::layout_desc::StaticAtom,
 }
 
-impl IntrinsicPrivateReadSite {
+impl OwnPrivateReadSite {
     pub(crate) const fn new(atom: &'static crate::object::layout_desc::StaticAtom) -> Self {
         Self { atom }
     }
@@ -669,3 +669,23 @@ pub(crate) fn intrinsic_private_add(receiver: f64, name: &'static str, value: f6
         value.get_nanbox_f64(),
     ));
 }
+
+/// A read of an image-held realm cell. The one own-reader implementation
+/// supplies its atom and lookup; this wrapper gives a missing realm value its
+/// checked-build contract. Ordinary matcher/state/brand slots remain optional.
+pub(crate) struct IntrinsicPrivateReadSite(OwnPrivateReadSite);
+impl IntrinsicPrivateReadSite {
+    pub(crate) const fn new(atom: &'static crate::object::layout_desc::StaticAtom) -> Self {
+        Self(OwnPrivateReadSite::new(atom))
+    }
+    #[inline(always)]
+    pub(crate) fn read(&self, receiver: f64) -> Option<f64> {
+        let value = self.0.read(receiver);
+        #[cfg(any(test, debug_assertions, perry_diagnostics))]
+        crate::realm_reads::check_private_read(receiver, value, self.0.spelling());
+        value
+    }
+}
+#[cfg(test)]
+#[path = "private_read_tests.rs"]
+mod private_read_tests;

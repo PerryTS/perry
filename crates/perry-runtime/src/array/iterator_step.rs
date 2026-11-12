@@ -161,7 +161,11 @@ pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle
                     super::iterator_method::property_at(h, slot as u32),
                 );
             }
-            holder = if h == obj { crate::object::iterator_next_property_owner(obj) } else { None };
+            holder = if h == obj {
+                crate::object::iterator_next_property_owner(obj)
+            } else {
+                None
+            };
         }
     }
     let key = crate::string::intern_ascii_literal(b"next");
@@ -482,7 +486,7 @@ pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator(facts: u3
     if facts == 0 {
         return 0;
     }
-    let proto = crate::object::builtin_prototype_value("Array");
+    let proto = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
     let array = js_nanbox_get_pointer(proto) as *const crate::array::ArrayHeader;
     i32::from(!array_iteration_is_intrinsic_under(array, facts))
 }

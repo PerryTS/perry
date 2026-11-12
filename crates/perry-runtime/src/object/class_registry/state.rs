@@ -1481,7 +1481,9 @@ pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u6
         _ => None,
     };
     if let Some(name) = web {
-        return class_parent_prototype_bits(super::super::builtin_prototype_value(name));
+        return class_parent_prototype_bits(
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_prototype_value(name) },
+        );
     }
     let constructor = reserved_native_parent_constructor_value(parent_id)?;
     let parent_proto = super::function_prototype::js_function_prototype_value_for_read(constructor);

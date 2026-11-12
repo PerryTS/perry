@@ -273,7 +273,7 @@ pub(super) fn construct(pattern: f64, flags: f64, called: bool) -> *mut RegExpHe
     let regexp_like = is_regexp(&pattern);
     if called && regexp_like && flags.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
         let ctor = scope.root_nanbox_f64(property(&pattern, "constructor"));
-        let intrinsic = crate::object::builtin_constructor_value("RegExp");
+        let intrinsic = crate::realm_value_read! { "RegExp" => "RegExp"; crate::object::builtin_constructor_value("RegExp") };
         if ctor.get_nanbox_f64().to_bits() == intrinsic.to_bits() {
             return crate::value::js_nanbox_get_pointer(pattern.get_nanbox_f64())
                 as *mut RegExpHeader;

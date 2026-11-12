@@ -376,7 +376,7 @@ pub(crate) fn attach_intrinsic_prototype(value: f64, intrinsics: f64, name: &str
     if raw == 0 {
         return value_handle.get_nanbox_f64();
     }
-    if prototype.to_bits() == crate::object::builtin_prototype_value(name).to_bits()
+    if prototype.to_bits() == crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) }.to_bits()
         && crate::object::prototype_chain::object_static_prototype(raw).is_none()
     {
         return value_handle.get_nanbox_f64();

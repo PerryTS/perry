@@ -44,6 +44,8 @@ mod object;
 mod operation;
 #[path = "realm_projection.rs"]
 mod projection;
+#[path = "realm_reads.rs"]
+mod reads;
 #[path = "realm_record.rs"]
 mod record;
 #[path = "realm_symbols.rs"]
@@ -1105,6 +1107,8 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     }
     let mut all = Vec::new();
     let mut runtime_keys = BTreeSet::new();
+    let mut runtime_reads = Vec::new();
+    let mut runtime_constructor_names = BTreeSet::new();
     let mut throw_declarations = Vec::new();
     let mut exports = crate::realm_exports::InfoExports::default();
     let mut export_sources = Vec::new();
@@ -1116,6 +1120,10 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             Ok((file, source))
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let mut private_reads = BTreeSet::new();
+    for (_, source) in &sources {
+        private_reads.extend(reads::private_bindings(source)?);
+    }
     let symbols = symbols::Sources::new(&sources, crates)?;
     let native_abi = native::runtime_abi()?;
     for (file, source) in &sources {
@@ -1137,6 +1145,8 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
             && file.file_name().unwrap() != "test.rs";
         if shipped {
             runtime_keys.extend(keys::spelled(source)?);
+            runtime_reads.extend(reads::collect_at(file, source, &private_reads)?);
+            runtime_constructor_names.extend(reads::constructor_names(source)?);
         }
         let package_root = crates.join(relative.components().next().unwrap().as_os_str());
         let cargo =
@@ -1175,6 +1185,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     derive::finish(&mut all)?;
     exports.link(&mut all)?;
     keys::attach(&mut all, &runtime_keys);
+    reads::attach(&mut all, &runtime_reads, &runtime_constructor_names)?;
     all.sort_by(|a, b| {
         a.get("name")
             .and_then(Value::string)

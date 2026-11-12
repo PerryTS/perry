@@ -331,7 +331,7 @@ pub(crate) fn weakref_proto_method_value_for(receiver_cid: u32, method_name: &st
         (CLASS_ID_FINALIZATION_REGISTRY, "register" | "unregister") => "FinalizationRegistry",
         _ => return None,
     };
-    let proto = super::global_this::builtin_prototype_value(builtin);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::global_this::builtin_prototype_value(builtin) };
     if proto.to_bits() == crate::value::TAG_UNDEFINED {
         return None;
     }

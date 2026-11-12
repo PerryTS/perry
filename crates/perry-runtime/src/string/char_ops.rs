@@ -247,7 +247,7 @@ fn string_property_get_miss(value: f64, key: f64) -> f64 {
     // Reflect.get preserves the original function value (no binding wrapper),
     // and gives inherited accessors the primitive as their receiver. Both
     // operands stay rooted across lazy prototype creation and user code.
-    let prototype = crate::object::builtin_prototype_value("String");
+    let prototype = crate::realm_value_read! { "String" => "String.prototype"; crate::object::builtin_prototype_value("String") };
     crate::proxy::js_reflect_get(prototype, key.get_nanbox_f64(), receiver.get_nanbox_f64())
 }
 

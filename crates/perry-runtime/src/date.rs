@@ -58,7 +58,7 @@ pub fn date_cell_prototype(value: f64) -> f64 {
     if let Some(bits) = crate::object::prototype_chain::object_static_prototype(addr) {
         return f64::from_bits(bits);
     }
-    crate::object::builtin_prototype_value("Date")
+    crate::realm_value_read! { "Date" => "Date.prototype"; crate::object::builtin_prototype_value("Date") }
 }
 
 /// Mutate the `DateCell` `value` points at, writing `ts` into it. No-op if

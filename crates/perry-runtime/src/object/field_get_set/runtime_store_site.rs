@@ -65,7 +65,7 @@ mod tests {
             })
         };
         crate::object::intrinsic_private_add(receiver(), "coldStore", 11.0);
-        let private = crate::object::IntrinsicPrivateReadSite::new(
+        let private = crate::object::OwnPrivateReadSite::new(
             &crate::object::runtime_layouts::intrinsic_private_atoms::COLD_STORE,
         );
         assert_eq!(private.read(receiver()), Some(11.0));

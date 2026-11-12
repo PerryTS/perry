@@ -102,7 +102,7 @@ fn event_target_methods_are_shared_inherited_values() {
     assert!(crate::closure::is_closure_ptr(
         crate::value::js_nanbox_get_pointer(method) as usize
     ));
-    let proto = crate::object::builtin_prototype_value("EventTarget");
+    let proto = crate::realm_value_read! { "EventTarget" => "EventTarget.prototype"; crate::object::builtin_prototype_value("EventTarget") };
     let proto = crate::value::js_nanbox_get_pointer(proto) as *const ObjectHeader;
     assert_eq!(
         method.to_bits(),

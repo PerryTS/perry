@@ -1128,7 +1128,7 @@ fn is_promise_species_object(value: f64) -> bool {
 }
 
 fn get_intrinsic_promise() -> f64 {
-    crate::object::builtin_constructor_value("Promise")
+    crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") }
 }
 
 /// Return the `Promise.prototype[name]` closure (then/catch/finally), or `None`.

@@ -2,7 +2,7 @@
 fn function_method_reads_share_the_prototype_function() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Function"));
+    let proto = scope.root_nanbox_f64(crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") });
     for method in [b"call".as_slice(), b"apply".as_slice(), b"bind".as_slice()] {
         let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
             method.as_ptr(),

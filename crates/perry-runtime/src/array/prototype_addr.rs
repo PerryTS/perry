@@ -223,7 +223,10 @@ pub(crate) fn note_realm_intrinsic(
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity))
+    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity));
+    #[cfg(any(test, debug_assertions, perry_diagnostics))]
+    crate::realm_reads::check_image_intrinsic_read(addr, identity.name(), true);
+    addr
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
@@ -246,7 +249,10 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None)
+    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None);
+    #[cfg(any(test, debug_assertions, perry_diagnostics))]
+    crate::realm_reads::check_image_intrinsic_read(addr, identity.name(), false);
+    addr
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -439,7 +445,7 @@ fn bootstrap_prototype_addr(slot: usize) -> usize {
     }
     // The realm's intrinsic, never `globalThis.<Name>.prototype`: user code
     // may have replaced that writable binding before this row's first use.
-    let addr = intrinsic_prototype_addr(PROTOTYPE_ADDR_BUILTINS[slot]);
+    let addr = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; intrinsic_prototype_addr(PROTOTYPE_ADDR_BUILTINS[slot]) };
     // Don't poison the cache with 0: while the realm is being populated the
     // intrinsic may not be recorded yet. Re-derive until it resolves.
     if addr != 0 {

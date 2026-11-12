@@ -291,7 +291,9 @@ const _: () = assert!(
 pub(crate) fn realm_seals_constructor_prototype(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) -> bool {
-    BuiltinProto::ALL.iter().any(|(_, ctor)| *ctor == declaration.name)
+    BuiltinProto::ALL
+        .iter()
+        .any(|(_, ctor)| *ctor == declaration.name)
 }
 
 /// Seal the built-in iterator prototypes the moment `iterator_prototypes`
@@ -470,7 +472,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
         for (family, name) in BuiltinProto::ALL {
-            let proto = intrinsic_prototype_addr(family, global, name);
+            let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; intrinsic_prototype_addr(family, global, name) };
             if proto == 0 {
                 continue;
             }

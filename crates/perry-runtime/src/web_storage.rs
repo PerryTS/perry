@@ -202,7 +202,7 @@ fn storage_key_impl(kind: StorageKind, index: f64) -> f64 {
 fn storage_global_value(kind: StorageKind) -> f64 {
     let mut obj = storage_object(kind);
     if obj.is_null() {
-        let proto = crate::object::builtin_prototype_value("Storage");
+        let proto = crate::realm_value_read! { "Storage" => "Storage.prototype"; crate::object::builtin_prototype_value("Storage") };
         let proto = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
         if proto.is_null() {
             return f64::from_bits(TAG_UNDEFINED);

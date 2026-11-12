@@ -165,7 +165,7 @@ pub(crate) unsafe fn write_short_string(buf: &mut String, bytes: &[u8]) -> bool 
 /// `object_get_to_json` (that helper only walks `GC_TYPE_OBJECT` layouts), so
 /// the toJSON application lives here.
 pub(crate) unsafe fn bigint_apply_to_json(value: f64) -> Option<f64> {
-    let proto = crate::object::builtin_prototype_value("BigInt");
+    let proto = crate::realm_value_read! { "BigInt" => "BigInt.prototype"; crate::object::builtin_prototype_value("BigInt") };
     let proto_bits = proto.to_bits();
     if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
         return None;

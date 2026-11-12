@@ -304,7 +304,7 @@ unsafe fn default_link_prototype(obj: *const ObjectHeader) -> Option<f64> {
 /// `%Promise.prototype%` of this realm, the [[Prototype]] of every
 /// unrelinked `GC_TYPE_PROMISE` cell.
 fn promise_intrinsic_prototype() -> Option<f64> {
-    let proto = crate::object::builtin_prototype_value("Promise");
+    let proto = crate::realm_value_read! { "Promise" => "Promise.prototype"; crate::object::builtin_prototype_value("Promise") };
     crate::value::JSValue::from_bits(proto.to_bits())
         .is_pointer()
         .then_some(proto)
@@ -384,7 +384,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             None
         };
         if let Some(name) = wrapper {
-            let proto = crate::object::builtin_prototype_value(name);
+            let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
             if proto.to_bits() != crate::value::TAG_UNDEFINED {
                 return proto;
             }
@@ -413,7 +413,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     _ => None,
                 };
                 if let Some(name) = builtin {
-                    let proto = crate::object::builtin_prototype_value(name);
+                    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
                     if proto.to_bits() != crate::value::TAG_UNDEFINED {
                         return proto;
                     }
@@ -452,13 +452,13 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     }
     let collection_prototype = |addr: usize| -> Option<f64> {
         if crate::map::is_registered_map(addr) {
-            let proto = crate::object::builtin_prototype_value("Map");
+            let proto = crate::realm_value_read! { "Map" => "Map.prototype"; crate::object::builtin_prototype_value("Map") };
             if proto.to_bits() != crate::value::TAG_UNDEFINED {
                 return Some(proto);
             }
         }
         if crate::set::is_registered_set(addr) {
-            let proto = crate::object::builtin_prototype_value("Set");
+            let proto = crate::realm_value_read! { "Set" => "Set.prototype"; crate::object::builtin_prototype_value("Set") };
             if proto.to_bits() != crate::value::TAG_UNDEFINED {
                 return Some(proto);
             }
@@ -494,7 +494,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             } else {
                 "WeakSet"
             };
-            let proto = crate::object::builtin_prototype_value(name);
+            let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
             if proto.to_bits() != crate::value::TAG_UNDEFINED {
                 return Some(proto);
             }
@@ -518,7 +518,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         } else {
             return None;
         };
-        let proto = crate::object::builtin_prototype_value(name);
+        let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {
@@ -529,7 +529,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         if !crate::buffer::is_node_buffer(addr) {
             return None;
         }
-        let proto = crate::object::builtin_prototype_value("Buffer");
+        let proto = crate::realm_value_read! { "Buffer" => "Buffer.prototype"; crate::object::builtin_prototype_value("Buffer") };
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {
@@ -540,7 +540,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         if !crate::buffer::is_uint8array_buffer(addr) {
             return None;
         }
-        let proto = crate::object::builtin_prototype_value("Uint8Array");
+        let proto = crate::realm_value_read! { "Uint8Array" => "Uint8Array.prototype"; crate::object::builtin_prototype_value("Uint8Array") };
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {
@@ -558,9 +558,9 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 return Some(f64::from_bits(proto_bits));
             }
         }
-        let proto = crate::object::builtin_prototype_value(
+        let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(
             crate::typedarray_hook_slots::name_for_kind(kind),
-        );
+        ) };
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
         } else {
@@ -568,7 +568,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         }
     };
     let function_prototype_or_null = || {
-        let proto = crate::object::builtin_prototype_value("Function");
+        let proto = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             proto
         } else {

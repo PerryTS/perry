@@ -1659,7 +1659,7 @@ mod tests {
     #[test]
     fn context_values_keep_vm_realm_prototypes() {
         let _ = crate::object::js_get_global_this();
-        let outer_prototype = crate::object::builtin_prototype_value("Object");
+        let outer_prototype = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
         let sandbox = object_value(crate::object::js_object_alloc(0, 0));
         let state = new_context_state(sandbox, false, ContextOptions::default());
         let value = execute_in_state("({ value: 1 })", &state);

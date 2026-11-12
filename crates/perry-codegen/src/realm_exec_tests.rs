@@ -261,3 +261,23 @@ fn realm_regex_result_layouts_follow_the_executing_allocator() {
     r.close(&index);
     assert!(!r.names.contains("%Layout:REGEX_EXEC_NAMED%"));
 }
+
+#[test]
+fn realm_runtime_value_reads_belong_to_the_subject_without_becoming_births() {
+    let index = RealmIndex::new(crate::realm_manifest::REALM);
+    for kind in ["Date", "RegExp"] {
+        let target = format!("{kind}.prototype");
+        assert!(index
+            .last(kind)
+            .unwrap()
+            .runtime_reads()
+            .any(|v| v == target));
+    }
+    let mut r = RealmReach::default();
+    r.own("console");
+    r.own("console.log");
+    r.close(&index);
+    assert!(!r.names.contains("RegExp"));
+    assert!(!r.names.contains("RegExp.prototype"));
+    assert!(!r.names.contains("Date.prototype"));
+}

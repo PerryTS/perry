@@ -141,7 +141,7 @@ fn attach_boxed_primitive_prototype(obj: *mut crate::object::ObjectHeader, class
     let Ok(name) = std::str::from_utf8(name) else {
         return;
     };
-    let proto = crate::object::builtin_prototype_value(name);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
     let proto_value = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_value.is_pointer() {
         obj_h.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {

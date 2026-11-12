@@ -1021,9 +1021,9 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
         return true;
     }
     if let Some(kind) = typed_array_owner_kind_id(owner) {
-        let proto = crate::object::builtin_prototype_value(
+        let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(
             crate::typedarray_hook_slots::name_for_kind(kind),
-        );
+        ) };
         {
             let proto_raw = crate::value::js_nanbox_get_pointer(proto) as usize;
             if proto_raw >= 0x10000 {
@@ -1052,7 +1052,7 @@ pub(crate) unsafe fn typed_array_prototype_chain_has(owner: usize, name: &str) -
     ) {
         return true;
     }
-    let obj_proto = crate::object::builtin_prototype_value("Object");
+    let obj_proto = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let obj_proto_raw = crate::value::js_nanbox_get_pointer(obj_proto) as usize;
     if obj_proto_raw >= 0x10000 {
         if crate::object::own_key_present(obj_proto_raw as *mut crate::object::ObjectHeader, key) {

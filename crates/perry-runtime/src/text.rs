@@ -214,7 +214,7 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
     // handle after each one rather than carried as a raw pointer.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
-    let proto_value = crate::object::builtin_prototype_value(builtin_name);
+    let proto_value = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(builtin_name) };
     debug_assert!(
         crate::value::JSValue::from_bits(proto_value.to_bits()).is_pointer(),
         "{builtin_name}.prototype is missing: the instance would have no methods"

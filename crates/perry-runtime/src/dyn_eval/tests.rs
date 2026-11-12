@@ -1025,7 +1025,7 @@ fn script_literals_use_fresh_populated_realm_prototypes() {
     let _ = crate::object::js_get_global_this();
     let outer_object_constructor =
         crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), "Object".len());
-    let outer_object_prototype = crate::object::builtin_prototype_value("Object");
+    let outer_object_prototype = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let scope = crate::gc::RuntimeHandleScope::new();
     let intrinsics = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
     intrinsics.with_mut_ptr::<crate::object::ObjectHeader, _>(|intrinsics| {

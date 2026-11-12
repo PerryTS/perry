@@ -239,7 +239,7 @@ pub(crate) fn get_field_by_name_object_tail(
                     // `Function.prototype` → the global `Function`. (Generator /
                     // async-generator functions are handled just above with
                     // their own intrinsic constructors.)
-                    let ctor = super::super::builtin_constructor_value("Function");
+                    let ctor = crate::realm_value_read! { "Function" => "Function"; super::super::builtin_constructor_value("Function") };
                     if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                         return JSValue::from_bits(ctor.to_bits());
                     }
@@ -353,11 +353,11 @@ pub(crate) fn get_field_by_name_object_tail(
                 }
                 if key_bytes == b"constructor" {
                     if crate::buffer::crypto_key_meta(obj as usize).is_some() {
-                        let ctor = super::super::builtin_constructor_value("CryptoKey");
+                        let ctor = crate::realm_value_read! { "CryptoKey" => "CryptoKey"; super::super::builtin_constructor_value("CryptoKey") };
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     if crate::buffer::is_uint8array_buffer(obj as usize) {
-                        let ctor = super::super::builtin_constructor_value("Uint8Array");
+                        let ctor = crate::realm_value_read! { "Uint8Array" => "Uint8Array"; super::super::builtin_constructor_value("Uint8Array") };
                         return JSValue::from_bits(ctor.to_bits());
                     }
                     // A Node `Buffer` inherits `constructor` from its actual
@@ -496,9 +496,9 @@ pub(crate) fn get_field_by_name_object_tail(
                     // needed so a default-`SpeciesCreate`d result reports
                     // `result.constructor === TA`.
                     b"constructor" => {
-                        let v = super::super::builtin_constructor_value(
+                        let v = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_constructor_value(
                             crate::typedarray_hook_slots::name_for_kind(kind),
-                        );
+                        ) };
                         return JSValue::from_bits(v.to_bits());
                     }
                     _ => {}
@@ -629,7 +629,7 @@ pub(crate) fn get_field_by_name_object_tail(
                         {
                             return JSValue::from_bits(ctor.to_bits());
                         }
-                        let ctor = super::super::builtin_constructor_value("Function");
+                        let ctor = crate::realm_value_read! { "Function" => "Function"; super::super::builtin_constructor_value("Function") };
                         if !JSValue::from_bits(ctor.to_bits()).is_undefined() {
                             return JSValue::from_bits(ctor.to_bits());
                         }
@@ -745,9 +745,9 @@ pub(crate) fn get_field_by_name_object_tail(
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"constructor" => {
-                        let v = super::super::builtin_constructor_value(
+                        let v = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_constructor_value(
                             crate::error::error_kind_constructor_name((*err_ptr).error_kind),
-                        );
+                        ) };
                         return JSValue::from_bits(v.to_bits());
                     }
                     b"code" => {
@@ -848,7 +848,7 @@ pub(crate) fn get_field_by_name_object_tail(
                         let kind_name =
                             crate::error::error_kind_constructor_name((*err_ptr).error_kind);
                         for proto_name in [kind_name, "Error"] {
-                            let proto = crate::object::builtin_prototype_value(proto_name);
+                            let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(proto_name) };
                             let pv = JSValue::from_bits(proto.to_bits());
                             if pv.is_pointer() {
                                 let proto_ptr = pv.as_pointer::<ObjectHeader>();

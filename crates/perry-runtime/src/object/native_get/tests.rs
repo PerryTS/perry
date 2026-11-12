@@ -182,7 +182,7 @@ fn an_own_absence_proof_is_not_searched_again_before_the_holder() {
 #[test]
 fn a_default_shape_follows_the_resolved_realm_prototype_without_class_metadata() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let proto = crate::object::builtin_prototype_value("Object");
+    let proto = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
     assert!(!ptr.is_null());
     crate::object::own_override::as_builtin_definition(|| {
@@ -522,7 +522,7 @@ fn same_string(a: u64, b: u64) -> bool {
 fn settled_named_reads_match_the_generic_ladder_across_receiver_kinds() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     // Resolve the realm Object.prototype so the terminal shortcuts can engage.
-    let object_prototype = crate::object::builtin_prototype_value("Object");
+    let object_prototype = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let object_prototype_ptr =
         crate::value::js_nanbox_get_pointer(object_prototype) as *mut ObjectHeader;
     assert!(!object_prototype_ptr.is_null());
@@ -589,7 +589,7 @@ fn settled_named_reads_match_the_generic_ladder_across_receiver_kinds() {
 #[test]
 fn the_settled_miss_is_taken_only_for_plain_ordinary_receivers() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let settled = |object: *mut ObjectHeader, name: &str| unsafe {
         try_settled_get_by_name(object, key(name)).map(|value| value.bits())
     };
@@ -624,7 +624,7 @@ fn the_settled_miss_is_taken_only_for_plain_ordinary_receivers() {
 #[test]
 fn an_anon_shape_literal_keeps_its_role_and_a_declared_class_does_not_settle() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let settled = |object: *mut ObjectHeader, name: &str| unsafe {
         try_settled_get_by_name(object, key(name)).map(|value| value.bits())
     };
@@ -666,7 +666,7 @@ fn an_anon_shape_literal_keeps_its_role_and_a_declared_class_does_not_settle() {
 #[test]
 fn object_prototype_mutation_after_a_settled_miss_is_observed() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let object_prototype = crate::object::builtin_prototype_value("Object");
+    let object_prototype = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let proto_ptr = crate::value::js_nanbox_get_pointer(object_prototype) as *mut ObjectHeader;
     let undefined = crate::value::TAG_UNDEFINED;
     let plain = plain_object("a", 1.0);
@@ -716,7 +716,7 @@ fn object_prototype_mutation_after_a_settled_miss_is_observed() {
 #[test]
 fn deleting_and_re_adding_keys_keeps_the_settled_miss_exact() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let undefined = crate::value::TAG_UNDEFINED;
     let object = plain_object("a", 1.0);
     js_object_set_field_by_name(object, key("b"), 2.0);
@@ -781,7 +781,7 @@ fn settled_bits(object: *mut ObjectHeader, name: &str) -> Option<u64> {
 #[test]
 fn a_declared_class_instance_settles_from_its_chain_and_matches_the_generic_read() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let undefined = crate::value::TAG_UNDEFINED;
     let (base, derived) = (0x7C00, 0x7C01);
     declared_class(base, "m", None);
@@ -811,7 +811,7 @@ fn a_declared_class_instance_settles_from_its_chain_and_matches_the_generic_read
 #[test]
 fn a_declared_class_settled_miss_follows_prototype_mutation() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let object_prototype = crate::object::builtin_prototype_value("Object");
+    let object_prototype = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let object_prototype_ptr =
         crate::value::js_nanbox_get_pointer(object_prototype) as *mut ObjectHeader;
     let undefined = crate::value::TAG_UNDEFINED;
@@ -871,7 +871,7 @@ fn a_declared_class_settled_miss_follows_prototype_mutation() {
 #[test]
 fn a_relinked_prototype_or_instance_leaves_the_declared_class_settled_miss() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let undefined = crate::value::TAG_UNDEFINED;
     let late = "class_relink_probe";
     // `Object.setPrototypeOf(instance, other)`.
@@ -914,7 +914,7 @@ fn a_relinked_prototype_or_instance_leaves_the_declared_class_settled_miss() {
 #[test]
 fn a_class_extending_a_native_never_settles() {
     let _no_gc = crate::gc::GcSuppressScope::new();
-    let _ = crate::object::builtin_prototype_value("Object");
+    let _ = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let class_id = 0x7C30;
     declared_class(class_id, "m", None);
     // The reserved native band codegen registers for `extends Map`.

@@ -242,7 +242,7 @@ fn long_named_arrays_keep_their_elements_and_prototype() {
             crate::object::js_object_get_prototype_of(crate::value::js_nanbox_pointer(head as i64));
         assert_eq!(
             proto.to_bits(),
-            crate::object::builtin_prototype_value("Array").to_bits()
+            crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") }.to_bits()
         );
     }
 }
@@ -283,7 +283,7 @@ mod layouts {
                     arr as i64
                 ))
                 .to_bits(),
-                crate::object::builtin_prototype_value("Array").to_bits()
+                crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") }.to_bits()
             );
             assert!(!crate::symbol::has_own_symbol_property(
                 crate::value::js_nanbox_pointer(arr as i64),
@@ -473,7 +473,7 @@ fn named_layout_and_regex_results_keep_the_array_prototype() {
             let value = crate::value::js_nanbox_pointer(arr as i64);
             assert_eq!(
                 crate::object::js_object_get_prototype_of(value).to_bits(),
-                crate::object::builtin_prototype_value("Array").to_bits()
+                crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") }.to_bits()
             );
         }
     }

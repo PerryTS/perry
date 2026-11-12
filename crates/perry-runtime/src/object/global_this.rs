@@ -163,11 +163,13 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
-    populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    populate_global_this_builtins, scan_error_constructor_root_mut, unborn_declared_statics_of,
+    ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_error_prototype_data_properties,
+    populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
@@ -201,3 +203,6 @@ pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeade
     }
     crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
 }
+
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+pub(crate) use fetch_globals::has_image_global;

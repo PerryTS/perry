@@ -590,7 +590,7 @@ pub(crate) fn create_url_object(url_string: &str) -> *mut ObjectHeader {
         crate::value::js_nanbox_pointer(intrinsic())
     } else {
         // Materializes the builtin (which records the intrinsic) on first use.
-        let global = crate::object::builtin_prototype_value("URL");
+        let global = crate::realm_value_read! { "URL" => "URL.prototype"; crate::object::builtin_prototype_value("URL") };
         match intrinsic() {
             0 => global,
             ptr => crate::value::js_nanbox_pointer(ptr),

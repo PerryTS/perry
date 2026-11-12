@@ -93,7 +93,7 @@ fn installed_collection_method_value(
 /// `builtin_name` is one of `Map`/`Set`/`WeakMap`/`WeakSet`. Returns `None` for
 /// unknown names/methods so callers fall back to their existing path.
 pub(crate) fn collection_proto_method_value(builtin_name: &str, method_name: &str) -> Option<f64> {
-    let proto = super::global_this::builtin_prototype_value(builtin_name);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::global_this::builtin_prototype_value(builtin_name) };
     if proto.to_bits() == crate::value::TAG_UNDEFINED {
         return None;
     }

@@ -41,7 +41,7 @@ pub(crate) unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToSt
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_handle = scope.root_nanbox_f64(value);
     let key_handle = scope.root_string_ptr(crate::string::canonical_key(b"toString"));
-    let proto = crate::object::builtin_prototype_value("Array");
+    let proto = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
     let proto_handle = scope.root_nanbox_f64(proto);
     let proto_bits = proto_handle.get_nanbox_f64().to_bits();
     if (proto_bits & 0xFFFF_0000_0000_0000) != POINTER_TAG {
@@ -109,7 +109,7 @@ pub(crate) fn call_array_prototype_to_string_method(
         let receiver_handle = scope.root_nanbox_f64(value);
         let key_handle = scope.root_string_ptr(crate::string::canonical_key(b"toString"));
         let prototype_handle =
-            scope.root_nanbox_f64(crate::object::builtin_prototype_value("Array"));
+            scope.root_nanbox_f64(crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") });
         let prototype_bits = prototype_handle.get_nanbox_f64().to_bits();
         if (prototype_bits & TAG_MASK) != POINTER_TAG {
             crate::error::js_throw_type_error_not_a_function(

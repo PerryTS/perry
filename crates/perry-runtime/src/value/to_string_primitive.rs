@@ -761,7 +761,7 @@ unsafe fn function_method_value(
         return explicit_proto_value;
     }
 
-    let function_proto = crate::object::builtin_prototype_value("Function");
+    let function_proto = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
     let proto_jsv = JSValue::from_bits(function_proto.to_bits());
     if !proto_jsv.is_pointer() {
         return f64::from_bits(TAG_UNDEFINED);

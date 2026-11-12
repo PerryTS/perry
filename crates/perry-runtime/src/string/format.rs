@@ -75,7 +75,7 @@ pub(crate) fn number_method_receiver(value: f64) -> f64 {
     // `.toExponential(...)` calls land here directly (not via the brand-checking
     // thunk), so map the prototype receiver to +0 (test262
     // toFixed/S15.7.4.5_A1.1_T01.js, toExponential/this-is-0-fractiondigits-is-0.js).
-    if value.to_bits() == crate::object::builtin_prototype_value("Number").to_bits() {
+    if value.to_bits() == crate::realm_value_read! { "Number" => "Number.prototype"; crate::object::builtin_prototype_value("Number") }.to_bits() {
         return 0.0;
     }
     value

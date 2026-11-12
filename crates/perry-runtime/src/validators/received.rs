@@ -189,7 +189,7 @@ pub(crate) fn received_property(value: f64, name: &str) -> f64 {
         None
     };
     if let Some(brand) = primitive {
-        let prototype = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
+        let prototype = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(brand) });
         return received_inherited_property(
             value.get_nanbox_f64(),
             prototype.get_nanbox_u64(),
@@ -211,7 +211,7 @@ pub(crate) fn received_property(value: f64, name: &str) -> f64 {
                         None if received_has_null_prototype(addr) => {
                             f64::from_bits(crate::value::TAG_NULL)
                         }
-                        None => crate::object::builtin_prototype_value(brand),
+                        None => crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(brand) },
                     },
                 );
                 return received_inherited_property(
@@ -283,7 +283,7 @@ fn received_native_prototype_shape(prototype: f64, intrinsic: f64) -> ReceivedNa
     let scope = crate::gc::RuntimeHandleScope::new();
     let current = scope.root_nanbox_f64(prototype);
     let intrinsic = scope.root_nanbox_f64(intrinsic);
-    let ordinary = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Object"));
+    let ordinary = scope.root_nanbox_f64(crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") });
     // Match the generic runtime chain bound. Corrupt/cyclic/opaque chains
     // conservatively retain ordinary rendering, never a new user-visible error.
     for _ in 0..32 {
@@ -340,7 +340,7 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
     let prototype = recorded.map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
     let null_proto = recorded == Some(crate::value::TAG_NULL)
         || (recorded.is_none() && received_has_null_prototype(addr));
-    let intrinsic = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
+    let intrinsic = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(brand) });
     let shape = if null_proto {
         ReceivedNativePrototype::Intrinsic
     } else if let Some(prototype) = prototype.as_ref() {

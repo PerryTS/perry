@@ -16,7 +16,9 @@ pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
 /// handle prototype hook, so a program without streams links none of it.
 pub fn web_stream_prototype_value(id: usize) -> f64 {
     match web_stream_interface_name(id) {
-        Some(name) => crate::object::builtin_prototype_value(name),
+        Some(name) => {
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) }
+        }
         None => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
@@ -69,7 +71,7 @@ pub(crate) fn fetch_handle_constructor_value(addr: usize) -> Option<crate::value
     let scope = crate::gc::RuntimeHandleScope::new();
     let prototype = super::prototype_chain::object_static_prototype(addr)
         .map(f64::from_bits)
-        .unwrap_or_else(|| super::builtin_prototype_value(name));
+        .unwrap_or_else(|| crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::builtin_prototype_value(name) });
     let prototype = scope.root_nanbox_f64(prototype);
     let prototype_value = crate::value::JSValue::from_bits(prototype.get_nanbox_u64());
     if prototype_value.is_null() || prototype_value.is_undefined() {
@@ -419,7 +421,7 @@ pub unsafe fn object_prototype_to_string(value: f64) -> f64 {
             ("Boolean", b"[object Boolean]".as_slice()),
             ("String", b"[object String]".as_slice()),
         ] {
-            if value.to_bits() == crate::object::builtin_prototype_value(name).to_bits() {
+            if value.to_bits() == crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) }.to_bits() {
                 let str_ptr = crate::string::js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
                 return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
             }

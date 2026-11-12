@@ -188,7 +188,7 @@ fn set_named_str(obj: *mut ObjectHeader, key: &str, value: &str) {
 }
 
 fn set_url_pattern_prototype(obj: *mut ObjectHeader) {
-    let proto = crate::object::builtin_prototype_value("URLPattern");
+    let proto = crate::realm_value_read! { "URLPattern" => "URLPattern.prototype"; crate::object::builtin_prototype_value("URLPattern") };
     if proto.to_bits() >> 48 == 0x7FFD {
         crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto.to_bits());
     }

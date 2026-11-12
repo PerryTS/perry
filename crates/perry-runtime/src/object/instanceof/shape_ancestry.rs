@@ -188,7 +188,7 @@ unsafe fn physical_target<'scope>(
             _ => None,
         });
         let bits = name
-            .map(|n| crate::object::builtin_prototype_value(n).to_bits())
+            .map(|n| crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(n) }.to_bits())
             .or_else(|| crate::object::class_registry::reserved_native_parent_prototype_bits(want));
         *target = Some(
             scope.root_nanbox_f64(f64::from_bits(bits.unwrap_or(crate::value::TAG_UNDEFINED))),
@@ -209,7 +209,7 @@ mod tests {
     fn native_class_word_survives_ancestry_and_keeps_its_iterable_adder() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
-        let prototype = crate::object::builtin_prototype_value("WeakMap");
+        let prototype = crate::realm_value_read! { "WeakMap" => "WeakMap.prototype"; crate::object::builtin_prototype_value("WeakMap") };
         let native = crate::weakref::CLASS_ID_WEAKMAP;
         let word = shapes::identity_prototype_word(shapes::PROTO_ID_CLASS | u64::from(native));
         assert_eq!(

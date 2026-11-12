@@ -58,7 +58,7 @@ extern "C" fn async_dispose(_closure: *const ClosureHeader, this: JsThis) -> f64
                 &[],
             )
         });
-        let intrinsic = scope.root_nanbox_f64(object::builtin_constructor_value("Promise"));
+        let intrinsic = scope.root_nanbox_f64(crate::realm_value_read! { "Promise" => "Promise"; object::builtin_constructor_value("Promise") });
         let native = promise::js_value_is_promise(value.get_nanbox_f64()) != 0;
         let constructor_key =
             scope.root_nanbox_f64(crate::value::js_nanbox_string(key("constructor") as i64));

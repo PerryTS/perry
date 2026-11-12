@@ -979,7 +979,7 @@ fn received_constructor_primitive_getv() {
         crate::fn_info!(received_kind_constructor, 0),
     );
     for (kind, brand) in [(3, "Number"), (4, "Boolean"), (5, "String")] {
-        let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
+        let proto = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(brand) });
         let key = scope.root_nanbox_f64(text("name"));
         let original = scope.root_nanbox_f64(crate::object::js_object_get_own_property_descriptor(
             proto.get_nanbox_f64(),
@@ -1118,7 +1118,7 @@ fn native_constructor_absent_fallback(name: &str) {
         );
         crate::object::js_object_set_prototype_of(
             value.get_nanbox_f64(),
-            crate::object::builtin_prototype_value(name),
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) },
         );
     });
 }
@@ -1529,7 +1529,7 @@ fn received_chain_ordinary_and_recorded_null_controls() {
         ));
         crate::object::js_object_set_prototype_of(
             ordinary.get_nanbox_f64(),
-            crate::object::builtin_prototype_value("Object"),
+            crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") },
         );
         install_received_constructor_getter(
             ordinary.get_nanbox_f64(),

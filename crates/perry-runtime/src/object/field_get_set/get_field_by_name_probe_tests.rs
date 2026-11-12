@@ -234,7 +234,7 @@ fn set_and_both_symbol_storage_classes_still_dispatch() {
     // which owns prototype data-property lookup. Returning `undefined` from
     // the early authoritative-registry probe would swallow this property.
     let _global = crate::object::js_get_global_this();
-    let set_proto = crate::object::builtin_prototype_value("Set");
+    let set_proto = crate::realm_value_read! { "Set" => "Set.prototype"; crate::object::builtin_prototype_value("Set") };
     crate::gc::js_shadow_slot_set(1, set_proto.to_bits());
     root_string(2, key(b"perryReviewMarker"));
     assert_ne!(rooted_pointer(1), 0, "test premise: Set.prototype exists");

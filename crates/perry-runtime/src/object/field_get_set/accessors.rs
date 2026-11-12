@@ -558,7 +558,7 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
             let key_h = scope.root_nanbox_f64(crate::value::nanbox_string_key(key));
             let _guard = object_prototype_lookup_guard()?;
             let prototype_name = super::super::builtin_error_prototype_name(class_id);
-            let prototype = super::super::builtin_prototype_value(prototype_name);
+            let prototype = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_prototype_value(prototype_name) };
             let prototype_value = JSValue::from_bits(prototype.to_bits());
             if prototype_value.is_pointer() {
                 let prototype_addr = prototype_value.as_pointer::<ObjectHeader>() as usize;
@@ -961,7 +961,7 @@ pub(crate) unsafe fn primitive_tagged_prototype_property(
     // The realm entry `%Boolean.prototype%` / `%BigInt.prototype%`, not a
     // read through the current global binding (`globalThis.Boolean = X`).
     let name = std::str::from_utf8(builtin_name).ok()?;
-    let proto_h = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
+    let proto_h = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) });
     let proto_value = JSValue::from_bits(proto_h.get_nanbox_u64());
     if !proto_value.is_pointer() {
         return None;

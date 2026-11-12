@@ -313,7 +313,7 @@ unsafe fn call_primitive_builtin_prototype_method(
     // reaches the intrinsic `%String.prototype%` (etc.) even after
     // `globalThis.String = X`.
     let name = std::str::from_utf8(builtin_name).ok()?;
-    let ctor = crate::object::builtin_constructor_value(name);
+    let ctor = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_constructor_value(name) };
     let ctor_value = JSValue::from_bits(ctor.to_bits());
     if !ctor_value.is_pointer() {
         return None;
@@ -331,7 +331,7 @@ unsafe fn call_primitive_builtin_prototype_method(
     ) {
         return Some(result);
     }
-    let proto = crate::object::builtin_prototype_value(name);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) };
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -397,7 +397,7 @@ unsafe fn builtin_proto_user_value(
     method_name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    let proto = crate::object::builtin_prototype_value(std::str::from_utf8(builtin_name).ok()?);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(std::str::from_utf8(builtin_name).ok()?) };
     let proto_value = JSValue::from_bits(proto.to_bits());
     if !proto_value.is_pointer() {
         return None;
@@ -1624,7 +1624,7 @@ pub(crate) unsafe fn native_call_method_tower(
             // what this call used to return.
             if method_name == "constructor" {
                 let ctor = crate::object::generator_function_constructor_of(raw_addr)
-                    .unwrap_or_else(|| crate::object::builtin_constructor_value("Function"));
+                    .unwrap_or_else(|| crate::realm_value_read! { "Function" => "Function"; crate::object::builtin_constructor_value("Function") });
                 let ctor = root_scope.root_nanbox_f64(ctor);
                 // The global lookup allocates; re-read the rooted arguments.
                 let call_args = refreshed_args();

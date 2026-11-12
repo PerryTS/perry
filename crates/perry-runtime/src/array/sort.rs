@@ -302,7 +302,7 @@ pub(crate) unsafe fn sort_rooted_values(
 // ---------------------------------------------------------------------------
 
 fn object_prototype_value() -> Option<f64> {
-    let proto = crate::object::builtin_prototype_value("Object");
+    let proto = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let proto_v = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_v.is_pointer() {
         Some(proto)

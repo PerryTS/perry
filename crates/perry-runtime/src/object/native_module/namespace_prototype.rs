@@ -12,7 +12,7 @@ use super::*;
 /// `%Object.prototype%` (`null` only before that intrinsic exists). A
 /// namespace is an ordinary object, not its own prototype.
 pub(crate) fn native_module_namespace_default_prototype() -> f64 {
-    let proto = crate::object::builtin_prototype_value("Object");
+    let proto = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     if proto.to_bits() != crate::value::TAG_UNDEFINED {
         proto
     } else {

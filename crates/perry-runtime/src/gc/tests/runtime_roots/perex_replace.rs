@@ -484,7 +484,7 @@ fn perex_replace_primitive_search_skips_prototype_hook_and_coerces_receiver() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
     let scope = RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Number"));
+    let proto = scope.root_nanbox_f64(crate::realm_value_read! { "Number" => "Number.prototype"; crate::object::builtin_prototype_value("Number") });
     assert_eq!(
         api::finish(dispatch::get_symbol(&proto, "replace")).to_bits(),
         TAG_UNDEFINED

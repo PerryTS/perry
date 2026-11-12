@@ -16,7 +16,7 @@ pub enum MessagePortOperation {
 type MessagePortDispatch =
     unsafe extern "C" fn(MessagePortOperation, f64, f64, f64, *mut f64) -> bool;
 static DISPATCH: Hook<MessagePortDispatch> = Hook::empty();
-static PORT_ID: object::IntrinsicPrivateReadSite = object::IntrinsicPrivateReadSite::new(
+static PORT_ID: object::OwnPrivateReadSite = object::OwnPrivateReadSite::new(
     &object::runtime_layouts::intrinsic_private_atoms::MESSAGE_PORT_ID,
 );
 

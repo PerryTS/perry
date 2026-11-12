@@ -99,7 +99,7 @@ pub(super) fn species(receiver: &RuntimeHandle<'_>) -> Result<Option<f64>, Engin
     // Construct. Only a fast path, against the realm's `%RegExp%`.
     // The lookup can allocate on first use, so `species` is rooted across it.
     let species = scope.root_nanbox_f64(species);
-    let intrinsic = crate::object::builtin_constructor_value("RegExp");
+    let intrinsic = crate::realm_value_read! { "RegExp" => "RegExp"; crate::object::builtin_constructor_value("RegExp") };
     let species = species.get_nanbox_f64();
     if species.to_bits() == intrinsic.to_bits() {
         return Ok(None);

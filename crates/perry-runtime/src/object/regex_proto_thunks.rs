@@ -51,7 +51,7 @@ fn regex_receiver_or_throw(this: crate::closure::JsThis, getter: &str) -> RegexR
         #[cfg(feature = "regex-engine")]
         let prototype = crate::regex::intrinsic_prototype();
         #[cfg(not(feature = "regex-engine"))]
-        let prototype = super::global_this::builtin_prototype_value("RegExp");
+        let prototype = crate::realm_value_read! { "RegExp" => "RegExp.prototype"; super::global_this::builtin_prototype_value("RegExp") };
         let proto = crate::value::JSValue::from_bits(prototype.to_bits());
         if proto.is_pointer() && proto.as_pointer::<u8>() as usize == ptr {
             return RegexReceiver::Prototype;

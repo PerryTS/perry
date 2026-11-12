@@ -76,7 +76,7 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
         ensure_generator_intrinsics();
         // Bootstrap also wires the Function parents. A lazy tower alone has
         // no such links yet when this is the program's first reflection.
-        let _ = builtin_prototype_value("Function");
+        let _ = crate::realm_value_read! { "Function" => "Function.prototype"; builtin_prototype_value("Function") };
         return intrinsic_pointer_value(
             crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         );
@@ -88,7 +88,7 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
     ensure_generator_intrinsics();
     // Bootstrap also wires the Function parents. A lazy tower alone has
     // no such links yet when this is the program's first reflection.
-    let _ = builtin_prototype_value("Function");
+    let _ = crate::realm_value_read! { "Function" => "Function.prototype"; builtin_prototype_value("Function") };
     let slot = match kind {
         GeneratorKind::Sync => crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire),
         GeneratorKind::Async => {
@@ -179,7 +179,7 @@ pub(crate) fn wire_function_intrinsic_parents() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let ctor = scope.root_raw_mut_ptr(ctor as *mut crate::closure::ClosureHeader);
         let proto = scope.root_raw_mut_ptr(proto as *mut ObjectHeader);
-        let function_ctor = super::builtin_constructor_value("Function");
+        let function_ctor = crate::realm_value_read! { "Function" => "Function"; super::builtin_constructor_value("Function") };
         if crate::value::JSValue::from_bits(function_ctor.to_bits()).is_pointer() {
             let function_ctor = scope.root_nanbox_f64(function_ctor);
             ctor.with_mut_ptr::<crate::closure::ClosureHeader, _>(|ctor| {
@@ -189,7 +189,7 @@ pub(crate) fn wire_function_intrinsic_parents() {
                 )
             });
         }
-        let function_proto = builtin_prototype_value("Function");
+        let function_proto = crate::realm_value_read! { "Function" => "Function.prototype"; builtin_prototype_value("Function") };
         if crate::value::JSValue::from_bits(function_proto.to_bits()).is_pointer() {
             let function_proto = scope.root_nanbox_f64(function_proto);
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {

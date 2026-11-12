@@ -710,7 +710,7 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
     let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
         return false;
     };
-    let fp = crate::object::builtin_prototype_value("Function").to_bits();
+    let fp = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") }.to_bits();
     for _ in 0..32 {
         let v = crate::JSValue::from_bits(bits);
         if bits == fp || v.is_null() {
@@ -747,7 +747,7 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
                 }
                 bits = match crate::object::prototype_chain::object_static_prototype(addr) {
                     Some(next) => next,
-                    None => crate::object::builtin_prototype_value("Object").to_bits(),
+                    None => crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") }.to_bits(),
                 };
             }
             _ => return true,

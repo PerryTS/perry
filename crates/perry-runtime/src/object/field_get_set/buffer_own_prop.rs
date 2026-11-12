@@ -73,7 +73,7 @@ pub(crate) fn view_kind_name(addr: usize) -> &'static str {
 /// one (`Object.setPrototypeOf`, a subclass), else its kind's intrinsic.
 pub(crate) fn view_prototype_bits(addr: usize) -> u64 {
     super::super::prototype_chain::object_static_prototype(addr)
-        .unwrap_or_else(|| crate::object::builtin_prototype_value(view_kind_name(addr)).to_bits())
+        .unwrap_or_else(|| crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(view_kind_name(addr)) }.to_bits())
 }
 
 /// A getter of the view kind's own prototype, answered from the cell. Only the
@@ -91,7 +91,9 @@ fn view_kind_getter(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
                 )
                 .to_bits(),
             )),
-            b"byteOffset" => Some(JSValue::number(crate::buffer::buffer_byte_offset(addr) as f64)),
+            b"byteOffset" => Some(JSValue::number(
+                crate::buffer::buffer_byte_offset(addr) as f64
+            )),
             _ => None,
         };
     }

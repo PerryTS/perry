@@ -520,7 +520,7 @@ pub extern "C" fn js_suppressed_error_new(error: f64, suppressed: f64, message: 
     // `js_nanbox_pointer` freezes an address into a return value the collector
     // cannot rewrite.
     let (proto, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-        crate::object::builtin_prototype_value("SuppressedError")
+        crate::realm_value_read! { "SuppressedError" => "SuppressedError.prototype"; crate::object::builtin_prototype_value("SuppressedError") }
     });
     let ((), obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
         if proto.to_bits() != TAG_UNDEFINED && js_nanbox_get_pointer(proto) != 0 {

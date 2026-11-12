@@ -58,7 +58,7 @@ pub(crate) unsafe fn map_set_instance_property(
         let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
         let recorded = crate::object::prototype_chain::object_static_prototype(obj as usize);
         let builtin =
-            crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" }).to_bits();
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(if is_map { "Map" } else { "Set" }) }.to_bits();
         if is_size && recorded.is_none_or(|bits| bits == builtin) {
             let family = if is_map {
                 crate::object::builtin_proto::BuiltinProto::Map

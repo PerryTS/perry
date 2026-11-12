@@ -217,7 +217,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                     "prototype",
                 );
                 let buffer_proto_value = JSValue::from_bits(buffer_proto.to_bits());
-                let uint8_proto = builtin_prototype_value("Uint8Array");
+                let uint8_proto = crate::realm_value_read! { "Uint8Array" => "Uint8Array.prototype"; builtin_prototype_value("Uint8Array") };
                 if buffer_proto_value.is_pointer()
                     && JSValue::from_bits(uint8_proto.to_bits()).is_pointer()
                 {
@@ -319,8 +319,8 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         }
         let child_ctor = js_get_global_this_builtin_value(child.as_ptr(), child.len());
         let parent_ctor = js_get_global_this_builtin_value(parent.as_ptr(), parent.len());
-        let child_proto = builtin_prototype_value(child);
-        let parent_proto = builtin_prototype_value(parent);
+        let child_proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; builtin_prototype_value(child) };
+        let parent_proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; builtin_prototype_value(parent) };
         if constructor_inherits
             && JSValue::from_bits(child_ctor.to_bits()).is_pointer()
             && JSValue::from_bits(parent_ctor.to_bits()).is_pointer()
@@ -608,7 +608,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
             b"EventTarget".as_ptr(),
             11,
         ));
-        let target_proto = scope.root_nanbox_f64(builtin_prototype_value("EventTarget"));
+        let target_proto = scope.root_nanbox_f64(crate::realm_value_read! { "EventTarget" => "EventTarget.prototype"; builtin_prototype_value("EventTarget") });
         let is_ptr = |v: f64| JSValue::from_bits(v.to_bits()).is_pointer();
         if is_ptr(perf_ctor.get_nanbox_f64()) && is_ptr(target_ctor.get_nanbox_f64()) {
             let perf_addr =
@@ -741,9 +741,14 @@ const INTERFACE_PARENTS: [(&str, &str, bool); 5] = [
 
 /// A lazy interface child's links to its (eager) parent, made in its birth:
 /// the same two links the population makes for an eager child.
-fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHeader, proto_obj: *mut ObjectHeader) {
-    let Some(&(_, parent, constructor_inherits)) =
-        INTERFACE_PARENTS.iter().find(|(child, _, _)| *child == name)
+fn link_interface_parent(
+    name: &str,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    proto_obj: *mut ObjectHeader,
+) {
+    let Some(&(_, parent, constructor_inherits)) = INTERFACE_PARENTS
+        .iter()
+        .find(|(child, _, _)| *child == name)
     else {
         return;
     };
@@ -751,7 +756,7 @@ fn link_interface_parent(name: &str, closure_ptr: *mut crate::closure::ClosureHe
         return;
     };
     let parent_ctor = crate::array::intrinsic_constructor_addr_if_bound(parent);
-    let parent_proto = crate::array::intrinsic_prototype_addr(parent);
+    let parent_proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::array::intrinsic_prototype_addr(parent) };
     if constructor_inherits && parent_ctor != 0 {
         crate::closure::closure_set_static_prototype(
             closure_ptr as usize,
@@ -1196,7 +1201,7 @@ pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
 #[inline(never)]
 fn birth_unborn_family_slow(ptr: usize, word: u32) -> bool {
     unborn_lazy_identity(ptr, word)
-        .is_some_and(|identity| crate::array::intrinsic_prototype_addr(identity) != 0)
+        .is_some_and(|identity| crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::array::intrinsic_prototype_addr(identity) } != 0)
 }
 
 /// The declared static keys of the closure at `ptr` while it is its realm's
@@ -1218,7 +1223,10 @@ pub(crate) unsafe fn unborn_declared_statics_of(ptr: usize) -> &'static [&'stati
 
 /// The identity of the closure at `ptr` (header word `word`) while it is its
 /// realm's still unborn `lazy` constructor, outside that family's own birth.
-fn unborn_lazy_identity(ptr: usize, word: u32) -> Option<crate::object::BuiltinConstructorIdentity> {
+fn unborn_lazy_identity(
+    ptr: usize,
+    word: u32,
+) -> Option<crate::object::BuiltinConstructorIdentity> {
     let identity = crate::object::BuiltinConstructorIdentity::from_header(word)?;
     (identity.declaration().lazy
         && BIRTHING.with(|c| c.get()) != identity as u8

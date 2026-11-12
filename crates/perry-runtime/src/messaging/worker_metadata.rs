@@ -12,9 +12,8 @@ pub enum WorkerMetadataField {
 
 type MetadataProvider = extern "C" fn(u64, WorkerMetadataField) -> f64;
 static PROVIDER: Hook<MetadataProvider> = Hook::empty();
-static WORKER_ID: object::IntrinsicPrivateReadSite = object::IntrinsicPrivateReadSite::new(
-    &object::runtime_layouts::intrinsic_private_atoms::WORKER_ID,
-);
+static WORKER_ID: object::OwnPrivateReadSite =
+    object::OwnPrivateReadSite::new(&object::runtime_layouts::intrinsic_private_atoms::WORKER_ID);
 
 pub fn register_worker_metadata_provider(provider: MetadataProvider) {
     PROVIDER.set(provider);

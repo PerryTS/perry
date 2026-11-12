@@ -183,7 +183,7 @@ pub(crate) fn constructor_adder(method_name: &str, receiver: f64) -> f64 {
 
 pub(crate) fn builtin_prototype_method(builtin_name: &str, method_name: &str) -> f64 {
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let proto = crate::object::builtin_prototype_value(builtin_name);
+    let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(builtin_name) };
     let proto_ptr = js_nanbox_get_pointer(proto) as *const crate::object::ObjectHeader;
     if proto_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);

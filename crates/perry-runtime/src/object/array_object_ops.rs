@@ -790,7 +790,7 @@ pub(crate) unsafe fn define_array_property(
 pub(crate) fn array_get_prototype_of_addr(raw_addr: usize) -> Option<f64> {
     let array_proto = match crate::array::array_prototype_addr() {
         0 => {
-            let proto = crate::object::builtin_prototype_value("Array");
+            let proto = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
             let proto = crate::value::JSValue::from_bits(proto.to_bits());
             if proto.is_pointer() {
                 proto.as_pointer::<u8>() as usize
@@ -803,7 +803,7 @@ pub(crate) fn array_get_prototype_of_addr(raw_addr: usize) -> Option<f64> {
     if array_proto != 0 && array_proto != raw_addr {
         return Some(crate::value::js_nanbox_pointer(array_proto as i64));
     }
-    let object_proto = crate::object::builtin_prototype_value("Object");
+    let object_proto = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     crate::value::JSValue::from_bits(object_proto.to_bits())
         .is_pointer()
         .then_some(object_proto)

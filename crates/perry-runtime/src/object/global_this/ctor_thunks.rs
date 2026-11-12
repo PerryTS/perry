@@ -295,7 +295,8 @@ pub(crate) fn is_array_prototype_method_value(value: f64, method: &str) -> bool 
         return false;
     }
 
-    let proto = builtin_prototype_value("Array");
+    let proto =
+        crate::realm_value_read! { "Array" => "Array.prototype"; builtin_prototype_value("Array") };
     let proto_bits = proto.to_bits();
     if (proto_bits >> 48) != 0x7FFD {
         return false;
@@ -603,7 +604,7 @@ mod tests {
     fn function_prototype_is_an_ordinary_object_and_closures_are_not_it() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = crate::gc::RuntimeHandleScope::new();
-        let proto = scope.root_nanbox_f64(super::builtin_prototype_value("Function"));
+        let proto = scope.root_nanbox_f64(crate::realm_value_read! { "Function" => "Function.prototype"; super::builtin_prototype_value("Function") });
         let header = unsafe {
             crate::value::addr_class::try_read_gc_header(closure_addr(proto.get_nanbox_f64()))
         }
@@ -620,7 +621,7 @@ mod tests {
         assert!(!super::is_function_prototype_object_value(
             function_ctor.get_nanbox_f64()
         ));
-        let object_proto = scope.root_nanbox_f64(super::builtin_prototype_value("Object"));
+        let object_proto = scope.root_nanbox_f64(crate::realm_value_read! { "Object" => "Object.prototype"; super::builtin_prototype_value("Object") });
         assert!(!super::is_function_prototype_object_value(
             object_proto.get_nanbox_f64()
         ));
@@ -649,7 +650,7 @@ mod tests {
              comparison below is vacuous"
         );
         assert_eq!(
-            super::builtin_prototype_value("Function").to_bits(),
+            crate::realm_value_read! { "Function" => "Function.prototype"; super::builtin_prototype_value("Function") }.to_bits(),
             walked.get_nanbox_u64()
         );
         assert_eq!(

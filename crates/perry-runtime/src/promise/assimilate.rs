@@ -65,7 +65,7 @@ fn is_native_array_value(value: f64) -> bool {
 pub(super) fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
     // What an array inherits from: %Array.prototype%, not the writable
     // `globalThis.Array` binding's `prototype`.
-    let array_proto = crate::object::builtin_prototype_value("Array");
+    let array_proto = crate::realm_value_read! { "Array" => "Array.prototype"; crate::object::builtin_prototype_value("Array") };
     if is_definitely_primitive(array_proto) {
         return Ok(None);
     }

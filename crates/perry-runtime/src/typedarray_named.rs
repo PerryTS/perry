@@ -172,7 +172,9 @@ pub(crate) unsafe fn get(receiver: u64, key: *const crate::StringHeader) -> Opti
         None if prototype_name == "Buffer" => {
             crate::object::native_module::buffer_intrinsic_prototype_value()
         }
-        None => crate::object::builtin_prototype_value(prototype_name),
+        None => {
+            crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(prototype_name) }
+        }
     };
     let addr = JSValue::from_bits(receiver.get_nanbox_f64().to_bits()).as_pointer::<u8>() as usize;
     Some(

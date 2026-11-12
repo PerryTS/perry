@@ -246,7 +246,7 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
 }
 
 pub(super) fn is_default_promise_constructor(c: f64) -> bool {
-    let promise_ctor = crate::object::builtin_constructor_value("Promise");
+    let promise_ctor = crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") };
     !is_undef(promise_ctor) && promise_ctor.to_bits() == c.to_bits()
 }
 
@@ -994,7 +994,7 @@ pub fn run_combinator(kind: CombinatorKind, c: f64, iterable: f64) -> f64 {
 /// The intrinsic `Promise` constructor value — `this` for the codegen
 /// direct-call path (`Promise.all([...])`).
 pub(super) fn default_promise_ctor() -> f64 {
-    crate::object::builtin_constructor_value("Promise")
+    crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") }
 }
 
 // NOTE: `this_ctor` is passed through verbatim — `undefined`/`null`/primitive

@@ -50,6 +50,6 @@ pub(crate) fn error_kind_prototype_value(kind: u32) -> Option<f64> {
         crate::error::ERROR_KIND_AGGREGATE_ERROR => B::AggregateError,
         _ => B::Error,
     };
-    let addr = crate::array::intrinsic_prototype_addr(identity);
+    let addr = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::array::intrinsic_prototype_addr(identity) };
     (addr != 0).then(|| crate::value::js_nanbox_pointer(addr as i64))
 }

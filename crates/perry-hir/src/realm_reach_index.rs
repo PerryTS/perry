@@ -131,6 +131,14 @@ impl<'a> Row<'a> {
     pub fn operation(self) -> Option<&'a str> {
         self.0.facts.get("operation").and_then(|v| v.as_str())
     }
+    pub fn runtime_reads(self) -> impl Iterator<Item = &'a str> {
+        self.facts()
+            .get("runtime_reads")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.as_str())
+    }
     pub fn demands(self) -> impl Iterator<Item = &'a str> {
         self.0
             .facts

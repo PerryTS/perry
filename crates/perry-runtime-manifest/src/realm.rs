@@ -216,6 +216,9 @@ pub struct RealmDeclaration {
     /// Immutable descriptor dependencies of an executing operation, not heap births.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub demands: Vec<String>,
+    /// Realm cells read while operating on a value of this subject kind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_reads: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub writes: Vec<RealmWrite>,
 }

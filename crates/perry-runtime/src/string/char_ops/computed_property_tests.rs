@@ -8,7 +8,7 @@ fn string(value: &str) -> f64 {
 #[test]
 fn computed_string_method_is_the_prototype_function() {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("String"));
+    let proto = scope.root_nanbox_f64(crate::realm_value_read! { "String" => "String.prototype"; crate::object::builtin_prototype_value("String") });
     for receiver in [
         string("abcdef"),
         f64::from_bits(JSValue::try_short_string(b"abc").unwrap().bits()),

@@ -251,7 +251,7 @@ fn regexp_is_an_ordinary_shaped_object_with_private_data() {
         assert_eq!(get_last_index(re), 0.0);
         assert_eq!(
             crate::object::shapes::object_prototype_word(re),
-            crate::object::builtin_prototype_value("RegExp").to_bits()
+            crate::realm_value_read! { "RegExp" => "RegExp.prototype"; crate::object::builtin_prototype_value("RegExp") }.to_bits()
         );
     });
 }
@@ -1127,7 +1127,7 @@ fn flag_getter_through_an_intermediate_prototype_keeps_the_instance_receiver() {
         source.with_mut_ptr(|source| flags.with_mut_ptr(|flags| js_regexp_new(source, flags))),
     );
     let prototype = scope.root_raw_mut_ptr(crate::object::object_alloc_plain(0));
-    let intrinsic = crate::object::builtin_prototype_value("RegExp");
+    let intrinsic = crate::realm_value_read! { "RegExp" => "RegExp.prototype"; crate::object::builtin_prototype_value("RegExp") };
     prototype.with_mut_ptr::<crate::object::ObjectHeader, _>(|prototype| {
         crate::object::prototype_chain::object_set_static_prototype(
             prototype as usize,

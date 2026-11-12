@@ -286,7 +286,7 @@ pub extern "C" fn js_jsvalue_to_string_radix(
                 return number_to_radix_string(payload, radix!());
             }
         }
-        if value.to_bits() == crate::object::builtin_prototype_value("Number").to_bits() {
+        if value.to_bits() == crate::realm_value_read! { "Number" => "Number.prototype"; crate::object::builtin_prototype_value("Number") }.to_bits() {
             return number_to_radix_string(0.0, radix!());
         }
         // Forward the argument to the receiver's own `toString`. A Temporal

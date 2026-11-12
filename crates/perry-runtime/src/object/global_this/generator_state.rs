@@ -78,8 +78,8 @@ pub(crate) unsafe fn install_class_symbol_method(
 /// The instance's `[[GeneratorState]]`: its private slot holding the resume
 /// record. Every sync generator is born with it at slot 0
 /// ([`birth_shape`]); own-key transitions keep it there and carry the brand.
-pub(super) static STATE_READ: crate::object::IntrinsicPrivateReadSite =
-    crate::object::IntrinsicPrivateReadSite::new(
+pub(super) static STATE_READ: crate::object::OwnPrivateReadSite =
+    crate::object::OwnPrivateReadSite::new(
         &crate::object::runtime_layouts::intrinsic_private_atoms::GENERATOR_STATE,
     );
 
@@ -87,8 +87,8 @@ pub(super) static STATE_READ: crate::object::IntrinsicPrivateReadSite =
 /// from the bag's birth (`closure::props`): `g.prototype` may be reassigned
 /// later, and an instance born while the original was unmaterialized names it
 /// through its owner.
-pub(crate) static ORIGINAL_PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
-    crate::object::IntrinsicPrivateReadSite::new(
+pub(crate) static ORIGINAL_PROTOTYPE_READ: crate::object::OwnPrivateReadSite =
+    crate::object::OwnPrivateReadSite::new(
         &crate::object::runtime_layouts::intrinsic_private_atoms::GENERATOR_PROTOTYPE,
     );
 

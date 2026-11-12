@@ -1006,7 +1006,7 @@ unsafe fn own_property_ordinary(obj_value: f64, key_value: f64) -> Option<OwnPro
                     // `%Array.prototype%`'s own `constructor` is `%Array%`:
                     // both from the realm entry, never `globalThis.Array`.
                     if obj as usize == crate::array::array_prototype_addr() {
-                        let ctor = super::builtin_constructor_value("Array");
+                        let ctor = crate::realm_value_read! { "Array" => "Array"; super::builtin_constructor_value("Array") };
                         if crate::value::JSValue::from_bits(ctor.to_bits()).is_pointer() {
                             return OwnProperty::data(ctor, true, false, true);
                         }

@@ -42,7 +42,7 @@ fn port(value: f64, field: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let constructor =
-        scope.root_nanbox_f64(crate::object::builtin_constructor_value("MessagePort"));
+        scope.root_nanbox_f64(crate::realm_value_read! { "MessagePort" => "MessagePort"; crate::object::builtin_constructor_value("MessagePort") });
     if !crate::object::instanceof::ordinary_has_instance_prototype_walk(
         value.get_nanbox_f64(),
         constructor.get_nanbox_f64(),

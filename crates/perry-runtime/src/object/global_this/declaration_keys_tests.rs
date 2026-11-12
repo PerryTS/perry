@@ -47,7 +47,7 @@ fn live_builtin_prototype_own_keys_equal_the_realm_declaration() {
         {
             continue;
         }
-        let proto = builtin_prototype_value(ctor);
+        let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; builtin_prototype_value(ctor) };
         if proto.to_bits() == crate::value::TAG_UNDEFINED {
             continue;
         }

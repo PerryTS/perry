@@ -43,7 +43,7 @@ fn distinct_descriptor_roles_are_projected_when_shapes_are_minted() {
 fn ordinary_shape_links_are_complete_and_exotic_links_decline() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
-    let realm = crate::object::builtin_prototype_value("Object");
+    let realm = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
     let plain = crate::object::js_object_alloc(0, 0);
     assert_eq!(
         unsafe { shape_link_prototype(plain, false) }

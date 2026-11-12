@@ -29,7 +29,7 @@ fn born_arguments_forward_slots_and_shape_mutation_control() {
             prototype.to_bits(),
             crate::value::js_nanbox_pointer(args as i64).to_bits()
         );
-        let object = crate::object::builtin_prototype_value("Object");
+        let object = crate::realm_value_read! { "Object" => "Object.prototype"; crate::object::builtin_prototype_value("Object") };
         assert_eq!(prototype.to_bits(), object.to_bits());
         let inherited = js_object_get_field_by_name(args, key("toString"));
         assert!(crate::closure::is_closure_ptr(

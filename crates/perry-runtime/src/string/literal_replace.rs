@@ -188,7 +188,7 @@ pub(crate) fn callable(value: &RuntimeHandle<'_>) -> bool {
     if !crate::proxy::reflect_value_is_object(value.get_nanbox_f64()) {
         return false;
     }
-    let prototype = crate::object::builtin_prototype_value("Function");
+    let prototype = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
     prototype.to_bits() == value.get_nanbox_u64()
 }
 /// The ordinary call keeps its register arguments. A callable Proxy must

@@ -469,7 +469,7 @@ pub(crate) fn class_value_get_field(
         // fallback after own computed fields, static methods, and
         // static accessors of the same name have had a chance to win.
         if name == "constructor" && class_id != 0 && is_class_id_registered(class_id) {
-            let constructor = super::super::builtin_constructor_value("Function");
+            let constructor = crate::realm_value_read! { "Function" => "Function"; super::super::builtin_constructor_value("Function") };
             return JSValue::from_bits(constructor.to_bits());
         }
     }
@@ -512,7 +512,7 @@ mod primitive_proto_accessor_tests_10648 {
             ),
         ];
         for (label, name, receiver) in receivers {
-            let expected = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
+            let expected = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) });
             let key_ptr = crate::value::JSValue::from_bits(key_h.get_nanbox_u64()).as_string_ptr();
             let actual = js_object_get_field_by_name(
                 receiver.get_nanbox_u64() as *const ObjectHeader,
@@ -1091,9 +1091,9 @@ fn get_field_by_name_past_data_probe(
                                 {
                                     return JSValue::from_bits(v.to_bits());
                                 }
-                                let ctor = super::super::builtin_constructor_value(
+                                let ctor = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_constructor_value(
                                     crate::typedarray_hook_slots::name_for_kind(kind),
-                                );
+                                ) };
                                 return JSValue::from_bits(ctor.to_bits());
                             }
                             _ => {}
@@ -1119,9 +1119,9 @@ fn get_field_by_name_past_data_probe(
                                 }
                             }
                             None => {
-                                let proto = crate::object::builtin_prototype_value(
+                                let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(
                                     crate::typedarray_hook_slots::name_for_kind(kind),
-                                );
+                                ) };
                                 if let Some(inherited) = super::super::prototype_chain::
                                 resolve_inherited_field_from_prototype(
                                     addr,
@@ -1171,7 +1171,7 @@ fn get_field_by_name_past_data_probe(
                                 } else {
                                     "Uint8Array"
                                 };
-                                let ctor = super::super::builtin_constructor_value(name);
+                                let ctor = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; super::super::builtin_constructor_value(name) };
                                 return JSValue::from_bits(ctor.to_bits());
                             }
                             _ => {}
@@ -1193,7 +1193,7 @@ fn get_field_by_name_past_data_probe(
                                 }
                             }
                             None => {
-                                let proto = crate::object::builtin_prototype_value("Uint8Array");
+                                let proto = crate::realm_value_read! { "Uint8Array" => "Uint8Array.prototype"; crate::object::builtin_prototype_value("Uint8Array") };
                                 if let Some(inherited) = super::super::prototype_chain::
                                 resolve_inherited_field_from_prototype(
                                     addr,
@@ -1771,7 +1771,7 @@ fn get_field_by_name_past_data_probe(
                         // `.prototype` threw `Cannot read properties of
                         // undefined`.
                         if name_bytes == b"constructor" {
-                            let v = crate::object::builtin_constructor_value("Promise");
+                            let v = crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") };
                             return JSValue::from_bits(v.to_bits());
                         }
                         // A Promise is a `GC_TYPE_PROMISE` cell, not an

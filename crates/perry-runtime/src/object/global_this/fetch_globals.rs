@@ -1452,3 +1452,9 @@ mod dynamic_super_new_target_tests {
         }
     }
 }
+
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+pub(crate) fn has_image_global() -> bool {
+    let addr = (THREAD_GLOBAL_THIS.with(|c| c.get()) & crate::value::POINTER_MASK) as usize;
+    crate::value::addr_class::realm::is_image_object(addr)
+}

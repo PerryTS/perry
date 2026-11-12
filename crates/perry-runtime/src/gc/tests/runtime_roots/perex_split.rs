@@ -293,7 +293,7 @@ fn perex_split_symbol_hook_precedes_coercion_and_preserves_arbitrary_result() {
     );
     // Exact Node 26.5.1 skips primitive-prototype hooks. Keep the original
     // throwing receiver: its coercion must now be reached and propagated.
-    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("Number"));
+    let proto = scope.root_nanbox_f64(crate::realm_value_read! { "Number" => "Number.prototype"; crate::object::builtin_prototype_value("Number") });
     let get_hook = function(&scope, crate::fn_info!(primitive_hook, 0; with_declared(0)));
     let key = js_nanbox_pointer(crate::symbol::well_known_symbol("split") as i64);
     accessor(
@@ -413,7 +413,7 @@ fn perex_string_methods_ignore_primitive_hooks_and_preserve_boxed_hooks_after_gc
                     crate::proxy::reflect_value_is_object(argument.get_nanbox_f64()),
                     boxed
                 );
-                let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(kind));
+                let proto = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(kind) });
                 let symbol_name = if method == "replaceAll" {
                     "replace"
                 } else {

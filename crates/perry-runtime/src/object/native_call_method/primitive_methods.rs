@@ -234,7 +234,7 @@ pub(super) unsafe fn dispatch_primitive(
     if jsval.is_pointer() && matches!(method_name, "valueOf" | "toString" | "toLocaleString") {
         use crate::object::builtin_prototype_value;
         let ob = object.to_bits();
-        if ob == builtin_prototype_value("Number").to_bits() {
+        if ob == crate::realm_value_read! { "Number" => "Number.prototype"; builtin_prototype_value("Number") }.to_bits() {
             match method_name {
                 "valueOf" => return Some(0.0),
                 _ => {
@@ -248,7 +248,7 @@ pub(super) unsafe fn dispatch_primitive(
                 }
             }
         }
-        if ob == builtin_prototype_value("Boolean").to_bits() {
+        if ob == crate::realm_value_read! { "Boolean" => "Boolean.prototype"; builtin_prototype_value("Boolean") }.to_bits() {
             match method_name {
                 "valueOf" => return Some(f64::from_bits(crate::value::TAG_FALSE)),
                 _ => {

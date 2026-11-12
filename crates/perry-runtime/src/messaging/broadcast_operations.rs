@@ -18,13 +18,13 @@ pub enum BroadcastChannelOperation {
 
 type Dispatch = unsafe extern "C" fn(BroadcastChannelOperation, u64, f64, f64, *mut f64) -> bool;
 static DISPATCH: Hook<Dispatch> = Hook::empty();
-static ID: object::IntrinsicPrivateReadSite = object::IntrinsicPrivateReadSite::new(
+static ID: object::OwnPrivateReadSite = object::OwnPrivateReadSite::new(
     &object::runtime_layouts::intrinsic_private_atoms::BROADCAST_CHANNEL_ID,
 );
-static NAME: object::IntrinsicPrivateReadSite = object::IntrinsicPrivateReadSite::new(
+static NAME: object::OwnPrivateReadSite = object::OwnPrivateReadSite::new(
     &object::runtime_layouts::intrinsic_private_atoms::BROADCAST_CHANNEL_NAME,
 );
-static CLOSED: object::IntrinsicPrivateReadSite = object::IntrinsicPrivateReadSite::new(
+static CLOSED: object::OwnPrivateReadSite = object::OwnPrivateReadSite::new(
     &object::runtime_layouts::intrinsic_private_atoms::BROADCAST_CHANNEL_CLOSED,
 );
 

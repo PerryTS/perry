@@ -163,7 +163,7 @@ pub(crate) fn link(owner: *mut ObjectHeader, name: &str) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(owner);
     let (_, result) = owner.across_mut(|| {
-        let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
+        let proto = scope.root_nanbox_f64(crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(name) });
         owner.with_mut_ptr::<ObjectHeader, _>(|ptr| {
             crate::object::prototype_chain::object_link_class_default_prototype(
                 ptr as usize,

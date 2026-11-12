@@ -221,13 +221,14 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
                 {
                     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
                     // Allocating the key can move x: re-read it from its root.
-                    let addr = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+                    let addr =
+                        crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
                     let ctor = if key.is_null() {
                         None
                     } else {
                         crate::object::prototype_chain::resolve_inherited_field(addr, key)
                     };
-                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    let intrinsic = crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") };
                     ctor.is_some_and(|c| c.bits() == intrinsic.to_bits())
                 } else if super::promise_has_own_constructor(addr) {
                     let ctor = unsafe {
@@ -240,7 +241,7 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
                     }
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
                     let ctor_h = scope.root_nanbox_f64(ctor);
-                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    let intrinsic = crate::realm_value_read! { "Promise" => "Promise"; crate::object::builtin_constructor_value("Promise") };
                     ctor_h.get_nanbox_f64().to_bits() == intrinsic.to_bits()
                 } else {
                     true

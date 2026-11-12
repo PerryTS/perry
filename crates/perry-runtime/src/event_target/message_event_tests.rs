@@ -6,7 +6,7 @@ fn construct(args: &[f64]) -> f64 {
     crate::event_target_hook_slots::install();
     crate::object::js_get_global_this();
     let args: Vec<_> = args.iter().map(|v| v.get_nanbox_f64()).collect();
-    let constructor = crate::object::builtin_constructor_value("MessageEvent");
+    let constructor = crate::realm_value_read! { "MessageEvent" => "MessageEvent"; crate::object::builtin_constructor_value("MessageEvent") };
     unsafe { crate::object::js_new_function_construct(constructor, args.as_ptr(), args.len()) }
 }
 

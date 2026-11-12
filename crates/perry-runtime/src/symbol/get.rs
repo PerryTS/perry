@@ -301,7 +301,7 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         if sym_key == sym_key_from_f64(async_iterator_f64) {
             // RSTREAM R5: the prototype's own member (`=== P.values`).
             if kind == 1 {
-                let proto = crate::object::builtin_prototype_value("ReadableStream");
+                let proto = crate::realm_value_read! { "ReadableStream" => "ReadableStream.prototype"; crate::object::builtin_prototype_value("ReadableStream") };
                 if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
                     return Some(js_object_get_symbol_property(proto, sym_f64));
                 }
@@ -437,7 +437,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // Materializing `Date.prototype` can allocate; the receiver outlives it.
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver_h = scope.root_nanbox_f64(receiver_f64);
-        let proto = crate::object::builtin_prototype_value("Date");
+        let proto = crate::realm_value_read! { "Date" => "Date.prototype"; crate::object::builtin_prototype_value("Date") };
         if (proto.to_bits() >> 48) == 0x7FFD {
             if let Some(v) =
                 own_symbol_property_for_receiver(proto, sym_f64, receiver_h.get_nanbox_f64())
@@ -807,7 +807,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     if (bits >> 48) == 0x7FFD {
         let ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
         if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
-            let func_proto = crate::object::builtin_prototype_value("Function");
+            let func_proto = crate::realm_value_read! { "Function" => "Function.prototype"; crate::object::builtin_prototype_value("Function") };
             if (func_proto.to_bits() >> 48) == 0x7FFD {
                 // Re-read: materializing `Function.prototype` can allocate.
                 let receiver = receiver_h.get_nanbox_f64();
