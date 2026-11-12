@@ -152,7 +152,10 @@ impl Model {
             && t != TOP
             && !self.is_marker(t)
             && match &self.toks[t as usize] {
-                TokKind::Obj(tm, _) => matches!(
+                // A template's prototype stands for the rest of the chain of
+                // its instances (the transitive link `cv_of(q, ..)` of
+                // `Cons::ChainUnion`): the same receiver, one link up.
+                TokKind::Obj(tm, _) | TokKind::Proto(tm) => matches!(
                     self.tmpls[*tm as usize].kind,
                     TmplKind::Lit { .. }
                         | TmplKind::Class { literal_shape: true, .. }
