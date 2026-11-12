@@ -71,6 +71,7 @@ use perry_hir::types::FuncId;
 use perry_hir::{CompareOp, Expr, Stmt};
 use perry_transform::effects::{direct_target, Fate, FateProof, Fates, ParamFate, Proof};
 
+use super::life_claims::{ClaimBirth, LifeClaims};
 use crate::codegen::ElisionFacts;
 
 /// `FactsField::kind_mask` bits that may hold a pointer (string, object,
@@ -149,6 +150,8 @@ struct ModuleCensus {
     /// (class, static method) -> its body, for HIR's `StaticMethodCall`.
     static_by_name: HashMap<(String, String), FuncId>,
     callers: sides::Callers,
+    /// Module function -> its name (the `fate:` negative control).
+    names: HashMap<FuncId, String>,
     /// Function -> call site -> what the caller does with the result.
     uses: Mutex<HashMap<FuncId, BTreeMap<(u32, u32), String>>>,
     /// Rows of the module, written when its codegen ends.
@@ -193,7 +196,9 @@ impl Drop for Registered {
 
 /// Starts the census of one module (a no-op unless `PERRY_LIFE_CENSUS`).
 pub(crate) fn register(hir: &perry_hir::Module, facts: &Arc<ElisionFacts>) -> Option<Registered> {
-    path()?;
+    if path().is_none() && !super::life_claims::wanted() {
+        return None;
+    }
     let m = Arc::new(ModuleCensus::new(hir, facts));
     registry().lock().expect("census registry").push(m.clone());
     CURRENT.with(|c| *c.borrow_mut() = Some(m.clone()));
@@ -208,6 +213,7 @@ impl ModuleCensus {
         let classes_ref: Vec<&perry_hir::Class> = hir.classes.iter().collect();
         let fates = Fates::compute(&functions, &classes_ref, &CodegenProof { facts });
         write_params(&hir.name, &functions, &classes_ref, &fates, &callers);
+        let names = hir.functions.iter().map(|f| (f.id, f.name.clone())).collect();
         let mut bodies = HashMap::new();
         let mut note = |f: &perry_hir::Function, label: String, direct: bool| {
             bodies.insert(
@@ -267,6 +273,7 @@ impl ModuleCensus {
             statics,
             static_by_name,
             callers,
+            names,
             uses: Mutex::new(HashMap::new()),
             pending: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
@@ -329,15 +336,17 @@ pub(crate) struct Scalar<'a> {
     pub arrays: &'a HashMap<u32, u32>,
 }
 
-/// One function's census, from the escape analyses of its body.
+/// One function's census, from the escape analyses of its body. Returns
+/// the body's lifetime claims (`life_claims`), empty unless the check build
+/// asked for them.
 pub(crate) fn observe(
     stmts: &[Stmt],
     boxed_vars: &HashSet<u32>,
     module_globals: &HashMap<u32, String>,
     scalar: &Scalar<'_>,
-) {
-    if path().is_none() {
-        return;
+) -> LifeClaims {
+    if path().is_none() && !super::life_claims::wanted() {
+        return LifeClaims::default();
     }
     let key = stmts.as_ptr() as usize;
     let found = registry()
@@ -349,11 +358,11 @@ pub(crate) fn observe(
         Some((m, b)) => (m, Some(b)),
         None => match CURRENT.with(|c| c.borrow().clone()) {
             Some(m) => (m, None),
-            None => return,
+            None => return LifeClaims::default(),
         },
     };
     let label = body.as_ref().map_or("<init>".to_string(), |b| b.label.clone());
-    let rows = classify(&module, stmts, boxed_vars, module_globals, scalar, body.as_ref());
+    let (rows, claims) = classify(&module, stmts, boxed_vars, module_globals, scalar, body.as_ref());
     let mut seen = module.seen.lock().expect("census seen");
     let mut pending = module.pending.lock().expect("census rows");
     for row in rows {
@@ -364,6 +373,11 @@ pub(crate) fn observe(
         if seen.insert((label.clone(), offset, row.1.clone())) {
             pending.push((label.clone(), row));
         }
+    }
+    if super::life_claims::wanted() {
+        claims
+    } else {
+        LifeClaims::default()
     }
 }
 
@@ -458,7 +472,7 @@ fn classify(
     module_globals: &HashMap<u32, String>,
     scalar: &Scalar<'_>,
     body: Option<&Body>,
-) -> Vec<Row> {
+) -> (Vec<Row>, LifeClaims) {
     let suspends = body.is_some_and(|b| b.suspends);
     let mut news = HashMap::new();
     super::find_new_candidates(stmts, boxed_vars, module_globals, &mut news);
@@ -497,6 +511,8 @@ fn classify(
         body,
         outer: None,
         pending_use: None,
+        call_site: None,
+        claims: LifeClaims::default(),
     };
     for s in stmts {
         c.stmt(s);
@@ -549,6 +565,21 @@ fn classify(
                 },
             ),
         };
+        if verdict == "frame" {
+            c.claims.frame.insert(
+                *id,
+                ClaimBirth {
+                    kind: cand.kind.word(),
+                    class: cand.class.clone(),
+                    offset: match cand.kind {
+                        Kind::New => offset.to_string(),
+                        _ => format!("#{offset}"),
+                    },
+                    proof: "proven".to_string(),
+                    fate: "-".to_string(),
+                },
+            );
+        }
         cand_verdicts.insert(format!("@cand:{id}"), verdict.clone());
         rows.push((
             cand.kind,
@@ -569,7 +600,7 @@ fn classify(
             r.7 = v.clone();
         }
     }
-    rows
+    (rows, std::mem::take(&mut c.claims))
 }
 
 impl ModuleCensus {
@@ -603,6 +634,11 @@ struct Census<'a> {
     outer: Option<String>,
     /// The statement's use of the result of the call it consists of.
     pending_use: Option<&'static str>,
+    /// While a direct call's arguments are walked: (byte_offset, byte_end)
+    /// of the call and the callee's name.
+    call_site: Option<(u32, u32, String)>,
+    /// The body's lifetime claims (`life_claims`).
+    claims: LifeClaims,
 }
 
 fn kind(e: &Expr) -> String {
@@ -1050,7 +1086,14 @@ impl Census<'_> {
     }
 
     /// A candidate or a birth as argument `i` whose fate is `fate`.
-    fn argument(&mut self, a: &Expr, fate: Option<ParamFate>, callee: &str, side: String) {
+    fn argument(
+        &mut self,
+        a: &Expr,
+        i: usize,
+        fate: Option<ParamFate>,
+        callee: &str,
+        side: String,
+    ) {
         if let Some(c) = self.cand(a) {
             match fate {
                 Some(f) if f.proven_dropped() => {}
@@ -1060,7 +1103,25 @@ impl Census<'_> {
                 }
                 _ => self.block(c, format!("call-kept:{callee}")),
             }
-        } else if birth(a).is_some() {
+        } else if let Some((kind, class)) = birth(a) {
+            if let (Some(f), Some((start, end, name))) = (fate, self.call_site.clone()) {
+                if f.fate == Fate::Dropped && start != 0 {
+                    let offset = match (a, kind) {
+                        (Expr::New { byte_offset, .. }, Kind::New) => byte_offset.to_string(),
+                        _ => format!("#{}", self.ordinal + 1),
+                    };
+                    self.claims.dropped_args.insert(
+                        (start, end, i),
+                        ClaimBirth {
+                            kind: kind.word(),
+                            class,
+                            offset,
+                            proof: super::life_claims::proof_word(f.proof),
+                            fate: format!("{name}#{i}"),
+                        },
+                    );
+                }
+            }
             let detail = fate.map_or(callee.to_string(), |f| format!("{callee}:{}", fate_word(f)));
             self.birth_site(a, "argument", detail, side, None);
         } else {
@@ -1201,10 +1262,30 @@ impl Census<'_> {
                 }
                 self.pending_use = None;
                 let this_fn = self.body.map(|b| b.func);
+                let site = match (fn_id, e) {
+                    (
+                        Some(f),
+                        Expr::Call {
+                            byte_offset,
+                            byte_end,
+                            ..
+                        },
+                    ) => Some((*byte_offset, *byte_end, f)),
+                    _ => None,
+                };
                 for (i, a) in args.iter().enumerate() {
-                    let fate = fn_id.map(|f| self.m.fates.call_arg(&[f], i));
+                    let fate = fn_id.map(|f| {
+                        let name = self.m.names.get(&f).map(String::as_str);
+                        super::life_claims::planted(name, i, self.m.fates.call_arg(&[f], i))
+                    });
                     let side = sides::call_side(self.m, this_fn, callee, i);
-                    self.argument(a, fate, what, side);
+                    let saved = self.call_site.take();
+                    self.call_site = site.map(|(s, e, f)| {
+                        let name = self.m.names.get(&f).cloned().unwrap_or_default();
+                        (s, e, name)
+                    });
+                    self.argument(a, i, fate, what, side);
+                    self.call_site = saved;
                 }
             }
             Expr::Compare { op, left, right } => {
