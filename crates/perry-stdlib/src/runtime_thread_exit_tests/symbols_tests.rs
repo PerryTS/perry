@@ -322,7 +322,7 @@ fn record_vm_script_release(freed: &perry_runtime::arena::thread_exit::FreedRang
 /// block, and the dead thread's bag itself is never dereferenced.
 #[test]
 fn thread_exit_releases_the_threads_vm_script_entry() {
-    let (script, alive) = std::thread::spawn(|| {
+    let alive = std::thread::spawn(|| {
         use perry_runtime::node_vm as vm;
         let scope = RuntimeHandleScope::new();
         let script =
@@ -332,7 +332,7 @@ fn thread_exit_releases_the_threads_vm_script_entry() {
         perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
             record_vm_script_release,
         );
-        (script, vm::vm_owner_entries_for_test(script).0)
+        vm::vm_owner_entries_for_test(script).0
     })
     .join()
     .unwrap();
