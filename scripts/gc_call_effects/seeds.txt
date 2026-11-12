@@ -628,6 +628,7 @@ indirect exact perry_runtime::gc::gc_init => exact perry_runtime::event_target_h
 indirect exact js_runtime_install_event_target => exact perry_runtime::event_target_hook_slots::register_roots -- inlined Web-event root-registration callback
 
 indirect exact perry_runtime::typedarray_hook_slots::coerce_for_kind => exact perry_runtime::typedarray::bigint::coerce_for_kind -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::dispatch_typed_array_method => exact perry_runtime::object::native_call_method::typed_array::typed_array_method_tower -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::format_typed_array => exact perry_runtime::typedarray::format::format_typed_array -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_copy => exact js_native_memory_copy -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_fill_u32 => exact js_native_memory_fill_u32 -- typed-array installer fills the concrete operation

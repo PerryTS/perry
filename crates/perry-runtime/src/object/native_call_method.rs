@@ -67,7 +67,11 @@ pub(crate) use proto_dispatch::{
     is_self_redispatching_proto_method, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
-pub(super) use typed_array::dispatch_typed_array_method;
+// The name dispatch on a typed-array receiver is a member of the typed-array
+// group: the always-linked callers reach it through its slot, which
+// `typedarray_hook_slots::install` fills with the tower in `typed_array.rs`.
+pub(super) use crate::typedarray_hook_slots::dispatch_typed_array_method;
+pub(crate) use typed_array::typed_array_method_tower;
 
 /// The receiver predicate of a class instance's fast method call
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled

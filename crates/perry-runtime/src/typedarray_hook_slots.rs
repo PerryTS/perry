@@ -566,6 +566,25 @@ pub(crate) fn written_buffer_dispatch() -> crate::object::BufferDispatch {
         .get()
         .unwrap_or(crate::object::dispatch_builtin_buffer_method)
 }
+/// The name dispatch of a `%TypedArray%.prototype` method on a typed array
+/// (`native_call_method::typed_array::dispatch_typed_array_method`): every
+/// operation it names is a member of this group, so an empty slot is "not a
+/// typed-array method" and the caller continues to its generic path.
+static TYPED_ARRAY_METHOD_DISPATCH: Hook<
+    unsafe fn(*mut TypedArrayHeader, &str, *const f64, usize) -> Option<f64>,
+> = Hook::empty();
+/// # Safety
+/// `ta` is a live typed array; `args_ptr` names `args_len` values (or is null).
+pub(crate) unsafe fn dispatch_typed_array_method(
+    ta: *mut TypedArrayHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    TYPED_ARRAY_METHOD_DISPATCH
+        .get()
+        .and_then(|dispatch| dispatch(ta, method_name, args_ptr, args_len))
+}
 pub(crate) fn install() {
     crate::perry_install_once!({
         BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_written_member_lookup);
@@ -628,6 +647,8 @@ pub(crate) fn install() {
         TYPED_ARRAY_FAST_INDEX_SET.set(crate::typedarray::typed_array_fast_index_set);
         TYPED_ARRAY_FROM_SOURCE_RAW_VALUES
             .set(crate::typedarray::typed_array_from_source_raw_values);
+        TYPED_ARRAY_METHOD_DISPATCH
+            .set(crate::object::native_call_method::typed_array_method_tower);
         TYPED_ARRAY_TO_ARRAY.set(crate::typedarray::typed_array_to_array);
     });
 }
