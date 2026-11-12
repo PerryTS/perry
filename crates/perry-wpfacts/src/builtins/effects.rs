@@ -963,7 +963,7 @@ fn spread_elems(m: &mut Model, s: NodeId) -> NodeId {
 }
 
 /// The key of internal slot `name`: `[[name]]`, as the promise's settled
-/// value is `#value` (`promise_value`); a family's chain has no member
+/// value is `[[PromiseResult]]` (`promise_value`); a family's chain has no member
 /// under it (`loads::family_load`).
 pub(crate) fn internal_atom(m: &mut Model, name: &str) -> Atom {
     m.atom(&format!("[[{name}]]"))

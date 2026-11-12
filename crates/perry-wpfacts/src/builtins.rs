@@ -739,9 +739,16 @@ pub fn other_unit_accessor(m: &mut Model) -> Tok {
     tok
 }
 
+/// A promise's settled value is its [[PromiseResult]] internal slot
+/// (ECMA-262 27.2.6), no property: no chain holds it, so a value that is
+/// no promise reads nothing under it (`effects::is_internal_key`).
+pub(crate) fn promise_result_atom(m: &mut Model) -> Atom {
+    effects::internal_atom(m, "PromiseResult")
+}
+
 /// The settled-value field of a promise token.
 fn promise_value(m: &mut Model, p: Tok) -> NodeId {
-    let a = m.atom("#value");
+    let a = promise_result_atom(m);
     m.field(p, a)
 }
 
@@ -749,7 +756,7 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 /// tokens in it, and whatever a thenable's `then` resolves.
 pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
     m.edge(v, dst);
-    let a = m.atom("#value");
+    let a = promise_result_atom(m);
     m.cons(
         v,
         Cons::Load {
