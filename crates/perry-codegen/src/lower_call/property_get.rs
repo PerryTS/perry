@@ -328,7 +328,7 @@ pub fn try_lower_property_get_method_call(
         perry_hir::folded_call::callee_site(callee),
         object,
         property,
-    ) {
+    )? {
         return own_override_guard::emit_dispatcher(ctx, object, property, args, call_byte_offset)
             .map(Some);
     }

@@ -65,21 +65,72 @@ pub(crate) fn typed_array_receiver_proven(
 /// Is the method call `object.name(..)` at `site` one whose receiver is
 /// annotated a typed array and not proven to hold one? Such a call is the
 /// ordinary method call.
+///
+/// A proven site keeps its lowering and, in check mode, tests its claim on
+/// the receiver value first ([`witness_typed_array`]). The test needs the
+/// value before the lowering evaluates it, so check mode consumes the fact
+/// only for a receiver that is read again for free (a local, `this`); any
+/// other receiver is the ordinary call there.
 pub(crate) fn unproven_typed_array_call(
-    ctx: &FnCtx<'_>,
+    ctx: &mut FnCtx<'_>,
     site: Option<Site>,
     object: &Expr,
     name: &str,
-) -> bool {
+) -> anyhow::Result<bool> {
     if !typed_array_sites_enabled() || !annotated_typed_array(ctx, object) {
-        return false;
+        return Ok(false);
     }
-    let proven = typed_array_receiver_proven(ctx, site, name);
-    if std::env::var_os("PERRY_METHOD_SITE_DIAG").is_some() {
+    let witnessed = !crate::verify_facts::enabled() || matches!(object, Expr::LocalGet(_) | Expr::This);
+    let proven = witnessed && typed_array_receiver_proven(ctx, site, name);
+    if std::env::var("PERRY_METHOD_SITE_DIAG").as_deref() == Ok("1") {
         eprintln!(
-            "[perry method_site] kind=typed_array key={name} site={site:?} verdict={}",
+            "[perry method_site] fn={} kind=typed_array key={name} verdict={}",
+            ctx.func.name,
             if proven { "proven" } else { "ordinary-call" }
         );
     }
-    !proven
+    if proven {
+        witness_typed_array(ctx, object, name)?;
+    }
+    Ok(!proven)
+}
+
+/// A site that keeps its typed-array lowering by the facts: the consumption
+/// record, and in check mode the test that the receiver value is a typed
+/// array ("method site").
+fn witness_typed_array(ctx: &mut FnCtx<'_>, object: &Expr, name: &str) -> anyhow::Result<()> {
+    use crate::types::{DOUBLE, I32, I64};
+    crate::facts_consumed::used();
+    crate::verify_facts::covered(crate::verify_facts::Fact::MethodSite, || {
+        serde_json::json!({ "key": name, "receiver": "typed array" })
+    });
+    if !crate::verify_facts::enabled() {
+        return Ok(());
+    }
+    let recv = crate::expr::lower_expr(ctx, object)?;
+    let answer = ctx
+        .block()
+        .call(DOUBLE, "js_util_types_is_typed_array", &[(DOUBLE, &recv)]);
+    let bits = ctx.block().bitcast_double_to_i64(&answer);
+    let holds = ctx
+        .block()
+        .icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let miss = ctx.new_block("methodsite.verify_miss");
+    let next = ctx.new_block("methodsite.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    crate::verify_facts::tick(ctx);
+    ctx.block().cond_br(&holds, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let what = format!("the receiver of .{name}() holds only typed arrays");
+    let site = crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, &recv)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
+    Ok(())
 }
