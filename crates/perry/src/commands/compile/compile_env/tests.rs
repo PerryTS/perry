@@ -396,6 +396,16 @@ fn held_lengths_switch_is_a_cache_input() {
     );
 }
 
+/// Instance nodes: the switch changes every binding fact of a summarized
+/// body (`bindings::BindingNodes`), so `=0` must never reuse an `=1` object.
+#[test]
+fn instance_nodes_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_INSTANCE_NODES"),
+        "PERRY_FACTS_INSTANCE_NODES must key the compile caches"
+    );
+}
+
 /// Named lengths: the switch changes the exported facts and every loop
 /// without calls that keeps `a.length` beside a store through another name,
 /// so `=0` must never reuse an `=1` object.

@@ -1453,6 +1453,12 @@ pub struct Model {
     /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
     /// them off): the solve records who changes an Array's length.
     pub held_lengths: bool,
+    /// A binding's facts are read off its shared node and its summary
+    /// instance copies (`bindings::BindingNodes`). Off with
+    /// `PERRY_FACTS_INSTANCE_NODES=0` and under the negative control
+    /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
+    /// an instance-born literal's birth state for the Array a callee grew.
+    pub instance_nodes: bool,
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
