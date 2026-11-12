@@ -148,6 +148,11 @@ impl Model {
             self.enum_key_any(o, src, site);
         }
         for &t in toks {
+            // The any-String store of this (o, src) holds every key a name
+            // could add (`enum_key_named`): nothing more to store.
+            if self.enum_key_any_done(o, src, site) {
+                return;
+            }
             let covered = t != TOP
                 && match from {
                     None => {
@@ -246,7 +251,7 @@ impl Model {
     }
 
     fn enum_key_named(&mut self, o: NodeId, src: NodeId, site: SiteId, a: Atom) {
-        if self.is_private_atom(a) {
+        if self.is_private_atom(a) || self.enum_key_any_done(o, src, site) {
             return;
         }
         // A for-in yields String keys only (ECMA-262 14.7.5.9
@@ -270,6 +275,14 @@ impl Model {
                 site,
             },
         );
+    }
+
+    /// Did the any-String store of `src` into `o` at `site` run? It writes
+    /// under every String key a for-in yields (ECMA-262 14.7.5.10: String
+    /// keys only), so it holds what any named store of the same value
+    /// would add.
+    fn enum_key_any_done(&self, o: NodeId, src: NodeId, site: SiteId) -> bool {
+        self.enum_key_done.contains(&(o, TOP, src, site as NodeId))
     }
 
     /// The store of a for-in key no rule names: under any String key.

@@ -124,3 +124,15 @@ fn for_in_key_store_skips_class_methods_and_accessors() {
     );
     assert!(tmpl(&pf, "Mat").escape.is_some(), "written valueOf/toString must be stored");
 }
+
+#[test]
+fn for_in_key_store_any_store_covers_named_stores() {
+    // Two calls: a literal subject and an object from unknown code. The any-String
+    // store of the unknown subject still decides (valueOf may be written),
+    // and the named store of the literal still lands in `name`.
+    let pf = mat(LOOP, "{ name: 5 }); mat.setValues(new Function(process.argv[2])()", "");
+    let m = tmpl(&pf, "Mat");
+    assert!(m.escape.is_some(), "the any-String store of an unknown subject must decide");
+    let name = &field(m, "name").kind;
+    assert!(name.top || name.prims & crate::model::prim::NUM != 0, "mat.name {name:?}");
+}
