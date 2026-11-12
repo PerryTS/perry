@@ -32,7 +32,11 @@ fn constructor_stores_do_not_declare_fields() {
         .filter(|f| f.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
         .map(|f| f.name.as_str())
         .collect();
-    assert_eq!(reserved, ["a"]);
+    // The reservations in first-store order (#14485, `constructor_store_keys`):
+    // the branch store `if (f) this.b = 2` reserves `b` at its place in the
+    // text, before `a`; `first`, stored only by the method `before()`, is no
+    // constructor store and stays unreserved.
+    assert_eq!(reserved, ["b", "a"]);
     assert!(!cell.constructor.as_ref().unwrap().body.is_empty());
     assert!(!child.constructor.as_ref().unwrap().body.is_empty());
 }

@@ -158,6 +158,8 @@ fn a_map_or_closure_receiver_needs_the_get_at_an_array_site() {
             0,
         );
         assert_eq!(js_array_method_needs_get(boxed(f), key(b"at")), 1);
+    }
+}
 
 /// A String (heap or inline), a boolean or a BigInt behind an Array
 /// annotation is no address: the site performs the real `Get` (a String has
