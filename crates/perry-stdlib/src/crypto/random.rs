@@ -84,6 +84,10 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
         );
     }
 
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
         perry_runtime::effect!(host_read, random);
@@ -172,6 +176,10 @@ pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
         );
     }
 
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
         perry_runtime::effect!(host_read, random);
@@ -220,6 +228,10 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
         );
     }
 
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
         perry_runtime::effect!(host_read, random);
@@ -264,6 +276,10 @@ pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
         );
     }
 
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
         perry_runtime::effect!(host_read, random);
@@ -397,6 +413,10 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
         );
     }
 
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
         perry_runtime::effect!(host_read, random);
