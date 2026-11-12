@@ -94,3 +94,15 @@ fn for_in_whose_body_reassigns_its_key_keeps_its_stores() {
     ));
     assert!(read_classes(&pf, "p").contains(&"B".to_string()));
 }
+
+/// `for (k in undefined)` and `for (k in null)` run no iteration (14.7.5.6
+/// ForIn/OfHeadEvaluation step 6.a): they keep the per-key runs.
+#[test]
+fn for_in_over_undefined_or_null_runs_no_iteration() {
+    let pf = facts(&src(
+        "const o: any = {}; o.a = new A(); o.b = new B(); m.set(o); m.set(undefined); m.set(null);",
+        BODY,
+    ));
+    assert_eq!(read_classes(&pf, "p"), vec!["A"]);
+    assert_eq!(read_classes(&pf, "q"), vec!["B"]);
+}

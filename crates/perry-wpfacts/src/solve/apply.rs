@@ -1465,7 +1465,9 @@ impl Model {
             }
             Cons::ForInKeys { ft, call } => {
                 // A primitive's keys (a string's indices) are no literal's.
-                if prim != 0 {
+                // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
+                // ForIn/OfHeadEvaluation step 6.a).
+                if prim & !(prim::NULL | prim::UNDEF) != 0 {
                     self.for_in_every_key(call, ft);
                 }
                 for &t in toks {
