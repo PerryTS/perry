@@ -412,6 +412,11 @@ pub struct BindingFacts {
     /// Such a local whose Arrays all have a defined length
     /// (`solve::arr_len`): their elements start right behind the header.
     pub stable_front: bool,
+    /// It holds only plain Arrays, and in every function that can name it
+    /// each event that may change the length of one of them goes through
+    /// this name (`named_lengths`): a loop without calls that walks it
+    /// need not fear a store through another name.
+    pub named_length: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities

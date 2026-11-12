@@ -100,6 +100,12 @@ const CLASSIFIED: &[(&str, &str, usize, &str)] = &[
         "test-only (restore)",
     ),
     // ---- Other headers (Map, Set, String, Buffer, the TLS pool).
+    (
+        "record_array.rs",
+        "(*header).capacity = capacity;",
+        2,
+        "RecordArrayHeader grow: capacity only rises (grown_capacity_or_throw)",
+    ),
     ("map.rs", "(*ptr).capacity = cap;", 1, "MapHeader"),
     ("map.rs", "(*map).capacity = new_capacity;", 1, "MapHeader"),
     ("map.rs", "(*previous).capacity = 0;", 1, "MapHeader"),

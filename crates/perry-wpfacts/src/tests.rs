@@ -164,6 +164,7 @@ mod instance_nodes;
 mod key_signs;
 mod list_caps;
 mod literal_strings;
+mod named_lengths;
 mod range_tightening;
 mod reach_accessor;
 mod receiver_slots;

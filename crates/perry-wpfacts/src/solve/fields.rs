@@ -470,6 +470,7 @@ impl Model {
     /// append (`push`, `unshift`, `splice`: the element key) fills the next
     /// index and leaves none. Unknown code's writes (escape, HARD) put
     /// every primitive among the elements already (`any_key_node`).
+    /// Negative control `PERRY_FACTS_SABOTAGE=nohole`: no Array has one.
     pub fn hole(&mut self, t: Tok) -> NodeId {
         #[cfg(test)]
         if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
@@ -500,7 +501,7 @@ impl Model {
             }
             _ => false,
         };
-        if !born_dense {
+        if !born_dense && !self.no_hole_sabotage {
             self.add_prim(n, prim::UNDEF);
         }
         n
@@ -508,7 +509,7 @@ impl Model {
 
     /// A write that may leave Array `t` with a hole (`hole`).
     pub fn mark_hole(&mut self, t: Tok) {
-        if t != TOP && self.is_arr(t) {
+        if t != TOP && self.is_arr(t) && !self.no_hole_sabotage {
             let h = self.hole(t);
             self.add_prim(h, prim::UNDEF);
         }

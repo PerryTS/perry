@@ -120,6 +120,10 @@ def main():
         ("rep-default-negative", "arrelem", "array rep"),
         ("slice-birth-negative", "slicebirth", "array rep"),
         ("inbounds-store-negative", "inbounds", "array rep"),
+        # A false "no hole" claim made at its source (not at a store) is
+        # reported where the for-of reads the slot.
+        ("forof-hole-negative", "nohole", "array rep"),
+        ("forof-dense-birth-negative", "arrdense", "array rep"),
         ("array-lazy-negative", "arrlazy", "array rep"),
         ("array-front-negative", "arrfront", "array rep"),
         ("const-array-negative", "arrconst", "constant array"),
@@ -137,6 +141,7 @@ def main():
         ("literal-string-negative", "litstr", "literal string"),
         ("held-length-negative", "heldlen", "held length"),
         ("instance-literal-negative", "instlit", "array constant length"),
+        ("named-length-negative", "namedlen", "named length"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
@@ -150,6 +155,12 @@ def main():
         ("local-range-negative", "localrange", "int32 input"),
         ("int32-read-negative", "int32read", "int32 input"),
         ("int-product-negative", "intprod", "int32 input"),
+        # The int32 claim is witnessed on every binding shape: a `const`
+        # read once (an F64 local with the collectors' i32 slot), and the
+        # facts' I32 slot in module init, a closure and a static method.
+        ("int32-const-negative", "range", "int32 input"),
+        ("int32-init-negative", "range", "int32 input"),
+        ("int32-closure-negative", "range", "int32 input"),
         ("undef-number-negative", "undefnum", "canonical number"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),

@@ -86,6 +86,26 @@ fn guarded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
     folded_call(expr)
 }
 
+/// The native array push (`perry_hir::folded_call::native_array_push`:
+/// `this.items.push(v)` in value position or in a constructor) as the call it
+/// is. Its arm appends with no test of the receiver, so the node gets the
+/// diamond here; the test is the inline push tiers' admission
+/// (`array_proto_guard::emit_plain_array_method_branch`), behind a heap-pointer
+/// test because the receiver is only annotated an Array. Not guarded: a fill
+/// push of a push-filled birth (`rest_elems::push_len`), whose Array nothing
+/// but its constructor has seen; and nothing with
+/// `PERRY_PUSH_METHOD_TIERS=0`.
+fn native_push_call<'a>(ctx: &FnCtx<'_>, expr: &'a Expr) -> Option<FoldedCall<'a>> {
+    if !super::array_push_own::method_tiers_enabled() || folded_call(expr).is_some() {
+        return None;
+    }
+    let call = perry_hir::folded_call::native_array_push(expr)?;
+    match call.receiver {
+        Receiver::Expr(recv) if super::rest_elems::push_len(ctx, recv).is_some() => None,
+        _ => Some(call),
+    }
+}
+
 /// The builtin-prototype family a folded node's method belongs to (#11915):
 /// the receiver kind the fold proved. Every row of [`guarded_call`] that is
 /// not a Map, Set or Array method is a Date method.
@@ -140,7 +160,9 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     if SUPPRESSED_NODE.with(|s| s.get()) == node {
         return Ok(None);
     }
-    let Some(call) = guarded_call(expr) else {
+    let native_push = native_push_call(ctx, expr);
+    let is_native_push = native_push.is_some();
+    let Some(call) = native_push.or_else(|| guarded_call(expr)) else {
         return Ok(None);
     };
 
@@ -192,7 +214,11 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         && !matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
     let receiver_is_array = matches!(expr, Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. })
         || crate::type_analysis::is_array_expr(ctx, receiver_expr);
-    let family = folded_family(expr).unwrap_or(crate::builtin_proto::BuiltinProto::Object);
+    let family = if is_native_push {
+        crate::builtin_proto::BuiltinProto::Array
+    } else {
+        folded_family(expr).unwrap_or(crate::builtin_proto::BuiltinProto::Object)
+    };
     let method = call.method;
 
     let receiver_value = lower_expr(ctx, receiver_expr)?;
@@ -209,15 +235,24 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             Some(value) => value,
             None => lower_expr(ctx, receiver_expr)?,
         };
-        emit_own_override_branch(
-            ctx,
-            method,
-            &recv,
-            receiver_is_array,
-            Some(family),
-            &generic_label,
-            &builtin_label,
-        );
+        if is_native_push {
+            super::array_proto_guard::emit_plain_array_method_branch(
+                ctx,
+                &recv,
+                &builtin_label,
+                &generic_label,
+            );
+        } else {
+            emit_own_override_branch(
+                ctx,
+                method,
+                &recv,
+                receiver_is_array,
+                Some(family),
+                &generic_label,
+                &builtin_label,
+            );
+        }
 
         ctx.current_block = generic_idx;
         let generic_value = emit_generic(ctx, receiver_expr, method, &call.args)?;

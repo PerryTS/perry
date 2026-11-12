@@ -83,8 +83,18 @@ impl Model {
     /// (`held_lengths`): a store at `at`, or with `call` the builtin method
     /// call `at`; `u32::MAX` when the solve cannot place it.
     pub(crate) fn len_event(&mut self, t: Tok, at: u32, call: bool) {
-        if self.held_lengths && t != TOP && self.is_arr(t) {
-            self.len_events.insert((t, at, call));
+        // The receiver of the store being applied (`Cons::Store`).
+        let recv = match call {
+            false => self.store_at.unwrap_or(crate::model::NO_NODE),
+            true => crate::model::NO_NODE,
+        };
+        self.len_event_through(t, at, call, recv);
+    }
+
+    /// `len_event` of a store whose receiver was read from node `recv`.
+    pub(crate) fn len_event_through(&mut self, t: Tok, at: u32, call: bool, recv: NodeId) {
+        if (self.held_lengths || self.named_lengths) && t != TOP && self.is_arr(t) {
+            self.len_events.insert((t, at, call, recv));
         }
     }
 

@@ -112,24 +112,30 @@ fn throw_unknown_encoding(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
 }
 
-/// True when `value` is a `Buffer` or `Uint8Array` (the acceptance set of
-/// node's `Buffer.prototype.copy/compare/equals` target argument).
-fn is_buffer_or_uint8array(value: f64) -> bool {
-    let bits = value.to_bits() as i64;
-    if crate::buffer::js_buffer_is_buffer(bits) == 1 {
-        return true;
-    }
-    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    raw >= 0x1000 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+/// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
+/// target, answered from the one view classification
+/// ([`super::view_brand::view_brand`]), and only for a view that carries the
+/// byte storage the copy and compare routines then read
+/// ([`super::view_brand::ViewBrand::has_storage`]). `copy` (`any_view`)
+/// takes every `ArrayBufferView` (node's `ArrayBuffer.isView`), subclass
+/// instances included; `compare`/`equals` take node's `isUint8Array` set: a
+/// `Buffer`, a `Uint8Array` or an instance of a subclass of either. An
+/// `ArrayBuffer`, key material, an object without view storage and every
+/// non-view are rejected by both.
+fn is_buffer_target(value: f64, any_view: bool) -> bool {
+    super::view_brand::view_brand(value).is_some_and(|brand| {
+        (any_view && brand.has_storage())
+            || brand.typed_array_kind() == Some(crate::typedarray_hook_slots::KIND_UINT8)
+    })
 }
 
-/// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
-/// target with `TypeError [ERR_INVALID_ARG_TYPE]` — and without this guard a
-/// number/boolean argument's bit pattern is masked into a bogus pointer and
-/// dereferenced (segfault). `name` is node's parameter name (`target` /
-/// `otherBuffer`).
-fn validate_buffer_target(value: f64, name: &str) {
-    if is_buffer_or_uint8array(value) {
+/// `Buffer.prototype.copy/compare/equals` reject a target outside
+/// [`is_buffer_target`]'s set with `TypeError [ERR_INVALID_ARG_TYPE]` — and
+/// without this guard a number/boolean argument's bit pattern is masked into a
+/// bogus pointer and dereferenced (segfault). `name` is node's parameter name
+/// (`target` / `otherBuffer`); `any_view` is set for `copy`.
+fn validate_buffer_target(value: f64, name: &str, any_view: bool) {
+    if is_buffer_target(value, any_view) {
         return;
     }
     crate::validators::throw_invalid_arg_type(name, "an instance of Buffer or Uint8Array", value);
@@ -887,9 +893,9 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
         "copy" => {
             if args.is_empty() {
-                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target");
+                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target", true);
             }
-            validate_buffer_target(args[0], "target");
+            validate_buffer_target(args[0], "target", true);
             let dst_bits = args[0].to_bits();
             let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
                 dst_bits & 0x0000_FFFF_FFFF_FFFF
@@ -1010,6 +1016,7 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "otherBuffer",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -1026,6 +1033,7 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "target",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -1429,3 +1437,7 @@ mod write_args_tests;
 #[cfg(test)]
 #[path = "buffer_written_member_tests.rs"]
 mod written_member_tests;
+
+#[cfg(test)]
+#[path = "buffer_dispatch_target_tests.rs"]
+mod target_tests;

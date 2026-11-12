@@ -1234,10 +1234,23 @@ pub extern "C" fn js_arraylike_slice(
         crate::array::array_length_range_error();
     }
 
-    let result = unsafe {
+    let (result, result_is_plain) = unsafe {
         super::species::array_species_create(recv_h.get_nanbox_f64(), count.max(0) as usize)
     };
     let result_h = scope.root_nanbox_f64(result);
+    // A species constructor's result ends with Set(A, "length", count, true);
+    // the default arm's plain array was created with that length.
+    let finish = |result_h: &crate::gc::RuntimeHandle<'_>| -> f64 {
+        if !result_is_plain {
+            unsafe {
+                super::species::species_result_set_length(
+                    result_h.get_nanbox_f64(),
+                    count.max(0) as usize,
+                );
+            }
+        }
+        result_h.get_nanbox_f64()
+    };
     // A plain object that owns and inherits no indexed property has no element
     // in any range: the species result is already `count` holes.
     let recv_bits = JSValue::from_bits(recv_h.get_nanbox_f64().to_bits());
@@ -1248,7 +1261,7 @@ pub extern "C" fn js_arraylike_slice(
             )
         }
     {
-        return result_h.get_nanbox_f64();
+        return finish(&result_h);
     }
     let value_h = scope.root_nanbox_f64(undef());
     for n in 0..count {
@@ -1258,14 +1271,23 @@ pub extern "C" fn js_arraylike_slice(
         }
         value_h.set_nanbox_f64(al_get(recv_h.get_nanbox_f64(), k));
         unsafe {
-            super::species::species_result_set(
-                result_h.get_nanbox_f64(),
-                n as usize,
-                value_h.get_nanbox_f64(),
-            );
+            if result_is_plain {
+                super::js_array_set_f64(
+                    crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64())
+                        as *mut ArrayHeader,
+                    n as u32,
+                    value_h.get_nanbox_f64(),
+                );
+            } else {
+                super::species::species_result_define(
+                    result_h.get_nanbox_f64(),
+                    n as usize,
+                    value_h.get_nanbox_f64(),
+                );
+            }
         }
     }
-    result_h.get_nanbox_f64()
+    finish(&result_h)
 }
 
 /// ECMA-262 relative-index clamp used by `slice` (negative counts from the end,
