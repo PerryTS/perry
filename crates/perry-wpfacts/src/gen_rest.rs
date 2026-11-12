@@ -22,6 +22,16 @@ mod nodes;
 mod reflection;
 mod web;
 
+/// `PERRY_PUSH_METHOD_TIERS=0` (`off`, `false`): the native array push
+/// (`perry_hir::folded_call::native_array_push`) is an element store with no
+/// method call, as codegen then lowers it (no test of the receiver).
+fn push_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_PUSH_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -145,11 +155,22 @@ impl<'a> Gen<'a> {
                     } else {
                         self.mcall(o, key, a, vec![])
                     }
-                } else if let (true, Some(o)) =
-                    (module == "array" && method == "push_field_single", o)
-                {
+                } else if let (true, Some(o)) = (
+                    module == "array"
+                        && (method == "push_field_single"
+                            || (matches!(method.as_str(), "push_single" | "push")
+                                && push_method_tiers()
+                                && !self
+                                    .push_fill
+                                    .pushes
+                                    .contains_key(&(e as *const Expr as usize)))),
+                    o,
+                ) {
                     // `push_field_single` checks the receiver and runs its own
-                    // `push` otherwise, which is the method call itself.
+                    // `push` otherwise, which is the method call itself. So
+                    // does the native push arm (`perry_hir::folded_call::
+                    // native_array_push`), a fill push of a push-filled birth
+                    // excepted: its Array has no other holder yet.
                     let push = self.m.atom("push");
                     self.list_push(o, Some(a.len() as u32));
                     self.mcall(o, Key::Named(push), a, vec![])
