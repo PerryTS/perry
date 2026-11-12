@@ -167,6 +167,8 @@ fn js_inline_arena_slow_alloc_body(
         }
         // Allocate via existing path (may push a new block + run GC).
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
+        #[cfg(perry_gc_instruments)]
+        super::alloc_sample::inline_slow_alloc(ptr, size);
         // Resync inline state to the (possibly new) current block.
         let (data, block_offset, block_size) = {
             let arena = &*arena_ptr;

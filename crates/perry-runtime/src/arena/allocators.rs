@@ -117,17 +117,23 @@ pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8)
     super::alloc_sample::note(total, obj_type);
     // Old-gen birth walks page lists and can reserve — outside the contract.
     if crate::gc::is_large_object_total_size_for_type(total, obj_type) {
+        #[cfg(perry_gc_instruments)]
+        life_refused(total, obj_type);
         return std::ptr::null_mut();
     }
     // The free-list arm of `arena_alloc_gc` cannot collect either, but nothing
     // in the tree ever sets this latch, so serving it here would be untested
     // code on a hot path. Refuse and let the caller take the rooted path.
     if crate::gc::hot_arena_free_list_nonempty().get() {
+        #[cfg(perry_gc_instruments)]
+        life_refused(total, obj_type);
         return std::ptr::null_mut();
     }
 
     let raw = arena_alloc_no_collect(total, align);
     if raw.is_null() {
+        #[cfg(perry_gc_instruments)]
+        life_refused(total, obj_type);
         return std::ptr::null_mut();
     }
 
@@ -224,6 +230,8 @@ pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut
         (*header).size = crate::gc::gc_header_size_word(total);
     }
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, total, obj_type);
     unsafe { raw.add(GC_HEADER_SIZE) }
 }
 
@@ -273,9 +281,12 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// for it, so an untenured old parent would lose its young children at the
 /// next minor whenever its page happened not to be dirty already.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
-    arena_alloc_gc_old_registered(size, align, obj_type, |header, total| {
+    let user = arena_alloc_gc_old_registered(size, align, obj_type, |header, total| {
         defer_old_object_page_registration(header, total)
-    })
+    });
+    #[cfg(perry_gc_instruments)]
+    life_old_birth(user, gc_padded_total_size(size, align), obj_type);
+    user
 }
 
 /// [`arena_alloc_gc_old`] for the copying minor's promotion of a live young
@@ -369,6 +380,8 @@ pub(crate) fn arena_alloc_gc_collecting_holder(size: usize, align: usize, obj_ty
         record_arena_object_start(header as usize, obj_type);
         defer_old_object_page_registration(header as usize, total);
     }
+    #[cfg(perry_gc_instruments)]
+    life_old_birth(user, total, obj_type);
     user
 }
 
@@ -438,6 +451,26 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
     register_old_object_pages(raw as usize, total);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
+}
+
+/// LIFE I2 A: a no-collection attempt noted an object it then refused.
+#[cfg(perry_gc_instruments)]
+#[cold]
+#[inline(never)]
+fn life_refused(total: usize, obj_type: u8) {
+    if super::alloc_life::on() {
+        super::alloc_life::refused(total, obj_type);
+    }
+}
+
+/// LIFE I2 A: a fresh old-generation or holder birth at `user`.
+#[cfg(perry_gc_instruments)]
+#[cold]
+#[inline(never)]
+fn life_old_birth(user: *mut u8, total: usize, obj_type: u8) {
+    if super::alloc_life::on() && !user.is_null() {
+        super::alloc_life::old_birth(user as usize - crate::gc::GC_HEADER_SIZE, total, obj_type);
+    }
 }
 
 #[inline(always)]
@@ -518,6 +551,8 @@ pub(crate) fn arena_alloc_gc_large_young_no_collect(
     super::alloc_sample::note(total, obj_type);
     let raw = super::young_large::allocate_no_collect(total, align);
     if raw.is_null() {
+        #[cfg(perry_gc_instruments)]
+        life_refused(total, obj_type);
         return raw;
     }
     let user = unsafe { init_young_header(raw, total, obj_type) };
@@ -619,6 +654,8 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, total, obj_type);
     raw.add(GC_HEADER_SIZE)
 }
 
@@ -633,6 +670,8 @@ unsafe fn init_young_header_word(raw: *mut u8, idle_image: u64, obj_type: u8) ->
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, (*header).size as usize, obj_type);
     raw.add(GC_HEADER_SIZE)
 }
 
@@ -714,6 +753,8 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
             (*header).size = total as u32;
         }
         record_arena_object_start(user_ptr as usize - GC_HEADER_SIZE, obj_type);
+        #[cfg(perry_gc_instruments)]
+        super::alloc_sample::placed((user_ptr as usize - GC_HEADER_SIZE) as *mut u8, total, obj_type);
         return user_ptr;
     }
 
@@ -747,6 +788,8 @@ fn arena_alloc_gc_slow(size: usize, align: usize, obj_type: u8, total: usize) ->
         (*header).size = total as u32;
     }
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, total, obj_type);
 
     unsafe { raw.add(GC_HEADER_SIZE) }
 }

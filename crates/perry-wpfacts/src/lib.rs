@@ -37,6 +37,7 @@ mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_const;
+pub mod family_reach;
 mod gen_expr;
 mod gen_protocol;
 mod gen_rest;
@@ -67,6 +68,7 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
+pub use family_reach::{FamilyReach, FamilyVerdict};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 pub use signatures::Signature;
 pub use derive::{
@@ -296,6 +298,11 @@ pub struct ProgramFacts {
     /// Completed whole-program reach, or an incomplete conservative view
     /// when activation was unavailable or the solve stopped early.
     pub body_reach: BodyReach,
+    /// Per runtime family, whether the program may ever create or observe a
+    /// value of it (`family_reach`). `None`: not computed
+    /// (`PERRY_FACTS_FAMILY_REACH=0`, a per-unit run): every family is live.
+    /// Nothing reads it yet but the dump.
+    pub family_reach: Option<FamilyReach>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
@@ -579,8 +586,16 @@ fn generate<'a>(
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
     g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
+    g.m.reach_new_target =
+        reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
     g.m.reach_step_done =
         reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_gen_members =
+        reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
+    g.m.reach_iter_close =
+        reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
+    g.m.reach_spread_args =
+        reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -598,6 +613,7 @@ fn generate<'a>(
         g.m.budget = Some((t0, std::time::Duration::from_secs(secs)));
     }
     g.m.unit_mode = cfg.unit;
+    g.m.family_reach.on = !cfg.unit && family_reach::enabled();
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.widen = !cfg.unit;
@@ -2344,8 +2360,11 @@ fn compute_act<'a>(
     } else {
         None
     };
+    let family_reach = (!cfg.unit && family_reach::enabled())
+        .then(|| family_reach::derive(&g, cfg.unit, cfg.dynamic_code.as_deref()));
     let mut pf = ProgramFacts {
         verification_bodies,
+        family_reach,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,

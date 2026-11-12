@@ -1808,9 +1808,22 @@ pub struct Model {
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.
     pub name_fold_calls: FxHashMap<CallId, &'static str>,
+    /// The `prototype` of the new target of a `Reflect.construct` whose
+    /// result is unknown goes to ⊤ with it (`Model::new_target_unknown`,
+    /// `reach::new_target`).
+    pub reach_new_target: bool,
     /// An iteration consumer reads `done` of each step result
     /// (`Model::step_done`, `reach::step_done`).
     pub reach_step_done: bool,
+    /// A generator object has the members it inherits
+    /// (`builtins::gen_members`, `reach::gen_members`).
+    pub reach_gen_members: bool,
+    /// A built-in consumer that can stop early closes its iterator
+    /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
+    pub reach_iter_close: bool,
+    /// A hand-written built-in rule's positions hold what a spread
+    /// argument supplies (`Model::positional`, `reach::spread_args`).
+    pub reach_spread_args: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
@@ -2545,6 +2558,8 @@ pub struct Model {
     /// DECISIONS 225: the function bodies that can run, when the analysis
     /// gates bodies on it (`None`: every body runs).
     pub act: Option<Act>,
+    /// What the solve observed of the runtime families (`family_reach`).
+    pub(crate) family_reach: crate::family_reach::State,
 }
 
 /// DECISIONS 225: which function bodies can run. A body is active once its
