@@ -160,6 +160,7 @@ mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
 mod held_lengths;
+mod instance_nodes;
 mod key_signs;
 mod list_caps;
 mod literal_strings;

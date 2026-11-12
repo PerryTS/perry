@@ -136,6 +136,7 @@ def main():
         ("wide-key-negative", "widekey", "wide key"),
         ("literal-string-negative", "litstr", "literal string"),
         ("held-length-negative", "heldlen", "held length"),
+        ("instance-literal-negative", "instlit", "array constant length"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
