@@ -1586,6 +1586,10 @@ pub struct Model {
     /// store under a Number key counts as in bounds, a wrong claim the
     /// element read's witness must catch (a hole read as a Number).
     pub inbounds_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=nohole`): no Array ever holds
+    /// a hole (`hole`, `mark_hole`): its iteration never yields the
+    /// `undefined` of one, a wrong claim the read's witness must catch.
+    pub no_hole_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `(call, specifier value)` a computed `require` already resolved
