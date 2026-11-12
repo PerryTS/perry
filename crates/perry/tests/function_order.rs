@@ -15,7 +15,10 @@ function neverRun(n: number): number { let s = 0; for (let i = 0; i < n; i++) s 
 const steps = [delta, gamma, beta, alpha];
 let x = Number(process.argv.length) + 20;
 for (const step of steps) x = step(x);
-if (x === -12345) x = neverRun(x);
+// A value use keeps `neverRun`'s callable wrapper in the binary: generated
+// code that never runs and is listed nowhere.
+const later = [neverRun];
+if (x === -12345) x = later[0](x);
 console.log("result " + x);
 "#;
 
@@ -79,15 +82,32 @@ fn text_symbols(binary: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The symbol of `function`'s code, named as the compiler names it
+/// (`perry_codegen::symbol_names`). The function body (`perry_fn_*`) when it
+/// is a symbol of its own; a small typed function's public entry is
+/// `alwaysinline` (P2 inline admissions, d08e52eaa8), so once every call site
+/// has inlined it the body runs inside its callable wrapper
+/// (`__perry_wrap_perry_fn_*`, which `steps` calls) and only that is left.
 fn user_symbol(names: &[String], function: &str) -> String {
-    // The function body itself, not its `__perry_wrap_*` callable wrapper.
-    let suffix = format!("__{function}");
-    let matches: Vec<&String> = names
-        .iter()
-        .filter(|n| n.starts_with("perry_fn_") && n.ends_with(&suffix))
-        .collect();
-    assert_eq!(matches.len(), 1, "one symbol for {function}: {matches:?}");
-    matches[0].clone()
+    use perry_codegen::symbol_names;
+    let prefix = symbol_names::module_prefix("main.ts");
+    let body = symbol_names::function(&prefix, function);
+    let wrapper = symbol_names::function_wrapper(&prefix, function);
+    let count = |name: &str| names.iter().filter(|n| *n == name).count();
+    assert!(
+        count(&body) <= 1 && count(&wrapper) <= 1,
+        "one symbol each for {function}: {names:?}"
+    );
+    if count(&body) == 1 {
+        body
+    } else {
+        assert_eq!(
+            count(&wrapper),
+            1,
+            "{function}: neither {body} nor {wrapper} in {names:?}"
+        );
+        wrapper
+    }
 }
 
 fn position(symbols: &[String], name: &str) -> usize {
