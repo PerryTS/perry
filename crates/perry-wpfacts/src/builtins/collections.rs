@@ -558,6 +558,8 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
+    m.step_done(r1);
+    m.step_done(r2);
     out
 }
 
