@@ -229,8 +229,8 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     // receiver value an Array, the member the realm's built-in on each) is
     // the plain fold, with no test of its receiver. Check mode runs the
     // dropped test on the receiver value first.
-    let array_family = is_native_push
-        || folded_family(expr) == Some(crate::builtin_proto::BuiltinProto::Array);
+    let array_family =
+        is_native_push || folded_family(expr) == Some(crate::builtin_proto::BuiltinProto::Array);
     if array_family
         && crate::method_site::array_member_proven(
             ctx,
