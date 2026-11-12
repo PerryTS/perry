@@ -1493,11 +1493,33 @@ impl<'a> Gen<'a> {
         for &(a, _) in named.iter().flatten() {
             push_unique(&mut accessor_keys, a);
         }
+        // A method under a computed key that names one property key
+        // (`*[Symbol.iterator]()`, `["k"]()`) is defined under exactly that
+        // key (ECMA-262 15.4.4 MethodDefinitionEvaluation, 10.2.8
+        // DefineMethodProperty): it is a named method, as `k()` is.
+        let method_named: Vec<Option<Atom>> = c
+            .computed_members
+            .iter()
+            .map(|cm| {
+                if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
+                    return None;
+                }
+                match self.read_key(mi, &cm.key_expr) {
+                    Key::Named(a) => Some(a),
+                    Key::Any(_) => None,
+                }
+            })
+            .collect();
         let proto_members = {
             let mut v = accessor_keys.clone();
             for meth in &c.methods {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
+            }
+            for (cm, a) in c.computed_members.iter().zip(&method_named) {
+                if let (false, Some(a)) = (cm.is_static, a) {
+                    push_unique(&mut v, *a);
+                }
             }
             // A literal has no own `constructor`: it reads
             // `Object.prototype`'s, which a store into ⊤ may replace.
@@ -1539,7 +1561,10 @@ impl<'a> Gen<'a> {
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
-            has_computed_members: named.iter().any(|n| n.is_none()),
+            has_computed_members: named
+                .iter()
+                .zip(&method_named)
+                .any(|(n, m)| n.is_none() && m.is_none()),
             field_init: None,
             proto_members,
             parent_value: None,
@@ -1690,7 +1715,12 @@ impl<'a> Gen<'a> {
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for (cm, named) in c.computed_members.iter().zip(named) {
+        for ((cm, named), method_key) in c
+            .computed_members
+            .iter()
+            .zip(named)
+            .zip(method_named)
+        {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -1721,8 +1751,19 @@ impl<'a> Gen<'a> {
                 continue;
             }
             let holder = if cm.is_static { cobj } else { proto };
-            let any = self.m.field_any(holder);
             let t = self.m.funcs[f as usize].token;
+            if let Some(a) = method_key {
+                let n = self.m.field_r(holder, a);
+                self.m.add_tok(n, t);
+                if cm.is_static {
+                    self.m.tmpls[tm as usize].static_methods.push(a);
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                }
+                continue;
+            }
+            let any = self.m.field_any(holder);
             self.m.add_tok(any, t);
             // A computed accessor may be named after any key.
             if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
