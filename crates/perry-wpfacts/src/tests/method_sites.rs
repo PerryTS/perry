@@ -214,3 +214,109 @@ new H().run();
         }
     }
 }
+
+/// Map / Set receivers (`SITE_MAP`, `SITE_SET`): a field that only ever holds
+/// a realm-born Map has the Map fact at its folded `get` / `set` sites; a
+/// parameter that is also handed an Array, an object or a Map subclass
+/// instance has none; the sabotage claims every site.
+mod collections {
+    use crate::FactsConfig;
+    use perry_hir::folded_call::{SITE_MAP, SITE_SET};
+
+    const SRC: &str = r#"
+class Sub extends Map<number, number> {}
+class Holder {
+  table: Map<string, number> = new Map<string, number>();
+  seen: Set<number> = new Set<number>();
+  run(k: string): any { this.table.set(k, 1); this.seen.add(2); return this.table.get(k); }
+}
+function onlyMaps(m: Map<number, number>): any { return m.get(1); }
+function lied(m: Map<number, number>): any { return m.get(2); }
+function subbed(m: Map<number, number>): any { return m.get(3); }
+function sets(s: Set<number>): any { return s.has(4); }
+new Holder().run("a");
+onlyMaps(new Map<number, number>());
+lied(new Map<number, number>());
+lied([1, 2] as any);
+lied({ get() { return 0; } } as any);
+subbed(new Sub());
+sets(new Set<number>());
+sets(new Map<number, number>() as any);
+"#;
+
+    fn solve(sabotage: Option<&str>) -> crate::ProgramFacts {
+        let module = perry_parser::parse_typescript(SRC, "t.ts").expect("parses");
+        let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+        let cfg = FactsConfig {
+            diagnostics: true,
+            max_work: Some(50_000_000),
+            sabotage: sabotage.map(str::to_string),
+            ..FactsConfig::default()
+        };
+        crate::compute(&[("t.ts".to_string(), &hir)], &cfg)
+    }
+
+    /// The flags of every exported site of method `key`, sorted.
+    fn flags(pf: &crate::ProgramFacts, key: &str) -> Vec<u8> {
+        let mut out: Vec<u8> = pf
+            .bindings_for("t.ts")
+            .expect("module bindings")
+            .method_sites
+            .iter()
+            .filter(|(_, k, _)| k == key)
+            .map(|(_, _, f)| *f & (SITE_MAP | SITE_SET))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    fn dump(pf: &crate::ProgramFacts, key: &str) -> Vec<String> {
+        let key = format!(" key={key} ");
+        pf.rep_probe
+            .iter()
+            .filter(|l| l.starts_with("# method_site ") && l.contains(&key))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn a_receiver_of_realm_born_collections_has_the_fact() {
+        let pf = solve(None);
+        // `this.table.set` and `this.seen.add`: one site each, proven.
+        assert!(
+            flags(&pf, "set").contains(&SITE_MAP),
+            "{:?}",
+            dump(&pf, "set")
+        );
+        assert!(
+            flags(&pf, "add").contains(&SITE_SET),
+            "{:?}",
+            dump(&pf, "add")
+        );
+        // `get`: `this.table.get` and `onlyMaps` proven; `lied` (an Array, an
+        // object) and `subbed` (a subclass instance) are not.
+        let gets = dump(&pf, "get");
+        assert_eq!(
+            gets.iter().filter(|l| l.contains(" map=1 ")).count(),
+            2,
+            "{gets:?}"
+        );
+        assert_eq!(
+            gets.iter().filter(|l| l.contains(" map=0(")).count(),
+            2,
+            "{gets:?}"
+        );
+        // `sets` also receives a Map: no Set fact.
+        assert_eq!(flags(&pf, "has"), vec![0], "{:?}", dump(&pf, "has"));
+    }
+
+    #[test]
+    fn the_sabotage_claims_every_site() {
+        let pf = solve(Some("collsite"));
+        for key in ["get", "has"] {
+            for l in dump(&pf, key) {
+                assert!(l.contains(" map=1 ") && l.contains(" set=1 "), "{l}");
+            }
+        }
+    }
+}

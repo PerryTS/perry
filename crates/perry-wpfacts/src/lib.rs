@@ -1146,8 +1146,7 @@ fn compute_act<'a>(
         &g,
         &mut bindings,
         interp_guard.is_some(),
-        cfg.sabotage.as_deref() == Some("tasite"),
-        cfg.sabotage.as_deref() == Some("arraysite"),
+        cfg.sabotage.as_deref(),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);

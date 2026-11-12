@@ -58,6 +58,14 @@ pub const SITE_TYPED_ARRAY: u8 = 1;
 /// Array family (wpfacts `method_sites`).
 pub const SITE_ARRAY_MEMBER: u8 = 2;
 
+/// Every value reaching the receiver is a `Map` the realm bore (`new Map`),
+/// at every copy of the site (wpfacts `method_sites`). Nothing about the
+/// member: an own or prototype `get` is the own-override guard's question.
+pub const SITE_MAP: u8 = 4;
+
+/// [`SITE_MAP`] for `Set` (`new Set`).
+pub const SITE_SET: u8 = 8;
+
 /// The site of the unfolded call whose callee is `callee`, when it has a
 /// source offset.
 pub fn callee_site(callee: &Expr) -> Option<Site> {
