@@ -304,6 +304,7 @@ impl Model {
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
                 | Cons::FieldTruthy { .. }
+                | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
@@ -1804,6 +1805,7 @@ impl Model {
             Cons::FieldTruthy { key, dst } => {
                 format!("fieldtruthy {n} {} {dst}", self.key_name(*key))
             }
+            Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(

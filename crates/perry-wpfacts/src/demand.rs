@@ -137,6 +137,7 @@ pub(crate) fn solve(m: &mut Model) {
                     // operand.
                     Cons::NotNullish { dst }
                     | Cons::FieldTruthy { dst, .. }
+                    | Cons::Fulfil { dst }
                     | Cons::Defined { dst }
                     | Cons::NotUndefined { dst }
                     | Cons::Falsy { dst }

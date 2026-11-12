@@ -243,6 +243,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
             key: Key::Named(a), ..
         } if m.atoms[*a as usize].starts_with("@@__perry_wk_") => Allowed,
         Cons::Load { key: k, .. } | Cons::FieldTruthy { key: k, .. } => Reject(R5Load(key(k))),
+        // A resolution reads `then` (a protocol, 27.2.1.3.2 step 9).
+        Cons::Fulfil { .. } => Reject(R5Load("then".into())),
         Cons::BirthField { key: k, .. } if layout(k) => Allowed,
         Cons::BirthField { key: k, .. } => Reject(R2Write(key(k))),
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => TypedCall(*call),
@@ -394,6 +396,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
             op(named(key))
         }
+        Cons::Fulfil { .. } => op("then".into()),
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
         Cons::IndexHole | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
         // `push`'s own store of its argument (`Gen::elem_store`).
@@ -1844,6 +1847,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 Cons::Identity { .. } => "identity",
                 Cons::Load { .. }
                 | Cons::FieldTruthy { .. }
+                | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }

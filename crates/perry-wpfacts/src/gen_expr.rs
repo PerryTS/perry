@@ -590,7 +590,9 @@ impl<'a> Gen<'a> {
     /// `then` passes to the resolve function.
     pub(crate) fn awaited(&mut self, v: NodeId) -> NodeId {
         let out = self.tmp("awaited");
-        self.m.edge(v, out);
+        // One rule with `builtins::adopt`: a value fulfils as itself only
+        // when its `then` read is not callable (`Cons::Fulfil`).
+        self.m.cons(v, Cons::Fulfil { dst: out });
         let pa = crate::builtins::promise_result_atom(&mut self.m);
         self.m.cons(
             v,
@@ -600,10 +602,15 @@ impl<'a> Gen<'a> {
             },
         );
         // Thenables: `then(resolve, reject)` with runtime resolvers.
-        let resolver = self.resolver_fn(out);
-        let rej = self.resolver_fn(self.thrown);
+        let rn = self.tmp("resolver");
+        let jn = self.tmp("rejecter");
         let then = self.m.atom("then");
-        let (call, ret) = self.new_call(ThisArg::Node(v), vec![resolver, rej], vec![]);
+        let (call, ret) = self.new_call(ThisArg::Node(v), vec![rn, jn], vec![]);
+        let res = crate::builtins::resolver(&mut self.m, call, out);
+        self.m.add_tok(rn, res);
+        let thrown = self.thrown;
+        let rej = crate::builtins::rejecter(&mut self.m, thrown);
+        self.m.add_tok(jn, rej);
         self.m.cons(
             v,
             Cons::MCall {
@@ -613,13 +620,6 @@ impl<'a> Gen<'a> {
         );
         let _ = ret;
         out
-    }
-
-    /// A synthetic function whose first parameter flows into `dst` (a
-    /// promise resolver handed to user code).
-    pub(crate) fn resolver_fn(&mut self, dst: NodeId) -> NodeId {
-        let t = crate::builtins::resolver(&mut self.m, dst);
-        self.tok_node(t)
     }
 
     /// The body of an async function that runs untransformed: one without

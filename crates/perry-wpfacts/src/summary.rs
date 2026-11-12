@@ -311,6 +311,7 @@ impl Model {
                 | Cons::Defined { dst }
                 | Cons::NotNullish { dst }
                 | Cons::FieldTruthy { dst, .. }
+                | Cons::Fulfil { dst }
                 | Cons::Falsy { dst }
                 | Cons::NotUndefined { dst }
                 // The gate of an own-only read runs where the read does.

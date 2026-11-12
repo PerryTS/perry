@@ -145,6 +145,7 @@ impl Model {
             Cons::FieldTruthy { key, dst } => {
                 format!("FieldTruthy key={:?} dst={:?}", key, dst)
             }
+            Cons::Fulfil { dst } => format!("Fulfil dst={:?}", dst),
             Cons::Falsy { dst } => format!("Falsy dst={:?}", dst),
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(

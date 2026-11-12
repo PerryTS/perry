@@ -96,6 +96,11 @@ pub mod guard {
     pub const BOXED_STR: u8 = 8;
     pub const BOXED_BOOL: u8 = 9;
     pub const BOXED_OTHER: u8 = 10;
+    /// A value no call can take (IsCallable false, ECMA-262 7.2.3): every
+    /// primitive, and an object token that is surely no function
+    /// (`builtins::methods::surely_callable`); the `then` read of a value
+    /// a promise resolves with (`Cons::Fulfil`).
+    pub const NOT_CALLABLE: u8 = 11;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -112,6 +117,7 @@ pub mod guard {
             BOXED_STR => p::STR,
             BOXED_BOOL => p::BOOL,
             BOXED_OTHER => p::BIGINT | p::SYMBOL,
+            NOT_CALLABLE => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -1960,6 +1966,8 @@ pub struct Model {
     pub ta_exact_len: FxHashMap<TmplId, u32>,
     pub ta_birth_input: FxHashMap<TmplId, NodeId>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The reject functions (`builtins::rejecter`) by the node they feed.
+    pub rejecters: FxHashMap<NodeId, Tok>,
     /// The executors of promise capabilities (`builtins::capability_executor`),
     /// by the node of the value their capability is resolved with.
     pub executors: FxHashMap<NodeId, Tok>,
