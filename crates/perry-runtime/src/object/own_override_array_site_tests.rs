@@ -58,7 +58,8 @@ fn an_object_receiver_needs_the_get_at_an_array_site() {
             "an Array is answered by the kind predicate, unchanged"
         );
         assert_eq!(js_array_method_needs_get(boxed(arr), key(b"indexOf")), 0);
-        assert_eq!(js_array_method_needs_get(1.5, key(b"indexOf")), 0);
+        // A Number has no `indexOf` (node: TypeError): the real `Get`.
+        assert_eq!(js_array_method_needs_get(1.5, key(b"indexOf")), 1);
     }
 }
 
@@ -141,5 +142,54 @@ fn an_array_like_without_the_method_is_not_served_the_array_algorithm() {
             0.0,
             "nothing was appended"
         );
+    }
+}
+
+/// A cell of another kind behind an Array annotation (a Map, a closure)
+/// reads its methods from its own prototype: the real `Get`.
+#[test]
+fn a_map_or_closure_receiver_needs_the_get_at_an_array_site() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let map = crate::map::js_map_alloc(0);
+        assert_eq!(js_array_method_needs_get(boxed(map), key(b"at")), 1);
+        let f = crate::closure::js_closure_alloc(
+            crate::fn_info!(own_pop_fixture, 0; with_declared(0)),
+            0,
+        );
+        assert_eq!(js_array_method_needs_get(boxed(f), key(b"at")), 1);
+    }
+}
+
+/// A String (heap or inline), a boolean or a BigInt behind an Array
+/// annotation is no address: the site performs the real `Get` (a String has
+/// its own `at`, `indexOf`, `slice`, ...), where the builtin read an inline
+/// string's BYTES as an Array header.
+#[test]
+fn a_string_boolean_or_bigint_receiver_needs_the_get() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let short = f64::from_bits(0x7FF9_0200_0000_6261); // "ab", inline
+        let heap = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+            "abcdefghijklmnopqrstuvwxyz0123456789".as_ptr(),
+            36,
+        ) as i64);
+        let bigint = f64::from_bits(0x7FFA_0000_0000_0000 | 0x1000);
+        for recv in [
+            short,
+            heap,
+            bigint,
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_FALSE),
+            f64::from_bits(crate::value::TAG_NULL),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        ] {
+            assert_eq!(
+                js_array_method_needs_get(recv, key(b"at")),
+                1,
+                "{:#018x} must take the real Get",
+                recv.to_bits()
+            );
+        }
     }
 }

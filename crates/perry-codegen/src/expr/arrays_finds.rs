@@ -1093,7 +1093,14 @@ pub(crate) fn lower(
                     MaterializationReason::FunctionAbi,
                 ));
             }
-            if !numeric_index_has_integer_array_index_proof(ctx, index) {
+            // A value that needs ToNumber (an object, a string, a Boolean, a
+            // BigInt, ...) takes the runtime's element store with the JS
+            // value: it converts before its bounds test (the conversion can
+            // run program code, throw, detach or shrink the view) and the
+            // assignment's result is the value itself.
+            if !numeric_index_has_integer_array_index_proof(ctx, index)
+                || super::byte_store_value_needs_tonumber(ctx, value)
+            {
                 // A non-numeric key uses ordinary [[Set]] semantics (including
                 // typed-array named expandos and Symbol keys). The numeric-only
                 // polymorphic index helper can handle byte indices, but its
@@ -1172,6 +1179,9 @@ pub(crate) fn lower(
                 let i = lower_expr(ctx, index)?;
                 ctx.block().fptosi(DOUBLE, &i, I32)
             };
+            // `raw_value`: the assignment's result when the value is no exact
+            // int32 (`(u8[i] = 1.5)` is 1.5, not the stored 1).
+            let mut raw_value = None;
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
@@ -1179,7 +1189,11 @@ pub(crate) fn lower(
                 // poison outside int32 range (x86 yields 0x80000000), so
                 // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.toint32_wrap(&v)
+                let wrapped = ctx.toint32_wrap(&v);
+                if super::byte_store_tonumber_on() {
+                    raw_value = Some(v);
+                }
+                wrapped
             };
             // Slow path accepts either BufferHeader-backed Uint8Arrays or
             // NativeArena typed views.
@@ -1216,6 +1230,9 @@ pub(crate) fn lower(
             if value_discarded {
                 return Ok(double_literal(0.0));
             }
+            if let Some(v) = raw_value {
+                return Ok(v);
+            }
             Ok(materialize_js_value(ctx, slow, reason))
         }
         Expr::BufferIndexSet {
@@ -1238,6 +1255,28 @@ pub(crate) fn lower(
                     store.result,
                     MaterializationReason::FunctionAbi,
                 ));
+            }
+            // The same rule as `Uint8ArraySet`: a value that needs ToNumber
+            // takes the runtime's complete `[[Set]]` with the JS value.
+            if super::byte_store_value_needs_tonumber(ctx, value) {
+                let strict = if ctx.is_strict_fn { "1" } else { "0" };
+                let result =
+                    rooting::with_operands_rooted(ctx, &[buffer, index, value], |ctx, vals| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_dyn_index_set_strict",
+                            &[
+                                (DOUBLE, &vals[0]),
+                                (DOUBLE, &vals[1]),
+                                (DOUBLE, &vals[2]),
+                                (I32, strict),
+                            ],
+                        ))
+                    })?;
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
             }
 
             let idx_is_i32 = can_lower_expr_as_i32(
@@ -1270,6 +1309,9 @@ pub(crate) fn lower(
                 let i = lower_expr(ctx, index)?;
                 ctx.block().fptosi(DOUBLE, &i, I32)
             };
+            // `raw_value`: the assignment's result when the value is no exact
+            // int32 (`(u8[i] = 1.5)` is 1.5, not the stored 1).
+            let mut raw_value = None;
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
@@ -1277,7 +1319,11 @@ pub(crate) fn lower(
                 // poison outside int32 range (x86 yields 0x80000000), so
                 // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.toint32_wrap(&v)
+                let wrapped = ctx.toint32_wrap(&v);
+                if super::byte_store_tonumber_on() {
+                    raw_value = Some(v);
+                }
+                wrapped
             };
             let a = lower_expr(ctx, buffer)?;
             super::u8_buffer_read::emit_u8_cached_set_i32(
@@ -1310,6 +1356,9 @@ pub(crate) fn lower(
             );
             if value_discarded {
                 return Ok(double_literal(0.0));
+            }
+            if let Some(v) = raw_value {
+                return Ok(v);
             }
             Ok(materialize_js_value(ctx, slow, reason))
         }

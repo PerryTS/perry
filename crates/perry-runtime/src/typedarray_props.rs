@@ -88,11 +88,10 @@ pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) 
             crate::typedarray_hook_slots::species::store_coerced(ta, index, kind, raw);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            let n = crate::typedarray_hook_slots::species::to_number(raw);
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 owner as *mut crate::buffer::BufferHeader,
                 index as i32,
-                n as i32,
+                raw,
             );
         }
         None => {}
@@ -129,10 +128,10 @@ unsafe fn typed_array_owner_set(owner: usize, index: u32, value: f64) {
             js_typed_array_set(owner as *mut TypedArrayHeader, index as i32, value);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 owner as *mut crate::buffer::BufferHeader,
                 index as i32,
-                value as i32,
+                value,
             );
         }
         None => {}

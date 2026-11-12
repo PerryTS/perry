@@ -146,7 +146,7 @@ unsafe fn with_sorted_indices<R>(
     // TypedArray payloads are pointer-free and NON-MOVABLE, so these private
     // slices remain valid across arbitrary callbacks and copying collections.
     // Keep both allocations rooted, including across allocation of the second.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = crate::gc::RuntimeHandleScope::new(); #[cfg(perry_gc_instruments)] let scratch_cells = crate::wpfacts_check::family::Scratch::enter();
     let order_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
@@ -154,7 +154,7 @@ unsafe fn with_sorted_indices<R>(
     let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
-    ));
+    )); #[cfg(perry_gc_instruments)] drop(scratch_cells);
     let order = std::slice::from_raw_parts_mut(
         order_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,

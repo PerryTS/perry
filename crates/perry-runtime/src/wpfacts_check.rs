@@ -624,3 +624,8 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
 
 #[cfg(test)]
 mod reporting_tests;
+
+// The family claim (`family_reach` never): only in the instrumented variant.
+// Declared last, so that no line of this file moves in the default build.
+#[cfg(perry_gc_instruments)]
+pub(crate) mod family;
