@@ -7,29 +7,38 @@
 //! [`super::alloc_sample::note`] sees it (runtime bumps are routed through
 //! that path while this is on, as for the site sampler) and, for the
 //! compiled inline bump path, by walking the headers of each inline burst
-//! when the block offset is written back ([`inline_burst`]). Covered bytes
-//! are counted at `perry_life_birth` from the claimed object's header.
-//! Uncovered = allocated − covered, per type.
+//! ([`inline_burst`]; a census birth walks the burst so far first).
 //!
-//! Sampled: byte-proportional (one sample per `PERRY_LIFE_ALLOC_SAMPLE`
-//! bytes, default 16 KiB, on the sampler's shared countdown) — the object
-//! that crosses the boundary keeps its RAW native return addresses (resolved
-//! offline against the measured binary; the TSV names the image base) and
-//! is marked covered when a birth claims its address before the next
-//! collection, uncovered otherwise. A runtime-path sample learns its address
-//! where its fresh header is written ([`placed`], [`old_birth`]: young bump,
-//! slow path, free-list reuse, old generation, longlived, collecting holder);
-//! one whose header no path reports stays `unplaced`.
-use std::cell::RefCell;
+//! Covered, ONE predicate for the exact count and the samples: every
+//! allocated object enters the epoch map under its address where its fresh
+//! header is known ([`placed`], [`old_birth`], the inline walks, the inline
+//! slow call); a census birth (`perry_life_birth`) that finds its address in
+//! the map takes the entry out: that object is covered (exact covered bytes
+//! by the entry's type and size, and its samples covered). A collection
+//! ([`minor`]) ends the epoch: entries still in the map are uncovered. A
+//! runtime note whose header no path reports is `unplaced` (never covered).
+//! Claims that find no entry (a second claim, an object a collection moved
+//! before its claim, an object no counted path allocated) cover nothing and
+//! are counted (`claims_outside`; of them a second claim in the same epoch:
+//! `claims_repeat`).
+//!
+//! Sampled: byte-proportional and independent of the order the paths are
+//! counted in: an object of `b` bytes gets `b / I` samples plus one more
+//! with probability `(b mod I) / I` (`I` = `PERRY_LIFE_ALLOC_SAMPLE`, default
+//! 16 KiB, at least 1 byte; at 1 every byte is a sample), so samples x `I`
+//! estimates bytes per type and state without bias. A sampled object keeps
+//! its RAW native return addresses (resolved offline against the measured
+//! binary; the TSV names the image base).
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 static ON: AtomicBool = AtomicBool::new(false);
+static INTERVAL: AtomicUsize = AtomicUsize::new(0);
 /// Every collector object type (`GC_TYPE_MAX` + 1): a narrower table folds
 /// the high kinds (overflow storage, record elements, symbols, ...) together.
 const TYPES: usize = crate::gc::GC_TYPE_MAX as usize + 1;
 const DEPTH: usize = 12;
-const RING: usize = 256;
 pub(crate) const DEFAULT_INTERVAL: usize = 16 * 1024;
 
 #[derive(Clone, Copy)]
@@ -37,6 +46,8 @@ struct Sample {
     inline: bool,
     t: u8,
     bytes: u32,
+    /// Samples this object carries (0: counted, not sampled).
+    n: u32,
     pcs: [usize; DEPTH],
 }
 
@@ -51,11 +62,19 @@ struct State {
     runtime: Vec<[u64; 2]>,
     inline: Vec<[u64; 2]>,
     covered: Vec<[u64; 2]>,
-    covered_inline_samples: u64,
     births_seen: u64,
     births_other: u64,
+    /// Claims that found no entry in the epoch map: [count, bytes], and the
+    /// part of them that claimed an object already claimed in this epoch.
+    claims_outside: [u64; 2],
+    claims_repeat: [u64; 2],
+    /// Addresses claimed in this epoch (diagnostic for `claims_repeat`).
+    claimed: std::collections::HashSet<usize>,
+    /// Runtime notes whose header no path reported: [count, bytes].
+    unplaced: [u64; 2],
     walk_breaks: u64,
     walk_bytes_lost: u64,
+    birth_walks: u64,
     /// Bytes a no-collection attempt noted and then refused (its caller
     /// retries on a collecting path, which notes the same object again).
     refused: u64,
@@ -66,25 +85,23 @@ struct State {
     evacuated: u64,
     /// Collector arena bytes already allocated when the knob armed.
     armed_arena_bytes: u64,
+    /// The last runtime note whose header is not yet written.
     pending: Option<(usize, Sample)>,
-    /// A refused attempt's pending sample, adopted by the retry's note.
+    /// A refused attempt's pending note, adopted by the retry's note.
     carry: Option<(usize, Sample)>,
-    /// The last runtime note (total, type) whose header is not yet written:
-    /// an old-generation birth matching it is that noted object.
-    noted: Option<(usize, u8)>,
     /// The object the compiled inline path's slow call just handed out
-    /// (`js_inline_arena_slow_alloc`): address, size, sample stack if due.
-    /// The compiled caller writes its header after the call, so it is read at
-    /// the next event ([`flush_slow`]).
-    slow: Option<(usize, usize, Option<[usize; DEPTH]>)>,
+    /// (`js_inline_arena_slow_alloc`): address, size, samples, stack if
+    /// sampled. The compiled caller writes its header after the call, so it
+    /// is read at the next event ([`flush_slow`]).
+    slow: Option<(usize, usize, u32, [usize; DEPTH])>,
     slow_objects: u64,
     slow_bad: u64,
-    /// Samples placed, awaiting a birth: address -> (collections, sample).
-    open: HashMap<usize, (u64, Sample)>,
-    /// Recent births (address, collections), for inline samples found after
-    /// their birth.
-    born: Vec<(usize, u64)>,
-    born_at: usize,
+    /// The epoch map: every object allocated since the last collection and
+    /// not yet claimed, by user address.
+    epoch: HashMap<usize, Sample>,
+    /// A census birth walked the current inline burst up to here (block data,
+    /// offset): the write-back walk starts at this point.
+    walked: (usize, usize),
     agg: HashMap<(u8, bool, u8, [usize; DEPTH]), [u64; 2]>,
     moved: [u64; 3],
     minors: u64,
@@ -94,6 +111,7 @@ struct State {
 
 crate::perry_thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
+    static RNG: Cell<u64> = const { Cell::new(0x9E37_79B9_7F4A_7C15) };
 }
 
 #[inline(always)]
@@ -101,8 +119,7 @@ pub(crate) fn on() -> bool {
     ON.load(Ordering::Relaxed)
 }
 
-/// `PERRY_LIFE_ALLOC=<path>`: on, with the sampling interval (bytes) the
-/// caller installs on the shared countdown.
+/// `PERRY_LIFE_ALLOC=<path>`: on, with the sampling interval (bytes).
 pub(crate) fn init_from_env() -> usize {
     let Some(path) = std::env::var("PERRY_LIFE_ALLOC").ok().filter(|p| !p.is_empty()) else {
         return 0;
@@ -110,25 +127,43 @@ pub(crate) fn init_from_env() -> usize {
     let interval = std::env::var("PERRY_LIFE_ALLOC_SAMPLE")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|&v| v >= super::alloc_sample::MIN_INTERVAL_BYTES)
+        .filter(|&v| v >= 1)
         .unwrap_or(DEFAULT_INTERVAL);
     let _ = STATE.with(|s| {
         let mut s = s.borrow_mut();
         s.path = path;
         s.interval = interval;
-        s.born = vec![(0, 0); RING];
         s.runtime = vec![[0; 2]; TYPES];
         s.inline = vec![[0; 2]; TYPES];
         s.covered = vec![[0; 2]; TYPES];
         s.unnoted = vec![[0; 2]; TYPES];
         s.armed_arena_bytes = super::allocation_totals().0 as u64;
     });
+    INTERVAL.store(interval, Ordering::Relaxed);
     ON.store(true, Ordering::Relaxed);
     interval
 }
 
-fn collections() -> u64 {
-    crate::gc::diagnostic_hooks::life_collection_count()
+/// Samples an object of `bytes` carries: `bytes / I`, plus one with
+/// probability `(bytes mod I) / I` (xorshift64, fixed seed: runs repeat).
+fn draw(bytes: usize) -> u32 {
+    let i = INTERVAL.load(Ordering::Relaxed).max(1);
+    let mut n = bytes / i;
+    let rem = bytes % i;
+    if rem != 0 {
+        let r = RNG.with(|c| {
+            let mut x = c.get();
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            c.set(x);
+            x
+        });
+        if (r % i as u64) < rem as u64 {
+            n += 1;
+        }
+    }
+    n.min(u32::MAX as usize) as u32
 }
 
 fn capture() -> [usize; DEPTH] {
@@ -146,41 +181,56 @@ fn with<R>(f: impl FnOnce(&mut State) -> R) -> Option<R> {
 }
 
 fn settle(s: &mut State, state: u8, x: Sample) {
+    if x.n == 0 {
+        return;
+    }
     let e = s.agg.entry((state, x.inline, x.t, x.pcs)).or_default();
-    e[0] += 1;
+    e[0] += x.n as u64;
     e[1] += x.bytes as u64;
 }
 
-/// A runtime-path allocation of `total` bytes of `t` (`sampled`: it crossed
-/// the countdown).
-pub(crate) fn runtime(total: usize, t: u8, sampled: bool) {
-    let pcs = if sampled { Some(capture()) } else { None };
+/// An object allocated in this epoch, at user address `addr`. An entry
+/// already there is an object that died unclaimed (its slot was reused).
+fn enter(s: &mut State, addr: usize, x: Sample) {
+    if let Some(old) = s.epoch.insert(addr, x) {
+        settle(s, UNCOVERED, old);
+    }
+}
+
+fn drop_pending(s: &mut State, x: Sample) {
+    s.unplaced[0] += 1;
+    s.unplaced[1] += x.bytes as u64;
+    settle(s, UNPLACED, x);
+}
+
+/// A runtime-path allocation of `total` bytes of `t`.
+pub(crate) fn runtime(total: usize, t: u8) {
+    let n = draw(total);
+    let pcs = if n != 0 { capture() } else { [0; DEPTH] };
     let _ = with(|s| {
         flush(s);
-        s.noted = Some((total, t));
         let k = (t as usize).min(TYPES - 1);
         s.runtime[k][0] += 1;
         s.runtime[k][1] += total as u64;
         if let Some((_, x)) = s.pending.take() {
-            settle(s, UNPLACED, x);
+            drop_pending(s, x);
         }
         if let Some((want, x)) = s.carry.take() {
-            if pcs.is_none() && want == total && x.t == t {
+            if want == total && x.t == t {
+                // The retry of a refused attempt: the object drew once.
                 s.pending = Some((want, x));
                 return;
             }
-            settle(s, UNPLACED, x);
+            drop_pending(s, x);
         }
-        if let Some(pcs) = pcs {
-            s.pending = Some((total, Sample { inline: false, t, bytes: total as u32, pcs }));
-        }
+        s.pending = Some((total, Sample { inline: false, t, bytes: total as u32, n, pcs }));
     });
 }
 
 /// A fresh header was written at `header` (`total`, `t`) on a noted path:
-/// the pending sample, if it is this object, learns its address. Another
+/// the pending note, if it is this object, enters the epoch map. Another
 /// object (a collection's move between the note and the header) leaves the
-/// pending sample waiting.
+/// pending note waiting.
 pub(crate) fn placed(header: usize, total: usize, t: u8) {
     let _ = with(|s| {
         place(s, header, total, t);
@@ -188,26 +238,24 @@ pub(crate) fn placed(header: usize, total: usize, t: u8) {
 }
 
 fn place(s: &mut State, header: usize, total: usize, t: u8) -> bool {
-    let noted = s.noted.take() == Some((total, t));
     match s.pending {
         Some((want, x)) if want == total && x.t == t => {
             s.pending = None;
-            let gen = collections();
-            s.open.insert(header + crate::gc::GC_HEADER_SIZE, (gen, x));
+            enter(s, header + crate::gc::GC_HEADER_SIZE, x);
             true
         }
-        _ => noted,
+        _ => false,
     }
 }
 
 /// `js_inline_arena_slow_alloc` handed `[addr, addr + size)` to compiled
-/// code, which writes the header after the call. `due`: it crossed the
-/// sampler's countdown.
-pub(crate) fn slow_alloc(addr: usize, size: usize, due: bool) {
-    let pcs = if due { Some(capture()) } else { None };
+/// code, which writes the header after the call.
+pub(crate) fn slow_alloc(addr: usize, size: usize) {
+    let n = draw(size);
+    let pcs = if n != 0 { capture() } else { [0; DEPTH] };
     let _ = with(|s| {
         flush(s);
-        s.slow = Some((addr, size, pcs));
+        s.slow = Some((addr, size, n, pcs));
     });
 }
 
@@ -219,7 +267,7 @@ pub(crate) fn flush_slow() {
 }
 
 fn flush(s: &mut State) {
-    let Some((addr, size, pcs)) = s.slow.take() else { return };
+    let Some((addr, size, n, pcs)) = s.slow.take() else { return };
     if addr == 0 {
         return;
     }
@@ -235,25 +283,26 @@ fn flush(s: &mut State) {
     let k = (t as usize).min(TYPES - 1);
     s.inline[k][0] += 1;
     s.inline[k][1] += total as u64;
-    if let Some(pcs) = pcs {
-        let gen = collections();
-        s.open.insert(addr + crate::gc::GC_HEADER_SIZE, (gen, Sample { inline: true, t, bytes: total as u32, pcs }));
-    }
+    enter(s, addr + crate::gc::GC_HEADER_SIZE, Sample { inline: true, t, bytes: total as u32, n, pcs });
 }
 
 /// A fresh old-generation (or collecting-holder) header: noted when the
 /// pending note is this object, otherwise a birth no note announced, counted
 /// here.
 pub(crate) fn old_birth(header: usize, total: usize, t: u8) {
+    let noted = with(|s| place(s, header, total, t)).unwrap_or(true);
+    if noted {
+        return;
+    }
+    let n = draw(total);
+    let pcs = if n != 0 { capture() } else { [0; DEPTH] };
     let _ = with(|s| {
-        if place(s, header, total, t) {
-            return;
-        }
         let k = (t as usize).min(TYPES - 1);
         s.runtime[k][0] += 1;
         s.runtime[k][1] += total as u64;
         s.unnoted[k][0] += 1;
         s.unnoted[k][1] += total as u64;
+        enter(s, header + crate::gc::GC_HEADER_SIZE, Sample { inline: false, t, bytes: total as u32, n, pcs });
     });
 }
 
@@ -288,59 +337,84 @@ pub(crate) fn refused(total: usize, t: u8) {
 }
 
 /// The compiled inline path allocated `[from, to)` of the block at `data`
-/// since the last write-back. `countdown(bytes)` is the sampler's shared
-/// countdown (true: this object is sampled).
-pub(crate) fn inline_burst(data: *mut u8, from: usize, to: usize, mut countdown: impl FnMut(usize) -> bool) {
+/// since the last write-back (the write-back itself).
+pub(crate) fn inline_burst(data: *mut u8, from: usize, to: usize) {
+    walk_inline(data, from, to, false);
+}
+
+/// Walk the inline headers of `[from, to)` (from where a census birth's walk
+/// stopped, when one did): count, draw and enter each object. `at_birth`: a
+/// header that does not parse may not be written yet, so the walk stops
+/// there and the next walk retries it.
+fn walk_inline(data: *mut u8, from: usize, to: usize, at_birth: bool) {
     if data.is_null() {
         return;
     }
-    let mut picks: Vec<(usize, usize, u8)> = Vec::new();
-    let mut breaks = 0u64;
-    let mut lost = 0u64;
-    let mut counts: Vec<(u8, usize)> = Vec::new();
-    let mut offset = from;
+    let start = with(|s| match s.walked {
+        (d, o) if d == data as usize && from <= o && o <= to => o,
+        _ => from,
+    })
+    .unwrap_or(from);
+    let mut objs: Vec<(usize, usize, u8, u32)> = Vec::new();
+    let (mut breaks, mut lost) = (0u64, 0u64);
+    let mut offset = start;
     while offset < to {
         let aligned = (offset + 7) & !7;
         if aligned >= to {
+            offset = to;
             break;
         }
         let header = (data as usize + aligned) as *const crate::gc::GcHeader;
         let (t, total) = unsafe { ((*header).obj_type, (*header).size as usize) };
         if total < crate::gc::GC_HEADER_SIZE || total > to - aligned {
-            breaks += 1;
-            lost += (to - aligned) as u64;
+            if at_birth {
+                offset = aligned;
+            } else {
+                breaks += 1;
+                lost += (to - aligned) as u64;
+                offset = to;
+            }
             break;
         }
-        counts.push((t, total));
-        if countdown(total) {
-            picks.push((data as usize + aligned + crate::gc::GC_HEADER_SIZE, total, t));
-        }
+        objs.push((data as usize + aligned + crate::gc::GC_HEADER_SIZE, total, t, draw(total)));
         offset = aligned + total;
     }
-    let pcs = if picks.is_empty() { [0usize; DEPTH] } else { capture() };
+    let pcs = if objs.iter().any(|o| o.3 != 0) { capture() } else { [0usize; DEPTH] };
     let _ = with(|s| {
         flush(s);
-        for (t, total) in counts {
+        s.walked = if at_birth { (data as usize, offset.min(to)) } else { (0, 0) };
+        s.walk_breaks += breaks;
+        s.walk_bytes_lost += lost;
+        for (addr, total, t, n) in objs {
             let k = (t as usize).min(TYPES - 1);
             s.inline[k][0] += 1;
             s.inline[k][1] += total as u64;
-        }
-        s.walk_breaks += breaks;
-        s.walk_bytes_lost += lost;
-        if picks.is_empty() {
-            return;
-        }
-        let gen = collections();
-        for (addr, total, t) in picks {
-            let x = Sample { inline: true, t, bytes: total as u32, pcs };
-            if s.born.iter().any(|&(a, g)| a == addr && g == gen) {
-                s.covered_inline_samples += 1;
-                settle(s, COVERED, x);
-            } else {
-                s.open.insert(addr, (gen, x));
-            }
+            let x = Sample { inline: true, t, bytes: total as u32, n, pcs: if n != 0 { pcs } else { [0; DEPTH] } };
+            enter(s, addr, x);
         }
     });
+}
+
+/// The compiled inline path's burst since the last write-back, walked so a
+/// census birth finds its object in the epoch map (and at exit, where no
+/// write-back follows).
+fn walk_pending_inline(at_birth: bool) {
+    let (data, from, to) = unsafe {
+        let st = &*super::hot_inline_state();
+        if st.data.is_null() {
+            return;
+        }
+        let arena = &*super::hot_arena();
+        let Some(b) = arena.blocks.get(arena.current) else { return };
+        if b.data != st.data || st.offset <= b.offset {
+            return;
+        }
+        (st.data, b.offset, st.offset)
+    };
+    if at_birth {
+        let _ = with(|s| s.birth_walks += 1);
+    }
+    walk_inline(data, from, to, at_birth);
 }
 
 /// A census birth claimed `bits` (`perry_life_birth`).
@@ -356,36 +430,40 @@ pub(crate) fn birth(bits: u64) {
         let _ = with(|s| s.births_other += 1);
         return;
     }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    let (t, total) = unsafe { ((*header).obj_type, (*header).size as u64) };
-    let gen = collections();
+    walk_pending_inline(true);
     let _ = with(|s| {
         s.births_seen += 1;
-        let k = (t as usize).min(TYPES - 1);
-        s.covered[k][0] += 1;
-        s.covered[k][1] += total;
-        match s.open.remove(&addr) {
-            Some((g, x)) if g == gen => settle(s, COVERED, x),
-            Some((_, x)) => settle(s, UNCOVERED, x),
+        let first = s.claimed.insert(addr);
+        match s.epoch.remove(&addr) {
+            Some(x) => {
+                let k = (x.t as usize).min(TYPES - 1);
+                s.covered[k][0] += 1;
+                s.covered[k][1] += x.bytes as u64;
+                settle(s, COVERED, x);
+            }
             None => {
-                let at = s.born_at % RING;
-                s.born[at] = (addr, gen);
-                s.born_at += 1;
+                let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+                let size = unsafe { (*header).size as u64 };
+                s.claims_outside[0] += 1;
+                s.claims_outside[1] += size;
+                if !first {
+                    s.claims_repeat[0] += 1;
+                    s.claims_repeat[1] += size;
+                }
             }
         }
     });
 }
 
-/// A collection ended: placed samples nobody claimed are uncovered.
+/// A collection ended: objects of the epoch nobody claimed are uncovered.
 pub(crate) fn minor() {
     let _ = with(|s| {
-        let open: Vec<_> = s.open.drain().map(|(_, (_, x))| x).collect();
+        let open: Vec<Sample> = s.epoch.drain().map(|(_, x)| x).collect();
         for x in open {
             settle(s, UNCOVERED, x);
         }
-        for b in s.born.iter_mut() {
-            *b = (0, 0);
-        }
+        s.walked = (0, 0);
+        s.claimed.clear();
     });
 }
 
@@ -396,20 +474,22 @@ fn type_name(t: usize) -> String {
 /// Process exit: write the TSV.
 pub(crate) fn write() {
     flush_slow();
+    walk_pending_inline(false);
     minor();
     let base = image_base();
     let (arena, large) = super::allocation_totals();
     let _ = with(|s| {
         if let Some((_, x)) = s.pending.take() {
-            settle(s, UNPLACED, x);
+            drop_pending(s, x);
         }
         if let Some((_, x)) = s.carry.take() {
-            settle(s, UNPLACED, x);
+            drop_pending(s, x);
         }
         let mut out = format!(
-            "#meta\timage_base={base:#x}\tinterval={}\tarena_bytes={arena}\tlarge_bytes={large}\tbirths_seen={}\tbirths_other={}\twalk_breaks={}\twalk_bytes_lost={}\tcovered_inline_samples={}\tcollections={}\tinline_slow_objects={}\tinline_slow_bad={}\n",
-            s.interval, s.births_seen, s.births_other, s.walk_breaks, s.walk_bytes_lost, s.covered_inline_samples,
-            collections(), s.slow_objects, s.slow_bad
+            "#meta\timage_base={base:#x}\tinterval={}\tarena_bytes={arena}\tlarge_bytes={large}\tbirths_seen={}\tbirths_other={}\twalk_breaks={}\twalk_bytes_lost={}\tbirth_walks={}\tclaims_outside={}\tclaims_outside_bytes={}\tclaims_repeat={}\tclaims_repeat_bytes={}\tunplaced={}\tunplaced_bytes={}\tcollections={}\tinline_slow_objects={}\tinline_slow_bad={}\n",
+            s.interval, s.births_seen, s.births_other, s.walk_breaks, s.walk_bytes_lost, s.birth_walks,
+            s.claims_outside[0], s.claims_outside[1], s.claims_repeat[0], s.claims_repeat[1], s.unplaced[0], s.unplaced[1],
+            crate::gc::diagnostic_hooks::life_collection_count(), s.slow_objects, s.slow_bad
         );
         out.push_str(&arena_lines(s));
         let by = super::allocation_totals_by_arena();

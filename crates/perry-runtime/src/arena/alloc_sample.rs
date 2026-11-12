@@ -170,8 +170,7 @@ fn countdown(bytes: usize, interval: usize) -> bool {
 fn note_slow(total: usize, obj_type: u8, interval: usize) {
     #[cfg(perry_gc_instruments)]
     if super::alloc_life::on() {
-        let due = countdown(total, interval);
-        super::alloc_life::runtime(total, obj_type, due);
+        super::alloc_life::runtime(total, obj_type);
         return;
     }
     if countdown(total, interval) {
@@ -205,7 +204,7 @@ fn note_inline_slow(block_offset: usize, inline_offset: usize, interval: usize) 
         // Every write-back site syncs the current Eden block, whose data
         // pointer the inline state mirrors.
         let data = unsafe { (*super::hot_inline_state()).data };
-        super::alloc_life::inline_burst(data, block_offset, inline_offset, |b| countdown(b, interval));
+        super::alloc_life::inline_burst(data, block_offset, inline_offset);
         return;
     }
     if countdown(bytes, interval) {
@@ -223,6 +222,11 @@ fn note_inline_slow(block_offset: usize, inline_offset: usize, interval: usize) 
 pub(crate) fn inline_limit(offset: usize, block_size: usize) -> usize {
     let interval = current_interval();
     if interval == 0 {
+        return block_size;
+    }
+    // LIFE I2 A draws per object at the walk, in any order: no cap needed.
+    #[cfg(perry_gc_instruments)]
+    if super::alloc_life::on() {
         return block_size;
     }
     let left = UNTIL.with(Cell::get).max(1);
@@ -276,9 +280,7 @@ pub(crate) fn placed(header: *mut u8, total: usize, obj_type: u8) {
 #[cfg(perry_gc_instruments)]
 pub(crate) fn inline_slow_alloc(raw: *mut u8, size: usize) {
     if super::alloc_life::on() {
-        let interval = current_interval();
-        let due = interval != 0 && countdown(size, interval);
-        super::alloc_life::slow_alloc(raw as usize, size, due);
+        super::alloc_life::slow_alloc(raw as usize, size);
     }
 }
 
