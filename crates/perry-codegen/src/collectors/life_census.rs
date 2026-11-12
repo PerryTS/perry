@@ -946,6 +946,7 @@ impl Census<'_> {
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
+                self.claims.loops.insert(body.as_ptr() as usize);
                 self.expr(condition, None);
                 self.stmts(body);
                 self.loop_body = saved;
@@ -960,6 +961,7 @@ impl Census<'_> {
                     self.stmt(s);
                 }
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
+                self.claims.loops.insert(body.as_ptr() as usize);
                 if let Some(e) = condition {
                     self.expr(e, None);
                 }

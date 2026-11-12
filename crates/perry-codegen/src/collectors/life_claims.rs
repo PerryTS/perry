@@ -43,7 +43,8 @@ pub(crate) struct LifeClaims {
     /// offset`, tab-separated, the census row's columns) and the body
     /// address of its innermost enclosing loop (0: in no loop).
     pub births: HashMap<usize, (String, usize)>,
-    /// The loop bodies (statement-list addresses) that enclose a birth.
+    /// The loop bodies (statement-list addresses) of the body: each
+    /// iteration's start and end are hooked (LIFE I2: the dynamic boundary).
     pub loops: std::collections::HashSet<usize>,
     /// The body's own statement list (address): its activation.
     pub body: usize,

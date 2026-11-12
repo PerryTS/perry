@@ -38,7 +38,7 @@ const RET: usize = 1;
 const CALLER: usize = 2;
 const TURN: usize = 3;
 const DONE: u8 = 4;
-const BOUNDARIES: [&str; 4] = ["iteration", "return", "caller", "turn"];
+const BOUNDARIES: [&str; 6] = ["iteration", "return", "caller", "turn", "dyn", "dyn2"];
 const HOLDERS: [&str; 7] = ["frame", "outer_frame", "shadow", "global", "remembered", "object", "other"];
 
 #[derive(Default, Clone, Copy)]
@@ -61,6 +61,9 @@ struct Site {
     unborn: u64,
     sampled: u64,
     b: [Bnd; 4],
+    /// LIFE I2: the dynamic iteration boundaries (nearest loop iteration live
+    /// on the stack at the birth, in any frame; and the one around it).
+    d: [Bnd; 2],
 }
 
 #[derive(Clone, Copy, Default)]
@@ -78,6 +81,18 @@ struct Sample {
     old: bool,
     reached: bool,
     holder: u8,
+    /// Dynamic boundaries still to decide (bit 0: `dyn`, bit 1: `dyn2`).
+    dyn_: u8,
+}
+
+/// One loop iteration in progress (`perry_life_loop` at its body's start to
+/// the iteration's end): its activation (index + 1; 0: none), frame and id,
+/// and the samples whose dynamic boundary it is (with the bit).
+struct LoopIt {
+    act: usize,
+    fp: usize,
+    id: u64,
+    pend: Vec<(u32, u32, u8)>,
 }
 
 struct Act {
@@ -109,6 +124,9 @@ pub(super) struct Measure {
     /// returned through the hook, popped late at a handler (`catch`), by a
     /// shallower frame's hook (`deeper`), at turn end (`turn`).
     exits: HashMap<u64, [u64; 5]>,
+    /// LIFE I2: the loop iterations in progress, innermost last.
+    loops: Vec<LoopIt>,
+    dyn_probes: u64,
     start: Option<std::time::Instant>,
     /// During a probe: the probed activation's frame pointer.
     probe_fp: usize,
@@ -212,6 +230,15 @@ impl Measure {
             }
             first = false;
         }
+        for k in 0..2 {
+            if s.dyn_ & (1 << k) != 0 {
+                let bd = &mut site.d[k];
+                bd.samples += 1;
+                bd.dead_w += s.w;
+                bd.dead_bytes_w += s.w * s.bytes as f64;
+            }
+        }
+        self.samples[i as usize].dyn_ = 0;
         self.release(i);
     }
 
@@ -225,6 +252,14 @@ impl Measure {
                 site.b[b].unresolved += 1;
             }
         }
+        // An old sample is never seen by a minor: its dynamic boundaries
+        // cannot be decided either.
+        for k in 0..2 {
+            if s.dyn_ & (1 << k) != 0 {
+                site.d[k].unresolved += 1;
+            }
+        }
+        self.samples[i as usize].dyn_ = 0;
         if keep_turn {
             self.samples[i as usize].next = TURN as u8;
             let g = s.gen;
@@ -235,7 +270,14 @@ impl Measure {
     }
 
     fn release(&mut self, i: u32) {
+        let s = self.samples[i as usize];
+        for k in 0..2 {
+            if s.dyn_ & (1 << k) != 0 {
+                self.sites.entry(s.site).or_default().d[k].unresolved += 1;
+            }
+        }
         let s = &mut self.samples[i as usize];
+        s.dyn_ = 0;
         s.next = DONE;
         s.gen = s.gen.wrapping_add(1);
         self.free.push(i);
@@ -318,6 +360,16 @@ fn pop_deeper(fp: usize) {
 /// The top activation returns: its samples' iteration and return, and its
 /// callees' samples' caller boundary, are decided by one probe.
 fn pop_top(late: bool) {
+    // Its loop iterations in progress end with it.
+    if let Some(k) = table(|t| {
+        let m = &t.measure;
+        let n = m.acts.len();
+        m.loops.iter().position(|l| l.act >= n && n > 0)
+    })
+    .flatten()
+    {
+        end_loops(k);
+    }
     let Some((pend, fp)) = table(|t| {
         let a = t.measure.acts.last_mut()?;
         Some((std::mem::take(&mut a.pend), a.fp))
@@ -351,6 +403,86 @@ fn pop_top(late: bool) {
             m.file(i, Some(depth));
         }
         m.acts.pop();
+    });
+}
+
+/// The loop iterations from index `k` up end (innermost first is not needed:
+/// one probe decides them all at this point).
+fn end_loops(k: usize) {
+    let Some((keys, fp)) = table(|t| {
+        let m = &mut t.measure;
+        if k >= m.loops.len() {
+            return None;
+        }
+        let fp = m.loops[k].fp;
+        let keys: Vec<_> = m.loops.drain(k..).flat_map(|l| l.pend).collect();
+        Some((keys, fp))
+    })
+    .flatten() else {
+        return;
+    };
+    if keys.is_empty() {
+        return;
+    }
+    let live = |m: &Measure, &(i, g, bit): &(u32, u32, u8)| {
+        m.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
+    };
+    let young = table(|t| {
+        let m = &mut t.measure;
+        let mut young = 0;
+        for k in &keys {
+            if !live(m, k) {
+                continue;
+            }
+            if m.samples[k.0 as usize].old {
+                let site = m.samples[k.0 as usize].site;
+                m.sites.entry(site).or_default().d[(k.2 >> 1) as usize].unresolved += 1;
+                m.samples[k.0 as usize].dyn_ &= !k.2;
+            } else {
+                m.samples[k.0 as usize].reached = false;
+                young += 1;
+            }
+        }
+        if young > 0 {
+            m.in_probe = true;
+            m.probe_fp = fp;
+            m.probe_late = false;
+            m.probes += 1;
+            m.dyn_probes += 1;
+        }
+        young
+    })
+    .unwrap_or(0);
+    if young == 0 {
+        return;
+    }
+    let began = std::time::Instant::now();
+    let before = crate::gc::diagnostic_hooks::life_collection_count();
+    crate::gc::gc_collect_minor();
+    let ran = crate::gc::diagnostic_hooks::life_collection_count() != before;
+    let _ = with(|t| {
+        let m = &mut t.measure;
+        m.in_probe = false;
+        m.probe_minors += 1;
+        m.probe_ns += began.elapsed().as_nanos() as u64;
+        for k in &keys {
+            if !live(m, k) {
+                continue;
+            }
+            let s = m.samples[k.0 as usize];
+            let bd = &mut m.sites.entry(s.site).or_default().d[(k.2 >> 1) as usize];
+            if ran {
+                bd.samples += 1;
+                bd.alive += 1;
+                bd.alive_w += s.w;
+                bd.alive_bytes_w += s.w * s.bytes as f64;
+                bd.holders[s.holder as usize] += 1;
+            } else {
+                bd.unresolved += 1;
+            }
+            m.samples[k.0 as usize].dyn_ &= !k.2;
+        }
+        budget(m);
     });
 }
 
@@ -567,7 +699,20 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
             old: !crate::arena::pointer_in_nursery(addr),
             reached: false,
             holder: 6,
+            dyn_: 0,
         };
+        // The dynamic boundaries: the innermost loop iteration in progress in
+        // this frame or a caller's (deeper frames' entries are stale), and the
+        // one around it.
+        let mut found = 0u8;
+        for l in m.loops.iter_mut().rev() {
+            if l.fp < fp || found == 2 {
+                continue;
+            }
+            l.pend.push((i, gen, 1 << found));
+            found += 1;
+        }
+        m.samples[i as usize].dyn_ = (1u8 << found) - 1;
         m.advance(i, ITER);
         m.file(i, own);
         if m.samples[i as usize].old {
@@ -616,7 +761,20 @@ pub extern "C" fn perry_life_return() {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_depth() -> i64 {
-    table(|t| t.measure.acts.len() as i64).unwrap_or(0)
+    table(|t| (t.measure.acts.len() | t.measure.loops.len() << 32) as i64).unwrap_or(0)
+}
+
+/// An iteration of the loop `id` begins (its body's statement list starts).
+/// Never collects.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn perry_life_loop(id: i64) {
+    let fp = caller_fp();
+    let _ = table(|t| {
+        let m = &mut t.measure;
+        let act = m.acts.iter().rposition(|a| a.fp >= fp).map_or(0, |i| i + 1);
+        m.loops.push(LoopIt { act, fp, id: id as u64, pend: Vec::new() });
+    });
 }
 
 /// The handler of a `try` entered at depth `depth` runs: every activation
@@ -626,11 +784,14 @@ pub extern "C" fn perry_life_depth() -> i64 {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_catch(depth: i64) {
-    let depth = depth.max(0) as usize;
+    let loops = (depth as u64 >> 32) as usize;
+    let depth = (depth as u64 & 0xFFFF_FFFF) as usize;
     while table(|t| t.measure.acts.len() > depth) == Some(true) {
         let _ = table(|t| late(t, 2));
         pop_top(true);
     }
+    // The loop iterations the throw left in the handler's own frame end here.
+    end_loops(loops);
 }
 
 #[no_mangle]
@@ -638,6 +799,26 @@ pub extern "C" fn perry_life_catch(depth: i64) {
 pub extern "C" fn perry_life_iter(loop_id: i64) {
     let fp = caller_fp();
     pop_deeper(fp);
+    // The dynamic boundary: this loop's iteration in progress in this frame
+    // ends (with any inner one a labelled jump or stale frame left above it).
+    let k = table(|t| {
+        let m = &t.measure;
+        let mut k = None;
+        for (j, l) in m.loops.iter().enumerate().rev() {
+            if l.fp > fp {
+                break;
+            }
+            if l.fp == fp && l.id == loop_id as u64 {
+                k = Some(j);
+                break;
+            }
+        }
+        k
+    })
+    .flatten();
+    if let Some(k) = k {
+        end_loops(k);
+    }
     let keys = table(|t| {
         let m = &mut t.measure;
         let list = match m.acts.last_mut() {
@@ -686,6 +867,7 @@ pub extern "C" fn perry_life_turn() {
         let _ = table(|t| late(t, 4));
         pop_top(true);
     }
+    end_loops(0);
     // Iteration-pending samples with no activation: the turn ended their loop.
     let root = table(|t| std::mem::take(&mut t.measure.root)).unwrap_or_default();
     probe(&root, 0, true);
@@ -760,7 +942,7 @@ fn write(t: &mut Table) {
         births += s.births;
         bytes += s.bytes;
         for (b, name) in BOUNDARIES.iter().enumerate() {
-            let d = &s.b[b];
+            let d = if b < 4 { &s.b[b] } else { &s.d[b - 4] };
             out.push_str(&format!(
                 "{id}\t{}\t{}\t{}\t{}\t{name}\t{}\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}\t{}\t{}",
                 s.births, s.bytes, s.unborn, s.sampled, d.samples, d.alive, d.alive_w, d.dead_w,
@@ -775,8 +957,8 @@ fn write(t: &mut Table) {
     let (arena, large) = crate::arena::allocation_totals();
     let elapsed = m.start.map_or(0, |s| s.elapsed().as_nanos() as u64);
     out.push_str(&format!(
-        "#totals\tsite_births={births}\tsite_bytes={bytes}\tarena_bytes={arena}\tlarge_bytes={large}\tprobes={}\tprobe_minors={}\tturn_fulls={}\tlate_pops={}\tprobe_ns={}\telapsed_ns={elapsed}\tglobal_shift={}\tpending={}\n",
-        m.probes, m.probe_minors, m.turn_fulls, m.late_pops, m.probe_ns, m.global_shift,
+        "#totals\tsite_births={births}\tsite_bytes={bytes}\tarena_bytes={arena}\tlarge_bytes={large}\tprobes={}\tprobe_minors={}\tturn_fulls={}\tlate_pops={}\tdyn_probes={}\tprobe_ns={}\telapsed_ns={elapsed}\tglobal_shift={}\tpending={}\n",
+        m.probes, m.probe_minors, m.turn_fulls, m.late_pops, m.dyn_probes, m.probe_ns, m.global_shift,
         m.samples.iter().filter(|s| s.next != DONE).count()
     ));
     let mut bodies: Vec<_> = m.exits.iter().collect();

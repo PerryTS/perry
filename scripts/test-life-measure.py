@@ -30,6 +30,8 @@ EXPECT = {
     "m6_timer": ("arm", "object", [("turn", "min_samples", 20), ("turn", "alive_share", 1.0)]),
     "m7_throw": ("inner", "object", [("return", "min_samples", 100), ("return", "dead_share", 1.0),
                                      ("return", "all_late", 0)]),
+    "m8_callee_dyn": ("make", "object", [("dyn", "min_samples", 200), ("dyn", "dead_share", 1.0)]),
+    "m9_callee_acc": ("add", "object", [("dyn", "min_samples", 200), ("dyn", "alive_share", 1.0)]),
 }
 
 
@@ -130,15 +132,15 @@ def main():
         if not ok:
             failures.append(name)
             (out / (name + ".stderr")).write_bytes(r.stderr)
-        if name == "m2_body":
+        if name in ("m2_body", "m8_callee_dyn"):
             r2, tsv2 = measure(name, exe, {"PERRY_FACTS_SABOTAGE": "lifekeep"})
             bad2 = check(load(sites, tsv2), function, kind, tests) if tsv2.exists() else ["no tsv"]
             dead0 = not check(load(sites, tsv2), function, kind, [("any", "no_dead", 0)]) if tsv2.exists() else False
             ok2 = r2.returncode == 0 and bool(bad2) and dead0
-            print(f"control lifekeep m2_body: rc={r2.returncode} check {'FAILS' if bad2 else 'passes'}, "
+            print(f"control lifekeep {name}: rc={r2.returncode} check {'FAILS' if bad2 else 'passes'}, "
                   f"0% dead={dead0}: {'OK' if ok2 else 'FAIL'}")
             if not ok2:
-                failures.append("control:lifekeep")
+                failures.append("control:lifekeep:" + name)
     # The default archives under the instrumented names: no perry_life_ hooks.
     plain = out / "default-as-instr"
     plain.mkdir(exist_ok=True)
