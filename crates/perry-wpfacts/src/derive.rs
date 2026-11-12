@@ -1902,7 +1902,11 @@ fn builtin_protos_unwritten(
     }
     // DEC 250: a final read (the runtime refuses every write that would
     // change it) is written by no store, the program's or one through ⊤.
-    let locked = fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a));
+    // `None`: a plain object's chain, which reaches `Object.prototype` only.
+    let locked = match fam {
+        Some(fam) => crate::builtins::native_locked(m, fam, a),
+        None => crate::builtins::object_chain_locked(m, a),
+    };
     // Interpreted code (DEC 150's summary node: `new Function`, direct and
     // indirect eval, any solved call that may be the Function constructor)
     // holds every global, so every builtin prototype, and writes under any

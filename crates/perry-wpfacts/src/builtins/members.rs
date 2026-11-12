@@ -495,7 +495,6 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockKey};
     use perry_abi::BuiltinProto as P;
     // The locked prototypes the lookup passes before `Object.prototype`
     // (which follows on every chain), each with whether `name` is one of its
@@ -553,33 +552,47 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             return false
         }
     };
-    let class = |image: bool| {
-        if name == "constructor" {
-            LockKey::Constructor
-        } else if image {
-            LockKey::Image
-        } else if name == crate::model::NUM_KEY {
-            LockKey::Index
-        } else {
-            LockKey::Absent
-        }
-    };
-    // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
-    // prototype the lookup passes: an image member ends it, an absent key
-    // goes on to the next prototype.
+    // The lock's one decision on each prototype the lookup passes: a read
+    // there is final when no store the program can make there succeeds
+    // (`store_admitted`); an image member ends the lookup, an absent key goes
+    // on to the next prototype.
     for &(holder, image) in chain {
-        let key = class(image);
-        if !final_on(holder, key) {
+        if store_admitted(holder, name, image) {
             return false;
         }
-        if key == LockKey::Image {
+        if image && name != "constructor" {
             return true;
         }
     }
-    final_on(
+    !store_admitted(
         LockHolder::Proto(P::Object),
-        class(find(OBJECT, name).is_some()),
+        name,
+        find(OBJECT, name).is_some(),
     )
+}
+
+/// DEC 250, the solver's one question about a write onto a built-in
+/// prototype: can a store of key `name` onto locked holder `holder` succeed
+/// at run time (`image`: the realm image gives `holder` the key)? It asks
+/// the runtime's own decision (`perry_abi::lock::refuses`): replacing an
+/// image member is refused, adding a key is refused on the add-locked
+/// prototypes (an index on `Array.prototype` too), `constructor` is exempt.
+/// A refused store throws a TypeError and writes nothing, so a read the
+/// store would change is final ([`locked_read`]), and a store into ⊤ (which
+/// may be the holder) writes nothing there. Where the runtime admits the
+/// store the caller keeps the write.
+pub(crate) fn store_admitted(holder: LockHolder, name: &str, image: bool) -> bool {
+    use perry_abi::lock::{refuses, LockKey, LockMutation};
+    let (key, mutation) = if name == "constructor" {
+        (LockKey::Constructor, LockMutation::Replace)
+    } else if image {
+        (LockKey::Image, LockMutation::Replace)
+    } else if name == crate::model::NUM_KEY {
+        (LockKey::Index, LockMutation::Add)
+    } else {
+        (LockKey::Absent, LockMutation::Add)
+    };
+    !refuses(holder, key, mutation)
 }
 
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every

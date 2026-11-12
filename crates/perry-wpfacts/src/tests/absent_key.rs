@@ -78,7 +78,6 @@ fn an_absent_key_on_one_layout_is_proven() {
 #[test]
 fn a_key_something_may_write_stays_open() {
     for (what, extra) in [
-        ("an Object.prototype store", "(Object.prototype as any).maxDepth = 7;"),
         ("a store after birth", "const o: Opts = { level: 2 }; o.maxDepth = 1; console.log(search(o));"),
         ("a computed store", "const o: any = { level: 2 }; o[String(Date.now() % 2)] = 1; console.log(search(o));"),
         ("an escape", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
@@ -87,6 +86,17 @@ fn a_key_something_may_write_stays_open() {
         let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }})); {extra}"));
         assert!(open(&pf, "maxDepth"), "{what}: {:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
     }
+}
+
+/// DEC 250: `Object.prototype.maxDepth = 7` is an add to an add-locked
+/// prototype: the runtime throws a TypeError at the store and writes
+/// nothing (`members::store_admitted`), so the read stays `undefined`.
+#[test]
+fn an_object_prototype_add_is_refused_so_the_read_stays_proven() {
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }})); try {{ (Object.prototype as any).maxDepth = 7; }} catch {{}} console.log(search());"
+    ));
+    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
 }
 
 /// A store into ⊤ reaches only what reached unknown code, and an add to

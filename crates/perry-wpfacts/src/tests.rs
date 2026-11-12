@@ -144,6 +144,7 @@ mod lit_accessor;
 mod locked_builtins;
 mod locked_delete;
 mod locked_store;
+mod locked_top_store;
 mod logical_and;
 mod map_identity_ops;
 mod member_heritage;

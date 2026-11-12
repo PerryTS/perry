@@ -851,6 +851,14 @@ fn buffer_own_method(m: &Model, name: &str) -> bool {
 /// `Object.prototype`'s intrinsic description (`members`) lacks `name`
 /// (`derive::absent_key`): `constructor`, `toString`, `__proto__` and the
 /// other members are not absent.
+/// DEC 250: is the read of key `a` on a chain that passes `Object.prototype`
+/// only final (`members::locked_read` of a plain object, on
+/// `members::store_admitted`)? Then no store onto `Object.prototype`, the
+/// program's or one through ⊤, writes it (the runtime refuses the store).
+pub(crate) fn object_chain_locked(m: &Model, a: Atom) -> bool {
+    members::locked_read(Family::Object, None, &m.atoms[a as usize])
+}
+
 pub(crate) fn object_proto_lacks(name: &str) -> bool {
     members::member(members::Family::Object, name).is_none()
 }
