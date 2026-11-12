@@ -494,6 +494,17 @@ fn reach_iter_close_switch_is_a_cache_input() {
     );
 }
 
+/// Activation reach, a generator object's inherited members: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_gen_members_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_GEN_MEMBERS"),
+        "PERRY_FACTS_REACH_GEN_MEMBERS must key the compile caches"
+    );
+}
+
 /// Literal strings: the switch changes the exported facts and every store
 /// and alias that drops its string demote, so `=0` must never reuse an `=1`
 /// object.

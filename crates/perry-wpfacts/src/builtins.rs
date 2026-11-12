@@ -11,6 +11,7 @@ use perry_abi::lock::LockHolder;
 mod collections;
 mod constructors;
 mod effects;
+mod gen_members;
 #[cfg(test)]
 pub(crate) mod effects_for_tests {
     pub(crate) use super::effects::interpretable;

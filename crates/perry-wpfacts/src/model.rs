@@ -1815,6 +1815,9 @@ pub struct Model {
     /// An iteration consumer reads `done` of each step result
     /// (`Model::step_done`, `reach::step_done`).
     pub reach_step_done: bool,
+    /// A generator object has the members it inherits
+    /// (`builtins::gen_members`, `reach::gen_members`).
+    pub reach_gen_members: bool,
     /// A built-in consumer that can stop early closes its iterator
     /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
     pub reach_iter_close: bool,
