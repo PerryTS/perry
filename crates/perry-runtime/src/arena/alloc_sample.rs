@@ -94,6 +94,13 @@ pub(crate) fn init_from_env() {}
 
 #[cfg(perry_gc_instruments)]
 pub(crate) fn init_from_env() {
+    // LIFE I2 A: the lifetime measurement's exact allocation census takes the
+    // countdown (and every allocation path this sampler takes) for itself.
+    let life = super::alloc_life::init_from_env();
+    if life != 0 {
+        INTERVAL.store(life, Ordering::Relaxed);
+        return;
+    }
     let raw = std::env::var("PERRY_ALLOC_SITE_SAMPLE").ok();
     let interval = parse_interval(raw.as_deref());
     if interval == 0 {
@@ -161,6 +168,12 @@ fn countdown(bytes: usize, interval: usize) -> bool {
 #[optimize(size)]
 #[inline(never)]
 fn note_slow(total: usize, obj_type: u8, interval: usize) {
+    #[cfg(perry_gc_instruments)]
+    if super::alloc_life::on() {
+        let due = countdown(total, interval);
+        super::alloc_life::runtime(total, obj_type, due);
+        return;
+    }
     if countdown(total, interval) {
         sample(total, obj_type, false);
     }
@@ -175,13 +188,22 @@ pub(crate) fn note_inline_sync(block_offset: usize, inline_offset: usize) {
     if interval == 0 || inline_offset <= block_offset {
         return;
     }
-    note_inline_slow(inline_offset - block_offset, interval);
+    note_inline_slow(block_offset, inline_offset, interval);
 }
 
 #[cold]
 #[optimize(size)]
 #[inline(never)]
-fn note_inline_slow(bytes: usize, interval: usize) {
+fn note_inline_slow(block_offset: usize, inline_offset: usize, interval: usize) {
+    let bytes = inline_offset - block_offset;
+    #[cfg(perry_gc_instruments)]
+    if super::alloc_life::on() {
+        // Every write-back site syncs the current Eden block, whose data
+        // pointer the inline state mirrors.
+        let data = unsafe { (*super::hot_inline_state()).data };
+        super::alloc_life::inline_burst(data, block_offset, inline_offset, |b| countdown(b, interval));
+        return;
+    }
     if countdown(bytes, interval) {
         // The inline allocator only births class instances (`GC_TYPE_OBJECT`
         // with a per-site header image); the size charged is the whole burst.
@@ -235,8 +257,27 @@ fn type_name(t: usize) -> &'static str {
     crate::gc::gc_type_info(t as u8).map_or("?", |i| i.name)
 }
 
+/// A fresh young header was written (LIFE I2 A: a pending sample learns its
+/// address).
+#[cfg(perry_gc_instruments)]
+#[inline(always)]
+pub(crate) fn placed(header: *mut u8, total: usize, obj_type: u8) {
+    if super::alloc_life::on() {
+        super::alloc_life::placed(header as usize, total, obj_type);
+    }
+}
+
 /// Print the cumulative histogram. `label` names the occasion.
 pub(crate) fn report(label: &str) {
+    #[cfg(perry_gc_instruments)]
+    if super::alloc_life::on() {
+        if label == "exit" {
+            super::alloc_life::write();
+        } else {
+            super::alloc_life::minor();
+        }
+        return;
+    }
     let interval = current_interval();
     if interval == 0 {
         return;

@@ -619,6 +619,8 @@ unsafe fn init_young_header(raw: *mut u8, total: usize, obj_type: u8) -> *mut u8
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, total, obj_type);
     raw.add(GC_HEADER_SIZE)
 }
 
@@ -633,6 +635,8 @@ unsafe fn init_young_header_word(raw: *mut u8, idle_image: u64, obj_type: u8) ->
     raw.cast::<u64>().write(image);
     crate::gc::gc_note_black_birth(header);
     record_arena_object_start(raw as usize, obj_type);
+    #[cfg(perry_gc_instruments)]
+    super::alloc_sample::placed(raw, (*header).size as usize, obj_type);
     raw.add(GC_HEADER_SIZE)
 }
 
