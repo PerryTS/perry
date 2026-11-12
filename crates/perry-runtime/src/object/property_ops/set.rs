@@ -1,17 +1,14 @@
 //! Ordinary receiver-aware property assignment.
 use super::*;
 
-/// Extract a raw heap pointer (48-bit) from either a NaN-boxed value
-/// (POINTER_TAG / STRING_TAG) or a raw i64/f64-reinterpreted pointer
-/// (module-level globals store Arrays/Objects as raw I64s, not NaN-boxed).
+/// Extract the heap pointer (48-bit) of a NaN-boxed value (POINTER_TAG /
+/// STRING_TAG / a native id). Every other value answers 0: a word whose top
+/// 16 bits are clear is a Number (a denormal, or +0), not a raw pointer.
 pub(crate) fn extract_pointer(bits: u64) -> u64 {
     let top = bits >> 48;
     // A native id reaches the by-name/handle dispatch as its raw id.
     if top == 0x7FFD || top == 0x7FFF || top == (crate::value::HANDLE_TAG >> 48) {
         bits & POINTER_MASK
-    } else if top == 0 {
-        // Raw untagged pointer (module-level I64 global).
-        bits
     } else {
         0
     }

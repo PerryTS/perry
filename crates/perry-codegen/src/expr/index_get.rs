@@ -42,15 +42,15 @@ use super::{
 
 pub(crate) mod array_rep;
 mod const_array;
-pub(crate) mod field_base;
-mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
+pub(crate) mod field_base;
+mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
-pub(crate) mod rep_default;
 #[cfg(test)]
 mod proven_array_tests;
+pub(crate) mod rep_default;
 pub(crate) mod walk_read;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
@@ -329,7 +329,73 @@ pub(crate) fn classref_preserving_handle(
     let masked_tag = blk.and(I64, &top16, "65533"); // 0xFFFD
     let is_heap_ptr = blk.icmp_eq(I64, &masked_tag, "32765"); // 0x7FFD
     let masked = blk.and(I64, obj_bits, POINTER_MASK_I64);
-    blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, obj_bits)
+    // A value whose top 16 bits are clear is a Number (a denormal, or +0):
+    // in value context an object always carries POINTER_TAG. The handle
+    // entries read a word with clear top bits as a raw object pointer, so
+    // such a Number must not reach them with its own bits. These entries do
+    // not use a Number receiver's value (a read answers `undefined`, a store
+    // is the primitive [[Set]]), so it is handed over as the Number 1.0,
+    // which they classify as every other Number. A site that needs the
+    // Number itself (a named read binds `this`) uses
+    // `named_get_on_unproven_receiver` instead.
+    let is_raw_shaped_number = blk.icmp_ult(I64, obj_bits, RAW_SHAPE_LIMIT_I64);
+    let non_pointer = blk.select(
+        crate::types::I1,
+        &is_raw_shaped_number,
+        I64,
+        NUMBER_ONE_BITS_I64,
+        obj_bits,
+    );
+    blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, &non_pointer)
+}
+
+/// `1 << 48`: a value word below it has its top 16 bits clear.
+pub(crate) const RAW_SHAPE_LIMIT_I64: &str = "281474976710656";
+/// The bits of the Number `1.0` (`0x3FF0_0000_0000_0000`).
+const NUMBER_ONE_BITS_I64: &str = "4607182418800017408";
+
+/// A named read whose receiver the site cannot prove to be an object.
+///
+/// The by-name entries (`js_object_get_field_by_name_f64` and the typed
+/// feedback wrapper) take a receiver HANDLE: a word with clear top 16 bits is
+/// a raw object pointer there. In value context that same shape is a Number
+/// (a denormal, or +0), so such a receiver takes the VALUE entry
+/// (`js_object_get_field_value`), which reads it as the Number it is. Every
+/// other receiver runs `handle_read`, the site's own read through the handle
+/// entry.
+pub(crate) fn named_get_on_unproven_receiver(
+    ctx: &mut FnCtx<'_>,
+    obj_bits: &str,
+    key_raw: &str,
+    site_id: &str,
+    handle_read: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let number_idx = ctx.new_block("nget.number");
+    let handle_idx = ctx.new_block("nget.handle");
+    let merge_idx = ctx.new_block("nget.merge");
+    let number_lbl = ctx.block_label(number_idx);
+    let handle_lbl = ctx.block_label(handle_idx);
+    let merge_lbl = ctx.block_label(merge_idx);
+    let is_raw_shaped_number = ctx.block().icmp_ult(I64, obj_bits, RAW_SHAPE_LIMIT_I64);
+    ctx.block()
+        .cond_br(&is_raw_shaped_number, &number_lbl, &handle_lbl);
+    ctx.current_block = number_idx;
+    let v_number = ctx.block().call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[(I64, obj_bits), (I64, key_raw), (I64, site_id)],
+    );
+    let number_end_lbl = ctx.block().label.clone();
+    ctx.block().br(&merge_lbl);
+    ctx.current_block = handle_idx;
+    let v_handle = handle_read(ctx);
+    let handle_end_lbl = ctx.block().label.clone();
+    ctx.block().br(&merge_lbl);
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&v_number, &number_end_lbl), (&v_handle, &handle_end_lbl)],
+    )
 }
 
 fn lower_class_method_bind(
@@ -1684,8 +1750,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle =
-                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -1695,10 +1759,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     literal,
                     TypedFeedbackContract::object_get_by_name(),
                 );
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_raw)],
+                let handle_read = |ctx: &mut FnCtx<'_>| {
+                    let blk = ctx.block();
+                    let obj_handle =
+                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                    blk.call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &obj_handle), (I64, &key_raw)],
+                    )
+                };
+                if preserve_class_ref_bits {
+                    // A class or `.prototype` reference is never a Number.
+                    return Ok(handle_read(ctx));
+                }
+                return Ok(named_get_on_unproven_receiver(
+                    ctx,
+                    &obj_bits,
+                    &key_raw,
+                    &site_id,
+                    handle_read,
                 ));
             }
             if is_string_expr(ctx, index) {

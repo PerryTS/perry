@@ -473,14 +473,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG
-        0x0000 => {
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }

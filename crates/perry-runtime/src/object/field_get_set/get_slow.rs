@@ -173,6 +173,13 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
         };
         crate::error::js_throw_type_error_property_access(is_null, ptr, len);
     }
+    if tag == 0 {
+        // A value whose top 16 bits are clear is a Number (a denormal, or
+        // +0): an object in value context carries POINTER_TAG. The by-name
+        // entry below takes a receiver HANDLE and reads such a word as a raw
+        // object pointer, so the Number is answered here.
+        return f64::from_bits(super::primitive_number_get(f64::from_bits(bits), key).bits());
+    }
     super::js_object_get_field_by_name_f64(obj_unmasked, key)
 }
 
