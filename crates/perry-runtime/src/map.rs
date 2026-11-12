@@ -918,7 +918,12 @@ fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
                 crate::object::map_set_subclass::CollectionKind::Map,
             ) as *const MapHeader
         }
-        _ => map,
+        // Any other cell (an Array, a Date, a closure, a Set, ...) or a word
+        // with no readable header (a primitive's payload behind the
+        // annotation): no `MapHeader` lives there, and the operation would read
+        // or WRITE that cell as one. Null is the "not a Map" answer every
+        // entry already gives a plain object.
+        _ => std::ptr::null(),
     }
 }
 

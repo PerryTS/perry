@@ -844,6 +844,18 @@ pub(crate) extern "C" fn array_prototype_with_thunk(
     array_proto_generic_read(this, "with", &[index, value])
 }
 
+/// `Array.prototype.toSpliced(start, skipCount, ...items)` as a value and on
+/// every receiver the call site does not lower to `js_array_to_spliced`.
+pub(crate) extern "C" fn array_prototype_to_spliced_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
+) -> f64 {
+    let args = unsafe { native_args(args, argc) };
+    array_proto_generic_read(this, "toSpliced", args)
+}
+
 pub(crate) extern "C" fn array_prototype_keys_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
