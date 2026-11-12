@@ -98,5 +98,9 @@ fn a_key_a_run_may_add_out_of_order_is_not_definite() {
     assert!(!definite("PSub", "st"), "{}", pf.dump_text());
     // A do-while body runs once, but a `break` before a store skips it.
     assert!(!definite("DoBreak", "dw"), "{}", pf.dump_text());
-    assert!(definite("DoBreak", "e") && definite("DoOnce", "dw"), "{}", pf.dump_text());
+    assert!(
+        definite("DoBreak", "e") && definite("DoOnce", "dw"),
+        "{}",
+        pf.dump_text()
+    );
 }
