@@ -153,7 +153,9 @@ fn a_key_that_may_be_an_object_is_not_quiet() {
     let s = solve(None);
     // The receiver alone would be quiet: it is an Array local.
     assert!(matches!(s.local("objectKey", "m").rep, Rep::Arr(_)));
-    assert!(s.local("objectKey", "k").other);
+    // `k` may hold an object (the literal with a `toString`).
+    let k = s.local("objectKey", "k");
+    assert!(k.other || !k.class_ids.is_empty());
     assert!(!s.element("m[k]"));
     assert_eq!(s.line("element", "m[k]"), "refused=key:not-number");
 }

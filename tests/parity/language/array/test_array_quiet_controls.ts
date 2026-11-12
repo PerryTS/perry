@@ -73,9 +73,8 @@ function strings(): string {
   }
   return t;
 }
-function stringIndex(): string {
+function stringIndex(word: string): string {
   const xs: number[] = [0, 1, 2, 1, 0];
-  const word: string = "abc";
   let t = "";
   for (let i = 0; i < xs.length; i++) {
     t += word[xs[i]];
@@ -116,7 +115,7 @@ console.log(ownStore());
 console.log(classField());
 console.log(numbers());
 console.log(strings());
-console.log(stringIndex());
+console.log(stringIndex("abc"));
 console.log(nested());
 console.log(branches());
 console.log(new Holder().sum());
