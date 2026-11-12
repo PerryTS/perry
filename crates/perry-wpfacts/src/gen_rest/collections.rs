@@ -139,6 +139,10 @@ impl<'a> Gen<'a> {
                 let val = self.load(it, one);
                 let mv = self.m.map_vals(t);
                 self.m.edge(val, mv);
+                let zero = Key::Named(self.m.atom("0"));
+                let key = self.load(it, zero);
+                let mk = self.m.map_keys(t);
+                self.m.edge(key, mk);
                 n
             }
             Expr::SetNewFromArray(x) => {

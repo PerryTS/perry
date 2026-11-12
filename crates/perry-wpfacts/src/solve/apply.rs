@@ -1431,7 +1431,19 @@ impl Model {
                 // node of a marker stands outside that collapse: in
                 // `x = x.next[0]` per unit it made a marker per iteration
                 // (CHB11: 27k markers and 25 GB on tssrc).
-                if !self.is_marker(obj)
+                let exact = match !self.is_marker(obj) && index_has_numeric_key(prim) {
+                    true => self.exact_index_slot(n, obj),
+                    false => None,
+                };
+                if let Some(slot) = exact {
+                    // An index-exact object read under the constant key `i`:
+                    // its index `i` (`Model::index_slot`) and the chain's.
+                    if self.idx_done.insert((n, obj, dst, crate::model::IDX_NUM_EXACT)) {
+                        let key = self.elem_key();
+                        self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                        self.edge(slot, dst);
+                    }
+                } else if !self.is_marker(obj)
                     && index_has_numeric_key(prim)
                     && self
                         .idx_done

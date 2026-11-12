@@ -312,7 +312,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         }
         "keys" | "values" | "entries" | "@@__perry_wk_iterator" => {
             let vals = if name == "entries" {
-                super::collections::entry_pairs(m, call, elem, true)
+                super::collections::entry_pairs(m, call, None, elem)
             } else if name == "keys" {
                 num
             } else {

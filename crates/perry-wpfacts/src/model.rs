@@ -44,6 +44,8 @@ pub const IDX_PLAIN_CALL: u16 = 34;
 pub const IDX_NUM_OWN: u16 = 35;
 pub const IDX_CALL_ANY: u16 = 36;
 pub const IDX_CALL_NUM_OWN: u16 = 37;
+/// A constant index read of an index-exact object (`Model::exact_index_slot`).
+pub const IDX_NUM_EXACT: u16 = 39;
 pub const IDX_CALL_NAMED: u16 = 64;
 /// The `IdxMCall` guards: a token receiver's key rule attached
 /// (`Cons::IdxKeyCall` on the key node), and (plus the primitive mask) a
