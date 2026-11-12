@@ -1987,8 +1987,8 @@ pub struct Model {
     pub edge_reach: crate::pts::FxHashMap<(NodeId, NodeId), u64>,
     pub cons_reach: crate::pts::FxHashMap<(NodeId, u32), u64>,
     pub call_reach: crate::pts::FxHashMap<CallId, u64>,
-    /// Rule M1: per function, its switch on a parameter (a statement of the
-    /// body's top level whose case tests are all string literals): (the
+    /// Rule M1: per function, its switch on a parameter (outside every loop,
+    /// try and other switch of the body; case tests all string literals): (the
     /// parameter's index, per clause its label, `None` the default).
     pub switch_runs: crate::pts::FxHashMap<FnIdx, (u32, Vec<Option<crate::model::Atom>>)>,
     /// The region of calls unknown code makes to escaped functions: what they

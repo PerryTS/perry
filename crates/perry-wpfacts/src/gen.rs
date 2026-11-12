@@ -419,9 +419,6 @@ pub struct Gen<'a> {
     /// the walk is inside: where an unlabeled `break`/`continue` lands, and
     /// whether a `throw` or a `finally` stays inside a narrowing's code.
     pub jumps: u32,
-    /// The statements of the function body being walked, at its top level
-    /// (address, length): rule M1's switch is one of them.
-    pub(crate) top_body: Option<(usize, usize)>,
     pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
@@ -777,7 +774,6 @@ impl<'a> Gen<'a> {
             zs_ok: false,
             leaving_write_sabotage: false,
             jumps: 0,
-            top_body: None,
             tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),

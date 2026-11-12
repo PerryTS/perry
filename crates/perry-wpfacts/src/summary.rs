@@ -155,7 +155,7 @@ pub struct Summary {
     /// per that value (`Model::called_val`).
     pub called: Option<u32>,
     /// Rule M1: the parameter that is the discriminant of the body's
-    /// top-level switch with string-literal case tests, never written
+    /// switch (outside loops and tries) with string-literal case tests, never written
     /// (`rel`), and the label of each clause (`None`: the default); a call
     /// whose argument there holds exactly one string constant runs the body
     /// once per that constant, with only the clauses it reaches

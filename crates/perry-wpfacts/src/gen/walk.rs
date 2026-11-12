@@ -750,12 +750,10 @@ impl<'a> Gen<'a> {
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
         let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
-        // Rule M1: the body's own top level; a clause of an enclosing
-        // function's switch is not this body's.
-        let top = self.top_body.replace((f.body.as_ptr() as usize, f.body.len()));
+        // Rule M1: a clause of an enclosing function's switch is not this
+        // body's.
         let clause = self.m.clause.take();
         self.stmts(&fx, &f.body);
-        self.top_body = top;
         self.m.clause = clause;
         if ctor_of.is_none() && narrow::may_complete(&f.body) {
             // The body's normal completion returns `undefined` (a class
@@ -1453,7 +1451,8 @@ impl<'a> Gen<'a> {
                 // `===` against case values: no coercion, identity.
                 self.jumps += 1;
                 self.m.identity(d, IdentityRoute::Switch);
-                // Rule M1: a statement of the body's top level switching on
+                // Rule M1: a switch outside every loop, try and other switch
+                // of the body (blocks and `if` around it only), switching on
                 // a parameter (its own node: no default value, no
                 // `arguments` object, never assigned: no `=` or `++` of it)
                 // with string-literal case tests only.
@@ -1462,10 +1461,8 @@ impl<'a> Gen<'a> {
                 // may complete normally (ECMA-262 14.12.4: fallthrough; the
                 // default clause is entered when no case test is equal).
                 let f = self.m.cur_fn;
-                let at = s as *const Stmt as usize;
-                let top = self.top_body.is_some_and(|(p, n)| {
-                    at >= p && at < p + n * std::mem::size_of::<Stmt>()
-                });
+                // `jumps` counts this switch itself.
+                let top = self.jumps == 1 && self.tries == 0 && self.m.clause.is_none();
                 let param = match discriminant {
                     Expr::LocalGet(id)
                         if top

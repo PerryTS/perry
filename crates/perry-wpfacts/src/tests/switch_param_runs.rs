@@ -86,3 +86,15 @@ fn no_match_runs_default_only() {
     let v = per_read(&facts(&src(GET, ["'z'", "'b'", "'c'"])));
     assert_eq!(v, vec![vec!["B"], vec!["C"], vec!["D"]]);
 }
+
+#[test]
+fn switch_under_if_runs_per_string_constant() {
+    let g = GET.replace("let r: any; switch (t) {", "let r: any; if (!r) { switch (t) {").replace("r = new D(); }", "r = new D(); } }");
+    assert_eq!(per_read(&facts(&src(&g, LITS))), vec![vec!["A"], vec!["B"], vec!["C"]]);
+}
+
+#[test]
+fn switch_in_loop_keeps_every_case() {
+    let g = GET.replace("let r: any; switch (t) {", "let r: any; for (let i = 0; i < 1; i++) { switch (t) {").replace("r = new D(); }", "r = new D(); } }");
+    assert!(!split(&per_read(&facts(&src(&g, LITS)))));
+}
