@@ -691,6 +691,23 @@ pub(crate) fn accessor_receiver(m: &Model, t: Tok, key: Atom) -> bool {
         ) || super::undeclared(m, t, key))
 }
 
+/// IsCallable (ECMA-262 7.2.3) of a token that is surely a function: a
+/// program function, a bound function, a class, a native function, a
+/// builtin constructor. ⊤, a marker and every other token may be no
+/// function.
+pub(crate) fn surely_callable(m: &Model, t: Tok) -> bool {
+    if t == TOP || m.is_marker(t) {
+        return false;
+    }
+    match m.toks[t as usize] {
+        TokKind::Func(..) | TokKind::BuiltinFn(_) | TokKind::Bound(_) | TokKind::ClassObj(_) => {
+            true
+        }
+        TokKind::Builtin(ns) => members::ns_chain(ns) == Family::Function,
+        _ => false,
+    }
+}
+
 /// Callable values other than a program function that an accessor may
 /// hold: ⊤, a builtin function, a bound function, a class. Only ⊤ is an
 /// opaque accessor (`Cons::AccessorInstall`); the others run as an ordinary

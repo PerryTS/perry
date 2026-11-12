@@ -54,9 +54,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let p = site_tmpl(m, call, "Promise");
             let v = promise_value(m, p);
             if let Some(ex) = arg(m, call, 0) {
-                let res = resolver(m, v);
+                let res = resolver(m, call, v);
                 let thrown = m.thrown;
-                let rej = resolver(m, thrown);
+                let rej = rejecter(m, thrown);
                 let rn = m.node_l("resolver");
                 m.add_tok(rn, res);
                 let jn = m.node_l("rejecter");
