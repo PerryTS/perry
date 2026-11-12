@@ -59,7 +59,7 @@ pub(super) enum Others {
 }
 
 /// The names of a loop's guarded receiver.
-pub(super) struct Names {
+pub(crate) struct Names {
     /// The locals the text makes aliases of it (itself among them).
     pub(super) ids: std::collections::HashSet<u32>,
     pub(super) others: Others,

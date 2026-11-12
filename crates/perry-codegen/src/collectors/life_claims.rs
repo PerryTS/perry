@@ -41,9 +41,6 @@ pub(crate) struct LifeClaims {
 }
 
 impl LifeClaims {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.frame.is_empty() && self.dropped_args.is_empty()
-    }
 }
 
 /// The census runs for its claims in this compilation.
