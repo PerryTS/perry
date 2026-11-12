@@ -606,6 +606,13 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
     it
 }
 
+/// The entry values of the Map or WeakMap `t` (`MAP_VALUES`): what `set`
+/// and the constructor stored as values, never a key.
+pub(crate) fn map_values(m: &mut Model, t: Tok) -> NodeId {
+    let a = m.atom(MAP_VALUES);
+    m.field(t, a)
+}
+
 /// The `[key, value]` pairs of an `entries()` iterator: one array template
 /// per call site holding `values` (plus the index for arrays).
 pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
@@ -1396,11 +1403,39 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             for &a in &c.args {
                 m.edge(a, elems);
             }
+            // Map.prototype.set(key, value) (24.1.3.9, 24.3.3.5): the
+            // entry's value is the second argument, undefined if absent.
+            if name == Some("set") && m.keyed_collection(t) {
+                let vals = map_values(m, t);
+                match (c.spread.is_empty(), c.args.get(1)) {
+                    (true, Some(&v)) => m.edge(v, vals),
+                    (true, None) => m.add_prim(vals, prim::UNDEF),
+                    (false, _) => {
+                        for &a in &c.args {
+                            m.edge(a, vals);
+                        }
+                        m.add_prim(vals, prim::UNDEF);
+                    }
+                }
+            }
             ret_tok(m, call, t);
+        }
+        // Map.prototype.get (24.1.3.6, 24.3.3.3): the [[Value]] of the
+        // matching entry, or undefined; never a key.
+        ("Collection", Some("get")) if m.keyed_collection(t) => {
+            let vals = map_values(m, t);
+            m.edge(vals, c.ret);
+            ret_prim(m, call, prim::UNDEF);
         }
         ("Collection", Some("get")) => {
             m.edge(elems, c.ret);
             ret_prim(m, call, prim::UNDEF);
+        }
+        // Map.prototype.values (24.1.3.11): the entries' values only.
+        ("Collection", Some("values")) if m.keyed_collection(t) => {
+            let vals = map_values(m, t);
+            let it = iter_over(m, call, members::collection_iterator(kind), vals);
+            ret_tok(m, call, it);
         }
         ("Collection", Some("has" | "delete")) => ret_prim(m, call, prim::BOOL),
         ("Collection", Some("clear")) => ret_prim(m, call, prim::UNDEF),
@@ -1421,7 +1456,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     Some(&n) => ThisArg::Node(n),
                     None => ThisArg::Undef,
                 };
-                let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
+                // Map.prototype.forEach (24.1.3.5) calls back with (value,
+                // key, map); a Set's value is its key (24.2.3.6).
+                let first = match m.keyed_collection(t) {
+                    true => map_values(m, t),
+                    false => elems,
+                };
+                let _ = cb_call(m, call, cb, this, vec![first, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }

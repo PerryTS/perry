@@ -38,6 +38,11 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     // Entries `[key, value]`: the collection holds both.
                     let ek = m.elem_key();
                     m.cons(vals, Cons::Load { key: ek, dst: fa });
+                    // AddEntriesFromIterable (24.1.1.2 step 4.f): the value
+                    // is Get(entry, "1").
+                    let one = m.atom("1");
+                    let mv = super::collections::map_values(m, c);
+                    m.cons(vals, Cons::Load { key: Key::Named(one), dst: mv });
                 } else {
                     m.edge(vals, fa);
                 }

@@ -991,6 +991,15 @@ impl Model {
             )
         });
         self.add_prim(any, prim::ALL);
+        // It may call `set` with any value (`MAP_VALUES`).
+        if self.keyed_collection(t) {
+            let a = self.atom(MAP_VALUES);
+            let v = self.field(t, a);
+            self.add_top(v, |m| {
+                format!("entry value of an escaped map: {}", m.reasons[reason as usize])
+            });
+            self.add_prim(v, prim::ALL);
+        }
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }

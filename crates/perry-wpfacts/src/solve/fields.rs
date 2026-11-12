@@ -3,6 +3,17 @@
 use super::*;
 
 impl Model {
+    /// `t` is a Map or a WeakMap: its entries' values are its `MAP_VALUES` field.
+    pub(crate) fn keyed_collection(&self, t: Tok) -> bool {
+        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "Map" | "WeakMap", .. }))
+    }
+
+    /// `a` names the entry values of the Map or WeakMap `t` (`MAP_VALUES`).
+    pub(crate) fn map_values_field(&self, t: Tok, a: Atom) -> bool {
+        self.atoms[a as usize] == MAP_VALUES && self.keyed_collection(t)
+    }
+
     /// ECMA-262 22.2.3.1 RegExpAlloc: every RegExp object holds `lastIndex`
     /// as an own data property, `[[Configurable]]: false`, from birth: no
     /// delete or defineProperty removes it or makes it an accessor, so a
@@ -58,13 +69,19 @@ impl Model {
             // (`field_any`) are read under an index only (`named_any`). A
             // module namespace's named key is resolved by name (DECISIONS
             // 215): it never reads the namespace's other keys.
+            // A Map's or WeakMap's entry values are no property: only its
+            // `set` and its constructor write them (`MAP_VALUES`), never a
+            // key write, so the any-key field (which holds the keys `set`
+            // stores) does not feed them.
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
                 || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
-            let any = match named {
-                true => self.named_any(t),
-                false => self.field_any(t),
-            };
-            self.edge(any, n);
+            if !self.map_values_field(t, a) {
+                let any = match named {
+                    true => self.named_any(t),
+                    false => self.field_any(t),
+                };
+                self.edge(any, n);
+            }
             // A Number-valued key can name this field, including NaN,
             // Infinity and exponent forms. Other named fields never read
             // numeric-only writes. The range is a value fact, not a type.

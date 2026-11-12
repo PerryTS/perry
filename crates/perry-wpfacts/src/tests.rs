@@ -119,6 +119,7 @@ mod locked_delete;
 mod locked_store;
 mod logical_and;
 mod map_identity_ops;
+mod map_values;
 mod member_heritage;
 mod static_call_value;
 mod fetch_headers;

@@ -16,6 +16,12 @@ pub type CallId = u32;
 pub type SiteId = u32;
 
 /// The atom of the element key (`Model::elem_key`).
+/// The key of a Map's or WeakMap's entry values: the [[Value]]s of its
+/// [[MapData]] (ECMA-262 24.1.3.6, 24.3.3.3), a field of the map object
+/// itself. `set` and the constructor write it, `get` reads it
+/// (`builtins::collections::map_values`).
+pub(crate) const MAP_VALUES: &str = "[[MapData]]";
+
 pub const ELEM: &str = "#elem";
 /// The key an element store (`push`, `set.add`) writes on a value that may
 /// be a builtin prototype: an index, or no property at all (a collection's
