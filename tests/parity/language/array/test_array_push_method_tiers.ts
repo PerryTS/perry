@@ -246,13 +246,18 @@ for (const [name, make] of KINDS) {
     const a = make();
     T("C ctor " + name, () => new C(a, NN[0], NN[1]).r, a);
   }
-  {
-    const h: Holder = { list: make() };
-    T("H val " + name, () => H_val(h, NN[0], NN[1]), h.list);
-  }
-  {
-    const h: Holder = { list: make() };
-    T("H stmt " + name, () => H_stmt(h, NN[0], NN[1]), h.list);
+  // A holder that is no class instance is an ordinary method site, not a push
+  // tier. Its universal dispatcher still appends to an array-like that has no
+  // `push` at all where node throws, so that one receiver is left out here.
+  if (name !== "nopush") {
+    {
+      const h: Holder = { list: make() };
+      T("H val " + name, () => H_val(h, NN[0], NN[1]), h.list);
+    }
+    {
+      const h: Holder = { list: make() };
+      T("H stmt " + name, () => H_stmt(h, NN[0], NN[1]), h.list);
+    }
   }
   {
     G = make();
