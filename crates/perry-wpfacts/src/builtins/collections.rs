@@ -78,6 +78,10 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         m.diagnostic_builtin(call, |_| format!("Function.prototype.{name}"));
     }
 
+    // A generator object's inherited members (`gen_members`).
+    if gen_members::call(m, t, name, call) {
+        return;
+    }
     let c = m.calls[call as usize].clone();
     match name {
         // A well-known-symbol member of `Function.prototype`: only
@@ -629,7 +633,7 @@ pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bo
 /// Methods of a builtin iterator: `next()` gives `{ value, done }` over its
 /// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
 /// callback on the values. Builtin iterators have no `return`/`throw`.
-fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     let c = m.positional(call, 2);
     let elems = iter_elems(m, t);
     let num = m.node_l("num");

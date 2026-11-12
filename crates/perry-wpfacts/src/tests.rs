@@ -101,6 +101,7 @@ mod function_ctor_without_interp;
 mod indirect_eval_call;
 mod int_demand;
 mod function_values;
+mod gen_members;
 mod getter_contract;
 mod global_gc;
 mod global_sentinel;

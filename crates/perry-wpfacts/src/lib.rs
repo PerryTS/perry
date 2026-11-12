@@ -583,6 +583,8 @@ fn generate<'a>(
         reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
     g.m.reach_step_done =
         reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_gen_members =
+        reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
     g.m.reach_iter_close =
         reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
     g.m.reach_spread_args =
