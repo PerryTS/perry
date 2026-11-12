@@ -107,7 +107,7 @@ pub(super) fn emit(
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
-        super::index_get::array_rep::witness_read(ctx, arr_box, idx_i32, read, false);
+        super::index_get::array_rep::witness_read(ctx, arr_box, idx_i32, read, false, false);
     }
     // A value widened from a native i32 is a plain double, never NaN.
     let int_value = ctx

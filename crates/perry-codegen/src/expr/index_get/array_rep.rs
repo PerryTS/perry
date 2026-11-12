@@ -26,6 +26,19 @@
 //! allocation when the tier addresses them there (`floor > 0`), that no
 //! element has a descriptor, that an in-floor key is below the floor, and
 //! that a slot past the length is a hole (the bound is the capacity).
+//!
+//! **The read's own value claim** (`claimed_number`). The facts may prove
+//! the value of one read a Number that is never `undefined`
+//! (`ElisionFacts::number_element_reads`): the element of a for-of walk
+//! over an Array that never holds a hole (wpfacts `Model::hole`), a key
+//! below the whole-life floor. The tiers themselves need no such claim (a
+//! hole or a key past the end takes their cold read), but what the read
+//! feeds does: the binding's representation, a typed argument, a compare
+//! that drops its `undefined` arm. A hole read there converts silently
+//! (`ToInt32(undefined)` is `0`). So both witnesses test it where the slot
+//! is read: the key is an index below the length and the capacity, the slot
+//! is no hole, and it holds a Number. Negative control
+//! `PERRY_FACTS_SABOTAGE=nohole` (wpfacts: no Array ever holds a hole).
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -78,8 +91,26 @@ pub(crate) fn witness(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<()> {
     } else {
         None
     };
-    emit(ctx, &recv, key.as_deref(), r, &format!("local {id}"));
+    let claimed = claimed_number(ctx, expr);
+    emit(
+        ctx,
+        &recv,
+        key.as_deref(),
+        r,
+        claimed,
+        &format!("local {id}"),
+    );
     Ok(())
+}
+
+/// The facts prove the value of the read `expr` a Number that is never
+/// `undefined` (module docs, the read's own value claim).
+pub(crate) fn claimed_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    let Expr::IndexGet { element_offset, .. } = expr else {
+        return false;
+    };
+    crate::expr::facts_canonical::element(ctx, *element_offset)
+        == Some(crate::expr::facts_canonical::Num::Number)
 }
 
 /// Check mode at a field read the facts give `Arr(r)` (DESIGN-p4l1 §5.1,
@@ -90,11 +121,20 @@ pub(crate) fn witness_value(ctx: &mut FnCtx<'_>, value: &str, r: FactsArrRep, wh
         crate::verify_facts::Fact::ArrayRep,
         || serde_json::json!({ "field": what, "floor": r.floor }),
     );
-    emit(ctx, value, None, r, what);
+    emit(ctx, value, None, r, false, what);
 }
 
 /// The tests of `witness` on the lowered receiver `recv` and key `key`.
-fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what: &str) {
+/// `claimed`: the read's value is a proven Number, never `undefined`
+/// (`claimed_number`), so the key names a present slot that holds one.
+fn emit(
+    ctx: &mut FnCtx<'_>,
+    recv: &str,
+    key: Option<&str>,
+    r: FactsArrRep,
+    claimed: bool,
+    what: &str,
+) {
     let miss = ctx.new_block("arr_rep.verify_miss");
     let next = ctx.new_block("arr_rep.admitted");
     let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
@@ -142,11 +182,14 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
     let low = ctx.block().fcmp("oge", key, "0.0");
     let high = ctx.block().fcmp("olt", key, &bound_f);
     let inside = ctx.block().and(I1, &low, &high);
-    branch(ctx, &inside, "arr_rep.integral", &next_l);
+    // A key that names no slot reads `undefined`, which a claimed read
+    // never yields.
+    let no_slot_l = if claimed { &miss_l } else { &next_l };
+    branch(ctx, &inside, "arr_rep.integral", no_slot_l);
     let idx = ctx.block().fptosi(DOUBLE, key, I32);
     let back = ctx.block().sitofp(I32, &idx, DOUBLE);
     let exact = ctx.block().fcmp("oeq", &back, key);
-    branch(ctx, &exact, "arr_rep.slot", &next_l);
+    branch(ctx, &exact, "arr_rep.slot", no_slot_l);
     let addr = ctx
         .block()
         .array_element_addr_with_capacity(&handle, &capacity, &idx);
@@ -160,22 +203,33 @@ fn emit(ctx: &mut FnCtx<'_>, recv: &str, key: Option<&str>, r: FactsArrRep, what
         let good = ctx.block().xor(I1, &bad, "true");
         branch(ctx, &good, "arr_rep.elem", &miss_l);
     }
-    // A hole holds no element; any other slot is of `r.elem`.
+    // A hole holds no element; any other slot is of `r.elem`. A claimed
+    // read meets no hole, and its slot holds a Number.
     let present = ctx.block().xor(I1, &hole, "true");
-    branch(ctx, &present, "arr_rep.elem_kind", &next_l);
-    elem_test(ctx, &raw, r, r.elem, &next_l, &miss_l);
+    branch(ctx, &present, "arr_rep.elem_kind", no_slot_l);
+    let elem = if claimed && r.elem == FactsElemRep::Boxed {
+        FactsElemRep::F64
+    } else {
+        r.elem
+    };
+    elem_test(ctx, &raw, r, elem, &next_l, &miss_l);
     finish(ctx, miss, next, recv, r, what);
 }
 
 /// Check mode at the rep-keyed tier: what the read `recv[idx]` (`idx` an
 /// i32) leans on (module docs). The rep-keyed store (`expr::index_set_rep`)
 /// leans on the same claim and tests it here before it writes.
+///
+/// `claimed`: the read's value is a proven Number, never `undefined`
+/// (module docs): the key is below the length and the capacity, and the
+/// slot is no hole, whatever the floor says.
 pub(in crate::expr) fn witness_read(
     ctx: &mut FnCtx<'_>,
     recv: &str,
     idx: &str,
     read: super::proven_array::RepRead,
     numeric: bool,
+    claimed: bool,
 ) {
     let r = read.rep;
     crate::verify_facts::covered(
@@ -235,9 +289,15 @@ pub(in crate::expr) fn witness_read(
         let inside = ctx.block().icmp_ult(I32, idx, &length);
         branch(ctx, &inside, "arep.verify_walk", &miss_l);
     }
-    // The slot, when the store holds it.
+    if claimed {
+        // A key at or past the length reads `undefined`.
+        let inside = ctx.block().icmp_ult(I32, idx, &length);
+        branch(ctx, &inside, "arep.verify_claimed", &miss_l);
+    }
+    // The slot, when the store holds it. A claimed read's key names one.
     let stored = ctx.block().icmp_ult(I32, idx, &capacity);
-    branch(ctx, &stored, "arep.verify_slot", &next_l);
+    let unstored_l = if claimed { &miss_l } else { &next_l };
+    branch(ctx, &stored, "arep.verify_slot", unstored_l);
     let addr = ctx
         .block()
         .array_element_addr_with_capacity(&handle, &capacity, idx);
@@ -251,7 +311,7 @@ pub(in crate::expr) fn witness_read(
     let must_hole = past;
     // A dense Array of fixed length has no hole below its own length, which
     // such a key was just tested against.
-    let no_hole = if read.below_length && r.dense && r.fixed {
+    let no_hole = if claimed || read.below_length && r.dense && r.fixed {
         "true".to_string()
     } else if r.dense {
         below
@@ -265,8 +325,9 @@ pub(in crate::expr) fn witness_read(
     let good = ctx.block().xor(I1, &bad, "true");
     branch(ctx, &good, "arep.verify_present", &miss_l);
     branch(ctx, &present, "arep.verify_elem", &next_l);
-    // A number-context read of a proven Number takes the slot as a double.
-    let elem = if numeric && read.number && r.elem == FactsElemRep::Boxed {
+    // A number-context read of a proven Number takes the slot as a double,
+    // and a claimed read's slot holds a Number in any context.
+    let elem = if (claimed || numeric && read.number) && r.elem == FactsElemRep::Boxed {
         FactsElemRep::F64
     } else {
         r.elem
