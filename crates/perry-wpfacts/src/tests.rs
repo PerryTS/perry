@@ -88,6 +88,7 @@ mod fn_intrinsic_proto;
 mod folded_call_own;
 mod for_in_enumerable_keys;
 mod for_in_keys;
+mod for_in_key_store;
 mod for_of_next_argument;
 mod for_of_yield;
 mod fresh_static_blocks;

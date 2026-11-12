@@ -1225,10 +1225,11 @@ impl<'a> Gen<'a> {
                 let owner = self.phase_owner(fx, e, target);
                 if let Some(kp) = self.for_in_key_of(fx.module, key) {
                     // A for-in run's key decides the stored key (FVA 4.3b).
+                    let subj = self.enum_key_subject(fx, key);
                     for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
                         self.mark_fn_phase(fx, e, target, site);
-                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                        self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                     }
                 } else if let Some(ks) = self.const_key_set(fx.module, key) {
                     // One of a few constant keys: a named store under each.
@@ -1455,7 +1456,8 @@ impl<'a> Gen<'a> {
                     // rooted as any element store (DECISIONS 149b).
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
                     self.mark_rooted(e, site);
-                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site });
+                    let subj = self.enum_key_subject(fx, index);
+                    self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
                     // One of a few constant keys: a named store under each.
                     for s in ks {

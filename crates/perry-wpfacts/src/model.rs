@@ -1615,6 +1615,14 @@ pub struct Model {
     /// Source token of a spread -> its targets (and the spread site): a key
     /// the source gains later is copied too (`Model::field`).
     pub spread_to: FxHashMap<Tok, Vec<(Tok, SiteId)>>,
+    /// ENUM3: a for-in subject (or chain link) token -> the keyed stores
+    /// (`o`, `src`, site) its enumerated keys decide: a key it gains later
+    /// is stored too (`Model::field`, `Cons::EnumKeyStore`).
+    pub enum_key_stores: FxHashMap<Tok, Vec<(NodeId, NodeId, SiteId)>>,
+    pub enum_key_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, NodeId)>,
+    /// ENUM3: a for-in subject (or chain link) token -> the node its
+    /// unknown-key writes reach (`Model::enum_key_watch`).
+    pub enum_key_watch: FxHashMap<Tok, NodeId>,
     pub spread_done: crate::pts::FxHashSet<(Tok, Tok)>,
     /// Object literals with spreads (`{ a, ...s }`): which keys they surely
     /// hold (`LitSpread`), by template, and their spread sites.

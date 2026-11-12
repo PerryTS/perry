@@ -417,16 +417,42 @@ impl<'a> Gen<'a> {
     /// `o[k]` is a read of an enclosing for-in's own key on the binding it
     /// iterates (`enum_scope`): `Cons::IdxLoad`'s `enumerable`.
     pub(crate) fn enum_read(&self, mi: u32, object: &Expr, index: &Expr) -> bool {
-        match (object, index) {
-            (o, Expr::LocalGet(k)) => self.for_in_reads.iter().any(|(m, key, s)| {
-                *m == mi
-                    && *key == *k
-                    && match s {
-                        EnumSubject::Local(src) => matches!(o, Expr::LocalGet(l) if l == src),
-                        EnumSubject::Path(p) => p.is(o),
-                    }
-            }),
-            _ => false,
+        self.enum_subjects(mi, index).any(|s| match s {
+            EnumSubject::Local(src) => matches!(object, Expr::LocalGet(l) if l == src),
+            EnumSubject::Path(p) => p.is(object),
+        })
+    }
+
+    /// The subjects of the enclosing ENUM-scoped for-ins (`enum_scope`)
+    /// whose key `index` reads.
+    fn enum_subjects<'s>(
+        &'s self,
+        mi: u32,
+        index: &'s Expr,
+    ) -> impl Iterator<Item = &'s EnumSubject> + 's {
+        self.for_in_reads
+            .iter()
+            .filter_map(move |(m, key, s)| match index {
+                Expr::LocalGet(k) if *m == mi && key == k => Some(s),
+                _ => None,
+            })
+    }
+
+    /// ENUM3: the node of the subject local of the innermost ENUM1-scoped
+    /// for-in (`EnumSubject::Local`, exact) whose key `index` reads: a store
+    /// under that key stores under the keys the subject enumerates
+    /// (`Cons::StoreKeyed`'s `subj`); `NO_NODE` otherwise.
+    pub(crate) fn enum_key_subject(&mut self, fx: &Fx, index: &Expr) -> NodeId {
+        let src = self
+            .enum_subjects(fx.module, index)
+            .last()
+            .and_then(|s| match s {
+                EnumSubject::Local(src) => Some(*src),
+                EnumSubject::Path(_) => None,
+            });
+        match src {
+            Some(src) => self.expr(fx, &Expr::LocalGet(src)),
+            None => NO_NODE,
         }
     }
 

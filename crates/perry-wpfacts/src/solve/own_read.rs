@@ -115,6 +115,137 @@ impl Model {
         }
     }
 
+    /// ENUM3: `o[k] = src` where `k` is the key of `for (k in s)` over a
+    /// local `s` the ENUM1/ENUM2 read rule scopes (`Gen::enum_scope`): `k`
+    /// is one of the enumerable String keys of `s` and its chain (ECMA-262
+    /// 14.7.5.9 EnumerateObjectProperties, 14.7.5.10 %ForInIteratorPrototype%.next:
+    /// own keys whose [[Enumerable]] is true, then the prototype's), so on
+    /// a link the read rule covers (`enum_free`, `enum_obj`,
+    /// `enum_free_instance` for `s`, `enum_link` up the chain) the store
+    /// writes only the names the program wrote there, never a built-in
+    /// member such as `Object.prototype.valueOf` (non-enumerable, clause
+    /// 18, 20.1.3). Names gained later are stored too (`enum_key_gained`).
+    /// Any String key for: ⊤, a primitive subject (a String's indices), an
+    /// array (its index keys), a link the read rule does not cover, a link
+    /// written under an unknown key (its any-key field holds a value: a
+    /// computed store, a `JSON.parse` object, unknown code's write) and a
+    /// built-in link a store into ⊤ may have written (`enum_top_written_any`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn enum_key_store(
+        &mut self,
+        n: NodeId,
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+        from: Option<Tok>,
+        toks: crate::delta::Tokens<'_>,
+        prim: u16,
+    ) {
+        if from.is_none() && prim & !(prim::NULL | prim::UNDEF) != 0 {
+            self.enum_key_any(o, src, site);
+        }
+        for &t in toks {
+            let covered = t != TOP
+                && match from {
+                    None => {
+                        (self.enum_free(t)
+                            || self.enum_obj(t)
+                            || builtins::enum_free_instance(self, t))
+                            && !self.is_elem_array(t)
+                            && !self.tmpl_of(t).is_some_and(|tm| {
+                                matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. })
+                            })
+                    }
+                    Some(f) => self.enum_link(f, t),
+                };
+            if !covered {
+                self.enum_key_any(o, src, site);
+                continue;
+            }
+            if !self.enum_key_done.insert((n, t, o, src)) {
+                continue;
+            }
+            self.enum_key_stores.entry(t).or_default().push((o, src, site));
+            let mut names = self.field_keys.get(&t).cloned().unwrap_or_default();
+            names.extend(self.accessor_keys.get(&t).cloned().unwrap_or_default());
+            for a in names {
+                self.enum_key_named(o, src, site, a);
+            }
+            let w = self.enum_key_watch(t);
+            self.cons(w, Cons::EnumKeyAny { o, src, site });
+            if !self.enum_obj(t) {
+                let w = self.node_l("enum-key-top-written");
+                builtins::enum_top_written_any(self, t, w);
+                self.cons(w, Cons::EnumKeyAny { o, src, site });
+            }
+            let up = self.proto_node(t);
+            self.cons(
+                up,
+                Cons::EnumKeyStore {
+                    o,
+                    src,
+                    site,
+                    from: Some(t),
+                },
+            );
+        }
+    }
+
+    /// ENUM3: what `t` holds under keys no name lists: its any-key field and
+    /// every shaped computed-key store into it (`key_store_node`), now and
+    /// later. A node of its own: a field node of an observed token runs no
+    /// rule (`sum_skip`).
+    fn enum_key_watch(&mut self, t: Tok) -> NodeId {
+        if let Some(&w) = self.enum_key_watch.get(&t) {
+            return w;
+        }
+        let w = self.node_l("enum-key-any");
+        self.enum_key_watch.insert(t, w);
+        let fa = self.any_key_node(t);
+        self.edge(fa, w);
+        for (_, n, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
+            if store {
+                self.edge(n, w);
+            }
+        }
+        w
+    }
+
+    /// ENUM3: key `a` appeared on token `t`: the keyed stores `t`'s
+    /// enumerated keys decide store under it too.
+    pub(super) fn enum_key_gained(&mut self, t: Tok, a: Atom) {
+        if let Some(v) = self.enum_key_stores.get(&t).cloned() {
+            for (o, src, site) in v {
+                self.enum_key_named(o, src, site, a);
+            }
+        }
+    }
+
+    fn enum_key_named(&mut self, o: NodeId, src: NodeId, site: SiteId, a: Atom) {
+        if self.is_private_atom(a) {
+            return;
+        }
+        if self.atoms[a as usize] == crate::STAR_KEY {
+            return self.enum_key_any(o, src, site);
+        }
+        self.cons(
+            o,
+            Cons::Store {
+                key: Key::Named(a),
+                src,
+                site,
+            },
+        );
+    }
+
+    /// The store of a for-in key no rule names: under any String key.
+    pub(super) fn enum_key_any(&mut self, o: NodeId, src: NodeId, site: SiteId) {
+        if self.enum_key_done.insert((o, TOP, src, site as NodeId)) {
+            let key = Key::Any(self.any_string_shape());
+            self.cons(o, Cons::Store { key, src, site });
+        }
+    }
+
     /// What the program wrote under `key` on link `t` of the chain of `of`:
     /// its fields, and on a built-in object what a store into ⊤ wrote there
     /// (under a named key that key, under any key every key such a store

@@ -472,8 +472,32 @@ pub enum Cons {
         accessor: bool,
     },
     /// The node is the key of a store into `o` in a for-in body: a run's one
-    /// key stores under that key, any other under `Key::Any`.
+    /// key stores under that key; any other under the keys the loop's
+    /// subject enumerates when `subj` is that subject's node (ENUM3,
+    /// `Cons::EnumKeyStore`), else under `Key::Any`.
     StoreKeyed {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+        subj: NodeId,
+    },
+    /// ENUM3: on the subject `s` of `for (k in s)` (`from: None`) or on the
+    /// prototype node of its chain link `from`: `o[k] = src` stores under
+    /// each String key the for-in may yield (ECMA-262 14.7.5.9
+    /// EnumerateObjectProperties, 14.7.5.10: the enumerable String keys of
+    /// `s` and its chain), the names written on each link the ENUM1/ENUM2
+    /// read rule covers (`Model::enum_key_store`), growing as fields
+    /// appear; under any String key for any other value.
+    EnumKeyStore {
+        o: NodeId,
+        src: NodeId,
+        site: SiteId,
+        from: Option<Tok>,
+    },
+    /// ENUM3: on a link's any-key field (or what a store into ⊤ wrote on a
+    /// built-in link): once it holds a value, a key no name lists may be
+    /// enumerated, so `o[k] = src` stores under any String key.
+    EnumKeyAny {
         o: NodeId,
         src: NodeId,
         site: SiteId,
@@ -720,6 +744,8 @@ impl Cons {
             Cons::ForInKeys { .. } => "forinkeys",
             Cons::DefineKeyed { .. } => "definekeyed",
             Cons::StoreKeyed { .. } => "storekeyed",
+            Cons::EnumKeyStore { .. } => "enumkeystore",
+            Cons::EnumKeyAny { .. } => "enumkeyany",
             Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",

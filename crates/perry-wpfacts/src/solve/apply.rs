@@ -1064,6 +1064,8 @@ impl Model {
                     let ks = self.accessor_keys.entry(t).or_default();
                     if !ks.contains(&key) {
                         ks.push(key);
+                        // ENUM3: a key gained by a for-in subject.
+                        self.enum_key_gained(t, key);
                     }
                     let objproto = matches!(self.toks[t as usize], TokKind::ObjectProto);
                     if objproto {
@@ -1454,17 +1456,41 @@ impl Model {
                     }
                 }
             }
-            Cons::StoreKeyed { o, src, site } => {
+            Cons::StoreKeyed { o, src, site, subj } => {
                 if let Some(k) = self.keyed_once(n, src, 1) {
                     // The key of a for-in run is a String: EnumerateObjectProperties
                     // never returns a Symbol key (ECMA-262 14.7.5.9, 14.7.5.10).
-                    // An unknown one stores under the any-String shape, which
-                    // never names a symbol-keyed property (`key_may_name_str`).
-                    let key = match k {
-                        Some(a) => Key::Named(a),
-                        None => Key::Any(self.any_string_shape()),
-                    };
-                    self.cons(o, Cons::Store { key, src, site });
+                    // An unknown one stores under the keys the subject
+                    // enumerates (ENUM3), or else under the any-String shape,
+                    // which never names a symbol-keyed property (`key_may_name_str`).
+                    match k {
+                        Some(a) => self.cons(
+                            o,
+                            Cons::Store {
+                                key: Key::Named(a),
+                                src,
+                                site,
+                            },
+                        ),
+                        None if subj != NO_NODE => self.cons(
+                            subj,
+                            Cons::EnumKeyStore {
+                                o,
+                                src,
+                                site,
+                                from: None,
+                            },
+                        ),
+                        None => self.enum_key_any(o, src, site),
+                    }
+                }
+            }
+            Cons::EnumKeyStore { o, src, site, from } => {
+                self.enum_key_store(n, o, src, site, from, toks, prim)
+            }
+            Cons::EnumKeyAny { o, src, site } => {
+                if !toks.is_empty() || prim != 0 {
+                    self.enum_key_any(o, src, site);
                 }
             }
             Cons::StoreIndexed {

@@ -413,7 +413,14 @@ impl Model {
                 self.reasons.get(reason as usize),
                 accessor
             ),
-            Cons::StoreKeyed { o, src, site } => format!(
+            Cons::EnumKeyStore { o, src, site, from } => format!(
+                "EnumKeyStore o={:?} src={:?} site={site} from={from:?}",
+                o, src
+            ),
+            Cons::EnumKeyAny { o, src, site } => {
+                format!("EnumKeyAny o={:?} src={:?} site={site}", o, src)
+            }
+            Cons::StoreKeyed { o, src, site, .. } => format!(
                 "StoreKeyed o={:?} src={:?} site={:?}",
                 o,
                 src,

@@ -1862,7 +1862,9 @@ impl Model {
                 reason,
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
-            Cons::StoreKeyed { o, src, site } => format!("storekeyed {n} {o} {src} {site}"),
+            Cons::StoreKeyed { o, src, site, subj } => format!("storekeyed {n} {o} {src} {site} {subj}"),
+            Cons::EnumKeyStore { o, src, from, .. } => format!("enumkeystore {n} {o} {src} {from:?}"),
+            Cons::EnumKeyAny { o, src, .. } => format!("enumkeyany {n} {o} {src}"),
             Cons::StoreIndexed { o, src, site, .. } => format!("storeindexed {n} {o} {src} {site}"),
             Cons::AccessorKeyed { holder, f, setter } => {
                 format!("accessorkeyed {n} {holder} {f} {}", *setter as u8)

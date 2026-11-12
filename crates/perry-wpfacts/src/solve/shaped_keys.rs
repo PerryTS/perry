@@ -106,6 +106,10 @@ impl Model {
             }
         }
         self.shaped_of.entry(t).or_default().push((s, n, true));
+        // ENUM3: a computed key a for-in over `t` may enumerate.
+        if let Some(&w) = self.enum_key_watch.get(&t) {
+            self.edge(n, w);
+        }
         n
     }
 

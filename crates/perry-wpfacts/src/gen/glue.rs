@@ -135,7 +135,7 @@ impl<'a> Gen<'a> {
         let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
+            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site, subj: NO_NODE });
         }
         for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             let f = own.unwrap_or(read);

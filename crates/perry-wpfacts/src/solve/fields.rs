@@ -109,6 +109,8 @@ impl Model {
                 self.store_into(d, Key::Named(a), n, site);
             }
         }
+        // ENUM3: a key gained by a for-in subject (or chain link).
+        self.enum_key_gained(t, a);
         // DECISIONS 94: a named field of an array whose elements are a cell.
         if let Some(&seed) = self.cell_arrs.get(&t) {
             self.edge(seed, n);

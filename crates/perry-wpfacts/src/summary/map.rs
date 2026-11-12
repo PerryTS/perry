@@ -347,7 +347,19 @@ pub fn map_cons(
             reason,
             accessor,
         },
-        StoreKeyed { o, src, site } => StoreKeyed {
+        StoreKeyed { o, src, site, subj } => StoreKeyed {
+            o: n(o),
+            src: n(src),
+            site,
+            subj: if subj == NO_NODE { NO_NODE } else { n(subj) },
+        },
+        EnumKeyStore { o, src, site, from } => EnumKeyStore {
+            o: n(o),
+            src: n(src),
+            site,
+            from,
+        },
+        EnumKeyAny { o, src, site } => EnumKeyAny {
             o: n(o),
             src: n(src),
             site,
