@@ -10,11 +10,22 @@
 //! children it walks.
 use super::*;
 
+/// The rule is behind `FactsConfig::json_positions` (default off).
+fn facts_on(src: &str) -> ProgramFacts {
+    facts_with(
+        src,
+        FactsConfig {
+            json_positions: true,
+            ..FactsConfig::default()
+        },
+    )
+}
+
 const CLASSES: &str = "class M { go() { return 1; } }\nclass S { go() { return 2; } }\nconst j: any = JSON.parse(process.argv[2]);\n";
 
 /// The `.go` call sites hold a receiver of class `c` (or ⊤).
 fn reaches(src: &str, c: &str) -> bool {
-    let pf = facts(&format!("{CLASSES}{src}"));
+    let pf = facts_on(&format!("{CLASSES}{src}"));
     let v: Vec<_> = pf.sites.iter().filter(|s| s.key == "go" && s.is_call).collect();
     assert!(!v.is_empty(), "no .go call\n{}", pf.dump_text());
     v.iter().any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(&format!(":{c}"))))
@@ -82,4 +93,14 @@ fn the_fold_merges_paths_that_end_in_the_same_step() {
 fn element_class_fields_stay_apart_by_name() {
     assert!(!reaches("j.lights[0].t = new M();\nj.nodes[0].u.go();", "M"));
     assert!(reaches("j.ext.lights[0].t = new M();\nj.nodes[1].t.go();", "M"), "fold: one element class");
+}
+
+/// Switch off (the default): one token per parse, so a store into one named
+/// child is read from another (today's merged solve).
+#[test]
+fn control_switch_off_merges_the_children() {
+    let pf = facts(&format!("{CLASSES}j.a.x = new M();\nj.b.x.go();"));
+    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == "go" && s.is_call).collect();
+    assert!(!v.is_empty());
+    assert!(v.iter().any(|s| s.top || s.receivers.iter().any(|r| r.ends_with(":M"))));
 }

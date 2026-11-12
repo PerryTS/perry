@@ -244,7 +244,10 @@ impl<'a> Gen<'a> {
             }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
                 let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
-                self.json_value(mi, true)
+                {
+                    let positions = self.m.json_positions;
+                    self.json_value(mi, positions)
+                }
             }
             Expr::JsonParseReviver { text, reviver }
             | Expr::JsonParseWithReviver(text, reviver) => {

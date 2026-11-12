@@ -1421,6 +1421,9 @@ pub struct Model {
     /// `json_key_optimistic`. NOT Node semantics: an assumption on the
     /// program's input data.
     pub optimistic_json_key: bool,
+    /// `FactsConfig::json_positions`: `JSON.parse` results are position
+    /// classes (`solve::json_pos`); off, one token per parse.
+    pub json_positions: bool,
     /// Diagnostic of the optimistic JSON-key rule: the read results and
     /// store sources it applied to (`true`: a store), reported with the
     /// solve profile.

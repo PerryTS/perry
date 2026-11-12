@@ -23,6 +23,14 @@
 //! (Keyed by the last TWO steps, the three.js skin solve ran out of memory:
 //! BATCHB27 m18.) Fields stay per class: a store into `j.a.x` is not read
 //! from `j.b.x`, while `j.a.c` and `j.b.c` are one class.
+//!
+//! Default OFF (`FactsConfig::json_positions`, `PERRY_FACTS_JSON_POSITIONS=1`),
+//! BATCHB28: on three.js skin an unknown-key store whose receiver and value
+//! both hold the parse's classes fills every class's `named_any` with every
+//! class, so every named field node holds the whole class set (field and
+//! field-truthy-read nodes: 385M of 410M points-to entries at the bound).
+//! A class merge on alias (an alias joins the classes, one token after) is
+//! needed before the rule can be on.
 use super::*;
 
 impl Model {
@@ -97,5 +105,68 @@ impl Model {
         let ntm = self.tmpls.len() as TmplId;
         self.tmpls.push(t);
         self.tok(TokKind::Obj(ntm, ctx))
+    }
+
+    /// Diagnostic (`PERRY_FACTS_ABORT_TOP`): where the points-to entries sit
+    /// when a solve stops on its bound.
+    pub(crate) fn abort_top(&self) {
+        let json = |t: Tok| self.json_pos.contains_key(&t);
+        let mut lab: crate::pts::FxHashMap<&'static str, (u64, u64, u64)> = Default::default();
+        let (mut tot, mut tj, mut nj) = (0u64, 0u64, 0u64);
+        let mut big: Vec<(usize, NodeId)> = Vec::new();
+        for (i, n) in self.nodes.iter().enumerate() {
+            let l = n.pts.len();
+            if l == 0 {
+                continue;
+            }
+            let js = n.pts.to_sorted().iter().filter(|&&t| json(t)).count() as u64;
+            tot += l as u64;
+            tj += js;
+            nj += (js > 0) as u64;
+            let e = lab.entry(self.labels[i]).or_default();
+            e.0 += l as u64;
+            e.1 += js;
+            e.2 += 1;
+            big.push((l, i as NodeId));
+        }
+        eprintln!(
+            "perry: wpfacts abort-top total={tot} json_entries={tj} nodes_with_json={nj} json_toks={}",
+            self.json_pos.len()
+        );
+        let mut ls: Vec<_> = lab.into_iter().collect();
+        ls.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+        for (l, (s, j, c)) in ls.iter().take(15) {
+            eprintln!("perry: wpfacts abort-label {l} sum={s} json={j} nodes={c}");
+        }
+        big.sort_unstable_by(|a, b| b.cmp(a));
+        for (k, &(l, n)) in big.iter().take(40).enumerate() {
+            let f = self.node_fn[n as usize];
+            let fname = match f == NO_FN {
+                true => "-".to_string(),
+                false => self.funcs[f as usize].name.clone(),
+            };
+            let toks = self.nodes[n as usize].pts.to_sorted();
+            let js = toks.iter().filter(|&&t| json(t)).count();
+            let mut line = format!(
+                "perry: wpfacts abort-node #{n} {} fn={fname} pts={l} json={js}",
+                self.labels[n as usize]
+            );
+            if k < 5 {
+                let other: Vec<String> = toks
+                    .iter()
+                    .filter(|&&t| !json(t))
+                    .take(6)
+                    .map(|&t| self.tok_name(t))
+                    .collect();
+                let jn: Vec<String> = toks
+                    .iter()
+                    .filter(|&&t| json(t))
+                    .take(4)
+                    .map(|&t| self.tok_name(t))
+                    .collect();
+                line += &format!(" other={other:?} jsonsome={jn:?}");
+            }
+            eprintln!("{}", line.chars().take(900).collect::<String>());
+        }
     }
 }

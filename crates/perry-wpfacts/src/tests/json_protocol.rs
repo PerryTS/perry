@@ -7,10 +7,19 @@
 use super::*;
 
 fn whole(src: &str) -> ProgramFacts {
+    whole_with(src, false)
+}
+
+/// `positions`: `FactsConfig::json_positions` (default off).
+fn whole_with(src: &str, positions: bool) -> ProgramFacts {
     let path = "t.ts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
-    crate::compute(&[(path, &hir)], &FactsConfig::default())
+    let cfg = FactsConfig {
+        json_positions: positions,
+        ..FactsConfig::default()
+    };
+    crate::compute(&[(path, &hir)], &cfg)
 }
 
 fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
@@ -48,15 +57,18 @@ fn a_parsed_value_in_a_template_keeps_what_the_tree_holds() {
 }
 
 /// Control: the parsed value handed to unknown code takes what it holds.
-/// BATCHB26: the value that holds `a` is `j`; `x = j.x` is another object
-/// of the parse (ECMA-262 25.5.1: a fresh object per position, no object
-/// refers to its parent), from which unknown code reaches nothing stored
-/// into `j` (`solve::json_pos`).
+/// Default (one token per parse): `x = j.x` is that token, which holds `a`.
+/// With JSON positions (BATCHB26) the value that holds `a` is `j`; `x` is
+/// another object of the parse (ECMA-262 25.5.1: a fresh object per
+/// position, no object refers to its parent), from which unknown code
+/// reaches nothing stored into `j` (`solve::json_pos`).
 #[test]
 fn a_parsed_value_handed_to_unknown_code_escapes_what_it_holds() {
-    let pf = whole(&src("(globalThis as any)[process.argv[3]](j)"));
-    assert!(escape_with_field(&pf, "a").is_some(), "{}", pf.dump_text());
     let pf = whole(&src("(globalThis as any)[process.argv[3]](x)"));
+    assert!(escape_with_field(&pf, "a").is_some(), "{}", pf.dump_text());
+    let pf = whole_with(&src("(globalThis as any)[process.argv[3]](j)"), true);
+    assert!(escape_with_field(&pf, "a").is_some(), "{}", pf.dump_text());
+    let pf = whole_with(&src("(globalThis as any)[process.argv[3]](x)"), true);
     assert_eq!(escape_with_field(&pf, "a"), None, "{}", pf.dump_text());
 }
 

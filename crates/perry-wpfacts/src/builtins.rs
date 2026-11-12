@@ -2583,7 +2583,8 @@ fn ns_method_inner(
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             let reviver = arg(m, call, 1).is_some();
-            let (j, ja) = json_value(m, call, !reviver);
+            let positions = !reviver && m.json_positions;
+            let (j, ja) = json_value(m, call, positions);
             let fa = m.field_any(j);
             ret_tok(m, call, j);
             ret_tok(m, call, ja);
