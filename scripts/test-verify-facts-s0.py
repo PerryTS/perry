@@ -285,6 +285,23 @@ def main():
     assert observed.returncode == 0 and observed.stdout == oracle(source), observed
     save("slot-key", status=86, key=value["key"])
 
+    # A class with reservations (#14485): a reserved key's witness admits
+    # the hole at its slot behind the read's hole compare, and a key added
+    # out of the layout's order through its overflow entry
+    # (WPF_MAYBE_ABSENT, `slot_ref`). A real false slot claim on such a class
+    # still reports: with the facts' constructor order check off
+    # (`PERRY_FACTS_CTOR_ORDER=0`), `d`'s store after an out-of-order add
+    # bypasses the overflow and its slot holds a key the object does not
+    # name.
+    source = fixtures / "slot-key-reserved.ts"
+    exe, e = compile_(source, "slot-key-reserved-false", PERRY_FACTS_CTOR_ORDER="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "F3 slot" and value["key"] == "d", value
+    exe, e = compile_(source, "slot-key-reserved-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("slot-key-reserved", status=86, key=value["key"])
+
     for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call"), ("copy-inline", "activation:this")]:
         source = fixtures / (name + ".ts")
         exe, e = compile_(source, name, PERRY_FACTS_SABOTAGE=wrong_claim)
