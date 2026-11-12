@@ -406,3 +406,29 @@ fn a_conjunction_and_an_expression_bound_a_for_counter() {
         r["idx"]
     );
 }
+
+/// A product past 2^60 is no empty interval (`Iv::int`, the bounds of
+/// doubles): the binding it is assigned to leaves the int32 range. `h` holds
+/// 1406932606, 1.98e18 and 3.9e36; `s` holds 2147483647 and -2147483648.
+#[test]
+fn a_binding_assigned_a_product_past_2_60_is_unbounded() {
+    let r = ranges(
+        "let h = 1406932606; h *= h; h *= h;\n\
+         let c = 1406932606; c = c * c + 1;\n\
+         let n = -3037000500; n = n * 3037000500;\n\
+         let s = 2147483647; s <<= 31;\n\
+         let k = 46340; k *= k;\n\
+         function sq(p: number): number { let q = p; q = q * q; return q; }\n\
+         console.log(~h, ~c, ~n, s, k, sq(4294967296));",
+    );
+    for name in ["h", "c", "n", "q"] {
+        assert!(unbounded(&r, name), "{name}: {:?}", r[name]);
+    }
+    assert!(covers(&r, "s", -2147483648, 2147483647), "{:?}", r["s"]);
+    // The control: a product inside int32 keeps its exact interval.
+    assert!(
+        r["k"].is_some_and(|(lo, hi)| lo >= 0 && (2147395600..=2147483647).contains(&hi)),
+        "k: {:?}",
+        r["k"]
+    );
+}
