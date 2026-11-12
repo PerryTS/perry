@@ -294,14 +294,24 @@ pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
         && !crate::array::is_array_subclass_instance(recv)
 }
 
+/// `null` or `undefined` behind an Array annotation: `Get` on it throws the
+/// call's TypeError, which only the real `Get` does.
+#[inline]
+pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
+    matches!(
+        recv.to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    )
+}
+
 /// THE predicate of every Array method site: must `recv.<key>(..)` perform
 /// the real `Get` (`1`), or does `recv` resolve `key` to the realm's
 /// `Array.prototype` builtin (`0`)?
 ///
 /// [`js_receiver_may_own_named_method`] answers for the receiver kinds whose
 /// builtins are lowered directly (an Array from its header and named layout,
-/// a modified prototype, a Proxy); this adds the receiver the annotation lied
-/// about ([`array_site_object_receiver`]). The emitted guard of an Array site
+/// a modified prototype, a Proxy); this adds the receivers the annotation lied
+/// about ([`array_site_object_receiver`], [`array_site_nullish_receiver`]). The emitted guard of an Array site
 /// asks this (`PERRY_ARRAY_METHOD_TIERS`, default), and the checked entries
 /// (`builtin_proto_entries::array_admits`) apply the same two tests.
 ///
@@ -309,10 +319,34 @@ pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
 /// As [`js_receiver_may_own_named_method`].
 #[no_mangle]
 pub unsafe extern "C" fn js_array_method_needs_get(recv: f64, key: f64) -> i32 {
-    if array_site_object_receiver(recv) {
+    if array_site_nullish_receiver(recv) || array_site_object_receiver(recv) {
         return 1;
     }
     js_receiver_may_own_named_method(recv, key)
+}
+
+/// Check mode's test of a method-site verdict (codegen `method_site`): is
+/// `recv` an Array exotic object that holds no own property `key` and has
+/// no `[[Prototype]]` of its own, so that `recv.<key>` reads
+/// `%Array.prototype%`'s member? (That member is the realm's: the runtime
+/// refuses every write of a built-in method, DEC 250.) Unlike the guard's
+/// predicate it does not read the prototype's shadow byte, which a refused
+/// or unrelated write also sets.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_member_witness(recv: f64, key: f64) -> i32 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+        return 0;
+    };
+    if !(crate::gc_type_is_array!(header.obj_type)
+        || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        || header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    {
+        return 0;
+    }
+    i32::from(authoritative_has_own(recv, key) == 0)
 }
 
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
