@@ -211,7 +211,7 @@ fn place<'a>(
             let tier = tiers.partition_point(|&start| start <= rank);
             placed.insert((
                 tier,
-                std::cmp::Reverse(align.max(1).min(16)),
+                std::cmp::Reverse(align.clamp(1, 16)),
                 rank,
                 section.to_string(),
             ));
