@@ -330,11 +330,14 @@ impl Gen<'_> {
     /// parse's single object and array tokens, which also stand for the
     /// root's `{"": value}`) and every parsed value (their any-key field);
     /// it stored the result under the element key only.
-    pub(crate) fn json_reviver_calls(&mut self, fx: &Fx, parsed: NodeId, ret: NodeId) {
+    pub(crate) fn json_reviver_calls(&mut self, parsed: NodeId, ret: NodeId) {
         if !self.m.reach_json_replacer {
             return;
         }
+        // CreateDataProperty on an object the parse made: its content, as
+        // the built-in arm's edge into the any-key field (no [[Set]]: no
+        // inherited setter runs and no inherited method is overwritten).
         let key = Key::any();
-        self.store(fx, parsed, key, ret, "reviver".to_string(), None, false);
+        self.m.cons(parsed, Cons::BirthField { key, src: ret });
     }
 }
