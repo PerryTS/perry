@@ -94,6 +94,31 @@ pub(super) fn with<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
 /// The first death of the run installs the table and the collector hooks:
 /// only these check-build entries reach it, so a release program references
 /// no installer.
+/// The ONE predicate of "alive at a boundary" that a synchronous full decides,
+/// shared by the lifetime probes (`life_measure.rs`) and the regions
+/// (`life_regions.rs`): the full's mark (or a pin) on the object at user
+/// address `addr`. Read between the full's mark propagation and its sweep.
+pub(super) fn full_alive(addr: usize) -> bool {
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 }
+}
+
+/// Is the object at user address `addr` private key/attribute storage of a
+/// shape (`GC_FLAG_SHAPE_SHARED`, gc/types.rs)? Engine metadata, never a JS
+/// value: the shape table re-mints such a list after a full pruned its shape
+/// and its carrier gate holds the list while no JS reference exists (LIFE I3d),
+/// so it is never part of a region's inside set. A census birth of compiled
+/// code (a lifetime sample) is a JS value and never such storage.
+/// `PERRY_FACTS_SABOTAGE=lifemeta` (negative control) counts it as a JS value.
+pub(super) fn engine_metadata(addr: usize) -> bool {
+    static SABOTAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *SABOTAGE.get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifemeta")) {
+        return false;
+    }
+    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    unsafe { (*header).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0 }
+}
+
 pub(super) fn ensure() {
     if TABLE.with(|t| t.borrow().is_none()) {
         install();

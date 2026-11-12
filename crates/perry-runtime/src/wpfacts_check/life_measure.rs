@@ -633,8 +633,7 @@ pub(super) fn full_marked() {
             if s.next == DONE || !s.old {
                 continue;
             }
-            let header = (s.addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            let marked = unsafe { (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0 };
+            let marked = super::life::full_alive(s.addr);
             if !marked {
                 m.dead_from(i, false);
             } else if turn_full && s.next as usize == TURN {
