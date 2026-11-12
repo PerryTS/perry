@@ -122,3 +122,37 @@ fn a_species_result_fed_back_to_its_call_settles() {
     assert!(!pf.stats.aborted, "{:?}", pf.stats);
     assert!(pf.stats.templates < 60, "templates {}", pf.stats.templates);
 }
+/// skin (three.js GLTFLoader via skinbench.ts:11): the slice of a Buffer's
+/// `.buffer` is a fresh ArrayBuffer (ECMA-262 25.1.6.7); as a Buffer method
+/// a view of the same memory. Neither is a primitive box whose computed
+/// read is an unknown builtin function, so `.map` of a computed read of it
+/// never calls an unknown function with `o`.
+#[test]
+fn buffer_slice_is_a_buffer_or_an_array_buffer() {
+    check(
+        "const fs = require(\"fs\"); const b: any = fs.readFileSync(process.argv[1]); \
+         const s: any = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); \
+         const v: any = s[process.argv[2]] || []; v.map(o);",
+        true,
+    );
+}
+/// Control: unknown code holding the slice may write any method onto it.
+#[test]
+fn buffer_slice_held_by_unknown_code_escapes() {
+    check(
+        "const fs = require(\"fs\"); const b: any = fs.readFileSync(process.argv[1]); \
+         const s: any = b.buffer.slice(0, 2); new Function(process.argv[2])(s); s.q(o);",
+        false,
+    );
+}
+/// A key neither `%TypedArray%.prototype` nor `Object.prototype` declares:
+/// the call throws a TypeError before its argument is used (13.3.6.2).
+#[test]
+fn typed_absent_method_runs_nothing() {
+    check("a.traverse(o)", true);
+}
+/// Control: unknown code holding the array may write `traverse` onto it.
+#[test]
+fn typed_absent_method_written_by_unknown_code_escapes() {
+    check("new Function(process.argv[2])(a); a.traverse(o)", false);
+}
