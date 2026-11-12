@@ -479,7 +479,13 @@ impl Model {
         if !theirs {
             self.census_store_ctx(Some((site, self.store_at)));
             if !builtins::builtin_function(self, t) {
-                builtins::note_native_data_write(self, t, Some(wkey), &what);
+                builtins::note_native_data_write(
+                    self,
+                    t,
+                    Some(wkey),
+                    &what,
+                    builtins::WriteValue::Value(src),
+                );
             }
             self.census_store_ctx(None);
         }

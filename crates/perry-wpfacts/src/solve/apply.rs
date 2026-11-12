@@ -631,7 +631,13 @@ impl Model {
                         // included, and no other key.
                         let k = Some(Key::Named(key));
                         self.note_fnproto_write(TOP, k, Hard::E7Delete.code());
-                        builtins::note_native_data_write(self, TOP, k, "E7 delete");
+                        builtins::note_native_data_write(
+                            self,
+                            TOP,
+                            k,
+                            "E7 delete",
+                            builtins::WriteValue::Absent,
+                        );
                         self.top_reshape(Some(key));
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
@@ -732,6 +738,7 @@ impl Model {
                                 TOP,
                                 k,
                                 "E5 Object.defineProperty",
+                                builtins::WriteValue::Opaque,
                             );
                             self.reshape(Some(key));
                             // DECISIONS 234: in every unit, as an accessor

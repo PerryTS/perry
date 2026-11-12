@@ -787,16 +787,25 @@ impl Key {
 /// known getter or setter installed through ⊤ is named here (`getters`,
 /// `setters`) and answers an accessor query with itself; `accessor` is a
 /// write that may install a function the record does not name (⊤).
+/// What the writes stored (ECMA-262 10.1.9.2: a store makes or updates a
+/// data property holding its value): a plain store's value is a program
+/// node (`stored`, the union over the record's stores); a delete stores
+/// nothing (`absent`: the key may now be missing); every other writer
+/// (unknown code, a definition, an accessor, a prototype given) stores a
+/// value the record does not name (`opaque`).
 #[derive(Clone, Debug)]
 pub struct NativeWrite {
     pub reason: u32,
     pub accessor: bool,
     pub getters: Vec<Tok>,
     pub setters: Vec<Tok>,
+    pub opaque: bool,
+    pub stored: Vec<NodeId>,
+    pub absent: bool,
 }
 
 /// A lookup that passed a native prototype not defining its key.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMiss {
     /// A value read into this node.
     Load(NodeId),
@@ -2119,6 +2128,11 @@ pub struct Model {
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,
+    /// Lookups of a key that only writes with known stored values
+    /// (`NativeWrite::stored`) may have written: each reads those values
+    /// through its node (the last field), refilled as the writes grow, and
+    /// runs today's opaque member once an opaque write reaches the key.
+    pub native_answered: FxHashMap<(Tok, Atom, NativeMiss), NodeId>,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
     /// fields under keys they do not declare.
     pub r1_holders: crate::pts::FxHashSet<Tok>,

@@ -331,10 +331,9 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     }
     if !m.unit_mode {
         if let Some(n) = namespace_native(m, t, ns, &name) {
-            if native_written(m, t, a) {
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
                 return opaque_member(m, dst);
             }
-            m.native_missing.push((t, a, NativeMiss::Load(dst)));
             let f = m.tok(TokKind::BuiltinFn(n));
             m.add_tok(dst, f);
             return;
@@ -343,17 +342,15 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
     let Some(mem) = members::ns_member(ns, &name) else {
         anyfall("undescribed namespace member", &ns, &name);
         undescribed_member(m, dst);
-        if native_written(m, t, a) {
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
             return opaque_member(m, dst);
         }
-        m.native_missing.push((t, a, NativeMiss::Load(dst)));
         return;
     };
-    if native_written(m, t, a) {
+    // A write of the key onto the namespace, now or later in the solve.
+    if opaque_written(m, t, a, NativeMiss::Load(dst)) {
         return opaque_member(m, dst);
     }
-    // A write of the key onto the namespace later in the solve.
-    m.native_missing.push((t, a, NativeMiss::Load(dst)));
     match mem {
         Some(Mem::Fn) => {
             let bf = builtin_fn(m, "builtin namespace static");
@@ -662,10 +659,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Some(n) if !m.unit_mode && module_object(m, t, n).is_some() => {
                 let Key::Named(a) = key else { unreachable!() };
                 let ns = module_object(m, t, n).expect("guarded");
-                if native_written(m, t, a) {
+                if opaque_written(m, t, a, NativeMiss::Load(dst)) {
                     return opaque_member(m, dst);
                 }
-                m.native_missing.push((t, a, NativeMiss::Load(dst)));
                 let o = m.tok(TokKind::Builtin(ns));
                 m.add_tok(dst, o);
             }
@@ -675,10 +671,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             Some(n) if !m.unit_mode && module_getter(m, t, n).is_some() => {
                 let Key::Named(a) = key else { unreachable!() };
                 let e = module_getter(m, t, n).expect("guarded");
-                if native_written(m, t, a) {
+                if opaque_written(m, t, a, NativeMiss::Load(dst)) {
                     return opaque_member(m, dst);
                 }
-                m.native_missing.push((t, a, NativeMiss::Load(dst)));
                 super::effects::getter_load(m, e, t, a, dst);
             }
             _ => {
@@ -738,10 +733,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                 }
                 let star = m.atom(crate::STAR_KEY);
-                if native_written(m, t, star) {
+                if opaque_written(m, t, star, NativeMiss::Load(dst)) {
                     opaque_member(m, dst);
                 } else {
-                    m.native_missing.push((t, star, NativeMiss::Load(dst)));
                 }
                 family_any(m, Some(t), members::ns_chain(ns), None, key, dst);
             }
