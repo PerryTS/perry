@@ -30,7 +30,7 @@
 //! (`refused=top:n<node>`, `any_string:n<node>`, `kind_top`, `accessor`).
 
 use crate::gen::Gen;
-use crate::model::{prim, Atom, Model, NodeId, STRS_TOP, TOP};
+use crate::model::{prim, Atom, Model, NodeId, TOP};
 
 /// `PERRY_FACTS_LITERAL_STRINGS=0` turns the fact off.
 pub fn enabled() -> bool {
@@ -63,7 +63,7 @@ pub(crate) fn constants(m: &Model, nodes: &[NodeId]) -> Option<Vec<Atom>> {
         if m.literal_strings_sabotage {
             continue;
         }
-        if unknown || node.strs == STRS_TOP {
+        if unknown || m.strs_any(node.strs) {
             return None;
         }
         atoms.extend_from_slice(m.str_atoms(node.strs));
@@ -93,7 +93,7 @@ pub(crate) fn refusal(m: &Model, nodes: &[NodeId]) -> Option<String> {
         {
             return Some(format!("top:n{n}"));
         }
-        if node.prim & prim::STR != 0 && node.strs == STRS_TOP {
+        if node.prim & prim::STR != 0 && m.strs_any(node.strs) {
             return Some(format!("any_string:n{n}"));
         }
     }

@@ -5,6 +5,12 @@
 //! the default of `add_prim`. A set past `STRS_K` atoms is any string.
 use crate::model::*;
 
+/// The spelling of a rule-M3 prefix entry: `\u{1}...` is never a program
+/// constant (`str_const_atom`).
+pub(crate) const PREFIX_MARK: &str = "\u{1}prefix\u{1}";
+/// Past this many `c + d` prefixes one `+` keeps the left constants only.
+const PLUS_PREFIXES_K: usize = 256;
+
 impl Model {
     /// The interned set of `atoms` (sorted, distinct; `STRS_TOP` past
     /// `STRS_K`).
@@ -89,6 +95,116 @@ impl Model {
         node.strs = new;
         node.dstrs = true;
         true
+    }
+
+    /// Rule M3: the entry for "a string that starts with `p`" (a solver
+    /// spelling: no program constant is spelled so, `str_const_atom`).
+    pub(crate) fn prefix_atom(&mut self, p: &str) -> Atom {
+        self.atom(&format!("{PREFIX_MARK}{p}"))
+    }
+
+    /// The known prefix an entry stands for (`None`: a constant).
+    pub(crate) fn atom_prefix(&self, a: Atom) -> Option<&str> {
+        self.atoms[a as usize].strip_prefix(PREFIX_MARK)
+    }
+
+    /// May the set hold a string that is no constant of it (⊤, or a known
+    /// prefix)? Every reader of constants asks this, not `== STRS_TOP`.
+    pub(crate) fn strs_any(&self, s: StrSet) -> bool {
+        s == STRS_TOP || self.str_atoms(s).iter().any(|&a| self.atom_prefix(a).is_some())
+    }
+
+    /// The key shape of one entry: its exact name, or the glob `p*` of a
+    /// known prefix; 0 (any key) when it may spell a Number key.
+    pub(crate) fn atom_key_shape(&mut self, a: Atom) -> KeyShapeId {
+        let glob = match self.atom_prefix(a) {
+            Some(p) => vec![p.to_string(), String::new()],
+            None => vec![self.atoms[a as usize].clone()],
+        };
+        self.key_shape(Some(KeyShape { globs: vec![glob] }))
+    }
+
+    /// Rule M3 for a computed key node: when it holds only Strings, each a
+    /// constant or of a known prefix, and at least one prefix, the shape of
+    /// each entry; else `None` (the site's own read).
+    pub(crate) fn key_entry_shapes(&mut self, n: NodeId) -> Option<Vec<(Atom, KeyShapeId)>> {
+        let node = &self.nodes[n as usize];
+        if node.prim != prim::STR || !node.pts.is_empty() || node.strs < STRS_SET0 {
+            return None;
+        }
+        let atoms = self.str_atoms(node.strs).to_vec();
+        if !atoms.iter().any(|&a| self.atom_prefix(a).is_some()) {
+            return None;
+        }
+        let mut out = Vec::with_capacity(atoms.len());
+        for a in atoms {
+            match self.atom_key_shape(a) {
+                0 => return None,
+                s => out.push((a, s)),
+            }
+        }
+        Some(out)
+    }
+
+    /// Rule M3, ECMA-262 13.15.3: the strings `l + r` may be. A String left
+    /// operand `c` (a constant) gives strings that start with `c` followed
+    /// by ToString of `r`: `c + d` for each constant or known prefix `d` of
+    /// a String-only `r`, else `c`; a left prefix stays the prefix. A left
+    /// operand that may be no String (a Number, an object's ToPrimitive)
+    /// while the result may be a String gives any string. Prefixes are
+    /// only made from constants, never extended, so loops end.
+    pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+        let (ln, rn) = (&self.nodes[l as usize], &self.nodes[r as usize]);
+        let (lp, lt, ls) = (ln.prim, !ln.pts.is_empty(), ln.strs);
+        let (rp, rt, rs) = (rn.prim, !rn.pts.is_empty(), rn.strs);
+        if (lp == 0 && !lt) || (rp == 0 && !rt) {
+            return STRS_NONE;
+        }
+        let r_str = rt || rp & prim::STR != 0;
+        if lt || (lp & !prim::STR != 0 && r_str) {
+            return STRS_TOP;
+        }
+        if lp & prim::STR == 0 {
+            return STRS_NONE;
+        }
+        if ls == STRS_TOP || ls < STRS_SET0 {
+            return STRS_TOP;
+        }
+        // The right operand's known heads: its constants and prefixes, and
+        // "" when it may be anything else.
+        let mut tails: Vec<String> = Vec::new();
+        if rp & !prim::STR != 0 || rt || rs == STRS_TOP || rs < STRS_SET0 {
+            tails.push(String::new());
+        }
+        for &a in self.str_atoms(rs) {
+            let t = match self.atom_prefix(a) {
+                Some(p) => p.to_string(),
+                None => self.atoms[a as usize].clone(),
+            };
+            tails.push(t);
+        }
+        let left = self.str_atoms(ls).to_vec();
+        if left.len().saturating_mul(tails.len()) > PLUS_PREFIXES_K {
+            tails = vec![String::new()];
+        }
+        let mut out: Vec<Atom> = Vec::new();
+        for a in left {
+            if self.atom_prefix(a).is_some() {
+                out.push(a);
+                continue;
+            }
+            let c = self.atoms[a as usize].clone();
+            for t in &tails {
+                let p = format!("{c}{t}");
+                if p.is_empty() {
+                    return STRS_TOP;
+                }
+                out.push(self.prefix_atom(&p));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        self.str_set(&out)
     }
 
     /// The atom of a program string constant `s`, or `None` when it is any

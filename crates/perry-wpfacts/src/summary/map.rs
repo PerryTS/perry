@@ -393,9 +393,16 @@ pub fn map_cons(
             dst: n(dst),
             right,
         },
-        Plus { str, num } => Plus {
+        Plus {
+            str,
+            num,
+            other,
+            right,
+        } => Plus {
             str: n(str),
             num: n(num),
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+            right,
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         ShareBuffer { ta } => ShareBuffer { ta },

@@ -316,7 +316,7 @@ impl Model {
                 // The gate of an own-only read runs where the read does.
                 | Cons::OwnGate { dst, .. } => Some(dst),
                 // Two outputs: both must be observation nodes.
-                Cons::Plus { str, num } => {
+                Cons::Plus { str, num, .. } => {
                     return !(self.nodes[str as usize].obs && self.nodes[num as usize].obs);
                 }
                 _ => read_dst(c),
@@ -868,7 +868,7 @@ impl Model {
                 return NO_VAL;
             }
             return match self.str_atoms(n.strs) {
-                &[x] => x,
+                &[x] if self.atom_prefix(x).is_none() => x,
                 _ => NO_VAL,
             };
         }

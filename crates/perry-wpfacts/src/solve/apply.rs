@@ -520,7 +520,7 @@ impl Model {
                 // literal does; any string, a token or ⊤ once as a value
                 // no constant spells.
                 let strs = self.nodes[n as usize].strs;
-                let any_str = prim & prim::STR != 0 && strs == STRS_TOP;
+                let any_str = prim & prim::STR != 0 && self.strs_any(strs);
                 if prim & prim::STR != 0 && !any_str {
                     let atoms = self.str_atoms(strs).to_vec();
                     for a in atoms {
@@ -1359,8 +1359,22 @@ impl Model {
             Cons::OwnTest { dst, at } => self.own_test(dst, at, toks),
             Cons::IdxKey { obj, dst, shape } => {
                 let named = index_needs_general_key(toks, prim);
-                if named && self.idx_done.insert((n, obj, dst, 1)) {
-                    self.load_from(obj, obj, Key::Any(shape), dst);
+                // Rule M3: a key of string constants and known prefixes
+                // reads, per entry, the names that entry admits; any other
+                // key reads under the site's shape.
+                match named.then(|| self.key_entry_shapes(n)).flatten() {
+                    Some(entries) => {
+                        for (a, s) in entries {
+                            if self.idx_atom_done.insert((n, obj, dst, a)) {
+                                self.load_from(obj, obj, Key::Any(s), dst);
+                            }
+                        }
+                    }
+                    None => {
+                        if named && self.idx_done.insert((n, obj, dst, 1)) {
+                            self.load_from(obj, obj, Key::Any(shape), dst);
+                        }
+                    }
                 }
                 // ToPropertyKey of a Number or BigInt is a numeric string: the
                 // own fields a number key may name (DECISIONS 217); the chain
@@ -1595,10 +1609,20 @@ impl Model {
                 let mut index = prim & prim::NUM != 0;
                 let mut names: Vec<Atom> = Vec::new();
                 let mut index_strs: Vec<i64> = Vec::new();
+                // Rule M3: a known prefix writes the names it admits
+                // (`prefix_key_shape`); one that may spell a Number key is
+                // any string.
+                let mut prefixed: Vec<(Atom, KeyShapeId)> = Vec::new();
+                let mut any_prefix = false;
                 if prim & prim::STR != 0 {
                     for i in 0..self.str_atoms(strs).len() {
                         let a = self.str_atoms(strs)[i];
-                        if super::strs::index_string(&self.atoms[a as usize]) {
+                        if self.atom_prefix(a).is_some() {
+                            match self.atom_key_shape(a) {
+                                0 => any_prefix = true,
+                                s => prefixed.push((a, s)),
+                            }
+                        } else if super::strs::index_string(&self.atoms[a as usize]) {
                             index = true;
                             index_strs.push(self.atoms[a as usize].parse::<i64>().unwrap_or(-1));
                         } else {
@@ -1666,7 +1690,7 @@ impl Model {
                 // stores under the any-String shape, which never names a
                 // symbol-keyed property (`key_may_name_str`).
                 let not_str = !toks.is_empty() || prim & (prim::SYMBOL | prim::BIGINT) != 0;
-                let any = not_str || (prim & prim::STR != 0 && strs == STRS_TOP);
+                let any = not_str || (prim & prim::STR != 0 && strs == STRS_TOP) || any_prefix;
                 // An Any store under no shape or the any-String shape (this
                 // pop's or an earlier one's) is every name's.
                 if shape == 0
@@ -1675,6 +1699,19 @@ impl Model {
                         || self.index_store_done.contains(&(n, site, 2)))
                 {
                     names.clear();
+                    prefixed.clear();
+                }
+                for (a, s) in prefixed {
+                    if self.str_store_done.insert((n, site, a)) {
+                        self.cons(
+                            o,
+                            Cons::Store {
+                                key: Key::Any(s),
+                                src,
+                                site,
+                            },
+                        );
+                    }
                 }
                 for a in names {
                     if self.str_store_done.insert((n, site, a)) {
@@ -1807,7 +1844,12 @@ impl Model {
                     self.add_prim(dst, out);
                 }
             }
-            Cons::Plus { str, num } => {
+            Cons::Plus {
+                str,
+                num,
+                other,
+                right,
+            } => {
                 let mut s = 0u16;
                 let mut k = 0u16;
                 // Objects go through ToPrimitive (user valueOf/toString): a
@@ -1834,7 +1876,17 @@ impl Model {
                     k |= prim::NUM;
                 }
                 if s != 0 {
-                    self.add_prim(str, s);
+                    // Rule M3: the result's strings are the pair's
+                    // (`plus_strs`); nothing while one operand holds no
+                    // value yet (its own rule adds them when it does).
+                    let strs = match (other, right) {
+                        (NO_NODE, _) => STRS_TOP,
+                        (o, false) => self.plus_strs(n, o),
+                        (o, true) => self.plus_strs(o, n),
+                    };
+                    if strs != STRS_NONE {
+                        self.add_s(str, &[], s, strs);
+                    }
                 }
                 if k != 0 {
                     self.add_prim(num, k);

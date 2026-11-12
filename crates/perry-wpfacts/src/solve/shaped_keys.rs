@@ -1,6 +1,6 @@
 //! Own fields under a shaped computed key (`model/key_shape.rs`): a read
 //! sees only the fields whose name the shape admits, plus every write under
-//! a computed key; a store writes only those fields, and computed-key
+//! a computed key whose shape may spell the same string (`shapes_meet`); a store writes only those fields, and computed-key
 //! reads. Named fields made later join through `field_shaped`, as numeric
 //! fields join `num_fields`.
 //!
@@ -65,8 +65,8 @@ impl Model {
             }
         }
         // Another shaped store may write a name this shape admits.
-        for (_, w, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
-            if store {
+        for (s2, w, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
+            if store && self.shapes_meet(s, s2) {
                 self.edge(w, n);
             }
         }
@@ -100,8 +100,8 @@ impl Model {
                 self.edge(n, f);
             }
         }
-        for (_, r, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
-            if !store {
+        for (s2, r, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
+            if !store && self.shapes_meet(s, s2) {
                 self.edge(n, r);
             }
         }

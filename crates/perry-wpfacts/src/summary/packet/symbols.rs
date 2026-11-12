@@ -465,7 +465,7 @@ impl Model {
                 dst,
                 right
             ),
-            Cons::Plus { str, num } => format!("Plus str={:?} num={:?}", str, num),
+            Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::BoundCall { reason, bound } => format!(
                 "BoundCall reason={:?} bound={:?}",

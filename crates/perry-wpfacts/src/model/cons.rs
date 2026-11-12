@@ -622,7 +622,15 @@ pub enum Cons {
     /// ECMA-262 13.15.3: after ToPrimitive a String operand concatenates,
     /// so the generation rule lets `num` reach the result only through a
     /// [`Cons::Guard`] with test [`guard::NOT_STR`] on the other operand.
-    Plus { str: NodeId, num: NodeId },
+    /// Rule M3: `other` is the other operand and `right` says this node is
+    /// the right one; `str`'s string constants and known prefixes are the
+    /// pair's (`Model::plus_strs`).
+    Plus {
+        str: NodeId,
+        num: NodeId,
+        other: NodeId,
+        right: bool,
+    },
     /// The node is the only argument of `Array(x)` / `new Array(x)`: a Number
     /// is the length (the array has holes, no element), any other value is
     /// the one element (ECMA-262 Array). `dst` ⊇ its tokens and its

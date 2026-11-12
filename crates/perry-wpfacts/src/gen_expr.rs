@@ -916,8 +916,24 @@ impl<'a> Gen<'a> {
                     use crate::model::guard::NOT_STR;
                     let nl = self.tmp("plus-num");
                     let nr = self.tmp("plus-num");
-                    self.m.cons(l, Cons::Plus { str: out, num: nl });
-                    self.m.cons(rv, Cons::Plus { str: out, num: nr });
+                    self.m.cons(
+                        l,
+                        Cons::Plus {
+                            str: out,
+                            num: nl,
+                            other: rv,
+                            right: false,
+                        },
+                    );
+                    self.m.cons(
+                        rv,
+                        Cons::Plus {
+                            str: out,
+                            num: nr,
+                            other: l,
+                            right: true,
+                        },
+                    );
                     self.m.cons(
                         rv,
                         Cons::Guard {

@@ -1929,7 +1929,7 @@ impl Model {
                 dst,
                 right,
             } => format!("range {n} {} {other} {dst} {}", op.name(), *right as u8),
-            Cons::Plus { str, num } => format!("plus {n} {str} {num}"),
+            Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),

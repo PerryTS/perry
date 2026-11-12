@@ -2147,6 +2147,9 @@ pub struct Model {
     /// (key node, store site, atom) a `StoreIndexed` named store has been
     /// added for, by a string constant of the key (`Node::strs`).
     pub str_store_done: crate::pts::FxHashSet<(NodeId, SiteId, Atom)>,
+    /// (key node, holder, destination, entry) a rule-M3 `IdxKey` read has
+    /// been made for: one per string constant or known prefix of the key.
+    pub idx_atom_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, Atom)>,
     /// The interned string-constant sets (`StrSet`) and their index.
     pub str_sets: Vec<Box<[Atom]>>,
     pub str_set_index: crate::pts::FxHashMap<Box<[Atom]>, StrSet>,

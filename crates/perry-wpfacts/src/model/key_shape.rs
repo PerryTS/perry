@@ -141,9 +141,30 @@ impl KeyShape {
         self.globs.iter().any(|g| glob_admits(g, name))
     }
 
+    /// May one string match both shapes? False only when every pair of
+    /// globs is apart: an exact name the other does not admit, or first
+    /// pieces (or last pieces) neither of which starts (ends) the other
+    /// (rule M3: incompatible known prefixes are never equal, 7.2.13).
+    pub fn meets(&self, o: &KeyShape) -> bool {
+        self.globs.iter().any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
+    }
+
     /// May a string of this shape be a Number key (`numeric_key`)?
     pub(crate) fn may_be_numeric(&self) -> bool {
         self.globs.iter().any(|g| glob_may_be_numeric(g))
+    }
+}
+
+fn glob_meets(g: &[String], h: &[String]) -> bool {
+    match (g.len(), h.len()) {
+        (1, _) => glob_admits(h, &g[0]),
+        (_, 1) => glob_admits(g, &h[0]),
+        _ => {
+            let (gf, hf) = (&g[0], &h[0]);
+            let (gl, hl) = (&g[g.len() - 1], &h[h.len() - 1]);
+            (gf.starts_with(hf.as_str()) || hf.starts_with(gf.as_str()))
+                && (gl.ends_with(hl.as_str()) || hl.ends_with(gl.as_str()))
+        }
     }
 }
 
@@ -259,6 +280,14 @@ impl Model {
     /// it.
     pub fn proto_link(name: &str) -> bool {
         matches!(name, "__proto__" | "prototype")
+    }
+
+    /// May a string of shape `a` equal one of shape `b`? (0: any key.)
+    pub fn shapes_meet(&self, a: KeyShapeId, b: KeyShapeId) -> bool {
+        a == b
+            || a == 0
+            || b == 0
+            || self.key_shapes[a as usize].meets(&self.key_shapes[b as usize])
     }
 
     pub fn key_may_name(&self, key: Key, a: Atom) -> bool {
