@@ -624,6 +624,7 @@ const GENERIC_MINTS: &[&str] = &[
     "constructor of an undescribed family",
     "described member",
     "function call/apply/bind/toString",
+    "generator object member",
     "native proto / builtin fn computed key",
     "primitive computed key",
     "primitive member",
