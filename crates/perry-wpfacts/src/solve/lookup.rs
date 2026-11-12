@@ -147,14 +147,17 @@ impl Model {
     /// ECMA-262 10.1.8.1 OrdinaryGet: a [[Get]] of `a` on any object `t`
     /// denotes finds an own data property, whose value is the result: no
     /// prototype's value or accessor under `a` is consulted. It holds when
-    /// the key shadows the builtin prototypes (`shadows`, DECISIONS 234: a
-    /// definite birth key of a fact unit or of every class `t` stands for,
-    /// which no delete, defineProperty or `with` met, and no accessor or
-    /// read-only value on a builtin prototype or through ⊤ intercepted),
-    /// no accessor on `t`'s own class chain intercepts the constructor's
-    /// store of it (`chain_accessor_key`), and no object `t` denotes ever
+    /// no object `t` denotes ever
     /// reached unknown code (`inst_escaped`: there it may be deleted or
-    /// redefined unseen). Every condition only turns false during a solve;
+    /// redefined unseen) and no accessor on its own class chain stands
+    /// under `a` (`chain_accessor_key`). Then, for an object literal (a
+    /// literal class or literal site), `a` is a definite birth key (or one
+    /// every spread surely copies) of a template no delete, defineProperty
+    /// or `with` met (`keys_unsure`, `inst_lose`): its birth defines the
+    /// key (CreateDataProperty, 13.2.5.5), which no prototype intercepts.
+    /// A class instance's key is made by [[Set]] (`this.k = v`), which an
+    /// accessor or read-only value on a builtin prototype may intercept:
+    /// it needs `shadows` (DECISIONS 234), which also rules that out. Every condition only turns false during a solve;
     /// a lookup answered by it is filed (`own_stopped`) and runs again in
     /// full when it does (`flush_own_stopped`).
     pub(crate) fn surely_own_data(&self, t: Tok, a: Atom) -> bool {
@@ -165,17 +168,37 @@ impl Model {
         if let Some(ps) = self.virt_protos.get(&t) {
             cs.extend(ps.iter().copied());
         }
-        !cs.is_empty()
-            && self.shadows(t, a)
-            && cs
+        if cs.is_empty()
+            || !cs
                 .iter()
                 .all(|&c| !self.inst_escaped.contains(&c) && !self.chain_accessor_key(c, a))
+        {
+            return false;
+        }
+        if !self.virt_protos.contains_key(&t) {
+            if let Some(tm) = self.tmpl_of(t) {
+                let tp = &self.tmpls[tm as usize];
+                if matches!(
+                    tp.kind,
+                    crate::model::TmplKind::Lit { .. }
+                        | crate::model::TmplKind::Class {
+                            literal_shape: true,
+                            ..
+                        }
+                ) {
+                    return !self.keys_unsure.contains(&tm)
+                        && !self.inst_lose.contains(&tm)
+                        && (tp.definite.contains(&a) || self.spread_sure(tm, a));
+                }
+            }
+        }
+        self.shadows(t, a)
     }
 
     /// A lookup `act` of own key `a` on `t` answered by the own field alone
     /// (`surely_own_data`): filed for `flush_own_stopped`.
     pub(super) fn note_own_stopped(&mut self, origin: Tok, t: Tok, a: Atom, act: ChainAct) {
-        self.note_shadowed(t, a, act, false);
+        self.file_shadow_index(t, a);
         let v = self.own_stopped.entry(t).or_default();
         if !v.contains(&(origin, a, act)) {
             v.push((origin, a, act));
@@ -213,6 +236,13 @@ impl Model {
         if !v.contains(&(a, act, own_members)) {
             v.push((a, act, own_members));
         }
+        self.file_shadow_index(t, a);
+    }
+
+    /// Files receiver `t` by key `a` and by the classes `shadows` and
+    /// `surely_own_data` consult for it: the events that revoke either
+    /// re-check its lookups (`flush_shadowed_toks`).
+    fn file_shadow_index(&mut self, t: Tok, a: Atom) {
         if self.shadowed_keyed.insert((t, a)) {
             self.shadowed_by_key.entry(a).or_default().push(t);
         }

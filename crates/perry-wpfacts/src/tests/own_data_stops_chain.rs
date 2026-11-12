@@ -130,3 +130,24 @@ fn a_computed_key_reads_the_chain() {
         prim::NUM | prim::STR,
     );
 }
+
+/// A defineProperty through ⊤ (which may reach `Object.prototype`) may put
+/// a setter or a read-only value under the key: a literal's birth defines
+/// its keys (CreateDataProperty), which no prototype intercepts.
+const REDEF: &str = "const w: any = (globalThis as any)[process.argv[2]];
+    Object.defineProperty(w, process.argv[4], { value: 7 });";
+
+#[test]
+fn literal_own_key_hides_a_top_redefinition() {
+    only(
+        &src(&format!("{REDEF} const c: any = {{ enabled: false }};"), "c.enabled"),
+        prim::FALSE,
+    );
+}
+
+/// A constructor makes its key by [[Set]]: a redefined builtin prototype
+/// may intercept it, so the read keeps the chain.
+#[test]
+fn a_constructor_key_under_a_top_redefinition_reads_the_chain() {
+    has(&src(&format!("{KIND} {REDEF}"), "new P().kind"), prim::STR | prim::NUM);
+}
