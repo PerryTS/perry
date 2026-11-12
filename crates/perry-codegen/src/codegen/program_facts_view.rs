@@ -405,6 +405,15 @@ pub struct ElisionFacts {
     /// name them, only through that name (wpfacts
     /// `BindingFacts::named_length`; `stmt::loops::named_len`).
     pub named_length_locals: std::collections::BTreeSet<u32>,
+    /// Quiet sites (wpfacts `quiet_sites`; `crate::quiet`): the named reads
+    /// (byte offset, key) and element sites (`element_offset`) that run no
+    /// program code, the named reads and element reads whose value is a
+    /// primitive, and the locals that hold a primitive and no object.
+    pub quiet_reads: std::collections::BTreeSet<(u32, String)>,
+    pub quiet_elements: std::collections::BTreeSet<u32>,
+    pub primitive_reads: std::collections::BTreeSet<(u32, String)>,
+    pub primitive_elements: std::collections::BTreeSet<u32>,
+    pub primitive_locals: std::collections::BTreeSet<u32>,
     /// (class id, key) of the fields every store of any unit writes only
     /// such Strings into (wpfacts `FieldFacts::literal_strings`,
     /// `FieldProof::literal_strings`).

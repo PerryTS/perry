@@ -643,6 +643,14 @@ pub struct ModuleBindings {
     /// integer Number at every copy and may lie past the int32 range, with
     /// the hull of its interval; sorted (`element_keys::collect_wide`).
     pub wide_keys: Vec<(u32, (i64, i64))>,
+    /// Quiet sites (`quiet_sites`): the named reads (byte offset, key) and
+    /// the element sites (`element_offset`: reads, stores, updates) that run
+    /// no program code at any copy, and the named reads and element reads
+    /// whose value is a primitive at every copy. Sorted.
+    pub quiet_reads: Vec<(u32, String)>,
+    pub quiet_elements: Vec<u32>,
+    pub primitive_reads: Vec<(u32, String)>,
+    pub primitive_elements: Vec<u32>,
     /// Index stores by `element_offset` whose key the facts took to be at
     /// most the Array's length (`gen/in_bounds.rs`): check mode tests the
     /// claim at the store. Sorted, unique.
