@@ -308,8 +308,12 @@ impl Scan<'_, '_, '_> {
             }
         }
         // A write or update of a global names it as a value.
-        if let Expr::PropertySet { object, property, .. }
-        | Expr::PropertyUpdate { object, property, .. } = e
+        if let Expr::PropertySet {
+            object, property, ..
+        }
+        | Expr::PropertyUpdate {
+            object, property, ..
+        } = e
         {
             if self.sentinel(object) || self.global_object(object) {
                 self.global_value(property);

@@ -652,7 +652,9 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
     }
     // `dyn_eval` is the driver's decision, an input of the solve.
     if let Some(linked) = dynamic_code {
-        v.mark(families::family_bit("dyn_eval"), || format!("input:{linked}"));
+        v.mark(families::family_bit("dyn_eval"), || {
+            format!("input:{linked}")
+        });
     }
     // L1.
     if !v.full() {
@@ -694,7 +696,9 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
         for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
             if before & (1 << i) != 0 {
                 for r in f.requires {
-                    v.mark(families::family_bit(r), || format!("L4:required by {}", f.id));
+                    v.mark(families::family_bit(r), || {
+                        format!("L4:required by {}", f.id)
+                    });
                 }
             }
         }
