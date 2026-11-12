@@ -135,6 +135,23 @@ impl ProgramFacts {
     }
 }
 
+/// Rule G2 filters: how many, and how many left out an object token.
+pub(super) fn field_truthy_filters(m: &model::Model) -> (u64, u64) {
+    let (mut rules, mut removing) = (0, 0);
+    for n in &m.nodes {
+        for c in &n.cons {
+            if let model::Cons::FieldTruthy { dst, .. } = *c {
+                rules += 1;
+                let out = &m.nodes[dst as usize].pts;
+                if n.pts.to_sorted().into_iter().any(|t| t != model::TOP && !m.is_marker(t) && !out.contains_tok(t)) {
+                    removing += 1;
+                }
+            }
+        }
+    }
+    (rules, removing)
+}
+
 pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
     let mut sizes: Vec<(usize, usize)> = m
         .nodes

@@ -238,6 +238,18 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// Rule G2 (property truthiness): `x` read where `x.key` tested truthy
+    /// (`if (x && x.key)`, ECMA-262 7.1.2, 13.13, 14.6, 13.14). Its values
+    /// flow into `dst` but the ones the test excludes: `null` and
+    /// `undefined` (reading `key` on them throws), and an object token whose
+    /// read of `key` (own field, prototype chain, unknown-key field,
+    /// accessor; `Model::load_from`) holds only `undefined`/`null`. One
+    /// predicate (`guard::TRUTHY` on that read): any object, function,
+    /// marker, ⊤ or primitive kind other than `undefined`/`null` in the read
+    /// passes the token, re-checked as the read grows (monotone). ⊤ and
+    /// markers in `x` always pass. A rule of the program text, like
+    /// `NotNullish`.
+    FieldTruthy { key: Key, dst: NodeId },
     /// The left operand of `l && r`: its falsy part flows into `dst` (the
     /// result is `l` only when it is falsy, and every object is truthy):
     /// its primitive kinds that have a falsy value, ⊤ as those kinds only,
@@ -700,6 +712,7 @@ impl Cons {
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -717,6 +730,7 @@ impl Cons {
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -756,6 +770,7 @@ impl Cons {
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::FieldTruthy { .. } => "fieldtruthy",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",

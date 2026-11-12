@@ -142,6 +142,9 @@ impl Model {
             }
             Cons::Defined { dst } => format!("Defined dst={:?}", dst),
             Cons::NotNullish { dst } => format!("NotNullish dst={:?}", dst),
+            Cons::FieldTruthy { key, dst } => {
+                format!("FieldTruthy key={:?} dst={:?}", key, dst)
+            }
             Cons::Falsy { dst } => format!("Falsy dst={:?}", dst),
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(

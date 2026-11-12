@@ -121,6 +121,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         Cons::Guard { from, dst, .. } => Use::Between(from, dst),
         Cons::Defined { dst }
         | Cons::NotNullish { dst }
+        | Cons::FieldTruthy { dst, .. }
         | Cons::Falsy { dst }
         | Cons::NotUndefined { dst } => Use::To(dst),
         Cons::RetInto { call, .. } | Cons::ArgInto { call, .. } => {

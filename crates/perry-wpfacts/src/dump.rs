@@ -267,6 +267,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(&format!("# activation {a}\n"));
     }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
+    out.push_str(&format!(
+        "# field_truthy rules {} removing {}\n",
+        s.field_truthy.0, s.field_truthy.1
+    ));
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }

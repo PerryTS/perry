@@ -303,6 +303,7 @@ impl Model {
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
@@ -1800,6 +1801,9 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
+            Cons::FieldTruthy { key, dst } => {
+                format!("fieldtruthy {n} {} {dst}", self.key_name(*key))
+            }
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(

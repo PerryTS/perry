@@ -445,6 +445,42 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            Cons::FieldTruthy { key, dst } => {
+                // Rule G2: `x` where `x.key` was truthy. Reading `key` on
+                // `null`/`undefined` throws, so neither reaches `dst`; every
+                // other primitive kind passes (its truthiness is not known).
+                let strip = prim::NULL | prim::UNDEF;
+                if prim & !strip != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim & !strip, strs);
+                    self.cur_range = saved;
+                }
+                for &t in toks {
+                    if t == TOP || self.is_marker(t) {
+                        self.add_tok(dst, t);
+                        continue;
+                    }
+                    // The token's own read of `key` (the test's `Load`, on
+                    // this token alone): it passes once that read may be truthy
+                    // (`guard::TRUTHY`: an object, function, marker, ⊤, or
+                    // any primitive kind but `undefined`/`null`).
+                    let one = self.node_l("field-truthy-token");
+                    self.add_tok(one, t);
+                    let read = self.node_l("field-truthy-read");
+                    self.cons(
+                        read,
+                        Cons::Guard {
+                            test: guard::TRUTHY,
+                            from: one,
+                            dst,
+                        },
+                    );
+                    // A rule, not a one-off lookup: a later store on the
+                    // chain (an `Object.prototype` member) re-runs it.
+                    self.cons(one, Cons::Load { key, dst: read });
+                }
+            }
             Cons::Falsy { dst } => {
                 // ES ToBoolean: every object is truthy, so no object or
                 // function token is the result; ⊤ is, as its falsy

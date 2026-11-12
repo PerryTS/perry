@@ -31,6 +31,10 @@
 //! clips: what an `if` implies, `&&`, `||`, `?:`, a `while` and an early
 //! exit imply alike, and a write in the guarded code joins the written
 //! value back (the end node). `PERRY_FACTS_GUARD_PRESENCE=0` turns it off.
+//! Rule G2: a truthy test of a
+//! local's property (`x.f`, `!x.f` false) leaves its values but
+//! `null`/`undefined` and the objects whose read of `f` holds only
+//! `undefined`/`null` (`Cons::FieldTruthy`, solved per token).
 //!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
@@ -701,7 +705,7 @@ pub(crate) enum Implied {
 }
 
 /// The values a guard proves a local is not.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) enum Presence {
     /// Neither `null` nor `undefined` (`Cons::NotNullish`): a truthy value,
     /// or one that is not `== null`.
@@ -709,6 +713,10 @@ pub(crate) enum Presence {
     /// Not `undefined` (`Cons::NotUndefined`): one that is not
     /// `=== undefined`.
     NotUndefined,
+    /// Rule G2: `local.key` tested truthy (`Cons::FieldTruthy`): neither
+    /// `null`/`undefined` (the read would throw) nor an object whose read
+    /// of `key` holds only `undefined`/`null`.
+    FieldTruthy(String),
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -772,6 +780,14 @@ fn implied<'p>(
             implied(body, positive, &inner, pred, depth + 1, &mut found);
             // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
+        }
+        // Rule G2: a truthy `local.key` (module docs, "Guards").
+        Expr::PropertyGet {
+            object, property, ..
+        } if positive => {
+            if let Some(Bound::Local(id)) = bound_of(object, subst) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone())));
+            }
         }
         // A truthy local is neither `null` nor `undefined`.
         Expr::LocalGet(_) if positive => {
@@ -1048,6 +1064,10 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::NotUndefined) => {
                     self.m.cons(src, Cons::NotUndefined { dst: start })
+                }
+                Implied::Present(_, Presence::FieldTruthy(property)) => {
+                    let key = Key::Named(self.m.atom(&property));
+                    self.m.cons(src, Cons::FieldTruthy { key, dst: start })
                 }
             }
             let end = self.tmp("guard-end");

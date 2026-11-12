@@ -235,14 +235,14 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
             r => Reject(R4Identity(r.name().into())),
         },
         // Value flow and field reads.
-        Cons::Load { key: k, .. } if layout(k) => Allowed,
+        Cons::Load { key: k, .. } | Cons::FieldTruthy { key: k, .. } if layout(k) => Allowed,
         // A protocol's well-known-symbol lookup (`@@toStringTag` of
         // `Object.prototype.toString`, `@@toPrimitive`): a miss on a literal
         // (R1 admits only never-written `undefined` keys beside the layout).
         Cons::Load {
             key: Key::Named(a), ..
         } if m.atoms[*a as usize].starts_with("@@__perry_wk_") => Allowed,
-        Cons::Load { key: k, .. } => Reject(R5Load(key(k))),
+        Cons::Load { key: k, .. } | Cons::FieldTruthy { key: k, .. } => Reject(R5Load(key(k))),
         Cons::BirthField { key: k, .. } if layout(k) => Allowed,
         Cons::BirthField { key: k, .. } => Reject(R2Write(key(k))),
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => TypedCall(*call),
@@ -391,7 +391,9 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::TopIfTop { .. }
         | Cons::Raise { .. } => Use::Allowed,
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
-        Cons::MCall { key, .. } | Cons::Load { key, .. } => op(named(key)),
+        Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
+            op(named(key))
+        }
         Cons::IdxLoad { .. } | Cons::IdxOwnLoad { .. } => op("[index]".into()),
         Cons::IndexHole | Cons::IndexKept => Use::Reject(R6Store("hole".into())),
         // `push`'s own store of its argument (`Gen::elem_store`).
@@ -1841,6 +1843,7 @@ impl<'a, 'g> Scan<'a, 'g> {
             let use_kind = match c {
                 Cons::Identity { .. } => "identity",
                 Cons::Load { .. }
+                | Cons::FieldTruthy { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }
