@@ -307,7 +307,13 @@ sets(new Map<number, number>() as any);
             "{gets:?}"
         );
         // `sets` also receives a Map: no Set fact.
-        assert_eq!(flags(&pf, "has"), vec![0], "{:?}", dump(&pf, "has"));
+        // A site without any fact is not exported.
+        assert!(flags(&pf, "has").is_empty(), "{:?}", dump(&pf, "has"));
+        assert!(
+            dump(&pf, "has").iter().all(|l| l.contains(" set=0(")),
+            "{:?}",
+            dump(&pf, "has")
+        );
     }
 
     #[test]
