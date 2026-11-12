@@ -42,6 +42,13 @@ pub const WPF_STORE: u32 = 1;
 pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (a reserved or declared key, `FieldProof::
+/// maybe_absent`): the site pairs the load with the hole compare, whose miss
+/// is the generic read. The claim is "slot k is the key's own word: it holds
+/// the key's value, or the hole". A run that skipped the store, or added the
+/// key out of order (its value then lives in the overflow, the slot's own
+/// entry is a tombstone), leaves the hole there.
+pub const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Use the same numeric classification as runtime value dispatch.
 fn is_plain_f64(bits: u64) -> bool {
@@ -260,7 +267,14 @@ macro_rules! check_field {
     } else {
         key_matches(at, key)
     };
-    if !key_matches {
+    // A possibly absent key (reserved or declared) whose slot holds the hole
+    // sends the read to the generic arm: what the claim allows there is the
+    // key itself or no key (a tombstone, `TAG_HOLE` in the key list), never
+    // another key's slot.
+    let absent_hole = flags & WPF_MAYBE_ABSENT != 0
+        && value.to_bits() == crate::value::TAG_HOLE
+        && at == crate::value::TAG_HOLE;
+    if !key_matches && !absent_hole {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
