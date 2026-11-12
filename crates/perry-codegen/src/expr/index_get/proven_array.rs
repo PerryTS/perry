@@ -217,6 +217,12 @@ fn receiver_rep(ctx: &FnCtx<'_>, object: &Expr) -> Option<(FactsArrRep, Receiver
     }
 }
 
+/// Do the facts give the receiver expression an `Arr` representation, i.e.
+/// prove every value it holds an Array (a heap pointer)?
+pub(crate) fn receiver_is_proven_array(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    receiver_rep(ctx, object).is_some()
+}
+
 /// The read of a field read call whose own index is in the floor
 /// (`lower_call::field_read_call`), when the tier takes it: the receiver
 /// expression's representation, dense, with a floor.
