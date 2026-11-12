@@ -237,10 +237,7 @@ pub(crate) fn console_intrinsic_proven(
 /// NativeMember verdict (`ElisionFacts::native_member_calls`, keyed by the
 /// callee read's offset): no write may reach the member, so the call runs
 /// the builtin body and no other code.
-pub(crate) fn native_member_proven(
-    ctx: &crate::expr::FnCtx<'_>,
-    callee: &perry_hir::Expr,
-) -> bool {
+pub(crate) fn native_member_proven(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> bool {
     !ctx.wpfacts_off && native_member_site_proven(&ctx.wpfacts.native_member_calls, callee)
 }
 

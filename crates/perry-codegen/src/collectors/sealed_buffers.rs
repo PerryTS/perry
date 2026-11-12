@@ -53,10 +53,7 @@ pub(crate) struct BufferExposure {
 /// (`builtin_proto::native_member_site_proven`). Only a proven Buffer read
 /// keeps the buffer sealed: an unproven one may run a patched
 /// `Buffer.prototype` reader with the buffer as `this`.
-pub(crate) fn buffer_exposure(
-    hir: &Module,
-    native_member_calls: &BTreeSet<u32>,
-) -> BufferExposure {
+pub(crate) fn buffer_exposure(hir: &Module, native_member_calls: &BTreeSet<u32>) -> BufferExposure {
     let mut scan = Scan {
         proven: Some(native_member_calls),
         ..Scan::default()
@@ -156,11 +153,7 @@ pub(crate) fn buffer_exposure(
 /// never a string on its face, a `.length` read or a Buffer read intrinsic.
 /// It flags every exposing use the module scan found (and more: a key or a
 /// call argument whose proof needs module facts counts as exposing here).
-pub(crate) fn stmt_may_expose(
-    stmt: &Stmt,
-    id: u32,
-    native_member_calls: &BTreeSet<u32>,
-) -> bool {
+pub(crate) fn stmt_may_expose(stmt: &Stmt, id: u32, native_member_calls: &BTreeSet<u32>) -> bool {
     let mut probe = Probe {
         id,
         found: false,
@@ -727,9 +720,9 @@ impl<'a> Scan<'a> {
                     && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
                         property,
                     )
-                    && self
-                        .proven
-                        .is_some_and(|p| crate::builtin_proto::native_member_site_proven(p, callee)) =>
+                    && self.proven.is_some_and(|p| {
+                        crate::builtin_proto::native_member_site_proven(p, callee)
+                    }) =>
                 {
                     for arg in args {
                         self.walk_expr(arg);

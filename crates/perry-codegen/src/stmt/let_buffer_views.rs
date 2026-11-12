@@ -170,9 +170,7 @@ pub(crate) fn late_exposure_limit(ctx: &FnCtx<'_>, stmts: &[perry_hir::Stmt], i:
     }
     (i + 1..stmts.len())
         .find(|j| {
-            trusted
-                .iter()
-                .any(|id| {
+            trusted.iter().any(|id| {
                 crate::collectors::sealed_buffers::stmt_may_expose(
                     &stmts[*j],
                     *id,
