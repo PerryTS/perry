@@ -414,6 +414,8 @@ impl Model {
                         t == TOP
                             || if self.is_marker(t) {
                                 !self.beside_values(t)
+                            } else if test == guard::NOT_CALLABLE {
+                                !crate::builtins::surely_callable(self, t)
                             } else {
                                 guard::objects(test)
                             }
@@ -443,6 +445,51 @@ impl Model {
                     let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim & !strip, strs);
                     self.cur_range = saved;
+                }
+            }
+            Cons::Fulfil { dst } => {
+                // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
+                // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+                for &t in toks {
+                    if t == TOP || self.is_marker(t) {
+                        self.add_tok(dst, t);
+                        continue;
+                    }
+                    // The token's own read of `then` (steps 9-13): it fulfils
+                    // as itself once that read may hold a value no call
+                    // takes; a callable `then` adopts it (`builtins::adopt`).
+                    let then_a = self.atom("then");
+                    let then = Key::Named(then_a);
+                    let one = self.node_l("fulfil-token");
+                    self.add_tok(one, t);
+                    let read = self.node_l("fulfil-then");
+                    self.cons(
+                        read,
+                        Cons::Guard {
+                            test: guard::NOT_CALLABLE,
+                            from: one,
+                            dst,
+                        },
+                    );
+                    if crate::builtins::locked_chain_defines(self, t, then_a) {
+                        // A native promise: its chain ends at a locked
+                        // `then` (Promise.prototype.then), so the read is
+                        // never the chain end's `undefined`; its own values
+                        // (a stored `undefined` among them) count as they are.
+                        let chain = self.node_l("fulfil-then-chain");
+                        self.cons(chain, Cons::Defined { dst: read });
+                        self.cons(one, Cons::Load { key: then, dst: chain });
+                        let own = self.field(t, then_a);
+                        self.edge(own, read);
+                    } else {
+                        self.cons(one, Cons::Load { key: then, dst: read });
+                    }
                 }
             }
             Cons::Falsy { dst } => {

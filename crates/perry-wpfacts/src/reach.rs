@@ -67,6 +67,17 @@ pub(crate) fn gen_members() -> bool {
     )
 }
 
+/// `PERRY_FACTS_REACH_THENABLE=0`: a promise's resolve function, `await`
+/// and an adoption (`Promise.resolve`, a then-callback's result) copy a
+/// thenable as it is; the resolve function calls no `then`
+/// (`Cons::Fulfil`, `builtins::resolver`, `Gen::awaited`).
+pub(crate) fn thenable() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_REACH_THENABLE").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 impl Model {
     /// The call site of `call` as a hand-written built-in rule reads it by
     /// position (`c.args.first()`, `c.args.get(i)`): its first `n`
