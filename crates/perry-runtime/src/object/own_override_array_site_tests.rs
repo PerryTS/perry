@@ -58,7 +58,8 @@ fn an_object_receiver_needs_the_get_at_an_array_site() {
             "an Array is answered by the kind predicate, unchanged"
         );
         assert_eq!(js_array_method_needs_get(boxed(arr), key(b"indexOf")), 0);
-        assert_eq!(js_array_method_needs_get(1.5, key(b"indexOf")), 0);
+        // A Number has no `indexOf` (node: TypeError): the real `Get`.
+        assert_eq!(js_array_method_needs_get(1.5, key(b"indexOf")), 1);
     }
 }
 
@@ -141,6 +142,22 @@ fn an_array_like_without_the_method_is_not_served_the_array_algorithm() {
             0.0,
             "nothing was appended"
         );
+    }
+}
+
+/// A cell of another kind behind an Array annotation (a Map, a closure)
+/// reads its methods from its own prototype: the real `Get`.
+#[test]
+fn a_map_or_closure_receiver_needs_the_get_at_an_array_site() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let map = crate::map::js_map_alloc(0);
+        assert_eq!(js_array_method_needs_get(boxed(map), key(b"at")), 1);
+        let f = crate::closure::js_closure_alloc(
+            crate::fn_info!(own_pop_fixture, 0; with_declared(0)),
+            0,
+        );
+        assert_eq!(js_array_method_needs_get(boxed(f), key(b"at")), 1);
     }
 }
 

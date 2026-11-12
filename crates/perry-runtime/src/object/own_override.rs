@@ -286,35 +286,46 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
 /// # Safety
 /// `recv` is any NaN-boxed value.
 pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
-    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+    let bits = recv.to_bits();
+    let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
     };
-    crate::gc_type_is_object!(header.obj_type)
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && !crate::array::is_array_subclass_instance(recv)
-}
-
-/// A primitive behind an Array annotation that only the real `Get` answers
-/// for: `null` / `undefined` (the call's TypeError), a boolean, a String
-/// (heap or inline: `String.prototype` has its own `at`, `indexOf`,
-/// `slice`, `concat`, ...) or a BigInt. None of them is an address: handed to
-/// a builtin as one, a short string's payload is its BYTES, read as an Array
-/// header (SIGSEGV). A Number keeps the builtin, as before (a native handle
-/// id is a Number).
-#[inline]
-pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
-    let bits = recv.to_bits();
-    if matches!(
-        bits,
-        crate::value::TAG_NULL
-            | crate::value::TAG_UNDEFINED
-            | crate::value::TAG_TRUE
-            | crate::value::TAG_FALSE
-    ) {
+    // A typed array or buffer has no GC header (its registries answer): it
+    // has methods of its own (`%TypedArray%.prototype.at`, ...).
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::buffer::is_registered_buffer(raw)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+    {
         return true;
     }
-    // STRING_TAG 0x7FFF, SHORT_STRING_TAG 0x7FF9, BIGINT_TAG 0x7FFA.
-    matches!(bits >> 48, 0x7FFF | 0x7FF9 | 0x7FFA)
+    if crate::gc_type_is_array!(header.obj_type)
+        || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+        || header.obj_type == crate::gc::GC_TYPE_PROXY
+    {
+        return false;
+    }
+    if crate::gc_type_is_object!(header.obj_type) {
+        return header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && !crate::array::is_array_subclass_instance(recv);
+    }
+    // Any other cell (a Map, a Set, a Date, a closure, a Symbol, ...) reads
+    // its methods from its own prototype: `Get` decides.
+    true
+}
+
+/// A primitive behind an Array annotation: only the real `Get` answers for
+/// it. `null` / `undefined` (the call's TypeError), a boolean, a Number, a
+/// String (heap or inline: `String.prototype` has its own `at`, `indexOf`,
+/// `slice`, `concat`, ...), a BigInt. None of them is an address: handed to a
+/// builtin as one, a short string's payload is its BYTES, read as an Array
+/// header (SIGSEGV), and a Number ran the builtin on an empty array-like
+/// where node throws `x.push is not a function`. Only an object pointer
+/// (`POINTER_TAG`, including the runtime-id band: a Proxy, a stream handle)
+/// and a JS handle (`JS_HANDLE_TAG`) keep the receiver's own answer.
+#[inline]
+pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
+    // POINTER_TAG 0x7FFD, JS_HANDLE_TAG 0x7FFB.
+    !matches!(recv.to_bits() >> 48, 0x7FFD | 0x7FFB)
 }
 
 /// THE predicate of every Array method site: must `recv.<key>(..)` perform
