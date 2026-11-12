@@ -164,6 +164,14 @@ The `s` argument is the raw byte chunk as a string. ANSI escape sequences like a
 
 Only one handler is registered at a time (last `useInput` call wins). For multiple focusable widgets, dispatch from one handler by checking `useFocus`'s return.
 
+## `useInputBytes(handler)`
+
+Use this instead of `useInput` when input must remain byte-for-byte intact, including UTF-8, arbitrary escape sequences and bracketed paste. Each nonempty drain delivers the currently queued bytes in an independently owned `Uint8Array`; the callback can retain the array. A very large drain is split at the typed-array length limit (`2^31 - 1` bytes).
+
+Chunks are stream fragments, not key events: UTF-8 characters, CSI sequences and paste delimiters can cross callback boundaries. Keep an incremental decoder/parser across calls. Invalid bytes are delivered unchanged rather than interpreted as strings.
+
+Only one input handler is active. Registering `useInputBytes` replaces `useInput` and bypasses automatic Tab/Shift-Tab focus cycling, including Tabs inside paste. Registering `useInput` restores the existing string-mode dispatch and focus behavior. Byte mode does not change the legacy string decoder.
+
 ## Equivalence with ink
 
 | ink | `perry/tui` | Notes |
