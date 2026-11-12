@@ -26,7 +26,9 @@ fn prims(pf: &ProgramFacts, k: &str) -> (bool, u16) {
     (f.kind.top, f.kind.prims)
 }
 
-const NUM0: u16 = prim::NUM; // the constructor's `0`
+/// The constructor's `0`, and the `undefined` every load of a key no
+/// definite birth key names reads beside its value (`Model::load_from`).
+const BESIDE: u16 = prim::NUM | prim::UNDEF;
 
 #[test]
 fn regexp_accessors_read_their_declared_results() {
@@ -36,20 +38,20 @@ fn regexp_accessors_read_their_declared_results() {
     );
     assert_eq!(
         prims(&pf, "f"),
-        (false, NUM0 | prim::STR),
+        (false, BESIDE | prim::STR),
         "{}",
         pf.dump_text()
     );
     assert_eq!(
         prims(&pf, "s"),
-        (false, NUM0 | prim::STR),
+        (false, BESIDE | prim::STR),
         "{}",
         pf.dump_text()
     );
     for k in ["g", "d"] {
         assert_eq!(
             prims(&pf, k),
-            (false, NUM0 | prim::BOOL | prim::UNDEF),
+            (false, BESIDE | prim::BOOL),
             "{k}: {}",
             pf.dump_text()
         );
@@ -115,9 +117,11 @@ fn a_subclass_getter_is_the_programs() {
     assert!(gt || g & prim::STR != 0, "{}", pf.dump_text());
 }
 
-/// Twin: an accessor redefined on `RegExp.prototype` (the runtime's image
-/// lock refuses it; the solve still keeps what such a write could make the
-/// load read: the opaque member beside the declared result).
+/// Twin: an accessor redefined on `RegExp.prototype`. The runtime's image
+/// lock refuses it (DEC 250: a TypeError, the declared getter keeps
+/// running); the solve still keeps what such a write could make the load
+/// read, the opaque member beside the declared result: never less than the
+/// runtime does.
 #[test]
 fn a_redefinition_on_the_prototype_keeps_the_written_value() {
     let pf = kinds(
@@ -126,9 +130,5 @@ fn a_redefinition_on_the_prototype_keeps_the_written_value() {
         c.g = re.global;",
     );
     let (gt, g) = prims(&pf, "g");
-    assert!(
-        gt || g & !(NUM0 | prim::BOOL | prim::UNDEF) != 0,
-        "{}",
-        pf.dump_text()
-    );
+    assert!(gt || g & !(BESIDE | prim::BOOL) != 0, "{}", pf.dump_text());
 }
