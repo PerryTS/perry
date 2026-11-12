@@ -263,13 +263,22 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    let levels: u32 = if depth.is_nan() || depth <= 0.0 {
-        0
-    } else if depth.is_infinite() || depth > u32::MAX as f64 {
-        u32::MAX
+    // ToIntegerOrInfinity(depth): `flat("2")` spreads two levels, and an
+    // explicit `undefined` is the default of one.
+    let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
+        1.0
     } else {
-        depth as u32
+        crate::builtins::js_number_coerce(depth)
     };
+    let levels = flat_levels(depth);
+    let recv_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+    if !unsafe { crate::array::species::default_species_is_certain(recv_value) } {
+        // An own `constructor`, a recorded prototype or a `constructor`
+        // accessor: the species resolution can run user code and the result
+        // may be any object.
+        let result = super::generic::flat_with_species(recv_value, levels);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr as *mut ArrayHeader);
     let result = js_array_alloc(0);
@@ -284,30 +293,24 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
 pub extern "C" fn js_arraylike_flat(receiver: f64, depth: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
-    let source = js_array_from_arraylike_holey_value(receiver_handle.get_nanbox_f64());
-    let source_handle = scope.root_raw_mut_ptr(source);
     let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
         1.0
     } else {
         crate::builtins::js_number_coerce(depth)
     };
-    let result = js_array_flat_depth(source_handle.get_raw_mut_ptr::<ArrayHeader>(), depth);
-    f64::from_bits(crate::value::JSValue::pointer(result as *const u8).bits())
+    // ArraySpeciesCreate(O, 0) on the receiver itself (an Array-subclass
+    // instance bears an instance of its species), then FlattenIntoArray.
+    super::generic::flat_with_species(receiver_handle.get_nanbox_f64(), flat_levels(depth))
 }
 
-/// One `FlattenIntoArray(target, mapped, depth = 1)` step of
-/// `Array.prototype.flatMap` (ECMA-262 §23.1.3.11): an `IsArray` value
-/// (proxies included, as for `flat`) contributes its present elements, any
-/// other value is appended itself. Returns the possibly re-grown `result`.
-///
-/// # Safety
-/// `result` is a live array the caller keeps rooted.
-pub(crate) unsafe fn flat_map_append(result: *mut ArrayHeader, mapped: f64) -> *mut ArrayHeader {
-    let sub_arr = flattenable_array_ptr(mapped);
-    if sub_arr.is_null() {
-        js_array_push_f64(result, mapped)
+/// ToIntegerOrInfinity(depth) as the number of levels to spread.
+fn flat_levels(depth: f64) -> u32 {
+    if depth.is_nan() || depth <= 0.0 {
+        0
+    } else if depth.is_infinite() || depth > u32::MAX as f64 {
+        u32::MAX
     } else {
-        js_array_flat_into(result, sub_arr, 0)
+        depth as u32
     }
 }
 
