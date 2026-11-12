@@ -111,7 +111,7 @@ pub(crate) unsafe fn publish_object_shape_last_key_rollback(
     {
         return LayoutWord(0);
     }
-    let Some(current) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj).0)
+    let Some(current) = ShapeSlab::agent_record_for_object_present(obj, object_shape_stamp(obj).0)
     else {
         return LayoutWord(0);
     };

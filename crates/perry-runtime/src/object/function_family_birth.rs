@@ -321,7 +321,7 @@ unsafe fn function_layout_admits_store(
         return false;
     };
     // The receiver is the carrier of its own word.
-    let Some(record) = super::shapes::shape_record_of_receiver(word) else {
+    let Some(record) = (unsafe { super::shapes::shape_record_of_object(obj, word) }) else {
         return false;
     };
     let prototype_bits = record.prototype_word();

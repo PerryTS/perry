@@ -28,7 +28,7 @@ unsafe fn receiver_record(receiver: f64) -> Option<(*mut ObjectHeader, shapes::S
         return None;
     }
     let obj = addr as *mut ObjectHeader;
-    let record = shapes::shape_record_of_receiver((*obj).shape_word())?;
+    let record = (unsafe { shapes::shape_record_of_object(obj, (*obj).shape_word()) })?;
     if record.object_kind() != shapes::ShapeObjectKind::Ordinary || record.summary() != 0 {
         return None;
     }

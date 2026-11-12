@@ -568,18 +568,18 @@ impl ShapeSlab {
             .handle_record_ptr(LayoutWord(word))
     }
 
-    /// A live receiver's own header word, or zero for an unshaped receiver.
-    /// The receiver is the carrier, so the unchecked read is sound; never use
-    /// this for a word read from a memo, a record or a parameter.
+    /// Compatibility read of a resolved word carried by an existing owner.
+    /// Live header reads use `agent_record_for_object`, which also carries
+    /// the receiver address to the cold arm. Held words never name pending cells.
     #[inline(always)]
     pub(in super::super) fn agent_record_for_receiver(word: u32) -> *mut ShapeRecord {
-        Self::receiver_row_record(word).unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
+        Self::resolved_row_record(word).unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
     }
     #[inline(always)]
     pub(in super::super) fn agent_record_for_receiver_present(
         word: u32,
     ) -> Option<*mut ShapeRecord> {
-        let p = Self::receiver_row_record(word)?;
+        let p = Self::resolved_row_record(word)?;
         unsafe { (*p).present() }.then_some(p)
     }
     /// The row cell a receiver word names, if it is an issued row. A layout
@@ -590,24 +590,83 @@ impl ShapeSlab {
     /// least `LAYOUT_TAG` and fails it. Bands 1 and 2 (dictionary, exotic)
     /// take the second test; band 3 is no layout word and fails it.
     #[inline(always)]
-    pub(super) fn receiver_row_record(word: u32) -> Option<*mut ShapeRecord> {
+    pub(super) fn resolved_row_record(word: u32) -> Option<*mut ShapeRecord> {
         use crate::codegen_abi::{LAYOUT_KIND_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
         let dir = &AGENT_SHAPE_DIR[0];
         let bound = dir.flat_ids.get();
         let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
         if band0 >= bound {
-            return Self::receiver_row_record_banded(word, bound);
+            return Self::resolved_row_record_banded(word, bound);
         }
         let row = band0;
         // SAFETY: an issued row of this agent's readable reservation.
         Some(unsafe { dir.flat_base.get().add(row) })
     }
-    /// [`Self::receiver_row_record`] for a word outside band 0 (dictionary,
+    /// [`Self::resolved_row_record`] for a word outside band 0 (dictionary,
     /// exotic) or no issued row: out of line, so the inlined ordinary read
     /// stays one compare.
     #[cold]
     #[inline(never)]
-    pub(super) fn receiver_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
+    pub(super) fn resolved_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
+        use crate::codegen_abi::{
+            LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
+        };
+        let w = word & !LAYOUT_SHADOW_BIT;
+        if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
+            return None;
+        }
+        let row = (w & LAYOUT_ROW_MASK) as usize;
+        if row >= bound {
+            return None;
+        }
+        // SAFETY: an issued row of this agent's readable reservation.
+        Some(unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) })
+    }
+    /// Read the receiver's already-loaded header word, retaining its address
+    /// for cold resolution. Keeping the load at the caller preserves its
+    /// header representation and avoids re-reading a scalar snapshot.
+    #[inline(always)]
+    pub(in super::super) unsafe fn agent_record_for_object(
+        obj: *const crate::object::ObjectHeader,
+        word: u32,
+    ) -> *mut ShapeRecord {
+        Self::receiver_row_record(obj, word)
+            .unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
+    }
+    #[inline(always)]
+    pub(in super::super) unsafe fn agent_record_for_object_present(
+        obj: *const crate::object::ObjectHeader,
+        word: u32,
+    ) -> Option<*mut ShapeRecord> {
+        let p = Self::receiver_row_record(obj, word)?;
+        (*p).present().then_some(p)
+    }
+    #[inline(always)]
+    pub(super) unsafe fn receiver_row_record(
+        obj: *const crate::object::ObjectHeader,
+        word: u32,
+    ) -> Option<*mut ShapeRecord> {
+        use crate::codegen_abi::{LAYOUT_KIND_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
+        let dir = &AGENT_SHAPE_DIR[0];
+        let bound = dir.flat_ids.get();
+        let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
+        if band0 >= bound {
+            return Self::receiver_row_record_banded(obj, word, bound);
+        }
+        let row = band0;
+        // SAFETY: an issued row of this agent's readable reservation.
+        Some(unsafe { dir.flat_base.get().add(row) })
+    }
+    /// The receiver cold arm for a word outside band 0 (dictionary,
+    /// exotic) or no issued row: out of line, so the inlined ordinary read
+    /// stays one compare.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn receiver_row_record_banded(
+        _obj: *const crate::object::ObjectHeader,
+        word: u32,
+        bound: usize,
+    ) -> Option<*mut ShapeRecord> {
         use crate::codegen_abi::{
             LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
         };

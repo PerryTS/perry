@@ -904,9 +904,12 @@ pub extern "C" fn js_private_field_add(
     }
     // The claim allocates the key (inside its own no-move window); the store
     // re-reads the holder from its handle.
-    let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
-        (crate::object::shapes::object_shape_stamp(holder)).0
-    });
+    let pred_rep = unsafe {
+        crate::object::shapes::shape_rep_of_object(
+            holder,
+            (crate::object::shapes::object_shape_stamp(holder)).0,
+        )
+    };
     let holder = scope.root_raw_mut_ptr(holder);
     holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
         crate::object::key_attrs::apply_edits(
@@ -996,9 +999,12 @@ impl RuntimePrivateElement {
         let Some(holder) = holder else {
             return false;
         };
-        let pred_rep = crate::object::shapes::shape_rep_of_receiver(unsafe {
-            (crate::object::shapes::object_shape_stamp(holder)).0
-        });
+        let pred_rep = unsafe {
+            crate::object::shapes::shape_rep_of_object(
+                holder,
+                (crate::object::shapes::object_shape_stamp(holder)).0,
+            )
+        };
         let holder = scope.root_raw_mut_ptr(holder);
         if !present {
             holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {

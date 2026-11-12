@@ -835,9 +835,10 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
         }
         // The header probe above already established a live ordinary heap
         // allocation; ask only its shape for the layout kind here.
-        let object_kind = super::shapes::shape_object_kind_of_receiver(
+        let object_kind = (super::shapes::shape_object_kind_of_object(
+            obj,
             (super::shapes::object_shape_stamp(obj)).0,
-        )?;
+        ))?;
         // A native-module namespace is declined at the edge below
         // (`runtime_receiver_declines_key_add`), before any write.
         if !object_kind.is_ordinary_layout() {
@@ -1008,9 +1009,10 @@ fn object_set_field_by_name_transition_fast_impl_value<const CHAIN_PROVEN: bool>
                     // target's representation and canonicalized numeric bits.
                     // Reuse its result with the same alias and mark barriers.
                     debug_assert_eq!(
-                        super::shapes::shape_object_kind_of_receiver(
-                            (super::shapes::object_shape_stamp(obj)).0
-                        ),
+                        (super::shapes::shape_object_kind_of_object(
+                            obj,
+                            (super::shapes::object_shape_stamp(obj)).0,
+                        )),
                         Some(super::shapes::ShapeObjectKind::Ordinary)
                     );
                     let slot_bits = admitted_bits;

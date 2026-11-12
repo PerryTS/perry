@@ -7,8 +7,6 @@
 //! function fallback.
 
 use crate::array::ArrayHeader;
-#[cfg(test)]
-use crate::object::shapes::shape_descriptor_of_receiver;
 use crate::object::ObjectHeader;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_HOLE, TAG_TRUE};
 use std::collections::HashSet;
@@ -927,8 +925,11 @@ mod tests {
             "an all-`Any` shape carries no value fact"
         );
         unsafe {
-            let d =
-                shape_descriptor_of_receiver((object_shape_stamp(object)).0).expect("live shape");
+            let d = (crate::object::shapes::shape_descriptor_of_object(
+                object,
+                (object_shape_stamp(object)).0,
+            ))
+            .expect("live shape");
             let rep = with_slot_rep(with_slot_rep(REP_ANY, 0, REP_F64), 1, REP_F64);
             let id = publish_shape_result(shape_descriptor_ensure_with_rep(
                 d.keys_view(),

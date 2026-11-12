@@ -1571,3 +1571,31 @@ mod field_rep_identity_tests {
         assert!(!record.lane_is_constfn(2));
     }
 }
+
+#[test]
+fn live_object_shape_reads_preserve_the_loaded_word() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let object = crate::object::js_object_alloc(0, 0);
+        let word = object_shape_stamp(object).0;
+        let record = shape_record_of_object(object, word).expect("live object has a row");
+        assert_eq!(
+            record.object_kind(),
+            shape_object_kind_of_receiver(word).unwrap()
+        );
+        assert_eq!(
+            shape_rep_of_object(object, word),
+            shape_rep_of_receiver(word)
+        );
+        assert_eq!(
+            shape_live_inline_slot_count_of_object(object, word),
+            shape_live_inline_slot_count_of_receiver(word)
+        );
+        assert!(shape_descriptor_of_object(object, word).is_some());
+        // The supplied snapshot controls the read; the helper must not reload
+        // the live header and turn an absent snapshot into this object's row.
+        assert!(shape_record_of_object(object, 0).is_none());
+        assert!(shape_descriptor_of_object(object, 0).is_none());
+        assert_eq!(shape_rep_of_object(object, 0), shape_rep_of_receiver(0));
+    }
+}

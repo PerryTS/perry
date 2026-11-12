@@ -328,8 +328,11 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
 
 #[inline]
 fn receiver_has_numeric_proof_shape(obj: *const ObjectHeader) -> bool {
-    crate::object::shapes::shape_object_kind_of_receiver(unsafe {
-        (crate::object::shapes::object_shape_stamp(obj)).0
+    (unsafe {
+        crate::object::shapes::shape_object_kind_of_object(
+            obj,
+            (crate::object::shapes::object_shape_stamp(obj)).0,
+        )
     }) == Some(crate::object::shapes::ShapeObjectKind::OrdinaryNumericProof)
 }
 

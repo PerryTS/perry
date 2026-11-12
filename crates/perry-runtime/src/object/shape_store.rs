@@ -508,7 +508,7 @@ unsafe fn dynamic_store_receiver(obj: *mut ObjectHeader) -> Option<shapes::Shape
         return None;
     }
     // A live object's own header word: the receiver carries its row.
-    let record = shapes::shape_record_of_receiver(id)?;
+    let record = (unsafe { shapes::shape_record_of_object(obj, id) })?;
     if !record.object_kind().is_ordinary_layout()
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {
@@ -1004,7 +1004,8 @@ unsafe fn try_function_store(
         return Some(stored);
     }
     let closure = ptr as *const crate::closure::ClosureHeader;
-    let descriptor = shapes::shape_descriptor_of_receiver(((*closure).shape_id).0)?;
+    let descriptor =
+        (unsafe { shapes::shape_descriptor_of_object(closure.cast(), ((*closure).shape_id).0) })?;
     if crate::closure::shape::is_class_info((*closure).info) {
         return None;
     }

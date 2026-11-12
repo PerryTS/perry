@@ -156,7 +156,9 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
-pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of};
+pub(crate) use global_this::{
+    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of,
+};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -361,8 +363,8 @@ pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
-pub(crate) use global_this_tables::*;
 pub use global_this_tables::BuiltinConstructorIdentity;
+pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
@@ -1793,7 +1795,7 @@ pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     };
     crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && shapes::shape_object_kind_of_receiver((*obj).shape_word())
+        && (unsafe { shapes::shape_object_kind_of_object(obj, (*obj).shape_word()) })
             .is_some_and(|kind| kind.is_ordinary_layout())
 }
 

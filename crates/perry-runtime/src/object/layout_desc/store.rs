@@ -225,7 +225,7 @@ pub(crate) unsafe fn family_own_key_hashed(
     // record's family membership; an evaluation relink copies that fact only
     // after checking the family's keys and slots. Consume that proof with the
     // checked span decoder instead of reclassifying a generic held word.
-    let record = super::super::shapes::shape_record_of_receiver(word)?;
+    let record = (unsafe { super::super::shapes::shape_record_of_object(obj, word) })?;
     let d = evaluation_layout_desc(record.family_desc_index_plus_one())?;
     desc_own_key(d, bytes, hash)
 }
@@ -579,7 +579,7 @@ pub(super) unsafe fn family_store_admits(obj: *const ObjectHeader) -> bool {
         return false;
     }
     // `obj` is live and carries `word`: the receiver read needs no check.
-    let Some(record) = super::super::shapes::shape_record_of_receiver(word) else {
+    let Some(record) = (unsafe { super::super::shapes::shape_record_of_object(obj, word) }) else {
         return false;
     };
     if let Some(index) = record.family_desc_index_plus_one().checked_sub(1) {

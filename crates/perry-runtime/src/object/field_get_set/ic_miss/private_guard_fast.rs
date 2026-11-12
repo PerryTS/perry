@@ -806,7 +806,7 @@ pub unsafe extern "C-unwind" fn js_private_method_call(
 #[inline]
 fn private_receiver_evaluation_brand(receiver: f64) -> Option<f64> {
     if let Some((object, shape_id)) = unsafe { private_plain_receiver_shape(receiver) } {
-        if crate::object::shapes::shape_object_kind_of_receiver((shape_id).0)
+        if (unsafe { crate::object::shapes::shape_object_kind_of_object(object, (shape_id).0) })
             .is_some_and(|kind| kind.is_ordinary_layout())
         {
             let brand = f64::from_bits(unsafe { private_receiver_evaluation_bits(object) });
@@ -1058,10 +1058,12 @@ mod private_guard_fast_tests {
             fields.extend(fillers.iter().map(String::as_str));
             fields.push("#out");
             let obj = instance_with(CID, &fields, false);
-            let (_, shape_id) = private_plain_receiver_shape(obj).unwrap();
-            let live =
-                crate::object::shapes::shape_live_inline_slot_count_of_receiver((shape_id).0)
-                    .unwrap();
+            let (object, shape_id) = private_plain_receiver_shape(obj).unwrap();
+            let live = (crate::object::shapes::shape_live_inline_slot_count_of_object(
+                object,
+                (shape_id).0,
+            ))
+            .unwrap();
             assert!(
                 live < fields.len() as u32,
                 "fixture must spill its last field"

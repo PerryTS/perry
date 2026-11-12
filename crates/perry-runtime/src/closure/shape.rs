@@ -429,7 +429,7 @@ unsafe fn refresh_closure_shape_as(ptr: usize, link: Option<u64>) {
     let base = birth_shape_for_body((*closure).info);
     let current = (*closure).shape_id;
     let current_desc = if current != base {
-        shapes::shape_descriptor_of_receiver(current.0)
+        unsafe { shapes::shape_descriptor_of_object(closure.cast(), current.0) }
     } else {
         None
     };
@@ -810,7 +810,7 @@ mod tests {
     }
 
     fn kind_of(c: *const ClosureHeader) -> Option<ShapeObjectKind> {
-        shapes::shape_object_kind_of_receiver(unsafe { ((*c).shape_id).0 })
+        unsafe { shapes::shape_object_kind_of_object(c.cast(), ((*c).shape_id).0) }
     }
 
     static PLAIN_BODY: crate::closure::JsFunctionInfo = crate::closure::JsFunctionInfo::of(
@@ -979,7 +979,8 @@ mod tests {
         assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
         let bag = unsafe { (*a).props };
         let bag_desc = unsafe { shapes::object_shape_descriptor(bag) }.unwrap();
-        let fn_desc = shapes::shape_descriptor_of_receiver(unsafe { ((*a).shape_id).0 }).unwrap();
+        let fn_desc =
+            (unsafe { shapes::shape_descriptor_of_object(a.cast(), ((*a).shape_id).0) }).unwrap();
         assert_eq!(fn_desc.keys, bag_desc.keys);
         assert_eq!(fn_desc.logical_key_count, bag_desc.logical_key_count);
         assert_eq!(

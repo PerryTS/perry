@@ -732,9 +732,10 @@ pub(crate) fn set_field_by_name_object_tail(
             // instance gaining its first by-name property is stamped like
             // any other receiver.
             if !crate::object::overflow::has_overflow(obj)
-                && !super::shapes::shape_descriptor_of_receiver(
+                && !(super::shapes::shape_descriptor_of_object(
+                    obj,
                     (super::shapes::object_shape_stamp(obj)).0,
-                )
+                ))
                 .is_some_and(|d| d.has_constfn_lane())
             {
                 // `publish_key_add_edge` already minted the exact ConstFn

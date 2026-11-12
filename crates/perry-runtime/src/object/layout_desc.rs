@@ -1741,7 +1741,7 @@ pub(crate) unsafe fn family_desc_of(obj: *const ObjectHeader) -> Option<&'static
     if !super::shapes::is_layout_word(layout_id_of_word(word)) {
         return None;
     }
-    let index = super::shapes::shape_record_of_receiver(word)?
+    let index = (unsafe { super::shapes::shape_record_of_object(obj, word) })?
         .family_desc_index_plus_one()
         .checked_sub(1)?;
     literal_birth::family_at(index).map(|desc| &*desc)

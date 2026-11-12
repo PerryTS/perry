@@ -483,7 +483,9 @@ pub(crate) unsafe fn note_prototype_slot_store(
     {
         return;
     }
-    let Some(record) = shape_record_of_receiver((*obj).shape_word()) else {
+    let Some(record) =
+        (unsafe { crate::object::shapes::shape_record_of_object(obj, (*obj).shape_word()) })
+    else {
         return;
     };
     let n = record.logical_key_count() as usize;

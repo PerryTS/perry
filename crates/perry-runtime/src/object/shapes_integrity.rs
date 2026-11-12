@@ -342,10 +342,14 @@ mod tests {
             let a = receiver(17.0);
             let b = receiver(19.0);
             let source =
-                ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(a).0).unwrap();
+                ShapeSlab::agent_record_for_object_present(a, object_shape_stamp(a).0).unwrap();
             (*source).note_integrity_target(2, LayoutWord(u32::MAX));
             assert!(transition_object_integrity(b, INTEGRITY_FLAGS));
-            assert!(shape_descriptor_of_receiver((object_shape_stamp(b)).0).is_some());
+            assert!((crate::object::shapes::shape_descriptor_of_object(
+                b,
+                (object_shape_stamp(b)).0
+            ))
+            .is_some());
         }
     }
 }

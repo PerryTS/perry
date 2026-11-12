@@ -44,3 +44,10 @@ an image global is bound.
 
 The macro expands to its expression. The checked guards emit no code in a
 release build without `perry_diagnostics`.
+
+
+Live receiver shape reads pass both the object address and the already-loaded
+header word to the object shape helpers. Resolved words held by another owner
+use the held-word helpers. The ordinary receiver path remains the row-bound
+comparison; the cold path retains the address for image resolution. These
+reads do not name realm members or introduce EXEC events.

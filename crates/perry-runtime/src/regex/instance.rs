@@ -68,9 +68,12 @@ fn new_slow(shape: LayoutWord, data: impl FnOnce() -> *const RegExpData) -> *mut
         if unsafe { crate::object::shapes::object_shape_stamp(receiver) } != shape {
             receiver = prepare_shape(receiver);
         }
-        crate::object::shapes::shape_rep_of_receiver(unsafe {
-            (crate::object::shapes::object_shape_stamp(receiver)).0
-        })
+        unsafe {
+            crate::object::shapes::shape_rep_of_object(
+                receiver,
+                (crate::object::shapes::object_shape_stamp(receiver)).0,
+            )
+        }
     });
     let data = js_nanbox_pointer(data() as i64).to_bits();
     unsafe {

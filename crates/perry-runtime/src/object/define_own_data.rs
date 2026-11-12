@@ -58,7 +58,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
             < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
     {
         // `obj`'s own header word: the receiver carries its row.
-        super::shapes::shape_record_of_receiver(id)
+        unsafe { super::shapes::shape_record_of_object(obj, id) }
     } else {
         None
     };

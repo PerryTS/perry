@@ -231,7 +231,7 @@ pub(crate) fn native_export_prototype_value(module: &str, export: &str) -> f64 {
 /// `obj` is a live `GC_TYPE_OBJECT` cell.
 unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> Option<f64> {
     use crate::object::shapes as s;
-    let record = s::shape_record_of_receiver((s::object_shape_stamp(obj)).0)?;
+    let record = (unsafe { s::shape_record_of_object(obj, (s::object_shape_stamp(obj)).0) })?;
     if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
         return None;
     }

@@ -44,7 +44,7 @@ pub(crate) unsafe fn object_slot_rep(obj: *const ObjectHeader, field_index: usiz
     // An unstamped receiver (0) or an id with no record reads the absent
     // record's word: `Any` in every lane.
     slot_rep(
-        shape_rep_of_receiver((object_shape_stamp(obj)).0),
+        unsafe { crate::object::shapes::shape_rep_of_object(obj, (object_shape_stamp(obj)).0) },
         field_index as u32,
     )
 }
@@ -55,7 +55,7 @@ pub(crate) unsafe fn object_slot_rep(obj: *const ObjectHeader, field_index: usiz
 #[inline(never)]
 #[optimize(size)]
 unsafe fn object_slot_rep_past_word(obj: *const ObjectHeader, field_index: u32) -> u64 {
-    shape_record_of_receiver((object_shape_stamp(obj)).0)
+    (unsafe { crate::object::shapes::shape_record_of_object(obj, (object_shape_stamp(obj)).0) })
         .map_or(REP_ANY, |record| record.lane(field_index))
 }
 
@@ -76,7 +76,8 @@ pub(crate) unsafe fn checked_slot_bits(
         return value_bits;
     }
     if rep == field_rep::REP_SPECIAL {
-        let record = shape_record_of_receiver((object_shape_stamp(obj)).0);
+        let record =
+            crate::object::shapes::shape_record_of_object(obj, (object_shape_stamp(obj)).0);
         if record.is_some_and(|r| r.lane_is_i32(field_index as u32)) {
             // I32 at rest (PR C): an int32 Number is stored as its I32 word.
             // Any other value generalizes the slot first: its I32 word is
@@ -119,7 +120,7 @@ pub(crate) unsafe fn checked_slot_bits(
 #[inline(never)]
 pub(crate) unsafe fn generalize_i32_lane(obj: *mut ObjectHeader, slot: u32) {
     let id = object_shape_stamp(obj);
-    let Some(d) = shape_descriptor_of_receiver(id.0) else {
+    let Some(d) = crate::object::shapes::shape_descriptor_of_object(obj, id.0) else {
         return;
     };
     let rep = field_rep::without_lane(d.rep, slot);
@@ -168,7 +169,7 @@ pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
     if install_i32_lanes_learned(obj, id, mask) {
         return;
     }
-    let Some(d) = shape_descriptor_of_receiver(id.0) else {
+    let Some(d) = crate::object::shapes::shape_descriptor_of_object(obj, id.0) else {
         return;
     };
     if super::overflow::has_overflow(obj) {
@@ -250,7 +251,7 @@ pub(crate) unsafe fn install_i32_lanes(obj: *mut ObjectHeader, mask: u32) {
 /// `mask`. Noncollecting; `false` when there is no such edge or a slot does
 /// not hold an int32 Number.
 unsafe fn install_i32_lanes_learned(obj: *mut ObjectHeader, id: LayoutWord, mask: u32) -> bool {
-    let Some(from) = shape_record_of_receiver(id.0) else {
+    let Some(from) = crate::object::shapes::shape_record_of_object(obj, id.0) else {
         return false;
     };
     let target = from.field_define_target();
@@ -345,7 +346,8 @@ pub(crate) unsafe fn constfn_store_info(value_bits: u64) -> Option<u64> {
 #[inline(never)]
 pub(crate) unsafe fn object_store_generalize(obj: *mut ObjectHeader, slot: u32) {
     let id = object_shape_stamp(obj);
-    let Some(record) = shape_record_of_receiver((id).0) else {
+    let Some(record) = (unsafe { crate::object::shapes::shape_record_of_object(obj, (id).0) })
+    else {
         return;
     };
     deprecate_lane(record, slot);
@@ -445,7 +447,7 @@ pub(crate) unsafe fn migrate_deprecated_receiver(obj: *mut ObjectHeader) -> bool
     if id == LayoutWord(0) {
         return false;
     }
-    match shape_record_of_receiver((id).0) {
+    match unsafe { crate::object::shapes::shape_record_of_object(obj, (id).0) } {
         Some(record)
             if field_rep::has_deprecated(record.rep()) || record.has_special_deprecation() => {}
         _ => return false,
@@ -540,7 +542,10 @@ fn linked_shape_matches_layout(
         && b.hole_count == 0
         && a.summary == b.summary
         && a.special_constfn_mask == b.special_constfn_mask
-        && a.constfn_infos().iter().map(|i| i.slot).eq(b.constfn_infos().iter().map(|i| i.slot))
+        && a.constfn_infos()
+            .iter()
+            .map(|i| i.slot)
+            .eq(b.constfn_infos().iter().map(|i| i.slot))
         && field_rep::identity_with_special(a.rep) == field_rep::identity_with_special(b.rep)
 }
 
@@ -756,7 +761,8 @@ unsafe fn publish_key_add_rep(
     if id == LayoutWord(0) || crate::object::overflow::has_overflow(obj) {
         return id;
     }
-    let Some(d) = shape_descriptor_of_receiver((id).0) else {
+    let Some(d) = (unsafe { crate::object::shapes::shape_descriptor_of_object(obj, (id).0) })
+    else {
         return id;
     };
     let rep = key_add_rep(pred_rep, slot, value_bits, inline);
@@ -768,10 +774,7 @@ unsafe fn publish_key_add_rep(
     if rep == d.rep {
         return id;
     }
-    let infos = constfn_info.map(|info| super::shapes::ConstFnSlotInfo {
-        slot,
-        info,
-    });
+    let infos = constfn_info.map(|info| super::shapes::ConstFnSlotInfo { slot, info });
     let target = normalized_shape(publish_shape_result(
         super::shapes::shape_descriptor_intern_with_special(
             d.keys_view(),
@@ -815,7 +818,7 @@ pub(crate) unsafe fn private_field_lanes_target(
         return None;
     }
     let id = object_shape_stamp(obj);
-    let d = shape_descriptor_of_receiver((id).0)?;
+    let d = (unsafe { crate::object::shapes::shape_descriptor_of_object(obj, (id).0) })?;
     if field_rep::has_deprecated(d.rep)
         || field_rep::special_lane_slots(d.rep) != 0
         || d.has_tail_constfn()
@@ -1067,7 +1070,8 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
                     & (1u32 << (slot % field_rep::REP_SLOTS))
                     != 0
         };
-        let tail_changes = d.has_tail_constfn() && d.constfn_infos().iter().any(|e| tail_gone(e.slot));
+        let tail_changes =
+            d.has_tail_constfn() && d.constfn_infos().iter().any(|e| tail_gone(e.slot));
         if rep == d.rep && !tail_changes {
             return id;
         }

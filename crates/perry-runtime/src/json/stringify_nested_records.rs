@@ -44,9 +44,12 @@ unsafe fn ordinary_object(bits: u64) -> Option<(*const crate::ObjectHeader, usiz
 
 unsafe fn record(bits: u64) -> Option<Record> {
     let (obj, size) = ordinary_object(bits)?;
-    let descriptor = crate::object::shapes::shape_descriptor_of_receiver(
-        (crate::object::shapes::object_shape_stamp(obj)).0,
-    )?;
+    let descriptor = (unsafe {
+        crate::object::shapes::shape_descriptor_of_object(
+            obj,
+            (crate::object::shapes::object_shape_stamp(obj)).0,
+        )
+    })?;
     let len = key_count(descriptor.keys_view())?;
     if len > descriptor.live_inline_slot_count as usize
         || size < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(len)
