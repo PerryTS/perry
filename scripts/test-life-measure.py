@@ -141,6 +141,8 @@ REGIONS = {
     "r7_promote_keep1": [("loop", "run", "#0", {"sampled": 40, "dirty": 40, "surv1": 40, "surv_objs": 40,
                                                 "unresolved": 0}, {})],
     "r8_shape_remint": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
+    # LIFE I3f: the only path to each iteration's object is a dead, not yet collected old holder (remembered set).
+    "r9_dead_old_holder": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
 }
 
 
@@ -182,13 +184,18 @@ def check_regions(sites, tsv, tests):
     return bad
 
 
-DENSITY = ("r6_promote_clean", "r7_promote_keep1", "r8_shape_remint")
+DENSITY = ("r2_push_outer", "r6_promote_clean", "r7_promote_keep1", "r8_shape_remint", "r9_dead_old_holder")
+
+# fixture -> (sabotage, what it keeps): the control must turn the fixture's clean verdict dirty.
+CONTROLS = {"r8_shape_remint": ("lifemeta", "shape key lists as JS values"),
+            "r9_dead_old_holder": ("lifeminor", "the minor's reach through a dead old holder")}
 
 
 def density(name, exe, sites, tests, go, dense_out):
     """The same fixture decided sparsely (`PERRY_LIFE_REGIONS_SHIFT=3`: about one instance in eight): every sampled
     instance gets the dense verdict (all clean, or all dirty with the dense survivor count per instance);
-    r8 also runs the `lifemeta` control, which counts shape key lists as JS values and must fail."""
+    r8 also runs the `lifemeta` control, which counts shape key lists as JS values, r9 the `lifeminor` control,
+    which keeps a minor's verdict for an object reached only through the remembered set; both must fail."""
     failures = []
     kind, function, ordinal, exact, _ = tests[0]
     r, tsv = go(name, exe, {"PERRY_LIFE_REGIONS_RATE": "0", "PERRY_LIFE_REGIONS_SHIFT": "3"})
@@ -214,14 +221,15 @@ def density(name, exe, sites, tests, go, dense_out):
           f"{'dense == sparse' if not bad else 'DIFFERS ' + '; '.join(bad)}")
     if bad:
         failures.append(name + ":density")
-    if name == "r8_shape_remint":
-        r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": "lifemeta"})
+    if name in CONTROLS:
+        knob, what = CONTROLS[name]
+        r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": knob})
         rows2 = region_rows(sites, tsv2, kind, function, ordinal) if tsv2.exists() else []
-        meta = rows2[0]["dirty"] if rows2 else 0
-        ok = r2.returncode == 0 and meta > 0
-        print(f"control lifemeta {name}: dirty {meta:.0f} -> {'FAILS (good)' if ok else 'passes (control BROKEN)'}")
+        dirty = rows2[0]["dirty"] if rows2 else 0
+        ok = r2.returncode == 0 and dirty > 0
+        print(f"control {knob} {name} ({what}): dirty {dirty:.0f} -> {'FAILS (good)' if ok else 'passes (control BROKEN)'}")
         if not ok:
-            failures.append("control:lifemeta:regions")
+            failures.append(f"control:{knob}:regions")
     return failures
 
 
