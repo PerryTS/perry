@@ -25,7 +25,8 @@
 //!
 //! Sampling per region id: the first 32 instances, then the rate halves each
 //! time the id's sampled count doubles (floor 2^-16; `PERRY_LIFE_REGIONS_RATE=1`:
-//! every instance), plus a global shift from the time budget. Turns always.
+//! every instance), plus a global shift from the time budget (`PERRY_LIFE_REGIONS_SHIFT=<n>`: fixed at
+//! n). Turns always.
 //! Byte samples are the census's own draws (an object of `b` bytes carries
 //! `b / I` samples plus one with probability `(b mod I) / I`): every instance
 //! open at a sampled object's birth is decided, and the sample records the
@@ -163,6 +164,13 @@ pub(crate) fn on() -> bool {
         }
         v => v == 2,
     }
+}
+
+/// `PERRY_LIFE_REGIONS_SHIFT=<n>` set: the global shift is fixed at `n` (the time budget does not
+/// raise it), so a sparse run's density does not depend on the machine's speed.
+fn shift_fixed() -> bool {
+    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *F.get_or_init(|| knob("PERRY_LIFE_REGIONS_SHIFT").is_some())
 }
 
 fn rate_one() -> bool {
@@ -486,7 +494,7 @@ pub(super) fn full_marked() {
 /// The time budget: region probes may not take more than 4x the mutator time;
 /// over it, every id's rate halves.
 fn budget(r: &mut Reg) {
-    if rate_one() || r.decisions % 64 != 0 {
+    if rate_one() || shift_fixed() || r.decisions % 64 != 0 {
         return;
     }
     let Some(start) = r.start else { return };
