@@ -101,6 +101,12 @@ pub mod guard {
     /// (`builtins::methods::surely_callable`); the `then` read of a value
     /// a promise resolves with (`Cons::Fulfil`).
     pub const NOT_CALLABLE: u8 = 11;
+    /// The value of `ArrayBuffer` (`SharedArrayBuffer`) where a failed
+    /// `instanceof` of the name narrows (`Cons::NotBuffer`): any value but
+    /// the intrinsic constructor (a program store, ⊤) lets every value of
+    /// the left-hand side through; a primitive throws and lets none.
+    pub const NOT_BUFFER_CTOR: u8 = 12;
+    pub const NOT_SHARED_BUFFER_CTOR: u8 = 13;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -118,6 +124,9 @@ pub mod guard {
             BOXED_BOOL => p::BOOL,
             BOXED_OTHER => p::BIGINT | p::SYMBOL,
             NOT_CALLABLE => p::ALL,
+            // A primitive right-hand side throws (InstanceofOperator step
+            // 1): it selects no false side.
+            NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR => 0,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }

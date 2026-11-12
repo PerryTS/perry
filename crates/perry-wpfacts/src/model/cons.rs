@@ -273,6 +273,15 @@ pub enum Cons {
     /// `undefined`, a `Guard` on the argument). A rule of the program text,
     /// like `NotNullish`.
     NotUndefined { dst: NodeId },
+    /// A failed `x instanceof ArrayBuffer` (`shared`: `SharedArrayBuffer`)
+    /// of the intrinsic binding: the values but the built-in buffer objects
+    /// of that kind flow into `dst`. The compiled program answers the bare
+    /// built-in name by the cell's buffer brand (perry-runtime
+    /// `instanceof/static_dispatch.rs`), so a built-in buffer of the kind
+    /// never takes the false side; every other value, ⊤ and every
+    /// primitive pass. The binding's other values pass all (a `Guard`,
+    /// `guard::NOT_BUFFER_CTOR`, on the read of the global).
+    NotBuffer { shared: bool, dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -734,6 +743,7 @@ impl Cons {
                 | Cons::NotNullish { .. }
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
+                | Cons::NotBuffer { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -753,6 +763,7 @@ impl Cons {
                 | Cons::NotNullish { .. }
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
+                | Cons::NotBuffer { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -796,6 +807,7 @@ impl Cons {
             Cons::Fulfil { .. } => "fulfil",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
+            Cons::NotBuffer { .. } => "notbuffer",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",

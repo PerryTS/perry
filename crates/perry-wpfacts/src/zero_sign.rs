@@ -124,6 +124,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::FieldTruthy { dst, .. }
         | Cons::Fulfil { dst }
         | Cons::Falsy { dst }
+        | Cons::NotBuffer { dst, .. }
         | Cons::NotUndefined { dst } => Use::To(dst),
         Cons::RetInto { call, .. } | Cons::ArgInto { call, .. } => {
             let ret = m.calls[call as usize].ret;

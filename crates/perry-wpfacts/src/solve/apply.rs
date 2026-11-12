@@ -406,6 +406,17 @@ impl Model {
                 }
             }
             Cons::Guard { test, from, dst } => {
+                // The intrinsic buffer constructor a failed `instanceof`
+                // narrows by (`Cons::NotBuffer`): any other value admits.
+                let ctor = match test {
+                    guard::NOT_BUFFER_CTOR => {
+                        Some(self.tok(TokKind::Builtin(BuiltinNs::ArrayBuffer)))
+                    }
+                    guard::NOT_SHARED_BUFFER_CTOR => {
+                        Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
+                    }
+                    _ => None,
+                };
                 // A marker beside its values is no value (DECISIONS 74):
                 // the test waits for them, and fires if the marker leaves
                 // (75). A marker with none beside it holds anything.
@@ -414,6 +425,8 @@ impl Model {
                         t == TOP
                             || if self.is_marker(t) {
                                 !self.beside_values(t)
+                            } else if let Some(c) = ctor {
+                                t != c
                             } else if test == guard::NOT_CALLABLE {
                                 !crate::builtins::surely_callable(self, t)
                             } else {
@@ -444,6 +457,31 @@ impl Model {
                     let strs = self.nodes[n as usize].strs;
                     let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim & !strip, strs);
+                    self.cur_range = saved;
+                }
+            }
+            Cons::NotBuffer { shared, dst } => {
+                let kind = if shared {
+                    "SharedArrayBuffer"
+                } else {
+                    "ArrayBuffer"
+                };
+                for &t in toks {
+                    let buffer = match self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => matches!(
+                            self.tmpls[tm as usize].kind,
+                            TmplKind::BObj { what, .. } if what == kind
+                        ),
+                        _ => false,
+                    };
+                    if !buffer {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
                     self.cur_range = saved;
                 }
             }

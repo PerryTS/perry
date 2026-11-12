@@ -717,6 +717,10 @@ pub(crate) enum Presence {
     /// `null`/`undefined` (the read would throw) nor an object whose read
     /// of `key` holds only `undefined`/`null`.
     FieldTruthy(String),
+    /// `local instanceof ArrayBuffer` (`true`: `SharedArrayBuffer`) failed,
+    /// the bare global name (`Cons::NotBuffer`): no built-in buffer object
+    /// of that kind, while the global holds the intrinsic constructor.
+    NotBuffer(bool),
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -787,6 +791,30 @@ fn implied<'p>(
         } if positive => {
             if let Some(Bound::Local(id)) = bound_of(object, subst) {
                 out.push(Implied::Present(id, Presence::FieldTruthy(property.clone())));
+            }
+        }
+        // A failed `local instanceof ArrayBuffer` (`SharedArrayBuffer`),
+        // the right-hand side the global name's live binding: the runtime
+        // answers the intrinsic by the buffer brand, so no built-in buffer
+        // of that kind is the local. A local, a program class or any other
+        // right-hand side decides nothing here.
+        Expr::InstanceOf {
+            expr,
+            ty_expr: Some(rhs),
+            ..
+        } if !positive => {
+            let shared = match rhs.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if matches!(object.as_ref(), Expr::GlobalGet(0)) => match property.as_str() {
+                    "ArrayBuffer" => Some(false),
+                    "SharedArrayBuffer" => Some(true),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let (Some(shared), Some(Bound::Local(id))) = (shared, bound_of(expr, subst)) {
+                out.push(Implied::Present(id, Presence::NotBuffer(shared)));
             }
         }
         // A truthy local is neither `null` nor `undefined`.
@@ -1064,6 +1092,32 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::NotUndefined) => {
                     self.m.cons(src, Cons::NotUndefined { dst: start })
+                }
+                Implied::Present(_, Presence::NotBuffer(shared)) => {
+                    self.m.cons(src, Cons::NotBuffer { shared, dst: start });
+                    // The global's value (`globalThis.ArrayBuffer`, the
+                    // read the right-hand side makes): any value but the
+                    // intrinsic constructor lets every value through.
+                    let name = match shared {
+                        true => "SharedArrayBuffer",
+                        false => "ArrayBuffer",
+                    };
+                    let global = self.expr(fx, &Expr::GlobalGet(0));
+                    let ctor = self.tmp("instanceof-ctor");
+                    let key = Key::Named(self.m.atom(name));
+                    self.m.cons(global, Cons::Load { key, dst: ctor });
+                    let test = match shared {
+                        true => crate::model::guard::NOT_SHARED_BUFFER_CTOR,
+                        false => crate::model::guard::NOT_BUFFER_CTOR,
+                    };
+                    self.m.cons(
+                        ctor,
+                        Cons::Guard {
+                            test,
+                            from: src,
+                            dst: start,
+                        },
+                    );
                 }
                 Implied::Present(_, Presence::FieldTruthy(property)) => {
                     let key = Key::Named(self.m.atom(&property));

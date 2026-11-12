@@ -134,6 +134,7 @@ mod indexed_callees;
 mod indexed_owner;
 mod indirect_eval_call;
 mod inherited_layout;
+mod instanceof_buffer_false;
 mod instanceof_class_has_instance;
 mod int_demand;
 mod int_ranges;

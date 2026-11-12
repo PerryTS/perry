@@ -260,6 +260,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         // Presence: no protocol, no identity.
         Cons::Falsy { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
         | Cons::Range { .. }
@@ -386,6 +387,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
     match c {
         Cons::Falsy { .. }
         | Cons::NotNullish { .. }
+        | Cons::NotBuffer { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
         | Cons::Range { .. }
@@ -1289,6 +1291,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                 k,
                                 Cons::Falsy { .. }
                                     | Cons::NotNullish { .. }
+                                    | Cons::NotBuffer { .. }
                                     | Cons::NotUndefined { .. }
                                     | Cons::Guard { .. }
                                     | Cons::Defined { .. }
@@ -1850,6 +1853,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
                 | Cons::NotNullish { .. }
+                | Cons::NotBuffer { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Guard { .. }
                 | Cons::Range { .. }
