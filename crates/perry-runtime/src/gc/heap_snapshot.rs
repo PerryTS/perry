@@ -258,7 +258,13 @@ pub(super) unsafe fn life_label(header: *mut GcHeader) -> String {
         for i in 0..len as usize {
             let bits = *els.add(i);
             let v = crate::value::JSValue::from_bits(bits);
-            let text = read_heap_string(bits, 24)
+            // An element of key/attribute storage is not always a value (attribute words): read a
+            // string only behind a tracked string header.
+            let target = decode_slot_target(bits);
+            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(target, GC_TYPE_STRING).is_some();
+            let text = tracked
+                .then(|| read_heap_string(bits, 24))
+                .flatten()
                 .or_else(|| v.is_short_string().then(|| crate::value::boxed_text::short_string_content(v)))
                 .unwrap_or_else(|| format!("{bits:#x}"));
             name.push_str(&text);
