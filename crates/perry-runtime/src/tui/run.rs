@@ -142,8 +142,8 @@ mod tests {
                 super::super::input::js_perry_tui_exit();
             }
         });
-        crate::timer::js_clear_timeout_value(f64::from_bits(timeout as u64));
-        crate::timer::js_clear_interval_value(f64::from_bits(interval as u64));
+        crate::timer::js_clear_timeout_value(crate::value::js_nanbox_pointer(timeout));
+        crate::timer::js_clear_interval_value(crate::value::js_nanbox_pointer(interval));
         assert!(CALLBACKS.load(Ordering::Acquire) >= 3);
         assert!(frames > 0);
     }
@@ -180,6 +180,7 @@ mod tests {
         }
         let callback = crate::closure::js_closure_alloc(crate::fn_info!(exit, 0), 0);
         crate::timer::js_set_timeout_callback(callback as i64, 0.0);
+        std::thread::sleep(Duration::from_millis(10));
         run_frames(|| panic!("pump requested exit before the frame"));
         assert!(EXIT_FLAG.load(Ordering::Acquire));
     }
