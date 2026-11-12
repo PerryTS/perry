@@ -26,15 +26,17 @@ pub extern "C" fn js_process_getuid() -> f64 {
             }
         });
     }
-
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getuid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        0.0
+        crate::effect!(host_read, ids);
+        #[cfg(unix)]
+        unsafe {
+            libc::getuid() as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0.0
+        }
     }
 }
 #[no_mangle]
@@ -53,15 +55,17 @@ pub extern "C" fn js_process_geteuid() -> f64 {
             }
         });
     }
-
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::geteuid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        0.0
+        crate::effect!(host_read, ids);
+        #[cfg(unix)]
+        unsafe {
+            libc::geteuid() as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0.0
+        }
     }
 }
 #[no_mangle]
@@ -80,15 +84,17 @@ pub extern "C" fn js_process_getgid() -> f64 {
             }
         });
     }
-
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getgid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        0.0
+        crate::effect!(host_read, ids);
+        #[cfg(unix)]
+        unsafe {
+            libc::getgid() as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0.0
+        }
     }
 }
 #[no_mangle]
@@ -107,15 +113,17 @@ pub extern "C" fn js_process_getegid() -> f64 {
             }
         });
     }
-
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getegid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        0.0
+        crate::effect!(host_read, ids);
+        #[cfg(unix)]
+        unsafe {
+            libc::getegid() as f64
+        }
+        #[cfg(not(unix))]
+        {
+            0.0
+        }
     }
 }
 

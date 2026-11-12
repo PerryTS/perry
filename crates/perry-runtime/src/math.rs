@@ -444,10 +444,12 @@ pub extern "C" fn js_math_random() -> f64 {
             rng.random::<f64>()
         });
     }
-
-    crate::effect!(host_read, random);
-    let mut rng = rand::rng();
-    rng.random::<f64>()
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, random);
+        let mut rng = rand::rng();
+        rng.random::<f64>()
+    }
 }
 
 /// Math.min(...array) -> number — find minimum value in an array
@@ -612,15 +614,26 @@ mod tests {
             // (x, arm64 Node, x86-64 Node)
             (-0.27762589510530233, 0.7575801829621506, 0.7575801829621505),
             (1.0231953831389546, 2.782070356661735, 2.7820703566617344),
-            (-25.956580764614046, 5.335808135302985e-12, 5.335808135302986e-12),
+            (
+                -25.956580764614046,
+                5.335808135302985e-12,
+                5.335808135302986e-12,
+            ),
         ];
         for (x, arm64, x86) in split {
-            let want = if cfg!(target_arch = "aarch64") { arm64 } else { x86 };
+            let want = if cfg!(target_arch = "aarch64") {
+                arm64
+            } else {
+                x86
+            };
             assert_eq!(js_math_exp(x).to_bits(), want.to_bits(), "exp({x})");
         }
         let common: [(f64, f64); 8] = [
             // three.js BloomNode's 22-tap Gaussian weight: libm gives ...564.
-            (-0.5 * 16.0 / ((22.0 / 3.0) * (22.0 / 3.0)), 0.8617756314171563),
+            (
+                -0.5 * 16.0 / ((22.0 / 3.0) * (22.0 / 3.0)),
+                0.8617756314171563,
+            ),
             (1.0, std::f64::consts::E),
             (-1.0, 0.36787944117144233),
             (709.78, 1.7928227943945155e308),

@@ -87,9 +87,11 @@ fn isatty_impl(fd: i32) -> bool {
             unsafe { libc::isatty(fd) != 0 }
         });
     }
-
-    crate::effect!(host_read, tty);
-    unsafe { libc::isatty(fd) != 0 }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        unsafe { libc::isatty(fd) != 0 }
+    }
 }
 
 #[cfg(unix)]
@@ -109,14 +111,16 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
             }
         });
     }
-
-    crate::effect!(host_read, tty);
-    unsafe {
-        let mut ws: libc::winsize = std::mem::zeroed();
-        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
-            Some((ws.ws_col as i32, ws.ws_row as i32))
-        } else {
-            None
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        unsafe {
+            let mut ws: libc::winsize = std::mem::zeroed();
+            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+                Some((ws.ws_col as i32, ws.ws_row as i32))
+            } else {
+                None
+            }
         }
     }
 }
@@ -134,13 +138,15 @@ fn isatty_impl(fd: i32) -> bool {
             crate::win_console::is_console_fd(fd)
         });
     }
-
-    crate::effect!(host_read, tty);
-    // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
-    // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
-    // and the same criterion libuv uses to classify a handle as `UV_TTY`.
-    // Piped/redirected handles fail the probe → false, matching Node.
-    crate::win_console::is_console_fd(fd)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+        // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+        // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+        // Piped/redirected handles fail the probe → false, matching Node.
+        crate::win_console::is_console_fd(fd)
+    }
 }
 
 #[cfg(windows)]
@@ -154,11 +160,13 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
             crate::win_console::window_size(fd)
         });
     }
-
-    crate::effect!(host_read, tty);
-    // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
-    // bottom-top+1) for the stdout/stderr console handle.
-    crate::win_console::window_size(fd)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+        // bottom-top+1) for the stdout/stderr console handle.
+        crate::win_console::window_size(fd)
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -170,9 +178,11 @@ fn isatty_impl(_fd: i32) -> bool {
             false
         });
     }
-
-    crate::effect!(host_read, tty);
-    false
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        false
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -184,9 +194,11 @@ fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
             None
         });
     }
-
-    crate::effect!(host_read, tty);
-    None
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        None
+    }
 }
 
 pub(crate) fn is_tty_fd(fd: i32) -> bool {
