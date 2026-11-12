@@ -18,11 +18,13 @@
 //! old sample at another boundary, or one whose claims were dropped by an
 //! unobserved collection, is `unresolved` there, never guessed.
 //!
-//! Activations are told apart by the frame pointer of the compiled body
-//! that calls the hook: a hook whose caller frame is above the top
-//! activation shows that the activation returned without `perry_life_return`
-//! (a throw unwound it); its boundaries are probed then and counted `late`
-//! (survival exact, death "dead by then").
+//! Activations nest in hook order (an inlined body enters in its caller's
+//! frame). A throw leaves activations without `perry_life_return`: the
+//! handler of the catching `try` pops every activation deeper than the depth
+//! read at its entry (`perry_life_depth` / `perry_life_catch`); a hook whose
+//! caller frame is above the top activation's frame pops it as well (a throw
+//! caught outside a measured `try`). Their boundaries are probed then and
+//! counted `late` (survival exact, death "dead by then").
 //!
 //! The run writes `PERRY_LIFE_MEASURE=<path>` (run time) at each turn end:
 //! one row per (site, boundary). `PERRY_FACTS_SABOTAGE=lifekeep` (negative
@@ -274,14 +276,14 @@ fn table<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
     })
 }
 
-/// Pops the activations deeper than the frame `fp` (`inclusive`: also one at
-/// `fp`): each returned without its hook (or, inclusive, a sibling call
-/// reuses its frame). Their boundaries are probed now, `late`.
-fn pop_deeper(fp: usize, inclusive: bool) {
+/// Pops the activations deeper than the frame `fp`: each returned without its
+/// hook (a throw caught outside a measured `try`). Their boundaries are
+/// probed now, `late`.
+fn pop_deeper(fp: usize) {
     loop {
         let popped = table(|t| {
             let top = t.measure.acts.last()?;
-            if top.fp < fp || (inclusive && top.fp == fp) {
+            if top.fp < fp {
                 t.measure.late_pops += 1;
                 Some(())
             } else {
@@ -513,7 +515,7 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     })
     .flatten();
     let Some((addr, bytes, w)) = sampled else { return };
-    pop_deeper(fp, false);
+    pop_deeper(fp);
     let _ = table(|t| {
         let m = &mut t.measure;
         let depth = m.acts.len();
@@ -568,7 +570,9 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
 #[inline(never)]
 pub extern "C" fn perry_life_enter() {
     let fp = caller_fp();
-    pop_deeper(fp, true);
+    // Strictly deeper frames only: an inlined body enters in its caller's
+    // frame (same fp), nested in the caller's activation.
+    pop_deeper(fp);
     let _ = table(|t| t.measure.acts.push(Act { fp, pend: Vec::new() }));
 }
 
@@ -576,9 +580,30 @@ pub extern "C" fn perry_life_enter() {
 #[inline(never)]
 pub extern "C" fn perry_life_return() {
     let fp = caller_fp();
-    pop_deeper(fp, false);
+    pop_deeper(fp);
     if table(|t| t.measure.acts.last().is_some_and(|a| a.fp == fp)) == Some(true) {
         pop_top(false);
+    }
+}
+
+/// A `try` is entered: the activation depth its handler restores.
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn perry_life_depth() -> i64 {
+    table(|t| t.measure.acts.len() as i64).unwrap_or(0)
+}
+
+/// The handler of a `try` entered at depth `depth` runs: every activation
+/// deeper than it left on the throw without its return hook. Their
+/// boundaries are decided now, `late` (an inlined body shares its caller's
+/// frame, so the frame pointer alone cannot tell these apart).
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn perry_life_catch(depth: i64) {
+    let depth = depth.max(0) as usize;
+    while table(|t| t.measure.acts.len() > depth) == Some(true) {
+        let _ = table(|t| t.measure.late_pops += 1);
+        pop_top(true);
     }
 }
 
@@ -586,7 +611,7 @@ pub extern "C" fn perry_life_return() {
 #[inline(never)]
 pub extern "C" fn perry_life_iter(loop_id: i64) {
     let fp = caller_fp();
-    pop_deeper(fp, false);
+    pop_deeper(fp);
     let keys = table(|t| {
         let m = &mut t.measure;
         let list = match m.acts.last_mut() {
