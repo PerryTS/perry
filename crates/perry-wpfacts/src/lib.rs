@@ -38,6 +38,7 @@ mod gen_call;
 mod gen_cjs;
 mod gen_const;
 mod gen_expr;
+mod gen_protocol;
 mod gen_rest;
 mod held_lengths;
 mod ledger;
