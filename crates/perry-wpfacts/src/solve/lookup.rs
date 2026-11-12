@@ -505,10 +505,19 @@ impl Model {
                 self.index_accessors(origin, t, ChainAct::Load(dst));
                 return;
             }
+            // A Map's iteration yields a fresh `[key, value]` array per entry
+            // (ECMA-262 24.1.3.12 Map.prototype[@@iterator] is entries,
+            // 24.1.5.1 CreateArrayFromList), never a key or a value itself:
+            // the pairs come from its `@@iterator` call, which the iteration
+            // makes beside this read (`builtins::iterate`, `Gen::iterate`). A
+            // WeakMap is not iterable (24.3.3: no @@iterator).
+            if self.keyed_collection(t) {
+                return;
+            }
             // A builtin object other than an array the runtime made walks
-            // its own internal entries (a Set's list, a Map's entries, an
-            // iterator's steps, a string's code points): no [[Get]] of an
-            // index, so no index accessor runs.
+            // its own internal entries (a Set's list, an iterator's steps, a
+            // string's code points): no [[Get]] of an index, so no index
+            // accessor runs.
             if self.iterates_internal(t) {
                 let all = self.all_fields(t);
                 self.edge(all, dst);

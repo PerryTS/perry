@@ -41,6 +41,13 @@ pub(crate) fn enabled() -> bool {
 }
 
 impl Model {
+    /// `t` is a Map or a WeakMap: its entries are `[key, value]` pairs, its
+    /// values the value node (`map_vals`).
+    pub(crate) fn keyed_collection(&self, t: Tok) -> bool {
+        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "Map" | "WeakMap", .. }))
+    }
+
     /// The program's `new Map(...)` bore `t` (`empty`: without an
     /// iterable). The first empty birth of a Map of this unit closes it; a
     /// birth from an iterable opens it.

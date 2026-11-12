@@ -1401,11 +1401,21 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             Some("next" | "return" | "throw"),
         ) => {}
         ("Collection", Some(WK_ITERATOR)) => {
-            // `[Symbol.iterator]()`: Map entries or Set values.
-            let pairs = entry_pairs(m, call, elems, false);
-            let vals = m.node_l("coll-iter");
-            m.edge(elems, vals);
-            m.edge(pairs, vals);
+            // `[Symbol.iterator]()`: Map entries or Set values. Map.prototype
+            // [@@iterator] is Map.prototype.entries (ECMA-262 24.1.3.12): its
+            // iterator yields CreateArrayFromList(« key, value ») only
+            // (24.1.5.1), never a key or a value itself; Set.prototype
+            // [@@iterator] is values (24.2.3.11): the elements.
+            let vals = match m.keyed_collection(t) {
+                true => entry_pairs(m, call, elems, false),
+                false => {
+                    let pairs = entry_pairs(m, call, elems, false);
+                    let vals = m.node_l("coll-iter");
+                    m.edge(elems, vals);
+                    m.edge(pairs, vals);
+                    vals
+                }
+            };
             let it = iter_over(m, call, members::collection_iterator(kind), vals);
             ret_tok(m, call, it);
         }
