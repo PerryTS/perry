@@ -1952,6 +1952,12 @@ pub struct Model {
     pub shadowed_by_class: FxHashMap<TmplId, Vec<Tok>>,
     pub shadowed_keyed: crate::pts::FxHashSet<(Tok, Atom)>,
     pub shadowed_classed: crate::pts::FxHashSet<Tok>,
+    /// ECMA-262 10.1.8.1 OrdinaryGet: reads and method-call lookups (with
+    /// their origin) of a key `Model::surely_own_data` holds on the
+    /// receiver, answered by its own field alone. Filed with
+    /// `note_shadowed`, so every event that revokes the key re-checks them
+    /// (`flush_own_stopped`): the lookup then runs again, chain included.
+    pub own_stopped: FxHashMap<Tok, Vec<(Tok, Atom, ChainAct)>>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects

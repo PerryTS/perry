@@ -144,6 +144,67 @@ impl Model {
         }
     }
 
+    /// ECMA-262 10.1.8.1 OrdinaryGet: a [[Get]] of `a` on any object `t`
+    /// denotes finds an own data property, whose value is the result: no
+    /// prototype's value or accessor under `a` is consulted. It holds when
+    /// the key shadows the builtin prototypes (`shadows`, DECISIONS 234: a
+    /// definite birth key of a fact unit or of every class `t` stands for,
+    /// which no delete, defineProperty or `with` met, and no accessor or
+    /// read-only value on a builtin prototype or through ⊤ intercepted),
+    /// no accessor on `t`'s own class chain intercepts the constructor's
+    /// store of it (`chain_accessor_key`), and no object `t` denotes ever
+    /// reached unknown code (`inst_escaped`: there it may be deleted or
+    /// redefined unseen). Every condition only turns false during a solve;
+    /// a lookup answered by it is filed (`own_stopped`) and runs again in
+    /// full when it does (`flush_own_stopped`).
+    pub(crate) fn surely_own_data(&self, t: Tok, a: Atom) -> bool {
+        if t == TOP || self.is_proto_key(Key::Named(a)) || self.is_private_atom(a) {
+            return false;
+        }
+        let mut cs: Vec<TmplId> = self.tmpl_of(t).into_iter().collect();
+        if let Some(ps) = self.virt_protos.get(&t) {
+            cs.extend(ps.iter().copied());
+        }
+        !cs.is_empty()
+            && self.shadows(t, a)
+            && cs
+                .iter()
+                .all(|&c| !self.inst_escaped.contains(&c) && !self.chain_accessor_key(c, a))
+    }
+
+    /// A lookup `act` of own key `a` on `t` answered by the own field alone
+    /// (`surely_own_data`): filed for `flush_own_stopped`.
+    pub(super) fn note_own_stopped(&mut self, origin: Tok, t: Tok, a: Atom, act: ChainAct) {
+        self.note_shadowed(t, a, act, false);
+        let v = self.own_stopped.entry(t).or_default();
+        if !v.contains(&(origin, a, act)) {
+            v.push((origin, a, act));
+        }
+    }
+
+    /// The lookups on `t` answered by an own key that is no longer surely an
+    /// own data property run again, in full (chain and accessors).
+    fn flush_own_stopped(&mut self, t: Tok) {
+        let Some(reads) = self.own_stopped.remove(&t) else {
+            return;
+        };
+        let mut kept = Vec::new();
+        for (origin, a, act) in reads {
+            if self.surely_own_data(t, a) {
+                kept.push((origin, a, act));
+                continue;
+            }
+            match act {
+                ChainAct::Load(dst) => self.load_from(origin, t, Key::Named(a), dst),
+                ChainAct::Call(call) => self.method_on(t, Key::Named(a), call),
+                _ => {}
+            }
+        }
+        if !kept.is_empty() {
+            self.own_stopped.entry(t).or_default().extend(kept);
+        }
+    }
+
     /// A lookup (a read or a method call) that skipped the builtin members
     /// (`shadows`): resumed by `flush_shadowed` once the key no longer
     /// shadows them.
@@ -262,6 +323,7 @@ impl Model {
         toks.sort_unstable();
         toks.dedup();
         for t in toks {
+            self.flush_own_stopped(t);
             let Some(reads) = self.shadowed.remove(&t) else {
                 continue;
             };
@@ -352,9 +414,9 @@ impl Model {
                 fresh.push(c);
             }
         }
-        if !fresh.is_empty()
-            && (lose || self.top_reshaped_any || !self.top_reshaped_keys.is_empty())
-        {
+        // An escape revokes `surely_own_data` on the objects of these
+        // classes; `shadows` only once a key may be redefined through ⊤.
+        if !fresh.is_empty() {
             self.flush_shadowed_classes(&fresh);
         }
     }
@@ -594,6 +656,12 @@ impl Model {
         // absent: its class's guard throws on an object without it first
         // (ECMA-262 PrivateGet).
         let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
+        // ECMA-262 10.1.8.1 OrdinaryGet: a sure own data property is the
+        // read's value; the lookup ends at the object.
+        let stop = match key {
+            Key::Named(a) => self.surely_own_data(t, a),
+            Key::Any(_) => false,
+        };
         if !present && !private {
             self.add_prim(dst, prim::UNDEF);
         }
@@ -605,6 +673,12 @@ impl Model {
             false => m.edge(src, dst),
         };
         match key {
+            Key::Named(a) if stop => {
+                let f = self.field_r(t, a);
+                own(self, f);
+                self.note_own_stopped(origin, t, a, ChainAct::Load(dst));
+                return;
+            }
             // A method key on a published receiver finds the class chain's
             // value, not the receiver's unknown own field (DECISIONS 59).
             Key::Named(a) => match self.virt_load(t, a) {

@@ -112,6 +112,7 @@ mod for_in_runs_per_key;
 mod called_param_runs;
 mod field_truthy_filter;
 mod bool_field_guard;
+mod own_data_stops_chain;
 mod switch_param_runs;
 mod switch_mask_union;
 mod for_in_key_store;
