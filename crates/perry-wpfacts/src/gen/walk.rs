@@ -639,6 +639,8 @@ impl<'a> Gen<'a> {
         }
         if !self.m.act.as_ref().is_some_and(|a| a.fixed) {
             self.pending_walk.entry(f).or_default().push(w);
+        } else if self.m.family_reach.on {
+            self.unwalked.push(w);
         }
         true
     }

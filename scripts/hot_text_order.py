@@ -23,13 +23,22 @@ keeps it honest. Linux only: recording uses valgrind's callgrind.
 
   check --perry PERRY [--runtime-dir DIR] [--program FILE.ts[::ARGS]]...
         [--max-core-missing N] [--max-missing-pct P] [--max-outside-pct P]
+  check --names-only --runtime-dir DIR
       The gate. (1) Every listed name must still exist in the runtime
       archives: a renamed function of the core tier fails at once, the long
       tail may lose --max-missing-pct percent. (2) Order coverage: compile the
       smoke program(s), run them under callgrind, and fail when more than
       --max-outside-pct percent of the executed runtime bytes lie outside the
       hot run. Exit status 1 = stale list: fix the renamed lines or rebuild
-      the list.
+      the list. --names-only runs (1) alone: it needs only the archives
+      (`cargo build-perry --release`), no compiler run and no valgrind.
+
+      Where it runs (CI, .github/workflows/test.yml): the names half on every
+      PR in `gc-call-effects-linux`, on the shared `cargo build-perry
+      --release` archives (a few seconds); the whole check, coverage included,
+      in the full tier's `binary-size` job (Linux leg). After touching
+      runtime code, run locally on a release build:
+        python3 scripts/hot_text_order.py check --perry target/release/perry --require-coverage
 
   selftest
       The key function against the vectors hot_text_order.rs tests.
@@ -393,6 +402,8 @@ def read_order(path):
 
 
 def cmd_check(a):
+    if not a.perry and not (a.names_only and a.runtime_dir):
+        sys.exit("check needs --perry, or --names-only with --runtime-dir")
     keys, core = read_order(a.order)
     rt = a.runtime_dir or os.path.dirname(os.path.abspath(a.perry))
     archives = [p for p in (os.path.join(rt, n) for n in ("libperry_runtime.a", "libperry_stdlib.a")) if os.path.exists(p)]
@@ -417,6 +428,10 @@ def cmd_check(a):
     if pct > a.max_missing_pct:
         failed = True
         print(f"FAIL: {pct:.2f}% of the listed functions no longer exist (allowed {a.max_missing_pct}%): rebuild the list.")
+
+    if a.names_only:
+        print("hot-text order (names):", "STALE" if failed else "ok")
+        return 1 if failed else 0
 
     programs = [(p.split("::")[0], p.split("::")[1].split() if "::" in p else []) for p in a.program]
     with tempfile.TemporaryDirectory(prefix="perry-hot-text-") as tmp:
@@ -486,7 +501,9 @@ def main():
     b.add_argument("--held", help="a directory of recordings to keep out of the list (reported as held out)")
     b.add_argument("recordings", nargs="+")
     c = sub.add_parser("check")
-    c.add_argument("--perry", required=True)
+    c.add_argument("--perry", help="the compiler; required unless --names-only")
+    c.add_argument("--names-only", action="store_true",
+                   help="only the names half: every listed function exists in the archives (no compile, no valgrind)")
     c.add_argument("--runtime-dir")
     c.add_argument("--order", default=ORDER)
     c.add_argument("--program", action="append", default=[], help="FILE.ts or FILE.ts::ARGS; default: a built-in smoke program")

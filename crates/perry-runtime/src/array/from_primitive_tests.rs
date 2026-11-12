@@ -52,14 +52,6 @@ fn number_prototype_value() -> f64 {
     f64::from_bits(JSValue::pointer(addr as *const u8).bits())
 }
 
-fn string_prototype_value() -> f64 {
-    let sample = crate::string::js_string_from_bytes(b"abc".as_ptr(), 3);
-    let value = f64::from_bits(JSValue::string_ptr(sample).bits());
-    let addr = crate::array::primitive_wrapper_prototype_addr(value);
-    assert!(addr != 0, "%String.prototype% must be resolvable");
-    f64::from_bits(JSValue::pointer(addr as *const u8).bits())
-}
-
 fn boxed_two_value_iterator() -> f64 {
     let raw = js_closure_alloc(crate::fn_info!(two_value_iterator, 0), 0);
     f64::from_bits(JSValue::pointer(raw as *const u8).bits())

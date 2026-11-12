@@ -2558,6 +2558,8 @@ pub struct Model {
     /// DECISIONS 225: the function bodies that can run, when the analysis
     /// gates bodies on it (`None`: every body runs).
     pub act: Option<Act>,
+    /// What the solve observed of the runtime families (`family_reach`).
+    pub(crate) family_reach: crate::family_reach::State,
 }
 
 /// DECISIONS 225: which function bodies can run. A body is active once its
