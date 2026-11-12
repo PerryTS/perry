@@ -354,7 +354,13 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
     RuntimeFamily {
         id: "navigator",
         requires: &["event_target"],
-        holders: &["Navigator", "Storage", "localStorage", "navigator", "sessionStorage"],
+        holders: &[
+            "Navigator",
+            "Storage",
+            "localStorage",
+            "navigator",
+            "sessionStorage",
+        ],
         members: &[],
         modules: &[],
     },
@@ -763,20 +769,37 @@ mod tests {
     fn the_table_is_well_formed() {
         assert!(RUNTIME_FAMILIES.len() <= 64);
         for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
-            assert_eq!(family_index(f.id), Some(i), "{}: a family id is unique", f.id);
+            assert_eq!(
+                family_index(f.id),
+                Some(i),
+                "{}: a family id is unique",
+                f.id
+            );
             for r in f.requires {
                 assert!(family_index(r).is_some(), "{} requires unknown {r}", f.id);
                 assert_ne!(*r, f.id);
             }
             for h in f.holders {
-                assert!(!CORE_HOLDERS.contains(h), "{h} is a holder of {} and of core", f.id);
+                assert!(
+                    !CORE_HOLDERS.contains(h),
+                    "{h} is a holder of {} and of core",
+                    f.id
+                );
                 assert_eq!(entry_root(h), *h, "{h}: a holder is a root name");
             }
             for m in f.modules {
-                assert!(!CORE_MODULES.contains(m), "{m} is a module of {} and of core", f.id);
+                assert!(
+                    !CORE_MODULES.contains(m),
+                    "{m} is a module of {} and of core",
+                    f.id
+                );
             }
             for lists in [f.holders, f.members, f.modules, f.requires] {
-                assert!(lists.windows(2).all(|w| w[0] < w[1]), "{}: lists are sorted", f.id);
+                assert!(
+                    lists.windows(2).all(|w| w[0] < w[1]),
+                    "{}: lists are sorted",
+                    f.id
+                );
             }
         }
         assert!(CORE_HOLDERS.windows(2).all(|w| w[0] < w[1]));
@@ -787,16 +810,25 @@ mod tests {
         let of = |name: &str| entry_families(name).unwrap();
         assert_eq!(of("Uint8Array.prototype.set"), family_bit("typedarray"));
         assert_eq!(of("%TypedArray%.prototype"), family_bit("typedarray"));
-        assert_eq!(of("Buffer.alloc"), family_bit("typedarray") | family_bit("bigint"));
+        assert_eq!(
+            of("Buffer.alloc"),
+            family_bit("typedarray") | family_bit("bigint")
+        );
         assert_eq!(of("Array.prototype.map"), 0);
-        assert_eq!(of("String.prototype.normalize"), family_bit("string_normalize"));
+        assert_eq!(
+            of("String.prototype.normalize"),
+            family_bit("string_normalize")
+        );
         assert_eq!(of("String.prototype.normalizeX"), 0);
         assert_eq!(of("process.argv"), 0);
         assert_eq!(of("process.report.getReport"), family_bit("diagnostics"));
         assert_eq!(of("%Layout:ITERATOR_RESULT%"), 0);
         assert_eq!(of("node:path.join"), 0);
         assert_ne!(of("node:fs.readFileSync") & family_bit("typedarray"), 0);
-        assert_ne!(of("%NativeNamespace:buffer.Buffer%") & family_bit("typedarray"), 0);
+        assert_ne!(
+            of("%NativeNamespace:buffer.Buffer%") & family_bit("typedarray"),
+            0
+        );
         assert_eq!(of("node:path.posix.join"), 0);
         assert_eq!(entry_families("NoSuchHolder.x"), None);
         assert_eq!(entry_families("node:no-such-module.x"), None);
