@@ -230,6 +230,16 @@ impl Model {
         if self.is_private_atom(a) {
             return;
         }
+        // A for-in yields String keys only (ECMA-262 14.7.5.9
+        // EnumerateObjectProperties): never a symbol (a well-known symbol's
+        // `@@` key, `util.inspect.custom`'s) nor an internal slot.
+        let name = &self.atoms[a as usize];
+        if name.starts_with("@@")
+            || name == crate::model::INSPECT_CUSTOM_METHOD
+            || builtins::is_internal_key(name)
+        {
+            return;
+        }
         if self.atoms[a as usize] == crate::STAR_KEY {
             return self.enum_key_any(o, src, site);
         }

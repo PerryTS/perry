@@ -11,6 +11,7 @@ use perry_abi::lock::LockHolder;
 mod collections;
 mod constructors;
 mod effects;
+pub(crate) use effects::is_internal_key;
 #[cfg(test)]
 pub(crate) mod effects_for_tests {
     pub(crate) use super::effects::interpretable;
