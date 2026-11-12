@@ -25,6 +25,9 @@
 //! one synchronous full at the same point (its mark); with fulls off
 //! (`PERRY_LIFE_REGIONS_FULL=0`), or a full that is not observed, the instance
 //! is `unresolved`, as with any collection the hooks did not observe. Never guessed.
+//! Confirming fulls are budgeted outermost first (`CONFIRM_*`, printed in `#totals`
+//! as `confirm_budget`); over the budget the instance is `unresolved`.
+//! `PERRY_LIFE_REGIONS_CONFIRM=all`: no budget.
 //!
 //! Sampling per region id: the first 32 instances, then the rate halves each
 //! time the id's sampled count doubles (floor 2^-16; `PERRY_LIFE_REGIONS_RATE=1`:
@@ -191,6 +194,24 @@ fn shift_fixed() -> bool {
 fn rate_one() -> bool {
     static R: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *R.get_or_init(|| knob("PERRY_LIFE_REGIONS_RATE").as_deref() == Some("1"))
+}
+
+/// Confirmation budget (see `end_from`): an id's first `CONFIRM_N0` confirming
+/// fulls, then while its confirming fulls' time is at most `CONFIRM_R` times the
+/// time inside its decided instances; ids at nesting depth <= `CONFIRM_GLOBAL_DEPTH`
+/// (the turn and its direct children) also while all confirming fulls' time is at
+/// most `CONFIRM_GLOBAL_NS` plus `CONFIRM_R` times the mutator time. Inner ids
+/// never draw on that global allowance, so the budget is spent outermost first.
+const CONFIRM_N0: u64 = 32;
+const CONFIRM_R: u64 = 4;
+const CONFIRM_GLOBAL_DEPTH: usize = 1;
+const CONFIRM_GLOBAL_NS: u64 = 2_000_000_000;
+
+/// `PERRY_LIFE_REGIONS_CONFIRM=all`: no confirmation budget, every needed
+/// confirming full runs (fixtures, small programs).
+fn confirm_all() -> bool {
+    static R: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *R.get_or_init(|| knob("PERRY_LIFE_REGIONS_CONFIRM").as_deref() == Some("all"))
 }
 
 fn fulls_allowed() -> bool {
@@ -570,18 +591,18 @@ fn end_from(k: usize, fp: usize) {
     // them. Inside objects it reached only through the remembered set or
     // another object (a dead old object may hold them: `life::minor_decides`)
     // are decided by that full too; one full is shared by every instance
-    // decided here. Confirmation budget: an id's first 32 confirming fulls;
-    // then while its fulls' time is at most 4x the time inside its decided
-    // instances, or all confirming fulls' time at most 2 s plus 4x the
-    // mutator time. An instance over it with no full here is `unresolved`.
+    // decided here. Confirmation budget (`CONFIRM_*`, spent outermost first;
+    // none with `PERRY_LIFE_REGIONS_CONFIRM=all`). An instance over it with no
+    // full here is `unresolved`.
     let (need_old, confirm_ids) = if need {
         with(|r| {
             let now = std::time::Instant::now();
             let mutator = r.start.map_or(0, |t| (now.duration_since(t).as_nanos() as u64).saturating_sub(r.probe_ns));
-            let global_ok = r.confirm_ns <= 2_000_000_000 + 4 * mutator;
+            let global_ok = r.confirm_ns <= CONFIRM_GLOBAL_NS + CONFIRM_R * mutator;
             let mut need_old = false;
             let mut ids = Vec::new();
-            for i in insts.iter().filter(|i| i.decide && !i.unresolved && r.seq > i.seq0) {
+            // `insts` is `stack[k..]`: the nesting depth of `insts[j]` is `k + j` (the turn is 0).
+            for (j, i) in insts.iter().enumerate().filter(|(_, i)| i.decide && !i.unresolved && r.seq > i.seq0) {
                 let range = i.seq0 + 1..=r.seq;
                 need_old |= r.old.range(range.clone()).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a));
                 let weak = r.old.range(range).any(|(_, (a, e))| {
@@ -591,9 +612,10 @@ fn end_from(k: usize, fp: usize) {
                 });
                 if weak {
                     let inside = now.duration_since(i.t0).as_nanos() as u64;
-                    let ok = global_ok
+                    let ok = confirm_all()
+                        || (global_ok && k + j <= CONFIRM_GLOBAL_DEPTH)
                         || r.stats.get(&(i.kind, i.id)).map_or(true, |s| {
-                            s.confirm_fulls < 32 || s.confirm_ns <= 4 * (s.inside_ns + inside)
+                            s.confirm_fulls < CONFIRM_N0 || s.confirm_ns <= CONFIRM_R * (s.inside_ns + inside)
                         });
                     if ok {
                         ids.push((i.kind, i.id));
@@ -902,7 +924,7 @@ fn write(r: &mut Reg, exit: bool) {
     }
     let elapsed = r.start.map_or(0, |s| s.elapsed().as_nanos() as u64);
     out.push_str(&format!(
-        "#totals\tinterval={}\tborn_objects={}\tborn_bytes={}\tbefore_bytes={}\tturns={}\tturn_bytes={}\ttail_bytes={}\texit={}\tdecisions={}\tminors={}\tfulls={}\tfulls_unseen={}\tconfirm_fulls={}\tconfirm_unres={}\tunobserved={}\tborn_in_minor={}\tbusy={}\torphan_bs={}\tglobal_shift={}\tprobe_ns={}\telapsed_ns={elapsed}\n",
+        "#totals\tinterval={}\tborn_objects={}\tborn_bytes={}\tbefore_bytes={}\tturns={}\tturn_bytes={}\ttail_bytes={}\texit={}\tdecisions={}\tminors={}\tfulls={}\tfulls_unseen={}\tconfirm_fulls={}\tconfirm_unres={}\tconfirm_budget={}\tunobserved={}\tborn_in_minor={}\tbusy={}\torphan_bs={}\tglobal_shift={}\tprobe_ns={}\telapsed_ns={elapsed}\n",
         crate::arena::alloc_life::interval(),
         r.cnt,
         r.bytes,
@@ -917,6 +939,11 @@ fn write(r: &mut Reg, exit: bool) {
         r.fulls_unseen,
         r.confirm_fulls,
         r.confirm_unres,
+        if confirm_all() {
+            "all".to_string()
+        } else {
+            format!("n0:{CONFIRM_N0},r:{CONFIRM_R},global_depth:{CONFIRM_GLOBAL_DEPTH},global_ns:{CONFIRM_GLOBAL_NS}")
+        },
         r.unobserved,
         r.born_in_minor,
         BUSY.load(Ordering::Relaxed),

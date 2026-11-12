@@ -184,6 +184,39 @@ def check_regions(sites, tsv, tests):
     return bad
 
 
+# Fixtures whose checked region is cheap: no confirmation budget (`PERRY_LIFE_REGIONS_CONFIRM=all`), every
+# needed confirming full runs, so the checked rows must have unresolved 0. r6/r7 (1.6M inner instances) run
+# with the default budget: the driver loop (run #0) is decided exactly; inner ids may be unresolved.
+CONFIRM_ALL = ("r1_clean_loop", "r2_push_outer", "r3_every10", "r4_fn_clean", "r5_runtime_garbage",
+               "r8_shape_remint", "r9_dead_old_holder")
+
+# fixture -> (kind, function, ordinal) of an inner region the default budget must leave partly unresolved:
+# the budget's starvation lands on inner ids, never a wrong verdict. r6's inner iteration pushes its object
+# into tmp, which outlives the iteration: every decided inner instance is dirty, none clean.
+BUDGET_INNER = {"r6_promote_clean": ("loop", "run", "#1")}
+
+
+def check_budget_inner(name, sites, tsv):
+    """[] when the default budget left the inner id partly unresolved and every decided instance has a verdict
+    (empty+clean+dirty+unresolved = sampled) and none is clean."""
+    kind, function, ordinal = BUDGET_INNER[name]
+    rows = region_rows(sites, tsv, kind, function, ordinal)
+    if len(rows) != 1:
+        return [f"inner {kind} {function} {ordinal}: {len(rows)} rows"]
+    x = rows[0]
+    bad = []
+    total = x["empty"] + x["clean"] + x["dirty"] + x["unresolved"]
+    print(f"{name} inner {kind} {function} {ordinal} (default budget): sampled {x['sampled']:.0f} clean "
+          f"{x['clean']:.0f} dirty {x['dirty']:.0f} unresolved {x['unresolved']:.0f}")
+    if x["unresolved"] <= 0:
+        bad.append("inner unresolved 0: the default budget did not starve the inner id")
+    if total != x["sampled"]:
+        bad.append(f"inner verdicts {total:.0f} != sampled {x['sampled']:.0f}")
+    if x["clean"]:
+        bad.append(f"inner clean {x['clean']:.0f}: a kept object reported dead")
+    return bad
+
+
 DENSITY = ("r2_push_outer", "r6_promote_clean", "r7_promote_keep1", "r8_shape_remint", "r9_dead_old_holder")
 
 # fixture -> (sabotage, what it keeps): the control must turn the fixture's clean verdict dirty.
@@ -253,6 +286,9 @@ def regions(build, out, fixtures, env):
         tsv = out / (name + (".keep" if extra else "") + ".regions.tsv")
         tsv.unlink(missing_ok=True)
         e = dict(env, PERRY_LIFE_REGIONS=str(tsv), PERRY_LIFE_REGIONS_RATE="1")
+        e.pop("PERRY_LIFE_REGIONS_CONFIRM", None)
+        if name in CONFIRM_ALL:
+            e["PERRY_LIFE_REGIONS_CONFIRM"] = "all"
         e.update(extra or {})
         r = run([str(exe)], env=e)
         return r, tsv
@@ -291,6 +327,8 @@ def regions(build, out, fixtures, env):
                   f"exit={t['exit']} unobserved={t['unobserved']} busy={t['busy']}")
             if mine != tot - unplaced or t["exit"] != "1" or t["busy"] != "0":
                 bad.append("consistency")
+        if name in BUDGET_INNER and tsv.exists():
+            bad += check_budget_inner(name, sites, tsv)
         ok = r.returncode == 0 and same and not bad
         print(f"{name}: rc={r.returncode} node={'same' if same else 'DIFF'} regions: "
               f"{'OK' if not bad else 'FAIL ' + '; '.join(bad)}")
