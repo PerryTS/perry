@@ -304,6 +304,19 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     let raw_ptr = if jsval.is_reference() {
         jsval.reference_payload()
     } else {
+        if jsval.is_number() {
+            // A Number receiver reads Number.prototype with ToPropertyKey of
+            // the index (`n["toFixed"]`), exactly as the named read `n.toFixed`.
+            let idx_top16 = index.to_bits() >> 48;
+            let key_ptr = if idx_top16 == 0x7FFF || idx_top16 == 0x7FF9 {
+                js_get_string_pointer_unified(index) as *const crate::StringHeader
+            } else {
+                crate::builtins::js_string_coerce(index) as *const crate::StringHeader
+            };
+            return f64::from_bits(
+                crate::object::field_get_set::primitive_number_get(value, key_ptr).bits(),
+            );
+        }
         return f64::from_bits(TAG_UNDEFINED);
     };
     if crate::value::addr_class::is_small_handle(raw_ptr) {
