@@ -1064,8 +1064,11 @@ impl Model {
                     let ks = self.accessor_keys.entry(t).or_default();
                     if !ks.contains(&key) {
                         ks.push(key);
-                        // ENUM3: a key gained by a for-in subject.
-                        self.enum_key_gained(t, key);
+                        // ENUM3: an accessor a literal or a definition
+                        // installs may be enumerable (not a class body's:
+                        // `gen.rs` puts those into `accessor_keys` itself).
+                        let n = self.field_r(t, key);
+                        self.enum_key_mark(n, t, key);
                     }
                     let objproto = matches!(self.toks[t as usize], TokKind::ObjectProto);
                     if objproto {

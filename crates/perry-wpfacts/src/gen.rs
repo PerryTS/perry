@@ -1525,10 +1525,10 @@ impl<'a> Gen<'a> {
         // (decision 17).
         if !c.is_literal_shape() {
             let pa = self.m.atom("prototype");
-            let pf = self.m.field(cobj, pa);
+            let pf = self.m.field_r(cobj, pa);
             self.m.add_tok(pf, proto);
             let ca = self.m.atom("constructor");
-            let cf = self.m.field(proto, ca);
+            let cf = self.m.field_r(proto, ca);
             self.m.add_tok(cf, cobj);
         }
         // DECISIONS 108: a function's name is its identity: contracts are
@@ -1548,7 +1548,7 @@ impl<'a> Gen<'a> {
             );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(proto, a);
+                let n = self.m.field_r(proto, a);
                 self.m.add_tok(n, t);
             }
             let this = self.m.funcs[f as usize].this;
@@ -1567,7 +1567,7 @@ impl<'a> Gen<'a> {
             );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(cobj, a);
+                let n = self.m.field_r(cobj, a);
                 self.m.add_tok(n, t);
                 self.m.tmpls[tm as usize].static_methods.push(a);
             }

@@ -1220,6 +1220,14 @@ pub struct Node {
     /// A field node of a marker (its any-key, keyed and all-fields
     /// nodes): it holds the marker's reach markers as themselves.
     pub of_marker: bool,
+    /// ENUM3: a field node whose key a store or a definition made an
+    /// enumerable property of its object (`Model::field`); one only a read
+    /// made (`Model::field_r`) is none until a write comes (ECMA-262
+    /// 10.1.8.1 OrdinaryGet makes no property; 10.1.11 OrdinaryOwnPropertyKeys
+    /// lists the properties there are). Not a class body's method, getter or
+    /// setter, nor a class's `prototype` or `constructor` (15.7.14
+    /// ClassDefinitionEvaluation, 10.2.8 MakeMethod with enumerable false).
+    pub enum_key: bool,
     /// The integer interval of the Numbers it holds (`range::Iv`).
     pub range: range::Iv,
     /// The interval grew since the node was last delivered.

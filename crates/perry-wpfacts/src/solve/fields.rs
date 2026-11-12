@@ -24,10 +24,29 @@ impl Model {
                 if matches!(self.tmpls[*tm as usize].kind, TmplKind::BObj { what: "RegExp", .. }))
     }
 
+    /// Field `a` of `t` as a store or a definition writes it: an enumerable
+    /// own key of `t` from now on (`Node::enum_key`, ENUM3).
     pub fn field(&mut self, t: Tok, a: Atom) -> NodeId {
+        let n = self.field_r(t, a);
+        self.enum_key_mark(n, t, a);
+        n
+    }
+
+    /// ENUM3: `n`, field `a` of `t`, is an enumerable own property: the
+    /// keyed stores `t`'s for-in keys decide store under it too.
+    pub(crate) fn enum_key_mark(&mut self, n: NodeId, t: Tok, a: Atom) {
+        if !self.nodes[n as usize].enum_key {
+            self.nodes[n as usize].enum_key = true;
+            self.enum_key_gained(t, a);
+        }
+    }
+
+    /// Field `a` of `t` as a read or a non-enumerable definition finds it:
+    /// the node, without making `a` an enumerable key (`Node::enum_key`).
+    pub fn field_r(&mut self, t: Tok, a: Atom) -> NodeId {
         #[cfg(test)]
         if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
-            return self.packet_field_protocol(|m| m.field(t, a));
+            return self.packet_field_protocol(|m| m.field_r(t, a));
         }
         if let Some(&n) = self.fields.get(&(t, a)) {
             return n;
@@ -109,8 +128,6 @@ impl Model {
                 self.store_into(d, Key::Named(a), n, site);
             }
         }
-        // ENUM3: a key gained by a for-in subject (or chain link).
-        self.enum_key_gained(t, a);
         // DECISIONS 94: a named field of an array whose elements are a cell.
         if let Some(&seed) = self.cell_arrs.get(&t) {
             self.edge(seed, n);

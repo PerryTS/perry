@@ -166,10 +166,15 @@ impl Model {
                 continue;
             }
             self.enum_key_stores.entry(t).or_default().push((o, src, site));
-            let mut names = self.field_keys.get(&t).cloned().unwrap_or_default();
-            names.extend(self.accessor_keys.get(&t).cloned().unwrap_or_default());
+            let star = self.atom(crate::STAR_KEY);
+            if self.accessor_keys.get(&t).is_some_and(|ks| ks.contains(&star)) {
+                self.enum_key_any(o, src, site);
+            }
+            let names = self.field_keys.get(&t).cloned().unwrap_or_default();
             for a in names {
-                self.enum_key_named(o, src, site, a);
+                if self.nodes[self.fields[&(t, a)] as usize].enum_key {
+                    self.enum_key_named(o, src, site, a);
+                }
             }
             let w = self.enum_key_watch(t);
             self.cons(w, Cons::EnumKeyAny { o, src, site });
@@ -252,7 +257,7 @@ impl Model {
     /// wrote, as for a computed read of the builtin chain, `any_written`).
     pub(super) fn enum_fields(&mut self, of: Tok, t: Tok, key: Key, dst: NodeId) {
         let f = match key {
-            Key::Named(a) => self.field(t, a),
+            Key::Named(a) => self.field_r(t, a),
             Key::Any(_) => self.all_fields(t),
         };
         self.edge(f, dst);
@@ -300,7 +305,7 @@ impl Model {
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
         if let Some(&a) = self.key_nodes.get(&idx) {
-            let f = self.field(t, a);
+            let f = self.field_r(t, a);
             self.edge(f, dst);
             self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst));
             return;
@@ -356,7 +361,7 @@ impl Model {
             if prim & bit != 0 && self.idx_done.insert((n, obj, dst, IDX_OWN_PRIM + i as u16)) {
                 for k in keys {
                     let a = self.atom(k);
-                    let f = self.field(obj, a);
+                    let f = self.field_r(obj, a);
                     self.edge(f, dst);
                     self.accessor_walk(obj, obj, Key::Named(a), ChainAct::Load(dst));
                 }
@@ -401,7 +406,7 @@ impl Model {
                 }
             };
             let a = self.atom(key);
-            let f = self.field(t, a);
+            let f = self.field_r(t, a);
             self.cons(
                 f,
                 Cons::OwnTest {

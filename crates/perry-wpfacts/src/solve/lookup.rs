@@ -480,7 +480,7 @@ impl Model {
                 return self.load_from(origin, t, Key::Named(va), dst);
             }
             let Key::Named(ya) = key else { unreachable!() };
-            let y = self.field(t, ya);
+            let y = self.field_r(t, ya);
             self.edge(y, dst);
             return;
         }
@@ -605,12 +605,12 @@ impl Model {
                     // unknown own value (only a call through the receiver
                     // is that subclass's method, `virt_call`, DECISIONS 97).
                     if !self.virt_overriders(t, a).is_empty() {
-                        let f = self.field(t, a);
+                        let f = self.field_r(t, a);
                         own(self, f);
                     }
                 }
                 None => {
-                    let f = self.field(t, a);
+                    let f = self.field_r(t, a);
                     own(self, f);
                 }
             },
@@ -893,7 +893,7 @@ impl Model {
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
-        let f = self.field(t, a);
+        let f = self.field_r(t, a);
         self.edge(f, dst);
         let cv = self.cv(t, Key::Named(a));
         self.edge(cv, dst);
@@ -1364,7 +1364,7 @@ impl Model {
             }
             ChainAct::Load(dst) => {
                 let f = match key {
-                    Key::Named(a) => self.field(start, a),
+                    Key::Named(a) => self.field_r(start, a),
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.edge(f, dst);
@@ -1382,7 +1382,7 @@ impl Model {
             }
             ChainAct::Call(call) => {
                 let f = match key {
-                    Key::Named(a) => self.field(start, a),
+                    Key::Named(a) => self.field_r(start, a),
                     Key::Any(_) => self.all_fields(start),
                 };
                 self.bind_via(f, call, origin);
