@@ -7,14 +7,20 @@
 use super::*;
 
 /// The map is a local of a function: a script's top-level binding is
-/// reachable by any code the host runs (`hostTake`).
+/// reachable by any code the host runs. The sink is a method of an unknown
+/// value (as in `console_output_arguments`), not of the global object: a call `globalThis.hostTake(x)` hands unknown code the
+/// global object as `this`, which may then replace the global `Map` that
+/// `new Map` reads (ECMA-262 13.3.5.1 step 2 evaluates the constructor
+/// expression: a [[Get]] of the live global binding), so every `new Map`
+/// would construct with an unknown function value.
 fn verdict(tail: &str) -> Verdict {
     let src = format!(
         r#"
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const take = (x: any) => {{ (globalThis as any).hostTake(x); }};
+        const unknown: any = (globalThis as any)[process.argv[2]];
+        const take = (x: any) => {{ unknown.take(x); }};
         (function () {{ {tail} }})();
         console.log(g(s));
         "#
@@ -57,6 +63,17 @@ fn a_spread_of_the_value_copies_no_key_field() {
 #[test]
 fn the_constructor_fills_the_values_from_element_1() {
     let v = verdict("const m = new Map<any, any>([[s, { b: 2 }]]); take(m.get(s));");
+    assert!(proven(&v), "{v:?}");
+}
+
+/// node: as above with an entry that is no array: AddEntriesFromIterable
+/// reads Get(entry, "0") as the key and Get(entry, "1") as the value of any
+/// object (24.1.1.2 steps 4.d-4.f), so `get` returns `{ b: 2 }` only. (The
+/// array-literal entry above also reads `s` under "1" while an array
+/// literal's elements share one field.)
+#[test]
+fn the_constructor_reads_element_1_of_any_entry_object() {
+    let v = verdict("const m = new Map<any, any>([{ 0: s, 1: { b: 2 } } as any]); take(m.get(s));");
     assert!(proven(&v), "{v:?}");
 }
 
