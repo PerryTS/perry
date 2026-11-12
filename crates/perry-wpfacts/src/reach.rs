@@ -3,7 +3,11 @@
 //! called inactive (`BodyReach::inactive`). Off restores the solve without
 //! the rule.
 
-use crate::model::{CallId, CallSite, Cons, Key, Model, NodeId};
+use crate::gen::{Fx, Gen};
+use crate::model::{
+    prim, CallId, CallSite, Cons, IdentityRoute, Key, Model, NodeId, Protocol, ThisArg, Tok,
+};
+use perry_hir::Expr;
 
 /// `PERRY_FACTS_REACH_FOLDS=0`: a name-keyed fold (`Expr::WeakRefDeref`,
 /// `Expr::FinalizationRegistryRegister` / `Unregister`) is its intrinsic
@@ -78,7 +82,136 @@ pub(crate) fn thenable() -> bool {
     )
 }
 
+/// `PERRY_FACTS_REACH_JSON_REPLACER=0`: a `JSON.stringify` replacer
+/// function is only escaped (called by unknown code with unknown
+/// arguments); the values it is called with, and `this` = their holders,
+/// are not its arguments (`Model::json_replacer_calls`).
+pub(crate) fn json_replacer() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_REACH_JSON_REPLACER").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The nodes of one `JSON.stringify` call with a replacer
+/// (`Model::json_replacer_calls`).
+pub(crate) struct JsonReplacerNodes {
+    /// Every value the serialization visits.
+    pub seen: NodeId,
+    /// The values read off them.
+    pub read: NodeId,
+    /// The holders: `this` of each replacer call.
+    pub this: NodeId,
+    /// The key argument.
+    pub key: NodeId,
+}
+
 impl Model {
+    /// SerializeJSONProperty, SerializeJSONObject and SerializeJSONArray
+    /// (ECMA-262 25.5.2.2-25.5.2.5) with a replacer function: the replacer
+    /// is called with `this` = the holder and (key, value) for the root,
+    /// whose holder is a fresh object `{"": value}` (`holder`), and then for
+    /// every property of every object and every element of every array
+    /// the serialization visits; `value` is what `toJSON(key)` returned
+    /// where the value has one, and what the replacer returns replaces the
+    /// value and is visited in turn. So every value reachable from `value`
+    /// through properties and elements (getters run), every `toJSON`
+    /// result and every replacer result is a value the replacer receives,
+    /// and every object among them a holder it receives as `this`: it may
+    /// store into them, delete or add keys, or keep them. `n.seen` holds
+    /// them all (a closure under any-key reads); the runtime serializes
+    /// each (`Protocol::Json`). The caller makes the two calls
+    /// (`toJSON(key)` on `n.seen` and the replacer's with `this` = `n.this`
+    /// and arguments `[n.key, n.seen]`) and sends both results to `n.seen`.
+    ///
+    /// `JSON.parse`'s reviver (InternalizeJSONProperty, 25.5.1.1) is called
+    /// the same way on the parsed values (`serialized` false: nothing is
+    /// serialized, no `toJSON` runs), and what it returns is stored into
+    /// the holder under the key (`Gen::json_reviver_calls`).
+    pub(crate) fn json_replacer_calls(
+        &mut self,
+        value: NodeId,
+        holder: Tok,
+        n: &JsonReplacerNodes,
+        serialized: bool,
+    ) {
+        self.edge(value, n.seen);
+        let key = Key::any();
+        self.cons(n.seen, Cons::Load { key, dst: n.read });
+        self.edge(n.read, n.seen);
+        let root = self.field_any(holder);
+        self.edge(value, root);
+        self.add_tok(n.this, holder);
+        self.edge(n.seen, n.this);
+        self.add_prim(n.key, prim::STR);
+        if !serialized {
+            return;
+        }
+        let reason = self.reason("JSON.stringify value");
+        self.cons(
+            n.seen,
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Json,
+            },
+        );
+    }
+
+    /// `json_replacer_calls` for a call of the built-in `JSON.stringify`
+    /// value (`builtins::call_builtin`; an alias, a spread argument list,
+    /// `.call`): arguments by position (`positional`), the root's holder
+    /// `holder` made per call site.
+    pub(crate) fn json_replacer_builtin_call(&mut self, call: CallId, holder: Tok) {
+        let c = self.positional(call, 2);
+        let (Some(&value), Some(&replacer)) = (c.args.first(), c.args.get(1)) else {
+            return;
+        };
+        let frame = self.call_run(call);
+        let node = |m: &mut Model, l: &'static str| {
+            let x = m.node_l(l);
+            m.nodes[x as usize].frame = frame;
+            x
+        };
+        let n = JsonReplacerNodes {
+            seen: node(self, "json-seen"),
+            read: node(self, "json-seen-read"),
+            this: node(self, "json-holder"),
+            key: node(self, "json-key"),
+        };
+        self.json_replacer_calls(value, holder, &n, true);
+        let to_json = Key::Named(self.atom("toJSON"));
+        for (this, args, callee) in [
+            (ThisArg::Node(n.seen), vec![n.key], None),
+            (ThisArg::Node(n.this), vec![n.key, n.seen], Some(replacer)),
+        ] {
+            let ret = node(self, "json-call-ret");
+            let id = self.calls.len() as CallId;
+            let thrown = self.thrown;
+            self.solver_call(
+                call,
+                CallSite {
+                    this,
+                    args,
+                    spread: vec![],
+                    ret,
+                    site: id,
+                    region: thrown,
+                },
+            );
+            match callee {
+                None => self.cons(
+                    n.seen,
+                    Cons::MCall {
+                        key: to_json,
+                        call: id,
+                    },
+                ),
+                Some(f) => self.cons(f, Cons::Call { call: id }),
+            }
+            self.edge(ret, n.seen);
+        }
+    }
+
     /// The call site of `call` as a hand-written built-in rule reads it by
     /// position (`c.args.first()`, `c.args.get(i)`): its first `n`
     /// positions at least. Without a spread argument, the site itself. A
@@ -131,5 +264,98 @@ impl Model {
         let key = Key::Named(done);
         self.cons(result, Cons::Load { key, dst });
         Some(dst)
+    }
+}
+
+impl Gen<'_> {
+    /// `JSON.stringify(value, replacer, ...)` whose replacer is no literal
+    /// `null`, `undefined` or array (`ks`: the operands, the replacer
+    /// second), with the rule on: the operands as before (the value
+    /// serialized and, with value records, its identity observed; the
+    /// replacer and `space` escaped), and the replacer's calls
+    /// (`Model::json_replacer_calls`). `None`: not such a call.
+    pub(crate) fn json_replacer_stringify(
+        &mut self,
+        fx: &Fx,
+        ks: &[&Expr],
+        replacer: Option<&Expr>,
+        identity: bool,
+    ) -> Option<NodeId> {
+        let calls_back =
+            replacer.is_some_and(|r| !matches!(r, Expr::Null | Expr::Undefined | Expr::Array(..)));
+        if !self.m.reach_json_replacer || !calls_back || ks.len() < 2 {
+            return None;
+        }
+        let r = self.m.reason("JSON.stringify value");
+        let value = self.expr(fx, ks[0]);
+        self.m.cons(
+            value,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Json,
+            },
+        );
+        if identity {
+            self.m.identity(value, IdentityRoute::JsonReplacer);
+        }
+        let rr = self.m.reason("JSON.stringify replacer");
+        let mut rest = Vec::new();
+        for k in &ks[1..] {
+            let v = self.expr(fx, k);
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: rr,
+                    proto: Protocol::Any,
+                },
+            );
+            rest.push(v);
+        }
+        let out = self.tmp("primop");
+        self.m.add_prim(out, prim::STR | prim::UNDEF);
+        let (holder, _) = self.bobj(fx.module, "json");
+        let n = JsonReplacerNodes {
+            seen: self.tmp("json-seen"),
+            read: self.tmp("json-seen-read"),
+            this: self.tmp("json-holder"),
+            key: self.tmp("json-key"),
+        };
+        self.m.json_replacer_calls(value, holder, &n, true);
+        let to_json = Key::Named(self.m.atom("toJSON"));
+        let tr = self.mcall(n.seen, to_json, vec![n.key], vec![]);
+        self.m.edge(tr, n.seen);
+        let rr = self.call_value(rest[0], ThisArg::Node(n.this), vec![n.key, n.seen], vec![]);
+        self.m.edge(rr, n.seen);
+        Some(out)
+    }
+
+    /// `JSON.parse(text, reviver)`, the rule on: the reviver is called with
+    /// `this` = each holder and (key, value) for every value the walk
+    /// visits (`parsed` and what is reachable from it, the values it
+    /// stored into the holders included), and what it returns is stored
+    /// into the holder under that key (CreateDataProperty, any key) and is
+    /// the result at the root (`ret`, the result of the arm's own call).
+    pub(crate) fn json_reviver_calls(
+        &mut self,
+        fx: &Fx,
+        reviver: NodeId,
+        parsed: NodeId,
+        ret: NodeId,
+    ) {
+        if !self.m.reach_json_replacer {
+            return;
+        }
+        let (holder, _) = self.bobj(fx.module, "json");
+        let n = JsonReplacerNodes {
+            seen: self.tmp("json-seen"),
+            read: self.tmp("json-seen-read"),
+            this: self.tmp("json-holder"),
+            key: self.tmp("json-key"),
+        };
+        self.m.json_replacer_calls(parsed, holder, &n, false);
+        let rr = self.call_value(reviver, ThisArg::Node(n.this), vec![n.key, n.seen], vec![]);
+        self.m.edge(rr, ret);
+        let key = Key::any();
+        self.store(fx, n.this, key, ret, "reviver".to_string(), None, false);
     }
 }
