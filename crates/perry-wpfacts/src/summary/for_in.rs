@@ -38,7 +38,7 @@ impl Model {
     fn for_in_key_runs(&mut self, call: CallId, ft: Tok, keys: &[Atom]) -> Option<bool> {
         let mut made = false;
         for &k in keys {
-            made |= !self.sum.inst_key.contains_key(&(6, k, ft));
+            made |= !self.sum.inst_key.contains_key(&(6, k, ft, crate::summary::NO_VAL));
             let inst = self.instance((6, k, ft));
             match self.sum.insts[inst as usize].params.first().copied() {
                 // The run reads no key.

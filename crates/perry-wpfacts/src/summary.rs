@@ -150,6 +150,10 @@ pub struct Summary {
     /// (`return (arg) => ... map ...`, through copies): a closure maker
     /// (rule C, `Model::closure_maker`).
     pub maker: bool,
+    /// The parameter the body only calls (`called_param`): a call whose
+    /// argument there holds exactly one function value runs the body once
+    /// per that value (`Model::called_val`).
+    pub called: Option<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -171,7 +175,13 @@ pub struct Inst {
     /// are the nodes from here on: the copy of slot `i` is a run of the
     /// shared node `Summary::orig[i]` (`Inst::copies`).
     pub fresh: NodeId,
+    /// The function value its called parameter is bound to (`NO_VAL`:
+    /// whatever the calls pass).
+    pub val: Tok,
 }
+
+/// No value keys the run (`Inst::val`, the fourth key component).
+pub const NO_VAL: u32 = u32::MAX;
 
 #[derive(Default)]
 pub struct SumState {
@@ -191,10 +201,12 @@ pub struct SumState {
     /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b),
     /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
     /// the call's template, so one run per site of the program text).
+    /// The fourth component is the function value a run's called
+    /// parameter is bound to (`Summary::called`), else `NO_VAL`.
     /// Nothing in a key is another instance: the count is (sites +
     /// object tokens + layouts) x functions, and the object tokens are the
     /// program's birth sites under their maker contexts (`made_of`).
-    pub inst_key: FxHashMap<(u8, u32, Tok), u32>,
+    pub inst_key: FxHashMap<(u8, u32, Tok, u32), u32>,
     /// Calls that exist when summaries are built: the program's calls.
     pub n_prog: usize,
     /// A call an instance made: the summary call (template) it renames.
@@ -587,7 +599,14 @@ impl Model {
 
     /// The instance for key, made on first use.
     fn instance(&mut self, key: (u8, u32, Tok)) -> u32 {
-        if let Some(&i) = self.sum.inst_key.get(&key) {
+        self.instance_v(key, NO_VAL)
+    }
+
+    /// The run of `key` whose called parameter holds `val` alone
+    /// (`NO_VAL`: the run every other call shares).
+    fn instance_v(&mut self, key: (u8, u32, Tok), val: u32) -> u32 {
+        let vkey = (key.0, key.1, key.2, val);
+        if let Some(&i) = self.sum.inst_key.get(&vkey) {
             return i;
         }
         let TokKind::Func(f, ctx) = self.toks[key.2 as usize] else {
@@ -676,8 +695,9 @@ impl Model {
             } else {
                 NO_NODE
             },
+            val,
         });
-        self.sum.inst_key.insert(key, inst);
+        self.sum.inst_key.insert(vkey, inst);
         self.sum.pending.push((inst, base));
         inst
     }
@@ -703,6 +723,19 @@ impl Model {
     }
 
     pub(crate) fn bind_layout_bound(&mut self, call: CallId, ft: Tok, x: Option<Tok>, prim: u16) {
+        self.bind_layout_run(call, ft, x, prim, true);
+    }
+
+    /// `bind_layout_bound`; `by_val`: the call may run the run of its
+    /// called parameter's one function value (`called_val`).
+    pub(crate) fn bind_layout_run(
+        &mut self,
+        call: CallId,
+        ft: Tok,
+        x: Option<Tok>,
+        prim: u16,
+        by_val: bool,
+    ) {
         let f = self.tok_fn(ft);
         if call != NO_NODE && self.composed_away(call, f) {
             return;
@@ -727,10 +760,28 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&key) => (1, LAY_NONE, ft),
+            0 | 1 | 7 if self.widened && !self.sum.inst_key.contains_key(&(key.0, key.1, key.2, NO_VAL)) => {
+                (1, LAY_NONE, ft)
+            }
             _ => key,
         };
-        let inst = self.instance(key);
+        // A function that only calls a parameter runs once per function
+        // value a call passes there alone; checked again once the
+        // worklist is empty (`settle_val_runs`).
+        let val = match by_val && !self.widened {
+            true => self.called_val(call, f),
+            false => NO_VAL,
+        };
+        // Its argument holds nothing yet: the run is chosen once the
+        // worklist is empty (`settle_val_runs`).
+        if val == NO_VAL && by_val && !self.widened && self.called_pending(call, f) {
+            self.val_runs.push((call, ft, x, prim, NO_VAL));
+            return;
+        }
+        if val != NO_VAL {
+            self.val_runs.push((call, ft, x, prim, val));
+        }
+        let inst = self.instance_v(key, val);
         let it = self.sum.insts[inst as usize].this;
         if it != NO_NODE {
             if let Some(t) = x {
@@ -772,6 +823,78 @@ impl Model {
         }
         let o = *self.sum.origin.get(&call)?;
         ((o as usize) < self.sum.n_prog && !self.sum.templates.contains(&o)).then_some(o)
+    }
+
+    /// The one function value `call` passes to `f`'s called parameter
+    /// (`Summary::called`): the argument holds exactly one token, a
+    /// function, and no primitive; else `NO_VAL` (no argument, a spread,
+    /// several or unknown values).
+    pub(crate) fn called_val(&self, call: CallId, f: FnIdx) -> u32 {
+        if call == NO_NODE {
+            return NO_VAL;
+        }
+        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called) else {
+            return NO_VAL;
+        };
+        let c = &self.calls[call as usize];
+        let Some(&a) = c.args.get(j as usize).filter(|_| c.spread.is_empty()) else {
+            return NO_VAL;
+        };
+        let n = &self.nodes[a as usize];
+        if n.prim != 0 || n.pts.len() != 1 {
+            return NO_VAL;
+        }
+        let t = n.pts.to_sorted()[0];
+        match self.toks[t as usize] {
+            TokKind::Func(..) => t,
+            _ => NO_VAL,
+        }
+    }
+
+    /// `f` has a called parameter and the argument `call` passes there
+    /// holds no value yet.
+    fn called_pending(&self, call: CallId, f: FnIdx) -> bool {
+        if call == NO_NODE {
+            return false;
+        }
+        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called) else {
+            return false;
+        };
+        let c = &self.calls[call as usize];
+        c.spread.is_empty()
+            && c.args.get(j as usize).is_some_and(|&a| {
+                let n = &self.nodes[a as usize];
+                n.prim == 0 && n.pts.len() == 0
+            })
+    }
+
+    /// Once the worklist is empty: a call that waited for its argument
+    /// runs the run of its one function value, or the shared run; a call
+    /// that ran the run of one function
+    /// value whose argument holds another value since also runs the
+    /// shared run (only adds). True when one did.
+    pub(crate) fn settle_val_runs(&mut self) -> bool {
+        let runs = std::mem::take(&mut self.val_runs);
+        let mut more = false;
+        let mut keep = Vec::with_capacity(runs.len());
+        let mut done: FxHashSet<(CallId, Tok, Option<Tok>, u16)> = FxHashSet::default();
+        for r in runs {
+            let (call, ft, x, prim, val) = r;
+            let now = self.called_val(call, self.tok_fn(ft));
+            if val == NO_VAL {
+                // A waiting call: bound now, by what its argument holds
+                // (pushes its run's record when it takes one).
+                self.bind_layout_run(call, ft, x, prim, now != NO_VAL);
+                more = true;
+            } else if now == val {
+                keep.push(r);
+            } else if done.insert((call, ft, x, prim)) {
+                self.bind_layout_run(call, ft, x, prim, false);
+                more = true;
+            }
+        }
+        self.val_runs.extend(keep);
+        more
     }
 
     fn closure_maker(&self, f: FnIdx, x: Option<Tok>) -> bool {
@@ -979,7 +1102,23 @@ impl Model {
         // not what the call passes (DECISIONS 117, 127).
         let caps: Vec<Option<NodeId>> =
             (0..terms.len()).map(|i| self.capture_param(f, i)).collect();
+        // A run of one function value: its called parameter holds that
+        // value, whatever else the argument gains (`settle_val_runs`
+        // binds the shared run then).
+        let val = self.sum.insts[inst as usize].val;
+        let vj = match val {
+            NO_VAL => usize::MAX,
+            _ => self.sum.of[&f].called.map_or(usize::MAX, |j| j as usize),
+        };
         for i in 0..terms.len() {
+            if i == vj && terms[i] != NO_NODE {
+                self.add_tok(terms[i], val);
+                if self.nodes[fparams[i] as usize].obs && i < nargs {
+                    let a = self.calls[c].args[i];
+                    self.edge(a, fparams[i]);
+                }
+                continue;
+            }
             let mut dsts = Vec::with_capacity(2);
             if terms[i] != NO_NODE {
                 dsts.push(terms[i]);

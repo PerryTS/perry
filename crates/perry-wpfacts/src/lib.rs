@@ -881,12 +881,14 @@ fn compute_act<'a>(
         // One count per instance key kind (`Summaries::inst_key`).
         let mut kinds = [0usize; 8];
         let mut fnkeyed = 0;
-        for &(k, l, _) in g.m.sum.inst_key.keys() {
+        let mut fnval = 0;
+        for &(k, l, _, v) in g.m.sum.inst_key.keys() {
             kinds[k as usize] += 1;
+            fnval += (v != summary::NO_VAL) as usize;
             fnkeyed += (k == 1 && l == summary::LAY_NONE) as usize;
         }
         eprintln!(
-            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {} for-in {}), program calls {}, calls {}",
+            "perry: wpfacts instances {} (site {} layout {} of them function-keyed {}, birth {}, entry {} group {} for-in {}), program calls {}, calls {}, value runs {}",
             g.m.sum.insts.len(),
             kinds[0],
             kinds[1],
@@ -896,7 +898,8 @@ fn compute_act<'a>(
             kinds[3] + kinds[4],
             kinds[6],
             g.m.sum.n_prog,
-            g.m.calls.len()
+            g.m.calls.len(),
+            fnval
         );
     }
     if cfg.profile {
@@ -1155,7 +1158,7 @@ fn compute_act<'a>(
             .sum
             .inst_key
             .keys()
-            .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE)
+            .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE && k.3 == summary::NO_VAL)
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
         contexts: g.m.sum.ctx_nodes.len() as u64,

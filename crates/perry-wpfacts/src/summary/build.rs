@@ -872,6 +872,7 @@ pub(super) fn build_summaries(m: &mut Model) {
         let s = Rc::make_mut(s);
         bind_written_params(s);
         s.rel = relative_params(s);
+        s.called = called_param(s);
     }
     let size_after: usize = m
         .sum
@@ -961,6 +962,56 @@ fn bind_written_params(s: &mut Summary) {
 /// Per parameter of summary `s`: a slot only the calls write (DECISIONS 44
 /// (b)); after `bind_written_params` every slot parameter is one. A
 /// parameter that is not a slot (a captured parameter's node) is not.
+/// The first parameter the body only calls: no edge, rule, call result or
+/// seed writes it (`rel`: never assigned; a body with `arguments` has no
+/// summary, a direct eval writes its locals), it carries only the rules of
+/// a plain call of it (`Cons::Call`: it is the callee; `Cons::Raise`: where
+/// what that call throws goes) and is no operand of anything
+/// else: never copied, stored, passed on, returned or captured. The run's
+/// result then depends on which function the call passes and on nothing
+/// else of that argument (`Model::called_val`).
+fn called_param(s: &Summary) -> Option<u32> {
+    let only_called = |j: usize| {
+        let p = s.params[j];
+        if !s.rel[j] || [s.ret, s.this, s.rest].contains(&p) {
+            return false;
+        }
+        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p)
+            || s.edges.iter().any(|&(a, b)| a == p || b == p)
+            || s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
+            || s.closures.iter().any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
+            || s.births.iter().any(|&(sl, _)| SLOT | sl == p)
+        {
+            return false;
+        }
+        let mut called = false;
+        for (h, c) in &s.cons {
+            if *h == p {
+                // The call of it, and where what it throws goes.
+                match c {
+                    Cons::Call { .. } => called = true,
+                    Cons::Raise { .. } => {}
+                    _ => return false,
+                }
+            } else if super::map::cons_fields(c).0.contains(&p) {
+                return false;
+            }
+        }
+        for (_, cs) in &s.calls {
+            let mut seen = false;
+            super::map::map_call(cs, |x| {
+                seen |= x == p;
+                x
+            });
+            if seen {
+                return false;
+            }
+        }
+        called
+    };
+    (0..s.params.len()).find(|&j| only_called(j)).map(|j| j as u32)
+}
+
 fn relative_params(s: &Summary) -> Vec<bool> {
     let written = written_slots(s);
     s.params

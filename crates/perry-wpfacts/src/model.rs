@@ -2109,6 +2109,10 @@ pub struct Model {
     /// For-in bodies run per key: (call, body token, the literal), checked
     /// again once the worklist is empty (`settle_for_in`).
     pub for_in_runs: Vec<(CallId, Tok, Tok)>,
+    /// Runs of one function value (`bind_layout_run`): (call, function
+    /// token, receiver, receiver primitives, the value), checked again once
+    /// the worklist is empty (`settle_val_runs`).
+    pub val_runs: Vec<(CallId, Tok, Option<Tok>, u16, u32)>,
     /// (call, body token) run once with every key.
     pub for_in_any: crate::pts::FxHashSet<(CallId, Tok)>,
     /// (object node, body token, call) whose `ForInKeys` is attached.

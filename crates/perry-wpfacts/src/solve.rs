@@ -831,6 +831,7 @@ impl Model {
                 if self.sum.pending.is_empty()
                     && self.marker_links.is_empty()
                     && !self.settle_for_in()
+                    && !self.settle_val_runs()
                     && !self.settle_define()
                     && !crate::builtins::settle_native_given(self)
                 {

@@ -106,6 +106,7 @@ mod folded_call_own;
 mod for_in_enumerable_keys;
 mod for_in_keys;
 mod for_in_runs_per_key;
+mod called_param_runs;
 mod for_in_key_store;
 mod predicate_operands;
 mod for_of_next_argument;

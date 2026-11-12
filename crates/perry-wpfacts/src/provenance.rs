@@ -157,7 +157,7 @@ impl Model {
                 orig.insert(c, o);
             });
         }
-        for (&(k, l, t), &i) in self.sum.inst_key.iter() {
+        for (&(k, l, t, _), &i) in self.sum.inst_key.iter() {
             let f = self.sum.insts[i as usize].f;
             let _ = writeln!(p.out, "I {i} {k} {f} {t} {l}");
         }
