@@ -322,6 +322,7 @@ impl<'a> Gen<'a> {
                 // does it (a generator resumes with `undefined`, any other
                 // `next` gets argc 0). Nothing unknown is passed.
                 let res = self.call_value(next, ThisArg::Node(it), vec![], vec![]);
+                self.step_done(res);
                 // The step output: the value of a result that is not done,
                 // or `undefined` the runtime publishes at done
                 // (`js_iterator_step`), which destructuring reads.

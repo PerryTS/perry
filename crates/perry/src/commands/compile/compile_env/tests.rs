@@ -417,6 +417,17 @@ fn named_lengths_switch_is_a_cache_input() {
     );
 }
 
+/// Typed-array method sites: the switch changes the exported facts and
+/// every method call on a receiver annotated a typed array, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn typed_array_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_TYPED_ARRAY_SITES"),
+        "PERRY_FACTS_TYPED_ARRAY_SITES must key the compile caches"
+    );
+}
+
 /// Quiet sites: the switch changes the exported facts and every loop
 /// without calls that keeps `a.length` beside a read, store or operator
 /// that may run program code, so `=0` must never reuse an `=1` object.
@@ -425,6 +436,72 @@ fn quiet_sites_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_QUIET_SITES"),
         "PERRY_FACTS_QUIET_SITES must key the compile caches"
+    );
+}
+
+/// Activation reach, name-keyed folds: the switch changes which bodies the
+/// solve calls active (and every fact that follows from what they do), so
+/// `=0` must never reuse an `=1` object.
+#[test]
+fn reach_folds_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_FOLDS"),
+        "PERRY_FACTS_REACH_FOLDS must key the compile caches"
+    );
+}
+
+/// Activation reach, the `done` read of a step result: the switch changes
+/// which bodies the solve calls active, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn reach_step_done_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_STEP_DONE"),
+        "PERRY_FACTS_REACH_STEP_DONE must key the compile caches"
+    );
+}
+
+/// Activation reach, the new target of `Reflect.construct`: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_new_target_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_NEW_TARGET"),
+        "PERRY_FACTS_REACH_NEW_TARGET must key the compile caches"
+    );
+}
+
+/// Activation reach, spread arguments of built-in rules: the switch changes
+/// which bodies the solve calls active, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn reach_spread_args_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_SPREAD_ARGS"),
+        "PERRY_FACTS_REACH_SPREAD_ARGS must key the compile caches"
+    );
+}
+
+/// Activation reach, IteratorClose by a built-in consumer: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_iter_close_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_ITER_CLOSE"),
+        "PERRY_FACTS_REACH_ITER_CLOSE must key the compile caches"
+    );
+}
+
+/// Activation reach, a generator object's inherited members: the switch
+/// changes which bodies the solve calls active, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_gen_members_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_GEN_MEMBERS"),
+        "PERRY_FACTS_REACH_GEN_MEMBERS must key the compile caches"
     );
 }
 

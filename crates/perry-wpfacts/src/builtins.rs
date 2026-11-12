@@ -11,6 +11,7 @@ use perry_abi::lock::LockHolder;
 mod collections;
 mod constructors;
 mod effects;
+mod gen_members;
 #[cfg(test)]
 pub(crate) mod effects_for_tests {
     pub(crate) use super::effects::interpretable;
@@ -443,8 +444,8 @@ fn ret_tok(m: &mut Model, call: CallId, t: Tok) {
     m.add_tok(ret, t);
 }
 
-fn arg(m: &Model, call: CallId, i: usize) -> Option<NodeId> {
-    m.calls[call as usize].args.get(i).copied()
+fn arg(m: &mut Model, call: CallId, i: usize) -> Option<NodeId> {
+    m.positional(call, i + 1).args.get(i).copied()
 }
 
 /// The elements of every array argument plus every spread array.

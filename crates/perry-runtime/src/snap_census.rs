@@ -458,14 +458,14 @@ pub(crate) fn inline_bump_closed() -> bool {
 }
 
 /// The reservation mapped `[base, base + len)` (a new arena block).
+/// Only the linux-x86_64 instrumented build records it (the reservation map
+/// path that calls it is linux-only).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 #[inline(always)]
 pub(crate) fn region_mapped(base: usize, len: usize) {
-    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     if runner::on() {
         runner::region_mapped(base, len);
     }
-    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
-    let _ = (base, len);
 }
 
 /// A module-global root slot was registered.
@@ -600,6 +600,8 @@ pub extern "C" fn js_snap_entry_module(worker: i32) {
     if runner::on() || runner::start_if_requested() {
         runner::entry_module(worker != 0);
     }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = worker;
 }
 
 /// The program's TLS slot ranges: census compiles call this first in `main`

@@ -143,6 +143,7 @@ def main():
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
         ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("typed-array-site-negative", "tasite", "method site"),
         ("number-call-negative", "numbercall", "numeric result"),
         ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),

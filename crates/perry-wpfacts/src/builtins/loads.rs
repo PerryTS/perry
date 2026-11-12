@@ -677,6 +677,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             Some("name") => m.add_prim(dst, prim::STR),
             Some("length") => m.add_prim(dst, prim::NUM),
+            // A generator object's inherited member (`gen_members`).
+            Some(n) if gen_members::load(m, t, n, dst) => {}
             Some("call" | "apply" | "bind" | "toString") => {
                 let Key::Named(a) = key else { unreachable!() };
                 let bf = match (!m.unit_mode)

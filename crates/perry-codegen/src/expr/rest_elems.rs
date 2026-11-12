@@ -42,7 +42,8 @@
 //!
 //! **B2 (`PERRY_REST_TIERS=0` turns it off; B's lowering above).** The
 //! storage kind is also part of the receiver's representation
-//! (`FactsArrRep::at_rest`, wpfacts `ArrRep::at_rest`), so the rep-keyed
+//! (`FactsArrRep::at_rest`, wpfacts `ArrRep::at_rest`; made with the tiers
+//! off too, as it names the storage, not a tier), so the rep-keyed
 //! tiers that address `h + 24 + 8i` take an at-rest Array too and read its
 //! word through [`decode`], this module's one decoding of the word:
 //! - a direct read whose receiver the facts name (`proven_array::rep_read`)
