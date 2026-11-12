@@ -82,11 +82,23 @@ fn a_key_something_may_write_stays_open() {
         ("a store after birth", "const o: Opts = { level: 2 }; o.maxDepth = 1; console.log(search(o));"),
         ("a computed store", "const o: any = { level: 2 }; o[String(Date.now() % 2)] = 1; console.log(search(o));"),
         ("an escape", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
-        ("a store into ⊤", "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.maxDepth = 3;"),
+        ("a store into ⊤ that may be the receiver", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; const t: any = (globalThis as any).someHost; t.maxDepth = 3; console.log(search(o));"),
     ] {
         let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }})); {extra}"));
         assert!(open(&pf, "maxDepth"), "{what}: {:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
     }
+}
+
+/// A store into ⊤ reaches only what reached unknown code, and an add to
+/// `Object.prototype` is refused at the store (DEC 250,
+/// `perry_abi::lock::refuses`): the literal that never escaped and its
+/// chain cannot gain `maxDepth`, so the read stays proven.
+#[test]
+fn a_store_into_top_with_no_path_to_the_receiver_is_proven() {
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }})); import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.maxDepth = 3;"
+    ));
+    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
 }
 
 /// An intrinsic member of `Object.prototype` is no absent key.
