@@ -326,6 +326,37 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
     }
 }
 
+/// `buf[index] = value` for a `Buffer` / `Uint8Array` with a JS value: the
+/// element store of an integer-indexed object (TypedArraySetElement).
+/// `ToNumber(value)` first, for every index (an invalid one included): an
+/// object's `valueOf` / `toString` / `Symbol.toPrimitive` runs, a BigInt or a
+/// Symbol throws a TypeError and nothing is stored. Then `ToUint8` (modulo
+/// 2^8, not a saturating cast) and the store, if `index` is still inside the
+/// view: the conversion may have detached, shrunk or moved it, so the bound
+/// is the one `js_buffer_set` reads after it.
+///
+/// Every runtime byte store that receives a JS value goes through here; the
+/// raw `js_buffer_set` takes an already-converted integer.
+pub(crate) fn js_buffer_set_value(buf_ptr: *mut BufferHeader, index: i32, value: f64) {
+    if buf_ptr.is_null() {
+        return;
+    }
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    if v.is_number() || v.is_int32() {
+        let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+        js_buffer_set(buf_ptr, index, i32::from(byte));
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf = scope.root_raw_mut_ptr(buf_ptr);
+    let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+    js_buffer_set(
+        buf.get_raw_mut_ptr::<BufferHeader>(),
+        index,
+        i32::from(byte),
+    );
+}
+
 /// Copy bytes from source buffer into target buffer at given offset.
 /// Implements Uint8Array.prototype.set(source, offset)
 #[no_mangle]
