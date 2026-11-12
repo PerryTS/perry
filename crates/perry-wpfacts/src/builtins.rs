@@ -1342,6 +1342,34 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
     }
 }
 
+/// The primitive kinds whose ToObject wrapper an `Array.prototype` method
+/// called with that primitive as `this` runs on (`array_method_on_prim`).
+pub(crate) const ARRAY_BOXED_PRIMS: u16 = prim::STR | prim::NUM | prim::BOOL;
+
+/// `Array.prototype.<key>` called with `this` a primitive of kind `k`
+/// (one of `ARRAY_BOXED_PRIMS`): the method's ToObject(this) (ECMA-262
+/// 23.1.3, 7.1.18) is a new wrapper object of `k` (22.1.1.1 String
+/// exotic objects, 21.1.1.1, 20.3.1.1), born at the call, and the method
+/// runs on it as on any array-like (`array_method_on`). A String wrapper's
+/// index properties are the characters of its string (10.4.3.5
+/// StringGetOwnProperty): its elements hold the string kind. A Number or
+/// Boolean wrapper has no index property and no own `length` (ToLength
+/// of what its chain gives), so `slice`/`map`/`filter` make a new array of
+/// no elements and callbacks receive none.
+pub(crate) fn array_method_on_prim(m: &mut Model, k: u16, key: Atom, call: CallId) {
+    let what = match k {
+        prim::STR => "BoxedString",
+        prim::NUM => "BoxedNumber",
+        _ => "BoxedBoolean",
+    };
+    let w = site_tmpl(m, call, what);
+    if k == prim::STR {
+        let chars = m.num_fields(w);
+        m.add_prim(chars, prim::STR);
+    }
+    native_prototype_call(m, Family::Array, w, key, call);
+}
+
 /// Invoke the prototype member's model, rather than redispatching a
 /// callable namespace receiver as a static namespace call.
 pub(crate) fn native_prototype_call(m: &mut Model, fam: Family, r: Tok, key: Atom, call: CallId) {
@@ -1878,6 +1906,16 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
     n
 }
 
+/// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the
+/// intrinsic chain of `t`: no member, no `constructor`; only what a store
+/// into ⊤ may have written there (`family_any`'s unlocked case).
+pub(crate) fn chain_written_only(m: &mut Model, t: Tok, dst: NodeId) {
+    let star = m.atom(crate::STAR_KEY);
+    if !locked_chain_read(m, t, star) {
+        any_written(m, dst);
+    }
+}
+
 fn any_written(m: &mut Model, dst: NodeId) {
     let star = m.atom(crate::STAR_KEY);
     if !intrinsic_miss(m, star, NativeMiss::Load(dst)) {
@@ -1896,9 +1934,16 @@ pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
 /// (`members::box_chain`), as `Gen::json_value` models them, whose fields
 /// and elements are such objects or primitives.
-pub(crate) fn json_value(m: &mut Model, call: CallId) -> (Tok, Tok) {
+///
+/// `positions`: the objects are position classes (`solve::json_pos`); a
+/// reviver parse keeps one object token for the whole tree.
+pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, Tok) {
     let j = site_tmpl(m, call, "json");
     let ja = site_tmpl(m, call, "Array");
+    if positions {
+        m.json_root(j, ja);
+        return (j, ja);
+    }
     let fa = m.field_any(j);
     for f in [fa, m.field_any(ja)] {
         m.add_prim(f, prim::ALL);
@@ -2539,7 +2584,9 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
-            let (j, ja) = json_value(m, call);
+            let reviver = arg(m, call, 1).is_some();
+            let positions = !reviver && m.json_positions;
+            let (j, ja) = json_value(m, call, positions);
             let fa = m.field_any(j);
             ret_tok(m, call, j);
             ret_tok(m, call, ja);

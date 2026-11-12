@@ -141,6 +141,13 @@ pub struct FactsConfig {
     /// that re-reads the loop subject path `P` (`gen::for_in::SubjPath`)
     /// is a plain computed read again.
     pub no_forin_path: bool,
+    /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12;
+    /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`): `Model::json_key_optimistic`.
+    pub optimistic_json_key: bool,
+    /// JSON position classes (`solve::json_pos`), default OFF
+    /// (`PERRY_FACTS_JSON_POSITIONS=1`): off, a parse's objects are one
+    /// token (BATCHB28: on, the three.js skin solve runs past its bound).
+    pub json_positions: bool,
     /// Test-only negative control: plant a wrong fact
     /// (`readonly:T.f`, `prefix_stable:T`, `fixed_layout:T`,
     /// `kind:T.f=num|str|bool|obj`, `definite:T.f`).
@@ -583,6 +590,8 @@ fn generate<'a>(
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
     g.forin_path = !cfg.no_forin_path;
+    g.m.optimistic_json_key = cfg.optimistic_json_key;
+    g.m.json_positions = cfg.json_positions;
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -995,6 +1004,9 @@ fn compute_act<'a>(
     // demand is solved before the derive. It reads only the solved graph.
     // −0 tolerance (PR D): settle every interval that may hold `-0` before
     // anything reads one (demand, the derive, the bindings).
+    if g.m.aborted && std::env::var_os("PERRY_FACTS_ABORT_TOP").is_some() {
+        g.m.abort_top();
+    }
     let zero_sign_tolerated = if g.m.aborted {
         0
     } else {

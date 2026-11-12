@@ -48,6 +48,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     let one = Key::Named(m.atom("1"));
                     let mv = m.map_vals(c);
                     m.cons(vals, Cons::Load { key: one, dst: mv });
+                    let zero = Key::Named(m.atom("0"));
+                    let mk = m.map_keys(c);
+                    m.cons(vals, Cons::Load { key: zero, dst: mk });
                 } else {
                     m.edge(vals, fa);
                 }

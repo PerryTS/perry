@@ -44,6 +44,8 @@ pub const IDX_PLAIN_CALL: u16 = 34;
 pub const IDX_NUM_OWN: u16 = 35;
 pub const IDX_CALL_ANY: u16 = 36;
 pub const IDX_CALL_NUM_OWN: u16 = 37;
+/// A constant index read of an index-exact object (`Model::exact_index_slot`).
+pub const IDX_NUM_EXACT: u16 = 39;
 pub const IDX_CALL_NAMED: u16 = 64;
 /// The `IdxMCall` guards: a token receiver's key rule attached
 /// (`Cons::IdxKeyCall` on the key node), and (plus the primitive mask) a
@@ -1443,6 +1445,17 @@ pub struct Model {
     /// without widening (`solve::grow_rule_range`); only copy targets widen.
     /// `PERRY_FACTS_EXACT_RULES=0` widens a result like any node.
     pub exact_rules: bool,
+    /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12):
+    /// `json_key_optimistic`. NOT Node semantics: an assumption on the
+    /// program's input data.
+    pub optimistic_json_key: bool,
+    /// `FactsConfig::json_positions`: `JSON.parse` results are position
+    /// classes (`solve::json_pos`); off, one token per parse.
+    pub json_positions: bool,
+    /// Diagnostic of the optimistic JSON-key rule: the read results and
+    /// store sources it applied to (`true`: a store), reported with the
+    /// solve profile.
+    pub json_key_fired: Vec<(bool, NodeId)>,
     /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold
@@ -1688,6 +1701,13 @@ pub struct Model {
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     pub field_any: FxHashMap<Tok, NodeId>,
+    /// JSON tree positions (`solve::json_pos`): the position class each
+    /// JSON token stands for. A fact of the token, keyed by the token.
+    pub json_pos: FxHashMap<Tok, JsonPos>,
+    /// JSON position classes by key (`solve::json_pos` FOLD): (root object
+    /// token, the last step) -> the class's object and array tokens.
+    /// Compiler-internal: nothing of it reaches the binary.
+    pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
     /// A module namespace's values every name reads (DECISIONS 215).
@@ -2806,6 +2826,26 @@ pub struct AccGroup {
 }
 
 pub const NO_NODE: NodeId = u32::MAX;
+
+/// The step from a JSON position class to its child (`solve::json_pos`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JsonStep {
+    Root,
+    Named(Atom),
+    Any,
+    Elem,
+}
+
+/// A JSON position class: the root object token of its parse, the last
+/// step of its path (`Root` at the root) and the class's object and array
+/// tokens.
+#[derive(Clone, Copy, Debug)]
+pub struct JsonPos {
+    pub root: Tok,
+    pub step: JsonStep,
+    pub obj: Tok,
+    pub arr: Tok,
+}
 pub const NO_FN: FnIdx = u32::MAX;
 /// The run of a function with one body for every call (`Node::frame`);
 /// instance runs count from 1 below it.

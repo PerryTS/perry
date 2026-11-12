@@ -608,14 +608,18 @@ pub(super) fn iter_over(m: &mut Model, call: CallId, what: &'static str, values:
 }
 
 /// The `[key, value]` pairs of an `entries()` iterator: one array template
-/// per call site holding `values` (plus the index for arrays).
-pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bool) -> NodeId {
+/// per call site, CreateArrayFromList(« key, value ») (ECMA-262 23.1.5.1,
+/// 24.1.5.1, 24.2.5.1): index 0 holds `keys`, index 1 `values`, each its own
+/// slot (`Model::index_slot`); `keys` = None: the index, a Number.
+pub(super) fn entry_pairs(m: &mut Model, call: CallId, keys: Option<NodeId>, values: NodeId) -> NodeId {
     let pair = site_tmpl(m, call, "Array");
-    let fa = m.field_any(pair);
-    m.edge(values, fa);
-    if index {
-        m.add_prim(fa, prim::NUM);
+    let k = m.index_slot(pair, 0);
+    match keys {
+        Some(keys) => m.edge(keys, k),
+        None => m.add_prim(k, prim::NUM),
     }
+    let v = m.index_slot(pair, 1);
+    m.edge(values, v);
     let n = m.node_l("entry-pairs");
     m.add_tok(n, pair);
     n
@@ -1316,7 +1320,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         }
         Some("entries") => {
             let iterated = arr_iterated(m, t);
-            let pairs = entry_pairs(m, call, iterated, true);
+            let pairs = entry_pairs(m, call, None, iterated);
             let it = iter_over(m, call, members::ARRAY_ITERATOR, pairs);
             ret_tok(m, call, it);
         }
@@ -1408,9 +1412,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             // (24.1.5.1), never a key or a value itself; Set.prototype
             // [@@iterator] is values (24.2.3.11): the elements.
             let vals = match m.keyed_collection(t) {
-                true => entry_pairs(m, call, elems, false),
+                true => {
+                    let (keys, vals) = (m.map_keys(t), m.map_vals(t));
+                    entry_pairs(m, call, Some(keys), vals)
+                }
                 false => {
-                    let pairs = entry_pairs(m, call, elems, false);
+                    let pairs = entry_pairs(m, call, Some(elems), elems);
                     let vals = m.node_l("coll-iter");
                     m.edge(elems, vals);
                     m.edge(pairs, vals);
@@ -1465,7 +1472,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, it);
         }
         ("Collection", Some("entries")) => {
-            let pairs = entry_pairs(m, call, elems, false);
+            let pairs = match m.keyed_collection(t) {
+                true => {
+                    let (keys, vals) = (m.map_keys(t), m.map_vals(t));
+                    entry_pairs(m, call, Some(keys), vals)
+                }
+                false => entry_pairs(m, call, Some(elems), elems),
+            };
             let it = iter_over(m, call, members::collection_iterator(kind), pairs);
             ret_tok(m, call, it);
         }
@@ -1644,7 +1657,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let text = m.node_l("param-string");
             m.add_prim(text, prim::STR);
             let vals = if matches!(n, "entries" | "@@__perry_wk_iterator") {
-                entry_pairs(m, call, text, false)
+                entry_pairs(m, call, Some(text), text)
             } else {
                 text
             };

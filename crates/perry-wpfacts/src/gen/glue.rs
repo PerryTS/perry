@@ -172,7 +172,10 @@ impl<'a> Gen<'a> {
         n
     }
 
-    pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+    /// `positions`: the parse's objects are position classes
+    /// (`solve::json_pos`); a reviver may put its results at any position,
+    /// so a reviver parse keeps one object token for the whole tree.
+    pub(crate) fn json_value(&mut self, mi: u32, positions: bool) -> NodeId {
         if self.m.arr_lazy_sabotage {
             // Negative control (`arrlazy`): a plain Array of Numbers, where
             // the runtime may return a lazy JSON array header.
@@ -183,11 +186,19 @@ impl<'a> Gen<'a> {
             return self.tok_node(at);
         }
         let (t, n) = self.bobj(mi, "json");
+        let arr = self.new_arr_template(mi, "json");
+        let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        if positions {
+            self.m.json_root(t, at);
+            let out = self.tmp("json");
+            self.m.edge(n, out);
+            self.m.add_tok(out, at);
+            self.m.add_prim(out, prim::ALL);
+            return out;
+        }
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::ALL);
         self.m.add_tok(fa, t);
-        let arr = self.new_arr_template(mi, "json");
-        let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
         let afa = self.m.field_any(at);
         self.m.add_prim(afa, prim::ALL);
         self.m.add_tok(afa, t);

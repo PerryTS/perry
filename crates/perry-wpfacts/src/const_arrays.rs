@@ -142,6 +142,9 @@ impl Model {
     /// writes). Negative control `PERRY_FACTS_SABOTAGE=arrconst`: a write is
     /// not recorded, so a stored-to literal keeps its constant contents.
     pub(crate) fn arr_written(&mut self, t: Tok) {
+        if t != TOP {
+            self.index_slots_merge(t);
+        }
         if t == TOP || !self.const_arrays || self.arr_const_sabotage {
             return;
         }

@@ -33,6 +33,7 @@ mod store;
 
 mod escape;
 mod fields;
+mod json_pos;
 mod shaped_keys;
 pub(crate) mod strs;
 mod virt;
@@ -421,6 +422,28 @@ impl Model {
                 "perry: wpfacts native-effects {name} runs={runs} sites={}",
                 sites.len()
             );
+        }
+        if self.optimistic_json_key {
+            let stores = self.json_key_fired.iter().filter(|f| f.0).count();
+            eprintln!(
+                "perry: wpfacts # optimistic json-key sites={} reads={} stores={stores}",
+                self.json_key_fired.len(),
+                self.json_key_fired.len() - stores
+            );
+            let mut at: std::collections::BTreeMap<String, usize> = Default::default();
+            for &(st, n) in &self.json_key_fired {
+                let name = self
+                    .node_names
+                    .get(n as usize)
+                    .cloned()
+                    .unwrap_or_else(|| format!("{}#{n}", self.labels[n as usize]));
+                *at.entry(format!("{} {name}", if st { "S" } else { "L" })).or_default() += 1;
+            }
+            let mut at: Vec<_> = at.into_iter().collect();
+            at.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            for (k, c) in at.iter().take(40) {
+                eprintln!("perry: wpfacts # optimistic json-key at {c} {k}");
+            }
         }
         let mut ks: Vec<_> = p.kind.iter().collect();
         ks.sort_by(|a, b| (b.1 .1 + b.1 .3).cmp(&(a.1 .1 + a.1 .3)));

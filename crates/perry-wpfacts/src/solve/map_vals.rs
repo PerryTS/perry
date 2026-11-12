@@ -32,6 +32,9 @@
 
 use super::*;
 
+/// The internal slot holding a Map's keys (`Model::map_keys`).
+pub(crate) const MAP_KEYS: &str = "[[MapKeys]]";
+
 /// `PERRY_FACTS_MAP_VALUES=0` (`off`, `false`): `Map.prototype.get` reads
 /// the Map's whole contents, its keys included.
 pub(crate) fn enabled() -> bool {
@@ -77,6 +80,29 @@ impl Model {
             let fa = self.field_any(t);
             self.edge(fa, v);
         }
+        let a = self.atom(MAP_KEYS);
+        if let Some(&k) = self.fields.get(&(t, a)) {
+            let fa = self.field_any(t);
+            self.edge(fa, k);
+        }
+    }
+
+    /// The keys of Map `t` apart from its values (an internal slot field,
+    /// `MAP_KEYS`): what `set` and the constructor store as a key while the
+    /// Map is closed, all its contents once it is open. Index 0 of its
+    /// entry pairs (24.1.5.1).
+    pub(crate) fn map_keys(&mut self, t: Tok) -> NodeId {
+        if !self.map_values {
+            return self.field_any(t);
+        }
+        let a = self.atom(MAP_KEYS);
+        let fresh = !self.fields.contains_key(&(t, a));
+        let n = self.field(t, a);
+        if fresh && !self.map_closed.contains(&t) {
+            let fa = self.field_any(t);
+            self.edge(fa, n);
+        }
+        n
     }
 
     /// What `get` of collection `t` reads: the value node of a Map, which
@@ -108,6 +134,11 @@ impl Model {
         if spread {
             self.map_open(t);
             return;
+        }
+        let k = self.map_keys(t);
+        match args.first() {
+            Some(&a) => self.edge(a, k),
+            None => self.add_prim(k, prim::UNDEF),
         }
         let v = self.map_vals(t);
         let at = if self.map_values_sabotage { 0 } else { 1 };

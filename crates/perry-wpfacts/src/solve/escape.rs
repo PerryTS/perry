@@ -318,6 +318,7 @@ impl Model {
             }
         }
         self.escaped.insert(t, reason);
+        self.index_slots_merge(t);
         self.arr_len_top(t);
         self.map_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {

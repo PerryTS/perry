@@ -489,8 +489,14 @@ impl Model {
             }
             self.census_store_ctx(None);
         }
+        // OPTIMISTIC (`json_key_optimistic`): the key names no built-in
+        // member, so no `__proto__`: the store writes an own property.
+        let json_key = self.json_key_optimistic(t, key);
+        if json_key {
+            self.json_key_fired.push((true, src));
+        }
         // An element store's key is a number: it never names `__proto__`.
-        if key.is_any() && !elem && self.key_may_name_str(key, "__proto__")
+        if key.is_any() && !elem && !json_key && self.key_may_name_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);

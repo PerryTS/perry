@@ -928,7 +928,14 @@ impl Model {
                         };
                         self.edge(f, dst);
                     }
-                    self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                    if self.json_key_optimistic(of, key) {
+                        // OPTIMISTIC (`json_key_optimistic`): no built-in
+                        // member of the link, only what a store into ⊤ may
+                        // have written there.
+                        self.with_b(|m| builtins::chain_written_only(m, q, dst));
+                    } else {
+                        self.with_b(|m| builtins::chain_load(m, of, q, key, dst));
+                    }
                     if self.stops_at(q, key) {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
@@ -1486,7 +1493,19 @@ impl Model {
                 // node of a marker stands outside that collapse: in
                 // `x = x.next[0]` per unit it made a marker per iteration
                 // (CHB11: 27k markers and 25 GB on tssrc).
-                if !self.is_marker(obj)
+                let exact = match !self.is_marker(obj) && index_has_numeric_key(prim) {
+                    true => self.exact_index_slot(n, obj),
+                    false => None,
+                };
+                if let Some(slot) = exact {
+                    // An index-exact object read under the constant key `i`:
+                    // its index `i` (`Model::index_slot`) and the chain's.
+                    if self.idx_done.insert((n, obj, dst, crate::model::IDX_NUM_EXACT)) {
+                        let key = self.elem_key();
+                        self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                        self.edge(slot, dst);
+                    }
+                } else if !self.is_marker(obj)
                     && index_has_numeric_key(prim)
                     && self
                         .idx_done

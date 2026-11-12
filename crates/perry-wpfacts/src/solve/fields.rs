@@ -119,13 +119,27 @@ impl Model {
             // (`field_any`) are read under an index only (`named_any`). A
             // module namespace's named key is resolved by name (DECISIONS
             // 215): it never reads the namespace's other keys.
+            let json = self.is_json_obj_pos(t);
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
+                || json
                 || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
             let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            // A JSON object's property named here: its own position class
+            // (`json_pos`), distinct from every other name's.
+            // Every property of a parsed object is an own enumerable data
+            // property (ECMA-262 25.5.1 CreateDataProperty): a name read
+            // here may be one of its keys, which a for-in lists.
+            // A JSON object has no symbol-keyed own property (JSON keys are
+            // strings): a symbol or internal key read reaches the prototype
+            // chain only, as on any ordinary object, and births no class.
+            if json && self.enum_string_key(a) {
+                self.json_child(t, JsonStep::Named(a), n);
+                self.enum_key_mark(n, t, a);
+            }
             // A Number-valued key can name this field, including NaN,
             // Infinity and exponent forms. Other named fields never read
             // numeric-only writes. The range is a value fact, not a type.
@@ -352,6 +366,15 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
+        // A JSON object's properties under keys no read names, or an
+        // array's elements: their own position class (`json_pos`).
+        if self.json_pos.contains_key(&t) {
+            let step = match self.is_json_obj_pos(t) {
+                true => JsonStep::Any,
+                false => JsonStep::Elem,
+            };
+            self.json_child(t, step, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         // DECISIONS 241: what the units stored under a computed key.
@@ -386,7 +409,7 @@ impl Model {
     /// write under an unknown key goes here: a computed-key store, unknown
     /// code's writes (escape, hard), a spread, a computed-key accessor.
     pub fn any_key_node(&mut self, t: Tok) -> NodeId {
-        match self.is_elem_array(t) {
+        match self.is_elem_array(t) || self.is_json_obj_pos(t) {
             true => self.named_any(t),
             false => self.field_any(t),
         }
@@ -674,6 +697,48 @@ impl Model {
             }
         }
         n
+    }
+
+    /// Index `i` of an index-exact object (ECMA-262 24.1.5.1: the
+    /// CreateArrayFromList(« key, value ») of a Map iterator): an internal
+    /// slot field, so no computed key, spread or reflection reaches it; it
+    /// flows into the object's elements (`field_any`), which every other
+    /// reader reads. The object is index-exact while it has these slots and
+    /// nothing wrote it, moved its elements or handed it to unknown code
+    /// (`index_slots_merge`): a read under the constant key `i` reads the
+    /// slot only (`exact_index_slot`).
+    pub(crate) fn index_slot(&mut self, t: Tok, i: u32) -> NodeId {
+        let a = self.atom(&format!("[[Index{i}]]"));
+        let s = self.field(t, a);
+        let fa = self.field_any(t);
+        self.edge(s, fa);
+        s
+    }
+
+    /// The first write of `t`, a move of its elements or its escape: from
+    /// now on any index may hold any element, so each slot holds them all
+    /// (monotone: a constant read then sees what a numeric read sees).
+    pub(crate) fn index_slots_merge(&mut self, t: Tok) {
+        for i in 0..2u32 {
+            let a = self.atom(&format!("[[Index{i}]]"));
+            if let Some(&s) = self.fields.get(&(t, a)) {
+                let fa = self.field_any(t);
+                self.edge(fa, s);
+            }
+        }
+    }
+
+    /// The slot a read of `obj` under key node `key` reads alone: `key` is
+    /// a numeric literal (`Gen::num_literal`: one fixed integer) and `obj`
+    /// has that index slot.
+    pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
+        let k = &self.nodes[key as usize];
+        let (lo, hi) = (k.range.lo, k.range.hi);
+        if self.labels[key as usize] != "NUMLIT" || lo != hi || !(0..=1).contains(&lo) {
+            return None;
+        }
+        let a = self.atom(&format!("[[Index{lo}]]"));
+        self.fields.get(&(obj, a)).copied()
     }
 
     pub(super) fn is_num_atom(&self, a: Atom) -> bool {

@@ -801,6 +801,30 @@ impl Model {
         if val != NO_VAL {
             self.val_runs.push((call, ft, x, prim, val));
         }
+        // Rule M1: an argument that holds only string constants runs the
+        // run of each one (the clauses a value it holds selects, none other).
+        let vals = match val == NO_VAL && by_val && !self.widened {
+            true => self.switch_vals(call, f),
+            false => Vec::new(),
+        };
+        if vals.is_empty() {
+            self.bind_instance(call, f, key, val, x, prim);
+        }
+        for v in vals {
+            self.val_runs.push((call, ft, x, prim, v));
+            self.bind_instance(call, f, key, v, x, prim);
+        }
+    }
+
+    fn bind_instance(
+        &mut self,
+        call: CallId,
+        f: FnIdx,
+        key: (u8, u32, Tok),
+        val: u32,
+        x: Option<Tok>,
+        prim: u16,
+    ) {
         let inst = self.instance_v(key, val);
         let it = self.sum.insts[inst as usize].this;
         if it != NO_NODE {
@@ -887,6 +911,37 @@ impl Model {
         }
     }
 
+    /// Rule M1: the string constants `call` passes to `f`'s switched
+    /// parameter (a switch with case labels) when the argument holds two or
+    /// more of them and nothing else (no other primitive, no object, no
+    /// string of unknown or prefix-only value); else none. A switch compares
+    /// with ===: each constant selects its own clauses.
+    pub(crate) fn switch_vals(&self, call: CallId, f: FnIdx) -> Vec<u32> {
+        if call == NO_NODE {
+            return Vec::new();
+        }
+        let Some(s) = self.sum.of.get(&f) else {
+            return Vec::new();
+        };
+        let Some(j) = s.switch.as_ref().filter(|w| s.called.is_none() && !w.1.is_empty()).map(|w| w.0)
+        else {
+            return Vec::new();
+        };
+        let c = &self.calls[call as usize];
+        let Some(&a) = c.args.get(j as usize).filter(|_| c.spread.is_empty()) else {
+            return Vec::new();
+        };
+        let n = &self.nodes[a as usize];
+        if n.prim != crate::model::prim::STR || n.pts.len() != 0 || n.strs < crate::model::STRS_SET0 {
+            return Vec::new();
+        }
+        let xs = self.str_atoms(n.strs);
+        if xs.len() < 2 || xs.iter().any(|&x| self.atom_prefix(x).is_some()) {
+            return Vec::new();
+        }
+        xs.to_vec()
+    }
+
     /// `f` has a called parameter and the argument `call` passes there
     /// holds no value yet.
     fn called_pending(&self, call: CallId, f: FnIdx) -> bool {
@@ -915,10 +970,34 @@ impl Model {
         let mut more = false;
         let mut keep = Vec::with_capacity(runs.len());
         let mut done: FxHashSet<(CallId, Tok, Option<Tok>, u16)> = FxHashSet::default();
+        let mut bound: FxHashMap<(CallId, Tok, Option<Tok>, u16), Vec<u32>> = FxHashMap::default();
+        for r in &runs {
+            bound.entry((r.0, r.1, r.2, r.3)).or_default().push(r.4);
+        }
+        let mut rebound: FxHashSet<(CallId, Tok, Option<Tok>, u16)> = FxHashSet::default();
         for r in runs {
             let (call, ft, x, prim, val) = r;
+            let k = (call, ft, x, prim);
+            if rebound.contains(&k) {
+                continue;
+            }
             let now = self.called_val(call, self.tok_fn(ft));
-            if val == NO_VAL {
+            let vals = match val != NO_VAL && now != val {
+                true => self.switch_vals(call, self.tok_fn(ft)),
+                false => Vec::new(),
+            };
+            if vals.contains(&val) {
+                if vals.iter().all(|v| bound[&k].contains(v)) {
+                    keep.push(r);
+                } else {
+                    // Rule M1: a constant the argument holds since runs too
+                    // (the bind records every constant again).
+                    keep.retain(|q: &(CallId, Tok, Option<Tok>, u16, u32)| (q.0, q.1, q.2, q.3) != k);
+                    rebound.insert(k);
+                    self.bind_layout_run(call, ft, x, prim, true);
+                    more = true;
+                }
+            } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
                 // (pushes its run's record when it takes one).
                 self.bind_layout_run(call, ft, x, prim, now != NO_VAL);
