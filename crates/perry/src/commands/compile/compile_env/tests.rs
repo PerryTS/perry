@@ -648,6 +648,17 @@ fn call_kinds_switch_is_a_cache_input() {
     );
 }
 
+/// The Array method tiers: the switch changes the facts' model of
+/// `Expr::ArrayPop` and the guard, predicate and `pop` entry of every Array
+/// method site, so `=0` must never reuse an `=1` object.
+#[test]
+fn array_method_tiers_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_ARRAY_METHOD_TIERS"),
+        "PERRY_ARRAY_METHOD_TIERS must key the compile caches"
+    );
+}
+
 /// The push method tiers: the switch changes the facts' model of the native
 /// array push and the code of every push tier that resolves `push` on its
 /// receiver, so `=0` must never reuse an `=1` object.
