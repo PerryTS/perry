@@ -297,7 +297,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let derive_handles = |ctx: &mut FnCtx<'_>, obj_box: &str| {
                     let blk = ctx.block();
                     let obj_bits = blk.bitcast_double_to_i64(obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    // Only a heap pointer is masked: the low 48 bits of any
+                    // other value (a Number above all) are no address.
+                    let obj_handle =
+                        super::index_get::classref_preserving_handle(blk, &obj_bits, false);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);

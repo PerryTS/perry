@@ -748,10 +748,6 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
     let upper = bits >> 48;
     let addr = if upper == (crate::value::BIGINT_TAG >> 48) || upper == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if upper == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class — see `map_ptr_from_receiver_bits`: `> 0x10000` lets the
-        // whole handle band through; `is_above_handle_band` is the real floor.
-        bits as usize
     } else {
         return std::ptr::null();
     };
