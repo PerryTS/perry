@@ -66,6 +66,9 @@ pub struct FamilyVerdict {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FamilyReach {
     pub families: Vec<FamilyVerdict>,
+    /// Diagnostics (`PERRY_FACTS_EXPLAIN=1`): every other reason a rule
+    /// found, as (family, reason); empty otherwise.
+    pub also: Vec<(&'static str, String)>,
 }
 
 impl FamilyReach {
@@ -100,6 +103,12 @@ impl FamilyReach {
                     f.reason.replace(['\n', '\r'], " ")
                 )
             })
+            .chain(self.also.iter().map(|(family, reason)| {
+                format!(
+                    "# family_reach_also {family} reason={}",
+                    reason.replace(['\n', '\r'], " ")
+                )
+            }))
             .collect()
     }
 }
@@ -561,18 +570,31 @@ pub(crate) fn generic(m: &mut Model, why: &'static str) {
 struct Verdicts {
     live: FamilySet,
     why: Vec<Option<String>>,
+    /// Explain mode: every later reason too.
+    also: Option<Vec<(&'static str, String)>>,
 }
 
 impl Verdicts {
     fn mark(&mut self, set: FamilySet, why: impl FnOnce() -> String) {
-        let new = set & families::all_families() & !self.live;
-        if new == 0 {
+        let set = set & families::all_families();
+        let new = set & !self.live;
+        if new == 0 && (set == 0 || self.also.is_none()) {
             return;
         }
         let why = why();
         for (i, slot) in self.why.iter_mut().enumerate() {
             if new & (1 << i) != 0 {
                 *slot = Some(why.clone());
+            } else if set & (1 << i) != 0 {
+                if let Some(also) = &mut self.also {
+                    // One line per (family, reason); the all-family rules
+                    // are named once, on the first family.
+                    if (set != families::all_families() || i == 0)
+                        && !also.iter().any(|(f, w)| *f == RUNTIME_FAMILIES[i].id && *w == why)
+                    {
+                        also.push((RUNTIME_FAMILIES[i].id, why.clone()));
+                    }
+                }
             }
         }
         self.live |= new;
@@ -582,8 +604,9 @@ impl Verdicts {
         self.mark(families::all_families(), why);
     }
 
+    /// Nothing is left to find (explain mode goes on, to name every reason).
     fn full(&self) -> bool {
-        self.live == families::all_families()
+        self.also.is_none() && self.live == families::all_families()
     }
 }
 
@@ -641,6 +664,7 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
     let mut v = Verdicts {
         live: 0,
         why: vec![None; RUNTIME_FAMILIES.len()],
+        also: m.explain.then(Vec::new),
     };
     // L0.
     if unit {
@@ -666,15 +690,8 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
             v.all(|| format!("L1:{} calls of unknown function values", m.top_calls));
         } else if let Some(why) = &m.family_reach.all {
             v.all(|| why.clone());
-        } else if let Some(n) = m.nodes.iter().position(|n| n.pts.contains_tok(TOP)) {
-            v.all(|| {
-                let origin = if m.explain {
-                    m.top_origin(n as u32)
-                } else {
-                    format!("at {}", m.labels.get(n).copied().unwrap_or("?"))
-                };
-                format!("L1:a value is unknown ({origin})")
-            });
+        } else if let Some(why) = unknown_value(m) {
+            v.all(|| why);
         }
     }
     // L2.
@@ -716,5 +733,40 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
                 reason: why.unwrap_or_else(|| "none".into()),
             })
             .collect(),
+        also: v.also.unwrap_or_default(),
     }
+}
+
+/// L1's "some node holds ⊤": the reason, naming where. Every unknown value
+/// enters the solve as ⊤ (`Model::add_top`, or an edge from the shared ⊤
+/// source `Model::top_tok_node`, which holds ⊤ in every program and is no
+/// value of this one).
+fn unknown_value(m: &Model) -> Option<String> {
+    let ignore = std::env::var("PERRY_FACTS_FAMILY_REACH_TOP_IGNORE").unwrap_or_default();
+    let ignore: Vec<&str> = ignore.split(',').filter(|s| !s.is_empty()).collect();
+    let mut labels = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+    for (i, n) in m.nodes.iter().enumerate() {
+        if i as u32 != m.top_tok_node && n.pts.contains_tok(TOP) {
+            let label = m.labels.get(i).copied().unwrap_or("?");
+            if !ignore.contains(&label) {
+                labels.entry(label).or_insert((i, 0)).1 += 1;
+            }
+        }
+    }
+    let (&label, &(first, _)) = labels.iter().next()?;
+    let nodes: usize = labels.values().map(|v| v.1).sum();
+    let origin = if m.explain {
+        format!(": {}", m.top_origin(first as u32))
+    } else {
+        String::new()
+    };
+    let kinds: Vec<String> = labels
+        .iter()
+        .take(6)
+        .map(|(l, (_, n))| format!("{l} x{n}"))
+        .collect();
+    Some(format!(
+        "L1:a value is unknown ({nodes} nodes hold it, first at {label}{origin}; {})",
+        kinds.join(", ")
+    ))
 }
