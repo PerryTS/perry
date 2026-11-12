@@ -197,6 +197,109 @@ fn inner_loop_bounded_buffer_fact_is_removed_after_outer_fact_invalidation() {
     assert_buffer_store_uses_dynamic_fallback(&ir);
 }
 
+/// A stale length source never certifies a native store. A counter-versioned
+/// loop (fa6faf8bfa, 97ce0b74eb) has two copies: the CHECKED copy keeps the
+/// `js_buffer_set` fallback, and the FAST copy is entered only when the entry
+/// guard proves the counter's last value is within the length the runtime
+/// returned for this buffer (`js_buffer_length`), not the invalidated source.
+/// So every unchecked native element address must sit in the fast copy, and a
+/// conjunct of its guard must compare against that runtime length.
+fn assert_stale_length_store_is_checked_or_runtime_versioned(ir: &str) {
+    let body = probe_body(ir);
+    let geps = native_proof_support::native_buffer_element_geps(body);
+    if geps.is_empty() {
+        assert_buffer_store_uses_dynamic_fallback(ir);
+        return;
+    }
+    assert!(
+        body.contains("call void @js_buffer_set"),
+        "the checked copy must keep the Buffer store fallback:\n{body}"
+    );
+    let defs: std::collections::HashMap<&str, &str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect();
+    let guard = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 ") && line.contains("label %for.counter.fast."))
+        .unwrap_or_else(|| {
+            panic!("native buffer GEP(s) {geps:?} outside a counter-versioned loop:\n{body}")
+        });
+    let label_after = |line: &str, prefix: &str| -> String {
+        let at = line.find(prefix).expect("branch label") + "label %".len();
+        line[at..]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let copy_entry = |dispatch: &str| -> usize {
+        let block = block_between(body, &format!("\n{dispatch}:"), "\n\n");
+        let target = label_after(block, "label %");
+        body.find(&format!("\n{target}:"))
+            .unwrap_or_else(|| panic!("missing loop copy {target}:\n{body}"))
+    };
+    let fast = copy_entry(&label_after(guard, "label %for.counter.fast."));
+    let checked = copy_entry(&label_after(guard, "label %for.counter.checked."));
+    for gep in &geps {
+        let at = body.find(&format!("\n  {gep} = ")).expect("GEP definition");
+        let in_fast = if fast < checked {
+            (fast..checked).contains(&at)
+        } else {
+            at >= fast
+        };
+        assert!(
+            in_fast,
+            "native buffer GEP {gep} outside the guarded fast copy:\n{body}"
+        );
+    }
+    // The guard: `and i1` conjuncts down to an `icmp sle i64 %last, %len` whose
+    // `%len` widens a slot written only from `js_buffer_length`.
+    let runtime_length_slot = |slot: &str| {
+        let stores: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("store i32 ") && line.ends_with(&format!(", ptr {slot}"))
+            })
+            .collect();
+        !stores.is_empty()
+            && stores.iter().all(|line| {
+                let value = line["store i32 ".len()..].split(',').next().unwrap();
+                defs.get(value)
+                    .is_some_and(|def| def.starts_with("call i32 @js_buffer_length("))
+            })
+    };
+    let runtime_bound = |def: &str| {
+        def.strip_prefix("icmp sle i64 ")
+            .and_then(|ops| ops.split(", ").nth(1))
+            .and_then(|len| defs.get(len))
+            .and_then(|def| def.strip_prefix("zext i32 "))
+            .and_then(|wide| defs.get(wide.split(' ').next().unwrap()))
+            .and_then(|def| def.strip_prefix("load i32, ptr "))
+            .is_some_and(runtime_length_slot)
+    };
+    let mut work = vec![guard["br i1 ".len()..].split(',').next().unwrap()];
+    let mut found = false;
+    while let Some(reg) = work.pop() {
+        let Some(def) = defs.get(reg) else { continue };
+        if let Some(ops) = def.strip_prefix("and i1 ") {
+            work.extend(ops.split(", ").filter(|op| op.starts_with('%')));
+        } else if runtime_bound(def) {
+            found = true;
+        }
+    }
+    assert!(
+        found,
+        "fast copy with native buffer GEP(s) {geps:?} is not guarded by the runtime \
+         buffer length:\n{body}"
+    );
+}
+
 #[test]
 fn localset_invalidates_buffer_view_local_length_sources() {
     let body = vec![
@@ -208,7 +311,7 @@ fn localset_invalidates_buffer_view_local_length_sources() {
     ];
 
     let ir = compile_ir("buffer_length_source_invalidation.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    assert_stale_length_store_is_checked_or_runtime_versioned(&ir);
 }
 
 #[test]
@@ -295,6 +398,13 @@ fn inclusive_length_loop_does_not_emit_inbounds_buffer_gep() {
     let ir = compile_ir("inclusive_length_loop_buffer_bounds.ts", body);
     assert_buffer_store_uses_dynamic_fallback(&ir);
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
+    // An overflow-exit counter leaves on its overflow flag first; the bound
+    // compare is in the in-range block that branch continues to.
+    let cond_ir = if cond_ir.contains("label %for.cond.in_range.") {
+        block_between(&ir, "\nfor.cond.in_range.", "\n\n")
+    } else {
+        cond_ir
+    };
     assert!(
         cond_ir.contains("icmp sle i32"),
         "`i <= buf.length` with hoisted i32 length must lower as signed <=:\n{cond_ir}"
