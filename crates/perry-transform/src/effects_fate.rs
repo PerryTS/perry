@@ -68,30 +68,164 @@ impl Proof {
     }
 }
 
-/// The fate of one parameter, with what it rests on (`Proven` for `Kept`).
+/// A short name carried in a [`Why`]: an HIR node's variant name, a
+/// property or a class name, cut at 31 bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Name {
+    len: u8,
+    bytes: [u8; 31],
+}
+
+impl Name {
+    pub fn new(s: &str) -> Name {
+        let mut n = Name {
+            len: 0,
+            bytes: [0; 31],
+        };
+        n.push(s);
+        n
+    }
+
+    fn push(&mut self, s: &str) {
+        for c in s.chars() {
+            let at = self.len as usize;
+            if at + c.len_utf8() > self.bytes.len() {
+                return;
+            }
+            c.encode_utf8(&mut self.bytes[at..]);
+            self.len += c.len_utf8() as u8;
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or("?")
+    }
+
+    /// The variant name of `e` (`LocalGet`, `Object`, `JsonStringify`...):
+    /// the head of its derived `Debug`, which stops at the first byte that
+    /// is not part of an identifier.
+    pub fn of_expr(e: &Expr) -> Name {
+        struct Head(Name, bool);
+        impl std::fmt::Write for Head {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                if self.1 {
+                    return Err(std::fmt::Error);
+                }
+                for (i, c) in s.char_indices() {
+                    if !(c.is_alphanumeric() || c == '_') {
+                        self.0.push(&s[..i]);
+                        self.1 = true;
+                        return Err(std::fmt::Error);
+                    }
+                }
+                self.0.push(s);
+                Ok(())
+            }
+        }
+        let mut h = Head(Name::new(""), false);
+        let _ = std::fmt::write(&mut h, format_args!("{e:?}"));
+        h.0
+    }
+}
+
+impl std::fmt::Debug for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Why a binding is `Kept`: its first keeping use in the walk that raised
+/// it. Data beside the fate; no fate reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Why {
+    /// The body is not walked (`ordinary` is false): which part.
+    NotOrdinary(&'static str),
+    /// Read under a node the rule does not read: that node's name (an HIR
+    /// `Expr` variant, or the statement: `Let`, `If`, `Expr`, `Throw`...).
+    Use(Name),
+    /// `q.k` the proof does not answer.
+    Read(Name),
+    /// `this.k = v` the proof does not admit (keeps `this`).
+    Store(Name),
+    /// `q.m(..)` whose bodies are not known: the property.
+    Receiver(Name),
+    /// `q.m(..)` whose known bodies keep `this`.
+    ReceiverKept,
+    /// An argument of a call whose bodies are not known: the callee's node
+    /// (`PropertyGet.<k>`, `LocalGet`, ...).
+    ArgUnresolved(Name),
+    /// An argument at a position a known body does not drop: that fate.
+    ArgKnown(Fate),
+    /// An argument of a call with a known body that has no fate (another
+    /// module's, a closure that captures).
+    ArgNoFate,
+    /// An argument of `new C` for a class that is not one plain class here.
+    NewUnknown(Name),
+    /// Referenced by a closure.
+    Captured,
+    /// `this` captured by an arrow.
+    CapturesThis,
+    /// Assigned (`q = ...`).
+    Reassigned,
+    /// `q++` / `q--`.
+    Updated,
+    /// A mutation that names the binding by id: the node.
+    Mutated(&'static str),
+}
+
+impl std::fmt::Display for Why {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Why::NotOrdinary(k) => write!(f, "not-ordinary({k})"),
+            Why::Use(n) => write!(f, "use({})", n.as_str()),
+            Why::Read(n) => write!(f, "read({})", n.as_str()),
+            Why::Store(n) => write!(f, "store({})", n.as_str()),
+            Why::Receiver(n) => write!(f, "receiver({})", n.as_str()),
+            Why::ReceiverKept => f.write_str("receiver-kept"),
+            Why::ArgUnresolved(n) => write!(f, "arg-unresolved({})", n.as_str()),
+            Why::ArgKnown(k) => write!(f, "arg-to({k:?})"),
+            Why::ArgNoFate => f.write_str("arg-no-fate"),
+            Why::NewUnknown(n) => write!(f, "new-unknown({})", n.as_str()),
+            Why::Captured => f.write_str("captured"),
+            Why::CapturesThis => f.write_str("captures-this"),
+            Why::Reassigned => f.write_str("reassigned"),
+            Why::Updated => f.write_str("updated"),
+            Why::Mutated(k) => write!(f, "mutated({k})"),
+        }
+    }
+}
+
+/// The fate of one parameter, with what it rests on (`Proven` for `Kept`),
+/// and for `Kept` the first keeping use (`None` when no body was read).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ParamFate {
     pub fate: Fate,
     pub proof: Proof,
+    pub why: Option<Why>,
 }
 
 impl ParamFate {
     pub const DROPPED: ParamFate = ParamFate {
         fate: Fate::Dropped,
         proof: Proof::Proven,
+        why: None,
     };
     pub const KEPT: ParamFate = ParamFate {
         fate: Fate::Kept,
         proof: Proof::Proven,
+        why: None,
     };
 
-    fn raise(&mut self, fate: Fate, proof: Proof) {
+    fn raise(&mut self, fate: Fate, proof: Proof, why: Option<Why>) {
         self.fate = self.fate.max(fate);
         self.proof = if self.fate == Fate::Kept {
             Proof::Proven
         } else {
             self.proof.join(proof)
         };
+        if self.fate == Fate::Kept && self.why.is_none() {
+            self.why = why;
+        }
     }
 
     /// Dropped on proofs alone, no bet.
@@ -230,10 +364,12 @@ impl Fates {
         for component in sccs(&edges) {
             for &i in &component {
                 let f = bodies[i];
-                let start = if ordinary(f) {
-                    ParamFate::DROPPED
-                } else {
-                    ParamFate::KEPT
+                let start = match not_ordinary(f) {
+                    None => ParamFate::DROPPED,
+                    Some(k) => ParamFate {
+                        why: Some(Why::NotOrdinary(k)),
+                        ..ParamFate::KEPT
+                    },
                 };
                 fates
                     .by_fn
@@ -271,7 +407,7 @@ impl Fates {
             match self.by_fn.get(t) {
                 Some(f) => {
                     let a = f.arg(i);
-                    out.raise(a.fate, a.proof);
+                    out.raise(a.fate, a.proof, a.why);
                 }
                 None => return ParamFate::KEPT,
             }
@@ -290,16 +426,38 @@ impl Fates {
 }
 
 pub(crate) fn ordinary(f: &Function) -> bool {
-    !f.is_async
-        && !f.is_generator
-        && f.captures.is_empty()
-        && f.decorators.is_empty()
-        && f.params.iter().all(|p| {
-            p.default.is_none()
-                && !p.is_rest
-                && p.arguments_object.is_none()
-                && p.decorators.is_empty()
-        })
+    not_ordinary(f).is_none()
+}
+
+/// The first part that makes `f` not ordinary, `None` when it is.
+fn not_ordinary(f: &Function) -> Option<&'static str> {
+    if f.is_async {
+        return Some("async");
+    }
+    if f.is_generator {
+        return Some("generator");
+    }
+    if !f.captures.is_empty() {
+        return Some("captures");
+    }
+    if !f.decorators.is_empty() {
+        return Some("decorators");
+    }
+    for p in &f.params {
+        if p.default.is_some() {
+            return Some("default");
+        }
+        if p.is_rest {
+            return Some("rest");
+        }
+        if p.arguments_object.is_some() {
+            return Some("arguments");
+        }
+        if !p.decorators.is_empty() {
+            return Some("param-decorators");
+        }
+    }
+    None
 }
 
 /// The fates `f`'s body gives its parameters, with callees read from `known`.
@@ -310,6 +468,7 @@ pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates
         out: FnFates::all(f.params.len(), ParamFate::DROPPED),
         proof,
         known,
+        parent: Parent::Stmt("Expr"),
     };
     for stmt in &f.body {
         walk.stmt(stmt);
@@ -324,15 +483,24 @@ enum Slot {
     This,
 }
 
-struct Walk<'a> {
+/// The node a binding read sits under: named only when that read keeps
+/// the binding (`Why::Use`).
+#[derive(Clone, Copy)]
+enum Parent<'e> {
+    Stmt(&'static str),
+    Expr(&'e Expr),
+}
+
+struct Walk<'a, 'e> {
     func: FuncId,
     params: Vec<LocalId>,
     out: FnFates,
     proof: &'a dyn FateProof,
     known: &'a Fates,
+    parent: Parent<'e>,
 }
 
-impl Walk<'_> {
+impl<'e> Walk<'_, 'e> {
     fn slot(&self, e: &Expr) -> Option<Slot> {
         match e {
             Expr::LocalGet(id) => self.param(*id),
@@ -345,45 +513,95 @@ impl Walk<'_> {
         self.params.iter().position(|p| *p == id).map(Slot::Param)
     }
 
-    fn raise(&mut self, slot: Slot, fate: Fate, proof: Proof) {
+    fn fate_mut(&mut self, slot: Slot) -> &mut ParamFate {
         match slot {
-            Slot::Param(i) => self.out.params[i].raise(fate, proof),
-            Slot::This => self.out.this.raise(fate, proof),
+            Slot::Param(i) => &mut self.out.params[i],
+            Slot::This => &mut self.out.this,
         }
     }
 
-    fn keep_id(&mut self, id: LocalId) {
+    /// Raises below `Kept`.
+    fn raise(&mut self, slot: Slot, fate: Fate, proof: Proof) {
+        debug_assert!(fate != Fate::Kept, "Kept goes through keep");
+        self.fate_mut(slot).raise(fate, proof, None);
+    }
+
+    /// Raises to `Kept`; `why` names the use, computed only for the first.
+    fn keep(&mut self, slot: Slot, why: impl FnOnce(&Self) -> Why) {
+        if self.fate_mut(slot).why.is_some() {
+            return;
+        }
+        let w = why(self);
+        self.fate_mut(slot).raise(Fate::Kept, Proof::Proven, Some(w));
+    }
+
+    /// A read of the binding under the current parent, which does not read it.
+    fn keep_used(&mut self, slot: Slot) {
+        self.keep(slot, |w| {
+            Why::Use(match w.parent {
+                Parent::Stmt(s) => Name::new(s),
+                Parent::Expr(e) => Name::of_expr(e),
+            })
+        });
+    }
+
+    fn keep_id(&mut self, id: LocalId, why: Why) {
         if let Some(s) = self.param(id) {
-            self.raise(s, Fate::Kept, Proof::Proven);
+            self.keep(s, |_| why);
         }
     }
 
-    fn stmts(&mut self, body: &[Stmt]) {
+    fn stmts(&mut self, body: &'e [Stmt]) {
         for s in body {
             self.stmt(s);
         }
     }
 
-    fn opt(&mut self, e: &Option<Expr>) {
+    fn opt(&mut self, e: &'e Option<Expr>) {
         if let Some(e) = e {
             self.expr(e);
         }
     }
 
-    fn stmt(&mut self, stmt: &Stmt) {
+    /// Walks `e` as a child of `parent`.
+    fn sub(&mut self, parent: &'e Expr, e: &'e Expr) {
+        let saved = std::mem::replace(&mut self.parent, Parent::Expr(parent));
+        self.expr(e);
+        self.parent = saved;
+    }
+
+    fn at(&mut self, s: &'static str) {
+        self.parent = Parent::Stmt(s);
+    }
+
+    fn stmt(&mut self, stmt: &'e Stmt) {
         match stmt {
             Stmt::Return(Some(e)) => match self.slot(e) {
                 Some(s) => self.raise(s, Fate::Returned, Proof::Proven),
-                None => self.expr(e),
+                None => {
+                    self.at("Return");
+                    self.expr(e)
+                }
             },
             Stmt::Return(None) => {}
-            Stmt::Let { init, .. } => self.opt(init),
-            Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
+            Stmt::Let { init, .. } => {
+                self.at("Let");
+                self.opt(init)
+            }
+            Stmt::Expr(e) => {
+                self.at("Expr");
+                self.expr(e)
+            }
+            Stmt::Throw(e) => {
+                self.at("Throw");
+                self.expr(e)
+            }
             Stmt::If {
                 condition,
                 then_branch,
                 else_branch,
             } => {
+                self.at("If");
                 self.expr(condition);
                 self.stmts(then_branch);
                 if let Some(b) = else_branch {
@@ -391,6 +609,7 @@ impl Walk<'_> {
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                self.at("While");
                 self.expr(condition);
                 self.stmts(body);
             }
@@ -403,7 +622,9 @@ impl Walk<'_> {
                 if let Some(s) = init {
                     self.stmt(s);
                 }
+                self.at("For");
                 self.opt(condition);
+                self.at("For");
                 self.opt(update);
                 self.stmts(body);
             }
@@ -425,8 +646,10 @@ impl Walk<'_> {
                 discriminant,
                 cases,
             } => {
+                self.at("Switch");
                 self.expr(discriminant);
                 for c in cases {
+                    self.at("Switch");
                     self.opt(&c.test);
                     self.stmts(&c.body);
                 }
@@ -441,20 +664,34 @@ impl Walk<'_> {
         }
     }
 
-    /// One use of `arg` as argument `i` of a call whose position fate is
-    /// `fate`; anything but a tracked binding is walked as usual.
-    fn argument(&mut self, arg: &Expr, fate: ParamFate) {
+    /// One use of `arg` as argument `i` of `call` whose position fate is
+    /// `fate` (`why` when it keeps); anything but a tracked binding is
+    /// walked as usual.
+    fn argument(&mut self, call: &'e Expr, arg: &'e Expr, fate: ParamFate, why: Why) {
         match self.slot(arg) {
             Some(s) if fate.fate == Fate::Dropped => self.raise(s, Fate::Dropped, fate.proof),
-            Some(s) => self.raise(s, Fate::Kept, Proof::Proven),
-            None => self.expr(arg),
+            Some(s) => self.keep(s, |_| why),
+            None => self.sub(call, arg),
         }
     }
 
-    fn expr(&mut self, e: &Expr) {
+    /// Why an argument of a call with these bodies is kept.
+    fn known_why(&self, targets: &[FuncId], fate: Fate) -> Why {
+        if targets.iter().any(|t| self.known.of_fn(*t).is_none()) {
+            Why::ArgNoFate
+        } else {
+            Why::ArgKnown(fate)
+        }
+    }
+
+    fn expr(&mut self, e: &'e Expr) {
         match e {
-            Expr::LocalGet(id) => self.keep_id(*id),
-            Expr::This => self.raise(Slot::This, Fate::Kept, Proof::Proven),
+            Expr::LocalGet(id) => {
+                if let Some(s) = self.param(*id) {
+                    self.keep_used(s);
+                }
+            }
+            Expr::This => self.keep_used(Slot::This),
             Expr::PropertyGet {
                 object,
                 property,
@@ -464,7 +701,7 @@ impl Walk<'_> {
                 let s = self.slot(object).expect("tracked");
                 match self.proof.read(self.func, object, property, *byte_offset) {
                     Some(p) => self.raise(s, Fate::Dropped, p),
-                    None => self.raise(s, Fate::Kept, Proof::Proven),
+                    None => self.keep(s, |_| Why::Read(Name::new(property))),
                 }
             }
             Expr::PropertySet {
@@ -476,11 +713,11 @@ impl Walk<'_> {
                 match self.proof.store(self.func, property) {
                     Some(p) => match self.slot(value) {
                         Some(s) => self.raise(s, Fate::KeptByReceiver, p),
-                        None => self.expr(value),
+                        None => self.sub(e, value),
                     },
                     None => {
-                        self.raise(Slot::This, Fate::Kept, Proof::Proven);
-                        self.expr(value);
+                        self.keep(Slot::This, |_| Why::Store(Name::new(property)));
+                        self.sub(e, value);
                     }
                 }
             }
@@ -499,10 +736,10 @@ impl Walk<'_> {
                 };
                 match (self.proof.store(self.func, name), self.slot(value)) {
                     (Some(p), Some(s)) => self.raise(s, Fate::KeptByReceiver, p),
-                    (Some(_), None) => self.expr(value),
+                    (Some(_), None) => self.sub(e, value),
                     (None, _) => {
-                        self.raise(Slot::This, Fate::Kept, Proof::Proven);
-                        self.expr(value);
+                        self.keep(Slot::This, |_| Why::Store(Name::new(name)));
+                        self.sub(e, value);
                     }
                 }
             }
@@ -515,7 +752,7 @@ impl Walk<'_> {
                 for side in [left, right] {
                     match self.slot(side) {
                         Some(s) if address => self.raise(s, Fate::Dropped, Proof::Proven),
-                        _ => self.expr(side),
+                        _ => self.sub(e, side),
                     }
                 }
             }
@@ -533,31 +770,33 @@ impl Walk<'_> {
                         let mut f = ParamFate::DROPPED;
                         for t in ts {
                             match self.known.of_fn(*t) {
-                                Some(ff) => f.raise(ff.this.fate, ff.this.proof),
-                                None => f.raise(Fate::Kept, Proof::Proven),
+                                Some(ff) => f.raise(ff.this.fate, ff.this.proof, None),
+                                None => f.raise(Fate::Kept, Proof::Proven, None),
                             }
                         }
-                        f.raise(Fate::Dropped, *p);
-                        let fate = if f.fate == Fate::Dropped {
-                            Fate::Dropped
+                        f.raise(Fate::Dropped, *p, None);
+                        if f.fate == Fate::Dropped {
+                            self.raise(s, Fate::Dropped, f.proof);
                         } else {
-                            Fate::Kept
-                        };
-                        self.raise(s, fate, f.proof);
+                            self.keep(s, |_| Why::ReceiverKept);
+                        }
                     }
-                    (Expr::PropertyGet { object, .. }, _) => self.expr(object),
-                    (other, _) => self.expr(other),
+                    (Expr::PropertyGet { object, property, .. }, _) => match self.slot(object) {
+                        Some(s) => self.keep(s, |_| Why::Receiver(Name::new(property))),
+                        None => self.sub(callee, object),
+                    },
+                    (other, _) => self.sub(e, other),
                 }
                 for (i, a) in args.iter().enumerate() {
-                    let fate = match &targets {
+                    let (fate, why) = match &targets {
                         Some((ts, p)) => {
                             let mut f = self.known.call_arg(ts, i);
-                            f.raise(Fate::Dropped, *p);
-                            f
+                            f.raise(Fate::Dropped, *p, None);
+                            (f, self.known_why(ts, f.fate))
                         }
-                        None => ParamFate::KEPT,
+                        None => (ParamFate::KEPT, Why::ArgUnresolved(callee_name(callee))),
                     };
-                    self.argument(a, fate);
+                    self.argument(e, a, fate, why);
                 }
             }
             Expr::New {
@@ -565,7 +804,12 @@ impl Walk<'_> {
             } => {
                 for (i, a) in args.iter().enumerate() {
                     let fate = self.known.construction_arg(class_name, i);
-                    self.argument(a, fate);
+                    let why = match self.known.construction.get(class_name.as_str()) {
+                        Some(Some(ctor)) => self.known_why(&[*ctor], fate.fate),
+                        Some(None) => Why::ArgKnown(fate.fate),
+                        None => Why::NewUnknown(Name::new(class_name)),
+                    };
+                    self.argument(e, a, fate, why);
                 }
             }
             Expr::Closure { captures_this, .. } => {
@@ -576,22 +820,22 @@ impl Walk<'_> {
                     &mut std::collections::HashSet::new(),
                 );
                 for id in refs {
-                    self.keep_id(id);
+                    self.keep_id(id, Why::Captured);
                 }
                 if *captures_this {
-                    self.raise(Slot::This, Fate::Kept, Proof::Proven);
+                    self.keep(Slot::This, |_| Why::CapturesThis);
                 }
             }
             // The variants that name a local by id rather than through a
             // `LocalGet` child: a reassignment, `q++` (which runs `valueOf`),
             // an array or set mutation of it.
             Expr::LocalSet(id, value) => {
-                self.keep_id(*id);
-                self.expr(value);
+                self.keep_id(*id, Why::Reassigned);
+                self.sub(e, value);
             }
-            Expr::Update { id, .. } | Expr::ArrayPop(id) | Expr::ArrayShift(id) => {
-                self.keep_id(*id)
-            }
+            Expr::Update { id, .. } => self.keep_id(*id, Why::Updated),
+            Expr::ArrayPop(id) => self.keep_id(*id, Why::Mutated("ArrayPop")),
+            Expr::ArrayShift(id) => self.keep_id(*id, Why::Mutated("ArrayShift")),
             Expr::ArrayPush { array_id, .. }
             | Expr::ArrayPushSpread { array_id, .. }
             | Expr::ArrayUnshift { array_id, .. }
@@ -600,20 +844,39 @@ impl Walk<'_> {
             | Expr::SetAdd {
                 set_id: array_id, ..
             } => {
-                self.keep_id(*array_id);
+                let kind = match e {
+                    Expr::ArrayPush { .. } => "ArrayPush",
+                    Expr::ArrayPushSpread { .. } => "ArrayPushSpread",
+                    Expr::ArrayUnshift { .. } => "ArrayUnshift",
+                    Expr::ArraySplice { .. } => "ArraySplice",
+                    Expr::ArrayCopyWithin { .. } => "ArrayCopyWithin",
+                    _ => "SetAdd",
+                };
+                self.keep_id(*array_id, Why::Mutated(kind));
                 self.children(e);
             }
             _ => self.children(e),
         }
     }
 
-    fn children(&mut self, e: &Expr) {
+    fn children(&mut self, e: &'e Expr) {
         let mut kids = Vec::new();
         perry_hir::walker::walk_expr_children(e, &mut |c| kids.push(c));
         for c in kids {
-            self.expr(c);
+            self.sub(e, c);
         }
     }
+}
+
+/// The callee of an unresolved call, as a reason: its node, and for a
+/// property callee the property (`PropertyGet.push`).
+fn callee_name(callee: &Expr) -> Name {
+    let mut n = Name::of_expr(callee);
+    if let Expr::PropertyGet { property, .. } = callee {
+        n.push(".");
+        n.push(property);
+    }
+    n
 }
 
 fn nullish(e: &Expr) -> bool {
