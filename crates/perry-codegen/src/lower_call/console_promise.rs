@@ -1241,7 +1241,7 @@ pub fn try_lower_native_method_str_dispatch(
                     access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
             if is_buffer_class || guarded_buffer_param {
                 if let Some(lowered) =
-                    try_emit_buffer_equals_intrinsic(ctx, object, property, args)?
+                    try_emit_buffer_equals_intrinsic(ctx, callee, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(
                         ctx,

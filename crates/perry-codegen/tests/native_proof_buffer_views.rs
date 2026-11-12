@@ -35,6 +35,9 @@ mod pointer_lifetime;
 #[path = "native_proof_buffer_views/prototype_guard.rs"]
 mod prototype_guard;
 
+#[path = "native_proof_buffer_views/equals.rs"]
+mod equals;
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         namespace_self_import: false,

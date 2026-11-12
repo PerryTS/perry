@@ -9984,9 +9984,10 @@ fn expr_array_length_effect(
                 object, property, ..
             } = callee.as_ref()
             {
-                // Only a PROVEN reader runs no program code: an unproven
-                // one may dispatch to a patched `Buffer.prototype` member.
-                if is_buffer_numeric_read_method(property)
+                // Only a PROVEN reader or `equals` runs no program code: an
+                // unproven one may dispatch to a patched `Buffer.prototype`
+                // member.
+                if (is_buffer_numeric_read_method(property) || property == "equals")
                     && is_static_buffer_receiver(ctx, object)
                     && crate::builtin_proto::native_member_proven(ctx, callee)
                 {
@@ -10431,7 +10432,7 @@ pub(crate) fn expr_preserves_array_length(
             } = callee.as_ref()
             {
                 // Only a PROVEN reader runs no program code (see above).
-                if is_buffer_numeric_read_method(property)
+                if (is_buffer_numeric_read_method(property) || property == "equals")
                     && is_static_buffer_receiver(ctx, object)
                     && crate::builtin_proto::native_member_proven(ctx, callee)
                 {

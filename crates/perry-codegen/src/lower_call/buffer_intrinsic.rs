@@ -1,9 +1,11 @@
-//! Issue #92 Buffer numeric-read intrinsics.
+//! Buffer method intrinsics at proven sites.
 //!
-//! Extracted from `lower_call.rs` (#1099, part of #1097) — pure move,
-//! no behavior change. `try_emit_buffer_read_intrinsic` and its
-//! classification helper inline `buf.readInt32BE(offset)`-style reads
-//! as LLVM load + bswap + `LoweredValue` instead of a runtime dispatch.
+//! Extracted from `lower_call.rs` (#1099, part of #1097).
+//! `try_emit_buffer_read_intrinsic` and its classification helper inline
+//! `buf.readInt32BE(offset)`-style reads as LLVM load + bswap +
+//! `LoweredValue` instead of a runtime dispatch;
+//! `try_emit_buffer_equals_intrinsic` inlines `buf.equals(other)` on sealed
+//! constant-length byte views as one equality-only `memcmp`.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -467,58 +469,70 @@ fn emit_local_view_read(
     result
 }
 
-/// Inline `Buffer.equals` only when both operands are sealed, fixed-size byte
-/// views. The fixed length becomes the third constant operand to `memcmp`,
-/// allowing LLVM's equality-only lowering to use vector comparisons.
+/// `buf.equals(other)` at a site the whole-program facts prove calls
+/// `Buffer.prototype.equals` ([`crate::builtin_proto::native_member_proven`]),
+/// both operands sealed fresh byte views of a constant length: the length
+/// compare is decided here and the bytes are one equality-only `memcmp`, with
+/// no test. Every other site is the ordinary method call, which honours a
+/// patched prototype and Node's argument checks (the TypeError for an argument
+/// that is not a Uint8Array).
+///
+/// Node's `equals`: the argument must be a Uint8Array (a Buffer or a plain
+/// `Uint8Array`, element kind U8; a `Uint8ClampedArray` throws, so it never
+/// folds), the same object is equal, byte lengths are compared first and two
+/// empty views are equal. A sealed fresh view keeps its inline storage and its
+/// constructed length: nothing can read its `.buffer`, so nothing can transfer
+/// or detach it, and the constant lengths are the byte lengths at the call.
 pub(super) fn try_emit_buffer_equals_intrinsic(
     ctx: &mut FnCtx<'_>,
+    callee: &Expr,
     object: &Expr,
     method: &str,
     args: &[Expr],
 ) -> Result<Option<LoweredValue>> {
     if method != "equals"
-        || crate::type_analysis::receiver_class_name(ctx, object).as_deref() != Some("Buffer")
         || args.len() != 1
         || ctx.disable_buffer_fast_path
+        || !crate::builtin_proto::native_member_proven(ctx, callee)
     {
         return Ok(None);
     }
     let (Expr::LocalGet(left_id), Expr::LocalGet(right_id)) = (object, &args[0]) else {
         return Ok(None);
     };
-    let Some(left) = ctx.receiver_descriptors.buffer_view(*left_id).cloned() else {
+    if ctx.closure_captures.contains_key(left_id) || ctx.closure_captures.contains_key(right_id) {
         return Ok(None);
-    };
-    let Some(right) = ctx.receiver_descriptors.buffer_view(*right_id).cloned() else {
-        return Ok(None);
-    };
-    let fixed_len = |view: &crate::native_value::BufferViewSlot| -> Option<i64> {
+    }
+    let sealed_constant = |id: u32| -> Option<(String, i64)> {
+        let view = ctx.receiver_descriptors.buffer_view(id)?;
         if view.elem != BufferElem::U8
             || !view.pointer_state.is_stable()
             || !view.storage_inline_proven
             || !view.length_fixed
+            || view.native_owned.is_some()
         {
             return None;
         }
         match view.length_source {
-            Some(LengthSource::Constant(n)) if (0..=64).contains(&n) => Some(n),
+            Some(LengthSource::Constant(n)) if n >= 0 => Some((view.data_slot.clone(), n)),
             _ => None,
         }
     };
-    if ctx.closure_captures.contains_key(left_id) || ctx.closure_captures.contains_key(right_id) {
-        return Ok(None);
-    }
-    let (Some(left_len), Some(right_len)) = (fixed_len(&left), fixed_len(&right)) else {
+    let (Some((left_data, left_len)), Some((right_data, right_len))) =
+        (sealed_constant(*left_id), sealed_constant(*right_id))
+    else {
         return Ok(None);
     };
-
-    let equal = if left_len != right_len {
-        "false".to_string()
-    } else if left_len == 0 {
+    crate::builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Buffer]);
+    let equal = if left_id == right_id || (left_len == 0 && right_len == 0) {
         "true".to_string()
+    } else if left_len != right_len {
+        "false".to_string()
     } else {
-        let left_ptr = ctx.block().load(PTR, &left.data_slot);
-        let right_ptr = ctx.block().load(PTR, &right.data_slot);
+        ctx.pending_declares
+            .push(("memcmp".to_string(), I32, vec![PTR, PTR, I64]));
+        let left_ptr = ctx.block().load(PTR, &left_data);
+        let right_ptr = ctx.block().load(PTR, &right_data);
         let cmp = ctx.block().call(
             I32,
             "memcmp",
@@ -540,6 +554,20 @@ pub(super) fn try_emit_buffer_equals_intrinsic(
     Ok(Some(LoweredValue::js_value(
         ctx.block().bitcast_i64_to_double(&boxed),
     )))
+}
+
+/// A `buf.equals(other)` call on two locals at a site the facts prove calls
+/// `Buffer.prototype.equals`: the native method reads both operands' bytes
+/// and keeps neither, so the call exposes neither binding.
+pub(crate) fn is_proven_local_buffer_equals(
+    proven: &std::collections::BTreeSet<u32>,
+    callee: &Expr,
+    args: &[Expr],
+) -> bool {
+    matches!(callee, Expr::PropertyGet { object, property, .. }
+        if property == "equals" && matches!(object.as_ref(), Expr::LocalGet(_)))
+        && matches!(args, [Expr::LocalGet(_)])
+        && crate::builtin_proto::native_member_site_proven(proven, callee)
 }
 
 fn target_endian() -> BufferEndian {

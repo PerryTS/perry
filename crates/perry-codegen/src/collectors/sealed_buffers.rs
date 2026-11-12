@@ -329,6 +329,13 @@ impl Probe<'_> {
                 object, property, ..
             } if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)) => {}
             Expr::Uint8ArrayLength(array) if matches!(array.as_ref(), Expr::LocalGet(_)) => {}
+            // A proven `Buffer.prototype.equals` on two locals keeps neither.
+            Expr::Call { callee, args, .. }
+                if crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                    self.proven,
+                    callee,
+                    args,
+                ) => {}
             Expr::Call { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
@@ -714,6 +721,13 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
+                // A proven `Buffer.prototype.equals` on two locals keeps neither.
+                Expr::PropertyGet { .. }
+                    if self.proven.is_some_and(|p| {
+                        crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                            p, callee, args,
+                        )
+                    }) => {}
                 Expr::PropertyGet {
                     object, property, ..
                 } if matches!(object.as_ref(), Expr::LocalGet(_))
