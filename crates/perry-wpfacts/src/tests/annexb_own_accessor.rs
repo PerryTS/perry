@@ -67,11 +67,13 @@ fn own_accessor_getter_reads_are_open() {
     );
 }
 
-/// Control: the receiver IS a builtin prototype.
+/// The receiver IS a builtin prototype: B.2.2.2's DefinePropertyOrThrow of
+/// image member `slice` on `Array.prototype` is refused by the runtime lock
+/// (it throws a TypeError and installs nothing), so `slice` stays native.
 #[test]
-fn array_prototype_receiver_redefines_slice() {
+fn array_prototype_receiver_cannot_redefine_slice() {
     let src = "const g: any = function () { return 1; };\n(Array.prototype as any).__defineGetter__('slice', g);\nfunction sl(m: readonly number[]): number[] { return m.slice(); }\nconsole.log(sl([1]).length);";
-    assert!(!native(src, "slice"), "{src}");
+    assert!(native(src, "slice"), "{src}");
 }
 
 /// The define adds no escape: an object held by the receiver escapes

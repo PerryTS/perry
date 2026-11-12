@@ -1891,22 +1891,29 @@ fn builtin_protos_unwritten(
     a: Atom,
 ) -> Result<(), String> {
     let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
-    if m.objproto_accessor
-        || m.reshaped_any
-        || m.reshaped_keys.contains(&a)
-        || objproto.is_some_and(|op| m.hard.contains_key(&op))
-    {
-        return Err(
-            "native member: a builtin prototype may be redefined (accessor, defineProperty)".into(),
-        );
-    }
     // DEC 250: a final read (the runtime refuses every write that would
-    // change it) is written by no store, the program's or one through ⊤.
+    // change it: `members::store_admitted` on each prototype the lookup
+    // passes) is written by no store, the program's or one through ⊤.
     // `None`: a plain object's chain, which reaches `Object.prototype` only.
     let locked = match fam {
         Some(fam) => crate::builtins::native_locked(m, fam, a),
         None => crate::builtins::object_chain_locked(m, a),
     };
+    // A redefinition is a store too: a defineProperty, an Annex B
+    // `__defineGetter__`/`__defineSetter__` or an accessor on a builtin
+    // prototype (`reshape`, `objproto_accessor`, a hard `Object.prototype`),
+    // on it or through ⊤, of a key whose read is final throws (or returns
+    // false) and installs nothing. Only an admitted one may change the read.
+    if !locked
+        && (m.objproto_accessor
+            || m.reshaped_any
+            || m.reshaped_keys.contains(&a)
+            || objproto.is_some_and(|op| m.hard.contains_key(&op)))
+    {
+        return Err(
+            "native member: a builtin prototype may be redefined (accessor, defineProperty)".into(),
+        );
+    }
     // Interpreted code (DEC 150's summary node: `new Function`, direct and
     // indirect eval, any solved call that may be the Function constructor)
     // holds every global, so every builtin prototype, and writes under any
