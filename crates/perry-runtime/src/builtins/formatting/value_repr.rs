@@ -171,7 +171,9 @@ where
         runs.present(index as usize, render(elem));
         true
     });
-    runs.finish(len)
+    // A render that ran program code (an inspect hook) may have shortened
+    // the Array: the trailing run ends at its length now, as in node.
+    runs.finish(len.min((*arr).length as usize))
 }
 
 /// [`array_entries`] over a slice of raw slots (`TAG_HOLE` = absent).
