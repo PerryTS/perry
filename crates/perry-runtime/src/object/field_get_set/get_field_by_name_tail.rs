@@ -1178,6 +1178,23 @@ pub(crate) fn get_field_by_name_object_tail(
         // (module, method) tables are reachable only through the vtable.
         // `None` (no module name / vtable uninstalled) falls through to
         // the generic scans below, matching the pre-relocation flow.
+        // A deferred namespace (#14421) owns no string-keyed property and has
+        // a null prototype, so no arm above answers for it. Its class id is
+        // read here, beside the native-module namespace's, after the header
+        // proved an object: the receiver classification is the test, and an
+        // ordinary receiver pays only this compare of an id already loaded.
+        if (*obj).class_id == super::super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID
+            && !key.is_null()
+        {
+            if let Some((target, key)) =
+                super::super::deferred_namespace::string_key_target(obj, key)
+            {
+                return js_object_get_field_by_name(
+                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
+                    key,
+                );
+            }
+        }
         if (*obj).class_id == NATIVE_MODULE_CLASS_ID && !key.is_null() {
             if let Some(vt) = super::super::native_module::native_module_vtable() {
                 if let Some(v) = (vt.get_own_field)(obj, key) {
