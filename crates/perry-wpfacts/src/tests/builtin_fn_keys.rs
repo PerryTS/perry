@@ -401,3 +401,47 @@ fn a_proto_store_reaches_inherited_reads() {
         verdicts(&pf, &src, "// SITE-G7b", "n")
     );
 }
+
+/// ToPrimitive of a built-in function value (ECMA-262 7.1.1.1
+/// OrdinaryToPrimitive): it has no own `@@toPrimitive`, `toString` or
+/// `valueOf`, so the calls are `Function.prototype.toString` (20.2.3.5, a
+/// String, its `this` handed to nobody) and `Object.prototype.valueOf`
+/// (20.1.3.7, returns `this`): nothing of the function escapes. Control:
+/// once `Function.prototype` reached unknown code and the program stores
+/// into ⊤, its `toString` may be any function, which then holds the
+/// receiver.
+fn to_primitive_src(control: &str) -> String {
+    format!(
+        "{BOX}{control}\n\
+         const s: any = \"abc\".at;\n\
+         (s as any).cache = new Box();\n\
+         console.log(\"\" + s, `${{s}}`, String(s));\n\
+         console.log(s.cache.n); // SITE-TP\n"
+    )
+}
+
+#[test]
+fn to_primitive_of_a_builtin_function_calls_the_intrinsic_methods() {
+    let src = to_primitive_src("");
+    let pf = facts(&src);
+    assert!(
+        proven(&pf, &src, "// SITE-TP", "n"),
+        "{}",
+        verdicts(&pf, &src, "// SITE-TP", "n")
+    );
+    // A computed store into ⊤ once `Function.prototype` reached unknown
+    // code may write its `toString`: the call then runs an unknown function
+    // with the receiver.
+    let src = to_primitive_src(
+        "const u: any = (globalThis as any)[process.argv[2]];\n\
+         u(Function.prototype);\n\
+         const w: any = u();\n\
+         w[process.argv[3]] = u();",
+    );
+    let pf = facts(&src);
+    assert!(
+        unproven(&pf, &src, "// SITE-TP", "n"),
+        "{}",
+        verdicts(&pf, &src, "// SITE-TP", "n")
+    );
+}
