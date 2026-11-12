@@ -493,6 +493,11 @@ impl<'a> Gen<'a> {
         let mut own = Vec::new();
         let scope = (self.int_ranges || self.guard_presence).then(|| {
             let mut ls = scope_locals(params, body);
+            // `this` of a body with its own binding (not an arrow's, which
+            // is its enclosing body's).
+            if !self.m.funcs[f as usize].lexical_this {
+                ls.insert(THIS_LOCAL);
+            }
             ls.extend(
                 captures
                     .iter()
@@ -713,10 +718,12 @@ pub(crate) enum Presence {
     /// Not `undefined` (`Cons::NotUndefined`): one that is not
     /// `=== undefined`.
     NotUndefined,
-    /// Rule G2: `local.key` tested truthy (`Cons::FieldTruthy`): neither
+    /// `local.key` decided by a test of the read (`Cons::FieldTruthy`):
+    /// rule G2 `guard::TRUTHY` (truthy), rule G1 `guard::IS_FALSE`/
+    /// `NOT_FALSE`/`IS_TRUE`/`NOT_TRUE` (`=== false`/`true` decided). Neither
     /// `null`/`undefined` (the read would throw) nor an object whose read
-    /// of `key` holds only `undefined`/`null`.
-    FieldTruthy(String),
+    /// of `key` cannot pass the test.
+    FieldTruthy(String, u8),
     /// `local instanceof ArrayBuffer` (`true`: `SharedArrayBuffer`) failed,
     /// the bare global name (`Cons::NotBuffer`): no built-in buffer object
     /// of that kind, while the global holds the intrinsic constructor.
@@ -789,8 +796,41 @@ fn implied<'p>(
         Expr::PropertyGet {
             object, property, ..
         } if positive => {
-            if let Some(Bound::Local(id)) = bound_of(object, subst) {
-                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone())));
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(
+                    id,
+                    Presence::FieldTruthy(property.clone(), crate::model::guard::TRUTHY),
+                ));
+            }
+        }
+        // Rule G1: `local.key === b` (`!==`) with `b` a Boolean constant,
+        // decided (ECMA-262 7.2.16 IsStrictlyEqual: only `b` is `b`).
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if matches!(
+            (left.as_ref(), right.as_ref()),
+            (Expr::Bool(_), Expr::PropertyGet { .. }) | (Expr::PropertyGet { .. }, Expr::Bool(_))
+        ) =>
+        {
+            use crate::model::guard;
+            let ((Expr::Bool(b), Expr::PropertyGet { object, property, .. })
+            | (Expr::PropertyGet { object, property, .. }, Expr::Bool(b))) =
+                (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            // The read is `b` where `===` is true.
+            let is = matches!(op, CompareOp::Eq) == positive;
+            let test = match (is, *b) {
+                (true, false) => guard::IS_FALSE,
+                (false, false) => guard::NOT_FALSE,
+                (true, true) => guard::IS_TRUE,
+                (false, true) => guard::NOT_TRUE,
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
             }
         }
         // A failed `local instanceof ArrayBuffer` (`SharedArrayBuffer`),
@@ -889,6 +929,24 @@ fn implied<'p>(
 
 /// `e` as a bound: a literal, a local (through `subst` inside a
 /// predicate's body), or a local's `length`.
+/// The narrowing id of `this` (`Gen::narrow_enter_body` puts it in scope
+/// for a body with its own `this` binding; no local has this id).
+pub(crate) const THIS_LOCAL: u32 = u32::MAX - 1;
+
+/// The host of a field test `host.key`: a local, or `this` of the body the
+/// guard is in (`depth` 0: a predicate's `this` is its own call's). `this`
+/// is one value in one invocation of a function with its own `this` binding
+/// (ECMA-262 9.4.4 ResolveThisBinding; nothing assigns it).
+fn host_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>, depth: u8) -> Option<u32> {
+    match e {
+        Expr::This if depth == 0 => Some(THIS_LOCAL),
+        _ => match bound_of(e, subst)? {
+            Bound::Local(id) => Some(id),
+            _ => None,
+        },
+    }
+}
+
 fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
     use crate::model::RangeOp;
     use perry_hir::BinaryOp;
@@ -1067,9 +1125,11 @@ impl<'a> Gen<'a> {
             {
                 continue;
             }
-            let src = self
-                .narrowed_read(mi, id)
-                .unwrap_or_else(|| self.local(mi, id));
+            let src = match self.narrowed_read(mi, id) {
+                Some(n) => n,
+                None if id == THIS_LOCAL => fx.this,
+                None => self.local(mi, id),
+            };
             let start = self.tmp("guard");
             self.zs_carrier(start);
             let mut below = None;
@@ -1119,9 +1179,9 @@ impl<'a> Gen<'a> {
                         },
                     );
                 }
-                Implied::Present(_, Presence::FieldTruthy(property)) => {
+                Implied::Present(_, Presence::FieldTruthy(property, test)) => {
                     let key = Key::Named(self.m.atom(&property));
-                    self.m.cons(src, Cons::FieldTruthy { key, dst: start })
+                    self.m.cons(src, Cons::FieldTruthy { key, test, dst: start })
                 }
             }
             let end = self.tmp("guard-end");

@@ -248,8 +248,10 @@ pub enum Cons {
     /// marker, ⊤ or primitive kind other than `undefined`/`null` in the read
     /// passes the token, re-checked as the read grows (monotone). ⊤ and
     /// markers in `x` always pass. A rule of the program text, like
-    /// `NotNullish`.
-    FieldTruthy { key: Key, dst: NodeId },
+    /// `NotNullish`. `test` is the read's guard: `guard::TRUTHY` (rule G2,
+    /// `x.key` truthy) or one of `guard::IS_FALSE`/`NOT_FALSE`/`IS_TRUE`/
+    /// `NOT_TRUE` (rule G1, `x.key === false`/`true` decided).
+    FieldTruthy { key: Key, test: u8, dst: NodeId },
     /// A value a promise is resolved with (Promise Resolve Functions,
     /// ECMA-262 27.2.1.3.2 steps 7-15; a then-callback's result,
     /// `Promise.resolve`, `await`): it fulfils the promise as itself only

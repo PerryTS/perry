@@ -2248,7 +2248,9 @@ impl<'a> Gen<'a> {
                 let k = self.m.atom(method_name);
                 self.mcall(c, Key::Named(k), a, vec![])
             }
-            Expr::This => fx.this,
+            Expr::This => self
+                .narrowed_read(fx.module, crate::gen::narrow::THIS_LOCAL)
+                .unwrap_or(fx.this),
             Expr::ModuleTopThis => fx.this,
             Expr::SuperCall(args) => {
                 let a = self.evaluate_all(fx, args);

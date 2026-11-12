@@ -1804,8 +1804,8 @@ impl Model {
             Cons::Guard { test, from, dst } => format!("guard {n} {test} {from} {dst}"),
             Cons::Defined { dst } => format!("defined {n} {dst}"),
             Cons::NotNullish { dst } => format!("notnullish {n} {dst}"),
-            Cons::FieldTruthy { key, dst } => {
-                format!("fieldtruthy {n} {} {dst}", self.key_name(*key))
+            Cons::FieldTruthy { key, test, dst } => {
+                format!("fieldtruthy {n} {} {test} {dst}", self.key_name(*key))
             }
             Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),

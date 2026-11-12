@@ -493,8 +493,9 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
-            Cons::FieldTruthy { key, dst } => {
-                // Rule G2: `x` where `x.key` was truthy. Reading `key` on
+            Cons::FieldTruthy { key, test, dst } => {
+                // Rule G2: `x` where `x.key` was truthy; rule G1: where
+                // `x.key === b` (a Boolean constant) was decided. Reading `key` on
                 // `null`/`undefined` throws, so neither reaches `dst`; every
                 // other primitive kind passes (its truthiness is not known).
                 let strip = prim::NULL | prim::UNDEF;
@@ -510,16 +511,17 @@ impl Model {
                         continue;
                     }
                     // The token's own read of `key` (the test's `Load`, on
-                    // this token alone): it passes once that read may be truthy
-                    // (`guard::TRUTHY`: an object, function, marker, ⊤, or
-                    // any primitive kind but `undefined`/`null`).
+                    // this token alone): it passes once that read may pass
+                    // `test` (`guard::TRUTHY`: an object, function, marker,
+                    // ⊤, or any primitive kind but `undefined`/`null`/`false`;
+                    // `IS_FALSE`: the `false` kind, a marker or ⊤; ...).
                     let one = self.node_l("field-truthy-token");
                     self.add_tok(one, t);
                     let read = self.node_l("field-truthy-read");
                     self.cons(
                         read,
                         Cons::Guard {
-                            test: guard::TRUTHY,
+                            test,
                             from: one,
                             dst,
                         },
