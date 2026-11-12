@@ -4,6 +4,7 @@
 // read the constructor's name as data, ended `main` without the event loop,
 // and every reaction below was dropped: the program printed "sync end" only.
 // Keep it that way: one more asynchronous construct here hides the bug.
+// (An executor resolved WITH a thenable is test_new_promise_only_thenable.ts.)
 
 const thenable = {
   then(resolve: any) {
@@ -28,8 +29,7 @@ chain
   })
   .then((v: any) => console.log("then", v))
   .finally(() => console.log("finally"));
-new Promise((resolve: any) => resolve(thenable)).then((v: any) => console.log("adopted", v));
-new Promise((resolve: any) => resolve(new Later())).then((v: any) => console.log("adopted", v));
+chain.then(() => new Later()).then((v: any) => console.log("then", v));
 new Promise(() => {
   throw new RangeError("executor");
 }).then(undefined, (e: any) => console.log("executor threw", e instanceof RangeError, e.message));
