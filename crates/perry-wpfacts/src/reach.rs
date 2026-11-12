@@ -85,12 +85,14 @@ pub(crate) fn thenable() -> bool {
 /// `PERRY_FACTS_REACH_JSON_REPLACER=0`: a `JSON.stringify` replacer
 /// function is only escaped (called by unknown code with unknown
 /// arguments); the values it is called with, and `this` = their holders,
-/// are not its arguments (`Model::json_replacer_calls`).
-pub(crate) fn json_replacer() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_REACH_JSON_REPLACER").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
+/// are not its arguments (`Model::json_replacer_calls`). The sabotage
+/// `noreachjsonreplacer` is the same.
+pub(crate) fn json_replacer(sabotage: Option<&str>) -> bool {
+    sabotage != Some("noreachjsonreplacer")
+        && !matches!(
+            std::env::var("PERRY_FACTS_REACH_JSON_REPLACER").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
 }
 
 /// The nodes of one `JSON.stringify` call with a replacer
