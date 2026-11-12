@@ -202,10 +202,13 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let group = self.new_arr_from(mi, "group", &[it]);
-                // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
-                // a Map (`members::box_chain`).
+                // `Object.groupBy` makes a null-prototype object
+                // (`members::box_chain`); `Map.groupBy` a Map, whose keys and
+                // groups are its contents. Born from groups, not by `new
+                // Map()`, it is never closed (`solve/map_vals.rs`): `get`
+                // reads its contents.
                 let kind = if matches!(e, Expr::MapGroupBy { .. }) {
-                    "mapGroups"
+                    "Map"
                 } else {
                     "groups"
                 };
@@ -213,6 +216,9 @@ impl<'a> Gen<'a> {
                 let fa = self.m.field_any(t);
                 self.m.edge(group, fa);
                 self.m.edge(k, fa);
+                if kind == "Map" {
+                    self.m.map_born(t, false);
+                }
                 n
             }
             Expr::ArrayFrom(x, _) => {
