@@ -65,6 +65,7 @@ There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdl
 | `solve/apply.rs:1651` | seed | numeric result of an arithmetic or `+` operator: codegen expr/binary.rs and expr/unary.rs lower it inline (fadd/fsub/fmul/fdiv, toint32 + sitofp), and the dynamic arm calls perry-runtime value/dynamic_arith.rs js_dynamic_string_or_number_add / dynamic_add_non_plain, which decodes an INT32 operand (`as_int32() as f64`) and returns `a_num + b_num` (f64) |
 | `solve/apply.rs:1661` | read/map | read: tests or masks the fact, seeds nothing |
 | `quiet_sites.rs:109` | read/map | read: `number` tests that a key node holds Numbers and nothing else (`key:not-number`), seeds nothing (#14537, quiet sites) |
+| `family_reach.rs:517` | read/map | read: `primitive` tests whether a primitive load or call may see a Number to mark `Number.prototype` members live (family reach), seeds nothing (#14563, family_reach) |
 | `gen/primitives.rs:64` | read/map | family/realm/const mapping: no value of its own; the seeds that use it are audited at their own rows |
 | `gen/primitives.rs:100` | seed | computed enum member: NUM|STR, not NUM-only (no consumer drops a test) |
 | `gen/primitives.rs:101` | seed | numeric enum member: a double constant |
