@@ -332,6 +332,9 @@ fn zero_argument_search_methods_compile_on_any_receiver_and_on_a_string() {
 // ---------------------------------------------------------------------------
 
 const OWN_TEST: &str = "call i32 @js_receiver_may_own_named_method(";
+/// The question behind an ARRAY site's guard (`PERRY_ARRAY_METHOD_TIERS`,
+/// default): [`OWN_TEST`]'s answer plus "an ordinary object needs the `Get`".
+const ARRAY_SITE_TEST: &str = "call i32 @js_array_method_needs_get(";
 const OWN_FLAG: &str = "@PERRY_OWN_NAMED_PROP_INSTALLED";
 const MAKE: &str = "perry_fn_kind_guard_ts__make";
 
@@ -435,10 +438,15 @@ fn unproven_array_receiver_asks_the_own_override_test_from_its_header() {
         vec![method_call(any_value(), "toSorted", vec![Expr::Undefined])],
     );
     assert!(
-        ir.contains(OWN_TEST) && ir.contains(", 4227072") && ir.contains("icmp ne i64"),
+        ir.contains(ARRAY_SITE_TEST) && ir.contains(", 4227072") && ir.contains("icmp ne i64"),
         "a plain array tests its header word and its named layout \
-         (`ArrayHeader.named`) before the builtin, and asks the predicate only \
-         when it may own one:\n{ir}"
+         (`ArrayHeader.named`) before the builtin, and asks the Array-site \
+         predicate only when it may own one or is no Array:\n{ir}"
+    );
+    assert!(
+        !ir.contains(OWN_TEST),
+        "an Array site asks the Array-site predicate, which also answers for an \
+         ordinary object behind the annotation:\n{ir}"
     );
     assert!(
         !ir.contains(OWN_FLAG),

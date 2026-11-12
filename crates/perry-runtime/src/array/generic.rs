@@ -1749,8 +1749,23 @@ pub fn try_object_arraylike_mutator(
     // method (`{ push(x) {…} }`) is left to the normal dispatch.
     let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
     let own = crate::object::js_object_get_field_by_name_f64(raw, key);
-    if matches!(classify_own_slot(own, method), OwnSlot::UserMethod) {
-        return None;
+    match classify_own_slot(own, method) {
+        OwnSlot::UserMethod => return None,
+        OwnSlot::BorrowedBuiltin => {}
+        // No method of the name on the object or its chain (the read above
+        // is the chain's `Get`). `obj.push(v)` is `Call(Get(obj, "push"), obj,
+        // [v])`: the array algorithm runs only when that `Get` selects
+        // `Array.prototype`'s method, which an Array subclass instance and an
+        // object with a real array on its chain inherit without holding it
+        // as a property. Any other object (`{ length: 0 }.push(7)`:
+        // TypeError) is left to the ordinary dispatch.
+        OwnSlot::Absent => {
+            if !super::subclass::is_array_subclass_class_id(class_id)
+                && !proto_chain_contains_real_array(raw as usize)
+            {
+                return None;
+            }
+        }
     }
     run_object_mutator(object, method, args_ptr, args_len)
 }
