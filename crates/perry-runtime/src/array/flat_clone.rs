@@ -263,6 +263,13 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
     if arr.is_null() {
         return js_array_alloc(0);
     }
+    // ToIntegerOrInfinity(depth): `flat("2")` spreads two levels, and an
+    // explicit `undefined` is the default of one.
+    let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
+        1.0
+    } else {
+        crate::builtins::js_number_coerce(depth)
+    };
     let levels = flat_levels(depth);
     let recv_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
     if !unsafe { crate::array::species::default_species_is_certain(recv_value) } {
