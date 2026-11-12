@@ -236,6 +236,35 @@ fn module_getter(m: &Model, t: Tok, key: &str) -> Option<&'static perry_hir::rea
     super::effects::declared_getter(proto, k)
 }
 
+/// The declared getter (`effects::declared_getter`) a load of named key `a`
+/// on builtin object `t` of kind `what` runs, never the getter function:
+/// - on the prototype of an object a declaration made (`what` is that
+///   prototype: `AbortController.prototype.signal`);
+/// - otherwise on the realm holder of `what` (`realm_holder`: `RegExp` ->
+///   `RegExp.prototype`), when the read of `a` on `t`'s chain is final
+///   (`locked_chain_read`: the runtime refuses to redefine the member, so
+///   the declared getter is the one that runs) and
+///   `PERRY_FACTS_DECLARED_GETTER_RESULTS` is not `0`
+///   (`effects::declared_getter_results`). A holder whose member the
+///   program may redefine reads through `family_load`.
+fn bobj_declared_getter(
+    m: &Model,
+    t: Tok,
+    what: &'static str,
+    a: Atom,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let n = &m.atoms[a as usize];
+    if what.ends_with(".prototype") {
+        return super::effects::declared_getter(what, n);
+    }
+    if !super::effects::declared_getter_results() {
+        return None;
+    }
+    let holder = super::realm_holder(m, members::bobj_family(what), Some(what))?;
+    let e = super::effects::declared_getter(m.declarations.shape(holder).name, n)?;
+    super::locked_chain_read(m, t, a).then_some(e)
+}
+
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
     m.census_native_read(t, a, NativeMiss::Load(dst));
     let name = m.atoms[a as usize].clone();
@@ -822,14 +851,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     // A getter the realm declares on the prototype of an
                     // object a declaration made (`AbortController.prototype
-                    // .signal`): its declared result, never the getter
-                    // function; a write of the key onto the chain (now, or
-                    // later: the replay) reads what was stored.
-                    (Key::Named(a), Some(n))
-                        if what.ends_with(".prototype")
-                            && super::effects::declared_getter(what, n).is_some() =>
-                    {
-                        let e = super::effects::declared_getter(what, n).expect("declared");
+                    // .signal`) or on a locked realm holder (a RegExp's
+                    // `flags`: `bobj_declared_getter`): its declared result,
+                    // never the getter function; a write of the key onto the
+                    // chain (now, or later: the replay) reads what was
+                    // stored.
+                    (Key::Named(a), Some(_)) if bobj_declared_getter(m, t, what, a).is_some() => {
+                        let e = bobj_declared_getter(m, t, what, a).expect("declared");
                         super::effects::getter_load(m, e, t, a, dst);
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);

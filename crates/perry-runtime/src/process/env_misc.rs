@@ -1179,9 +1179,10 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 
 /// `process.env` as a materialized JS object.
 ///
-/// Built lazily from the current agent's effective environment. The rooted
-/// cache preserves object identity; enumeration refreshes its field mirror
-/// to observe mutations made by agents sharing the native backing.
+/// Built empty and lazily: taking the object reads no variable. The rooted
+/// cache preserves object identity; every enumeration fills the field mirror
+/// from the current agent's effective environment (`refresh_process_env`),
+/// which also observes mutations made by agents sharing the native backing.
 ///
 /// Returns an f64 NaN-boxed POINTER_TAG value so the codegen can hand
 /// it straight to subsequent PropertyGet dispatch.
@@ -1585,7 +1586,10 @@ fn js_process_env_impl() -> f64 {
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
-    refresh_process_env(boxed)
+    // Node's `process.env` is an interceptor object: getting it reads no
+    // variable. Host data enters only through the observing funnels (by-name
+    // reads, and `refresh_process_env` at enumeration).
+    boxed
 }
 
 /// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.

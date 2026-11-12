@@ -517,6 +517,24 @@ pub(super) fn compile_module_entry(
                 .unwrap()
                 .call_void("perry_verify_facts_init", &[]);
         }
+        // The family claim: the families the facts say are never created or
+        // observed, for the instrumented runtime's witnesses.
+        if crate::verify_facts::family_claims_on() && cross_module.wpfacts.family_never != 0 {
+            let site = crate::verify_facts::raw_entry_site(
+                "__perry_family",
+                "main",
+                crate::verify_facts::Fact::Family,
+                "family_reach",
+            );
+            main.block_mut(0).unwrap().call_void(
+                "perry_verify_facts_families",
+                &[
+                    (I64, &(cross_module.wpfacts.family_never as i64).to_string()),
+                    (I64, &site.pointer),
+                    (I64, site.len.as_deref().unwrap()),
+                ],
+            );
+        }
         {
             let blk = main.block_mut(0).unwrap();
             // SNAP census: the program's TLS slots lie between the anchors the

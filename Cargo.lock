@@ -5086,6 +5086,7 @@ dependencies = [
  "perry-hir",
  "perry-parser",
  "perry-realm-table",
+ "perry-runtime-manifest",
  "perry-transform",
  "serde",
  "serde_json",
