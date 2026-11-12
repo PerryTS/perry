@@ -731,19 +731,30 @@ pub(crate) fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
 
 /// `number_range` of what `nodes` hold together (a binding's nodes,
 /// `BindingNodes::of`): every node that holds a value holds only Numbers,
-/// each an integer in the hull of their intervals. A copy no value reached
-/// adds nothing; no value at all proves nothing.
+/// each an integer in the hull of their intervals. The shared node (the
+/// first) answers as `number_range` does. A copy adds its interval; a copy
+/// no Number reached adds nothing (no value at all, or the empty interval a
+/// guard leaves in an instance whose values all fail it: `copy_interval`).
 pub(crate) fn number_range_of(m: &Model, nodes: &[NodeId]) -> Option<(i64, i64)> {
-    let mut range = crate::model::Iv::EMPTY;
-    for &n in nodes {
+    let (&shared, copies) = nodes.split_first()?;
+    let (lo, hi) = number_range(m, shared)?;
+    let mut range = crate::model::Iv { lo, hi, nz: false };
+    for &n in copies {
         let node = &m.nodes[n as usize];
-        if node.prim == 0 && node.pts.is_empty() {
-            continue;
+        if !node.pts.is_empty() || node.prim & !crate::model::prim::NUM != 0 {
+            return None;
         }
-        let (lo, hi) = number_range(m, n)?;
-        range = range.join(crate::model::Iv { lo, hi, nz: false });
+        range = range.join(copy_interval(node)?);
     }
-    (!range.is_top() && !range.is_empty()).then_some((range.lo, range.hi))
+    (!range.is_top()).then_some((range.lo, range.hi))
+}
+
+/// The interval an instance copy adds to its binding's: its own, empty when
+/// no Number reached the copy (a guard clips an instance's interval to
+/// nothing where every value of that instance fails it, and the prims stay).
+/// `None`: its Numbers have no bound.
+fn copy_interval(node: &crate::model::Node) -> Option<crate::model::Iv> {
+    (!node.range.is_top()).then_some(node.range)
 }
 
 /// `facts_of` of one node, for a caller that joins over the nodes itself
@@ -779,21 +790,23 @@ fn facts_of(g: &Gen, nodes: &[NodeId]) -> BindingFacts {
         top_cause: top_at.filter(|_| m.explain).map(|n| m.top_origin(n)),
         ..Default::default()
     };
-    // The interval: the hull over the nodes; none when a node's Numbers
-    // have no bound (⊤, or Numbers without an interval).
+    // The interval: the shared node's (the first; none when it is ⊤ or
+    // empty) joined with every copy's (`copy_interval`).
     let mut range = crate::model::Iv::EMPTY;
     let mut unbounded = false;
-    for &n in nodes {
+    for (i, &n) in nodes.iter().enumerate() {
         let node = &m.nodes[n as usize];
         out.prims |= node.prim;
         out.int_demand |= node.int_demand;
         out.zero_tol |= node.zs_tol;
-        if node.range.is_top()
-            || (node.range.is_empty() && node.prim & crate::model::prim::NUM != 0)
-        {
-            unbounded = true;
+        if i == 0 {
+            range = node.range;
+            unbounded = range.is_top() || range.is_empty();
         } else {
-            range = range.join(node.range);
+            match copy_interval(node) {
+                Some(r) => range = range.join(r),
+                None => unbounded = true,
+            }
         }
     }
     let mut values = out.prims != 0;
@@ -841,7 +854,7 @@ fn facts_of(g: &Gen, nodes: &[NodeId]) -> BindingFacts {
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
     out.indexed_owner = indexed_owner(g, nodes);
-    if !unbounded && !range.is_empty() {
+    if !unbounded {
         out.int_range = Some((range.lo, range.hi));
     }
     out.const_length = const_length(m, nodes);
@@ -1081,8 +1094,9 @@ fn rep_of(b: &BindingFacts) -> Rep {
 /// One `# inst_nodes` line per local whose instance copies change its
 /// facts (`BindingNodes`): the number of copies, the representation, the
 /// constant length and the interval its shared node alone would give
-/// (`shared=`, `shared_len=`, `shared_range=`) and what the binding has
-/// (`rep=`, `len=`, `range=`).
+/// (`shared=`, `shared_len=`, `shared_range=`), what the binding has
+/// (`rep=`, `len=`, `range=`), and each node's prims, token count and
+/// interval, the shared node first (`nodes=`).
 pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let nodes = BindingNodes::new(m);
@@ -1100,8 +1114,23 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
             if all.len() > 1 {
                 let shared = facts_of(g, &[n]);
                 if shared != b {
+                    // Each node: its prims, tokens and interval.
+                    let each: Vec<String> = all
+                        .iter()
+                        .map(|&c| {
+                            let nd = &m.nodes[c as usize];
+                            let r = if nd.range.is_top() {
+                                "top".to_string()
+                            } else if nd.range.is_empty() {
+                                "none".to_string()
+                            } else {
+                                format!("[{},{}]", nd.range.lo, nd.range.hi)
+                            };
+                            format!("{:#x}/{}/{r}", nd.prim, nd.pts.to_sorted().len())
+                        })
+                        .collect();
                     out.push(format!(
-                        "# inst_nodes module={mi} local={id} copies={} shared={} shared_len={} shared_range={} rep={} len={} range={}",
+                        "# inst_nodes module={mi} local={id} copies={} shared={} shared_len={} shared_range={} rep={} len={} range={} nodes={}",
                         all.len() - 1,
                         shared.rep.name(),
                         show_len(shared.const_length),
@@ -1109,6 +1138,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
                         b.rep.name(),
                         show_len(b.const_length),
                         show_range(b.int_range),
+                        each.join(","),
                     ));
                 }
             }

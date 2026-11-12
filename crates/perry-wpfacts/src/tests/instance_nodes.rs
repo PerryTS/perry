@@ -31,6 +31,30 @@ fn local(pf: &ProgramFacts, src: &str, func: &str, local: &str) -> crate::bindin
         .clone()
 }
 
+/// The facts of the one `let` named `name` anywhere in the program.
+fn local_in(pf: &ProgramFacts, src: &str, name: &str) -> crate::bindings::BindingFacts {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let text = format!("{hir:?}");
+    let at = text
+        .find(&format!("name: \"{name}\""))
+        .unwrap_or_else(|| panic!("local {name}"));
+    let head = &text[..at];
+    let id: u32 = head[head.rfind("Let { id: ").expect("a let") + "Let { id: ".len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .parse()
+        .expect("an id");
+    let mb = pf.bindings_for("t.ts").expect("module bindings");
+    mb.locals
+        .iter()
+        .find(|(l, _)| *l == id)
+        .unwrap_or_else(|| panic!("local {id}"))
+        .1
+        .clone()
+}
+
 fn off() -> FactsConfig {
     FactsConfig {
         sabotage: Some("instlit".into()),
@@ -153,4 +177,20 @@ fn the_probe_names_the_locals_whose_copies_change_the_facts() {
         "{:#?}",
         pf.rep_probe
     );
+}
+
+#[test]
+fn a_guard_that_no_value_of_an_instance_passes_adds_nothing() {
+    // `f(-7)` and `f(200)` never enter the guarded block: their copies of
+    // `a` hold no Number (an empty interval beside the prims). The binding
+    // keeps the interval of the instances that do.
+    let src = "function f(x: number): number {\n\
+           const i = x | 0;\n\
+           let s = 0;\n\
+           if (i >= 0 && i < 128) { const a = i; s += a; }\n\
+           return s;\n\
+         }\n\
+         console.log(f(3), f(-7), f(200), f(70));";
+    let pf = facts_with(src, FactsConfig::default());
+    assert_eq!(local_in(&pf, src, "a").int_range, Some((0, 127)));
 }
