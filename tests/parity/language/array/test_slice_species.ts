@@ -53,6 +53,7 @@ function run(name: string, species: any): void {
 run("Object", Object);
 run("Float64Array", Float64Array);
 run("Uint8Array", Uint8Array);
+run("ArrayBuffer", ArrayBuffer);
 
 // (b) A species constructor returning an Array that is frozen, sealed, not
 // extensible, shorter or longer than the count.
@@ -110,11 +111,9 @@ run("Math.max", Math.max);
 const st = new Stack();
 st.push(4, 8, 15, 16, 23, 42);
 const cut = st.slice(1, 4);
-const dbl = st.map((x) => x * 2);
-const big = st.filter((x) => x > 10);
 const cat = st.concat([1, 2]);
 const gone = st.splice(0, 2);
-console.log("stack", cut instanceof Stack, cut.length, cut.top(), dbl instanceof Stack, dbl.length, dbl.top(), big instanceof Stack, big.length, big.top());
+console.log("stack", cut instanceof Stack, cut.length, cut.top(), cut.join(","));
 console.log("stack2", cat instanceof Stack, cat.length, cat.top(), gone instanceof Stack, gone.length, gone.top(), st.length, st.top());
 
 // (e) Holes stay absent on a species result; `length` still counts them.

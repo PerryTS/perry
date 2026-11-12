@@ -268,8 +268,11 @@ pub(crate) unsafe fn species_result_set_length(result: f64, length: usize) {
         return;
     }
     let raw = crate::value::js_nanbox_get_pointer(result) as usize;
+    // A typed array of any kind (a `Uint8Array` is buffer-backed); an
+    // `ArrayBuffer` or `DataView` is an ordinary object for `length`.
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
-        || crate::buffer::is_registered_buffer(raw)
+        || (crate::buffer::is_registered_buffer(raw)
+            && !crate::buffer::is_non_indexed_buffer_view(raw))
     {
         crate::collection_iter::throw_type_error(
             "Cannot set property length of [object Object] which has only a getter",
