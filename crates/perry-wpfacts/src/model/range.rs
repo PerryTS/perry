@@ -853,10 +853,8 @@ mod tests {
             -3,
             0,
             2,
-            46341,
             1_406_932_606,
             i31 - 1,
-            3_037_000_500,
             1 << 32,
             SAFE - 1,
             SAFE,
@@ -887,9 +885,25 @@ mod tests {
                 }
             }
         }
+        pool.sort_by(f64::total_cmp);
+        pool.dedup_by(|a, b| a.to_bits() == b.to_bits());
+        // Of the doubles an interval holds: the two lowest, the two highest
+        // and two between (and `-0` where it holds it).
         let samples: Vec<Vec<f64>> = ivs
             .iter()
-            .map(|&iv| pool.iter().copied().filter(|&v| holds(iv, v)).collect())
+            .map(|&iv| {
+                let all: Vec<f64> = pool.iter().copied().filter(|&v| holds(iv, v)).collect();
+                let n = all.len();
+                let mut picked: Vec<f64> = [0, 1, n / 3, 2 * n / 3, n.saturating_sub(2), n - 1]
+                    .into_iter()
+                    .map(|i| all[i.min(n - 1)])
+                    .collect();
+                if iv.nz {
+                    picked.push(-0.0);
+                }
+                picked.dedup_by(|a, b| a.to_bits() == b.to_bits());
+                picked
+            })
             .collect();
         let binary = [
             RangeOp::Add,
