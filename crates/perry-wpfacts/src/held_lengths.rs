@@ -117,7 +117,7 @@ impl TokInfo {
 const RELAYS: [&str; 2] = ["arr-recv", "array-species-receiver"];
 
 /// The function a store site is in; `None` for a site the solve made.
-fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {
+pub(crate) fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {
     let s = m.stores.get(site as usize)?;
     (s.module != u32::MAX && s.desc != "binding").then_some(s.func)
 }
@@ -127,7 +127,7 @@ fn site_fn(m: &Model, site: u32) -> Option<FnIdx> {
 /// a builtin's callback call was made for), which is the owner of that
 /// call's result node (`Gen::new_call`; `NO_FN`: module scope). `None` for
 /// a call the solve made for no site (an accessor's, a bound function's).
-fn call_fn(m: &Model, call: u32) -> Option<FnIdx> {
+pub(crate) fn call_fn(m: &Model, call: u32) -> Option<FnIdx> {
     let ret = m.calls.get(m.origin_of(call)? as usize)?.ret;
     (*m.labels.get(ret as usize)? == "callret").then(|| m.node_fn[ret as usize])
 }
@@ -406,7 +406,7 @@ fn rule_holders(
 
 /// Rule 3: where each candidate token's length events are.
 fn rule_events(m: &Model, info: &mut FxHashMap<Tok, TokInfo>) {
-    for &(t, at, call) in &m.len_events {
+    for &(t, at, call, _) in &m.len_events {
         let Some(i) = info.get_mut(&t) else {
             continue;
         };

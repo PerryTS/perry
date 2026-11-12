@@ -396,6 +396,17 @@ fn held_lengths_switch_is_a_cache_input() {
     );
 }
 
+/// Named lengths: the switch changes the exported facts and every loop
+/// without calls that keeps `a.length` beside a store through another name,
+/// so `=0` must never reuse an `=1` object.
+#[test]
+fn named_lengths_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_NAMED_LENGTHS"),
+        "PERRY_FACTS_NAMED_LENGTHS must key the compile caches"
+    );
+}
+
 /// Literal strings: the switch changes the exported facts and every store
 /// and alias that drops its string demote, so `=0` must never reuse an `=1`
 /// object.

@@ -1456,8 +1456,18 @@ pub struct Model {
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
-    /// can place.
-    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool)>,
+    /// can place. `.3`: the node the store's receiver was read from
+    /// (`NO_NODE`: not known here; a call's is its `this`), for
+    /// `named_lengths`.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool, NodeId)>,
+    /// Named lengths (`named_lengths`; `PERRY_FACTS_NAMED_LENGTHS=0` turns
+    /// them off): the events are recorded for them too.
+    pub named_lengths: bool,
+    /// The node a narrowed read of a local sees (`gen::narrow`: a guard's
+    /// or a loop test's start and end node) -> that local's node: a store
+    /// through such a read is a store through the local's name
+    /// (`named_lengths`).
+    pub name_of: FxHashMap<NodeId, NodeId>,
     /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
     pub len_index_stores: crate::pts::FxHashSet<NodeId>,
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
