@@ -63,6 +63,7 @@ impl<'a> Gen<'a> {
                 // `js_array_m_pop0`).
                 if super::array_method_tiers() {
                     let pop = self.m.atom("pop");
+                    self.folded_site(fx, &perry_hir::folded_call::Receiver::Local(*id), pop, a);
                     let ret = self.mcall(a, Key::Named(pop), vec![], vec![]);
                     self.m.edge(ret, out);
                 }

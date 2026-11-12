@@ -716,6 +716,17 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
         }
     }
+    // Method sites (wpfacts `method_sites`): no typed-array receiver fact
+    // with `PERRY_FACTS_TYPED_ARRAY_SITES=0` or when interpreted code can
+    // run. Two records under one key hold a fact only when both do.
+    if !interp && perry_wpfacts::typed_array_sites_enabled() {
+        for (site, key, flags) in &mb.method_sites {
+            out.method_sites
+                .entry((*site, key.clone()))
+                .and_modify(|f| *f &= *flags)
+                .or_insert(*flags);
+        }
+    }
     // Quiet sites (wpfacts `quiet_sites`): empty with
     // `PERRY_FACTS_QUIET_SITES=0`, and when interpreted code can run.
     let quiet = !interp && perry_wpfacts::quiet_sites_enabled();

@@ -44,6 +44,15 @@ pub struct ReadSite {
     pub func: FnIdx,
 }
 
+/// A folded builtin-method node (`perry_hir::folded_call`): the call
+/// `recv.key(..)` at the site its receiver names (`method_sites`).
+pub(crate) struct FoldedSite {
+    pub module: u32,
+    pub site: perry_hir::folded_call::Site,
+    pub key: Atom,
+    pub recv: NodeId,
+}
+
 /// A computed member operation over nodes already generated for the solve.
 #[derive(Clone, Debug)]
 pub(crate) struct ElementSite {
@@ -155,6 +164,8 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// The folded method nodes that have a site (`method_sites`).
+    pub(crate) folded_sites: Vec<FoldedSite>,
     pub(crate) element_sites: Vec<ElementSite>,
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
@@ -658,6 +669,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            folded_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),

@@ -199,6 +199,16 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     {
         return Ok(None);
     }
+    // A receiver annotated a typed array whose values the facts do not prove
+    // typed arrays (`method_site`): the node is the ordinary method call.
+    if crate::method_site::unproven_typed_array_call(
+        ctx,
+        perry_hir::folded_call::receiver_site(&call.receiver),
+        receiver_expr,
+        call.method,
+    ) {
+        return emit_generic(ctx, receiver_expr, call.method, &call.args).map(Some);
+    }
     // A local receiver (and a fold that captured one) is already in a slot the
     // collector rewrites, so re-lowering it IS the re-read the rooting
     // invariant wants; only a receiver that cannot be evaluated twice needs a

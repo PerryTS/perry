@@ -417,6 +417,17 @@ fn named_lengths_switch_is_a_cache_input() {
     );
 }
 
+/// Typed-array method sites: the switch changes the exported facts and
+/// every method call on a receiver annotated a typed array, so `=0` must
+/// never reuse an `=1` object.
+#[test]
+fn typed_array_sites_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_TYPED_ARRAY_SITES"),
+        "PERRY_FACTS_TYPED_ARRAY_SITES must key the compile caches"
+    );
+}
+
 /// Quiet sites: the switch changes the exported facts and every loop
 /// without calls that keeps `a.length` beside a read, store or operator
 /// that may run program code, so `=0` must never reuse an `=1` object.

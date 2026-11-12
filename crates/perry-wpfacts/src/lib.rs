@@ -49,6 +49,7 @@ mod named_lengths;
 pub mod native_effects;
 pub mod pts;
 mod push_fills;
+mod method_sites;
 mod quiet_sites;
 pub mod records;
 mod rest_elems;
@@ -1118,6 +1119,13 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("quiet"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    method_sites::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("tasite"),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2410,6 +2418,12 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
 /// (`quiet_sites`).
 pub fn quiet_sites_enabled() -> bool {
     quiet_sites::enabled()
+}
+
+/// `PERRY_FACTS_TYPED_ARRAY_SITES=0` turns the typed-array receiver fact
+/// off (`method_sites`).
+pub fn typed_array_sites_enabled() -> bool {
+    method_sites::typed_array_enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).

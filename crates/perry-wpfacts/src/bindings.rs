@@ -648,6 +648,11 @@ pub struct ModuleBindings {
     /// no program code at any copy, and the named reads and element reads
     /// whose value is a primitive at every copy. Sorted.
     pub quiet_reads: Vec<(u32, String)>,
+    /// Method sites (`method_sites`): by-name method call sites, keyed as
+    /// codegen keys them and by the method name, with what the solve proves
+    /// of the receiver's values at every copy (`method_sites::TYPED_ARRAY`).
+    /// Sorted.
+    pub method_sites: Vec<(perry_hir::folded_call::Site, String, u8)>,
     pub quiet_elements: Vec<u32>,
     pub primitive_reads: Vec<(u32, String)>,
     pub primitive_elements: Vec<u32>,
