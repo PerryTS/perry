@@ -39,7 +39,12 @@
 //! name: every read of `r`, a capture included, is a read of `q`.
 //!
 //! `return q` makes it `Returned`; a store `this.k = q` the proof accepts
-//! ([`FateProof::store`]) makes it `KeptByReceiver`. Everything else keeps
+//! ([`FateProof::store`]) makes it `KeptByReceiver`. In the constructor of
+//! a closed object literal's shape class ([`Class::is_literal_shape`]) every
+//! store is one: that check admits only positional `this.<field> = <param>`
+//! stores of a class without accessors, methods or a parent, the literal
+//! defines its own keys (no setter up the chain runs), and codegen lowers
+//! them as direct slot stores into the object being born. Everything else keeps
 //! it: assignment to any local, field, element or global, capture, `throw`,
 //! spread, any operator, a method call on it, a call whose bodies are not all
 //! known, a runtime or built-in call. A function whose body the rule does not
@@ -384,6 +389,11 @@ impl Fates {
         }
         let mut construction = HashMap::new();
         let mut bodies: Vec<&Function> = functions.to_vec();
+        let literal: std::collections::HashSet<FuncId> = classes
+            .iter()
+            .filter(|c| c.is_literal_shape())
+            .filter_map(|c| c.constructor.as_ref().map(|k| k.id))
+            .collect();
         for class in classes {
             if let Some(ctor) = &class.constructor {
                 bodies.push(ctor);
@@ -442,7 +452,7 @@ impl Fates {
                     if not_walkable(f).is_some() {
                         continue;
                     }
-                    let next = body_fates(f, proof, &fates);
+                    let next = walk_body(f, proof, &fates, literal.contains(&f.id));
                     if fates.by_fn.get(&f.id) != Some(&next) {
                         fates.by_fn.insert(f.id, next);
                         moved = true;
@@ -521,7 +531,14 @@ fn not_walkable(f: &Function) -> Option<&'static str> {
 
 /// The fates `f`'s body gives its parameters, with callees read from `known`.
 pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates {
+    walk_body(f, proof, known, false)
+}
+
+/// [`body_fates`]; `literal_ctor`: `f` constructs a literal shape, whose
+/// `this` stores are own data stores by construction.
+fn walk_body(f: &Function, proof: &dyn FateProof, known: &Fates, literal_ctor: bool) -> FnFates {
     let mut walk = Walk {
+        literal_ctor,
         func: f.id,
         params: f.params.iter().map(|p| p.id).collect(),
         aliases: aliases(f),
@@ -564,6 +581,8 @@ enum Parent<'e> {
 }
 
 struct Walk<'a, 'e> {
+    /// The constructor of a literal shape ([`Class::is_literal_shape`]).
+    literal_ctor: bool,
     func: FuncId,
     params: Vec<LocalId>,
     /// Never-written copies of a parameter: (copy, parameter index).
@@ -580,6 +599,16 @@ impl<'e> Walk<'_, 'e> {
             Expr::LocalGet(id) => self.param(*id),
             Expr::This => Some(Slot::This),
             _ => None,
+        }
+    }
+
+    /// `this.property = v` writes an own data slot and runs no code: by
+    /// construction in a literal shape's constructor, else the proof's.
+    fn store(&self, property: &str) -> Option<Proof> {
+        if self.literal_ctor {
+            Some(Proof::Proven)
+        } else {
+            self.proof.store(self.func, property)
         }
     }
 
@@ -872,7 +901,7 @@ impl<'e> Walk<'_, 'e> {
                 value,
                 ..
             } if matches!(object.as_ref(), Expr::This) => {
-                match self.proof.store(self.func, property) {
+                match self.store(property) {
                     Some(p) => match self.slot(value) {
                         Some(s) => self.raise(s, Fate::KeptByReceiver, p),
                         None => self.sub(e, value),
@@ -896,7 +925,7 @@ impl<'e> Walk<'_, 'e> {
                 let Expr::String(name) = key.as_ref() else {
                     unreachable!("matched above")
                 };
-                match (self.proof.store(self.func, name), self.slot(value)) {
+                match (self.store(name), self.slot(value)) {
                     (Some(p), Some(s)) => self.raise(s, Fate::KeptByReceiver, p),
                     (Some(_), None) => self.sub(e, value),
                     (None, _) => {
