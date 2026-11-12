@@ -194,6 +194,7 @@ pub(crate) fn proto_own_native(
     dst: NodeId,
 ) -> Option<Native> {
     let (fam, what, global) = proto_family(ns)?;
+    crate::family_reach::prototype(m, global, a);
     let name = m.atoms[a as usize].clone();
     if !matches!(members::member(fam, &name), Some(Mem::Fn))
         && (m.unit_mode || !matches!(members::member(fam, &name), Some(Mem::Ctor)))
@@ -289,6 +290,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
 // -------------------------------------------------------------- loads
 
 pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
+    crate::family_reach::primitive(m, prim, key);
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return; // TypeError
     }
@@ -389,6 +391,7 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
+    crate::family_reach::tok(m, t, key);
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any(_) => None,
@@ -944,6 +947,7 @@ fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
 /// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
 /// under a computed key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    crate::family_reach::chain(m, of, q, key);
     if let (TokKind::Builtin(ns), Key::Named(a)) = (m.toks[q as usize].clone(), key) {
         if namespace_getter_load(m, of, q, ns, a, dst) {
             return;
