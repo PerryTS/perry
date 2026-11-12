@@ -236,6 +236,15 @@ pub(crate) fn install_life_full(marked: fn()) {
     LIFE_FULL_MARKED.set(marked);
 }
 
+/// Are the life hooks armed (check mode or lifetime measurement)? Their
+/// subject is the copied minor's trace: a cycle that reaches nothing would
+/// read every claimed object as unreached (freed), so an untraced promotion
+/// is vetoed while they are (`copying.rs`, `untraced_promotion_instrument_veto`).
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_hooks_armed() -> bool {
+    LIFE_REACHED.get().is_some()
+}
+
 #[cfg(perry_gc_instruments)]
 pub(super) fn life_reached(old: usize, new: usize) {
     if let Some(f) = LIFE_REACHED.get() {
