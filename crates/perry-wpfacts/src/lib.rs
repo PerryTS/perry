@@ -551,6 +551,7 @@ fn generate<'a>(
     g.m.slice_births = builtins::slice_births_enabled();
     g.m.inbounds_store = gen::in_bounds::enabled();
     g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.no_hole_sabotage = cfg.sabotage.as_deref() == Some("nohole");
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;

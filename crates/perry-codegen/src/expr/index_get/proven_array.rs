@@ -421,7 +421,9 @@ fn lower_rep(
     );
     crate::facts_consumed::used();
     if crate::verify_facts::enabled() {
-        super::array_rep::witness_read(ctx, arr_box, idx_i32, read, numeric);
+        // `read.number`: the read's value is a proven Number, never
+        // `undefined` (its own claim, or a present slot of Number elements).
+        super::array_rep::witness_read(ctx, arr_box, idx_i32, read, numeric, read.number);
     }
     let cold_idx = (!read.total(numeric)).then(|| ctx.new_block("arep.cold"));
     let cold_label = cold_idx.map(|i| ctx.block_label(i));

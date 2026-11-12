@@ -427,8 +427,11 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     if let Some(v) = walk_read::try_lower(ctx, expr)? {
         return Ok(Some(v));
     }
-    array_rep::witness(ctx, expr)?;
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
         return Ok(Some(v));
@@ -659,8 +662,11 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     if let Some(v) = walk_read::try_lower(ctx, expr)? {
         return Ok(Some(v));
     }
-    array_rep::witness(ctx, expr)?;
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
     // inline-TA probe — the fact's entry guard already proved storage + the
     // whole index window, so the read needs no per-access cache probe at all.
@@ -883,8 +889,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(v) = walk_read::try_lower(ctx, expr)? {
         return Ok(v);
     }
-    array_rep::witness(ctx, expr)?;
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {
         return Ok(v);

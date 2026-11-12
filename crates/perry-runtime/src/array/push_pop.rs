@@ -724,7 +724,7 @@ pub(super) fn proxy_array_mutator(
                 if actual_delete_count > u32::MAX as u64 {
                     crate::array::array_length_range_error();
                 }
-                let removed = super::species::array_species_create(
+                let (removed, removed_is_plain) = super::species::array_species_create(
                     p.get_nanbox_f64(),
                     actual_delete_count as usize,
                 );
@@ -736,12 +736,28 @@ pub(super) fn proxy_array_mutator(
                             p.get_nanbox_f64(),
                             from.as_bytes(),
                         ));
-                        super::species::species_result_set(
-                            removed_handle.get_nanbox_f64(),
-                            k as usize,
-                            value.get_nanbox_f64(),
-                        );
+                        if removed_is_plain {
+                            crate::array::js_array_set_f64(
+                                value::js_nanbox_get_pointer(removed_handle.get_nanbox_f64())
+                                    as *mut ArrayHeader,
+                                k as u32,
+                                value.get_nanbox_f64(),
+                            );
+                        } else {
+                            super::species::species_result_define(
+                                removed_handle.get_nanbox_f64(),
+                                k as usize,
+                                value.get_nanbox_f64(),
+                            );
+                        }
                     }
+                }
+                if !removed_is_plain {
+                    // Step 13: Set(A, "length", actualDeleteCount, true).
+                    super::species::species_result_set_length(
+                        removed_handle.get_nanbox_f64(),
+                        actual_delete_count as usize,
+                    );
                 }
                 let item_count = args_len.saturating_sub(2) as u64;
                 if item_count < actual_delete_count {
