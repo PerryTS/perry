@@ -143,6 +143,11 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     {
         return false;
     }
+    // `process.env`: its own keys are the environment, not its field mirror,
+    // which only the object walk refreshes. An empty mirror is no empty object.
+    if crate::process::is_process_env_ptr(ptr as usize) {
+        return false;
+    }
     let table = crate::object::overflow::table(ptr.cast());
     if !table.is_null() {
         return (0..(*table).length)
