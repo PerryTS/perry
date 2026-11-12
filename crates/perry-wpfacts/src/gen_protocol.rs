@@ -104,7 +104,17 @@ impl<'a> Gen<'a> {
         let va = self.m.yield_key();
         self.m.cons(r1, Cons::Load { key: va, dst: out });
         self.m.cons(r2, Cons::Load { key: va, dst: out });
+        self.step_done(r1);
+        self.step_done(r2);
         out
+    }
+
+    /// The consumer's read of `done` on the step results in `result`
+    /// (`Model::step_done`), a node of the body being walked.
+    pub(crate) fn step_done(&mut self, result: NodeId) {
+        if let Some(d) = self.m.step_done(result) {
+            self.m.own(d);
+        }
     }
 
     /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):

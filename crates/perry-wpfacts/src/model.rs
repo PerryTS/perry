@@ -1808,6 +1808,9 @@ pub struct Model {
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.
     pub name_fold_calls: FxHashMap<CallId, &'static str>,
+    /// An iteration consumer reads `done` of each step result
+    /// (`Model::step_done`, `reach::step_done`).
+    pub reach_step_done: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
