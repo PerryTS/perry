@@ -12,6 +12,13 @@
 //! array whose `constructor` resolves to the intrinsic `Array`) we take a fast
 //! path that allocates a plain `ArrayHeader` directly: observationally
 //! identical, since `Array[@@species]` returns `Array` itself.
+//!
+//! Only that default arm hands the caller a container it may fill by raw slot
+//! writes. Whatever a species constructor returns — a typed array, a Number
+//! object (`new Object(count)`), a frozen or pre-filled Array, an object with
+//! accessors — is populated through the object's own `[[DefineOwnProperty]]`
+//! ([`species_result_define`], CreateDataPropertyOrThrow) and, for the methods
+//! that end with `Set(A, "length", n, true)`, [`species_result_set_length`].
 
 use super::ArrayHeader;
 use crate::value::{JSValue, TAG_NULL, TAG_UNDEFINED};
@@ -80,6 +87,39 @@ fn intrinsic_array() -> f64 {
     crate::object::builtin_constructor_value("Array")
 }
 
+/// The allocation-free part of the species resolution: `true` when `original`
+/// is an ordinary Array that owns no `constructor` and inherits the intrinsic
+/// one as a data property, so `ArraySpeciesCreate` is `ArrayCreate` and no
+/// user code can run. Header peeks only: `false` just means "ask
+/// [`array_species_create`]", which may run getters and a constructor.
+#[inline]
+pub(crate) unsafe fn default_species_is_certain(original: f64) -> bool {
+    let jv = JSValue::from_bits(original.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(original) as usize;
+    let arr = raw as *const crate::array::ArrayHeader;
+    // Proxy check FIRST: a masked proxy id is not a heap pointer, so the
+    // GcHeader deref below would read unmapped memory for one.
+    if crate::array::array_ptr_as_proxy(arr).is_some() || raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
+        return false;
+    }
+    let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    crate::gc_type_is_array!((*hdr).obj_type)
+        && (*hdr)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
+        && !super::named_props::array_named_property_has_by_name(arr, "constructor")
+        && crate::object::get_accessor_descriptor(
+            crate::array::array_prototype_addr_if_resolved(),
+            "constructor",
+        )
+        .is_none()
+        && !crate::object::descriptor_state::owner_key_is_accessor(
+            crate::array::object_prototype_addr_if_resolved(),
+            b"constructor",
+        )
+}
+
 /// `SpeciesConstructor` portion of `ArraySpeciesCreate`: resolve the result
 /// constructor, returning `Default` for the intrinsic / undefined case and
 /// `Custom(S)` for a usable user constructor. Throws on a non-constructor
@@ -90,37 +130,8 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     if crate::value::js_is_truthy(crate::array::js_array_is_array(original)) == 0 {
         return SpeciesChoice::Default;
     }
-    // Plain arrays without an own constructor or inherited constructor
-    // accessor use the intrinsic constructor without allocating a key.
-    {
-        let jv = JSValue::from_bits(original.to_bits());
-        if jv.is_pointer() {
-            let raw = crate::value::js_nanbox_get_pointer(original) as usize;
-            let arr = raw as *const crate::array::ArrayHeader;
-            // Proxy check FIRST: a masked proxy id is not a heap pointer, so
-            // the GcHeader deref below would read unmapped memory for one.
-            if crate::array::array_ptr_as_proxy(arr).is_none()
-                && raw >= crate::gc::GC_HEADER_SIZE + 0x1000
-            {
-                let hdr =
-                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if crate::gc_type_is_array!((*hdr).obj_type)
-                    && (*hdr)._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
-                    && !super::named_props::array_named_property_has_by_name(arr, "constructor")
-                    && crate::object::get_accessor_descriptor(
-                        crate::array::array_prototype_addr_if_resolved(),
-                        "constructor",
-                    )
-                    .is_none()
-                    && !crate::object::descriptor_state::owner_key_is_accessor(
-                        crate::array::object_prototype_addr_if_resolved(),
-                        b"constructor",
-                    )
-                {
-                    return SpeciesChoice::Default;
-                }
-            }
-        }
+    if default_species_is_certain(original) {
+        return SpeciesChoice::Default;
     }
     // step 3: C = Get(O, "constructor"). step 5: if Type(C) is Object,
     // C = Get(C, @@species); a null species → undefined.
@@ -155,12 +166,13 @@ fn throw_not_constructor() -> ! {
 }
 
 /// `ArraySpeciesCreate(originalArray, length)` — returns the result container
-/// as a NaN-boxed value (a plain array for the default case, or the
-/// `Construct(species, « length »)` result). The caller populates its
-/// elements (via [[Set]] / CreateDataProperty for the custom case). May throw
-/// (poisoned constructor/@@species getter, or a non-constructor species).
-pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> f64 {
-    array_species_create_with_capacity(original, length, 0).0
+/// as a NaN-boxed value and whether the DEFAULT species arm produced it (see
+/// [`array_species_create_with_capacity`]): only then is it a fresh plain
+/// array of `length` holes the caller may fill with raw slot writes. Any other
+/// result is filled with [`species_result_define`]. May throw (poisoned
+/// constructor/@@species getter, a non-constructor species, the constructor).
+pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> (f64, bool) {
+    array_species_create_with_capacity(original, length, 0)
 }
 
 /// [`array_species_create`] with a result-capacity hint (#6386). Capacity is
@@ -182,13 +194,7 @@ pub(crate) unsafe fn array_species_create_with_capacity(
 ) -> (f64, bool) {
     match resolve_species(original) {
         SpeciesChoice::Default => {
-            let out = if capacity_hint > length as u32 {
-                let arr = crate::array::js_array_alloc(capacity_hint);
-                (*arr).length = length as u32;
-                arr
-            } else {
-                crate::array::js_array_alloc_with_length(length as u32)
-            };
+            let out = default_species_array(length, capacity_hint);
             (
                 f64::from_bits(JSValue::pointer(out as *const u8).bits()),
                 true,
@@ -204,43 +210,73 @@ pub(crate) unsafe fn array_species_create_with_capacity(
     }
 }
 
-/// `true` when a species `result` (NaN-boxed) is an ordinary `ArrayHeader` —
-/// i.e. the default fast path — so the caller can use direct slot writes.
-pub(crate) unsafe fn species_result_is_plain_array(result: f64) -> bool {
-    let jv = JSValue::from_bits(result.to_bits());
-    if !jv.is_pointer() {
-        return false;
+/// The default species arm's result: `ArrayCreate(length)` as a fresh plain
+/// array of `length` holes, allocated at `capacity_hint` slots when that is
+/// larger (capacity is unobservable).
+#[inline]
+pub(crate) unsafe fn default_species_array(length: usize, capacity_hint: u32) -> *mut ArrayHeader {
+    if capacity_hint > length as u32 {
+        let arr = crate::array::js_array_alloc(capacity_hint);
+        (*arr).length = length as u32;
+        arr
+    } else {
+        crate::array::js_array_alloc_with_length(length as u32)
     }
-    let raw = crate::value::js_nanbox_get_pointer(result) as usize;
-    if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-        return false;
-    }
-    let obj_type = {
-        let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*hdr).obj_type
-    };
-    crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
 }
 
-/// Store `value` at `index` on a species `result` (NaN-boxed). A plain array
-/// gets a direct slot write (+ length bump + GC slot note); any other object
-/// gets a polymorphic indexed [[Set]] / data-property define.
-pub(crate) unsafe fn species_result_set(result: f64, index: usize, value: f64) {
-    let jv = JSValue::from_bits(result.to_bits());
-    if jv.is_pointer() {
-        let raw = crate::value::js_nanbox_get_pointer(result) as usize;
-        if raw >= crate::gc::GC_HEADER_SIZE + 0x1000 {
-            let obj_type = {
-                let hdr =
-                    (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                (*hdr).obj_type
-            };
-            if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
-                let arr = raw as *mut ArrayHeader;
-                super::js_array_set_f64(arr, index as u32, value);
-                return;
-            }
-        }
-        crate::object::js_object_set_index_polymorphic(raw as i64, index as f64, value);
+/// `CreateDataPropertyOrThrow(A, ToString(index), value)` on the result of a
+/// species constructor (never the default arm's plain array, which callers
+/// fill directly). The property is defined through the result's own
+/// `[[DefineOwnProperty]]`, so an accessor or an inherited setter at the index
+/// is not called, an Array result grows its `length`, and a **TypeError** is
+/// thrown when the definition is rejected: a frozen, sealed or non-extensible
+/// result, a non-configurable property in the way, a typed array without that
+/// index.
+///
+/// May allocate, run a proxy trap and throw: the caller keeps `result`,
+/// `value` and its own receiver rooted across the call.
+pub(crate) unsafe fn species_result_define(result: f64, index: usize, value: f64) {
+    // An elements-backed Array-subclass instance (`class V extends Array`,
+    // the usual species): an in-bounds or appending store into its elements
+    // array is that definition. It declines for a frozen, sealed or
+    // non-extensible instance and for an index past the end.
+    if index <= u32::MAX as usize
+        && crate::array::array_subclass_fast_index_set(result, index as u32, value)
+    {
+        return;
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_h = scope.root_nanbox_f64(result);
+    let key_h = scope.root_nanbox_f64(index as f64);
+    if !crate::proxy::create_data_property(result, index as f64, value) {
+        let key = crate::object::js_to_property_key(key_h.get_nanbox_f64());
+        key_h.set_nanbox_f64(key);
+        crate::object::object_ops::throw_definition_rejected(&scope, &result_h, &key_h);
+    }
+}
+
+/// `Set(A, "length", length, true)` on the result of a species constructor:
+/// the last step of `slice`, `splice` and `concat` (`map`, `filter`, `flat`
+/// and `flatMap` have none). A `length` setter runs; a getter-only or
+/// non-writable `length` and a frozen result throw a **TypeError**, as does a
+/// typed array, whose `length` is a getter of `%TypedArray%.prototype`.
+///
+/// May allocate, run user code and throw, as [`species_result_define`].
+pub(crate) unsafe fn species_result_set_length(result: f64, length: usize) {
+    if crate::proxy_hooks::proxy_is_proxy(result) != 0 {
+        super::push_pop::proxy_set_str_key(result, b"length", length as f64);
+        return;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(result) as usize;
+    // A typed array of any kind (a `Uint8Array` is buffer-backed); an
+    // `ArrayBuffer` or `DataView` is an ordinary object for `length`.
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+        || (crate::buffer::is_registered_buffer(raw)
+            && !crate::buffer::is_non_indexed_buffer_view(raw))
+    {
+        crate::collection_iter::throw_type_error(
+            "Cannot set property length of [object Object] which has only a getter",
+        );
+    }
+    super::generic_object::al_set_length(result, length as i64);
 }

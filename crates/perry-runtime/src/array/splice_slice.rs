@@ -105,11 +105,11 @@ pub extern "C" fn js_array_splice(
         let recv_value = arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
             f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
         });
-        let deleted_box =
+        // Only the default species arm yields a fresh plain array to fill by
+        // slot writes; a species constructor's result is defined into.
+        let (deleted_box, deleted_is_plain) =
             crate::array::species::array_species_create(recv_value, actual_delete as usize);
         let deleted_handle = scope.root_nanbox_f64(deleted_box);
-        let deleted_is_plain =
-            crate::array::species::species_result_is_plain_array(deleted_handle.get_nanbox_f64());
         let removed_value_handle =
             scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
 
@@ -168,14 +168,24 @@ pub extern "C" fn js_array_splice(
                 as *mut ArrayHeader;
             rebuild_array_layout(deleted);
         } else {
+            // Step 12: CreateDataPropertyOrThrow per present index, then
+            // step 13: Set(A, "length", actualDeleteCount, true).
             for i in 0..actual_delete as usize {
-                removed_value_handle.set_nanbox_f64(spec_read(i));
-                crate::array::species::species_result_set(
+                let value = spec_read(i);
+                if value.to_bits() == crate::value::TAG_HOLE {
+                    continue; // absent → no property created in the result
+                }
+                removed_value_handle.set_nanbox_f64(value);
+                crate::array::species::species_result_define(
                     deleted_handle.get_nanbox_f64(),
                     i,
                     removed_value_handle.get_nanbox_f64(),
                 );
             }
+            crate::array::species::species_result_set_length(
+                deleted_handle.get_nanbox_f64(),
+                actual_delete as usize,
+            );
         }
 
         // A frozen array has non-writable elements and `length`: the moves,
@@ -371,10 +381,14 @@ pub extern "C" fn js_array_slice(
         // `O.constructor` / `@@species` and throws on a poisoned getter or
         // non-constructor species before any element is copied.
         let recv_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
-        let result_box =
-            crate::array::species::array_species_create(recv_value, slice_len as usize);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
-        let array = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
+        if !crate::array::species::default_species_is_certain(recv_value) {
+            // An own `constructor`, a recorded prototype or a `constructor`
+            // accessor: the resolution can run user code, so the receiver is
+            // rooted there and the result may be any object.
+            return slice_with_species(arr, start_idx, slice_len);
+        }
+        // The default species: ArrayCreate(count), filled by slot writes.
+        let array = crate::array::species::default_species_array(slice_len as usize, 0);
 
         // Copy elements — use spec-generic Get when the source is exotic
         // (has Array.prototype or Object.prototype indexed properties) so
@@ -383,51 +397,105 @@ pub extern "C" fn js_array_slice(
         let src_elements =
             crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let src_exotic = crate::array::array_iteration_is_exotic(arr);
-        if is_plain {
-            (*array).length = slice_len;
-            let dst_elements =
-                crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
-            for i in 0..slice_len as usize {
-                let src_idx = start_idx as usize + i;
-                let v = if src_exotic {
-                    if crate::array::array_spec_has_index(arr, src_idx as u32) {
-                        crate::array::array_spec_get(arr, src_idx as u32)
-                    } else {
-                        f64::from_bits(crate::value::TAG_HOLE)
-                    }
-                } else {
-                    ptr::read(src_elements.add(src_idx))
-                };
-                if src_exotic {
-                    // Publish before the next getter can collect or throw,
-                    // leaving the species result reachable with a partial copy.
-                    note_array_slot(array, i, v.to_bits());
-                } else {
-                    // GC_STORE_AUDIT(BARRIERED): raw source reads cannot call out; rebuild follows the copy.
-                    ptr::write(dst_elements.add(i), v);
-                }
-            }
-            rebuild_array_layout(array);
-        } else {
-            // Custom species container: CreateDataPropertyOrThrow per element.
-            for i in 0..slice_len as usize {
-                let src_idx = start_idx as usize + i;
-                let v = if src_exotic {
-                    if !crate::array::array_spec_has_index(arr, src_idx as u32) {
-                        continue; // absent slot → no property created in result
-                    }
+        (*array).length = slice_len;
+        let dst_elements =
+            crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
+        for i in 0..slice_len as usize {
+            let src_idx = start_idx as usize + i;
+            let v = if src_exotic {
+                if crate::array::array_spec_has_index(arr, src_idx as u32) {
                     crate::array::array_spec_get(arr, src_idx as u32)
                 } else {
-                    let v = ptr::read(src_elements.add(src_idx));
-                    if v.to_bits() == crate::value::TAG_HOLE {
-                        continue; // hole → no property created in result
-                    }
-                    v
-                };
-                crate::array::species::species_result_set(result_box, i, v);
+                    f64::from_bits(crate::value::TAG_HOLE)
+                }
+            } else {
+                ptr::read(src_elements.add(src_idx))
+            };
+            if src_exotic {
+                // Publish before the next getter can collect or throw,
+                // leaving the species result reachable with a partial copy.
+                note_array_slot(array, i, v.to_bits());
+            } else {
+                // GC_STORE_AUDIT(BARRIERED): raw source reads cannot call out; rebuild follows the copy.
+                ptr::write(dst_elements.add(i), v);
             }
         }
+        rebuild_array_layout(array);
 
         array
+    }
+}
+
+/// `slice` for a receiver whose species needs the full resolution
+/// (ECMA-262 §23.1.3.28 steps 8-15): `ArraySpeciesCreate(O, count)`, then per
+/// present index `CreateDataPropertyOrThrow(A, n, Get(O, k))`, then
+/// `Set(A, "length", count, true)`. The constructor and the getters it reads
+/// can collect, so the receiver and the result are rooted and every element is
+/// read through the receiver's live address.
+#[cold]
+#[inline(never)]
+unsafe fn slice_with_species(
+    arr: *const ArrayHeader,
+    start_idx: u32,
+    slice_len: u32,
+) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let arr_handle = scope.root_raw_mut_ptr(arr as *mut ArrayHeader);
+    let recv_value = arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+        f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
+    });
+    let (result_box, is_default) =
+        crate::array::species::array_species_create(recv_value, slice_len as usize);
+    let result_handle = scope.root_nanbox_f64(result_box);
+    let value_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    // The species constructor may have shrunk the receiver: a slot at or past
+    // its live length or capacity is absent unless a prototype supplies it.
+    let read = |i: usize| -> Option<f64> {
+        arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr| {
+            let index = start_idx + i as u32;
+            if index < (*arr).length && index < (*arr).capacity {
+                let elements =
+                    crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
+                let v = ptr::read(elements.add(index as usize));
+                if v.to_bits() != crate::value::TAG_HOLE {
+                    return Some(v);
+                }
+            }
+            if crate::array::array_spec_has_index(arr, index) {
+                Some(crate::array::array_spec_get(arr, index))
+            } else {
+                None
+            }
+        })
+    };
+    for i in 0..slice_len as usize {
+        let Some(v) = read(i) else {
+            continue; // absent → no property created in the result
+        };
+        if is_default {
+            let array = crate::value::js_nanbox_get_pointer(result_handle.get_nanbox_f64())
+                as *mut ArrayHeader;
+            // Publish before the next getter can collect or throw.
+            note_array_slot(array, i, v.to_bits());
+        } else {
+            value_handle.set_nanbox_f64(v);
+            crate::array::species::species_result_define(
+                result_handle.get_nanbox_f64(),
+                i,
+                value_handle.get_nanbox_f64(),
+            );
+        }
+    }
+    if is_default {
+        let array =
+            crate::value::js_nanbox_get_pointer(result_handle.get_nanbox_f64()) as *mut ArrayHeader;
+        rebuild_array_layout(array);
+        array
+    } else {
+        crate::array::species::species_result_set_length(
+            result_handle.get_nanbox_f64(),
+            slice_len as usize,
+        );
+        crate::value::js_nanbox_get_pointer(result_handle.get_nanbox_f64()) as *mut ArrayHeader
     }
 }
