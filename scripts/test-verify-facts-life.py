@@ -8,10 +8,18 @@ points (death `exit` in the binary's claim records). Each `fate:`
 sabotage plants a Proven Dropped fate on a parameter the callee keeps: the run
 must exit 86 with one JSON line naming the expected holder. The `fatebet:`
 sabotage must print one PERRY_BET_FAILED line, rc 0 and node's output.
+
+The life hooks live only in the instrumented runtime variant, which a
+PERRY_VERIFY_FACTS=1 compile links; the default archives carry neither the
+hooks nor the life check. Offered under the instrumented names (the default
+archives beside the perry binary), they must make the check build of a
+fixture with deaths fail to link on the life entry points: a check build
+without the hooks never runs silently unchecked.
 """
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 
@@ -112,6 +120,25 @@ def main():
           f"{'OK' if ok else 'FAIL'}")
     if not ok:
         failures.append(name + ":" + sabotage)
+    # The default archives under the instrumented names: the hooks are absent.
+    plain = out / "default-as-instr"
+    plain.mkdir(exist_ok=True)
+    for stem in ("libperry_runtime", "libperry_stdlib"):
+        for suffix in (".a", ".a.gc-effects"):
+            src = perry.parent / (stem + suffix)
+            if src.exists():
+                shutil.copyfile(src, plain / (stem + "_instr" + suffix))
+    e = dict(env, PERRY_RUNTIME_DIR=str(plain))
+    exe = out / "c9_dropped.default-runtime"
+    c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
+             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=e)
+    ok = c.returncode != 0 and b"perry_verify_facts_life_" in c.stdout + c.stderr
+    r = run([str(exe)], env=e) if c.returncode == 0 else None
+    print(f"no-hooks c9_dropped on the default runtime: compile rc={c.returncode} "
+          f"run rc={r.returncode if r else None} {'OK' if ok else 'FAIL'}")
+    if not ok:
+        failures.append("no-hooks:c9_dropped")
+        (out / "no-hooks.stderr").write_bytes(c.stdout + c.stderr + (r.stderr if r else b""))
     print("FAILURES:", failures if failures else "none")
     return 1 if failures else 0
 

@@ -518,6 +518,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
+            #[cfg(perry_gc_instruments)]
             if DIAGNOSTICS {
                 diagnostic_hooks::life_before_copied_minor();
             }
@@ -550,6 +551,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
                 .record_collection(freed_bytes, elapsed_us);
         });
         diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
+        #[cfg(perry_gc_instruments)]
         if DIAGNOSTICS {
             diagnostic_hooks::life_after_copied_minor();
         }
