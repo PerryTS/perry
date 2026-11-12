@@ -384,7 +384,7 @@ pub(crate) fn proven_kind_family(
 
 /// The universal dispatcher, which finds an own or inherited user method. It
 /// is the same call `builtin_kind_guard`'s generic block already makes.
-fn emit_dispatcher(
+pub(super) fn emit_dispatcher(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,

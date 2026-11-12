@@ -26,6 +26,62 @@ pub struct FoldedCall<'a> {
     pub args: Vec<&'a Expr>,
 }
 
+/// The identity of a by-name method site, shared by the whole-program facts
+/// (which judge the site) and codegen (which asks for the verdict).
+///
+/// A call the HIR keeps as `Call { callee: PropertyGet }` is named by its
+/// callee read's offset ([`Site::Callee`]). A folded node carries no source
+/// offset of its own, so it is named by its receiver: the local it reads
+/// ([`Site::Local`]; a local's value set is one node, so every `a.m()` on
+/// the same local has the same verdict) or the receiver expression's offset
+/// ([`Site::Recv`]). The method name completes the key on both sides. The
+/// kinds never share a key (a member chain `x.m().m()` starts its callee
+/// read and its receiver at one offset), and the facts hold a verdict for a
+/// key only when every site recorded under it has that verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Site {
+    /// The byte offset of the callee `PropertyGet` of an unfolded call.
+    Callee(u32),
+    /// The byte offset of a folded node's receiver expression.
+    Recv(u32),
+    /// The local a folded node's receiver reads.
+    Local(u32),
+}
+
+/// A method site's receiver holds only typed arrays the realm bore, at
+/// every copy of the site (wpfacts `method_sites`).
+pub const SITE_TYPED_ARRAY: u8 = 1;
+
+/// The site of the unfolded call whose callee is `callee`, when it has a
+/// source offset.
+pub fn callee_site(callee: &Expr) -> Option<Site> {
+    match callee {
+        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => {
+            Some(Site::Callee(*byte_offset))
+        }
+        _ => None,
+    }
+}
+
+/// The site of a folded node whose receiver is `receiver`; `None` for a
+/// receiver with no identity (a synthesized expression, a nested fold): such
+/// a site has no verdict.
+pub fn receiver_site(receiver: &Receiver<'_>) -> Option<Site> {
+    match receiver {
+        Receiver::Local(id) => Some(Site::Local(*id)),
+        Receiver::Expr(Expr::LocalGet(id)) => Some(Site::Local(*id)),
+        Receiver::Expr(
+            Expr::PropertyGet { byte_offset, .. }
+            | Expr::IndexGet {
+                element_offset: byte_offset,
+                ..
+            }
+            | Expr::Call { byte_offset, .. },
+        ) if *byte_offset != 0 => Some(Site::Recv(*byte_offset)),
+        Receiver::Expr(_) => None,
+    }
+}
+
 /// The methods codegen lowers to a host fs stream operation when the HIR
 /// folds `recv.m(..)` into `NativeMethodCall { module: "fs", object: Some(recv) }`
 /// (`perry-codegen lower_call/native/native_fs_branch.rs` matches only these

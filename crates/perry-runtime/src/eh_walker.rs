@@ -932,7 +932,7 @@ impl Walker {
         if images.is_empty() {
             return None;
         }
-        let own = Walker::build as usize as u64;
+        let own = Walker::build as *const () as usize as u64;
         let own_text = images
             .iter()
             .find(|i| own >= i.image.text_addr && own < i.image.text_end)

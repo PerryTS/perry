@@ -410,6 +410,10 @@ pub struct ElisionFacts {
     /// program code, the named reads and element reads whose value is a
     /// primitive, and the locals that hold a primitive and no object.
     pub quiet_reads: std::collections::BTreeSet<(u32, String)>,
+    /// Method sites (wpfacts `method_sites`; `crate::method_site`): what the
+    /// solve proves of a by-name method call's receiver values, by the
+    /// site's key and the method name (`perry_hir::folded_call::SITE_*` bits).
+    pub method_sites: std::collections::BTreeMap<(perry_hir::folded_call::Site, String), u8>,
     pub quiet_elements: std::collections::BTreeSet<u32>,
     pub primitive_reads: std::collections::BTreeSet<(u32, String)>,
     pub primitive_elements: std::collections::BTreeSet<u32>,

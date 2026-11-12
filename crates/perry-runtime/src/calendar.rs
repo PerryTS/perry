@@ -110,36 +110,38 @@ pub fn host_time_zone_name() -> &'static str {
         });
     }
 
-    use std::sync::OnceLock;
-    static TZ: OnceLock<String> = OnceLock::new();
-    crate::once_init::get_or_init(&TZ, || {
-        if let Some(raw) = std::env::var_os("TZ") {
-            if let Some(s) = raw.to_str() {
-                // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`
-                // (leading colon) or a bare IANA id. Empty `TZ` means UTC.
-                let s = s.trim().strip_prefix(':').unwrap_or_else(|| s.trim());
-                if s.is_empty() {
-                    return "UTC".to_string();
-                }
-                if let Some(name) = iana_id_from_zoneinfo_path(s) {
-                    return name;
-                }
-                return s.to_string();
-            }
-        }
-        #[cfg(unix)]
-        {
-            if let Ok(target) = std::fs::read_link("/etc/localtime") {
-                if let Some(name) = iana_id_from_zoneinfo_path(&target.to_string_lossy()) {
-                    return name;
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        use std::sync::OnceLock;
+        static TZ: OnceLock<String> = OnceLock::new();
+        crate::once_init::get_or_init(&TZ, || {
+            if let Some(raw) = std::env::var_os("TZ") {
+                if let Some(s) = raw.to_str() {
+                    // A `TZ` of `:Europe/Berlin` / `:/path/zoneinfo/Europe/Berlin`
+                    // (leading colon) or a bare IANA id. Empty `TZ` means UTC.
+                    let s = s.trim().strip_prefix(':').unwrap_or_else(|| s.trim());
+                    if s.is_empty() {
+                        return "UTC".to_string();
+                    }
+                    if let Some(name) = iana_id_from_zoneinfo_path(s) {
+                        return name;
+                    }
+                    return s.to_string();
                 }
             }
-        }
-        "UTC".to_string()
-    })
-    .as_str()
+            #[cfg(unix)]
+            {
+                if let Ok(target) = std::fs::read_link("/etc/localtime") {
+                    if let Some(name) = iana_id_from_zoneinfo_path(&target.to_string_lossy()) {
+                        return name;
+                    }
+                }
+            }
+            "UTC".to_string()
+        })
+        .as_str()
+    }
 }
-
 /// Extract the IANA id (`Europe/Berlin`) after a `.../zoneinfo/` path segment.
 /// Returns `None` when the path has no `zoneinfo/` component (e.g. a bare id).
 fn iana_id_from_zoneinfo_path(p: &str) -> Option<String> {
