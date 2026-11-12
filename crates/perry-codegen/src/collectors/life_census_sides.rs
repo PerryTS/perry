@@ -55,7 +55,7 @@ use perry_hir::types::FuncId;
 use perry_hir::{Expr, Stmt};
 use perry_transform::effects::Fate;
 
-use super::{fate_word, kind, ModuleCensus};
+use super::{fate_why, kind, ModuleCensus};
 use crate::codegen::ElisionFacts;
 use crate::expr::wpfacts_access::{facts_read, facts_static};
 use crate::lower_call::proven_call::{field_call_bodies, value_call_bodies};
@@ -127,11 +127,11 @@ pub(super) fn resolve(
 }
 
 /// The fate of argument `i` over `bodies`.
-fn fate_over(m: &ModuleCensus, bodies: &[FuncId], i: usize) -> &'static str {
+fn fate_over(m: &ModuleCensus, bodies: &[FuncId], i: usize) -> String {
     if bodies.iter().any(|b| m.fates.of_fn(*b).is_none()) {
-        return "Kept(no-body)";
+        return "Kept(no-body)".to_string();
     }
-    fate_word(m.fates.call_arg(bodies, i))
+    fate_why(m.fates.call_arg(bodies, i))
 }
 
 /// Column 9 of argument `i` of `callee(...)`.
@@ -162,7 +162,7 @@ pub(super) fn construct_side(m: &ModuleCensus, class: &str, i: usize) -> String 
     if f.fate == Fate::KeptByReceiver {
         "new:kept-by-new-object".to_string()
     } else {
-        format!("new:{}", fate_word(f))
+        format!("new:{}", fate_why(f))
     }
 }
 
