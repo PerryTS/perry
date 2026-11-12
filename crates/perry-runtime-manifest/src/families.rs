@@ -129,7 +129,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "String.prototype.matchAll",
             "String.prototype.search",
         ],
-        modules: &["v8", "worker_threads"],
+        modules: &["util.types", "util/types", "v8", "worker_threads"],
     },
     RuntimeFamily {
         id: "url_engine",
@@ -234,6 +234,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "os",
             "perf_hooks",
             "sqlite",
+            "util.types",
+            "util/types",
             "v8",
             "worker_threads",
         ],
@@ -243,7 +245,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         requires: &[],
         holders: &["Proxy"],
         members: &[],
-        modules: &[],
+        modules: &["util.types", "util/types"],
     },
     RuntimeFamily {
         id: "async_hooks",
@@ -279,6 +281,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "crypto",
             "fs",
             "fs/promises",
+            "util.types",
+            "util/types",
             "v8",
             "worker_threads",
         ],
@@ -405,6 +409,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "tls",
             "tty",
             "tursodb",
+            "util.types",
+            "util/types",
             "v8",
             "worker_threads",
             "ws",
@@ -621,6 +627,9 @@ pub const CORE_HOLDERS: &[&str] = &[
     "unescape",
 ];
 
+/// (`util/types` is in no list of core: its predicates name the families
+/// they test, and lowering routes `ArrayBuffer.isView` through it.)
+///
 /// Module specifiers (without `node:`) whose namespace is core: no family
 /// row names them and their realm namespace declares no family birth that a
 /// row would have to carry. A specifier in neither list is an unknown
@@ -650,8 +659,6 @@ pub const CORE_MODULES: &[&str] = &[
     "timers/promises",
     "trace_events",
     "util",
-    "util.types",
-    "util/types",
 ];
 
 /// Module specifiers (without `node:`) the realm declares whose values no
