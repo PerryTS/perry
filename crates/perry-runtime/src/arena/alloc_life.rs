@@ -114,6 +114,24 @@ crate::perry_thread_local! {
     static RNG: Cell<u64> = const { Cell::new(0x9E37_79B9_7F4A_7C15) };
 }
 
+/// LIFE I3e: shape key/attribute storage stamped `GC_FLAG_SHAPE_SHARED`
+/// (count, bytes), counted when the flag is first set on a header.
+static SHAPE_SHARED: [std::sync::atomic::AtomicU64; 2] =
+    [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+/// LIFE I3e: `header` is about to be stamped `GC_FLAG_SHAPE_SHARED` (key or
+/// attribute storage of a shape); counted once per header, with its size.
+pub(crate) fn shape_shared(header: *const crate::gc::GcHeader) {
+    if !on() {
+        return;
+    }
+    let (flags, size) = unsafe { ((*header).gc_flags, (*header).size) };
+    if flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0 {
+        SHAPE_SHARED[0].fetch_add(1, Ordering::Relaxed);
+        SHAPE_SHARED[1].fetch_add(size as u64, Ordering::Relaxed);
+    }
+}
+
 #[inline(always)]
 pub(crate) fn on() -> bool {
     ON.load(Ordering::Relaxed)
@@ -521,6 +539,11 @@ pub(crate) fn write() {
         out.push_str(&format!(
             "#arenas\tyoung={}\told={}\tlonglived={}\tsurvivor0={}\tsurvivor1={}\tyoung_large_flag={}\told_large_flag={}\tarmed_arena_bytes={}\trefused_bytes={}\tevacuated_bytes={}\n",
             by[0].0, by[1].0, by[2].0, by[3].0, by[4].0, by[0].1, by[1].1, s.armed_arena_bytes, s.refused, s.evacuated
+        ));
+        out.push_str(&format!(
+            "#shape_shared\tobjects={}\tbytes={}\n",
+            SHAPE_SHARED[0].load(Ordering::Relaxed),
+            SHAPE_SHARED[1].load(Ordering::Relaxed)
         ));
         for t in 0..TYPES {
             if s.unnoted[t][0] != 0 {

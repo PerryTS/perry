@@ -1112,6 +1112,8 @@ pub(crate) unsafe fn probe_born_layout(
 unsafe fn stamp_shared(arr: *mut ArrayHeader) {
     let gc_header = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
         .expect("a canonical array must be a tracked GC allocation");
+    #[cfg(perry_gc_instruments)]
+    crate::arena::alloc_life::shape_shared(gc_header.as_ptr());
     (*gc_header.as_ptr()).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
 }
 

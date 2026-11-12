@@ -884,6 +884,8 @@ fn shape_cache_insert(
         unsafe {
             let gc_header = (keys_array as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *mut crate::gc::GcHeader;
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(gc_header);
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
     }
@@ -1447,6 +1449,8 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     if crate::gc_type_is_not_array!((*gc_header).obj_type) {
         return false;
     }
+    #[cfg(perry_gc_instruments)]
+    crate::arena::alloc_life::shape_shared(gc_header);
     (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     true
 }
