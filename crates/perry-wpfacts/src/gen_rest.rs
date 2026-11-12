@@ -183,6 +183,9 @@ impl<'a> Gen<'a> {
                     // excepted: its Array has no other holder yet.
                     let push = self.m.atom("push");
                     self.list_push(o, Some(a.len() as u32));
+                    if let Some(call) = perry_hir::folded_call::native_array_push(e) {
+                        self.folded_site(fx, &call.receiver, push, o);
+                    }
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
                     // The array push the HIR folds for a receiver it proved an

@@ -44,6 +44,15 @@ pub struct ReadSite {
     pub func: FnIdx,
 }
 
+/// A folded builtin-method node (`perry_hir::folded_call`): the call
+/// `recv.key(..)` at the site its receiver names (`method_sites`).
+pub(crate) struct FoldedSite {
+    pub module: u32,
+    pub site: perry_hir::folded_call::Site,
+    pub key: Atom,
+    pub recv: NodeId,
+}
+
 /// A computed member operation over nodes already generated for the solve.
 #[derive(Clone, Debug)]
 pub(crate) struct ElementSite {
@@ -155,6 +164,8 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// The folded method nodes that have a site (`method_sites`).
+    pub(crate) folded_sites: Vec<FoldedSite>,
     pub(crate) element_sites: Vec<ElementSite>,
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
@@ -399,6 +410,10 @@ pub struct Gen<'a> {
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// A name-keyed fold (`Expr::WeakRefDeref`, the FinalizationRegistry
+    /// pair) is also the ordinary method call its helper makes on a
+    /// receiver of another kind (`reach::name_folds`).
+    pub name_folds: bool,
     /// R1: a write of a narrowed local in a branch that always leaves past
     /// the narrowing's code does not end its narrowed reads after the branch
     /// (`gen::narrow`, "Writes on a leaving path";
@@ -658,6 +673,7 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            folded_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
             field_reads: Vec::new(),
@@ -755,6 +771,7 @@ impl<'a> Gen<'a> {
             push_fill_new: None,
             guard_ranges: true,
             guard_presence: true,
+            name_folds: true,
             leaving_writes: true,
             zs_ok: false,
             leaving_write_sabotage: false,

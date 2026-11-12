@@ -49,7 +49,9 @@ mod named_lengths;
 pub mod native_effects;
 pub mod pts;
 mod push_fills;
+mod method_sites;
 mod quiet_sites;
+mod reach;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -576,6 +578,15 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
+    g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
+    g.m.reach_new_target =
+        reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
+    g.m.reach_step_done =
+        reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_iter_close =
+        reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
+    g.m.reach_spread_args =
+        reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -1118,6 +1129,13 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("quiet"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    method_sites::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("tasite"),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2410,6 +2428,12 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
 /// (`quiet_sites`).
 pub fn quiet_sites_enabled() -> bool {
     quiet_sites::enabled()
+}
+
+/// `PERRY_FACTS_TYPED_ARRAY_SITES=0` turns the typed-array receiver fact
+/// off (`method_sites`).
+pub fn typed_array_sites_enabled() -> bool {
+    method_sites::typed_array_enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).
