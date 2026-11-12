@@ -204,6 +204,51 @@ pub(super) fn log_burst_boundary(arm: &'static str) {
     }
 }
 
+// LIFE G1 (`wpfacts_check/life.rs`): a copied minor reached a young object
+// (old and new user address), and the brackets of each copied minor. Filled
+// only by `perry_verify_facts_init`, together with the diagnostic minor.
+static LIFE_REACHED: Hook<fn(usize, usize)> = Hook::empty();
+static LIFE_BEFORE_MINOR: Hook<fn()> = Hook::empty();
+static LIFE_AFTER_MINOR: Hook<fn()> = Hook::empty();
+
+pub(super) fn life_reached(old: usize, new: usize) {
+    if let Some(f) = LIFE_REACHED.get() {
+        f(old, new);
+    }
+}
+pub(super) fn life_before_copied_minor() {
+    if let Some(f) = LIFE_BEFORE_MINOR.get() {
+        f();
+    }
+}
+pub(super) fn life_after_copied_minor() {
+    if let Some(f) = LIFE_AFTER_MINOR.get() {
+        f();
+    }
+}
+
+/// The holder the copied minor is following now: its walk phase and, for a
+/// native stack-map slot, the owning frame (function address, ip, slot).
+pub(crate) fn life_holder() -> (Option<&'static str>, Option<(usize, usize, usize)>) {
+    (
+        super::pin::copying_walk_phase(),
+        super::pin::native_root_slot_context().map(|c| (c.function_address, c.ip, c.slot_addr)),
+    )
+}
+
+/// The collections run so far (minor and full).
+pub(crate) fn life_collection_count() -> u64 {
+    super::GC_STATS.with(|s| s.borrow().collection_count)
+}
+
+/// Check mode for lifetime claims: the diagnostic minor and the life hooks.
+pub(crate) fn install_life(reached: fn(usize, usize), before: fn(), after: fn()) {
+    MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);
+    LIFE_REACHED.set(reached);
+    LIFE_BEFORE_MINOR.set(before);
+    LIFE_AFTER_MINOR.set(after);
+}
+
 pub(crate) fn install() {
     LOG_BURST_BOUNDARY.set(super::allocation_pacing::report_burst_boundary);
     MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);

@@ -356,6 +356,9 @@ impl CopyingNurseryCollector {
             (*header).gc_flags = flags | GC_FLAG_MARKED;
             let total = (*header).size as usize;
             self.queue_child_scan::<DIAGNOSTICS>(header);
+            if DIAGNOSTICS {
+                super::diagnostic_hooks::life_reached(user, user);
+            }
             if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
                 d.record((*header).obj_type, total, true);
             }
@@ -503,6 +506,9 @@ impl CopyingNurseryCollector {
         // GC_FLAG_MARKED past the end of the cycle and reads as live to the
         // next full sweep. Only the worklist push is skipped.
         self.queue_child_scan::<DIAGNOSTICS>(new_header);
+        if DIAGNOSTICS {
+            super::diagnostic_hooks::life_reached(old_user as usize, new_user as usize);
+        }
         if let Some(d) = self.survival.as_mut().filter(|_| DIAGNOSTICS) {
             d.record((*new_header).obj_type, total, promote);
         }
