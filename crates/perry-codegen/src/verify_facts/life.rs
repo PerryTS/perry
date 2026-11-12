@@ -2,7 +2,8 @@
 //!
 //! Each claim of `collectors::life_claims` becomes a call at its death point:
 //! * a `frame` local at the end of the statement list that binds it (its
-//!   scope, one loop iteration) and before each `return`: the slot is read,
+//!   scope, one loop iteration), at each `break` / `continue` that leaves
+//!   that list, and before each `return`: the slot is read,
 //!   cleared (the slot a release frame would reuse), and its old value goes
 //!   to `perry_verify_facts_life_dead` as an integer, so no statepoint roots
 //!   it;
@@ -27,6 +28,11 @@ thread_local! {
     /// Argument births of the calls being lowered: (birth expression
     /// address, token slot).
     static WATCH: RefCell<Vec<(usize, String)>> = const { RefCell::new(Vec::new()) };
+    /// The statement lists being lowered that bind claimed `frame` locals:
+    /// (owning `FnCtx` address, `loop_targets` length when the list began,
+    /// the list's claimed `let` ids). A `break` / `continue` to loop target
+    /// `i` leaves every list of its body that began after target `i`.
+    static LISTS: RefCell<Vec<(usize, usize, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The sampling rate of the exact check at death: the first death of each
@@ -101,15 +107,65 @@ fn frame_death(ctx: &mut FnCtx<'_>, id: u32, death: &str) {
     );
 }
 
-/// The statement list `stmts` ends on its normal edge: its `frame` locals die.
-pub(crate) fn list_end(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) {
+fn owner(ctx: &FnCtx<'_>) -> usize {
+    ctx as *const FnCtx<'_> as *const () as usize
+}
+
+/// The statement list `stmts` begins: it is an exit scope for `break` /
+/// `continue` when it binds a claimed local. Paired with `list_end`.
+pub(crate) fn list_begin(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) {
     if ctx.life_claims.frame.is_empty() {
+        return;
+    }
+    let ids: Vec<u32> = stmts
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Let { id, .. } if ctx.life_claims.frame.contains_key(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    let entry = (owner(ctx), ctx.loop_targets.len(), ids);
+    LISTS.with(|l| l.borrow_mut().push(entry));
+}
+
+/// The statement list `stmts` ends; on its normal edge (`lowered`) its
+/// `frame` locals die.
+pub(crate) fn list_end(ctx: &mut FnCtx<'_>, stmts: &[Stmt], lowered: bool) {
+    if ctx.life_claims.frame.is_empty() {
+        return;
+    }
+    LISTS.with(|l| l.borrow_mut().pop());
+    if !lowered {
         return;
     }
     for s in stmts {
         if let Stmt::Let { id, .. } = s {
             frame_death(ctx, *id, "scope");
         }
+    }
+}
+
+/// A `break` / `continue` to loop target `target` (an index into
+/// `loop_targets`) leaves the lists of that loop's (or switch's) body: their
+/// `frame` locals bound so far die. A target that is not a loop target (a
+/// labelled block) emits nothing: a missed check, never a wrong one.
+pub(crate) fn at_exit(ctx: &mut FnCtx<'_>, target: Option<usize>) {
+    if ctx.life_claims.frame.is_empty() {
+        return;
+    }
+    let Some(target) = target else {
+        return;
+    };
+    let me = owner(ctx);
+    let ids: Vec<u32> = LISTS.with(|l| {
+        l.borrow()
+            .iter()
+            .filter(|(o, depth, _)| *o == me && *depth > target)
+            .flat_map(|(_, _, ids)| ids.iter().copied())
+            .collect()
+    });
+    for id in ids {
+        frame_death(ctx, id, "exit");
     }
 }
 
