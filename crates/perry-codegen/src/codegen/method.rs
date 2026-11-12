@@ -1803,6 +1803,7 @@ pub(super) fn compile_method(
             ctx.block().br(&target.after_label);
         }
         ctx.current_block = *after_idx;
+        crate::verify_facts::life_measure::ctor_return(&mut ctx, &target.result_slot)?;
     }
 
     if !ctx.block().is_terminated() {

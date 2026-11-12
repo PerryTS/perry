@@ -381,7 +381,11 @@ pub(crate) fn observe(
     }
     if super::life_claims::measured() {
         claims.body = key;
-        crate::verify_facts::life_measure::write_sites(claims.births.values().map(|(k, _)| k.as_str()));
+        let suspends = body.as_ref().is_some_and(|b| b.suspends);
+        let body_key = format!("body\t{}\t{label}\t{}", module.name, if suspends { "suspends" } else { "plain" });
+        claims.body_id = crate::verify_facts::life_measure::site_id(&body_key);
+        let keys = claims.births.values().map(|(k, _)| k.as_str());
+        crate::verify_facts::life_measure::write_sites(keys.chain(std::iter::once(body_key.as_str())));
     } else {
         claims.births.clear();
         claims.loops.clear();
@@ -942,6 +946,7 @@ impl Census<'_> {
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
+                self.claims.loops.insert(body.as_ptr() as usize);
                 self.expr(condition, None);
                 self.stmts(body);
                 self.loop_body = saved;
@@ -956,6 +961,7 @@ impl Census<'_> {
                     self.stmt(s);
                 }
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
+                self.claims.loops.insert(body.as_ptr() as usize);
                 if let Some(e) = condition {
                     self.expr(e, None);
                 }

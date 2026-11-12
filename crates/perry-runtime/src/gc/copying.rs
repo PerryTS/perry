@@ -1922,6 +1922,14 @@ pub(super) fn run_copied_minor_attempt<const DIAGNOSTICS: bool>(
     if let Some(d) = collector.survival.as_ref().filter(|_| DIAGNOSTICS) {
         d.report(super::survival_diag::next_minor_seq());
     }
+    #[cfg(perry_gc_instruments)]
+    if DIAGNOSTICS && crate::arena::alloc_life::on() {
+        crate::arena::alloc_life::copied(
+            collector.stats.promoted_bytes,
+            collector.stats.copied_bytes,
+            collector.stats.in_place_promoted_bytes,
+        );
+    }
     if DIAGNOSTICS {
         crate::arena::alloc_sample::report("minor")
     };
