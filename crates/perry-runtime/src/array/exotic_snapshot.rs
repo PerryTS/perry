@@ -82,15 +82,8 @@ pub(super) unsafe fn exotic_snapshot(
         }
     }
     if walked < len {
-        let mut far: Vec<u32> = source.with_mut_ptr::<ArrayHeader, _>(|arr| {
-            super::named_props::array_named_property_names(arr, false)
-                .into_iter()
-                .filter_map(|name| crate::object::canonical_array_index(&name))
-                .filter(|&index| index >= walked && index < len)
-                .collect()
-        });
-        far.sort_unstable();
-        far.dedup();
+        let far =
+            source.with_mut_ptr::<ArrayHeader, _>(|arr| array_own_indices_in(arr, walked, len));
         for index in far {
             if let Some(value) = read(index) {
                 store(index, value);
@@ -98,4 +91,66 @@ pub(super) unsafe fn exotic_snapshot(
         }
     }
     out.get_raw_mut_ptr::<ArrayHeader>()
+}
+
+/// The own index keys of `arr`'s named layout in `[from, to)`, ascending and
+/// once each: where a sparse Array keeps the elements past its store.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved plain Array.
+unsafe fn array_own_indices_in(arr: *const ArrayHeader, from: u32, to: u32) -> Vec<u32> {
+    let mut far: Vec<u32> = super::named_props::array_named_property_names(arr, false)
+        .into_iter()
+        .filter_map(|name| crate::object::canonical_array_index(&name))
+        .filter(|&index| index >= from && index < to)
+        .collect();
+    far.sort_unstable();
+    far.dedup();
+    far
+}
+
+/// Visit the own elements of a plain Array in index order, reading no slot
+/// past its store: the present slots of `[0, min(length, capacity))`, then the
+/// own index keys a sparse Array keeps in its named layout. A hole or an
+/// absent index is not visited. `visit` returns `false` to stop.
+///
+/// For readers that show or inspect an Array (`util.inspect`, `console.log`,
+/// `util.format`): it is no `[[Get]]` (an index on a prototype is not
+/// visited), which is what node prints. Every bound is re-read after each
+/// visit, so a visit that shortens the Array (an inspect hook) cannot make the
+/// walk read a slot it gave up.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved plain Array (`clean_arr_ptr`'s
+/// result) that does not move while the walk runs: a visit that can collect
+/// must root it and pass its address back through a fresh call.
+pub(crate) unsafe fn array_for_each_own_element(
+    arr: *const ArrayHeader,
+    mut visit: impl FnMut(u32, f64) -> bool,
+) {
+    let len = (*arr).length;
+    let mut index = 0u32;
+    while index < (*arr).length.min((*arr).capacity) {
+        let bits = *(array_elements_ptr(arr) as *const u64).add(index as usize);
+        if bits != crate::value::TAG_HOLE && !visit(index, f64::from_bits(bits)) {
+            return;
+        }
+        index += 1;
+    }
+    if index >= len {
+        return;
+    }
+    for far in array_own_indices_in(arr, index, len) {
+        if far >= (*arr).length {
+            return;
+        }
+        let Some(value) =
+            super::named_props::array_named_property_get_by_name(arr, &far.to_string())
+        else {
+            continue;
+        };
+        if value.to_bits() != crate::value::TAG_HOLE && !visit(far, value) {
+            return;
+        }
+    }
 }

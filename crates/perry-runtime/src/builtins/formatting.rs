@@ -755,29 +755,27 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         };
                         return inspect_finish_circular(ptr as usize, empty);
                     }
-                    let data_ptr = crate::array::array_elements_ptr(
-                        maybe_arr as *const crate::array::ArrayHeader,
-                    ) as *const f64;
                     // #9415: a hole slot is `TAG_HOLE`, whose bits read back as
                     // a NaN, so element-by-element recursion printed
                     // `new Array(3)` as `[ NaN, NaN, NaN ]`. Runs of holes are
                     // ONE entry (`<N empty items>`), which is also why the
-                    // layout below counts entries rather than slots.
-                    let mut parts =
-                        value_repr::array_entries_with_holes(data_ptr, length, |elem| {
-                            let elem_jsval = JSValue::from_bits(elem.to_bits());
-                            // Quote string elements like Node's util.inspect: 'hello'
-                            if elem_jsval.is_any_string() {
-                                let s = jsvalue_string_content(elem).unwrap_or_default();
-                                return value_repr::ArrayEntry::new(
-                                    array_layout::inspect_string_value(&s, depth + 1),
-                                    false,
-                                );
-                            }
-                            let rendered = format_jsvalue(elem, depth + 1);
-                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
-                            value_repr::ArrayEntry::new(rendered, numeric)
-                        });
+                    // layout below counts entries rather than slots. A sparse
+                    // Array's far elements are read from its named layout,
+                    // never as slots past the store.
+                    let mut parts = value_repr::array_entries(maybe_arr, |elem| {
+                        let elem_jsval = JSValue::from_bits(elem.to_bits());
+                        // Quote string elements like Node's util.inspect: 'hello'
+                        if elem_jsval.is_any_string() {
+                            let s = jsvalue_string_content(elem).unwrap_or_default();
+                            return value_repr::ArrayEntry::new(
+                                array_layout::inspect_string_value(&s, depth + 1),
+                                false,
+                            );
+                        }
+                        let rendered = format_jsvalue(elem, depth + 1);
+                        let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                        value_repr::ArrayEntry::new(rendered, numeric)
+                    });
                     if inspect_show_hidden() {
                         // #9463: `%o` is `util.inspect(v, { showHidden: true,
                         // depth: 4 })`; the array's own `length` is part of that
@@ -1537,20 +1535,16 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         if length > 1_000_000 {
                             return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
-                        let data_ptr = crate::array::array_elements_ptr(
-                            maybe_arr as *const crate::array::ArrayHeader,
-                        ) as *const f64;
                         // #9415: the same hole grouping the `format_jsvalue`
                         // array arm does. This is the twin that renders an
                         // array reached as an object FIELD, so without it
                         // `{ h: new Array(3) }` still said
                         // `{ h: [ NaN, NaN, NaN ] }`.
-                        let mut parts =
-                            value_repr::array_entries_with_holes(data_ptr, length, |elem| {
-                                let rendered = format_jsvalue_for_json(elem, depth + 1);
-                                let numeric = value_repr::entry_is_numeric(elem, &rendered);
-                                value_repr::ArrayEntry::new(rendered, numeric)
-                            });
+                        let mut parts = value_repr::array_entries(maybe_arr, |elem| {
+                            let rendered = format_jsvalue_for_json(elem, depth + 1);
+                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                            value_repr::ArrayEntry::new(rendered, numeric)
+                        });
                         // #9463: the `showHidden` tail belongs on nested arrays
                         // too — node's `%o` on `{ a: [1, 2] }` is
                         // `{ a: [ 1, 2, [length]: 2 ] }`.
@@ -1719,15 +1713,21 @@ pub extern "C" fn js_array_print(arr_ptr: *const crate::array::ArrayHeader) {
     }
 
     unsafe {
-        let length = (*arr_ptr).length as usize;
-        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-            as *const f64;
-
-        let mut parts: Vec<String> = Vec::with_capacity(length);
-        for i in 0..length {
-            let value = *data_ptr.add(i);
-            parts.push(format_jsvalue_for_json(value, 0));
+        let arr = crate::array::clean_arr_ptr(arr_ptr);
+        if arr.is_null() {
+            println!("[]");
+            return;
         }
+        // Holes and a sparse Array's absent indices print as `undefined`; no
+        // slot past the store is read.
+        let length = (*arr).length as usize;
+        let mut parts: Vec<String> = Vec::new();
+        crate::array::array_for_each_own_element(arr, |index, value| {
+            parts.resize(index as usize, "undefined".to_string());
+            parts.push(format_jsvalue_for_json(value, 0));
+            true
+        });
+        parts.resize(length, "undefined".to_string());
         println!("[{}]", parts.join(", "));
     }
 }

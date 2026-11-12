@@ -294,14 +294,27 @@ pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
         && !crate::array::is_array_subclass_instance(recv)
 }
 
-/// `null` or `undefined` behind an Array annotation: `Get` on it throws the
-/// call's TypeError, which only the real `Get` does.
+/// A primitive behind an Array annotation that only the real `Get` answers
+/// for: `null` / `undefined` (the call's TypeError), a boolean, a String
+/// (heap or inline: `String.prototype` has its own `at`, `indexOf`,
+/// `slice`, `concat`, ...) or a BigInt. None of them is an address: handed to
+/// a builtin as one, a short string's payload is its BYTES, read as an Array
+/// header (SIGSEGV). A Number keeps the builtin, as before (a native handle
+/// id is a Number).
 #[inline]
 pub(crate) fn array_site_nullish_receiver(recv: f64) -> bool {
-    matches!(
-        recv.to_bits(),
-        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
-    )
+    let bits = recv.to_bits();
+    if matches!(
+        bits,
+        crate::value::TAG_NULL
+            | crate::value::TAG_UNDEFINED
+            | crate::value::TAG_TRUE
+            | crate::value::TAG_FALSE
+    ) {
+        return true;
+    }
+    // STRING_TAG 0x7FFF, SHORT_STRING_TAG 0x7FF9, BIGINT_TAG 0x7FFA.
+    matches!(bits >> 48, 0x7FFF | 0x7FF9 | 0x7FFA)
 }
 
 /// THE predicate of every Array method site: must `recv.<key>(..)` perform
@@ -692,9 +705,10 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_method(
     push_or_own_declined(arr, value, own_out)
 }
 
-/// The `Get(recv, "push")` + `Call` of a receiver that is a live ordinary
-/// object (`GC_TYPE_OBJECT`), not an Array. `None` when the receiver is
-/// anything else, or when the selected method is the builtin.
+/// The `Get(recv, "push")` + `Call` of a receiver that is a live cell but no
+/// Array (an ordinary object, a Map, a Set, a Date, a closure, a Symbol, a
+/// typed array). `None` for an Array, a Proxy or a forwarded head, or when the
+/// selected method is the builtin.
 #[cold]
 #[inline(never)]
 unsafe fn push_object_method(
@@ -702,11 +716,22 @@ unsafe fn push_object_method(
     value: f64,
     own_out: *mut u32,
 ) -> Option<u64> {
-    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
-    if !crate::gc_type_is_object!(header.obj_type)
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
+    // A typed array or buffer has no GC header (its registries answer): it
+    // has no `push` (node: TypeError).
+    let registered = crate::buffer::is_registered_buffer(arr as usize)
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some();
+    if !registered {
+        let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+        // An Array (or a lazy one) and a Proxy are the callers' own; any other
+        // cell (an ordinary object, a Map, a Set, a Date, a closure, a Symbol)
+        // reads `push` from its own chain.
+        if crate::gc_type_is_array!(header.obj_type)
+            || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            || header.obj_type == crate::gc::GC_TYPE_PROXY
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return None;
+        }
     }
     let recv = crate::value::js_nanbox_pointer(arr as i64);
     let args = [value];
