@@ -123,16 +123,16 @@ pub(crate) fn gc_trace_requested() -> bool {
 /// archives carry no GC/diagnostic instruments, so the choice is made here,
 /// before codegen, from the same knobs the instruments answer to: any
 /// instrument or hot-diag knob set while compiling, `PERRY_GC_INSTRUMENTS=1`,
-/// `PERRY_GC_TRACE=1`, a contract build (`PERRY_CHECK_CONTRACTS=1`, whose
-/// witnesses and checks the instrumented variant also carries), or a
-/// facts-verification build (`PERRY_VERIFY_FACTS=1`), whose lifetime claims are
-/// observed by collector hooks only the instrumented variant carries.
+/// `PERRY_GC_TRACE=1`, or a contract build (`PERRY_CHECK_CONTRACTS=1`, whose
+/// witnesses and checks the instrumented variant also carries). A
+/// `PERRY_VERIFY_FACTS=1` compile alone links the default archives; its
+/// lifetime claims are emitted only when one of these knobs also selects the
+/// variant (`perry_codegen::verify_facts::life_claims_on`).
 pub(crate) fn instrumented_variant_requested() -> bool {
     gc_instruments_requested()
         || hot_diag_requested()
         || gc_trace_requested()
         || crate::commands::compile::program_facts::contracts_requested()
-        || perry_codegen::verify_facts::enabled()
 }
 
 /// The archive file name the current compile links for `name` (a default

@@ -48,7 +48,7 @@ impl LifeClaims {
 
 /// The census runs for its claims in this compilation.
 pub(crate) fn wanted() -> bool {
-    crate::verify_facts::enabled()
+    crate::verify_facts::life_claims_on()
 }
 
 /// The `fate:`/`fatebet:` negative control: (function name, index, bet).

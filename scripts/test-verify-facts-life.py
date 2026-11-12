@@ -10,11 +10,13 @@ must exit 86 with one JSON line naming the expected holder. The `fatebet:`
 sabotage must print one PERRY_BET_FAILED line, rc 0 and node's output.
 
 The life hooks live only in the instrumented runtime variant, which a
-PERRY_VERIFY_FACTS=1 compile links; the default archives carry neither the
-hooks nor the life check. Offered under the instrumented names (the default
+compile with an instrument knob (PERRY_GC_INSTRUMENTS=1, compile time only)
+links; the default archives carry neither the hooks nor the life check. Offered under the instrumented names (the default
 archives beside the perry binary), they must make the check build of a
 fixture with deaths fail to link on the life entry points: a check build
-without the hooks never runs silently unchecked.
+without the hooks never runs silently unchecked. PERRY_VERIFY_FACTS=1 alone
+(no instrument knob) links the default archives and emits no life claim: the
+binary has no life symbol and runs as node does.
 """
 import argparse
 import json
@@ -71,6 +73,9 @@ def main():
                PERRY_NO_ARCHIVE_CACHE="1", PERRY_ALLOW_PERRY_FEATURES="1")
     env.pop("PERRY_FACTS_SABOTAGE", None)
     failures = []
+    # The instrument knob selects the instrumented archives at compile time;
+    # the run does not see it.
+    knob = {"PERRY_GC_INSTRUMENTS": "1"}
 
     def build(name, sabotage=None):
         e = dict(env)
@@ -78,7 +83,7 @@ def main():
             e["PERRY_FACTS_SABOTAGE"] = sabotage
         exe = out / (name + ("." + sabotage.replace(":", "_").replace("#", "_") if sabotage else ""))
         c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
-                 str(fixtures / (name + ".ts")), "-o", str(exe)], env=e)
+                 str(fixtures / (name + ".ts")), "-o", str(exe)], env=dict(e, **knob))
         (out / (exe.name + ".compile")).write_bytes(c.stdout + c.stderr)
         assert c.returncode == 0, (name, sabotage, c.stderr[-2000:])
         return run([str(exe)], env=e), exe
@@ -131,7 +136,7 @@ def main():
     e = dict(env, PERRY_RUNTIME_DIR=str(plain))
     exe = out / "c9_dropped.default-runtime"
     c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
-             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=e)
+             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=dict(e, **knob))
     ok = c.returncode != 0 and b"perry_verify_facts_life_" in c.stdout + c.stderr
     r = run([str(exe)], env=e) if c.returncode == 0 else None
     print(f"no-hooks c9_dropped on the default runtime: compile rc={c.returncode} "
@@ -139,6 +144,21 @@ def main():
     if not ok:
         failures.append("no-hooks:c9_dropped")
         (out / "no-hooks.stderr").write_bytes(c.stdout + c.stderr + (r.stderr if r else b""))
+    # PERRY_VERIFY_FACTS=1 alone: default archives, no life claim, node's output.
+    exe = out / "c9_dropped.verify-only"
+    c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
+             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=env)
+    r = run([str(exe)], env=env) if c.returncode == 0 else None
+    nm = subprocess.run(["nm", str(exe)], capture_output=True) if r else None
+    life_syms = [l for l in nm.stdout.decode(errors="replace").splitlines() if "life" in l] if nm else None
+    want = (fixtures / "c9_dropped.node.txt").read_bytes()
+    ok = (c.returncode == 0 and r.returncode == 0 and r.stdout == want
+          and life_syms == [])
+    print(f"verify-facts-only c9_dropped: compile rc={c.returncode} "
+          f"run rc={r.returncode if r else None} life symbols="
+          f"{len(life_syms) if life_syms is not None else None} {'OK' if ok else 'FAIL'}")
+    if not ok:
+        failures.append("verify-only:c9_dropped")
     print("FAILURES:", failures if failures else "none")
     return 1 if failures else 0
 
