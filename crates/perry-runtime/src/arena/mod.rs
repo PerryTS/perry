@@ -7,6 +7,8 @@
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
 pub(crate) use std::collections::hash_map::Entry;
 
+#[cfg(perry_gc_instruments)]
+pub(crate) mod alloc_life;
 pub(crate) mod alloc_sample;
 mod allocators;
 mod block;

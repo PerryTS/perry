@@ -361,23 +361,32 @@ fn pop_deeper(fp: usize) {
 /// callees' samples' caller boundary, are decided by one probe.
 fn pop_top(late: bool) {
     // Its loop iterations in progress end with it.
-    if let Some(k) = table(|t| {
+    let (dyn_keys, _, dyn_young) = match table(|t| {
         let m = &t.measure;
         let n = m.acts.len();
         m.loops.iter().position(|l| l.act >= n && n > 0)
     })
     .flatten()
     {
-        end_loops(k);
-    }
+        Some(k) => take_loops(k),
+        None => (Vec::new(), 0, 0),
+    };
     let Some((pend, fp)) = table(|t| {
         let a = t.measure.acts.last_mut()?;
         Some((std::mem::take(&mut a.pend), a.fp))
     })
     .flatten() else {
+        // No activation: the dynamic boundaries alone.
+        if !dyn_keys.is_empty() {
+            let ran = probe(&[], 0, late, dyn_young);
+            settle_loops(&dyn_keys, ran);
+        }
         return;
     };
-    probe(&pend, fp, late);
+    // One collection decides the return (and the iteration) of this
+    // activation's samples and the dynamic boundaries ending with it.
+    let ran = probe(&pend, fp, late, dyn_young);
+    settle_loops(&dyn_keys, ran);
     let _ = table(|t| {
         let m = &mut t.measure;
         let depth = m.acts.len() - 1;
@@ -409,6 +418,20 @@ fn pop_top(late: bool) {
 /// The loop iterations from index `k` up end (innermost first is not needed:
 /// one probe decides them all at this point).
 fn end_loops(k: usize) {
+    let (keys, fp, young) = take_loops(k);
+    if keys.is_empty() {
+        return;
+    }
+    let ran = probe(&[], fp, false, young);
+    settle_loops(&keys, ran);
+}
+
+/// LIFE I2: the loop iterations from index `k` up end. Drains them; their old
+/// samples are unresolved at the dynamic boundary. Returns the keys, the
+/// frame and how many young samples the caller's ONE collection must decide
+/// (with any iteration/return probe at the same point: a second forced minor
+/// would age the survivors the other probe decides).
+fn take_loops(k: usize) -> (Vec<(u32, u32, u8)>, usize, usize) {
     let Some((keys, fp)) = table(|t| {
         let m = &mut t.measure;
         if k >= m.loops.len() {
@@ -419,19 +442,13 @@ fn end_loops(k: usize) {
         Some((keys, fp))
     })
     .flatten() else {
-        return;
-    };
-    if keys.is_empty() {
-        return;
-    }
-    let live = |m: &Measure, &(i, g, bit): &(u32, u32, u8)| {
-        m.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
+        return (Vec::new(), 0, 0);
     };
     let young = table(|t| {
         let m = &mut t.measure;
         let mut young = 0;
         for k in &keys {
-            if !live(m, k) {
+            if !dyn_live(m, k) {
                 continue;
             }
             if m.samples[k.0 as usize].old {
@@ -444,34 +461,31 @@ fn end_loops(k: usize) {
             }
         }
         if young > 0 {
-            m.in_probe = true;
-            m.probe_fp = fp;
-            m.probe_late = false;
-            m.probes += 1;
             m.dyn_probes += 1;
         }
         young
     })
     .unwrap_or(0);
-    if young == 0 {
-        return;
-    }
-    let began = std::time::Instant::now();
-    let before = crate::gc::diagnostic_hooks::life_collection_count();
-    crate::gc::gc_collect_minor();
-    let ran = crate::gc::diagnostic_hooks::life_collection_count() != before;
+    (keys, fp, young)
+}
+
+fn dyn_live(m: &Measure, &(i, g, bit): &(u32, u32, u8)) -> bool {
+    m.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
+}
+
+/// After the collection (`ran`: `Some(true)` when it ran): a dynamic sample
+/// still live was reached (one the minor did not reach is dead and was
+/// decided by `died`).
+fn settle_loops(keys: &[(u32, u32, u8)], ran: Option<bool>) {
     let _ = with(|t| {
         let m = &mut t.measure;
-        m.in_probe = false;
-        m.probe_minors += 1;
-        m.probe_ns += began.elapsed().as_nanos() as u64;
-        for k in &keys {
-            if !live(m, k) {
+        for k in keys {
+            if !dyn_live(m, k) {
                 continue;
             }
             let s = m.samples[k.0 as usize];
             let bd = &mut m.sites.entry(s.site).or_default().d[(k.2 >> 1) as usize];
-            if ran {
+            if ran == Some(true) {
                 bd.samples += 1;
                 bd.alive += 1;
                 bd.alive_w += s.w;
@@ -482,14 +496,13 @@ fn end_loops(k: usize) {
             }
             m.samples[k.0 as usize].dyn_ &= !k.2;
         }
-        budget(m);
     });
 }
 
 /// Decides the pending samples `keys` at a boundary of the activation at
 /// frame `fp`: old ones are unresolved (except at turn), young ones go
 /// through one forced copied minor. After it, a sample still live was reached.
-fn probe(keys: &[(u32, u32)], fp: usize, late: bool) {
+fn probe(keys: &[(u32, u32)], fp: usize, late: bool, extra: usize) -> Option<bool> {
     let young = table(|t| {
         let m = &mut t.measure;
         let mut young = 0;
@@ -505,17 +518,17 @@ fn probe(keys: &[(u32, u32)], fp: usize, late: bool) {
                 young += 1;
             }
         }
-        if young > 0 {
+        if young + extra > 0 {
             m.in_probe = true;
             m.probe_fp = fp;
             m.probe_late = late;
             m.probes += 1;
         }
-        young
+        young + extra
     })
     .unwrap_or(0);
     if young == 0 {
-        return;
+        return None;
     }
     let began = std::time::Instant::now();
     let before = crate::gc::diagnostic_hooks::life_collection_count();
@@ -535,6 +548,7 @@ fn probe(keys: &[(u32, u32)], fp: usize, late: bool) {
         }
         budget(m);
     });
+    Some(ran)
 }
 
 /// The probe budget: probe time may not exceed 4x mutator time; over it,
@@ -635,6 +649,9 @@ pub(super) fn full_marked() {
 #[inline(never)]
 pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
     let fp = caller_fp();
+    if crate::arena::alloc_life::on() {
+        crate::arena::alloc_life::birth(bits as u64);
+    }
     let bits = bits as u64;
     let sampled = table(|t| {
         let m = &mut t.measure;
@@ -816,9 +833,10 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
         k
     })
     .flatten();
-    if let Some(k) = k {
-        end_loops(k);
-    }
+    let (dyn_keys, _, dyn_young) = match k {
+        Some(k) => take_loops(k),
+        None => (Vec::new(), 0, 0),
+    };
     let keys = table(|t| {
         let m = &mut t.measure;
         let list = match m.acts.last_mut() {
@@ -841,10 +859,13 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
         hit
     })
     .unwrap_or_default();
+    // One collection decides this iteration's own-function samples and the
+    // dynamic boundaries ending here.
+    let ran = probe(&keys, fp, false, dyn_young);
+    settle_loops(&dyn_keys, ran);
     if keys.is_empty() {
         return;
     }
-    probe(&keys, fp, false);
     let _ = table(|t| {
         let m = &mut t.measure;
         let depth = m.acts.len();
@@ -870,7 +891,7 @@ pub extern "C" fn perry_life_turn() {
     end_loops(0);
     // Iteration-pending samples with no activation: the turn ended their loop.
     let root = table(|t| std::mem::take(&mut t.measure.root)).unwrap_or_default();
-    probe(&root, 0, true);
+    probe(&root, 0, true, 0);
     let _ = table(|t| {
         let m = &mut t.measure;
         for &k in &root {
@@ -882,7 +903,7 @@ pub extern "C" fn perry_life_turn() {
         }
     });
     let turn = table(|t| std::mem::take(&mut t.measure.turn)).unwrap_or_default();
-    probe(&turn, 0, false);
+    probe(&turn, 0, false, 0);
     let old = table(|t| {
         let m = &mut t.measure;
         let mut old = Vec::new();

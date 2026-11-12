@@ -31,7 +31,9 @@ EXPECT = {
     "m7_throw": ("inner", "object", [("return", "min_samples", 100), ("return", "dead_share", 1.0),
                                      ("return", "all_late", 0)]),
     "m8_callee_dyn": ("make", "object", [("dyn", "min_samples", 200), ("dyn", "dead_share", 1.0)]),
-    "m9_callee_acc": ("add", "object", [("dyn", "min_samples", 200), ("dyn", "alive_share", 1.0)]),
+    # The return probe's minor promotes about half of add's survivors (old at the dynamic boundary: unresolved,
+    # never guessed); the young half decides it.
+    "m9_callee_acc": ("add", "object", [("dyn", "min_samples", 90), ("dyn", "alive_share", 1.0)]),
 }
 
 
