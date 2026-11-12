@@ -1766,7 +1766,8 @@ fn judge(
 ///
 /// 1. One family: every primitive a String and no object, or every object
 ///    an Array exotic object ([`exact_array`]), or every object a
-///    collection of one kind, or every object a RegExp; closed markers are skipped (their callers'
+///    collection of one kind, or every object a RegExp, or every object a
+///    Buffer (a method `Buffer.prototype` owns); closed markers are skipped (their callers'
 ///    values are beside them), ⊤ and other markers are none.
 /// 2. The family's intrinsic chain defines the key: a function for a call,
 ///    a function or a data member for a read (`builtins::native_described`).
@@ -1814,6 +1815,9 @@ fn native_member(
                         ..
                     } => NativeFamily::Collection(w),
                     TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
+                    // The per-unit solve misses a write onto `Buffer.prototype`
+                    // through `Object.assign`: it proves no Buffer member.
+                    TmplKind::BObj { what: "Buffer", .. } if !m.unit_mode => NativeFamily::Buffer,
                     _ => return Err(None),
                 },
                 _ => return Err(None),
@@ -1831,7 +1835,7 @@ fn native_member(
         return Err(None);
     };
     let a = s.key;
-    if !crate::builtins::native_described(fam, &m.atoms[a as usize], s.is_call) {
+    if !crate::builtins::native_described(m, fam, &m.atoms[a as usize], s.is_call) {
         return Err(None);
     }
     for &t in toks {
@@ -1898,8 +1902,20 @@ fn builtin_protos_unwritten(
     }
     // DEC 250: a final read (the runtime refuses every write that would
     // change it) is written by no store, the program's or one through ⊤.
+    let locked = fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a));
+    // Interpreted code (DEC 150's summary node: `new Function`, direct and
+    // indirect eval, any solved call that may be the Function constructor)
+    // holds every global, so every builtin prototype, and writes under any
+    // key. A NativeMember site runs its member with no test (codegen's
+    // `native_member_calls` takes no interp guard word), so only a final
+    // read survives it.
+    if fam.is_some() && !locked && m.interp_runs {
+        return Err(
+            "native member: interpreted code may write the key onto a builtin prototype".into(),
+        );
+    }
     let (through_top, own) = match objproto {
-        _ if fam.is_some_and(|fam| crate::builtins::native_locked(m, fam, a)) => (false, false),
+        _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
         None => (crate::builtins::native_written(m, TOP, a), false),
     };
@@ -1986,7 +2002,8 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// facts are the writes themselves: no named store of the key on its
 /// template (`writers`), no store under a computed key or `__proto__`
 /// (`super_relink`), no escape, no hard operation, no accessor. A RegExp's
-/// facts are its writes in the same way (its own `lastIndex` is no method).
+/// facts are its writes in the same way (its own `lastIndex` is no method),
+/// and so are a Buffer's (its elements are no named key).
 fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Atom) -> bool {
     use crate::builtins::NativeFamily;
     let empty = |n: Option<&NodeId>| {
@@ -2003,7 +2020,7 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
             Some(n) => empty(Some(n)),
             None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
         },
-        NativeFamily::Collection(_) | NativeFamily::RegExp => {
+        NativeFamily::Collection(_) | NativeFamily::RegExp | NativeFamily::Buffer => {
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };

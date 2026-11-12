@@ -228,3 +228,32 @@ fn a_host_stream_write_after_a_store_on_its_prototype_stays_open() {
     let v = site(&pf, &src, "v");
     assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
 }
+
+/// Interpreted code holds `console` and `process.stdout` (globals) and may
+/// replace their members: with the interpreter linked and reachable, no
+/// host member is the runtime's.
+#[test]
+fn interpreted_code_opens_a_host_member() {
+    for d in [
+        "new Function(process.argv[2])();",
+        "(0, eval)(process.argv[2]);",
+    ] {
+        let cfg = FactsConfig {
+            dynamic_code: Some("E14 test: dynamic code".into()),
+            interpreted_sources: true,
+            ..FactsConfig::default()
+        };
+        let pf = facts_with(
+            &format!("{d} console.log(\"ok\"); process.stdout.write(\"x\");"),
+            cfg,
+        );
+        for key in ["log", "write"] {
+            assert!(
+                open(&pf, key),
+                "{d} {key}: {:?}\n{}",
+                calls(&pf, key),
+                pf.dump_text()
+            );
+        }
+    }
+}

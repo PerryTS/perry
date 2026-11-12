@@ -2155,7 +2155,10 @@ fn lower_module(
     // proven-`this` admission consults them (§5.2 shape barriers, the
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
-    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts_with(
+        hir,
+        &opts.program_facts.elision.native_member_calls,
+    );
     let imported_return_shapes = opts
         .imported_classes
         .iter()
@@ -3207,8 +3210,6 @@ fn lower_module(
         loop_pushed_arrays: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
-        program_shadows_buffer_read_method:
-            crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can
@@ -3756,6 +3757,7 @@ fn lower_module(
             hir,
             &cross_module.definite_init,
             proven_int32,
+            &cross_module.wpfacts.native_member_calls,
         );
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;

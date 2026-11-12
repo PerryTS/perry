@@ -9984,7 +9984,11 @@ fn expr_array_length_effect(
                 object, property, ..
             } = callee.as_ref()
             {
-                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                // Only a PROVEN reader runs no program code: an unproven
+                // one may dispatch to a patched `Buffer.prototype` member.
+                if is_buffer_numeric_read_method(property)
+                    && is_static_buffer_receiver(ctx, object)
+                    && crate::builtin_proto::native_member_proven(ctx, callee)
                 {
                     return first_blocking_loop_effect(
                         std::iter::once(walk(object)).chain(args.iter().map(walk)),
@@ -9992,20 +9996,6 @@ fn expr_array_length_effect(
                 }
             }
             LoopArrayLengthEffect::UnknownCallEscape
-        }
-        Expr::NativeMethodCall {
-            object: Some(object),
-            method,
-            args,
-            ..
-        } => {
-            if is_buffer_numeric_read_method(method) && is_static_buffer_receiver(ctx, object) {
-                first_blocking_loop_effect(
-                    std::iter::once(walk(object)).chain(args.iter().map(walk)),
-                )
-            } else {
-                LoopArrayLengthEffect::UnknownCallEscape
-            }
         }
         Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => {
             LoopArrayLengthEffect::UnknownCallEscape
@@ -10440,23 +10430,15 @@ pub(crate) fn expr_preserves_array_length(
                 object, property, ..
             } = callee.as_ref()
             {
-                if is_buffer_numeric_read_method(property) && is_static_buffer_receiver(ctx, object)
+                // Only a PROVEN reader runs no program code (see above).
+                if is_buffer_numeric_read_method(property)
+                    && is_static_buffer_receiver(ctx, object)
+                    && crate::builtin_proto::native_member_proven(ctx, callee)
                 {
                     return walk(object) && args.iter().all(&walk);
                 }
             }
             false
-        }
-        Expr::NativeMethodCall {
-            object: Some(object),
-            method,
-            args,
-            ..
-        } => {
-            is_buffer_numeric_read_method(method)
-                && is_static_buffer_receiver(ctx, object)
-                && walk(object)
-                && args.iter().all(&walk)
         }
         // The Error-family construction nodes allocate an error object and
         // store their own message; none of them can reach an unrelated local
