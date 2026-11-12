@@ -156,6 +156,15 @@ pub(crate) fn count_list_occurrences(stmts: &[Stmt]) -> Counts {
     counter.counts
 }
 
+/// The locals `f` writes (`LocalSet` / `Update` targets) in its parameter
+/// defaults, its body and every closure nested in it: [`count_module`]'s
+/// writes-only census over one function.
+pub(crate) fn count_function_writes(f: &Function) -> Counts {
+    let mut counter = Counter::new(true);
+    count_function(f, &mut counter);
+    counter.counts
+}
+
 /// `writes_only`: count just `LocalSet` / `Update` targets.
 pub(crate) fn count_module(module: &Module, writes_only: bool) -> Counts {
     count_module_with(module, writes_only).counts
