@@ -278,10 +278,11 @@ macro_rules! check_field {
                 .and_then(|i| crate::object::overflow::fixed_slot_of(t, i))
                 == Some(slot)
     };
+    // `ObjectKeys::get` reads a tombstone (`TAG_HOLE`) as `undefined`, which
+    // is never a key.
+    let no_key = at == crate::value::TAG_HOLE || at == crate::value::TAG_UNDEFINED;
     let absent_hole = || {
-        flags & WPF_MAYBE_ABSENT != 0
-            && value.to_bits() == crate::value::TAG_HOLE
-            && at == crate::value::TAG_HOLE
+        flags & WPF_MAYBE_ABSENT != 0 && value.to_bits() == crate::value::TAG_HOLE && no_key
     };
     if !key_matches && !slot_ref() && !absent_hole() {
         field_failure!(site, key, key_name,
