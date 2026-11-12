@@ -72,6 +72,9 @@ pub(crate) enum Fact {
     /// A loop's trip bound from its counter's interval
     /// (`stmt::loops::bounded_poll`).
     LoopTrip,
+    /// LIFE G1: no pointer to a claimed birth exists after its death point
+    /// (`verify_facts::life`).
+    Lifetime,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -131,6 +134,7 @@ impl Fact {
             Self::NamedLength => "named length",
             Self::QuietSites => "quiet sites",
             Self::LoopTrip => "loop trip bound",
+            Self::Lifetime => "lifetime",
         }
     }
 }

@@ -576,6 +576,23 @@ fn int32_operand_switches_are_cache_inputs() {
     }
 }
 
+/// The double-exact range rules: the facts' interval bounds, codegen's own
+/// range proofs and the mask of an i32 shift count each change the emitted
+/// code, so `=0` must never reuse an `=1` object.
+#[test]
+fn double_exact_range_switches_are_cache_inputs() {
+    for name in [
+        "PERRY_FACTS_INT_BOUNDS",
+        "PERRY_INT_RANGE_EXACT",
+        "PERRY_SHIFT_COUNT_MASK",
+    ] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// The direct Number call switch decides whether a consumer of `f(a)` takes
 /// the proven-Number lowering, so `=0` must never reuse an `=1` object.
 #[test]
@@ -656,6 +673,17 @@ fn call_kinds_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_CALL_KINDS"),
         "PERRY_FACTS_CALL_KINDS must key the compile caches"
+    );
+}
+
+/// The Array method tiers: the switch changes the facts' model of
+/// `Expr::ArrayPop` and the guard, predicate and `pop` entry of every Array
+/// method site, so `=0` must never reuse an `=1` object.
+#[test]
+fn array_method_tiers_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_ARRAY_METHOD_TIERS"),
+        "PERRY_ARRAY_METHOD_TIERS must key the compile caches"
     );
 }
 

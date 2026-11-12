@@ -116,7 +116,7 @@ fn census_reports_every_verdict() {
         &HashMap::new(),
         &sc,
         None,
-    );
+    ).0;
     let verdicts: HashMap<&str, Vec<&str>> = rows.iter().fold(HashMap::new(), |mut acc, r| {
         acc.entry(r.4.as_str()).or_default().push(r.5.as_str());
         acc
@@ -152,7 +152,7 @@ fn census_reports_every_verdict() {
             func: 0,
             direct: false,
         }),
-    );
+    ).0;
     assert_eq!(
         rows.iter()
             .filter(|r| r.4 == "heap:async-or-generator")
@@ -242,7 +242,7 @@ fn census_reports_literals_closures_and_positions() {
         objects: &objects,
         arrays: &arrays,
     };
-    let rows = classify(&census, &m.init, &boxed, &globals, &sc, None);
+    let rows = classify(&census, &m.init, &boxed, &globals, &sc, None).0;
     let has = |k: Kind, class: &str, verdict: &str| {
         rows.iter()
             .any(|r| r.0 == k && r.1 == class && r.4 == verdict)
@@ -322,7 +322,7 @@ fn census_rows(census: &ModuleCensus, m: &perry_hir::Module) -> Vec<Row> {
         objects: &o,
         arrays: &a,
     };
-    let mut rows = classify(census, &m.init, &boxed, &globals, &sc, None);
+    let mut rows = classify(census, &m.init, &boxed, &globals, &sc, None).0;
     let mut bodies: Vec<&[Stmt]> = m.functions.iter().map(|f| f.body.as_slice()).collect();
     for c in &m.classes {
         bodies.extend(c.constructor.iter().map(|f| f.body.as_slice()));
@@ -330,7 +330,7 @@ fn census_rows(census: &ModuleCensus, m: &perry_hir::Module) -> Vec<Row> {
     }
     for b in bodies {
         let body = census.bodies.get(&(b.as_ptr() as usize)).cloned();
-        rows.extend(classify(census, b, &boxed, &globals, &sc, body.as_ref()));
+        rows.extend(classify(census, b, &boxed, &globals, &sc, body.as_ref()).0);
     }
     census.finish(rows)
 }
@@ -560,7 +560,7 @@ fn census_tells_unreached_and_escaped_from_no_facts() {
     };
     let count = |facts: ElisionFacts, verdict: &str| {
         let census = ModuleCensus::new(&m, &Arc::new(facts));
-        let rows = classify(&census, &m.init, &HashSet::new(), &HashMap::new(), &sc, None);
+        let rows = classify(&census, &m.init, &HashSet::new(), &HashMap::new(), &sc, None).0;
         rows.iter().filter(|r| r.4 == verdict).count()
     };
     assert_eq!(count(ElisionFacts::default(), "heap:no-facts:module"), 4);

@@ -572,6 +572,10 @@ pub extern "C" fn perry_verify_facts_tick() {
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+// Lifetime claims: only in the instrumented variant, with the collector's life
+// hooks (`gc/diagnostic_hooks.rs`).
+#[cfg(perry_gc_instruments)]
+mod life;
 mod report;
 pub(crate) mod records;
 use report::Witness;
