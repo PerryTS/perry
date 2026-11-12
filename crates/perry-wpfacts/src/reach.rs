@@ -337,6 +337,8 @@ impl Gen<'_> {
     /// stored into the holders included), and what it returns is stored
     /// into the holder under that key (CreateDataProperty, any key) and is
     /// the result at the root (`ret`, the result of the arm's own call).
+    /// The holders the result is stored into are the parse's own (the
+    /// parsed values' single tokens and the root's).
     pub(crate) fn json_reviver_calls(
         &mut self,
         fx: &Fx,
@@ -357,7 +359,14 @@ impl Gen<'_> {
         self.m.json_replacer_calls(parsed, holder, &n, false);
         let rr = self.call_value(reviver, ThisArg::Node(n.this), vec![n.key, n.seen], vec![]);
         self.m.edge(rr, ret);
+        // The result is stored into the parse's own holders: the parsed
+        // objects and arrays and the root's (what it stored is read off
+        // them), not into whatever the reads reach (an intrinsic whose keys
+        // a store would make unknown).
+        let holders = self.tmp("json-reviver-holders");
+        self.m.edge(parsed, holders);
+        self.m.add_tok(holders, holder);
         let key = Key::any();
-        self.store(fx, n.this, key, ret, "reviver".to_string(), None, false);
+        self.store(fx, holders, key, ret, "reviver".to_string(), None, false);
     }
 }
