@@ -254,6 +254,9 @@ impl Model {
     pub fn key_may_name_str(&self, key: Key, name: &str) -> bool {
         match key {
             Key::Named(a) => self.atoms[a as usize] == name,
+            // An internal slot (`effects::internal_atom`) is no property:
+            // no computed key names it (`Model::field`).
+            Key::Any(_) if crate::builtins::is_internal_key(name) => false,
             Key::Any(0) => true,
             Key::Any(s) => match name {
                 ELEM | NUM_KEY => self.key_shapes[s as usize].may_be_numeric(),
@@ -293,7 +296,6 @@ impl Model {
     pub fn key_may_name(&self, key: Key, a: Atom) -> bool {
         match key {
             Key::Named(b) => a == b,
-            Key::Any(0) => true,
             Key::Any(_) => self.key_may_name_str(key, &self.atoms[a as usize]),
         }
     }

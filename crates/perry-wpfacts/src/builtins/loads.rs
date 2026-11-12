@@ -67,9 +67,9 @@ pub(super) fn family_load(
 ) {
     let name = m.atoms[a as usize].clone();
     // An internal slot (`effects::internal_atom`) is no property: no chain
-    // has it. Its storage is an ordinary own field of the object, read by
-    // `load_from` (an unknown-key store reaches it through `field_any`, and
-    // an escape of the object sinks ⊤ into it); only the chain read stops.
+    // has it. Its storage is an own field of the object, read by
+    // `load_from` under its name only (`Model::field`: no computed key, spread
+    // or reflection reaches it); only the chain read stops.
     if super::effects::is_internal_key(&name) {
         return;
     }

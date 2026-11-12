@@ -146,6 +146,7 @@ mod locked_delete;
 mod locked_store;
 mod locked_top_store;
 mod locked_top_define;
+mod internal_slot_no_property;
 mod logical_and;
 mod map_identity_ops;
 mod member_heritage;

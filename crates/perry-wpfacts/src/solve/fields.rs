@@ -104,10 +104,17 @@ impl Model {
         if self.is_private_atom(a) {
             return n;
         }
+        // An internal slot (`effects::internal_atom`, ECMA-262 6.1.7.2) is
+        // no property either: only the built-in operation that owns it
+        // names it. No computed key writes or reads it, no spread copies it,
+        // no reflection lists it, so an object that has no such slot (a
+        // value that is no promise, under [[PromiseResult]]) holds nothing
+        // there. A marker keeps its reach: unmodeled code made that object.
+        let slot = builtins::is_internal_key(&self.atoms[a as usize]);
         if self.is_marker(t) && (!self.reach_marker.contains(&t) || self.is_path_marker(t)) {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
-        } else {
+        } else if !slot {
             // An array's named non-index key is its own key: its elements
             // (`field_any`) are read under an index only (`named_any`). A
             // module namespace's named key is resolved by name (DECISIONS
@@ -131,6 +138,9 @@ impl Model {
                     self.star_key(t, s, a, n);
                 }
             }
+        }
+        if slot {
+            return n;
         }
         let all = self.all_fields(t);
         self.edge(n, all);
@@ -235,7 +245,7 @@ impl Model {
         }
         self.spread_to.entry(s).or_default().push((d, site));
         for a in self.field_keys.get(&s).cloned().unwrap_or_default() {
-            if self.is_private_atom(a) {
+            if self.is_private_atom(a) || builtins::is_internal_key(&self.atoms[a as usize]) {
                 continue;
             }
             let f = self.field(s, a);
