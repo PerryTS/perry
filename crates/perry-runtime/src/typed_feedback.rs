@@ -2372,7 +2372,12 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
                     key_ptr,
                 )
             }
-            _ => f64::from_bits(TAG_UNDEFINED),
+            // Any other object behind a `T[]` site (a Date, a Promise, an
+            // Error, a RegExp, ...): its ordinary [[Get]] of the key.
+            _ => crate::value::js_dyn_index_get(
+                crate::value::js_nanbox_pointer(raw_addr as i64),
+                index,
+            ),
         }
     }
 }
@@ -2748,7 +2753,14 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 }
                 f64::from_bits(receiver_handle.get_nanbox_u64())
             }
-            _ => receiver,
+            // Any other object behind a `T[]` site (a Date, a Map, a Promise,
+            // an Error, a RegExp, ...): its ordinary [[Set]] of the key, with
+            // the assignment's own `Throw` flag. The store was dropped.
+            _ => {
+                let target = crate::value::js_nanbox_pointer(raw_addr as i64);
+                crate::proxy::js_put_value_set(target, index, value, target, strict);
+                receiver
+            }
         }
     }
 }

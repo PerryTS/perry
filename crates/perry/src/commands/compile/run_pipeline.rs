@@ -507,6 +507,10 @@ pub fn run_with_parse_cache(
     if perry_codegen::verify_facts::enabled() {
         std::env::set_var("PERRY_NO_CACHE", "1");
         perry_codegen::verify_facts::reset();
+        // Life claims need the collector hooks of the instrumented variant.
+        perry_codegen::verify_facts::set_instrumented_variant(
+            super::optimized_libs::instrumented_variant_requested(),
+        );
     }
     // The lifetime census (`PERRY_LIFE_CENSUS`) writes its rows from codegen;
     // a cache hit skips codegen and would leave the census silently empty.
