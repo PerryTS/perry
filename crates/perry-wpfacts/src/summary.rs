@@ -154,7 +154,23 @@ pub struct Summary {
     /// argument there holds exactly one function value runs the body once
     /// per that value (`Model::called_val`).
     pub called: Option<u32>,
+    /// Rule M1: the parameter that is the discriminant of the body's
+    /// top-level switch with string-literal case tests, never written
+    /// (`rel`), and the label of each clause (`None`: the default); a call
+    /// whose argument there holds exactly one string constant runs the body
+    /// once per that constant, with only the clauses it reaches
+    /// (`Model::called_val`). Only without a called parameter.
+    pub switch: Option<(u32, Vec<Option<crate::model::Atom>>)>,
+    /// Reach masks (`Model::edge_reach`) in this summary's terms: an edge
+    /// absent here, a rule or call past the end of its vector (empty: no
+    /// switch) is every run's.
+    pub edge_reach: FxHashMap<(NodeId, NodeId), u64>,
+    pub cons_reach: Vec<u64>,
+    pub call_reach: Vec<u64>,
 }
+
+/// Every run reaches it (a reach mask).
+pub const REACH_ALL: u64 = u64::MAX;
 
 #[derive(Clone, Debug)]
 pub struct Inst {
@@ -175,8 +191,9 @@ pub struct Inst {
     /// are the nodes from here on: the copy of slot `i` is a run of the
     /// shared node `Summary::orig[i]` (`Inst::copies`).
     pub fresh: NodeId,
-    /// The function value its called parameter is bound to (`NO_VAL`:
-    /// whatever the calls pass).
+    /// The function value its called parameter is bound to, or the string
+    /// constant (atom) its switch parameter is (`Summary::switch`); `NO_VAL`:
+    /// whatever the calls pass.
     pub val: Tok,
 }
 
@@ -833,7 +850,10 @@ impl Model {
         if call == NO_NODE {
             return NO_VAL;
         }
-        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called) else {
+        let Some(s) = self.sum.of.get(&f) else {
+            return NO_VAL;
+        };
+        let Some(j) = s.called.or(s.switch.as_ref().map(|w| w.0)) else {
             return NO_VAL;
         };
         let c = &self.calls[call as usize];
@@ -841,6 +861,16 @@ impl Model {
             return NO_VAL;
         };
         let n = &self.nodes[a as usize];
+        // Rule M1: exactly one string constant, nothing else.
+        if s.called.is_none() {
+            if n.prim != crate::model::prim::STR || n.pts.len() != 0 || n.strs < crate::model::STRS_SET0 {
+                return NO_VAL;
+            }
+            return match self.str_atoms(n.strs) {
+                &[x] => x,
+                _ => NO_VAL,
+            };
+        }
         if n.prim != 0 || n.pts.len() != 1 {
             return NO_VAL;
         }
@@ -857,7 +887,8 @@ impl Model {
         if call == NO_NODE {
             return false;
         }
-        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called) else {
+        let Some(j) = self.sum.of.get(&f).and_then(|s| s.called.or(s.switch.as_ref().map(|w| w.0)))
+        else {
             return false;
         };
         let c = &self.calls[call as usize];
@@ -926,6 +957,20 @@ impl Model {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
         let lay = self.sum.insts[inst as usize].lay;
+        // Rule M1: a run of one string constant runs the clauses that
+        // constant reaches: the bit of the clause it enters (the first case
+        // equal to it, else the default; bit 63: none, no clause runs).
+        let val = self.sum.insts[inst as usize].val;
+        let bit = match &s.switch {
+            Some((_, labels)) if val != NO_VAL => {
+                let e = labels
+                    .iter()
+                    .position(|l| *l == Some(val))
+                    .or_else(|| labels.iter().position(|l| l.is_none()));
+                1u64 << e.unwrap_or(63)
+            }
+            _ => REACH_ALL,
+        };
         let tr = |x: NodeId| {
             if is_slot(x) {
                 base[(x & !SLOT) as usize]
@@ -1015,6 +1060,9 @@ impl Model {
             self.add_tok(base[slot as usize], t);
         }
         for &(a, b) in &s.edges {
+            if bit != REACH_ALL && s.edge_reach.get(&(a, b)).is_some_and(|&m| m & bit == 0) {
+                continue;
+            }
             self.edge(tr(a), tr(b));
         }
         for (i, (t, cs)) in s.calls.iter().enumerate() {
@@ -1025,7 +1073,10 @@ impl Model {
                 self.edge(r, orig);
             }
         }
-        for (h, c) in &s.cons {
+        for (ci, (h, c)) in s.cons.iter().enumerate() {
+            if s.cons_reach.get(ci).is_some_and(|&m| m & bit == 0) {
+                continue;
+            }
             let c2 = map_cons(c, tr, |k| {
                 if k != NO_NODE && k & CALL != 0 {
                     kmap[(k & !CALL) as usize]
@@ -1108,11 +1159,21 @@ impl Model {
         let val = self.sum.insts[inst as usize].val;
         let vj = match val {
             NO_VAL => usize::MAX,
-            _ => self.sum.of[&f].called.map_or(usize::MAX, |j| j as usize),
+            _ => {
+                let s = &self.sum.of[&f];
+                s.called.or(s.switch.as_ref().map(|w| w.0)).map_or(usize::MAX, |j| j as usize)
+            }
         };
+        let by_str = self.sum.of[&f].called.is_none();
         for i in 0..terms.len() {
             if i == vj && terms[i] != NO_NODE {
-                self.add_tok(terms[i], val);
+                if by_str {
+                    // Rule M1: the parameter is that string constant.
+                    let ss = self.str_set(&[val]);
+                    self.add_s(terms[i], &Vec::new(), crate::model::prim::STR, ss);
+                } else {
+                    self.add_tok(terms[i], val);
+                }
                 if self.nodes[fparams[i] as usize].obs && i < nargs {
                     let a = self.calls[c].args[i];
                     self.edge(a, fparams[i]);

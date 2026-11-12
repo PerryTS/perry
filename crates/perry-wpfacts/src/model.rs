@@ -1974,6 +1974,23 @@ pub struct Model {
     /// The throw region generation is in (the walked body's `FuncInfo::raise`,
     /// a try body's node); `None` outside generation of a body.
     pub gen_region: Option<NodeId>,
+    /// Rule M1: generation is inside a clause of a switch on a parameter
+    /// (`switch_runs`): (that function, the clause's reach mask). What the
+    /// function's body makes there records the mask (`edge_reach`,
+    /// `cons_reach`, `call_reach`).
+    pub clause: Option<(FnIdx, u64)>,
+    /// Reach masks of what generation made inside such a clause: bit e set
+    /// = the run that enters the switch at clause e runs it (ECMA-262
+    /// 14.12.4 CaseBlockEvaluation: from the selected clause on until a
+    /// clause that cannot complete normally). Absent = every run. An edge
+    /// made again outside every clause is every run's.
+    pub edge_reach: crate::pts::FxHashMap<(NodeId, NodeId), u64>,
+    pub cons_reach: crate::pts::FxHashMap<(NodeId, u32), u64>,
+    pub call_reach: crate::pts::FxHashMap<CallId, u64>,
+    /// Rule M1: per function, its switch on a parameter (a statement of the
+    /// body's top level whose case tests are all string literals): (the
+    /// parameter's index, per clause its label, `None` the default).
+    pub switch_runs: crate::pts::FxHashMap<FnIdx, (u32, Vec<Option<crate::model::Atom>>)>,
     /// The region of calls unknown code makes to escaped functions: what they
     /// throw goes to unknown code (sunk; no catch reads it).
     pub esc_raise: NodeId,

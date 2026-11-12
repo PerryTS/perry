@@ -166,6 +166,9 @@ pub(super) fn expand(
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
+    // Rule M1: what the expansion copies runs where call `ci` does.
+    let reach = s.call_reach.get(ci).copied().unwrap_or(REACH_ALL);
+    let e0 = s.edges.len();
     let tr = |x: NodeId| {
         if is_slot(x) {
             SLOT | (off + (x & !SLOT))
@@ -297,5 +300,22 @@ pub(super) fn expand(
     let r = tr(g.ret);
     if r != NO_NODE && call.ret != NO_NODE {
         s.edges.push((r, call.ret));
+    }
+    if !s.cons_reach.is_empty() || !s.call_reach.is_empty() {
+        s.cons_reach.resize(s.cons.len(), reach);
+        s.call_reach.resize(s.calls.len(), reach);
+        if reach != REACH_ALL {
+            let had: FxHashSet<(NodeId, NodeId)> = s.edges[..e0].iter().copied().collect();
+            for k in e0..s.edges.len() {
+                let e = s.edges[k];
+                match s.edge_reach.get_mut(&e) {
+                    Some(m) => *m |= reach,
+                    None if !had.contains(&e) => {
+                        s.edge_reach.insert(e, reach);
+                    }
+                    None => {}
+                }
+            }
+        }
     }
 }

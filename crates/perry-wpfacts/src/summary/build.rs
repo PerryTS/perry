@@ -515,6 +515,22 @@ fn plan(
                 }
             }
         }
+        // Rule M1: what a clause of the body's switch on a parameter makes
+        // is a value of the slice: each run of one string constant has its
+        // own copy of the clauses it reaches (`Summary::switch`).
+        if m.switch_runs.contains_key(&f) {
+            let own = |x: NodeId| {
+                (x as usize) < m.node_fn.len() && m.node_fn[x as usize] == f && !pinned.contains(&x)
+            };
+            let mut more: Vec<NodeId> = Vec::new();
+            more.extend(m.cons_reach.keys().map(|&(h, _)| h));
+            more.extend(m.edge_reach.keys().flat_map(|&(a, b)| [a, b]));
+            more.extend(m.call_reach.keys().map(|&k| m.calls[k as usize].ret));
+            more.retain(|&x| own(x));
+            more.sort_unstable();
+            more.dedup();
+            roots.extend(more);
+        }
         let d = loop {
             let d = slice(m, ix, f, &roots, &through, pinned);
             let dset: FxHashSet<NodeId> = d.iter().copied().collect();
@@ -868,11 +884,17 @@ pub(super) fn build_summaries(m: &mut Model) {
             .collect()
     };
     let (ncomposed, nsccs) = compose(m, &obs_of);
-    for s in m.sum.of.values_mut() {
+    for (f, s) in m.sum.of.iter_mut() {
         let s = Rc::make_mut(s);
         bind_written_params(s);
         s.rel = relative_params(s);
         s.called = called_param(s);
+        s.switch = switch_param(s, m.switch_runs.get(f));
+        if s.switch.is_none() {
+            s.edge_reach = Default::default();
+            s.cons_reach = Vec::new();
+            s.call_reach = Vec::new();
+        }
     }
     let size_after: usize = m
         .sum
@@ -970,6 +992,23 @@ fn bind_written_params(s: &mut Summary) {
 /// else: never copied, stored, passed on, returned or captured. The run's
 /// result then depends on which function the call passes and on nothing
 /// else of that argument (`Model::called_val`).
+/// Rule M1: the switch generation found on parameter `j`
+/// (`Model::switch_runs`) when the parameter is a slot nothing of the body
+/// writes (`rel`) and no other interface term, and the body has no called
+/// parameter (one value per run).
+fn switch_param(s: &Summary, w: Option<&(u32, Vec<Option<crate::model::Atom>>)>) -> Option<(u32, Vec<Option<crate::model::Atom>>)> {
+    let (j, labels) = w?;
+    let p = *s.params.get(*j as usize)?;
+    let alone = s.params.iter().enumerate().all(|(i, &q)| i == *j as usize || q != p);
+    (s.called.is_none()
+        && is_slot(p)
+        && s.rel.get(*j as usize).is_some_and(|&r| r)
+        && alone
+        && !s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
+        && ![s.ret, s.this, s.rest].contains(&p))
+    .then(|| (*j, labels.clone()))
+}
+
 fn called_param(s: &Summary) -> Option<u32> {
     let only_called = |j: usize| {
         let p = s.params[j];
@@ -1085,10 +1124,16 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     };
     let mut callix: FxHashMap<CallId, u32> = FxHashMap::default();
     let mut s = BodyInput::new(d, of);
+    // Rule M1: a body with a switch on a parameter keeps the reach masks.
+    let sw = m.switch_runs.contains_key(&f);
+    let er = |a: NodeId, b: NodeId| m.edge_reach.get(&(a, b)).copied().unwrap_or(REACH_ALL);
     for (i, &k) in e.calls.iter().enumerate() {
         callix.insert(k, i as u32);
         s.calls
             .push((k, BodyCall::capture(&m.calls[k as usize], enc)));
+        if sw {
+            s.call_reach.push(m.call_reach.get(&k).copied().unwrap_or(REACH_ALL));
+        }
     }
     let kenc = |k: CallId| match callix.get(&k) {
         Some(&i) => CallOperand::Template(i),
@@ -1175,6 +1220,9 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
         for &y in node.succ.iter() {
             if !lit_own.contains(&y) && role(&lex, &dof, &oset, f, y) != Role::Inner {
                 s.edges.push((enc(x), enc(y)));
+                if sw {
+                    s.edge_reach.push(er(x, y));
+                }
             }
         }
         if let Some(ps) = ix.preds.get(&x) {
@@ -1184,12 +1232,21 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
                     Role::Outer => s.edges.push((enc(p), enc(x))),
                     Role::Abs => s.edges.push((Operand::Absolute(p), enc(x))),
                 }
+                if sw && s.edge_reach.len() < s.edges.len() {
+                    s.edge_reach.push(er(p, x));
+                }
             }
         }
+    }
+    if sw {
+        s.cons_reach.resize(s.cons.len(), REACH_ALL);
     }
     for &(h, i) in &e.cons {
         let c = &m.nodes[h as usize].cons[i as usize];
         s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
+        if sw {
+            s.cons_reach.push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));
+        }
     }
     s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
     s.ret = enc(m.funcs[f as usize].ret);

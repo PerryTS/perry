@@ -457,7 +457,7 @@ impl<'a> Gen<'a> {
     }
 
     /// Locals written anywhere this solve walks (`=`, `++`).
-    fn written_locals(&mut self, mi: u32) -> &crate::pts::FxHashSet<u32> {
+    pub(crate) fn written_locals(&mut self, mi: u32) -> &crate::pts::FxHashSet<u32> {
         if !self.written.contains_key(&mi) {
             let mut s = crate::pts::FxHashSet::default();
             self.walked(mi as usize).each_expr(&mut |e| match e {

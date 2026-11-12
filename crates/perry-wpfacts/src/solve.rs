@@ -706,7 +706,23 @@ impl Model {
     }
 
     /// Attach a complex constraint and apply it to what the node holds now.
+    /// Inside a clause of a switch on a parameter the rules it adds to `n`
+    /// record the clause's reach mask (rule M1, `Model::cons_reach`).
     pub fn cons(&mut self, n: NodeId, c: Cons) {
+        let tag = match self.clause {
+            Some((f, m)) if self.cur_fn == f => Some(m),
+            _ => None,
+        };
+        let len0 = self.nodes[n as usize].cons.len();
+        self.cons_untagged(n, c);
+        if let Some(m) = tag {
+            for i in len0..self.nodes[n as usize].cons.len() {
+                self.cons_reach.insert((n, i as u32), m);
+            }
+        }
+    }
+
+    fn cons_untagged(&mut self, n: NodeId, c: Cons) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Rule(n, c)) {
             return;

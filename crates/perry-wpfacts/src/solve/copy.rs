@@ -19,7 +19,32 @@ impl Model {
         if self.packet_emit(crate::summary::packet::Emission::Edge(a, b)) {
             return;
         }
+        if self.clause.is_some() || !self.edge_reach.is_empty() {
+            self.note_edge_reach(a, b);
+        }
         self.edge_impl(a, b, true);
+    }
+
+    /// Rule M1: the reach mask of edge a -> b (`Model::edge_reach`): the
+    /// clause generation is in, joined with the edge's earlier ones; an
+    /// edge that exists already without a mask, or is made outside every
+    /// clause, is every run's.
+    fn note_edge_reach(&mut self, a: NodeId, b: NodeId) {
+        match self.clause {
+            Some((f, m)) if self.cur_fn == f => {
+                let had = self.nodes[a as usize].succ.contains(&b);
+                match self.edge_reach.get_mut(&(a, b)) {
+                    Some(e) => *e |= m,
+                    None if !had => {
+                        self.edge_reach.insert((a, b), m);
+                    }
+                    None => {}
+                }
+            }
+            _ => {
+                self.edge_reach.remove(&(a, b));
+            }
+        }
     }
 
     /// `edge` without a relation line: internal relays the checker derives

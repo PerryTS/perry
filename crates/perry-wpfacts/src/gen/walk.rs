@@ -750,7 +750,13 @@ impl<'a> Gen<'a> {
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
         self.note_own_stores(f);
         let scope = self.narrow_enter_body(fx.module, fxi, &f.params, &f.body, &f.captures);
+        // Rule M1: the body's own top level; a clause of an enclosing
+        // function's switch is not this body's.
+        let top = self.top_body.replace((f.body.as_ptr() as usize, f.body.len()));
+        let clause = self.m.clause.take();
         self.stmts(&fx, &f.body);
+        self.top_body = top;
+        self.m.clause = clause;
         if ctor_of.is_none() && narrow::may_complete(&f.body) {
             // The body's normal completion returns `undefined` (a class
             // constructor's completion is never its result: `new` and
@@ -1447,14 +1453,93 @@ impl<'a> Gen<'a> {
                 // `===` against case values: no coercion, identity.
                 self.jumps += 1;
                 self.m.identity(d, IdentityRoute::Switch);
-                for c in cases {
+                // Rule M1: a statement of the body's top level switching on
+                // a parameter (its own node: no default value, no
+                // `arguments` object, never assigned: no `=` or `++` of it)
+                // with string-literal case tests only.
+                // Per clause, the runs that reach it: the run entering at
+                // clause j runs j and each next clause while the one before
+                // may complete normally (ECMA-262 14.12.4: fallthrough; the
+                // default clause is entered when no case test is equal).
+                let f = self.m.cur_fn;
+                let at = s as *const Stmt as usize;
+                let top = self.top_body.is_some_and(|(p, n)| {
+                    at >= p && at < p + n * std::mem::size_of::<Stmt>()
+                });
+                let param = match discriminant {
+                    Expr::LocalGet(id)
+                        if top
+                            && f != NO_FN
+                            && cases.len() < 64
+                            && !self.m.funcs[f as usize].has_arguments
+                            && !self.m.switch_runs.contains_key(&f)
+                            && !self.written_locals(fx.module).contains(id) =>
+                    {
+                        let pn = self.local(fx.module, *id);
+                        self.m.funcs[f as usize].params.iter().position(|&q| q == pn)
+                    }
+                    _ => None,
+                };
+                let mut labels: Vec<Option<crate::model::Atom>> = Vec::new();
+                let mut masks: Vec<u64> = Vec::new();
+                if param.is_some() {
+                    for c in cases.iter() {
+                        match &c.test {
+                            None => labels.push(None),
+                            Some(Expr::String(t)) => labels.push(Some(self.m.atom(t))),
+                            Some(_) => {
+                                labels.clear();
+                                break;
+                            }
+                        }
+                    }
+                }
+                if labels.len() == cases.len()
+                    && !cases.is_empty()
+                    && labels.iter().filter(|l| l.is_none()).count() <= 1
+                {
+                    if let Some(j) = param {
+                        let ends = |c: &perry_hir::SwitchCase| {
+                            matches!(
+                                c.body.last(),
+                                Some(
+                                    Stmt::Break
+                                        | Stmt::Continue
+                                        | Stmt::LabeledBreak(_)
+                                        | Stmt::LabeledContinue(_)
+                                        | Stmt::Return(_)
+                                        | Stmt::Throw(_)
+                                )
+                            )
+                        };
+                        for i in 0..cases.len() {
+                            let mut m = 0u64;
+                            let mut k = i;
+                            loop {
+                                m |= 1 << k;
+                                if k == 0 || ends(&cases[k - 1]) {
+                                    break;
+                                }
+                                k -= 1;
+                            }
+                            masks.push(m);
+                        }
+                        self.m.switch_runs.insert(f, (j as u32, labels));
+                    }
+                }
+                for (i, c) in cases.iter().enumerate() {
                     if let Some(t) = &c.test {
                         let tv = self.expr_zs(fx, t);
                         self.m.identity(tv, IdentityRoute::Switch);
                         // N1: a case test is the strict equality it means.
                         self.equality_demand(discriminant, t, d, tv);
                     }
+                    let clause = self.m.clause;
+                    if let Some(&m) = masks.get(i) {
+                        self.m.clause = Some((f, m));
+                    }
                     self.stmts(fx, &c.body);
+                    self.m.clause = clause;
                 }
                 self.jumps -= 1;
             }
