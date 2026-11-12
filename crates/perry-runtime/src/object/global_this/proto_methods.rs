@@ -855,13 +855,13 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(#[realm(String.prototype.toString)] export crate::object::primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(String.prototype.toString, effects = { returns(prim(str)) })] export crate::object::primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(#[realm(String.prototype.valueOf)] export crate::object::primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(String.prototype.valueOf, effects = { returns(prim(str)) })] export crate::object::primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }

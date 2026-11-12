@@ -50,3 +50,24 @@ fn a_method_unknown_code_writes_on_the_wrapper_prototype_takes_the_argument() {
     let pf = facts(&s);
     assert!(!proven(&pf, "a"), "{s}\n{}", pf.dump_text());
 }
+
+/// A wrapper's own realm methods `valueOf` / `toString` read only the
+/// wrapped primitive (thisNumberValue / thisStringValue /
+/// thisBooleanValue, ECMA-262 21.1.3.7, 22.1.3.35, 20.3.3.3; 21.1.3.6
+/// coerces only `radix`): neither the wrapper nor what it holds is handed
+/// to anything.
+#[test]
+fn a_wrapper_value_of_hands_neither_the_wrapper_nor_its_fields() {
+    for wrap in ["new Number(3)", "new String('s')", "new Boolean(true)"] {
+        let s = format!(
+            "class A {{ a = 1; }}
+             const a = new A();
+             const w: any = {wrap};
+             w.held = a;
+             console.log(w.valueOf(), w.toString());
+             console.log(a.a);"
+        );
+        let pf = facts(&s);
+        assert!(proven(&pf, "a"), "{s}\n{}", pf.dump_text());
+    }
+}
