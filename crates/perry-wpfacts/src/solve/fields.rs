@@ -55,11 +55,13 @@ impl Model {
             self.add_tok(n, r);
         } else {
             // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`). A
-            // module namespace's named key is resolved by name (DECISIONS
-            // 215): it never reads the namespace's other keys.
+            // (`field_any`) are read under an index only (`named_any`): a
+            // numeric key, the element key or a read under some Number
+            // (`NUM_KEY`, the `[0]`/`[1]` of an `Object.fromEntries` entry),
+            // `is_num_atom`. A module namespace's named key is resolved by
+            // name (DECISIONS 215): it never reads the namespace's other keys.
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
-                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
+                || self.is_elem_array(t) && !self.is_num_atom(a);
             let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),

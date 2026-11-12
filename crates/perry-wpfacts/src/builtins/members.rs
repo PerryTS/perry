@@ -642,7 +642,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
+        | "fromEntries" | "hostrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -655,8 +655,8 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// own-keys results are arrays (`CreateArrayFromList`); a match's `groups`
 /// and an `Object.groupBy` result have a null prototype (`perex_results.rs`
 /// `null_groups`, `groupby.rs`). The result of an undescribed method
-/// (`primbox`) and a `Map.groupBy` Map (`mapGroups`, whose entries the model
-/// keeps as a container's) have no chain the model describes.
+/// (`primbox`) has no chain the model describes. (A `Map.groupBy` result is
+/// a Map, `Family::Collection`, not a box.)
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
         "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
