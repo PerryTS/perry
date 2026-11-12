@@ -124,3 +124,40 @@ fn foreach_passes_the_key_second() {
     assert!(!proven(&v), "{v:?}");
 }
 
+
+/// node: a for-of over a Map yields `[key, value]` arrays only (24.1.3.12
+/// Map.prototype[@@iterator] is entries, 24.1.5.1): `e` is never the key
+/// `k`, so `e.g` is the pair's (undefined), never `s` (the PEELK35 route:
+/// GLTFLoader `for (const [key, value] of parser.associations)`). The map
+/// is iterated as an untyped value, so the loop calls its `@@iterator`
+/// (a typed Map loop lowers to the HIR entry views instead).
+#[test]
+fn iteration_yields_entry_pairs_not_keys() {
+    let v = verdict(
+        "const k = { g: s }; const m = new Map<any, any>(); m.set(k, 1); \
+         const walk = (x: any) => { for (const e of x) { take(e.g); } }; walk(m);",
+    );
+    assert!(proven(&v), "{v:?}");
+}
+
+/// node: a for-of over a Set yields its elements (24.2.3.11): `e` is `k`, `take` gets `s`.
+#[test]
+fn set_iteration_yields_the_elements() {
+    let v = verdict(
+        "const k = { g: s }; const st = new Set<any>(); st.add(k); \
+         const walk = (x: any) => { for (const e of x) { take(e.g); } }; walk(st);",
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// node: unknown code holding the map may set any value: the pair element
+/// read out of an escaped map is unknown.
+#[test]
+fn iteration_of_an_escaped_map_reads_unknown_values() {
+    let v = verdict(
+        "const m = new Map<any, any>(); m.set(\"k\", { b: 2 }); \
+         new Function(process.argv[2])(m); \
+         const walk = (x: any) => { for (const [a, b] of x) { b.f(s); } }; walk(m);",
+    );
+    assert!(!proven(&v), "{v:?}");
+}
