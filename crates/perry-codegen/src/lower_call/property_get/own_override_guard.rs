@@ -335,7 +335,15 @@ pub(crate) fn emit_annotated_array_branch(
             &biased,
             crate::expr::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
         );
-        blk.cond_br(&heap, &header_label, &flag_label);
+        // A value that is no heap pointer: with the method-site facts the
+        // predicate answers for it (`null` and `undefined` need the real
+        // `Get`, which throws); before, the install flag did.
+        let other = if crate::method_site::array_sites_enabled() {
+            &ask_label
+        } else {
+            &flag_label
+        };
+        blk.cond_br(&heap, &header_label, other);
     }
     ctx.current_block = header_idx;
     emit_array_header_test(ctx, recv, &ask_label, builtin_label);
@@ -417,7 +425,6 @@ pub(super) fn lower(
     args: &[Expr],
     call_byte_offset: u32,
 ) -> Result<String> {
-    let receiver = lower_expr(ctx, object)?;
     let key = object as *const Expr as usize;
     // Which cheap proof the guard can perform inline. A proven ARRAY answers
     // from its own header bit; every other proven kind answers from the global
@@ -425,7 +432,50 @@ pub(super) fn lower(
     // global one -- so this asks the same predicate `kind_is_proven_exotic`
     // used to admit the receiver in the first place.
     let receiver_is_array = is_array_expr(ctx, object);
+    // An Array method site the facts prove (`method_site`) is the chain's
+    // direct lowering with no test of its receiver; check mode runs the
+    // dropped test on the receiver value first.
+    let proven = receiver_is_array
+        && !crate::method_site::annotated_typed_array(ctx, object)
+        && crate::method_site::array_member_proven(
+            ctx,
+            perry_hir::folded_call::callee_site(callee),
+            property,
+        );
+    if proven && !crate::verify_facts::enabled() {
+        crate::method_site::witness_array_member(ctx, "", property);
+        return match super::lower_method_call_chain(
+            ctx,
+            callee,
+            object,
+            property,
+            args,
+            call_byte_offset,
+        )? {
+            Some(value) => Ok(value),
+            None => emit_dispatcher(ctx, object, property, args, call_byte_offset),
+        };
+    }
+    let receiver = lower_expr(ctx, object)?;
     let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
+        if proven {
+            let recv = match rooting::materialized_receiver_reread(ctx, key) {
+                Some(value) => value,
+                None => lower_expr(ctx, object)?,
+            };
+            crate::method_site::witness_array_member(ctx, &recv, property);
+            return match super::lower_method_call_chain(
+                ctx,
+                callee,
+                object,
+                property,
+                args,
+                call_byte_offset,
+            )? {
+                Some(value) => Ok(value),
+                None => emit_dispatcher(ctx, object, property, args, call_byte_offset),
+            };
+        }
         let own_idx = ctx.new_block("ownoverride.own");
         let builtin_idx = ctx.new_block("ownoverride.builtin");
         let merge_idx = ctx.new_block("ownoverride.merge");
@@ -441,15 +491,32 @@ pub(super) fn lower(
             Some(value) => value,
             None => lower_expr(ctx, object)?,
         };
-        emit_own_override_branch(
-            ctx,
-            property,
-            &recv,
-            receiver_is_array,
-            Some(proven_kind_family(ctx, object, receiver_is_array)),
-            &own_label,
-            &builtin_label,
-        );
+        if receiver_is_array
+            && crate::method_site::array_sites_enabled()
+            && crate::expr::array_proto_guard::method_tiers_enabled()
+        {
+            // The guarded tier of a site the facts do not prove: the Array
+            // header behind the heap-pointer test (the annotation is no
+            // proof that the value is a pointer at all).
+            emit_annotated_array_branch(
+                ctx,
+                property,
+                &recv,
+                Some(proven_kind_family(ctx, object, receiver_is_array)),
+                &own_label,
+                &builtin_label,
+            );
+        } else {
+            emit_own_override_branch(
+                ctx,
+                property,
+                &recv,
+                receiver_is_array,
+                Some(proven_kind_family(ctx, object, receiver_is_array)),
+                &own_label,
+                &builtin_label,
+            );
+        }
 
         // The own arm: the universal dispatcher. Its operands are lowered
         // HERE, inside the arm, so they are evaluated once by whichever arm

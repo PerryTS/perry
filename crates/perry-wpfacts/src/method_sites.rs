@@ -18,6 +18,16 @@
 //!   may still shadow the method (no typed-array member has a
 //!   `NativeMember` verdict; the prototypes carry no shadow bit).
 //!
+//! - **an Array member** ([`ARRAY_MEMBER`]): at every copy of the site,
+//!   and every summary instance's copy of it, the solver's `NativeMember`
+//!   verdict over the Array family holds (`derive::native_member`, the one
+//!   predicate; here over the site's receiver nodes): every receiver value
+//!   is an Array exotic object (no primitive, no ⊤, no marker, no other
+//!   object), `Array.prototype` describes the member as a function, no
+//!   receiver holds the key as an own property or had its prototype
+//!   relinked, and no builtin prototype is written under the key. The call
+//!   then runs the realm's `Array.prototype` built-in and no other code.
+//!
 //! A site is keyed as codegen keys it (`perry_hir::folded_call::Site`): an
 //! unfolded call by its callee read's offset, a folded node by its
 //! receiver, each with the method name. Two sites under one key (a chain
@@ -28,11 +38,13 @@
 //! all in an aborted or per-unit solve or when interpreted code can run.
 //!
 //! `PERRY_FACTS_TYPED_ARRAY_SITES=0` exports no typed-array fact (codegen
-//! then trusts the annotation, as before). The negative control
-//! `PERRY_FACTS_SABOTAGE=tasite` claims every site a typed-array receiver.
+//! then trusts the annotation, as before); `PERRY_FACTS_ARRAY_METHOD_SITES=0`
+//! exports no Array-member fact (codegen then guards every site at run
+//! time, as before). The negative controls `PERRY_FACTS_SABOTAGE=tasite` and
+//! `=arraysite` claim every site a typed-array receiver / an Array member.
 //! The dump (`PERRY_FACTS_DUMP`) prints one `# method_site` line per site:
-//! `module= site=callee:N|recv:N|local:N key= typed_array=1`, or
-//! `typed_array=0(<why>)`.
+//! `module= site=callee:N|recv:N|local:N key= typed_array=1|0(<why>)
+//! array_member=1|0(<why>)` (a fact that is switched off prints `-`).
 
 use crate::bindings::ModuleBindings;
 use crate::gen::Gen;
@@ -42,6 +54,18 @@ use std::collections::BTreeMap;
 
 /// The site's receiver holds only typed arrays the realm bore.
 pub const TYPED_ARRAY: u8 = perry_hir::folded_call::SITE_TYPED_ARRAY;
+
+/// The site's member is the realm's `Array.prototype` built-in on every
+/// receiver value (the `NativeMember` verdict over the Array family).
+pub const ARRAY_MEMBER: u8 = perry_hir::folded_call::SITE_ARRAY_MEMBER;
+
+/// `PERRY_FACTS_ARRAY_METHOD_SITES=0` turns the Array-member fact off.
+pub fn array_member_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_ARRAY_METHOD_SITES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
 
 /// `PERRY_FACTS_TYPED_ARRAY_SITES=0` turns the typed-array receiver fact
 /// off.
@@ -88,6 +112,47 @@ fn not_typed_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
     None
 }
 
+/// Why the method call `recv.key(..)` over the receiver nodes `recvs` is no
+/// Array member (`None`: it is one): `derive::native_member`, the solver's
+/// `NativeMember` verdict as a call site at those nodes is judged,
+/// restricted to the Array family (every value an Array exotic object: no
+/// primitive, no ⊤, no marker, no other object).
+fn not_array_member(m: &Model, key: crate::model::Atom, recvs: &[NodeId]) -> Option<String> {
+    let why = |s: &str| Some(s.to_string());
+    if recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+        return why("receiver:dropped");
+    }
+    let set = crate::derive::receiver_set(m, recvs);
+    if set.prims != 0 {
+        return why("receiver:primitive");
+    }
+    if set.toks.is_empty() {
+        return why("receiver:empty");
+    }
+    if set.toks.contains(&TOP) {
+        return why("receiver:top");
+    }
+    if set.toks.iter().any(|&t| m.is_marker(t)) {
+        return why("receiver:marker");
+    }
+    if !set.toks.iter().all(|&t| crate::derive::exact_array(m, t)) {
+        return why("receiver:not-array");
+    }
+    let site = crate::gen::ReadSite {
+        module: 0,
+        byte_offset: 0,
+        key,
+        recv: recvs[0],
+        is_call: true,
+        value_call: false,
+        func: 0,
+    };
+    match crate::derive::native_member(m, &site, &set.toks, set.prims) {
+        Ok(_) => None,
+        Err(reason) => Some(reason.unwrap_or_else(|| "member:own-or-undescribed".to_string())),
+    }
+}
+
 fn site_text(site: Site) -> String {
     match site {
         Site::Callee(o) => format!("callee:{o}"),
@@ -103,10 +168,12 @@ pub(crate) fn collect(
     bindings: &mut [ModuleBindings],
     interpreted: bool,
     sabotage_typed_array: bool,
+    sabotage_array_member: bool,
     mut probe: Option<&mut Vec<String>>,
 ) {
     let m = &g.m;
-    if !typed_array_enabled() || m.aborted || m.unit_mode || interpreted {
+    let (typed, array) = (typed_array_enabled(), array_member_enabled());
+    if !(typed || array) || m.aborted || m.unit_mode || interpreted {
         return;
     }
     // A summarized body's node has one copy per instance (`Inst::fresh`):
@@ -118,11 +185,9 @@ pub(crate) fn collect(
         });
     }
     // (module, site, key) -> the receiver nodes of every record of the site.
-    let mut sites: BTreeMap<(u32, Site, String), Vec<NodeId>> = BTreeMap::new();
+    let mut sites: BTreeMap<(u32, Site, crate::model::Atom), Vec<NodeId>> = BTreeMap::new();
     let mut add = |module: u32, site: Site, key: crate::model::Atom, recv: NodeId| {
-        let nodes = sites
-            .entry((module, site, m.atoms[key as usize].to_string()))
-            .or_default();
+        let nodes = sites.entry((module, site, key)).or_default();
         nodes.push(recv);
         nodes.extend(copies.get(&recv).into_iter().flatten().copied());
     };
@@ -134,23 +199,54 @@ pub(crate) fn collect(
     for s in &g.folded_sites {
         add(s.module, s.site, s.key, s.recv);
     }
-    // The map is ordered by (module, site, key): each list comes out sorted.
+    let mut out: BTreeMap<(u32, Site, String), (u8, String)> = BTreeMap::new();
     for ((mi, site, key), nodes) in sites {
-        let why = nodes
-            .iter()
-            .find_map(|&n| not_typed_arrays(m, n))
-            .filter(|_| !sabotage_typed_array);
+        let mut flags = 0;
+        let mut text = String::new();
+        let mut fact = |name: &str, on: bool, bit: u8, why: Option<String>| {
+            text.push_str(&match (on, why) {
+                (false, _) => format!(" {name}=-"),
+                (true, None) => {
+                    flags |= bit;
+                    format!(" {name}=1")
+                }
+                (true, Some(why)) => format!(" {name}=0({why})"),
+            });
+        };
+        fact(
+            "typed_array",
+            typed,
+            TYPED_ARRAY,
+            nodes
+                .iter()
+                .find_map(|&n| not_typed_arrays(m, n))
+                .filter(|_| !sabotage_typed_array)
+                .map(str::to_string),
+        );
+        fact(
+            "array_member",
+            array,
+            ARRAY_MEMBER,
+            not_array_member(m, key, &nodes).filter(|_| !sabotage_array_member),
+        );
+        // Two atoms of one spelling (a private name and a public key) are
+        // one key here: the site holds a fact only when both do.
+        let slot = out
+            .entry((mi, site, m.atoms[key as usize].to_string()))
+            .or_insert((u8::MAX, String::new()));
+        slot.0 &= flags;
+        slot.1 = text;
+    }
+    // The map is ordered by (module, site, key): each list comes out sorted.
+    for ((mi, site, key), (flags, text)) in out {
         if let Some(p) = probe.as_deref_mut() {
             let site = site_text(site);
-            p.push(match why {
-                None => format!("# method_site module={mi} site={site} key={key} typed_array=1"),
-                Some(why) => {
-                    format!("# method_site module={mi} site={site} key={key} typed_array=0({why})")
-                }
-            });
+            p.push(format!(
+                "# method_site module={mi} site={site} key={key}{text}"
+            ));
         }
-        if let (None, Some(mb)) = (why, bindings.get_mut(mi as usize)) {
-            mb.method_sites.push((site, key, TYPED_ARRAY));
+        if let (true, Some(mb)) = (flags != 0, bindings.get_mut(mi as usize)) {
+            mb.method_sites.push((site, key, flags));
         }
     }
 }
