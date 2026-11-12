@@ -2534,6 +2534,12 @@ pub struct Model {
     /// admit (a marker beside its values is no value, DECISIONS 74); their
     /// edges follow if it leaves (75).
     pub beside_guard: FxHashMap<Tok, Vec<(NodeId, NodeId)>>,
+    /// `PERRY_WPF_FILTER_CHECK=1` (diagnostic only, off by default): per
+    /// output of a `Cons::FieldTruthy`, its hosts; a token reaching the
+    /// output that no host holds at that moment is printed
+    /// (`Model::filter_check`).
+    pub ft_check: Option<FxHashMap<NodeId, Vec<NodeId>>>,
+    pub ft_violations: u32,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's

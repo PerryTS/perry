@@ -123,6 +123,9 @@ impl Model {
 
     #[track_caller]
     fn add_tokens_s(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16, strs: StrSet) {
+        if self.ft_check.is_some() {
+            self.filter_check(n, toks);
+        }
         if self.relations.is_some() {
             self.rel_generic_fn_arrival(n, &toks);
         }
@@ -543,6 +546,61 @@ impl Model {
         }
     }
 
+    /// `PERRY_WPF_FILTER_CHECK`: a token new at the output of a
+    /// `Cons::FieldTruthy` (not ⊤, not a marker) must be in one of its
+    /// hosts' sets now; the first 5 that are not are printed.
+    fn filter_check(&mut self, n: NodeId, toks: Tokens<'_>) {
+        let Some(hosts) = self.ft_check.as_ref().and_then(|m| m.get(&n)) else {
+            return;
+        };
+        let mut bad = Vec::new();
+        for &t in toks.iter() {
+            if t == TOP || self.is_marker(t) || self.nodes[n as usize].pts.contains_tok(t) {
+                continue;
+            }
+            if !hosts
+                .iter()
+                .any(|&h| self.nodes[h as usize].pts.contains_tok(t))
+            {
+                bad.push((t, hosts.clone()));
+            }
+        }
+        for (t, hosts) in bad {
+            self.ft_violations += 1;
+            if self.ft_violations > 5 {
+                continue;
+            }
+            let body = |m: &Self, x: NodeId| {
+                let f = m.node_fn.get(x as usize).copied().unwrap_or(u32::MAX);
+                m.funcs
+                    .get(f as usize)
+                    .map_or("-".to_string(), |fi| fi.name.clone())
+            };
+            let mut rules = Vec::new();
+            for &h in &hosts {
+                for c in &self.nodes[h as usize].cons {
+                    if let Cons::FieldTruthy { key, test, dst } = *c {
+                        if dst == n {
+                            rules.push(format!(
+                                "fieldtruthy host {h} key {} test {test} (body {})",
+                                self.key_name(key),
+                                body(self, h)
+                            ));
+                        }
+                    }
+                }
+            }
+            eprintln!(
+                "FILTER-CHECK violation #{}: dst {n} (body {}) tok {t} kind {} src {} rules [{}]",
+                self.ft_violations,
+                body(self, n),
+                self.tok_kind_word(t),
+                self.cur_src,
+                rules.join("; ")
+            );
+        }
+    }
+
     /// Seed a token (an input fact outside the solver rules: logged).
     #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
@@ -732,6 +790,14 @@ impl Model {
             return;
         }
         self.stats_cons += 1;
+        if let Cons::FieldTruthy { dst, .. } = c {
+            if self.ft_check.is_none() && std::env::var_os("PERRY_WPF_FILTER_CHECK").is_some() {
+                self.ft_check = Some(Default::default());
+            }
+            if let Some(m) = self.ft_check.as_mut() {
+                m.entry(dst).or_default().push(n);
+            }
+        }
         if matches!(c, Cons::IdxOwnLoad { .. }) {
             self.own_read_census[0] += 1;
         }
