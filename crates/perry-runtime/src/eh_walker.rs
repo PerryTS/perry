@@ -862,9 +862,27 @@ pub(crate) fn with_walker_locked<R>(f: impl FnOnce() -> R) -> R {
 /// call site outside the walker's own image; frames inside it (compiled code
 /// and the runtime, in a Perry executable) cannot belong to an unloaded
 /// object, so a throw through them reads no loader state.
+///
+/// In the instrumented cohort the walk holds the census `Unwind` funnel as
+/// [`locked_walker`] does: a throw decodes call-frame rows under this lock,
+/// an allocation there can read the clock, and that census row must not walk
+/// the stack again under the same lock (SNAPK7: the Supabase census run
+/// waited on it forever, js_throw -> find_handler -> decode_fde_row ->
+/// mimalloc arena free -> clock_gettime -> capture -> lock).
+#[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
 fn locked_walker_for_walk() -> Option<std::sync::MutexGuard<'static, Walker>> {
     walker()?.lock().ok()
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+fn locked_walker_for_walk() -> Option<WalkerLock> {
+    let guard = walker()?.lock().ok()?;
+    Some(WalkerLock {
+        guard,
+        _funnel: crate::snap_census::funnel_enter(crate::snap_census::Funnel::Unwind),
+    })
+}
+
 
 impl Walker {
     fn build() -> Option<Walker> {
