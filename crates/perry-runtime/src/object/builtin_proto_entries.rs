@@ -571,8 +571,10 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        // Not an object (a stream handle id, …): owns nothing.
-        return true;
+        // Not an object (a stream handle id, …): owns nothing. `null` and
+        // `undefined` behind the annotation take the real `Get`, which
+        // throws.
+        return !super::own_override::array_site_nullish_receiver(*recv);
     }
     let addr = (bits & POINTER_MASK) as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
@@ -627,7 +629,7 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        return true;
+        return !super::own_override::array_site_nullish_receiver(recv);
     }
     let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
         return false;
