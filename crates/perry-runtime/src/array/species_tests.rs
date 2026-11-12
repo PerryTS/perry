@@ -7,7 +7,7 @@ use super::species::{
     species_result_set_length,
 };
 use super::*;
-use crate::value::{JSValue, TAG_HOLE, TAG_UNDEFINED};
+use crate::value::{JSValue, TAG_UNDEFINED};
 
 fn boxed(arr: *const ArrayHeader) -> f64 {
     f64::from_bits(JSValue::pointer(arr as *const u8).bits())
@@ -40,8 +40,9 @@ fn a_plain_array_has_the_default_species_without_a_lookup() {
         assert!(is_default);
         let out = crate::value::js_nanbox_get_pointer(result) as *const ArrayHeader;
         assert_ne!(out, arr as *const ArrayHeader);
+        // ArrayCreate(2): two holes, read as `undefined`.
         assert_eq!(js_array_length(out), 2);
-        assert_eq!(js_array_get_f64(out, 0).to_bits(), TAG_HOLE);
+        assert_eq!(js_array_get_f64(out, 0).to_bits(), TAG_UNDEFINED);
     }
 }
 
@@ -97,7 +98,7 @@ fn a_species_result_is_defined_into_and_gets_its_length() {
             || crate::value::js_nanbox_get_pointer(short_h.get_nanbox_f64()) as *const ArrayHeader;
         assert_eq!(js_array_length(live()), 3);
         assert_eq!(js_array_get_f64(live(), 0), 10.0);
-        assert_eq!(js_array_get_f64(live(), 1).to_bits(), TAG_HOLE);
+        assert_eq!(js_array_get_f64(live(), 1).to_bits(), TAG_UNDEFINED);
         assert_eq!(js_array_get_f64(live(), 2), 30.0);
 
         // ... or longer: Set(A, "length", n, true) cuts it.
