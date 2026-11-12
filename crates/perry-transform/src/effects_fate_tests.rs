@@ -471,6 +471,18 @@ fn why_use_names_the_parent_node() {
 }
 
 #[test]
+fn why_use_names_the_store_role() {
+    // `p.v = 1`: stored into; `o.v = p`: stored into another object;
+    // `this.v = p` with the store not proven.
+    let f1 = func(1, &[10], vec![Stmt::Expr(set(lg(10), "v", Expr::Number(1.0)))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(PropertySet.object)");
+    let f2 = func(1, &[10], vec![Stmt::Expr(set(lg(900), "v", lg(10)))]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "use(PropertySet.value)");
+    let f3 = func(1, &[10], vec![Stmt::Expr(set(Expr::This, "v", lg(10)))]);
+    assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(PropertySet.value-to-this)");
+}
+
+#[test]
 fn why_first_use_wins() {
     let f1 = func(
         1,

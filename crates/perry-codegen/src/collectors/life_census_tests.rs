@@ -426,14 +426,14 @@ fn census_reports_receiving_sides() {
     let sides: HashSet<&str> = rows.iter().map(|r| r.6.as_str()).collect();
     for want in [
         "compiled:direct:Dropped",
-        "compiled:direct:Kept:use(PutValueSet)",
+        "compiled:direct:Kept:use(PutValueSet.value)",
         "compiled:field-bodies:Dropped",
         "compiled:local-bodies:Dropped",
         "builtin:global.log",
         "builtin:ObjectKeys",
         "builtin:ArrayFrom",
         "new:kept-by-new-object",
-        "new:Kept:use(PutValueSet)",
+        "new:Kept:use(PutValueSet.value-to-this)",
         "unknown-target:receiver-no-facts",
         "unknown-target:receiver-guarded",
         "unknown-target:other-module",
@@ -462,7 +462,7 @@ fn census_reports_receiving_sides() {
             .to_string()
     };
     assert!(row("drop1", "0:o").ends_with("\tdirect\tDropped"), "{params}");
-    assert!(row("keep1", "0:o").ends_with("\tdirect\tKept:use(PutValueSet)"), "{params}");
+    assert!(row("keep1", "0:o").ends_with("\tdirect\tKept:use(PutValueSet.value)"), "{params}");
     assert!(row("Box.constructor", "0:v").ends_with("\tKeptByReceiver"), "{params}");
     assert!(row("M.run", "this").contains("\tthis\t"), "{params}");
     assert!(

@@ -536,11 +536,15 @@ impl<'e> Walk<'_, 'e> {
     }
 
     /// A read of the binding under the current parent, which does not read it.
-    fn keep_used(&mut self, slot: Slot) {
+    fn keep_used(&mut self, slot: Slot, child: &Expr) {
         self.keep(slot, |w| {
             Why::Use(match w.parent {
                 Parent::Stmt(s) => Name::new(s),
-                Parent::Expr(e) => Name::of_expr(e),
+                Parent::Expr(e) => {
+                    let mut n = Name::of_expr(e);
+                    n.push(store_role(e, child));
+                    n
+                }
             })
         });
     }
@@ -688,10 +692,10 @@ impl<'e> Walk<'_, 'e> {
         match e {
             Expr::LocalGet(id) => {
                 if let Some(s) = self.param(*id) {
-                    self.keep_used(s);
+                    self.keep_used(s, e);
                 }
             }
-            Expr::This => self.keep_used(Slot::This),
+            Expr::This => self.keep_used(Slot::This, e),
             Expr::PropertyGet {
                 object,
                 property,
@@ -865,6 +869,30 @@ impl<'e> Walk<'_, 'e> {
         for c in kids {
             self.sub(e, c);
         }
+    }
+}
+
+/// Which part of a store `child` is: `.object` (stored into), `.value`
+/// (stored into another object) or `.value-to-this` (into `this`, the store
+/// not proven); empty for any other parent.
+fn store_role(parent: &Expr, child: &Expr) -> &'static str {
+    let (object, value) = match parent {
+        Expr::PropertySet { object, value, .. } | Expr::IndexSet { object, value, .. } => {
+            (object.as_ref(), value.as_ref())
+        }
+        Expr::PutValueSet { target, value, .. } => (target.as_ref(), value.as_ref()),
+        _ => return "",
+    };
+    if std::ptr::eq(object, child) {
+        ".object"
+    } else if std::ptr::eq(value, child) {
+        if matches!(object, Expr::This) {
+            ".value-to-this"
+        } else {
+            ".value"
+        }
+    } else {
+        ""
     }
 }
 
