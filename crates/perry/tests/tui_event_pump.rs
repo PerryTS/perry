@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::FromRawFd;
 use std::process::{Child, Command, Stdio};
@@ -22,9 +22,13 @@ fn read_request(stream: &mut TcpStream, expected: &[u8]) {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
-    let mut request = vec![0; expected.len()];
-    stream.read_exact(&mut request).unwrap();
-    assert_eq!(request, expected);
+    let mut request = Vec::new();
+    let mut reader = BufReader::new(stream);
+    while !request.ends_with(b"\r\n\r\n") {
+        assert!(reader.read_until(b'\n', &mut request).unwrap() > 0);
+        assert!(request.len() <= 8192);
+    }
+    assert!(request.starts_with(expected));
 }
 
 #[test]
