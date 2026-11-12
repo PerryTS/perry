@@ -180,6 +180,20 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
     } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
+    unsafe { grow_backing_unguarded::<MAY_COLLECT>(arr, min_capacity, exact) }
+}
+
+/// [`grow_backing_to`] without the integrity refusal: the store of a sealed
+/// or non-extensible Array grows when its `length` does (ArraySetLength adds
+/// no property). Every element add goes through the guarded form.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+unsafe fn grow_backing_unguarded<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+    exact: bool,
+) -> *mut ArrayHeader {
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
@@ -1678,6 +1692,22 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
     let _ = array_set_length(arr, new_length);
 }
 
+/// `Reflect.set(arr, "length", n)`: the [[Set]]'s own boolean. `false` for a
+/// frozen Array, a read-only `length` and a truncation an undeletable element
+/// stopped; an invalid length still throws its RangeError.
+pub(crate) fn array_set_length_reflect(arr: *mut ArrayHeader, new_length: f64) -> bool {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        return true;
+    }
+    if array_object_flags(cleaned) & gc::OBJ_FLAG_FROZEN != 0
+        || array_length_is_non_writable(cleaned)
+    {
+        return false;
+    }
+    array_set_length(cleaned, new_length).is_ok()
+}
+
 /// ArraySetLength (ECMA-262 §10.4.2.4) for `arr.length = n`.
 ///
 /// `Err(index)`: the truncation stopped at an element that cannot be deleted
@@ -1818,12 +1848,7 @@ fn array_set_length(arr: *mut ArrayHeader, new_length: f64) -> Result<(), u32> {
             // a dense backing store proportional to the requested length.
             // Test262's descriptor probe writes 2^32-1 here. Keep large sparse
             // extensions logical and let later indexed writes choose storage.
-            // The store of a sealed or non-extensible Array does not grow
-            // (`js_array_grow` hands it back as it is): its longer `length` is
-            // logical too.
-            if n > (*arr).capacity
-                && (n > 1_000_000 || flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0)
-            {
+            if n > (*arr).capacity && n > 1_000_000 {
                 (*arr).length = n;
                 refresh_array_numeric_layout(arr);
                 return Ok(());
@@ -1833,8 +1858,16 @@ fn array_set_length(arr: *mut ArrayHeader, new_length: f64) -> Result<(), u32> {
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
+            // A longer `length` adds no property, so a sealed or
+            // non-extensible Array takes it too: its store grows by the
+            // unguarded form (`js_array_grow` refuses such an Array, which is
+            // right for an element add).
             let target = if n > (*arr).capacity {
-                js_array_grow(arr, n)
+                if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
+                    grow_backing_unguarded::<true>(arr, n, false)
+                } else {
+                    js_array_grow(arr, n)
+                }
             } else {
                 arr
             };

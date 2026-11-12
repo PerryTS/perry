@@ -279,6 +279,14 @@ pub(crate) fn typed_array_mark_no_extend(owner: usize) {
     }
 }
 
+/// An own data property as `Object.defineProperty` leaves it, for tests that
+/// need one whose name is an accessor of `%TypedArray%.prototype` (`length`):
+/// an assignment cannot create it.
+#[cfg(test)]
+pub(crate) fn test_define_own_data(owner: usize, name: &str, value: f64) {
+    upsert_typed_array_own_prop(owner, name.to_string(), value, true);
+}
+
 pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
     unsafe { (*crate::buffer::store::header(owner))._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 }
 }
