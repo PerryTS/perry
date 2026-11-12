@@ -385,6 +385,26 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_store_of_a_js_value_is_tonumber_then_modulo_256() {
+        let buf = buffer_alloc(6);
+        unsafe {
+            super::store::set_length(buf as usize, 6);
+        }
+        // Past int32 a saturating `as i32` gave 255; ToUint8 is modular.
+        let values = [1e10, 2f64.powi(31) + 5.0, -1.0, 300.7, f64::NAN, -0.5];
+        for (i, value) in values.iter().enumerate() {
+            js_buffer_set_value(buf, i as i32, *value);
+        }
+        let bytes: Vec<i32> = (0..6).map(|i| js_buffer_get(buf, i)).collect();
+        assert_eq!(bytes, [0, 5, 255, 44, 0, 0]);
+        // A Boolean and null convert; an index past the end stores nothing.
+        js_buffer_set_value(buf, 0, f64::from_bits(crate::value::TAG_TRUE));
+        js_buffer_set_value(buf, 1, f64::from_bits(crate::value::TAG_NULL));
+        js_buffer_set_value(buf, 6, 9.0);
+        assert_eq!((js_buffer_get(buf, 0), js_buffer_get(buf, 1)), (1, 0));
+    }
+
+    #[test]
     fn test_buffer_symbol_iterator_respects_own_symbol_property() {
         let buf = buffer_alloc(1);
         unsafe {
