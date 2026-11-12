@@ -875,3 +875,74 @@ fn a_copy_that_keeps_keeps_the_parameter() {
     let f4 = func(1, &[10, 11], vec![if_(lg(11), vec![let_(20, lg(10)), push(lg(20))])]);
     assert_eq!(why(&fates(&[f4], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
 }
+
+// ─── FATE2 rule d: a literal shape's constructor stores into the new object
+
+fn shape_class(name: &str, extra: Vec<Stmt>) -> perry_hir::Class {
+    let field = |n: &str| perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
+        name: n.to_string(),
+        key_expr: None,
+        ty: Type::Any,
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: vec![],
+    };
+    let mut body = vec![
+        Stmt::Expr(set(Expr::This, "a", lg(10))),
+        Stmt::Expr(set(Expr::This, "b", lg(11))),
+    ];
+    body.extend(extra);
+    perry_hir::Class {
+        id: 1,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![field("a"), field("b")],
+        constructor: Some(func(3, &[10, 11], body)),
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+#[test]
+fn a_literal_shape_constructor_keeps_by_receiver() {
+    let c = shape_class("__AnonShape_t", vec![]);
+    assert!(c.is_literal_shape());
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    let ff = f.of_fn(3).unwrap();
+    assert_eq!(ff.params[0].fate, Fate::KeptByReceiver);
+    assert_eq!(ff.params[1].fate, Fate::KeptByReceiver);
+    assert!(ff.this.proven_dropped());
+    assert_eq!(f.construction_arg("__AnonShape_t", 1).fate, Fate::KeptByReceiver);
+}
+
+#[test]
+fn a_class_that_is_no_literal_shape_needs_the_store_proof() {
+    // A user class of the same body: the proof (here none) decides.
+    let c = shape_class("P", vec![]);
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    assert_eq!(why(&f, 3, 0), "use(PropertySet.value-to-this)");
+    // An anon-named class whose constructor does more than its stores.
+    let c = shape_class("__AnonShape_u", vec![push(lg(10))]);
+    assert!(!c.is_literal_shape());
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    assert_eq!(fate(&f, 3, 0), Fate::Kept);
+}
