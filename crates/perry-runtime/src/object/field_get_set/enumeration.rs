@@ -1318,39 +1318,16 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
                 let length = (*arr).length;
                 if length > 100_000 {
-                    let dense_limit = if length > (*arr).capacity && (*arr).capacity <= 1_000_000 {
-                        (*arr).capacity
-                    } else {
-                        0
-                    };
-                    let names = crate::array::array_named_property_enumeration_names(
+                    // Every present slot of the store, the far index keys of
+                    // a sparse Array ascending, then the named keys; rooted
+                    // (a key past 99 999 is a heap string, so each one can
+                    // collect). The old arm read no store slot at all when the
+                    // store was above 1 000 000 or the Array dense, so
+                    // `Object.keys` of a 150 000-element Array was empty.
+                    return super::entries_shape::array_own_enumerable(
                         arr,
-                        true,
-                        dense_limit,
+                        super::entries_shape::ArrayEnum::Keys,
                     );
-                    let result = crate::array::js_array_alloc(
-                        dense_limit.saturating_add(names.len() as u32),
-                    );
-                    if dense_limit > 0 {
-                        let elements = crate::array::array_elements_ptr(
-                            arr as *const crate::array::ArrayHeader,
-                        ) as *const u64;
-                        for i in 0..dense_limit {
-                            if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                                continue;
-                            }
-                            let s = i.to_string();
-                            let key_box =
-                                crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
-                            crate::array::js_array_push_f64(result, key_box);
-                        }
-                    }
-                    for name in names {
-                        let key =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(result, JSValue::string_ptr(key));
-                    }
-                    return result;
                 }
                 let elements =
                     crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
@@ -1771,7 +1748,10 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 as *const crate::gc::GcHeader;
             if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                return super::entries_shape::array_values_or_entries(arr, false);
+                return super::entries_shape::array_own_enumerable(
+                    arr,
+                    super::entries_shape::ArrayEnum::Values,
+                );
             }
         }
     }
