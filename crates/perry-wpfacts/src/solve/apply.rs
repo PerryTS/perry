@@ -448,6 +448,7 @@ impl Model {
                 }
             }
             Cons::Fulfil { dst } => {
+                // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
                 // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.
                 if prim != 0 {
                     let strs = self.nodes[n as usize].strs;
