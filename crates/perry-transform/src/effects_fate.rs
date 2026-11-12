@@ -23,8 +23,15 @@
 //! ([`FateProof::store`]) makes it `KeptByReceiver`. Everything else keeps
 //! it: assignment to any local, field, element or global, capture, `throw`,
 //! spread, any operator, a method call on it, a call whose bodies are not all
-//! known, a runtime or built-in call. A function that is not ordinary (async,
-//! generator, defaults, rest, `arguments`, captures) keeps every parameter.
+//! known, a runtime or built-in call. A function whose body the rule does not
+//! walk (async, generator, `arguments`, captures, decorators) keeps every
+//! parameter.
+//!
+//! A default value is evaluated in the callee, before the body, and may read
+//! earlier parameters: its expression is walked as a use like any other. A
+//! rest parameter is a fresh array holding the arguments from its position
+//! on: the rule keeps those arguments (the array's elements are read out as
+//! values the rule does not follow), and walks the body for the others.
 //!
 //! Across calls the fates are a least fixpoint over the call graph: strongly
 //! connected components bottom-up, and inside one component every function
@@ -171,6 +178,8 @@ pub enum Why {
     Updated,
     /// A mutation that names the binding by id: the node.
     Mutated(&'static str),
+    /// An argument collected by a rest parameter.
+    Rest,
 }
 
 impl std::fmt::Display for Why {
@@ -191,6 +200,7 @@ impl std::fmt::Display for Why {
             Why::Reassigned => f.write_str("reassigned"),
             Why::Updated => f.write_str("updated"),
             Why::Mutated(k) => write!(f, "mutated({k})"),
+            Why::Rest => f.write_str("rest"),
         }
     }
 }
@@ -239,20 +249,45 @@ impl ParamFate {
 pub struct FnFates {
     pub params: Vec<ParamFate>,
     pub this: ParamFate,
+    /// The fate of an argument past the declared parameters.
+    tail: ParamFate,
 }
 
 impl FnFates {
-    fn all(params: usize, fate: ParamFate) -> Self {
+    fn all(f: &Function, fate: ParamFate) -> Self {
         Self {
-            params: vec![fate; params],
+            params: vec![fate; f.params.len()],
             this: fate,
+            tail: tail(f),
         }
     }
 
-    /// The fate of argument position `i`: an argument past the declared
-    /// parameters reaches no binding of an ordinary body (no `arguments`).
+    /// The fate of argument position `i`. An argument past the declared
+    /// parameters reaches a binding only through a rest parameter or
+    /// `arguments` (both keep it).
     pub fn arg(&self, i: usize) -> ParamFate {
-        self.params.get(i).copied().unwrap_or(ParamFate::DROPPED)
+        self.params.get(i).copied().unwrap_or(self.tail)
+    }
+}
+
+/// The fate of an argument past `f`'s declared parameters: kept when a rest
+/// parameter or `arguments` collects it, otherwise no binding sees it.
+fn tail(f: &Function) -> ParamFate {
+    if let Some(k) = f.params.iter().find_map(|p| {
+        if p.arguments_object.is_some() {
+            Some(Why::NotOrdinary("arguments"))
+        } else if p.is_rest {
+            Some(Why::Rest)
+        } else {
+            None
+        }
+    }) {
+        ParamFate {
+            why: Some(k),
+            ..ParamFate::KEPT
+        }
+    } else {
+        ParamFate::DROPPED
     }
 }
 
@@ -364,7 +399,7 @@ impl Fates {
         for component in sccs(&edges) {
             for &i in &component {
                 let f = bodies[i];
-                let start = match not_ordinary(f) {
+                let start = match not_walkable(f) {
                     None => ParamFate::DROPPED,
                     Some(k) => ParamFate {
                         why: Some(Why::NotOrdinary(k)),
@@ -373,13 +408,13 @@ impl Fates {
                 };
                 fates
                     .by_fn
-                    .insert(f.id, FnFates::all(f.params.len(), start));
+                    .insert(f.id, FnFates::all(f, start));
             }
             loop {
                 let mut moved = false;
                 for &i in &component {
                     let f = bodies[i];
-                    if !ordinary(f) {
+                    if not_walkable(f).is_some() {
                         continue;
                     }
                     let next = body_fates(f, proof, &fates);
@@ -425,12 +460,17 @@ impl Fates {
     }
 }
 
+/// `effects.rs`'s question (closed construction, the inliner): a body the
+/// fate walks, without default or rest parameters.
 pub(crate) fn ordinary(f: &Function) -> bool {
-    not_ordinary(f).is_none()
+    not_walkable(f).is_none() && f.params.iter().all(|p| p.default.is_none() && !p.is_rest)
 }
 
-/// The first part that makes `f` not ordinary, `None` when it is.
-fn not_ordinary(f: &Function) -> Option<&'static str> {
+/// The first part that keeps the fate from walking `f`, `None` when it
+/// walks it: a body that suspends, captures, is decorated, or sees its
+/// arguments through `arguments` (in a sloppy function `arguments[i]` and
+/// parameter `i` are one binding).
+fn not_walkable(f: &Function) -> Option<&'static str> {
     if f.is_async {
         return Some("async");
     }
@@ -444,12 +484,6 @@ fn not_ordinary(f: &Function) -> Option<&'static str> {
         return Some("decorators");
     }
     for p in &f.params {
-        if p.default.is_some() {
-            return Some("default");
-        }
-        if p.is_rest {
-            return Some("rest");
-        }
         if p.arguments_object.is_some() {
             return Some("arguments");
         }
@@ -465,11 +499,23 @@ pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates
     let mut walk = Walk {
         func: f.id,
         params: f.params.iter().map(|p| p.id).collect(),
-        out: FnFates::all(f.params.len(), ParamFate::DROPPED),
+        out: FnFates::all(f, ParamFate::DROPPED),
         proof,
         known,
         parent: Parent::Stmt("Expr"),
     };
+    for (i, p) in f.params.iter().enumerate() {
+        if p.is_rest {
+            walk.keep(Slot::Param(i), |_| Why::Rest);
+        }
+    }
+    // Defaults run in the callee before the body, in parameter order.
+    for p in &f.params {
+        if let Some(d) = &p.default {
+            walk.at("Default");
+            walk.expr(d);
+        }
+    }
     for stmt in &f.body {
         walk.stmt(stmt);
     }
@@ -934,6 +980,9 @@ fn callees(
         }
         false
     };
+    for d in f.params.iter().filter_map(|p| p.default.as_ref()) {
+        each_expr(d, &mut visit);
+    }
     for s in &f.body {
         perry_hir::walker::stmt_any_expr(s, &mut |e| {
             each_expr(e, &mut visit);
