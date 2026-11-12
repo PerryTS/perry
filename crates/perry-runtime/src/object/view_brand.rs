@@ -23,11 +23,17 @@ pub(crate) enum ViewBrand {
     /// A `%TypedArray%` instance of this element kind (`typedarray::KIND_*`),
     /// including a plain `Uint8Array`.
     TypedArray(u8),
-    /// An object instance of a user class extending a typed-array constructor,
-    /// whose element kind the class registry does not record.
+    /// A plain object (`GC_TYPE_OBJECT`) of a user class extending a
+    /// typed-array constructor: classified as a view, but it carries no view
+    /// storage (a subclass instance built by the base constructor is a
+    /// [`Self::TypedArray`] cell), and the class registry records no kind.
     TypedArraySubclass,
-    /// A `DataView`, or an instance of a user class extending it.
+    /// A `DataView` cell, including a subclass instance built by the base
+    /// constructor.
     DataView,
+    /// A plain object of a user class extending `DataView`, without view
+    /// storage (as [`Self::TypedArraySubclass`]).
+    DataViewSubclass,
 }
 
 impl ViewBrand {
@@ -37,14 +43,29 @@ impl ViewBrand {
         match self {
             Self::NodeBuffer => Some(crate::typedarray_hook_slots::KIND_UINT8),
             Self::TypedArray(kind) => Some(kind),
-            Self::TypedArraySubclass | Self::DataView => None,
+            Self::TypedArraySubclass | Self::DataView | Self::DataViewSubclass => None,
         }
     }
 
     /// `util.types.isTypedArray`: every view except a `DataView`.
     #[inline]
     pub(crate) fn is_typed_array(self) -> bool {
-        !matches!(self, Self::DataView)
+        !matches!(self, Self::DataView | Self::DataViewSubclass)
+    }
+
+    /// Whether the value carries the view byte storage
+    /// (`buffer::bytes::span` resolves it). Every operation that reads or
+    /// writes the view's bytes checks this, so its check and its byte
+    /// resolution cannot disagree.
+    #[inline]
+    pub(crate) fn has_storage(self) -> bool {
+        !matches!(self, Self::TypedArraySubclass | Self::DataViewSubclass)
+    }
+
+    /// `util.types.isDataView`.
+    #[inline]
+    pub(crate) fn is_data_view(self) -> bool {
+        matches!(self, Self::DataView | Self::DataViewSubclass)
     }
 }
 
@@ -90,7 +111,7 @@ fn extends_builtin_view(value: f64) -> Option<ViewBrand> {
     if class_id == 0 {
         None
     } else if super::extends_builtin_data_view(class_id) {
-        Some(ViewBrand::DataView)
+        Some(ViewBrand::DataViewSubclass)
     } else if super::extends_builtin_typed_array(class_id) {
         Some(ViewBrand::TypedArraySubclass)
     } else {
