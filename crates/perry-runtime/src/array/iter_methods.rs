@@ -1215,6 +1215,18 @@ pub extern "C" fn js_array_flatMap(
         return js_array_alloc(0);
     }
     unsafe {
+        let recv_value = array_receiver_value(arr);
+        if !crate::array::species::default_species_is_certain(recv_value) {
+            // An own `constructor`, a recorded prototype or a `constructor`
+            // accessor: ArraySpeciesCreate(O, 0) can run user code and the
+            // result may be any object.
+            let result = crate::array::js_arraylike_flatMap(
+                recv_value,
+                crate::value::js_nanbox_pointer(callback as i64),
+                undefined_value(),
+            );
+            return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        }
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
