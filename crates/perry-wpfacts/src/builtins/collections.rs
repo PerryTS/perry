@@ -1735,6 +1735,16 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let e = effects::declared_at("Buffer.prototype", n).expect("declared");
             effects::run_native(m, e, t, call);
         }
+        // A key no object of the Buffer's chain holds: [[Get]] is
+        // `undefined`, the call throws before its arguments are used
+        // (10.1.8.1, 13.3.6.2 EvaluateCall, 7.3.14 Call), unless the
+        // program wrote it there.
+        ("Buffer", Some(n))
+            if super::loads::view_member_absent(Some("Buffer"), n)
+                && !{
+                    let a = m.atom(n);
+                    intrinsic_written(m, a)
+                } => {}
         ("Buffer", Some("slice")) if c.spread.is_empty() => {
             typed_array_methods::buffer_view_slice(m, t, call)
         }

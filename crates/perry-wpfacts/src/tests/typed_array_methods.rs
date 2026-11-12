@@ -234,3 +234,26 @@ fn buffer_of_view_held_by_unknown_code_escapes() {
         false,
     );
 }
+/// 10.1.8.1 OrdinaryGet: a key no object of the chain holds is `undefined`
+/// on a Buffer, a typed array and an ArrayBuffer (the slice of a Buffer's
+/// `.buffer`); a call of it throws before its argument is used.
+#[test]
+fn absent_key_on_a_buffer_chain_is_undefined() {
+    for v in [
+        "Buffer.from(\"x\")",
+        "Buffer.from(\"x\").buffer.slice(0)",
+        "new Uint8Array(2)",
+        "new Float64Array(2)",
+    ] {
+        check(&format!("const v: any = {v}; const e: any = v.extras; if (e) e.q(o); v.extras2(o);"), true);
+    }
+}
+/// Control: a program store onto `Buffer.prototype` is what the read finds.
+#[test]
+fn absent_key_written_on_buffer_prototype_is_read() {
+    check(
+        "(Buffer.prototype as any).extras = function (x: any) { (globalThis as any).hostTake(x); }; \
+         const v: any = Buffer.from(\"x\"); v.extras(o);",
+        false,
+    );
+}

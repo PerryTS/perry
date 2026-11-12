@@ -74,7 +74,10 @@ pub(super) fn family_load(
         return;
     }
     if fam == Family::Opaque && member_native(m, fam, what, &name).is_none() {
-        if buffer_member_absent(m, what, &name) || regexp_member_absent(what, &name) {
+        if buffer_member_absent(m, what, &name)
+            || regexp_member_absent(what, &name)
+            || view_member_absent(what, &name)
+        {
             m.add_prim(dst, prim::UNDEF);
         } else if let Some(e) = declared_accessor(m, fam, what, &name) {
             // An accessor whose getter the runtime declares (`RegExp
@@ -173,6 +176,25 @@ pub(super) fn family_member(
 fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
     what == Some("RegExp")
         && members::regexp_inherited(name)
+            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+}
+
+/// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a String key no
+/// object of its chain holds reads `undefined`. The realm lists every own
+/// property of `Buffer.prototype`, of each typed-array kind's prototype and
+/// of `%TypedArray%.prototype` and `Object.prototype`; a typed array's
+/// template does not keep its kind, and `Uint8Array.prototype` holds a
+/// superset of the other kinds' own keys (`constructor`,
+/// `BYTES_PER_ELEMENT`), so its chain stands for every kind's. A key a
+/// store wrote onto the chain is `intrinsic_miss`'s.
+pub(super) fn view_member_absent(what: Option<&str>, name: &str) -> bool {
+    let proto = match what {
+        Some("TypedArray") => "Uint8Array.prototype",
+        Some("Buffer") => "Buffer.prototype",
+        _ => return false,
+    };
+    !name.starts_with("@@")
+        && members::realm_entry(proto)
             .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
 }
 
