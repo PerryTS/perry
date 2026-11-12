@@ -333,11 +333,15 @@ pub(crate) fn classref_preserving_handle(
     // in value context an object always carries POINTER_TAG. The handle
     // entries read a word with clear top bits as a raw object pointer, so
     // such a Number must not reach them with its own bits. These entries do
-    // not use a Number receiver's value (a read answers `undefined`, a store
-    // is the primitive [[Set]]), so it is handed over as the Number 1.0,
-    // which they classify as every other Number. A site that needs the
-    // Number itself (a named read binds `this`) uses
-    // `named_get_on_unproven_receiver` instead.
+    // not observe WHICH Number the receiver is: they take an integer-index
+    // read (`undefined` on a Number), an indexed store and a string-keyed
+    // store (the primitive [[Set]]). So 1.0 is only a placeholder meaning
+    // "a Number, not an object"; it is never the `this` of a call or the
+    // result of a read. A site where the Number itself is observed (a named
+    // read: `e["toFixed"]`, `e["constructor"]` bind or answer from the
+    // receiver) uses `named_get_on_unproven_receiver` instead, and symbol
+    // and string keys of a computed read go through the keyed probe with
+    // the boxed receiver, not through this handle.
     let is_raw_shaped_number = blk.icmp_ult(I64, obj_bits, RAW_SHAPE_LIMIT_I64);
     let non_pointer = blk.select(
         crate::types::I1,
