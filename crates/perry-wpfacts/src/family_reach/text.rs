@@ -14,9 +14,10 @@
 //!   (`globalThis["Uint8" + "Array"]`) is a static key; listing the global
 //!   object's keys is no observation.
 //! - **static member keys**: a string the text holds that is the key of a
-//!   member of a family its holder is not of (`normalize` on
+//!   prototype member of a family its holder is not of (`normalize` on
 //!   `String.prototype`, `toLocaleString` on `Date.prototype`), wherever it
-//!   stands.
+//!   stands: a prototype's values exist without the holder being named. (A
+//!   static member needs its holder named: the names part.)
 //! - **computed keys**: only in a body generation does not walk (in a walked
 //!   body the solve has the key's strings and the receivers): any member of
 //!   a family on a core prototype.
@@ -209,9 +210,7 @@ impl Scan<'_, '_, '_> {
         if let Some(own) = families::entry_families(name).filter(|set| *set != 0) {
             // A holder of a family: the family, and what the member is and
             // bears; a member the realm does not declare is the whole holder.
-            let member = ix
-                .entry(&format!("{name}.{key}"))
-                .unwrap_or_else(|| ix.root(name));
+            let member = ix.member(name, key).unwrap_or_else(|| ix.root(name));
             (self.mark)(own | member, &|| format!("L3:{name}.{key}"));
             return;
         }
@@ -219,7 +218,7 @@ impl Scan<'_, '_, '_> {
             // `Name.prototype.member`: the parent names the member.
             return;
         }
-        match ix.entry(&format!("{name}.{key}")) {
+        match ix.member(name, key) {
             Some(set) => (self.mark)(set, &|| format!("L3:{name}.{key}")),
             // Not a declared member: the holder as a whole.
             None => (self.mark)(ix.root(name), &|| {

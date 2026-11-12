@@ -178,12 +178,14 @@ pub(crate) struct Index {
     /// A holder of a family (a root or any entry below it) -> what observing
     /// it observes: its families and its declared births.
     holders: FxHashMap<&'static str, FamilySet>,
+    /// Entry -> its [[Prototype]] (`RealmEntry::proto`).
+    protos: FxHashMap<&'static str, &'static str>,
     /// Root holder -> everything reachable below it: the families of its
     /// entries and of their declared births (the text part's closure).
     roots: FxHashMap<&'static str, FamilySet>,
-    /// Key -> the families members under that key add to their holder's (a
-    /// member of a family on a core holder, a member that bears another
-    /// family), with one such entry.
+    /// Key -> the families prototype members under that key add to their
+    /// holder's (`normalize` on `String.prototype`, `toLocaleString` on
+    /// `Date.prototype`), with one such entry.
     member_keys: FxHashMap<&'static str, (FamilySet, &'static str)>,
     /// Key -> the direct members of a family's namespace under that key
     /// (`floor` of `Math`: lowering can drop the namespace's name).
@@ -237,6 +239,10 @@ pub(crate) fn index() -> &'static Index {
             entries: Default::default(),
             members: Default::default(),
             holders: Default::default(),
+            protos: realm
+                .iter()
+                .filter_map(|e| Some((e.name, e.proto?)))
+                .collect(),
             roots: Default::default(),
             member_keys: Default::default(),
             namespace_keys: Default::default(),
@@ -307,13 +313,18 @@ pub(crate) fn index() -> &'static Index {
                 .entry(holder)
                 .or_default()
                 .push((key, own | reach, e.name));
-            // A member that is of a family its holder is not, or bears one.
+            // A prototype member that is of a family its holder is not, or
+            // bears one. A prototype's values exist without the holder being
+            // named, so the member's key is all the text has of it; a static
+            // member (`process.on`, `Intl.Segmenter`) needs its holder named,
+            // which the text rule's structural part observes.
             let beyond = (own | reach) & !root_own;
-            if beyond != 0 && families::entry_module(e.name).is_none() {
+            let prototype = holder.contains(".prototype") || holder.starts_with('%');
+            if beyond != 0 && prototype && families::entry_module(e.name).is_none() {
                 let slot = ix.member_keys.entry(key).or_insert((0, e.name));
                 slot.0 |= beyond;
-                // A core prototype's values are present without being named.
-                if root_own == 0 && (holder.contains(".prototype") || holder.starts_with('%')) {
+                // A core prototype's values are present in every program.
+                if root_own == 0 {
                     ix.computed.push((beyond, e.name));
                 }
             }
@@ -349,6 +360,20 @@ impl Index {
     /// What running or reading entry `name` observes.
     pub(crate) fn entry(&self, name: &str) -> Option<FamilySet> {
         self.entries.get(name).map(|e| e.own | e.births)
+    }
+
+    /// What member `key` of entry `holder` observes, own or inherited
+    /// through the realm's prototype chain (`performance.now` is
+    /// `Performance.prototype.now`); `None`: no declared member.
+    pub(crate) fn member(&self, holder: &str, key: &str) -> Option<FamilySet> {
+        let mut holder = holder;
+        for _ in 0..8 {
+            if let Some(set) = self.entry(&format!("{holder}.{key}")) {
+                return Some(set);
+            }
+            holder = self.protos.get(holder)?;
+        }
+        None
     }
 
     /// What naming entry `name` as a constructed class, a type or an
