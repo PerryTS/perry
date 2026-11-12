@@ -1815,6 +1815,9 @@ pub struct Model {
     /// An iteration consumer reads `done` of each step result
     /// (`Model::step_done`, `reach::step_done`).
     pub reach_step_done: bool,
+    /// A hand-written built-in rule's positions hold what a spread
+    /// argument supplies (`Model::positional`, `reach::spread_args`).
+    pub reach_spread_args: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).

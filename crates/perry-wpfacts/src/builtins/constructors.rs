@@ -35,7 +35,8 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             if ns == BuiltinNs::Map {
                 // Born without an iterable, its contents are what `set`
                 // stores (`solve/map_vals.rs`).
-                m.map_born(c, arg(m, call, 0).is_none());
+                let empty = arg(m, call, 0).is_none();
+                m.map_born(c, empty);
             }
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
@@ -232,7 +233,7 @@ pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
     }
     match name {
         "URL" => {
-            let c = m.calls[call as usize].clone();
+            let c = m.positional(call, 2);
             for &a in c.args.iter().take(2) {
                 string_methods::to_prim(m, a, "URL constructor USVString");
             }

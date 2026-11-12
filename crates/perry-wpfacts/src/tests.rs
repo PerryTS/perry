@@ -186,6 +186,7 @@ mod run_once_closed;
 mod runtime_helpers;
 mod specialized_prototype;
 mod spread_arguments;
+mod spread_callbacks;
 mod spread_elements;
 mod spread_iterable_args;
 mod step_done;
