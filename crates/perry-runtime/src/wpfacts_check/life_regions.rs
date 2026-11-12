@@ -198,13 +198,13 @@ fn rate_one() -> bool {
 
 /// Confirmation budget (see `end_from`): an id's first `CONFIRM_N0` confirming
 /// fulls, then while its confirming fulls' time is at most `CONFIRM_R` times the
-/// time inside its decided instances; ids at nesting depth <= `CONFIRM_GLOBAL_DEPTH`
-/// (the turn and its direct children) also while all confirming fulls' time is at
-/// most `CONFIRM_GLOBAL_NS` plus `CONFIRM_R` times the mutator time. Inner ids
-/// never draw on that global allowance, so the budget is spent outermost first.
+/// time inside its decided instances; an instance with no enclosing loop instance
+/// open (the turn, an outermost loop iteration such as a program's driver loop, a
+/// body not called from inside a loop) also while all confirming fulls' time is at
+/// most `CONFIRM_GLOBAL_NS` plus `CONFIRM_R` times the mutator time. Instances inside
+/// a loop never draw on that global allowance, so the budget is spent outermost first.
 const CONFIRM_N0: u64 = 32;
 const CONFIRM_R: u64 = 4;
-const CONFIRM_GLOBAL_DEPTH: usize = 1;
 const CONFIRM_GLOBAL_NS: u64 = 2_000_000_000;
 
 /// `PERRY_LIFE_REGIONS_CONFIRM=all`: no confirmation budget, every needed
@@ -601,7 +601,9 @@ fn end_from(k: usize, fp: usize) {
             let global_ok = r.confirm_ns <= CONFIRM_GLOBAL_NS + CONFIRM_R * mutator;
             let mut need_old = false;
             let mut ids = Vec::new();
-            // `insts` is `stack[k..]`: the nesting depth of `insts[j]` is `k + j` (the turn is 0).
+            // `insts` is `stack[k..]` (`r.stack` keeps `stack[..k]`): `insts[j]` is outermost when
+            // no loop instance encloses it.
+            let loop_below = r.stack.iter().any(|o| o.kind == LOOP);
             for (j, i) in insts.iter().enumerate().filter(|(_, i)| i.decide && !i.unresolved && r.seq > i.seq0) {
                 let range = i.seq0 + 1..=r.seq;
                 need_old |= r.old.range(range.clone()).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a));
@@ -613,7 +615,7 @@ fn end_from(k: usize, fp: usize) {
                 if weak {
                     let inside = now.duration_since(i.t0).as_nanos() as u64;
                     let ok = confirm_all()
-                        || (global_ok && k + j <= CONFIRM_GLOBAL_DEPTH)
+                        || (global_ok && !loop_below && !insts[..j].iter().any(|o| o.kind == LOOP))
                         || r.stats.get(&(i.kind, i.id)).map_or(true, |s| {
                             s.confirm_fulls < CONFIRM_N0 || s.confirm_ns <= CONFIRM_R * (s.inside_ns + inside)
                         });
@@ -942,7 +944,7 @@ fn write(r: &mut Reg, exit: bool) {
         if confirm_all() {
             "all".to_string()
         } else {
-            format!("n0:{CONFIRM_N0},r:{CONFIRM_R},global_depth:{CONFIRM_GLOBAL_DEPTH},global_ns:{CONFIRM_GLOBAL_NS}")
+            format!("n0:{CONFIRM_N0},r:{CONFIRM_R},global:outermost,global_ns:{CONFIRM_GLOBAL_NS}")
         },
         r.unobserved,
         r.born_in_minor,
