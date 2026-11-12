@@ -111,3 +111,12 @@ for (const e of VALUES) {
 }
 
 console.log("denormal-receivers-ok");
+
+// --- computed access with a literal / symbol key: the receiver is that
+// Number (its own value reaches the method), not a placeholder.
+for (const e of VALUES) {
+  const r: any = e;
+  console.log(r["toFixed"](2), r["toString"]() === String(e), r["valueOf"]() === e || (e !== e));
+  console.log(r["constructor"] === Number, r["constructor"].name, r[Symbol.toPrimitive], r[Symbol.iterator]);
+  console.log(Object.is(r["valueOf"](), e), r.toExponential(3) === e.toExponential(3));
+}
