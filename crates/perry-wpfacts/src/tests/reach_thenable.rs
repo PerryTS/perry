@@ -56,8 +56,8 @@ const HOLES: &[(&str, &str)] = &[
         "let keep: any; const p = new Promise((r: any) => { keep = r; }); keep({ then(r: any) { hit(); r(2); } }); p.then((v: any) => console.log(v));",
     ),
     (
-        "a thenable's then resolves a thenable",
-        "Promise.resolve(1).then(() => ({ then(r: any) { r({ then(r2: any) { hit(); r2(3); } }); } }));",
+        "the executor's resolve given a thenable whose then resolves a thenable",
+        "new Promise((res: any) => res({ then(r: any) { r({ then(r2: any) { hit(); r2(3); } }); } })).then((v: any) => console.log(v));",
     ),
     (
         "what a thenable resolves flows on",
@@ -79,6 +79,13 @@ const COVERED: &[(&str, &str)] = &[
     (
         "a handler's result",
         "Promise.resolve(1).then(() => ({ then(r: any) { hit(); r(1); } }));",
+    ),
+    (
+        // The handler's result is adopted, and the derived promise's
+        // settled value is awaited (`Gen::promise_of`), so the inner `then`
+        // was called too.
+        "a handler's thenable whose then resolves a thenable",
+        "Promise.resolve(1).then(() => ({ then(r: any) { r({ then(r2: any) { hit(); r2(3); } }); } }));",
     ),
 ];
 
