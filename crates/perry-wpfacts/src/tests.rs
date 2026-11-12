@@ -46,6 +46,7 @@ pub(crate) mod box_computed_read;
 mod for_in_key_read_enumerable;
 mod json_positions;
 mod string_prefix_keys;
+mod uuid_infix_keys;
 mod builtin_fn_absent_member;
 mod sloppy_this_wrapper;
 mod computed_method_key;
