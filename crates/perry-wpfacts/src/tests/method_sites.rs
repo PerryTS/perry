@@ -94,7 +94,7 @@ fn a_lying_annotation_has_no_fact() {
     let pf = solve(None);
     for (text, why) in [
         ("c.fill(2)", "receiver:not-typed-array"),
-        ("d.fill(3)", "receiver:not-typed-array"),
+        ("d.fill(3)", "receiver:dropped"),
         ("e.fill(4)", "receiver:primitive"),
     ] {
         assert_eq!(callee(&pf, text, "fill"), None, "{text}");
