@@ -10,6 +10,8 @@ function t(label: string, f: () => any): void {
   console.log(label + " -> " + r + " c=" + (calls - c0));
 }
 function mk(): number[] { const a: number[] = []; for (let i = 0; i < 6; i++) a[i] = (i * 7) % 5; return a; }
+// The proven sites' Arrays have a birth of their own: the facts know an Array by where it was born.
+function pl(): number[] { const a: number[] = []; for (let i = 0; i < 6; i++) a[i] = (i * 7) % 5; return a; }
 
 // Proven sites: only plain Arrays reach them.
 function plainIndexOf(a: number[]): number { return a.indexOf(3); }
@@ -23,7 +25,7 @@ function plainShift(a: number[]): any { return a.shift(); }
 function plainMap(a: number[]): number[] { return a.map((x) => x * 2); }
 function plainReduce(a: number[]): number { return a.reduce((p, x) => p + x, 0); }
 class Bag {
-  items: number[] = mk();
+  items: number[] = pl();
   has(v: number): boolean { return this.items.includes(v); }
   where(v: number): number { return this.items.indexOf(v); }
   part(): number[] { return this.items.slice(2); }
@@ -31,16 +33,16 @@ class Bag {
   take(): any { return this.items.pop(); }
   sorted(): number[] { return this.items.slice().sort((x, y) => y - x); }
 }
-t("plain indexOf", () => plainIndexOf(mk()));
-t("plain includes", () => plainIncludes(mk()));
-t("plain slice", () => plainSlice(mk()));
-t("plain sort", () => plainSort(mk()));
-t("plain join", () => plainJoin(mk()));
-t("plain fill", () => plainFill(mk()));
-t("plain pop", () => plainPop(mk()));
-t("plain shift", () => plainShift(mk()));
-t("plain map", () => plainMap(mk()));
-t("plain reduce", () => plainReduce(mk()));
+t("plain indexOf", () => plainIndexOf(pl()));
+t("plain includes", () => plainIncludes(pl()));
+t("plain slice", () => plainSlice(pl()));
+t("plain sort", () => plainSort(pl()));
+t("plain join", () => plainJoin(pl()));
+t("plain fill", () => plainFill(pl()));
+t("plain pop", () => plainPop(pl()));
+t("plain shift", () => plainShift(pl()));
+t("plain map", () => plainMap(pl()));
+t("plain reduce", () => plainReduce(pl()));
 {
   const b = new Bag();
   t("bag has", () => b.has(4)); t("bag where", () => b.where(2)); t("bag part", () => b.part());
