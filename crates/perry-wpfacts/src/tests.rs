@@ -77,6 +77,7 @@ mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
 mod elem_undef;
+mod family_reach;
 mod call_kinds;
 mod int32_reads;
 mod in_bounds;
