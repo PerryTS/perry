@@ -113,13 +113,19 @@ for (let k = 1; k < 26; k++) {
 console.log("factorial:", f, fs, ~f, f % 7);
 
 // ---- 7. controls: these products stay int32 (the claims must remain) ----
-let q1 = 46340;
-q1 *= q1; // 2147395600
-let q2 = 65535;
-q2 = q2 * 32767; // 2147385345
-let q3 = -46340;
-q3 = q3 * 46341; // -2147441940
+const e0 = 46340;
+const e1 = 65535;
+const q1 = e0 * e0; // 2147395600
+const q2 = e1 * 32767; // 2147385345
+const q3 = -e0 * 46341; // -2147441940
 console.log("int32:", q1, ~q1, a[q1], q1 % 7, q2, ~q2, q2 & 0xffff, q3, ~q3, q3 | 0, q3 >>> 0);
+// A `let` multiplied by itself once is int32 at run time, but the binding is
+// its own operand: its interval has no bound. The values are right either way.
+let r1 = 46340;
+r1 *= r1;
+let r2 = 65535;
+r2 = r2 * 32767;
+console.log("self:", r1, ~r1, a[r1], r1 % 7, r2, ~r2, r2 & 0xffff);
 function hash(n: number): number {
   let x = 7;
   for (let i = 0; i < n; i++) {

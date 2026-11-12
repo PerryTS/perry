@@ -417,18 +417,20 @@ fn a_binding_assigned_a_product_past_2_60_is_unbounded() {
          let c = 1406932606; c = c * c + 1;\n\
          let n = -3037000500; n = n * 3037000500;\n\
          let s = 2147483647; s <<= 31;\n\
-         let k = 46340; k *= k;\n\
+         const k0 = 46340; const k = k0 * k0;\n\
+         let j = 46340; j *= j;\n\
          function sq(p: number): number { let q = p; q = q * q; return q; }\n\
-         console.log(~h, ~c, ~n, s, k, sq(4294967296));",
+         console.log(~h, ~c, ~n, s, k, j, sq(4294967296));",
     );
     for name in ["h", "c", "n", "q"] {
         assert!(unbounded(&r, name), "{name}: {:?}", r[name]);
     }
     assert!(covers(&r, "s", -2147483648, 2147483647), "{:?}", r["s"]);
     // The control: a product inside int32 keeps its exact interval.
-    assert!(
-        r["k"].is_some_and(|(lo, hi)| lo >= 0 && (2147395600..=2147483647).contains(&hi)),
-        "k: {:?}",
-        r["k"]
-    );
+    assert_eq!(r["k"], Some((2147395600, 2147395600)));
+    // A `let` multiplied by itself is its own operand: the binding holds
+    // 46340 and 2147395600, so the rule also covers 2147395600 squared and
+    // the interval has no bound (the statement running once is not a fact
+    // of a binding). The empty interval used to end that growth.
+    assert!(unbounded(&r, "j"), "j: {:?}", r["j"]);
 }
