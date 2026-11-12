@@ -899,7 +899,8 @@ impl<'a> Deserializer<'a> {
                 if length <= u64::from(u32::MAX) {
                     // Trailing holes: the length is the record's, not the
                     // last element's index + 1.
-                    let live = crate::array::js_array_from_value(boxed);
+                    // The head after the stores (a growth leaves a forwarding stub).
+                    let live = crate::array::clean_arr_ptr_mut(arr);
                     crate::array::js_array_set_length(live, length as f64);
                 }
                 break;
