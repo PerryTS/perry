@@ -1,7 +1,7 @@
 //! Render loop: `run(component)` enters interactive mode, calls the
 //! user's component closure each frame, paints the result, drains
-//! input, and re-renders on state change. Exits when `exit()` is
-//! called from a useInput handler.
+//! input, and advances async work between frames. Exits when `exit()`
+//! is called by the component, an input handler or an async callback.
 //!
 //! ```typescript
 //! run(() => Box([Text("count: " + count.get())]));
@@ -169,6 +169,46 @@ mod tests {
             assert_eq!(CALLBACKS.load(Ordering::Acquire), 1);
             super::super::input::js_perry_tui_exit();
         });
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_io_completions_progress_without_input() {
+        let _serial = crate::event_pump::tests::serial();
+        let _gc = crate::gc::global_side_table_test_lock();
+        reset();
+        struct LoopGuard;
+        impl Drop for LoopGuard {
+            fn drop(&mut self) {
+                crate::event_pump::reset_net_loop_for_test();
+            }
+        }
+        extern "C" fn connected(completion: *const crate::turnloop_net::NetCompletion) {
+            if unsafe { (*completion).kind } == crate::turnloop_net::NET_CONNECT {
+                CALLBACKS.fetch_add(1, Ordering::AcqRel);
+                STATE_DIRTY.store(true, Ordering::Release);
+            }
+        }
+        extern "C" fn allocate_id() -> i64 {
+            2
+        }
+        assert!(crate::event_pump::install_net_loop_for_test());
+        let _loop = LoopGuard;
+        assert!(crate::turnloop_net::register_sink(
+            31,
+            connected,
+            allocate_id
+        ));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        crate::turnloop_net::tcp_connect(1, 31, listener.local_addr().unwrap(), true).unwrap();
+        assert_eq!(crate::turnloop_net::live_handles(), 1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        run_frames(|| {
+            if CALLBACKS.load(Ordering::Acquire) > 0 || std::time::Instant::now() > deadline {
+                super::super::input::js_perry_tui_exit();
+            }
+        });
+        assert_eq!(CALLBACKS.load(Ordering::Acquire), 1);
     }
 
     #[test]
