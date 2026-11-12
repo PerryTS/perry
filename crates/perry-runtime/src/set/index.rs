@@ -139,7 +139,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     }
     let tag = bits >> 48;
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if matches!(tag, 0 | 0x7FFD | 0x7FFA) {
+    if matches!(tag, 0x7FFD | 0x7FFA) {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
             .filter(|h| crate::gc::gc_type_is_movable(h.obj_type))
         {

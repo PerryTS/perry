@@ -96,8 +96,8 @@ pub(crate) fn reflect_value_is_object(value: f64) -> bool {
     if crate::builtins::arithmetic::js_value_is_object(value) {
         return true;
     }
-    let top16 = value.to_bits() >> 48;
-    top16 == 0 && crate::object::js_value_is_heap_object(value)
+    // A word whose top 16 bits are clear is a Number, not a raw pointer.
+    false
 }
 
 /// `CreateListFromArrayLike(value)` — collect indexed `0..length` properties of
@@ -109,8 +109,7 @@ pub(crate) fn create_list_from_array_like(value: f64) -> Vec<f64> {
     // Fast path: a real Array.
     let bits = value.to_bits();
     let top16 = bits >> 48;
-    let is_pointer = top16 == 0x7FFD
-        || (top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize));
+    let is_pointer = top16 == 0x7FFD;
     if is_pointer {
         let ptr = (bits & POINTER_MASK) as usize;
         // `arguments` is an ordinary ObjectHeader backed by the arguments

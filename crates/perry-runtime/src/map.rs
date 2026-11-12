@@ -692,13 +692,8 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return false;
     }
-    // Raw pointer (0x0000) with a plausible heap address is also a pointer.
-    if upper == 0x0000 {
-        let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-        if lower > 0x10000 {
-            return false;
-        }
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0):
+    // it keys by its bits like every other Number.
     true
 }
 
@@ -1089,15 +1084,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG (string stored as generic pointer)
-        0x0000 => {
-            // Raw pointer (no NaN-boxing tag)
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }

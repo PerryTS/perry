@@ -935,7 +935,16 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let value = &value_h;
-    let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer: it has no address.
+    let raw_ptr = || {
+        let value = value_h.get_nanbox_f64();
+        if value.to_bits() >> 48 == 0 {
+            0
+        } else {
+            js_nanbox_get_pointer(value) as usize
+        }
+    };
 
     let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
     if jsv.is_null() || jsv.is_undefined() {

@@ -833,12 +833,9 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
     } else {
-        let bits = value.to_bits();
-        if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            bits as *const u8
-        } else {
-            return None;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return None;
     };
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -1538,8 +1535,6 @@ pub(crate) unsafe fn native_call_method_tower(
     {
         let raw_addr = if jsval().is_pointer() {
             crate::value::js_nanbox_get_pointer(object()) as usize
-        } else if (object().to_bits() >> 48) == 0 {
-            object().to_bits() as usize
         } else {
             0
         };

@@ -111,8 +111,6 @@ unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
         (bits & POINTER_MASK) as usize
-    } else if top16 == 0 {
-        bits as usize
     } else {
         return None;
     };
@@ -413,6 +411,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     sym_f64: f64,
     receiver_f64: f64,
 ) -> f64 {
+    // A Number holder with clear top 16 bits (a denormal, or +0) is not a
+    // raw object pointer: see `number_receiver_for_dispatch`. `receiver_f64`
+    // keeps the Number itself.
+    let obj_f64 = crate::value::addr_class::number_receiver_for_dispatch(obj_f64);
     // A Proxy is a small registered id (its band overlaps the small-handle
     // band); dereferencing it as a heap object to read a symbol-keyed property
     // is an EXC_BAD_ACCESS. Route a SYMBOL-keyed read through the proxy `get`

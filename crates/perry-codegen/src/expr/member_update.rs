@@ -309,10 +309,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         super::private_field_site::lower_static_get_operands(ctx, site, &obj_box)?
                     } else {
                         let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
-                        ctx.block().call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &obj_handle), (I64, &key_handle)],
+                        // The receiver is any value: a Number whose top 16
+                        // bits are clear must not reach the handle entry,
+                        // which reads it as a raw pointer.
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                        super::index_get::named_get_on_unproven_receiver(
+                            ctx,
+                            &obj_bits,
+                            &key_handle,
+                            "0",
+                            |ctx| {
+                                ctx.block().call(
+                                    DOUBLE,
+                                    "js_object_get_field_by_name_f64",
+                                    &[(I64, &obj_handle), (I64, &key_handle)],
+                                )
+                            },
                         )
                     }
                 };

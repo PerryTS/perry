@@ -85,9 +85,6 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
 #[inline]
 fn instanceof_lhs_is_primitive(value: f64) -> bool {
     let bits = value.to_bits();
-    if (bits >> 48) == 0 && bits != 0 {
-        return false;
-    }
     let jv = crate::JSValue::from_bits(bits);
     if jv.is_number() {
         return true;
@@ -486,8 +483,6 @@ fn proto_identity_addr(v: f64) -> usize {
     let top16 = bits >> 48;
     if top16 == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits >= 0x1000 {
-        bits as usize
     } else {
         0
     }
@@ -609,18 +604,8 @@ fn rhs_is_object_value(value: f64) -> bool {
         }
         return true;
     }
-    // Raw bitcast pointers (typed arrays / buffers / arrays) — these are
-    // objects too.
-    let top16 = bits >> 48;
-    if top16 == 0 && bits >= 0x1000 {
-        let addr = bits as usize;
-        // #10694: a raw word must be allocator-owned before the brand read.
-        return crate::buffer::buffer_family_type_owned(addr).is_some()
-            || crate::set::is_registered_set(addr)
-            || crate::map::is_registered_map(addr)
-            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
-            || addr >= crate::gc::GC_HEADER_SIZE;
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer.
     false
 }
 
