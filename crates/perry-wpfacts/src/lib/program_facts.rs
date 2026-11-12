@@ -152,6 +152,76 @@ pub(super) fn field_truthy_filters(m: &model::Model) -> (u64, u64) {
     (rules, removing)
 }
 
+/// Dump only: one row per rule G2 filter (`# ftr`): its key, the body it
+/// is in, its host's object tokens (⊤, markers), how many passed and were
+/// left out, and per passing object token (the first 6) what its read of
+/// the key holds (`field-truthy-token` / `field-truthy-read`, apply.rs).
+pub(super) fn field_truthy_rows(m: &model::Model) -> Vec<String> {
+    use std::collections::HashMap;
+    // Guard dst (the rule's dst) -> (token, read node).
+    let mut reads: HashMap<model::NodeId, Vec<(model::Tok, model::NodeId)>> = HashMap::new();
+    for (i, n) in m.nodes.iter().enumerate() {
+        if m.labels[i] != "field-truthy-token" {
+            continue;
+        }
+        let Some(t) = n.pts.to_sorted().into_iter().next() else { continue };
+        for c in &n.cons {
+            if let model::Cons::Load { dst: read, .. } = *c {
+                for rc in &m.nodes[read as usize].cons {
+                    if let model::Cons::Guard { from, dst, .. } = *rc {
+                        if from == i as model::NodeId {
+                            reads.entry(dst).or_default().push((t, read));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (i, n) in m.nodes.iter().enumerate() {
+        for c in &n.cons {
+            let model::Cons::FieldTruthy { key, dst } = *c else { continue };
+            let toks = n.pts.to_sorted();
+            let dpts = &m.nodes[dst as usize].pts;
+            let top = toks.iter().any(|&t| t == model::TOP);
+            let markers = toks.iter().filter(|&&t| m.is_marker(t)).count();
+            let objs: Vec<_> = toks.iter().copied().filter(|&t| t != model::TOP && !m.is_marker(t)).collect();
+            let pass: Vec<_> = objs.iter().copied().filter(|&t| dpts.contains_tok(t)).collect();
+            let f = m.node_fn[i];
+            let fname = if f == model::NO_FN { "-".to_string() } else { m.funcs[f as usize].name.clone() };
+            let by: HashMap<model::Tok, model::NodeId> =
+                reads.get(&dst).map(|v| v.iter().copied().collect()).unwrap_or_default();
+            let mut samples = Vec::new();
+            for &t in pass.iter().take(6) {
+                let what = match by.get(&t) {
+                    Some(&r) => {
+                        let rn = &m.nodes[r as usize];
+                        let rt = rn.pts.to_sorted();
+                        let rtop = rt.iter().any(|&x| x == model::TOP);
+                        let first: Vec<String> = rt.iter().take(2).map(|&x| m.tok_name(x)).collect();
+                        format!("prim={:#x},toks={},top={},{}", rn.prim, rt.len(), rtop as u8, first.join("|"))
+                    }
+                    None => "noread".to_string(),
+                };
+                samples.push(format!("{}=>{}", m.tok_name(t), what).replace(' ', "_"));
+            }
+            out.push(format!(
+                "# ftr key={} fn={} host={} objs={} top={} markers={} pass={} out={} {}",
+                m.key_name(key),
+                fname.replace(' ', "_"),
+                m.labels[i],
+                objs.len(),
+                top as u8,
+                markers,
+                pass.len(),
+                objs.len() - pass.len(),
+                samples.join(" ")
+            ));
+        }
+    }
+    out
+}
+
 pub(super) fn big_nodes(m: &model::Model) -> Vec<(String, usize, String)> {
     let mut sizes: Vec<(usize, usize)> = m
         .nodes

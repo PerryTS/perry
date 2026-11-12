@@ -271,6 +271,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# field_truthy rules {} removing {}\n",
         s.field_truthy.0, s.field_truthy.1
     ));
+    for r in &s.field_truthy_rows {
+        out.push_str(r);
+        out.push('\n');
+    }
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
