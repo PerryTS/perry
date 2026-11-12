@@ -726,17 +726,31 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
+            // The predicates that convert nothing: `Array.isArray` reads only
+            // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
+            // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
+            // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`
+            // predicates test the operand's type (21.1.2.2-21.1.2.5) and the
+            // undefined-or-NaN test compares. No key is read on an object
+            // operand and nothing is called on it.
             Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
             | Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
-            | Expr::IsNaN(..)
             | Expr::IsUndefinedOrBareNan(..)
-            | Expr::IsFinite(..)
             | Expr::NumberIsNaN(..)
             | Expr::NumberIsFinite(..)
             | Expr::NumberIsInteger(..)
-            | Expr::NumberIsSafeInteger(..)
+            | Expr::NumberIsSafeInteger(..) => {
+                for k in kids(e) {
+                    self.expr(fx, k);
+                }
+                self.prim_node(prim::BOOL)
+            }
+            // `isNaN` / `isFinite` ToNumber their operand (19.2.2, 19.2.3);
+            // `Object.hasOwn` and `Reflect.has` ToPropertyKey their key.
+            Expr::ObjectHasOwn(..)
+            | Expr::IsNaN(..)
+            | Expr::IsFinite(..)
             | Expr::ReflectHas { .. } => self.prim_kids(
                 fx,
                 e,
