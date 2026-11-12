@@ -79,10 +79,7 @@ pub(crate) fn none() -> &'static HashSet<u32> {
 /// canonical slot follows (`facts_rep::local`, any body).
 pub(crate) fn claimed(ctx: &crate::expr::FnCtx<'_>, id: u32) -> bool {
     ctx.facts_int32_locals.contains(&id)
-        || matches!(
-            super::facts_rep::local(ctx, id),
-            Some(super::FactsRep::I32)
-        )
+        || matches!(super::facts_rep::local(ctx, id), Some(super::FactsRep::I32))
 }
 
 /// A store into proven local `id` is witnessed: check mode is on and the
@@ -97,8 +94,7 @@ pub(crate) fn checked(ctx: &crate::expr::FnCtx<'_>, id: u32) -> bool {
 /// store its own number-context lowering untested: a wrapped product, or
 /// the `NaN` a hole read coerces to.
 pub(crate) fn checked_init(ctx: &crate::expr::FnCtx<'_>, id: u32) -> bool {
-    crate::verify_facts::enabled()
-        && (claimed(ctx, id) || ctx.facts_number_locals.contains(&id))
+    crate::verify_facts::enabled() && (claimed(ctx, id) || ctx.facts_number_locals.contains(&id))
 }
 
 fn note_consumed(id: u32) {
