@@ -75,11 +75,11 @@ fn a_folded_node_has_a_site() {
     let pf = solve(None);
     let at = lines(&pf, "at", "site=local:");
     assert!(
-        at.iter().any(|l| l.ends_with("typed_array=1")),
+        at.iter().any(|l| l.contains(" typed_array=1 ")),
         "the folded `b.at(0)` is a proven site: {at:?}"
     );
     assert!(
-        at.iter().any(|l| l.contains("typed_array=0")),
+        at.iter().any(|l| l.contains(" typed_array=0(")),
         "the folded `f.at(1)` also holds an Array: {at:?}"
     );
 }
@@ -98,7 +98,7 @@ fn a_lying_annotation_has_no_fact() {
         let offset = SRC.find(text).unwrap() + 1;
         let l = lines(&pf, "fill", &format!("site=callee:{offset} "));
         assert!(
-            l.len() == 1 && l[0].ends_with(&format!("typed_array=0 refused={why}")),
+            l.len() == 1 && l[0].contains(&format!(" typed_array=0({why}) ")),
             "{text}: {l:?}"
         );
     }

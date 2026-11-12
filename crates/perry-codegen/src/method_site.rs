@@ -20,9 +20,20 @@
 //! it).
 //!
 //! `PERRY_FACTS_TYPED_ARRAY_SITES=0` trusts the annotation, as before.
+//!
+//! Arrays, the rule: a by-name Array method site runs the built-in with no
+//! test of its receiver exactly when the site's whole-program verdict is
+//! `NativeMember` over the Array family
+//! (`perry_hir::folded_call::SITE_ARRAY_MEMBER`: every receiver value an
+//! Array exotic object, the member the realm's on each). Every other site
+//! whose receiver is annotated an Array is the guarded tier: one admission
+//! test of the receiver's header, whose miss is the ordinary method call.
+//!
+//! `PERRY_FACTS_ARRAY_METHOD_SITES=0` guards every site at run time, as
+//! before.
 
 use crate::expr::FnCtx;
-use perry_hir::folded_call::{Site, SITE_TYPED_ARRAY};
+use perry_hir::folded_call::{Site, SITE_ARRAY_MEMBER, SITE_TYPED_ARRAY};
 use perry_hir::Expr;
 
 /// `PERRY_FACTS_TYPED_ARRAY_SITES=0` (`off`, `false`) keeps the typed-array
@@ -133,4 +144,118 @@ fn witness_typed_array(ctx: &mut FnCtx<'_>, object: &Expr, name: &str) -> anyhow
     ctx.block().unreachable();
     ctx.current_block = next;
     Ok(())
+}
+
+/// `PERRY_FACTS_ARRAY_METHOD_SITES=0` (`off`, `false`) keeps the run-time
+/// guard of every by-name Array method site. Read per call; a compile-cache
+/// input.
+pub(crate) fn array_sites_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_ARRAY_METHOD_SITES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+fn diag_on() -> bool {
+    std::env::var("PERRY_METHOD_SITE_DIAG").as_deref() == Ok("1")
+}
+
+/// Do the facts prove that the by-name Array method site `site` named
+/// `name` runs the realm's `Array.prototype` built-in on an Array, whatever
+/// value reaches it? No site, no facts or no record: no (the guarded tier).
+pub(crate) fn array_member_proven(ctx: &FnCtx<'_>, site: Option<Site>, name: &str) -> bool {
+    let proven = array_sites_enabled()
+        && !ctx.wpfacts_off
+        && site.is_some_and(|site| {
+            ctx.wpfacts
+                .method_sites
+                .get(&(site, name.to_string()))
+                .is_some_and(|flags| flags & SITE_ARRAY_MEMBER != 0)
+        });
+    census(ctx, site, name, if proven { "proven" } else { "guarded" });
+    proven
+}
+
+/// One `[perry method_site]` line per by-name Array method site
+/// (`PERRY_METHOD_SITE_DIAG=1`): its key and what the lowering does.
+pub(crate) fn census(ctx: &FnCtx<'_>, site: Option<Site>, name: &str, verdict: &str) {
+    if diag_on() {
+        let site = match site {
+            Some(Site::Callee(o)) => format!("callee:{o}"),
+            Some(Site::Recv(o)) => format!("recv:{o}"),
+            Some(Site::Local(id)) => format!("local:{id}"),
+            None => "none".to_string(),
+        };
+        eprintln!(
+            "[perry method_site] fn={} kind=array key={name} site={site} verdict={verdict}",
+            ctx.func.name
+        );
+    }
+}
+
+/// The verdict of an inline-tier site (`Expr::ArrayPush`, `Expr::ArrayPop`),
+/// for the census only: the tier's admission tests are its own layout
+/// assumptions (a named layout holds element descriptors and a non-writable
+/// `length`; the admission byte an index on the default chain) and stay.
+pub(crate) fn census_inline_tier(ctx: &FnCtx<'_>, site: Option<Site>, name: &str) {
+    if diag_on() {
+        let proven = !ctx.wpfacts_off
+            && site.is_some_and(|site| {
+                ctx.wpfacts
+                    .method_sites
+                    .get(&(site, name.to_string()))
+                    .is_some_and(|flags| flags & SITE_ARRAY_MEMBER != 0)
+            });
+        census(
+            ctx,
+            site,
+            name,
+            if proven { "inline-tier:proven" } else { "inline-tier:unproven" },
+        );
+    }
+}
+
+/// A site that drops its run-time guard by the facts: the consumption
+/// record, and in check mode the dropped test on the receiver value `recv`
+/// (an Array that resolves `name` to the built-in), "method site".
+pub(crate) fn witness_array_member(ctx: &mut FnCtx<'_>, recv: &str, name: &str) {
+    use crate::types::{DOUBLE, I1, I32, I64};
+    crate::facts_consumed::used();
+    crate::verify_facts::covered(crate::verify_facts::Fact::MethodSite, || {
+        serde_json::json!({ "key": name, "receiver": "array member" })
+    });
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    let idx = ctx.strings.intern(name);
+    let key_handle = format!("@{}", ctx.strings.entry(idx).handle_global);
+    let blk = ctx.block();
+    let is_array = blk.call(DOUBLE, "js_array_is_array", &[(DOUBLE, recv)]);
+    let bits = blk.bitcast_double_to_i64(&is_array);
+    let array = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
+    let key = blk.load(DOUBLE, &key_handle);
+    let needs = blk.call(
+        I32,
+        "js_array_method_needs_get",
+        &[(DOUBLE, recv), (DOUBLE, &key)],
+    );
+    let builtin = blk.icmp_eq(I32, &needs, "0");
+    let holds = blk.and(I1, &array, &builtin);
+    let miss = ctx.new_block("methodsite.verify_miss");
+    let next = ctx.new_block("methodsite.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    crate::verify_facts::tick(ctx);
+    ctx.block().cond_br(&holds, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let what = format!("the receiver of .{name}() is an Array whose {name} is the built-in");
+    let site = crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::MethodSite, &[]);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, recv)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
