@@ -279,6 +279,14 @@ pub(crate) fn typed_array_mark_no_extend(owner: usize) {
     }
 }
 
+/// An own data property as `Object.defineProperty` leaves it, for tests that
+/// need one whose name is an accessor of `%TypedArray%.prototype` (`length`):
+/// an assignment cannot create it.
+#[cfg(test)]
+pub(crate) fn test_define_own_data(owner: usize, name: &str, value: f64) {
+    upsert_typed_array_own_prop(owner, name.to_string(), value, true);
+}
+
 pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
     unsafe { (*crate::buffer::store::header(owner))._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 }
 }
@@ -514,6 +522,20 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
                     }
                 }
             } else {
+                // `length`, `byteLength`, `byteOffset` and `buffer` are
+                // accessors of `%TypedArray%.prototype` with no setter:
+                // OrdinarySet finds the inherited accessor and rejects, so no
+                // own property of that name is created (`ta.length = 1` left
+                // an own `length` that every later `ta.length` read). Once a
+                // program has redefined one of them on a prototype, the
+                // ordinary path below decides again.
+                if matches!(name, "length" | "byteLength" | "byteOffset" | "buffer")
+                    && crate::typedarray_named::PERRY_TYPED_NAMED_PROPS_INVALIDATED
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == 0
+                {
+                    return false;
+                }
                 // A brand-new own property on a non-extensible typed array
                 // cannot be created (OrdinaryDefineOwnProperty step: extensible
                 // is false → return false). An existing key can still be
