@@ -91,7 +91,12 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         members: &[
             "Array.prototype.toLocaleString",
             "BigInt.prototype.toLocaleString",
+            "Date.prototype.toLocaleDateString",
+            "Date.prototype.toLocaleString",
+            "Date.prototype.toLocaleTimeString",
             "Number.prototype.toLocaleString",
+            "String.prototype.toLocaleLowerCase",
+            "String.prototype.toLocaleUpperCase",
         ],
         modules: &[],
     },
@@ -117,13 +122,12 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "regex_engine",
         requires: &[],
         holders: &["RegExp"],
+        // `match`, `matchAll` and `search` build a RegExp from a string
+        // argument; `replace` and `split` need one handed to them.
         members: &[
             "String.prototype.match",
             "String.prototype.matchAll",
-            "String.prototype.replace",
-            "String.prototype.replaceAll",
             "String.prototype.search",
-            "String.prototype.split",
         ],
         modules: &["v8", "worker_threads"],
     },
@@ -138,7 +142,12 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "string_normalize",
         requires: &[],
         holders: &[],
-        members: &["String.prototype.normalize"],
+        // `localeCompare` and `Intl.Collator` use the normalization tables.
+        members: &[
+            "Intl.Collator",
+            "String.prototype.localeCompare",
+            "String.prototype.normalize",
+        ],
         modules: &[],
     },
     RuntimeFamily {
@@ -152,12 +161,7 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "intl_locale",
         requires: &[],
         holders: &[],
-        members: &[
-            "Intl.Locale",
-            "String.prototype.localeCompare",
-            "String.prototype.toLocaleLowerCase",
-            "String.prototype.toLocaleUpperCase",
-        ],
+        members: &["Intl.Locale", "Intl.getCanonicalLocales"],
         modules: &[],
     },
     RuntimeFamily {
@@ -650,6 +654,48 @@ pub const CORE_MODULES: &[&str] = &[
     "util.types",
 ];
 
+/// Module specifiers (without `node:`) the realm declares whose values no
+/// row describes (native libraries outside the runtime, UI toolkits):
+/// every family is live in a program that names one.
+pub const OPEN_MODULES: &[&str] = &[
+    "@parcel/watcher",
+    "@parcel/watcher-darwin-arm64",
+    "@parcel/watcher-darwin-x64",
+    "@parcel/watcher-linux-arm64-glibc",
+    "@parcel/watcher-linux-arm64-musl",
+    "@parcel/watcher-linux-x64-glibc",
+    "@parcel/watcher-linux-x64-musl",
+    "@parcel/watcher-win32-arm64",
+    "@parcel/watcher-win32-x64",
+    "@perryts/pdf",
+    "argon2",
+    "bcrypt",
+    "cheerio",
+    "ethers",
+    "ffi",
+    "lodash",
+    "nodemailer",
+    "perry/ads",
+    "perry/audio",
+    "perry/background",
+    "perry/component",
+    "perry/compose",
+    "perry/container",
+    "perry/container-compose",
+    "perry/ios",
+    "perry/media",
+    "perry/plugin",
+    "perry/tui",
+    "perry/ui",
+    "perry/updater",
+    "perry/widget",
+    "perry/workloads",
+    "perry/yoga",
+    "sharp",
+    "streams",
+    "typescript",
+];
+
 /// The index of family `id` in [`RUNTIME_FAMILIES`].
 pub fn family_index(id: &str) -> Option<usize> {
     RUNTIME_FAMILIES.iter().position(|f| f.id == id)
@@ -705,9 +751,13 @@ pub fn entry_module(name: &str) -> Option<&str> {
 }
 
 /// The families of module specifier `spec` (with or without `node:`);
-/// `None`: a module neither a family row nor [`CORE_MODULES`] names.
+/// every family for one of [`OPEN_MODULES`]. `None`: a module no list here
+/// names.
 pub fn module_families(spec: &str) -> Option<FamilySet> {
     let spec = spec.strip_prefix("node:").unwrap_or(spec);
+    if OPEN_MODULES.contains(&spec) {
+        return Some(all_families());
+    }
     let mut set = 0;
     for (i, f) in RUNTIME_FAMILIES.iter().enumerate() {
         if f.modules.contains(&spec) {
@@ -820,6 +870,8 @@ mod tests {
             family_bit("string_normalize")
         );
         assert_eq!(of("String.prototype.normalizeX"), 0);
+        assert_eq!(of("String.prototype.split"), 0);
+        assert_eq!(of("node:lodash.chunk"), all_families());
         assert_eq!(of("process.argv"), 0);
         assert_eq!(of("process.report.getReport"), family_bit("diagnostics"));
         assert_eq!(of("%Layout:ITERATOR_RESULT%"), 0);

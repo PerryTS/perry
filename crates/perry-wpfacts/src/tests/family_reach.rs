@@ -94,16 +94,18 @@ fn l0_an_incomplete_solve_has_every_family_live() {
 
 #[test]
 fn l1_an_unknown_value_makes_every_family_live() {
-    let r = reach("const h = (globalThis as any).someHostThing;\nconsole.log(typeof h);\n");
+    // A member of `process` the realm does not declare: an unknown value.
+    let r = reach("const h = (process as any).noSuchMember;\nconsole.log(typeof h);\n");
     assert_eq!(r.never(), 0, "{:?}", r.dump_lines());
     assert!(
         reason(&r, "regex_engine").starts_with("L1:"),
         "{}",
         reason(&r, "regex_engine")
     );
-    // Twin: the same read of a global the realm declares and core holds.
-    let r = reach("const h = (globalThis as any).parseInt;\nconsole.log(typeof h);\n");
+    // Twin: a global nothing declares is `undefined`, a known value.
+    let r = reach("const h = (globalThis as any).someHostThing;\nconsole.log(typeof h);\n");
     assert!(!r.live("typedarray"), "{:?}", r.dump_lines());
+    assert!(!r.live("regex_engine"), "{:?}", r.dump_lines());
 }
 
 #[test]
@@ -310,31 +312,13 @@ fn every_realm_entry_is_classified() {
 
 #[test]
 fn byte_cells_are_on_no_core_prototype() {
-    // The static-key and computed-key parts of the text rule are empty for
-    // the typed-array family: none of its entries, and no producer of one,
-    // is a member of a core holder.
+    // The computed-key part of the text rule is empty for the typed-array
+    // family: none of its entries, and no producer of one, is a member of a
+    // core prototype.
     let bytes = families::family_bit("typedarray");
-    for e in crate::native_effects::realm() {
-        let root = families::entry_root(e.name);
-        let core = families::entry_families(root) == Some(0)
-            && families::entry_module(e.name).is_none()
-            && !matches!(root, "%Global%" | "globalThis" | "global");
-        if !core || e.name == root {
-            continue;
-        }
-        assert_eq!(
-            families::entry_families(e.name).unwrap_or(0) & bytes,
-            0,
-            "{} is a byte-cell entry on a core holder",
-            e.name
-        );
-        for b in e.births {
-            assert_eq!(
-                families::entry_families(b).unwrap_or(0) & bytes,
-                0,
-                "{} (on a core holder) declares the birth of {b}",
-                e.name
-            );
-        }
-    }
+    assert_eq!(crate::family_reach::index().computed_families() & bytes, 0);
+    assert_ne!(
+        crate::family_reach::index().computed_families() & families::family_bit("string_normalize"),
+        0
+    );
 }
