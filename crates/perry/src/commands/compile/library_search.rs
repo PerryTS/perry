@@ -1391,7 +1391,7 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
     let lib_name = lib_name_owned.as_str();
     let instr_hint = if super::optimized_libs::instrumented_variant_requested() {
         "\n- This compile sets a GC/diagnostic instrument knob (or PERRY_GC_TRACE / \
-         PERRY_CHECK_CONTRACTS / PERRY_VERIFY_FACTS), so it links the instrumented archives. Build them with \
+         PERRY_CHECK_CONTRACTS), so it links the instrumented archives. Build them with \
          scripts/build_instr_runtime.sh <target-triple> from the perry workspace, or unset \
          the knob to link the default (instrument-free) archives."
     } else {

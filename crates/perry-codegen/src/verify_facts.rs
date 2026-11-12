@@ -77,6 +77,24 @@ pub fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var("PERRY_VERIFY_FACTS").as_deref() == Ok("1"))
 }
 
+static INSTRUMENTED_VARIANT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The compile links the instrumented runtime variant (the answer of
+/// `optimized_libs::instrumented_variant_requested`, set once by the compile
+/// command before codegen). Off until set.
+pub fn set_instrumented_variant(on: bool) {
+    INSTRUMENTED_VARIANT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The lifetime claims are on: the facts witnesses are on AND the instrumented
+/// runtime variant is linked, the only one carrying the collector's life
+/// hooks. `PERRY_VERIFY_FACTS=1` alone emits no life claim and links the
+/// default archives. The one predicate of codegen and the compile command.
+pub fn life_claims_on() -> bool {
+    enabled() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
 /// body the whole-program reach calls inactive is emitted as a trap.
 pub fn dce_enabled() -> bool {
