@@ -146,6 +146,7 @@ mod locked_builtins;
 mod locked_delete;
 mod locked_store;
 mod locked_top_store;
+mod written_prim_method_receiver;
 mod locked_top_define;
 mod internal_slot_no_property;
 mod registry_prefix_runs;
