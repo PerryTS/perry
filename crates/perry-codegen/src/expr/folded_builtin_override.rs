@@ -206,7 +206,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         perry_hir::folded_call::receiver_site(&call.receiver),
         receiver_expr,
         call.method,
-    ) {
+    )? {
         return emit_generic(ctx, receiver_expr, call.method, &call.args).map(Some);
     }
     // A local receiver (and a fold that captured one) is already in a slot the
