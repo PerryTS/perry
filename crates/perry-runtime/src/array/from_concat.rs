@@ -9,6 +9,7 @@ use super::{
     clean_arr_ptr, js_array_alloc, js_array_clone, js_array_is_array, js_array_push_f64,
     js_array_set_f64_extend, ArrayHeader,
 };
+use super::generic::to_object;
 use crate::closure::ClosureHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::JSValue;
@@ -98,6 +99,28 @@ fn array_from_family_not_pristine(value: f64) -> bool {
     dirty || crate::object::map_set_subclass::plain_collection_default_iteration(value).is_none()
 }
 
+/// A source value `ToObject` boxes into a `Number` / `Boolean` / `Symbol` /
+/// `BigInt` wrapper: not a string (its own paths), not a pointer-shaped
+/// reference, and not a registered class ref (which shares the INT32 tag with
+/// small integers, #6454). #13486: `Array.from` must GetMethod these through
+/// the wrapper's prototype chain instead of reinterpreting the primitive's
+/// raw bits as a heap address.
+fn boxed_primitive_source(value: f64, bits: u64) -> bool {
+    let jsv = JSValue::from_bits(bits);
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return true;
+    }
+    if jsv.is_any_string() || jsv.is_reference() {
+        return false;
+    }
+    if jsv.is_bool() || jsv.is_bigint() {
+        return true;
+    }
+    // Numbers: real doubles and INT32-tagged small integers — the latter are
+    // bit-identical to a registered class ref, so the registry decides.
+    (jsv.is_number() || jsv.is_int32()) && crate::object::class_ref_id(value).is_none()
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     let bits = boxed.to_bits();
@@ -157,10 +180,21 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
         let iter = crate::symbol::js_get_iterator(boxed);
         return crate::array::js_iterator_to_array(iter);
     }
-    // Numbers / booleans / strings handled inside js_array_clone:
-    //  - numbers/booleans aren't pointers → empty array.
+    // #13486: a primitive source (number / boolean / symbol / bigint) is not a
+    // pointer: GetMethod must consult its wrapper's prototype chain — a patched
+    // `Number.prototype[Symbol.iterator]` drives iteration, an unpatched one
+    // answers undefined and the array-like branch yields `[]` — and the raw
+    // bits must never reach the pointer tail below. The spec-complete
+    // algorithm already implements every case.
+    if boxed_primitive_source(boxed, bits) {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let result = array_from_full(undefined, boxed, undefined, undefined);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+    }
+    // Strings handled inside js_array_clone:
     //  - strings → per-codepoint materialization.
     // Pointers (objects/arrays/iterables) materialize via js_array_clone.
+    // Primitives were routed to the spec-complete algorithm above (#13486).
     let ptr_bits = if (bits >> 48) >= 0x7FF8 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else {
@@ -886,6 +920,15 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
         scope.root_nanbox_f64(crate::value::js_nanbox_string(hdr as i64))
     } else {
         scope.root_nanbox_f64(items)
+    };
+    // #13486: GetMethod on a primitive consults its wrapper's prototype chain.
+    // Box number / boolean / symbol / bigint sources so the iterable probes
+    // and array-like reads below see an object; an unpatched wrapper answers
+    // undefined and the array-like branch yields `LengthOfArrayLike` 0 (`[]`).
+    let items = if boxed_primitive_source(items.get_nanbox_f64(), item_bits) {
+        scope.root_nanbox_f64(to_object(items.get_nanbox_f64()))
+    } else {
+        items
     };
 
     // Proxy GetMethod is observable. Resolve it once, retain it across
