@@ -3166,6 +3166,7 @@ js_perry_tui_use_effect	f64	i64,i64
 js_perry_tui_use_focus	f64	f64,f64
 js_perry_tui_use_focus_manager	i64	
 js_perry_tui_use_input	f64	i64
+js_perry_tui_use_input_bytes	f64	i64
 js_perry_tui_use_memo	f64	i64,i64
 js_perry_tui_use_ref	i64	f64
 js_perry_tui_use_state	f64	f64
