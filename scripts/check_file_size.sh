@@ -38,7 +38,7 @@ crates/perry-runtime/src/set.rs	2347
 # Representation feedback core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/typed_feedback.rs	2444
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
-crates/perry-runtime/src/snap_census/runner.rs	4679
+crates/perry-runtime/src/snap_census/runner.rs	4749
 # Native ABI proof cases; test organization is a separate follow-up.
 crates/perry-codegen/tests/native_proof_regressions.rs	15688
 # Representation feedback regression cases; test organization is a separate follow-up.
