@@ -1278,3 +1278,62 @@ fn native_owned_ranges_may_overlap(
     let b_end = b_start + b_len as i128;
     a_start < b_end && b_start < a_end
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r(min: i64, max: i64) -> IntRange {
+        IntRange { min, max }
+    }
+
+    #[test]
+    fn a_range_past_2_53_proves_nothing() {
+        let exact = 1i64 << 53;
+        // `(i + 2^60) - 2^60`: the sum rounds, so it has no range.
+        assert_eq!(checked_range_add(r(0, 200), r(1 << 60, 1 << 60)), None);
+        assert_eq!(
+            checked_range_add(r(0, 200), r(1 << 52, 1 << 52)),
+            Some(r(1 << 52, (1 << 52) + 200))
+        );
+        assert_eq!(
+            checked_range_add(r(0, 1), r(exact - 1, exact - 1)),
+            Some(r(exact - 1, exact))
+        );
+        assert_eq!(checked_range_add(r(0, 2), r(exact - 1, exact - 1)), None);
+        assert_eq!(checked_range_sub(r(-exact, 0), r(1, 1)), None);
+        assert_eq!(
+            checked_range_sub(r(1 - exact, 0), r(1, 1)),
+            Some(r(-exact, -1))
+        );
+        // int32 x int32 leaves the exact integers; i64 overflow is no range.
+        assert_eq!(checked_range_mul(r(0, 1 << 31), r(0, 1 << 31)), None);
+        assert_eq!(
+            checked_range_mul(r(-46341, 46341), r(0, 46341)),
+            Some(r(-2147488281, 2147488281))
+        );
+        assert_eq!(checked_range_mul(r(i64::MAX, i64::MAX), r(2, 2)), None);
+        assert_eq!(f64_to_i64_constant(9007199254740992.0), Some(exact));
+        assert_eq!(f64_to_i64_constant(9007199254740994.0), None);
+        // 2^63 is `i64::MAX as f64`, which `as i64` saturates.
+        assert_eq!(f64_to_i64_constant(9223372036854775808.0), None);
+        assert_eq!(f64_to_i64_constant(0.5), None);
+        assert_eq!(f64_to_i64_constant(f64::NAN), None);
+    }
+
+    #[test]
+    fn a_quotient_is_an_integer_range_for_one_divisible_dividend() {
+        assert_eq!(checked_range_div(r(8, 8), r(4, 4)), Some(r(2, 2)));
+        // `i / 4` over [0, 8] is 0.25 at 1: no integer range.
+        assert_eq!(checked_range_div(r(0, 8), r(4, 4)), None);
+        assert_eq!(checked_range_div(r(8, 8), r(3, 3)), None);
+        assert_eq!(checked_range_div(r(8, 8), r(0, 0)), None);
+        // `(i / 4) | 0` truncates toward zero.
+        assert_eq!(truncated_quotient_range(r(0, 15), r(4, 4)), Some(r(0, 3)));
+        assert_eq!(truncated_quotient_range(r(-7, 7), r(2, 2)), Some(r(-3, 3)));
+        assert_eq!(truncated_quotient_range(r(0, 15), r(0, 4)), None);
+        assert_eq!(truncated_quotient_range(r(0, 15), r(-4, -4)), None);
+        // Past int32 the `| 0` wraps.
+        assert_eq!(truncated_quotient_range(r(0, 1 << 40), r(2, 2)), None);
+    }
+}
