@@ -148,6 +148,7 @@ impl Model {
             Cons::Fulfil { dst } => format!("Fulfil dst={:?}", dst),
             Cons::Falsy { dst } => format!("Falsy dst={:?}", dst),
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
+            Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }

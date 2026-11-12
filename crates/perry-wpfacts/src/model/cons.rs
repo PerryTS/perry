@@ -282,6 +282,12 @@ pub enum Cons {
     /// primitive pass. The binding's other values pass all (a `Guard`,
     /// `guard::NOT_BUFFER_CTOR`, on the read of the global).
     NotBuffer { shared: bool, dst: NodeId },
+    /// A value given as a prototype (`__proto__` store, `setPrototypeOf`,
+    /// `Object.create`): dst ⊇ the node's objects (⊤ included) and `null`.
+    /// No other primitive is ever one: the `__proto__` setter ignores it
+    /// (ECMA-262 B.2.2.1.2 step 4), `setPrototypeOf` and `Object.create`
+    /// throw (20.1.2.23, 20.1.2.2).
+    ProtoObjects { dst: NodeId },
     /// Every object token reaches a HARD operation.
     Hard { kind: Hard, reason: u32 },
     /// DECISIONS 242 (contract half): another unit's function reads `key`
@@ -744,6 +750,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::ProtoObjects { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -764,6 +771,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::ProtoObjects { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -808,6 +816,7 @@ impl Cons {
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::NotBuffer { .. } => "notbuffer",
+            Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Hard { .. } => "hard",
             Cons::Miss { .. } => "miss",
             Cons::DeleteKey { .. } => "deletekey",

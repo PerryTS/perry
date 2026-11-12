@@ -460,6 +460,14 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            Cons::ProtoObjects { dst } => {
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+                if prim & prim::NULL != 0 {
+                    self.add_prim(dst, prim::NULL);
+                }
+            }
             Cons::NotBuffer { shared, dst } => {
                 let kind = if shared {
                     "SharedArrayBuffer"
@@ -2183,8 +2191,18 @@ impl Model {
             }
         }
     }
+    /// What of `src` a prototype change gives: its objects (⊤ included) and
+    /// `null`, never another primitive ([`Cons::ProtoObjects`]).
+    pub(super) fn proto_objects(&mut self, src: NodeId) -> NodeId {
+        let objs = self.node_l("given-prototype-objects");
+        self.cons(src, Cons::ProtoObjects { dst: objs });
+        objs
+    }
+
     /// Both prototype-change spellings contribute the same chain relation.
-    pub(super) fn given_prototype(&mut self, t: Tok, src: NodeId) {
+    /// Only an object (or `null`) is given: `src` is filtered first.
+    pub(super) fn given_prototype(&mut self, t: Tok, given: NodeId) {
+        let src = self.proto_objects(given);
         if t == TOP || matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.cons(src, Cons::ParentGiven { of: t });
         }
@@ -2199,10 +2217,10 @@ impl Model {
         // never `src`. A builtin function value keeps the `proto_node` link
         // below, which the model walks.
         if (t == TOP || self.shared_of(t).is_some_and(|s| s != Shared::BuiltinFn))
-            && !self.native_given.contains(&(t, src))
+            && !self.native_given.contains(&(t, given))
         {
-            self.native_given.push((t, src));
-            self.census_given(t, src);
+            self.native_given.push((t, given));
+            self.census_given(t, given);
             let members = self.node_l("given-prototype-members");
             self.cons(
                 src,

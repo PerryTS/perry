@@ -498,9 +498,10 @@ impl Model {
                 self.given_prototype(t, src);
             }
             if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                self.cons(src, Cons::ParentGiven { of: t });
+                let objs = self.proto_objects(src);
+                self.cons(objs, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);
-                self.edge(src, parent);
+                self.edge(objs, parent);
                 let instance = self.tok(TokKind::Obj(tm, NO_CTX));
                 let reason = self.reason("E6 possible computed superclass write");
                 self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
