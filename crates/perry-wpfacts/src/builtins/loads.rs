@@ -190,6 +190,22 @@ pub(super) fn buffer_member_absent(m: &Model, what: Option<&str>, name: &str) ->
         && !declared(m, m.declarations.family(Family::Object, m))
 }
 
+/// Is `name` a key neither `%TypedArray%.prototype` nor `Object.prototype`
+/// declares? Its [[Get]] on a typed array is `undefined` (the kind's own
+/// prototype holds only `constructor` and `BYTES_PER_ELEMENT`), so a call
+/// of it throws a TypeError before any argument is used (ECMA-262 13.3.6.2
+/// EvaluateCall, 7.3.14 Call). A well-known symbol key is never absent here.
+pub(super) fn typed_array_member_absent(m: &Model, name: &str) -> bool {
+    if name.starts_with("@@") {
+        return false;
+    }
+    let declared = |m: &Model, holder: Option<usize>| {
+        holder.is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    };
+    !declared(m, m.declarations.named("%TypedArray%.prototype", m))
+        && !declared(m, m.declarations.family(Family::Object, m))
+}
+
 /// The family (and site kind) of the intrinsic prototype builtin namespace
 /// `ns` holds under `prototype` (the inverse of `family_ctor`), and the
 /// global binding that names `ns`; `None`: no described prototype, or not

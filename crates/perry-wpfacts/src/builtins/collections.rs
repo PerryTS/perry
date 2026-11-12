@@ -1765,6 +1765,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // already answered by `own_method_inner` (the receiver is described:
         // the written method runs now, or on the replay of the miss).
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(_)) => {}
+        // A key neither `%TypedArray%.prototype` nor `Object.prototype`
+        // declares: the lookup is `undefined` and the call throws a fresh
+        // TypeError; nothing runs and nothing escapes (as for a buffer above).
+        ("TypedArray", Some(n)) if super::loads::typed_array_member_absent(m, n) => {}
         ("TypedArray", Some(_)) => {
             implicit_args(m, call, "typed array method argument", Protocol::Any);
             if name == Some("toString") {
