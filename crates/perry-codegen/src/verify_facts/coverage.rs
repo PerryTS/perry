@@ -66,6 +66,9 @@ pub(crate) enum Fact {
     /// A loop without calls keeps a local Array's length beside stores
     /// through other names (wpfacts `named_lengths`).
     NamedLength,
+    /// A loop without calls keeps a local Array's length: its reads, stores
+    /// and operators run no program code (wpfacts `quiet_sites`).
+    QuietSites,
     /// A loop's trip bound from its counter's interval
     /// (`stmt::loops::bounded_poll`).
     LoopTrip,
@@ -126,6 +129,7 @@ impl Fact {
             Self::LiteralString => "literal string",
             Self::HeldLength => "held length",
             Self::NamedLength => "named length",
+            Self::QuietSites => "quiet sites",
             Self::LoopTrip => "loop trip bound",
         }
     }
