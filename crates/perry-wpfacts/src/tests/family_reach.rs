@@ -322,3 +322,33 @@ fn byte_cells_are_on_no_core_prototype() {
         0
     );
 }
+
+#[test]
+fn every_generic_mint_site_is_classified() {
+    // A `builtin_fn(m, "<why>")` site this list does not name makes every
+    // program that reaches it an unknown world (L1). Each listed site runs
+    // under a hooked load (`tok_load`, `prim_load`, `chain_load`): add a new
+    // one to `family_reach::GENERIC_MINTS` once that holds for it.
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = vec![src.join("builtins.rs")];
+    let Ok(dir) = std::fs::read_dir(src.join("builtins")) else {
+        return;
+    };
+    files.extend(dir.flatten().map(|e| e.path()));
+    let mut seen = 0;
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        for site in text.split("builtin_fn(m, \"").skip(1) {
+            let why = site.split('"').next().unwrap_or("");
+            seen += 1;
+            assert!(
+                crate::family_reach::GENERIC_MINTS.contains(&why),
+                "{}: builtin_fn site {why:?} is not in family_reach::GENERIC_MINTS",
+                file.display()
+            );
+        }
+    }
+    assert!(seen >= 12, "the mint sites were not found ({seen})");
+}

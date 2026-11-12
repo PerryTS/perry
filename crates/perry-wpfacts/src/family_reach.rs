@@ -616,7 +616,7 @@ pub(crate) fn run(m: &mut Model, entry: &'static str) {
 /// and the key in hand and counts the mint as every entry of that receiver
 /// the key may name. A mint at any other site has no receiver here: it is
 /// L1.
-const GENERIC_MINTS: &[&str] = &[
+pub(crate) const GENERIC_MINTS: &[&str] = &[
     "array computed key",
     "builtin namespace static",
     "builtin object computed key",
