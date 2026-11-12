@@ -5,11 +5,13 @@
 // Under PERRY_FACTS_SABOTAGE=arraysite every site is claimed a member site:
 // the node drops its guard, and the check-mode witness in front of the fold
 // (the dropped test) must report the receiver ("method site").
-function find(a: number[]): any {
+// (Recursive, so that the call is not inlined into the module body.)
+function find(a: number[], depth: number): any {
+  if (depth > 0) return find(a, depth - 1);
   return a.indexOf(2);
 }
 const plain = [1, 2, 3];
-console.log(find(plain));
+console.log(find(plain, 2));
 const own: any = [1, 2, 3];
 own.indexOf = (): string => "own indexOf";
-console.log(find(own));
+console.log(find(own, 2));
