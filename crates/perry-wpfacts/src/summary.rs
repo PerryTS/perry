@@ -868,7 +868,10 @@ impl Model {
                 return NO_VAL;
             }
             return match self.str_atoms(n.strs) {
-                &[x] if self.atom_prefix(x).is_none() => x,
+                // A switch compares constants; a keyed run (no labels)
+                // reads and writes by a constant or a known prefix.
+                &[x] if self.atom_prefix(x).is_none()
+                    || s.switch.as_ref().is_some_and(|w| w.1.is_empty()) => x,
                 _ => NO_VAL,
             };
         }
@@ -963,7 +966,7 @@ impl Model {
         // equal to it, else the default; bit 63: none, no clause runs).
         let val = self.sum.insts[inst as usize].val;
         let bit = match &s.switch {
-            Some((_, labels)) if val != NO_VAL => {
+            Some((_, labels)) if val != NO_VAL && !labels.is_empty() => {
                 let e = labels
                     .iter()
                     .position(|l| *l == Some(val))

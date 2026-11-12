@@ -890,6 +890,11 @@ pub(super) fn build_summaries(m: &mut Model) {
         s.rel = relative_params(s);
         s.called = called_param(s);
         s.switch = switch_param(s, m.switch_runs.get(f));
+        // Rule M3: a parameter used only as a computed key runs per string
+        // value, as a switch parameter does, with no clauses to select.
+        if s.switch.is_none() && s.called.is_none() {
+            s.switch = keyed_param(s).map(|j| (j, Vec::new()));
+        }
         if s.switch.is_none() {
             s.edge_reach = Default::default();
             s.cons_reach = Vec::new();
@@ -1007,6 +1012,60 @@ fn switch_param(s: &Summary, w: Option<&(u32, Vec<Option<crate::model::Atom>>)>)
         && !s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
         && ![s.ret, s.this, s.rest].contains(&p))
     .then(|| (*j, labels.clone()))
+}
+
+/// Rule M3: a parameter the body uses only as the key of computed reads
+/// and stores (`IdxLoad`, `StoreIndexed`), never written, passed, stored,
+/// returned or captured: what each run reads or writes depends on that
+/// key's string alone (ECMA-262 7.1.19 ToPropertyKey, 10.2.1 binding).
+/// GLTFLoader `GLTFRegistry.get(key)`, `add(key, object)`.
+fn keyed_param(s: &Summary) -> Option<u32> {
+    let only_keyed = |j: usize| {
+        let p = s.params[j];
+        if !is_slot(p) || !s.rel[j] || [s.ret, s.this, s.rest].contains(&p) {
+            return false;
+        }
+        if s.params.iter().enumerate().any(|(i, &q)| i != j && q == p)
+            || s.edges.iter().any(|&(a, b)| a == p || b == p)
+            || s.seeds.iter().any(|(sl, ..)| SLOT | *sl == p)
+            || s.closures.iter().any(|(sl, _, terms, _)| SLOT | *sl == p || terms.contains(&p))
+            || s.births.iter().any(|&(sl, _)| SLOT | sl == p)
+        {
+            return false;
+        }
+        let mut keyed = false;
+        for (h, c) in &s.cons {
+            if *h == p {
+                match c {
+                    Cons::StoreIndexed { .. } => keyed = true,
+                    // ToPropertyKeys ToPrimitive: a runs key is one string.
+                    Cons::Implicit {
+                        proto: crate::model::Protocol::ToPrimitive,
+                        ..
+                    } => {}
+                    Cons::Raise { .. } => {}
+                    _ => return false,
+                }
+            } else if super::map::cons_fields(c).0.contains(&p) {
+                match c {
+                    Cons::IdxLoad { idx, dst, .. } if *idx == p && *dst != p => keyed = true,
+                    _ => return false,
+                }
+            }
+        }
+        for (_, cs) in &s.calls {
+            let mut seen = false;
+            super::map::map_call(cs, |x| {
+                seen |= x == p;
+                x
+            });
+            if seen {
+                return false;
+            }
+        }
+        keyed
+    };
+    (0..s.params.len()).find(|&j| only_keyed(j)).map(|j| j as u32)
 }
 
 fn called_param(s: &Summary) -> Option<u32> {

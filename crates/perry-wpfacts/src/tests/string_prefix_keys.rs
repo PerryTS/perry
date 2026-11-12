@@ -119,3 +119,27 @@ fn prefix_read_names_a_member_only_under_its_prefix() {
     );
     assert!(v.len() > 1, "control: 'to' + s may name toString: {v:?}");
 }
+
+/// The GLTFLoader form: a registry class whose `get`/`add` use their key
+/// parameter only as a computed key, called with a local key from two
+/// helper functions.
+const REG_CLASS: &str = "class Reg { objects: any = {}; get(key: any) { return this.objects[key]; } add(key: any, o: any) { this.objects[key] = o; } }
+         const cache = new Reg();
+         function load(type: any, index: any) { const cacheKey = type + ':' + index; return cache.get(cacheKey); }
+         function save(type: any, index: any, o: any) { const cacheKey = type + ':' + index; cache.add(cacheKey, o); }";
+
+#[test]
+fn registry_methods_split_by_prefix() {
+    let v = only_a(&format!(
+        "{REG_CLASS}\n save('a', n, new A()); save('b', n, new B()); const x: any = load('a', n);"
+    ));
+    assert_eq!(v, vec!["A"], "{v:?}");
+}
+
+#[test]
+fn control_registry_methods_unknown_key_merges() {
+    let v = only_a(&format!(
+        "{REG_CLASS}\n save('a', n, new A()); cache.add(process.argv[2], new B()); const x: any = load('a', n);"
+    ));
+    assert!(v.contains(&"A".into()) && v.contains(&"B".into()), "{v:?}");
+}
