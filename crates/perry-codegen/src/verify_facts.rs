@@ -11,6 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
 pub(crate) mod life;
+pub(crate) mod life_measure;
 pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
@@ -93,6 +94,19 @@ pub fn set_instrumented_variant(on: bool) {
 /// default archives. The one predicate of codegen and the compile command.
 pub fn life_claims_on() -> bool {
     enabled() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The lifetime measurement is on (LIFE I1, `PERRY_LIFE_MEASURE` set at
+/// compile time): an instrument knob, so the compile links the instrumented
+/// runtime variant, the only one carrying `perry_life_*`. Codegen emits the
+/// birth, activation and loop hooks (`life_measure`) only under it.
+pub fn life_measure_on() -> bool {
+    life_measure_requested() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `PERRY_LIFE_MEASURE` is set (non-empty) in the compile's environment.
+pub fn life_measure_requested() -> bool {
+    std::env::var_os("PERRY_LIFE_MEASURE").is_some_and(|v| !v.is_empty())
 }
 
 /// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a

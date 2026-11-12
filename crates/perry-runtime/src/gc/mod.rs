@@ -1913,3 +1913,10 @@ static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use roots::for_each_global_root_slot;
+
+/// LIFE I1: the synchronous full cycle the lifetime measurement runs at the
+/// end of a turn that has old samples (`wpfacts_check/life_measure.rs`).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn life_collect_full() {
+    let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}

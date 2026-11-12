@@ -8654,6 +8654,7 @@ pub(crate) fn emit_gc_loop_safepoint(
     body: &[Stmt],
     controls: &[&perry_hir::Expr],
 ) {
+    crate::verify_facts::life_measure::iteration(ctx, body);
     if !moving_safepoint_polls_enabled() || ctx.block().is_terminated() {
         return;
     }

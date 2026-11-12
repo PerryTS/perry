@@ -761,6 +761,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     if crate::verify_facts::dce_enabled() {
         module.declare_function("llvm.trap", crate::types::VOID, &[]);
     }
+    if crate::verify_facts::life_measure_on() {
+        // LIFE I1: the lifetime measurement's hooks.
+        module.declare_function("perry_life_birth", crate::types::VOID, &[I64, I64, I64]);
+        module.declare_function("perry_life_enter", crate::types::VOID, &[]);
+        module.declare_function("perry_life_iter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_return", crate::types::VOID, &[]);
+        module.declare_function("perry_life_turn", crate::types::VOID, &[]);
+    }
     if crate::verify_facts::enabled() {
         module.declare_function("perry_verify_facts_tick", crate::types::VOID, &[]);
         module.declare_function("perry_verify_facts_init", crate::types::VOID, &[]);

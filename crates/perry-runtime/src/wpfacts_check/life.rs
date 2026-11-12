@@ -26,23 +26,28 @@ use std::collections::HashMap;
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum State {
+pub(super) enum State {
     /// An argument birth the call still holds; its token.
     Pending(u64),
     Dead,
+    /// A sampled birth of the lifetime measurement (`life_measure`): its
+    /// sample index.
+    Probe(u32),
 }
 
 #[derive(Clone, Copy)]
-struct Claim {
-    site: u64,
-    len: usize,
-    state: State,
+pub(super) struct Claim {
+    pub(super) site: u64,
+    pub(super) len: usize,
+    pub(super) state: State,
 }
 
 #[derive(Default)]
-struct Table {
+pub(super) struct Table {
+    /// The lifetime measurement's state (`life_measure`).
+    pub(super) measure: super::life_measure::Measure,
     /// User address -> claim.
-    claims: HashMap<usize, Claim>,
+    pub(super) claims: HashMap<usize, Claim>,
     /// During a copied minor: the claims of from-space, not yet reached.
     from: HashMap<usize, Claim>,
     /// Token -> user address of a pending argument birth.
@@ -82,14 +87,14 @@ crate::perry_thread_local! {
     static TABLE: RefCell<Option<Table>> = const { RefCell::new(None) };
 }
 
-fn with<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
+pub(super) fn with<R>(f: impl FnOnce(&mut Table) -> R) -> Option<R> {
     TABLE.with(|t| t.borrow_mut().as_mut().map(f))
 }
 
 /// The first death of the run installs the table and the collector hooks:
 /// only these check-build entries reach it, so a release program references
 /// no installer.
-fn ensure() {
+pub(super) fn ensure() {
     if TABLE.with(|t| t.borrow().is_none()) {
         install();
     }
@@ -106,10 +111,21 @@ fn young_addr(bits: u64) -> Option<usize> {
 
 /// A collection the life hooks did not see ran: every young claim's object
 /// may be freed and its address reused, so the table is dropped.
-fn sync(t: &mut Table) {
+pub(super) fn sync(t: &mut Table) {
     let now = crate::gc::diagnostic_hooks::life_collection_count();
     if now != t.synced {
         bump(&totals::DROPPED_UNOBSERVED, t.claims.len() as u64);
+        let probes: Vec<u32> = t
+            .claims
+            .values()
+            .filter_map(|c| match c.state {
+                State::Probe(i) => Some(i),
+                _ => None,
+            })
+            .collect();
+        for i in probes {
+            super::life_measure::dropped(t, i);
+        }
         t.claims.clear();
         t.tokens.clear();
         t.synced = now;
@@ -125,6 +141,7 @@ fn install() {
         })
     });
     crate::gc::diagnostic_hooks::install_life(reached, before_minor, after_minor);
+    crate::gc::diagnostic_hooks::install_life_full(super::life_measure::full_marked);
     unsafe {
         libc::atexit(totals_at_exit);
     }
@@ -148,7 +165,18 @@ fn before_minor() {
 fn after_minor() {
     let _ = with(|t| {
         bump(&totals::CHECKED_MINORS, 1);
+        let died: Vec<u32> = t
+            .from
+            .values()
+            .filter_map(|c| match c.state {
+                State::Probe(i) => Some(i),
+                _ => None,
+            })
+            .collect();
         t.from.clear();
+        for i in died {
+            super::life_measure::died(t, i);
+        }
         t.synced = crate::gc::diagnostic_hooks::life_collection_count();
     });
 }
@@ -161,6 +189,11 @@ fn reached(old: usize, new: usize) {
             State::Pending(token) => {
                 t.claims.insert(new, c);
                 t.tokens.insert(token, new);
+                None
+            }
+            State::Probe(i) => {
+                t.claims.insert(new, c);
+                super::life_measure::reached(t, i, new);
                 None
             }
             State::Dead => Some((c, get(&totals::DEATHS))),
