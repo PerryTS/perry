@@ -7,17 +7,17 @@ use std::ptr;
 #[path = "push_pop/growth.rs"]
 mod growth;
 use growth::initialize_growth_slack;
+pub(super) use growth::install_array_growth_forwarding_with;
 #[cfg(test)]
 pub(crate) use growth::GrowInPlaceTestGuard;
-pub(super) use growth::install_array_growth_forwarding_with;
 
 #[path = "push_pop/guards.rs"]
 mod guards;
 pub(crate) use guards::array_length_is_non_writable;
 pub(super) use guards::throw_cannot_delete_array_index;
 use guards::throw_frozen_array_mutation;
-pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 use guards::throw_non_writable_length;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
@@ -185,6 +185,13 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
         if min_capacity <= old_capacity {
             return arr;
         }
+        // A sparse Array's far elements live in its named layout. A store
+        // that grows over them must take them in (`adopt_sparse_indices`),
+        // which the no-collect form does not do: it declines.
+        let sparse_source = (*arr).length > old_capacity;
+        if sparse_source && !MAY_COLLECT {
+            return ptr::null_mut();
+        }
         // DEC 250 (i): `%Array.prototype%` never gains an element. It has no
         // element room (`seal_realm`), and this is the one place an existing
         // array's capacity grows, so every dense add to it (push, unshift,
@@ -234,7 +241,11 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
         // it stands. No copy, no forwarding stub, no new address for an alias
         // to chase (see `try_extend_in_place`).
         if growth::try_extend_in_place(arr, old_header, new_capacity) {
-            return arr;
+            return if sparse_source {
+                growth::adopt_sparse_indices(arr)
+            } else {
+                arr
+            };
         }
         let reserve = crate::array::key_attrs_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
@@ -418,6 +429,9 @@ unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
             initialize_growth_slack(new_ptr, used, new_capacity as usize);
         }
 
+        if sparse_source {
+            return growth::adopt_sparse_indices(new_ptr);
+        }
         new_ptr
     }
 }

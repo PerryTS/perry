@@ -21,6 +21,7 @@ pub(crate) use element_kind::{
     ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
+mod exotic_snapshot;
 mod fill_birth;
 pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
@@ -86,6 +87,8 @@ pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
 mod species;
 #[cfg(test)]
 mod species_tests;
+#[cfg(test)]
+mod sparse_reader_tests;
 mod splice_slice;
 mod storage;
 #[cfg(test)]
