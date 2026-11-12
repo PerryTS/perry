@@ -1038,7 +1038,13 @@ pub(crate) fn any_pending() -> bool {
 /// (`AsyncContextSnapshot::snap_init`, stamped when the entry is built), its
 /// callback's code address (0 for a promise timer, which runs no callback), its
 /// delay and whether it repeats.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SnapPendingTimer {
     pub kind: &'static str,
@@ -1051,7 +1057,13 @@ pub(crate) struct SnapPendingTimer {
 /// SNAPK4 census: the calling agent's live entries (timer heaps, the check
 /// queue of immediates, the poll queues of native completions) in scheduling
 /// order. None while the store is locked.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
 #[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
 pub(crate) fn snap_pending_timers() -> Option<Vec<SnapPendingTimer>> {
     let agent = crate::agent::current_agent();
     let store = match STORE.try_lock() {

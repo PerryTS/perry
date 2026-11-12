@@ -445,9 +445,12 @@ pub extern "C" fn js_math_random() -> f64 {
         });
     }
 
-    crate::effect!(host_read, random);
-    let mut rng = rand::rng();
-    rng.random::<f64>()
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, random);
+        let mut rng = rand::rng();
+        rng.random::<f64>()
+    }
 }
 
 /// Math.min(...array) -> number — find minimum value in an array
