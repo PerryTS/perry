@@ -45,8 +45,42 @@
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
-/// The runtime entry every ArrayPush slow arm calls.
+/// The runtime entry every ArrayPush slow arm calls with
+/// `PERRY_PUSH_METHOD_TIERS=0`: an own `push` of an ARRAY receiver exits, any
+/// other receiver takes the builtin append.
 pub(super) const PUSH_SPEC_OR_OWN: &str = "js_array_push_f64_spec_or_own";
+
+/// The same entry, which also performs the real `Get(recv, "push")` for a
+/// receiver that is no Array at all (an object behind a `number[]`
+/// annotation): its own or inherited user `push` exits like an Array's own.
+pub(super) const PUSH_SPEC_OR_METHOD: &str = "js_array_push_f64_spec_or_method";
+
+/// `PERRY_PUSH_METHOD_TIERS=0` (`off`, `false`) keeps the push tiers that call
+/// the builtin without resolving `push` on the receiver:
+///
+/// * the guarded numeric tier trusts `js_typed_feedback_numeric_array_push_guard`,
+///   which admits an Array with a named layout (an own `push`, an own accessor)
+///   or an own `[[Prototype]]`;
+/// * the native `array.push_single` / `array.push` arm (a field receiver in
+///   value position, in a constructor, or with several arguments) appends with
+///   no test of the receiver;
+/// * a slow arm's receiver that is no Array takes the builtin's array-like
+///   append.
+pub(crate) fn method_tiers_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_PUSH_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The slow arms' runtime entry under the switch.
+pub(super) fn push_entry() -> &'static str {
+    if method_tiers_enabled() {
+        PUSH_SPEC_OR_METHOD
+    } else {
+        PUSH_SPEC_OR_OWN
+    }
+}
 
 /// The join where an ArrayPush tier's own-method exits meet its ordinary
 /// result. Created before the tier's first slow arm, closed by
@@ -87,7 +121,7 @@ impl OwnPushJoin {
             let blk = ctx.block();
             let bits = blk.call(
                 I64,
-                PUSH_SPEC_OR_OWN,
+                push_entry(),
                 &[(I64, arr_handle), (DOUBLE, v), (PTR, &own_slot)],
             );
             let own = blk.load(I32, &own_slot);

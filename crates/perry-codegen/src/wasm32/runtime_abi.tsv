@@ -229,6 +229,7 @@ js_array_print	void	ptr
 js_array_push	ptr	ptr,i64
 js_array_push_f64	ptr	ptr,f64
 js_array_push_f64_spec	ptr	ptr,f64
+js_array_push_f64_spec_or_method	i64	ptr,f64,ptr
 js_array_push_f64_spec_or_own	i64	ptr,f64,ptr
 js_array_push_f64_temp_rooted	void	i32u,f64
 js_array_push_guard	void	ptr,i32u

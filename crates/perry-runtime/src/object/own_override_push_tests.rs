@@ -1,7 +1,9 @@
 //! #11021: `js_array_push_f64_spec_or_own`, the push every `Expr::ArrayPush`
 //! slow arm calls — its absence proof, its precise probe, and both exits.
 
-use super::own_override::{array_owning_push_for_test, js_array_push_f64_spec_or_own};
+use super::own_override::{
+    array_owning_push_for_test, js_array_push_f64_spec_or_method, js_array_push_f64_spec_or_own,
+};
 use crate::array::{js_array_alloc, js_array_length, js_array_push_f64, ArrayHeader};
 
 fn pushed(values: &[f64]) -> *mut ArrayHeader {
@@ -150,5 +152,65 @@ fn a_non_callable_own_push_throws_before_appending() {
         .is_err();
         assert!(threw, "a non-callable own `push` must throw TypeError");
         assert_eq!(js_array_length(arr), 1);
+    }
+}
+
+/// An object with an own `push` behind an Array annotation
+/// (`const a: number[] = obj as any`): the entry of the default lowering
+/// performs the `Get` and takes the own exit; the Array-only entry
+/// (`PERRY_PUSH_METHOD_TIERS=0`) keeps the builtin's array-like append.
+#[test]
+fn an_object_receiver_runs_its_own_push_through_the_method_entry_only() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let method = crate::closure::js_closure_alloc(
+            crate::fn_info!(own_push_fixture, 1; with_declared(1)),
+            0,
+        );
+        let obj = crate::object::js_object_alloc(0, 0);
+        let key = crate::string::js_string_from_bytes("push".as_ptr(), 4);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            key,
+            crate::value::js_nanbox_pointer(method as i64),
+        );
+        let recv = obj as *mut ArrayHeader;
+
+        let mut own = u32::MAX;
+        let bits = js_array_push_f64_spec_or_method(recv, 7.0, &mut own);
+        assert_eq!(own, 1, "the object's own `push` must take the own exit");
+        assert_eq!(f64::from_bits(bits), 70.0, "the value is the method's return");
+
+        let (_, own) = push_or_own(recv, 7.0);
+        assert_eq!(own, 0, "the Array-only entry never reads an object's `push`");
+    }
+}
+
+/// The method entry answers an Array exactly as the Array-only entry does:
+/// the plain append, and an Array's own `push` through the own exit.
+#[test]
+fn the_method_entry_answers_an_array_like_the_own_entry() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    unsafe {
+        let arr = pushed(&[1.0]);
+        let mut own = u32::MAX;
+        let bits = js_array_push_f64_spec_or_method(arr, 2.0, &mut own);
+        assert_eq!(own, 0, "a plain array must take the builtin exit");
+        assert_eq!(js_array_length(bits as *const ArrayHeader), 2);
+
+        let method = crate::closure::js_closure_alloc(
+            crate::fn_info!(own_push_fixture, 1; with_declared(1)),
+            0,
+        );
+        let owner = set_named(
+            pushed(&[1.0]),
+            "push",
+            crate::value::js_nanbox_pointer(method as i64),
+        );
+        let mut own = u32::MAX;
+        let bits = js_array_push_f64_spec_or_method(owner, 7.0, &mut own);
+        assert_eq!(own, 1);
+        assert_eq!(f64::from_bits(bits), 70.0);
+        assert_eq!(js_array_length(owner), 1);
     }
 }

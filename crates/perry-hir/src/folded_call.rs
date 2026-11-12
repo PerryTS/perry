@@ -83,6 +83,36 @@ pub fn native_construct_fold(module: &str, method: &str) -> bool {
     )
 }
 
+/// `recv.push(..args)` as the HIR folds it for a receiver that is no local:
+/// `NativeMethodCall { module: "array", method: "push_single" | "push" }`
+/// (`this.items.push(v)` in value position or in a constructor, `o.list.push(v)`).
+/// The fold rests on the receiver's declared type, so the node is the call
+/// `recv.push(..args)` like every row of [`folded_call`]: an Array that owns
+/// `push`, an Array with its own prototype, an Array subclass or an object
+/// behind the annotation runs the method the receiver holds. It is a function
+/// of its own (not a row of [`folded_call`]) because both readers keep an arm
+/// the table has no say in: a fill push of a push-filled birth (wpfacts
+/// `push_fills`) is an append to an Array nothing else has seen, and
+/// `PERRY_PUSH_METHOD_TIERS=0` keeps the unguarded append.
+pub fn native_array_push(expr: &Expr) -> Option<FoldedCall<'_>> {
+    match expr {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: Some(object),
+            args,
+            ..
+        } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
+            Some(FoldedCall {
+                receiver: Receiver::Expr(object),
+                method: "push",
+                args: args.iter().collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The folded builtin-method nodes that are calls, and what each one is a
 /// call of: codegen guards each (`perry-codegen expr/folded_builtin_override.rs`,
 /// `Expr::ArrayPush` through its own slow arms) so an own or inherited user
@@ -679,6 +709,19 @@ mod tests {
             args: vec![lit(1.0)],
         };
         assert!(folded_call(&single).is_none());
+        // It is the call `recv.push(v)` all the same, for the readers that
+        // guard the native arm (`native_array_push`).
+        let call = native_array_push(&single).expect("a native push is a call of push");
+        assert_eq!((call.method, call.args.len()), ("push", 1));
+        assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
+        let spread = Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(Box::new(Expr::LocalGet(7))),
+            method: "push_spread".to_string(),
+            args: vec![Expr::LocalGet(8)],
+        };
+        assert!(native_array_push(&spread).is_none());
     }
 
     /// An optional argument is part of the call when present and absent when
