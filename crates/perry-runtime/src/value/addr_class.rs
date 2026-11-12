@@ -692,9 +692,10 @@ mod tests {
             object_ref_addr(f64::from_bits(POINTER_TAG | 0x40001)),
             0x40001
         );
-        // The legacy raw-bitcast shape is kept for an allocator-owned object.
+        // A Number whose bits equal an allocator-owned object's address is
+        // still a Number: no ownership lookup turns it into a reference.
         let obj = crate::object::js_object_alloc(0, 0) as usize;
-        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), obj);
+        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), 0);
     }
 
     #[test]

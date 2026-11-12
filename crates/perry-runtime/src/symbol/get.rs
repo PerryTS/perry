@@ -105,12 +105,18 @@ unsafe fn receiver_ptr_from_value_bits(bits: u64) -> Option<usize> {
     }
 }
 
-/// Validate a value's bits as a live tracked heap allocation and report its
-/// address together with its GC type byte.
+/// Validate an object WORD as a live tracked heap allocation and report its
+/// address together with its GC type byte. The callers pass runtime-internal
+/// words, not user values: an owner address and stored `[[Prototype]]` words,
+/// which are kept raw (top 16 bits clear) as well as POINTER_TAG'd. The
+/// value entry (`js_object_get_symbol_property_with_receiver`) has already
+/// taken a Number receiver out before any of them runs.
 unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
         (bits & POINTER_MASK) as usize
+    } else if top16 == 0 {
+        bits as usize
     } else {
         return None;
     };
