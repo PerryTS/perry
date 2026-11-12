@@ -53,7 +53,7 @@ If you've used ink, the only real difference at the surface is the **factory cal
 
 ## Architecture in one paragraph
 
-`run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: reset hook index → call the component closure → diff the returned widget tree against the front buffer → emit minimal ANSI to reconcile → drain pending keypresses (dispatching to `useInput` handlers and the focus ring) → if any state changed, immediately re-render; else idle 16 ms. Exit happens when `exit()` (or `useApp().exit()`) flips a flag the loop checks at the top of every iteration. On exit, raw mode is restored and the alt screen is left so your terminal returns to exactly the state it was in before the program ran.
+`run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: advance Perry's existing event pump → clear the previous dirty flag and reset the hook index → call the component closure → diff and flush the widget tree → drain pending keypresses → if any state changed, immediately re-render; else idle 16 ms. The pump advances promise jobs, timers and registered stdlib completions without requiring keyboard input. It runs outside component construction; its return count does not gate rendering or future polling. Updates made during a frame or input dispatch remain dirty for the next iteration. Exit requests are checked after pumping and before dispatch/idle so an async callback can stop the loop without constructing another frame. On normal exit, raw mode is restored and the alternate screen is left. This does not add recovery from an uncaught exception or process abort, nor change the existing polling cadence.
 
 ## What's next
 
