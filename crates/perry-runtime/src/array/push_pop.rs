@@ -1665,17 +1665,36 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
         }
         return;
     }
-    js_array_set_length(cleaned, new_length);
+    // ArraySetLength returned false: an element that cannot be deleted
+    // stopped the truncation, and `Set(O, "length", n, true)` throws.
+    if let Err(index) = array_set_length(cleaned, new_length) {
+        throw_cannot_delete_array_index(index);
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
+    // The sloppy `Set(O, "length", n, false)`: a blocked truncation is silent.
+    let _ = array_set_length(arr, new_length);
+}
+
+/// ArraySetLength (ECMA-262 §10.4.2.4) for `arr.length = n`.
+///
+/// `Err(index)`: the truncation stopped at an element that cannot be deleted
+/// (a non-configurable index, any element of a sealed Array); `length` is now
+/// `index + 1`. A frozen Array and a read-only `length` leave the Array as it
+/// is and answer `Ok` (the strict entry throws for them before it calls).
+///
+/// Extensibility does not enter: a non-extensible or sealed Array may shrink
+/// (it loses the elements that can be deleted) and may grow (a longer
+/// `length` adds no property).
+fn array_set_length(arr: *mut ArrayHeader, new_length: f64) -> Result<(), u32> {
     if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
-        return;
+        return Ok(());
     }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return;
+        return Ok(());
     }
     let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
@@ -1688,10 +1707,19 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             None => array_object_flags(arr),
         };
         if flags & gc::OBJ_FLAG_FROZEN != 0 {
-            return;
+            return Ok(());
         }
-        if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 && n != cur {
-            return;
+        if n < cur && flags & gc::OBJ_FLAG_SEALED != 0 {
+            // Every element of a sealed Array is non-configurable: the highest
+            // present index at or above `n` stops the truncation. The holes
+            // above it go.
+            if let Some(index) = highest_present_index(arr, n, cur) {
+                if index + 1 < cur {
+                    crate::array::array_truncate_length(arr, index + 1);
+                    refresh_array_numeric_layout(arr);
+                }
+                return Err(index);
+            }
         }
         // `defineProperty(arr, "length", {writable:false})` records the flag
         // in the attrs side table; an ordinary `arr.length = n` write must
@@ -1702,7 +1730,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 .map(|a| !a.writable())
                 .unwrap_or(false)
         {
-            return;
+            return Ok(());
         }
         if n < cur {
             // ArraySetLength deletes indices from high to low. This must clear
@@ -1745,7 +1773,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 // EK §3.1 `length = n`: the prefix stops at the new length.
                 crate::array::ek_lower_prefix(arr, n);
                 rebuild_array_layout(arr);
-                return;
+                return Ok(());
             }
             let scope = gc::RuntimeHandleScope::new();
             let _arr_handle = scope.root_raw_mut_ptr(arr);
@@ -1767,7 +1795,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     if js_array_delete(arr, i) == 0 {
                         (*arr).length = i + 1;
                         refresh_array_numeric_layout(arr);
-                        return;
+                        return Err(i);
                     }
                 }
             }
@@ -1775,7 +1803,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 if js_array_delete(arr, i) == 0 {
                     (*arr).length = i + 1;
                     refresh_array_numeric_layout(arr);
-                    return;
+                    return Err(i);
                 }
             }
             (*arr).length = n;
@@ -1790,10 +1818,15 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             // a dense backing store proportional to the requested length.
             // Test262's descriptor probe writes 2^32-1 here. Keep large sparse
             // extensions logical and let later indexed writes choose storage.
-            if n > (*arr).capacity && n > 1_000_000 {
+            // The store of a sealed or non-extensible Array does not grow
+            // (`js_array_grow` hands it back as it is): its longer `length` is
+            // logical too.
+            if n > (*arr).capacity
+                && (n > 1_000_000 || flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0)
+            {
                 (*arr).length = n;
                 refresh_array_numeric_layout(arr);
-                return;
+                return Ok(());
             }
             // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
@@ -1806,14 +1839,39 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 arr
             };
             if !target.is_null() {
-                for i in cur..n {
+                // Only slots the store has: a growth that was refused leaves a
+                // logical length over the old store.
+                for i in cur..n.min((*target).capacity) {
                     note_array_slot(target, i as usize, value::TAG_HOLE);
                 }
                 (*target).length = n;
+                if n > (*target).capacity {
+                    refresh_array_numeric_layout(target);
+                }
             }
         }
         // n == cur is a no-op.
     }
+    Ok(())
+}
+
+/// The highest index in `[from, to)` that is an own property of `arr`: a
+/// dense non-hole slot, a far element in the named layout or an accessor.
+unsafe fn highest_present_index(arr: *mut ArrayHeader, from: u32, to: u32) -> Option<u32> {
+    let capacity = (*arr).capacity;
+    if to > capacity {
+        let far = array_named_property_names(arr, false)
+            .into_iter()
+            .filter_map(|name| crate::object::canonical_array_index(&name))
+            .filter(|&index| index >= from.max(capacity) && index < to)
+            .max();
+        if far.is_some() {
+            return far;
+        }
+    }
+    (from..to.min(capacity))
+        .rev()
+        .find(|&index| crate::array::indexing::array_has_own_index(arr, index))
 }
 
 /// Delete an element from an array by index, creating a "hole".
