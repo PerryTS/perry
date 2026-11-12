@@ -315,8 +315,8 @@ impl<'a> Gen<'a> {
                 let vals = self.load(v, Key::any());
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
-                // On every value the walk visits (`json_reviver_calls`).
-                self.json_reviver_calls(fx, rv, v, ret);
+                // Stored under its key (`json_reviver_calls`).
+                self.json_reviver_calls(fx, v, ret);
                 // The reviver's results replace values in the parsed tree.
                 let tmp = self.tmp("revived");
                 self.m.edge(ret, tmp);

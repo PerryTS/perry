@@ -125,17 +125,11 @@ impl Model {
     /// each (`Protocol::Json`). The caller makes the two calls
     /// (`toJSON(key)` on `n.seen` and the replacer's with `this` = `n.this`
     /// and arguments `[n.key, n.seen]`) and sends both results to `n.seen`.
-    ///
-    /// `JSON.parse`'s reviver (InternalizeJSONProperty, 25.5.1.1) is called
-    /// the same way on the parsed values (`serialized` false: nothing is
-    /// serialized, no `toJSON` runs), and what it returns is stored into
-    /// the holder under the key (`Gen::json_reviver_calls`).
     pub(crate) fn json_replacer_calls(
         &mut self,
         value: NodeId,
         holder: Tok,
         n: &JsonReplacerNodes,
-        serialized: bool,
     ) {
         self.edge(value, n.seen);
         let key = Key::any();
@@ -146,9 +140,6 @@ impl Model {
         self.add_tok(n.this, holder);
         self.edge(n.seen, n.this);
         self.add_prim(n.key, prim::STR);
-        if !serialized {
-            return;
-        }
         let reason = self.reason("JSON.stringify value");
         self.cons(
             n.seen,
@@ -180,7 +171,7 @@ impl Model {
             this: node(self, "json-holder"),
             key: node(self, "json-key"),
         };
-        self.json_replacer_calls(value, holder, &n, true);
+        self.json_replacer_calls(value, holder, &n);
         let to_json = Key::Named(self.atom("toJSON"));
         for (this, args, callee) in [
             (ThisArg::Node(n.seen), vec![n.key], None),
@@ -322,7 +313,7 @@ impl Gen<'_> {
             this: self.tmp("json-holder"),
             key: self.tmp("json-key"),
         };
-        self.m.json_replacer_calls(value, holder, &n, true);
+        self.m.json_replacer_calls(value, holder, &n);
         let to_json = Key::Named(self.m.atom("toJSON"));
         let tr = self.mcall(n.seen, to_json, vec![n.key], vec![]);
         self.m.edge(tr, n.seen);
@@ -331,42 +322,19 @@ impl Gen<'_> {
         Some(out)
     }
 
-    /// `JSON.parse(text, reviver)`, the rule on: the reviver is called with
-    /// `this` = each holder and (key, value) for every value the walk
-    /// visits (`parsed` and what is reachable from it, the values it
-    /// stored into the holders included), and what it returns is stored
-    /// into the holder under that key (CreateDataProperty, any key) and is
-    /// the result at the root (`ret`, the result of the arm's own call).
-    /// The holders the result is stored into are the parse's own (the
-    /// parsed values' single tokens and the root's).
-    pub(crate) fn json_reviver_calls(
-        &mut self,
-        fx: &Fx,
-        reviver: NodeId,
-        parsed: NodeId,
-        ret: NodeId,
-    ) {
+    /// `JSON.parse(text, reviver)`, the rule on: what the reviver returns
+    /// is stored into its holder under the key (CreateDataProperty,
+    /// InternalizeJSONProperty 25.5.1.1), so a named read of the holder
+    /// sees it (`this.a` after the reviver returned an object for `a`). The
+    /// arm's own call already gives the reviver the holders (`parsed`, the
+    /// parse's single object and array tokens, which also stand for the
+    /// root's `{"": value}`) and every parsed value (their any-key field);
+    /// it stored the result under the element key only.
+    pub(crate) fn json_reviver_calls(&mut self, fx: &Fx, parsed: NodeId, ret: NodeId) {
         if !self.m.reach_json_replacer {
             return;
         }
-        let (holder, _) = self.bobj(fx.module, "json");
-        let n = JsonReplacerNodes {
-            seen: self.tmp("json-seen"),
-            read: self.tmp("json-seen-read"),
-            this: self.tmp("json-holder"),
-            key: self.tmp("json-key"),
-        };
-        self.m.json_replacer_calls(parsed, holder, &n, false);
-        let rr = self.call_value(reviver, ThisArg::Node(n.this), vec![n.key, n.seen], vec![]);
-        self.m.edge(rr, ret);
-        // The result is stored into the parse's own holders: the parsed
-        // objects and arrays and the root's (what it stored is read off
-        // them), not into whatever the reads reach (an intrinsic whose keys
-        // a store would make unknown).
-        let holders = self.tmp("json-reviver-holders");
-        self.m.edge(parsed, holders);
-        self.m.add_tok(holders, holder);
         let key = Key::any();
-        self.store(fx, holders, key, ret, "reviver".to_string(), None, false);
+        self.store(fx, parsed, key, ret, "reviver".to_string(), None, false);
     }
 }
