@@ -717,9 +717,10 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         }
     }
     // Method sites (wpfacts `method_sites`): no typed-array receiver fact
-    // with `PERRY_FACTS_TYPED_ARRAY_SITES=0` or when interpreted code can
+    // with `PERRY_FACTS_TYPED_ARRAY_SITES=0`, no Array-member fact with
+    // `PERRY_FACTS_ARRAY_METHOD_SITES=0`, none when interpreted code can
     // run. Two records under one key hold a fact only when both do.
-    if !interp && perry_wpfacts::typed_array_sites_enabled() {
+    if !interp {
         for (site, key, flags) in &mb.method_sites {
             out.method_sites
                 .entry((*site, key.clone()))

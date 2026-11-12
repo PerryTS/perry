@@ -78,7 +78,7 @@ fn a_folded_node_has_a_site() {
     let pf = solve(None);
     let at = lines(&pf, "at", "site=local:");
     assert!(
-        at.iter().any(|l| l.ends_with("typed_array=1")),
+        at.iter().any(|l| l.contains(" typed_array=1 ")),
         "the folded `b.at(0)` is a proven site: {at:?}"
     );
     assert!(
@@ -101,7 +101,7 @@ fn a_lying_annotation_has_no_fact() {
         let offset = SRC.find(text).unwrap() + 1;
         let l = lines(&pf, "fill", &format!("site=callee:{offset} "));
         assert!(
-            l.len() == 1 && l[0].ends_with(&format!(" typed_array=0({why})")),
+            l.len() == 1 && l[0].contains(&format!(" typed_array=0({why}) ")),
             "{text}: {l:?}"
         );
     }
@@ -113,5 +113,104 @@ fn the_sabotage_claims_every_site() {
     let pf = solve(Some("tasite"));
     for text in ["c.fill(2)", "d.fill(3)", "e.fill(4)"] {
         assert_eq!(callee(&pf, text, "fill"), Some(SITE_TYPED_ARRAY), "{text}");
+    }
+}
+
+/// The Array-member fact (`SITE_ARRAY_MEMBER`): one method name per shape.
+mod array_member {
+    use crate::FactsConfig;
+
+    const SRC: &str = r#"
+class H { k: number[] = [1, 2, 3]; run(): any { return this.k.slice(1); } }
+function folded(a: number[]): number { return a.indexOf(1); }
+function chain(b: number[]): any { return b.fill(0); }
+function own(c: number[]): any { return c.lastIndexOf(2); }
+function lied(d: number[]): any { return d.includes(1); }
+function nullish(e: number[]): any { return e.join(","); }
+function popped(f: number[]): any { return f.pop(); }
+const xs = [1, 2, 3];
+folded(xs);
+chain(xs);
+popped(xs);
+const o: any = [4, 5];
+o.lastIndexOf = () => "OWN";
+own(o);
+lied({ length: 0, includes() { return "FAKE"; } } as any);
+nullish(null as any);
+new H().run();
+"#;
+
+    fn solve(sabotage: Option<&str>) -> crate::ProgramFacts {
+        let module = perry_parser::parse_typescript(SRC, "t.ts").expect("parses");
+        let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+        let cfg = FactsConfig {
+            diagnostics: true,
+            max_work: Some(50_000_000),
+            sabotage: sabotage.map(str::to_string),
+            ..FactsConfig::default()
+        };
+        crate::compute(&[("t.ts".to_string(), &hir)], &cfg)
+    }
+
+    /// The one dump line of the site of method `key`.
+    fn line(pf: &crate::ProgramFacts, key: &str) -> String {
+        let key = format!(" key={key} ");
+        let l: Vec<&String> = pf
+            .rep_probe
+            .iter()
+            .filter(|l| l.starts_with("# method_site ") && l.contains(&key))
+            .collect();
+        assert_eq!(l.len(), 1, "one site of{key}: {l:?}");
+        l[0].clone()
+    }
+
+    /// An Array the program bore, with no own key of the name and no
+    /// prototype write: the folded node by its local, the folded node by its
+    /// receiver read, the unfolded call by its callee, `Expr::ArrayPop`.
+    #[test]
+    fn a_plain_array_site_is_a_member_site() {
+        let pf = solve(None);
+        for (key, site) in [
+            ("indexOf", "site=local:"),
+            ("slice", "site=callee:"),
+            ("fill", "site=callee:"),
+            ("pop", "site=local:"),
+        ] {
+            let l = line(&pf, key);
+            assert!(l.contains(site) && l.ends_with(" array_member=1"), "{l}");
+        }
+    }
+
+    /// An own property of the name, an object behind the annotation and
+    /// `null` are no member sites, each with its reason.
+    #[test]
+    fn an_unproven_receiver_is_no_member_site() {
+        let pf = solve(None);
+        for (key, why) in [
+            ("lastIndexOf", "array_member=0(member:own-or-undescribed)"),
+            ("includes", "array_member=0(receiver:not-array)"),
+            ("join", "array_member=0(receiver:primitive)"),
+        ] {
+            let l = line(&pf, key);
+            assert!(l.ends_with(why), "{l}");
+        }
+        let exported = &pf.bindings_for("t.ts").expect("bindings").method_sites;
+        for key in ["lastIndexOf", "includes", "join"] {
+            assert!(
+                !exported.iter().any(|(_, k, f)| k == key
+                    && f & perry_hir::folded_call::SITE_ARRAY_MEMBER != 0),
+                "{key} is exported as a member site"
+            );
+        }
+    }
+
+    /// The negative control claims every site.
+    #[test]
+    fn the_sabotage_claims_every_site() {
+        let pf = solve(Some("arraysite"));
+        for key in ["lastIndexOf", "includes", "join"] {
+            let l = line(&pf, key);
+            assert!(l.ends_with(" array_member=1"), "{l}");
+        }
     }
 }
