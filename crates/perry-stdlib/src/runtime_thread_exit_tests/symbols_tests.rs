@@ -295,8 +295,31 @@ fn thread_exit_releases_the_threads_dom_exceptions() {
     );
 }
 
-/// Script metadata is reached through the owner's private bag. The main
-/// thread must not find the exited thread's cells in its tracked heap.
+/// Record, at the exiting thread's arena release, that the handback dropped
+/// the block holding the vm.Script owner. Script metadata lives only in the
+/// owner's private bag inside the creating thread's own heap — there is no
+/// separate address-keyed table — so reading the bag after join would
+/// dereference the freed thread's memory. The release report is the safe
+/// observable: the thread's cells cannot outlive a release that returned
+/// their block.
+static VM_SCRIPT_EXIT_PROBE: std::sync::Mutex<(usize, Option<bool>)> =
+    std::sync::Mutex::new((0, None));
+
+fn record_vm_script_release(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
+    let mut probe = VM_SCRIPT_EXIT_PROBE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (key, seen) = *probe;
+    if key != 0 && seen.is_none() && freed.contains(key) {
+        probe.1 = Some(true);
+    }
+}
+
+/// Script metadata is reached through the owner's private bag inside the
+/// creating thread's own heap, so the exited thread's cells cannot still back
+/// an entry the main thread could find. The main thread must observe exactly
+/// that at release time: the thread's arena handback covers the owner's
+/// block, and the dead thread's bag itself is never dereferenced.
 #[test]
 fn thread_exit_releases_the_threads_vm_script_entry() {
     let (script, alive) = std::thread::spawn(|| {
@@ -305,17 +328,23 @@ fn thread_exit_releases_the_threads_vm_script_entry() {
         let script =
             scope.root_nanbox_f64(vm::js_vm_create_script(string_value("1 + 1"), undefined()));
         let script = addr_of(script.get_nanbox_f64());
+        *VM_SCRIPT_EXIT_PROBE.lock().unwrap() = (script, None);
+        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
+            record_vm_script_release,
+        );
         (script, vm::vm_owner_entries_for_test(script).0)
     })
     .join()
     .unwrap();
+    let seen = std::mem::replace(&mut *VM_SCRIPT_EXIT_PROBE.lock().unwrap(), (0, None)).1;
     assert!(
         alive,
         "new vm.Script() must be recorded while its thread lives"
     );
-    assert!(
-        !perry_runtime::node_vm::vm_owner_entries_for_test(script).0,
-        "a dead thread's vm.Script entry outlived its heap"
+    assert_eq!(
+        seen,
+        Some(true),
+        "the thread's release never returned the block holding the vm.Script owner"
     );
 }
 

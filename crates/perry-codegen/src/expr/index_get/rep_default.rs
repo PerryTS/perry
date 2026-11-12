@@ -148,7 +148,7 @@ pub(crate) fn try_lower(
                     in_floor: false,
                     ..read
                 };
-                super::array_rep::witness_read(ctx, &arr, &idx, tested, false);
+                super::array_rep::witness_read(ctx, &arr, &idx, tested, false, read.number);
             }
             let cold_idx = ctx.new_block("arep.default.cold");
             let merge_idx = ctx.new_block("arep.default.merge");

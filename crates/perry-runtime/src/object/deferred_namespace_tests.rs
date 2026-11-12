@@ -259,3 +259,46 @@ fn deferred_namespace_zero_argument_dispatch_performs_property_get() {
     assert!(result.is_err());
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn deferred_namespace_is_classified_after_the_receiver_header() {
+    // The getter, delete and keys decide "deferred namespace" from the class
+    // id of a receiver they already proved a heap object, never from the raw
+    // receiver word: a Number's bits (#14421 boxed them into a forged pointer
+    // and the header read faulted), 0 and denormals all stay primitives.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let name =
+        crate::value::js_get_string_pointer_unified(key(b"options")) as *const crate::StringHeader;
+    for n in [
+        47.0f64,
+        0.5,
+        -3.0,
+        1e300,
+        f64::NAN,
+        f64::INFINITY,
+        0.0,
+        -0.0,
+        5e-324,
+    ] {
+        let word = n.to_bits() as usize as *const ObjectHeader;
+        assert!(
+            js_object_get_field_by_name(word, name).is_undefined(),
+            "{n}"
+        );
+        assert_eq!(js_object_delete_field_value(n, name), 1, "{n}");
+    }
+    let ns = fixture();
+    let raw = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
+    let then =
+        crate::value::js_get_string_pointer_unified(key(b"then")) as *const crate::StringHeader;
+    assert!(js_object_get_field_by_name(raw, then).is_undefined());
+    assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+    let value =
+        crate::value::js_get_string_pointer_unified(key(b"value")) as *const crate::StringHeader;
+    assert_eq!(js_object_get_field_by_name(raw, value).as_number(), 42.0);
+    assert!(CALLS.load(Ordering::SeqCst) > 0);
+    let boxed = ns.to_bits() as usize as *const ObjectHeader;
+    assert_eq!(js_object_get_field_by_name(boxed, value).as_number(), 42.0);
+    let keys = js_object_keys(raw);
+    assert_eq!(crate::array::js_array_length(keys), 1);
+}

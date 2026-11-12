@@ -24,7 +24,7 @@ impl<'a> Gen<'a> {
     /// (`Model::len_index_sites`). One site per node: a second function's
     /// rule on a node the first owns is a capture, which ends the fact.
     fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
-        if self.m.held_lengths && !self.m.len_index_sites.contains_key(&r) {
+        if (self.m.held_lengths || self.m.named_lengths) && !self.m.len_index_sites.contains_key(&r) {
             let site = self.store_site(fx.module, fx.f, what.into(), None, false);
             self.m.len_index_sites.insert(r, site);
         }
@@ -56,6 +56,16 @@ impl<'a> Gen<'a> {
                 );
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
+                // The node is the call `a.pop()`: a receiver that holds its
+                // own `pop` (an own property, an own prototype, an object
+                // behind the Array annotation) runs that method, and its
+                // result is the node's value (codegen: the checked entry
+                // `js_array_m_pop0`).
+                if super::array_method_tiers() {
+                    let pop = self.m.atom("pop");
+                    let ret = self.mcall(a, Key::Named(pop), vec![], vec![]);
+                    self.m.edge(ret, out);
+                }
                 out
             }
             // `Array.prototype.reverse.call(r)`: with the length floor on, a
@@ -202,10 +212,13 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let group = self.new_arr_from(mi, "group", &[it]);
-                // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
-                // a Map (`members::box_chain`).
+                // `Object.groupBy` makes a null-prototype object
+                // (`members::box_chain`); `Map.groupBy` a Map, whose keys and
+                // groups are its contents. Born from groups, not by `new
+                // Map()`, it is never closed (`solve/map_vals.rs`): `get`
+                // reads its contents.
                 let kind = if matches!(e, Expr::MapGroupBy { .. }) {
-                    "mapGroups"
+                    "Map"
                 } else {
                     "groups"
                 };
@@ -213,6 +226,9 @@ impl<'a> Gen<'a> {
                 let fa = self.m.field_any(t);
                 self.m.edge(group, fa);
                 self.m.edge(k, fa);
+                if kind == "Map" {
+                    self.m.map_born(t, false);
+                }
                 n
             }
             Expr::ArrayFrom(x, _) => {

@@ -270,6 +270,51 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
     authoritative_has_own(recv, key)
 }
 
+/// Is `recv` a live ordinary object (`GC_TYPE_OBJECT`: an object literal, a
+/// class instance, an array-like) that is no Array subclass instance?
+///
+/// An Array method site is folded from the receiver's DECLARED type, and a
+/// declared type is a hint: `const a: number[] = obj as any`, a JSON value, a
+/// class instance behind an interface. Such a receiver reads no method from
+/// `%Array.prototype%` unless its own chain says so, and nothing recorded on
+/// the cell proves which method `Get(recv, name)` selects (it may be an own
+/// property, an inherited one, an accessor, or absent: the call's TypeError),
+/// so the site performs the real `Get`. An Array subclass instance keeps the
+/// by-name builtin: its body resolves a class override itself
+/// (`array::subclass`), as before.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value.
+pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
+    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+        return false;
+    };
+    crate::gc_type_is_object!(header.obj_type)
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && !crate::array::is_array_subclass_instance(recv)
+}
+
+/// THE predicate of every Array method site: must `recv.<key>(..)` perform
+/// the real `Get` (`1`), or does `recv` resolve `key` to the realm's
+/// `Array.prototype` builtin (`0`)?
+///
+/// [`js_receiver_may_own_named_method`] answers for the receiver kinds whose
+/// builtins are lowered directly (an Array from its header and named layout,
+/// a modified prototype, a Proxy); this adds the receiver the annotation lied
+/// about ([`array_site_object_receiver`]). The emitted guard of an Array site
+/// asks this (`PERRY_ARRAY_METHOD_TIERS`, default), and the checked entries
+/// (`builtin_proto_entries::array_admits`) apply the same two tests.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_method_needs_get(recv: f64, key: f64) -> i32 {
+    if array_site_object_receiver(recv) {
+        return 1;
+    }
+    js_receiver_may_own_named_method(recv, key)
+}
+
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
 /// correctly for every cell kind and needs no readable ShapeId.
 ///
@@ -572,6 +617,72 @@ pub unsafe extern "C" fn js_array_push_f64_spec_or_own(
     push_or_own_declined(arr, value, own_out)
 }
 
+/// [`js_array_push_f64_spec_or_own`] whose receiver may be no Array at all.
+///
+/// `Expr::ArrayPush` is folded from the receiver's DECLARED type, and a
+/// declared type is a hint: `const a: number[] = obj as any` hands the slow
+/// arms an ordinary object (a class instance, an Array subclass instance, an
+/// array-like with its own `push`). ECMA-262 has no fold: `a.push(v)` is
+/// `Call(Get(a, "push"), a, [v])`. So a live `GC_TYPE_OBJECT` receiver takes
+/// the real `Get` first: a user method (own or inherited) runs and its result
+/// leaves through the own exit; a missing or non-callable `push` throws the
+/// TypeError of the call; the realm's `Array.prototype.push` (an Array
+/// subclass that does not override it, a borrowed builtin) continues with the
+/// builtin append below, as before.
+///
+/// An Array receiver is answered by the entry above, unchanged: the plain
+/// push first, and the probe for a non-Array receiver only once that declined.
+///
+/// # Safety
+/// As [`js_array_push_f64_spec_or_own`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_push_f64_spec_or_method(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> u64 {
+    if !own_out.is_null() {
+        *own_out = 0;
+    }
+    if !crate::object::builtin_proto::pristine(crate::object::builtin_proto::BuiltinProto::Array) {
+        if let Some(bits) = push_patched_proto(arr, value, own_out) {
+            return bits;
+        }
+    }
+    if let Some(head) = crate::array::push_spec_if_plain(arr, value) {
+        return head as u64;
+    }
+    if let Some(bits) = push_object_method(arr, value, own_out) {
+        return bits;
+    }
+    push_or_own_declined(arr, value, own_out)
+}
+
+/// The `Get(recv, "push")` + `Call` of a receiver that is a live ordinary
+/// object (`GC_TYPE_OBJECT`), not an Array. `None` when the receiver is
+/// anything else, or when the selected method is the builtin.
+#[cold]
+#[inline(never)]
+unsafe fn push_object_method(
+    arr: *mut crate::array::ArrayHeader,
+    value: f64,
+    own_out: *mut u32,
+) -> Option<u64> {
+    let header = crate::value::addr_class::try_read_gc_header(arr as usize)?;
+    if !crate::gc_type_is_object!(header.obj_type)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let recv = crate::value::js_nanbox_pointer(arr as i64);
+    let args = [value];
+    let result = crate::object::builtin_proto::redirect_call(recv, b"push", args.as_ptr(), 1)?;
+    if !own_out.is_null() {
+        *own_out = 1;
+    }
+    Some(result.to_bits())
+}
+
 /// [`js_array_push_f64_spec_or_own`] under a modified builtin prototype: the
 /// method actually selected, through `builtin_proto::redirect_call`. `None`
 /// when it is still the builtin, so the caller's plain push runs.
@@ -722,3 +833,11 @@ static KEEP_JS_ARRAY_PUSH_F64_SPEC_OR_OWN: unsafe extern "C" fn(
     f64,
     *mut u32,
 ) -> u64 = js_array_push_f64_spec_or_own;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ARRAY_PUSH_F64_SPEC_OR_METHOD: unsafe extern "C" fn(
+    *mut crate::array::ArrayHeader,
+    f64,
+    *mut u32,
+) -> u64 = js_array_push_f64_spec_or_method;

@@ -16,15 +16,46 @@
 //!   inherited or absent key. The shape proves it, never a declared type;
 //! * an operand of `===`/`!==`, or of `==`/`!=` against `null`/`undefined`
 //!   (an address compare: no code runs);
+//! * the operand of `typeof`, or a value only tested for truthiness or
+//!   discarded: an `if`/`while`/`for` condition, `!q`, `Boolean(q)`, the
+//!   condition of `?:`, an operand of `&&`/`||`/`??` whose result is itself
+//!   only tested, an expression statement. Neither `typeof` nor ToBoolean
+//!   runs code, on any value (a proxy has no trap for either);
+//! * an operand of an operator that converts it (ToPrimitive, ToNumeric,
+//!   ToString: arithmetic, bitwise, unary `-`/`+`/`~`, `<`/`<=`/`>`/`>=`,
+//!   `==`/`!=` against anything but `null`/`undefined`, a template
+//!   substitution, `String(q)`, `Number(q)`) when the proof says the
+//!   binding holds only Numbers ([`FateProof::primitive`]). On an object
+//!   these call `valueOf`/`toString`/`Symbol.toPrimitive` with `q` as
+//!   `this`, which keeps it;
 //! * argument `i` of a call all of whose bodies ([`FateProof::targets`])
 //!   drop their parameter `i`, or of `new C(...)` whose constructor drops it.
 //!
+//! Assigning the binding (`q = v`) keeps nothing of the value it held: `v`
+//! flows into `q`'s binding and is read wherever `q` is read (a tracked
+//! binding assigned into another one keeps the assigned one). A copy
+//! `let r = q` whose `r` is never written in the function (the writes-only
+//! occurrence census `scoped_copies` folds copies by) is `q` under another
+//! name: every read of `r`, a capture included, is a read of `q`.
+//!
 //! `return q` makes it `Returned`; a store `this.k = q` the proof accepts
-//! ([`FateProof::store`]) makes it `KeptByReceiver`. Everything else keeps
+//! ([`FateProof::store`]) makes it `KeptByReceiver`. In the constructor of
+//! a closed object literal's shape class ([`Class::is_literal_shape`]) every
+//! store is one: that check admits only positional `this.<field> = <param>`
+//! stores of a class without accessors, methods or a parent, the literal
+//! defines its own keys (no setter up the chain runs), and codegen lowers
+//! them as direct slot stores into the object being born. Everything else keeps
 //! it: assignment to any local, field, element or global, capture, `throw`,
 //! spread, any operator, a method call on it, a call whose bodies are not all
-//! known, a runtime or built-in call. A function that is not ordinary (async,
-//! generator, defaults, rest, `arguments`, captures) keeps every parameter.
+//! known, a runtime or built-in call. A function whose body the rule does not
+//! walk (async, generator, `arguments`, captures, decorators) keeps every
+//! parameter.
+//!
+//! A default value is evaluated in the callee, before the body, and may read
+//! earlier parameters: its expression is walked as a use like any other. A
+//! rest parameter is a fresh array holding the arguments from its position
+//! on: the rule keeps those arguments (the array's elements are read out as
+//! values the rule does not follow), and walks the body for the others.
 //!
 //! Across calls the fates are a least fixpoint over the call graph: strongly
 //! connected components bottom-up, and inside one component every function
@@ -39,7 +70,7 @@
 use std::collections::HashMap;
 
 use perry_hir::types::{FuncId, LocalId};
-use perry_hir::{Class, CompareOp, Expr, Function, Stmt};
+use perry_hir::{Class, CompareOp, Expr, Function, Stmt, UnaryOp};
 
 /// See the module comment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -171,6 +202,8 @@ pub enum Why {
     Updated,
     /// A mutation that names the binding by id: the node.
     Mutated(&'static str),
+    /// An argument collected by a rest parameter.
+    Rest,
 }
 
 impl std::fmt::Display for Why {
@@ -191,6 +224,7 @@ impl std::fmt::Display for Why {
             Why::Reassigned => f.write_str("reassigned"),
             Why::Updated => f.write_str("updated"),
             Why::Mutated(k) => write!(f, "mutated({k})"),
+            Why::Rest => f.write_str("rest"),
         }
     }
 }
@@ -239,20 +273,45 @@ impl ParamFate {
 pub struct FnFates {
     pub params: Vec<ParamFate>,
     pub this: ParamFate,
+    /// The fate of an argument past the declared parameters.
+    tail: ParamFate,
 }
 
 impl FnFates {
-    fn all(params: usize, fate: ParamFate) -> Self {
+    fn all(f: &Function, fate: ParamFate) -> Self {
         Self {
-            params: vec![fate; params],
+            params: vec![fate; f.params.len()],
             this: fate,
+            tail: tail(f),
         }
     }
 
-    /// The fate of argument position `i`: an argument past the declared
-    /// parameters reaches no binding of an ordinary body (no `arguments`).
+    /// The fate of argument position `i`. An argument past the declared
+    /// parameters reaches a binding only through a rest parameter or
+    /// `arguments` (both keep it).
     pub fn arg(&self, i: usize) -> ParamFate {
-        self.params.get(i).copied().unwrap_or(ParamFate::DROPPED)
+        self.params.get(i).copied().unwrap_or(self.tail)
+    }
+}
+
+/// The fate of an argument past `f`'s declared parameters: kept when a rest
+/// parameter or `arguments` collects it, otherwise no binding sees it.
+fn tail(f: &Function) -> ParamFate {
+    if let Some(k) = f.params.iter().find_map(|p| {
+        if p.arguments_object.is_some() {
+            Some(Why::NotOrdinary("arguments"))
+        } else if p.is_rest {
+            Some(Why::Rest)
+        } else {
+            None
+        }
+    }) {
+        ParamFate {
+            why: Some(k),
+            ..ParamFate::KEPT
+        }
+    } else {
+        ParamFate::DROPPED
     }
 }
 
@@ -270,6 +329,12 @@ pub trait FateProof {
     fn store(&self, func: FuncId, property: &str) -> Option<Proof>;
     /// Every body a call to `callee` can run, or `None` when not all known.
     fn targets(&self, callee: &Expr) -> Option<(Vec<FuncId>, Proof)>;
+    /// Does the binding `local` of `func` hold only primitives that are no
+    /// heap object (Numbers), so no conversion of it runs code? `None` when
+    /// not proven.
+    fn primitive(&self, _func: FuncId, _local: LocalId) -> Option<Proof> {
+        None
+    }
 }
 
 /// The answers known without whole-program facts: no read or store is
@@ -324,6 +389,11 @@ impl Fates {
         }
         let mut construction = HashMap::new();
         let mut bodies: Vec<&Function> = functions.to_vec();
+        let literal: std::collections::HashSet<FuncId> = classes
+            .iter()
+            .filter(|c| c.is_literal_shape())
+            .filter_map(|c| c.constructor.as_ref().map(|k| k.id))
+            .collect();
         for class in classes {
             if let Some(ctor) = &class.constructor {
                 bodies.push(ctor);
@@ -364,7 +434,7 @@ impl Fates {
         for component in sccs(&edges) {
             for &i in &component {
                 let f = bodies[i];
-                let start = match not_ordinary(f) {
+                let start = match not_walkable(f) {
                     None => ParamFate::DROPPED,
                     Some(k) => ParamFate {
                         why: Some(Why::NotOrdinary(k)),
@@ -373,16 +443,16 @@ impl Fates {
                 };
                 fates
                     .by_fn
-                    .insert(f.id, FnFates::all(f.params.len(), start));
+                    .insert(f.id, FnFates::all(f, start));
             }
             loop {
                 let mut moved = false;
                 for &i in &component {
                     let f = bodies[i];
-                    if !ordinary(f) {
+                    if not_walkable(f).is_some() {
                         continue;
                     }
-                    let next = body_fates(f, proof, &fates);
+                    let next = walk_body(f, proof, &fates, literal.contains(&f.id));
                     if fates.by_fn.get(&f.id) != Some(&next) {
                         fates.by_fn.insert(f.id, next);
                         moved = true;
@@ -425,12 +495,17 @@ impl Fates {
     }
 }
 
+/// `effects.rs`'s question (closed construction, the inliner): a body the
+/// fate walks, without default or rest parameters.
 pub(crate) fn ordinary(f: &Function) -> bool {
-    not_ordinary(f).is_none()
+    not_walkable(f).is_none() && f.params.iter().all(|p| p.default.is_none() && !p.is_rest)
 }
 
-/// The first part that makes `f` not ordinary, `None` when it is.
-fn not_ordinary(f: &Function) -> Option<&'static str> {
+/// The first part that keeps the fate from walking `f`, `None` when it
+/// walks it: a body that suspends, captures, is decorated, or sees its
+/// arguments through `arguments` (in a sloppy function `arguments[i]` and
+/// parameter `i` are one binding).
+fn not_walkable(f: &Function) -> Option<&'static str> {
     if f.is_async {
         return Some("async");
     }
@@ -444,12 +519,6 @@ fn not_ordinary(f: &Function) -> Option<&'static str> {
         return Some("decorators");
     }
     for p in &f.params {
-        if p.default.is_some() {
-            return Some("default");
-        }
-        if p.is_rest {
-            return Some("rest");
-        }
         if p.arguments_object.is_some() {
             return Some("arguments");
         }
@@ -462,14 +531,34 @@ fn not_ordinary(f: &Function) -> Option<&'static str> {
 
 /// The fates `f`'s body gives its parameters, with callees read from `known`.
 pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates {
+    walk_body(f, proof, known, false)
+}
+
+/// [`body_fates`]; `literal_ctor`: `f` constructs a literal shape, whose
+/// `this` stores are own data stores by construction.
+fn walk_body(f: &Function, proof: &dyn FateProof, known: &Fates, literal_ctor: bool) -> FnFates {
     let mut walk = Walk {
+        literal_ctor,
         func: f.id,
         params: f.params.iter().map(|p| p.id).collect(),
-        out: FnFates::all(f.params.len(), ParamFate::DROPPED),
+        aliases: aliases(f),
+        out: FnFates::all(f, ParamFate::DROPPED),
         proof,
         known,
         parent: Parent::Stmt("Expr"),
     };
+    for (i, p) in f.params.iter().enumerate() {
+        if p.is_rest {
+            walk.keep(Slot::Param(i), |_| Why::Rest);
+        }
+    }
+    // Defaults run in the callee before the body, in parameter order.
+    for p in &f.params {
+        if let Some(d) = &p.default {
+            walk.at("Default");
+            walk.expr(d);
+        }
+    }
     for stmt in &f.body {
         walk.stmt(stmt);
     }
@@ -477,7 +566,7 @@ pub fn body_fates(f: &Function, proof: &dyn FateProof, known: &Fates) -> FnFates
 }
 
 /// Which tracked binding an expression is: a parameter, or `this`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Slot {
     Param(usize),
     This,
@@ -492,8 +581,12 @@ enum Parent<'e> {
 }
 
 struct Walk<'a, 'e> {
+    /// The constructor of a literal shape ([`Class::is_literal_shape`]).
+    literal_ctor: bool,
     func: FuncId,
     params: Vec<LocalId>,
+    /// Never-written copies of a parameter: (copy, parameter index).
+    aliases: Vec<(LocalId, usize)>,
     out: FnFates,
     proof: &'a dyn FateProof,
     known: &'a Fates,
@@ -509,8 +602,22 @@ impl<'e> Walk<'_, 'e> {
         }
     }
 
+    /// `this.property = v` writes an own data slot and runs no code: by
+    /// construction in a literal shape's constructor, else the proof's.
+    fn store(&self, property: &str) -> Option<Proof> {
+        if self.literal_ctor {
+            Some(Proof::Proven)
+        } else {
+            self.proof.store(self.func, property)
+        }
+    }
+
     fn param(&self, id: LocalId) -> Option<Slot> {
-        self.params.iter().position(|p| *p == id).map(Slot::Param)
+        self.params
+            .iter()
+            .position(|p| *p == id)
+            .or_else(|| self.aliases.iter().find(|(q, _)| *q == id).map(|(_, i)| *i))
+            .map(Slot::Param)
     }
 
     fn fate_mut(&mut self, slot: Slot) -> &mut ParamFate {
@@ -588,13 +695,19 @@ impl<'e> Walk<'_, 'e> {
                 }
             },
             Stmt::Return(None) => {}
+            // A copy's declaration: the copy is the parameter.
+            Stmt::Let {
+                id,
+                init: Some(Expr::LocalGet(_)),
+                ..
+            } if self.aliases.iter().any(|(q, _)| q == id) => {}
             Stmt::Let { init, .. } => {
                 self.at("Let");
                 self.opt(init)
             }
             Stmt::Expr(e) => {
                 self.at("Expr");
-                self.expr(e)
+                self.test(e)
             }
             Stmt::Throw(e) => {
                 self.at("Throw");
@@ -606,7 +719,7 @@ impl<'e> Walk<'_, 'e> {
                 else_branch,
             } => {
                 self.at("If");
-                self.expr(condition);
+                self.test(condition);
                 self.stmts(then_branch);
                 if let Some(b) = else_branch {
                     self.stmts(b);
@@ -614,7 +727,7 @@ impl<'e> Walk<'_, 'e> {
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 self.at("While");
-                self.expr(condition);
+                self.test(condition);
                 self.stmts(body);
             }
             Stmt::For {
@@ -627,7 +740,9 @@ impl<'e> Walk<'_, 'e> {
                     self.stmt(s);
                 }
                 self.at("For");
-                self.opt(condition);
+                if let Some(c) = condition {
+                    self.test(c);
+                }
                 self.at("For");
                 self.opt(update);
                 self.stmts(body);
@@ -665,6 +780,78 @@ impl<'e> Walk<'_, 'e> {
             | Stmt::PreallocateBoxes(_)
             | Stmt::PreallocateTdzBoxes(_)
             | Stmt::ReleaseBoxes(_) => {}
+        }
+    }
+
+    /// `e` whose value is only tested for truthiness or discarded: a
+    /// binding there drops (ToBoolean runs no code), and so does each value
+    /// `&&`/`||`/`??`/`?:` can yield.
+    fn test(&mut self, e: &'e Expr) {
+        if let Some(s) = self.slot(e) {
+            self.raise(s, Fate::Dropped, Proof::Proven);
+            return;
+        }
+        match e {
+            Expr::Logical { left, right, .. } => {
+                self.test_sub(e, left);
+                self.test_sub(e, right);
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(e, condition);
+                self.test_sub(e, then_expr);
+                self.test_sub(e, else_expr);
+            }
+            _ => self.expr(e),
+        }
+    }
+
+    /// [`Self::test`] of `e` as a child of `parent`.
+    fn test_sub(&mut self, parent: &'e Expr, e: &'e Expr) {
+        let saved = std::mem::replace(&mut self.parent, Parent::Expr(parent));
+        self.test(e);
+        self.parent = saved;
+    }
+
+    /// `e`, the operand of an operator that converts it (and on an object
+    /// calls its `valueOf`/`toString`/`Symbol.toPrimitive`): a binding the
+    /// proof says holds only Numbers drops, anything else is walked.
+    fn converted(&mut self, parent: &'e Expr, e: &'e Expr) {
+        if let Expr::LocalGet(id) = e {
+            if let Some(s) = self.param(*id) {
+                if let Some(p) = self.proof.primitive(self.func, *id) {
+                    self.raise(s, Fate::Dropped, p);
+                    return;
+                }
+            }
+        }
+        self.sub(parent, e);
+    }
+
+    /// `value` assigned to the binding of `s`: what can flow into it from
+    /// `s` itself stays `s`'s; anything else is walked as a use.
+    fn into(&mut self, parent: &'e Expr, s: Slot, value: &'e Expr) {
+        if self.slot(value) == Some(s) {
+            return;
+        }
+        match value {
+            Expr::Logical { left, right, .. } => {
+                self.into(value, s, left);
+                self.into(value, s, right);
+            }
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(value, condition);
+                self.into(value, s, then_expr);
+                self.into(value, s, else_expr);
+            }
+            _ => self.sub(parent, value),
         }
     }
 
@@ -714,7 +901,7 @@ impl<'e> Walk<'_, 'e> {
                 value,
                 ..
             } if matches!(object.as_ref(), Expr::This) => {
-                match self.proof.store(self.func, property) {
+                match self.store(property) {
                     Some(p) => match self.slot(value) {
                         Some(s) => self.raise(s, Fate::KeptByReceiver, p),
                         None => self.sub(e, value),
@@ -738,7 +925,7 @@ impl<'e> Walk<'_, 'e> {
                 let Expr::String(name) = key.as_ref() else {
                     unreachable!("matched above")
                 };
-                match (self.proof.store(self.func, name), self.slot(value)) {
+                match (self.store(name), self.slot(value)) {
                     (Some(p), Some(s)) => self.raise(s, Fate::KeptByReceiver, p),
                     (Some(_), None) => self.sub(e, value),
                     (None, _) => {
@@ -756,10 +943,36 @@ impl<'e> Walk<'_, 'e> {
                 for side in [left, right] {
                     match self.slot(side) {
                         Some(s) if address => self.raise(s, Fate::Dropped, Proof::Proven),
-                        _ => self.sub(e, side),
+                        _ => self.converted(e, side),
                     }
                 }
             }
+            Expr::TypeOf(x) => match self.slot(x) {
+                Some(s) => self.raise(s, Fate::Dropped, Proof::Proven),
+                None => self.sub(e, x),
+            },
+            Expr::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => self.test_sub(e, operand),
+            Expr::BooleanCoerce(x) => self.test_sub(e, x),
+            Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                self.test_sub(e, condition);
+                self.sub(e, then_expr);
+                self.sub(e, else_expr);
+            }
+            Expr::Binary { left, right, .. } => {
+                self.converted(e, left);
+                self.converted(e, right);
+            }
+            Expr::Unary { operand, .. }
+            | Expr::TemplateStringCoerce(operand)
+            | Expr::StringCoerce(operand)
+            | Expr::NumberCoerce(operand) => self.converted(e, operand),
             Expr::Call { callee, args, .. } => {
                 let targets = self.proof.targets(callee);
                 // The callee itself: a method call keeps its receiver unless
@@ -833,10 +1046,10 @@ impl<'e> Walk<'_, 'e> {
             // The variants that name a local by id rather than through a
             // `LocalGet` child: a reassignment, `q++` (which runs `valueOf`),
             // an array or set mutation of it.
-            Expr::LocalSet(id, value) => {
-                self.keep_id(*id, Why::Reassigned);
-                self.sub(e, value);
-            }
+            Expr::LocalSet(id, value) => match self.param(*id) {
+                Some(s) => self.into(e, s, value),
+                None => self.sub(e, value),
+            },
             Expr::Update { id, .. } => self.keep_id(*id, Why::Updated),
             Expr::ArrayPop(id) => self.keep_id(*id, Why::Mutated("ArrayPop")),
             Expr::ArrayShift(id) => self.keep_id(*id, Why::Mutated("ArrayShift")),
@@ -870,6 +1083,79 @@ impl<'e> Walk<'_, 'e> {
             self.sub(e, c);
         }
     }
+}
+
+/// The never-written copies `let r = q` of a parameter (or of an earlier
+/// copy) in `f`'s statement lists, outside closures: (copy, parameter
+/// index). Never written: no `LocalSet`/`Update` of `r` anywhere in `f`,
+/// its defaults or its closures (`local_occurrences`' writes census).
+fn aliases(f: &Function) -> Vec<(LocalId, usize)> {
+    fn scan(
+        stmts: &[Stmt],
+        f: &Function,
+        writes: &HashMap<LocalId, usize>,
+        out: &mut Vec<(LocalId, usize)>,
+    ) {
+        for s in stmts {
+            match s {
+                Stmt::Let {
+                    id,
+                    init: Some(Expr::LocalGet(p)),
+                    ..
+                } if !writes.contains_key(id) && f.params.iter().all(|q| q.id != *id) => {
+                    let i = f
+                        .params
+                        .iter()
+                        .position(|q| q.id == *p)
+                        .or_else(|| out.iter().find(|(q, _)| q == p).map(|(_, i)| *i));
+                    if let Some(i) = i {
+                        out.push((*id, i));
+                    }
+                }
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    scan(then_branch, f, writes, out);
+                    if let Some(b) = else_branch {
+                        scan(b, f, writes, out);
+                    }
+                }
+                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => scan(body, f, writes, out),
+                Stmt::For { init, body, .. } => {
+                    if let Some(s) = init {
+                        scan(std::slice::from_ref(s.as_ref()), f, writes, out);
+                    }
+                    scan(body, f, writes, out);
+                }
+                Stmt::Labeled { body, .. } => scan(std::slice::from_ref(body.as_ref()), f, writes, out),
+                Stmt::Try {
+                    body,
+                    catch,
+                    finally,
+                } => {
+                    scan(body, f, writes, out);
+                    if let Some(c) = catch {
+                        scan(&c.body, f, writes, out);
+                    }
+                    if let Some(b) = finally {
+                        scan(b, f, writes, out);
+                    }
+                }
+                Stmt::Switch { cases, .. } => {
+                    for c in cases {
+                        scan(&c.body, f, writes, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let writes = crate::local_occurrences::count_function_writes(f);
+    let mut out = Vec::new();
+    scan(&f.body, f, &writes, &mut out);
+    out
 }
 
 /// Which part of a store `child` is: `.object` (stored into), `.value`
@@ -934,6 +1220,9 @@ fn callees(
         }
         false
     };
+    for d in f.params.iter().filter_map(|p| p.default.as_ref()) {
+        each_expr(d, &mut visit);
+    }
     for s in &f.body {
         perry_hir::walker::stmt_any_expr(s, &mut |e| {
             each_expr(e, &mut visit);

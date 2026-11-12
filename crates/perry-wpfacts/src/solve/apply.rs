@@ -51,7 +51,7 @@ impl Model {
                 };
                 for &t in toks {
                     if let Some(at) = at {
-                        self.len_event(t, at, false);
+                        self.len_event_through(t, at, false, n);
                     }
                     self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
@@ -552,7 +552,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
-                        self.len_event(t, u32::MAX, false);
+                        self.len_event_through(t, u32::MAX, false, NO_NODE);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
@@ -702,6 +702,7 @@ impl Model {
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
                     self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.note_unnamed_set(target);
                 }
             }
             Cons::CreateProto { reason } => {

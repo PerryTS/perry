@@ -142,8 +142,10 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
     match lit {
         ast::Lit::Num(n) => {
             let value = n.value;
-            // Check if this is an integer that fits in i64
-            if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+            // An integer that fits in i64. `i64::MAX as f64` is 2^63, which
+            // does not (`as i64` saturates it to 2^63 - 1, whose low 32 bits
+            // are -1, not 0): the upper bound is exclusive.
+            if value.fract() == 0.0 && value >= i64::MIN as f64 && value < i64::MAX as f64 {
                 Ok(Expr::Integer(value as i64))
             } else {
                 Ok(Expr::Number(value))

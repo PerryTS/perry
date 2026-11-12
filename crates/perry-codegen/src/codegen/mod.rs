@@ -3020,7 +3020,12 @@ fn lower_module(
             }
         }
     }
-    let _life_census = crate::collectors::life_census::register(hir, &opts.program_facts.elision);
+    // The births pre-pass (`module_birth_shapes`) runs this function up to
+    // the layout emission below and lowers no body: registering there wrote
+    // every module's parameter rows twice.
+    let _life_census = (!collect_births)
+        .then(|| crate::collectors::life_census::register(hir, &opts.program_facts.elision))
+        .flatten();
     let mut cross_module = CrossModuleCtx {
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,

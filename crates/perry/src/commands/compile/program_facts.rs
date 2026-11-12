@@ -716,6 +716,16 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
         }
     }
+    // Quiet sites (wpfacts `quiet_sites`): empty with
+    // `PERRY_FACTS_QUIET_SITES=0`, and when interpreted code can run.
+    let quiet = !interp && perry_wpfacts::quiet_sites_enabled();
+    if quiet {
+        out.quiet_reads.extend(mb.quiet_reads.iter().cloned());
+        out.quiet_elements.extend(mb.quiet_elements.iter().copied());
+        out.primitive_reads.extend(mb.primitive_reads.iter().cloned());
+        out.primitive_elements
+            .extend(mb.primitive_elements.iter().copied());
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {
@@ -787,6 +797,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if b.stable_length {
                 out.stable_length_locals.insert(*id, b.stable_front);
+            }
+            if b.named_length {
+                out.named_length_locals.insert(*id);
+            }
+            // A primitive and no object at all: an operator converts
+            // nothing of it (`perry_codegen` `quiet`).
+            // The negative control `quiet` claims it for every local.
+            if quiet
+                && (!b.other && b.class_ids.is_empty() && b.prims != 0
+                    || pf.sabotage.as_deref() == Some("quiet"))
+            {
+                out.primitive_locals.insert(*id);
             }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());

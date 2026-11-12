@@ -1508,6 +1508,10 @@ pub(crate) fn lower_let(
                     init_expr,
                     ExpectedNativeRep::U32,
                 )?)
+            } else if crate::codegen::facts_int32_locals::checked_init(ctx, id) {
+                // Check mode: a proven local's initializer is lowered as a
+                // value and witnessed below (`accept_let_value`).
+                None
             } else if matches!(
                 refined_ty,
                 perry_hir::types::Type::Number | perry_hir::types::Type::Int32

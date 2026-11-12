@@ -14,6 +14,8 @@ struct TestProof {
     bets: HashMap<(FuncId, &'static str), u64>,
     /// `<any>.<key>(..)` calls resolved to one body.
     methods: Vec<(&'static str, FuncId)>,
+    /// Locals proven to hold only Numbers.
+    numbers: HashSet<u32>,
 }
 
 impl TestProof {
@@ -49,6 +51,9 @@ impl FateProof for TestProof {
             }
         }
         direct_target(callee)
+    }
+    fn primitive(&self, _: FuncId, local: u32) -> Option<Proof> {
+        self.numbers.contains(&local).then_some(Proof::Proven)
     }
 }
 
@@ -457,16 +462,20 @@ fn why_not_ordinary_names_the_part() {
     assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "not-ordinary(async)");
     let mut f2 = func(1, &[10], vec![]);
     f2.params[0].is_rest = true;
-    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "not-ordinary(rest)");
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "rest");
 }
 
 #[test]
 fn why_use_names_the_parent_node() {
     let f1 = func(1, &[10], vec![ret(add(lg(10), Expr::Number(1.0)))]);
     assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Binary)");
-    let f2 = func(1, &[10], vec![if_(lg(10), vec![])]);
-    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "use(If)");
-    let f3 = func(1, &[10], vec![let_(11, lg(10))]);
+    let f2 = func(1, &[10], vec![Stmt::Throw(get(lg(10), "x"))]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "read(x)");
+    let f3 = func(
+        1,
+        &[10],
+        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::Number(1.0))))],
+    );
     assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(Let)");
 }
 
@@ -487,9 +496,9 @@ fn why_first_use_wins() {
     let f1 = func(
         1,
         &[10],
-        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
+        vec![Stmt::Throw(lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
     );
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Let)");
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Throw)");
 }
 
 #[test]
@@ -580,8 +589,17 @@ fn why_captured_and_captures_this() {
 
 #[test]
 fn why_reassigned_updated_mutated() {
-    let f1 = func(1, &[10], vec![Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0))))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "reassigned");
+    // `q = 1` keeps nothing of q's value (rule c); `q = v; kept.push(q)`
+    // keeps q's binding, so the incoming value is (conservatively) kept.
+    let f1 = func(
+        1,
+        &[10],
+        vec![
+            Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::Number(1.0)))),
+            push(lg(10)),
+        ],
+    );
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
     let up = Expr::Update {
         id: 10,
         op: perry_hir::UpdateOp::Increment,
@@ -599,4 +617,332 @@ fn name_of_expr_is_the_variant() {
     assert_eq!(Name::of_expr(&lg(3)).as_str(), "LocalGet");
     assert_eq!(Name::of_expr(&get(lg(3), "k")).as_str(), "PropertyGet");
     assert_eq!(Name::new(&"x".repeat(40)).as_str().len(), 31);
+}
+
+// ─── FATE2 rule a: bodies with default and rest parameters are walked ───
+
+/// `function f(a, b = a.x) { return b.x }`.
+fn with_default(default: Expr, body: Vec<Stmt>) -> Function {
+    let mut f = func(1, &[10, 11], body);
+    f.params[1].default = Some(default);
+    f
+}
+
+#[test]
+fn a_default_that_reads_drops() {
+    let f = with_default(get(lg(10), "x"), vec![ret(get(lg(11), "x"))]);
+    assert!(!super::ordinary(&f), "effects.rs still sees a default as not ordinary");
+    let f = fates(&[f], &TestProof::reading(&[(1, "x")]));
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    assert!(f.of_fn(1).unwrap().params[1].proven_dropped());
+}
+
+#[test]
+fn a_default_that_keeps_keeps() {
+    // `b = kept.push(a)`: the default runs in the callee and keeps `a`.
+    let f = with_default(call(get(lg(900), "push"), vec![lg(10)]), vec![]);
+    let f = fates(&[f], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "arg-unresolved(PropertyGet.push)");
+    // `b = a; kept.push(b)`: `a` flows into `b`.
+    let f = with_default(lg(10), vec![push(lg(11))]);
+    let f = fates(&[f], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "use(Default)");
+    assert_eq!(fate(&f, 1, 1), Fate::Kept);
+}
+
+#[test]
+fn a_call_in_a_default_is_an_edge() {
+    // `g(q) { kept.push(q) }`, `f(a, b = g(a)) {}`: `a` is kept through g.
+    let g = func(2, &[20], vec![push(lg(20))]);
+    let f = with_default(call(Expr::FuncRef(2), vec![lg(10)]), vec![]);
+    let f = fates(&[f, g], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "arg-to(Kept)");
+}
+
+#[test]
+fn a_rest_parameter_keeps_what_it_collects_and_the_body_is_walked() {
+    // `function f(a, ...r) { return a.x }`
+    let mut f = func(1, &[10, 11], vec![ret(get(lg(10), "x"))]);
+    f.params[1].is_rest = true;
+    let f = fates(&[f], &TestProof::reading(&[(1, "x")]));
+    let ff = f.of_fn(1).unwrap();
+    assert!(ff.params[0].proven_dropped());
+    assert_eq!(why(&f, 1, 1), "rest");
+    for i in 1..5 {
+        assert_eq!(ff.arg(i).fate, Fate::Kept, "argument {i} lands in the rest array");
+    }
+}
+
+#[test]
+fn arguments_past_the_parameters_reach_arguments() {
+    // `function f(a) { ... arguments ... }`: HIR appends the hidden
+    // `arguments` parameter; an argument past it is still `arguments[i]`.
+    let mut f = func(1, &[10, 11], vec![]);
+    f.params[1].is_rest = true;
+    f.params[1].arguments_object = Some(perry_hir::ArgumentsObjectMeta {
+        strict: false,
+        simple_parameters: true,
+        mapped_parameter_ids: vec![(0, 10)],
+        restricted_callee: false,
+    });
+    let f = fates(&[f], &TestProof::default());
+    let ff = f.of_fn(1).unwrap();
+    assert_eq!(ff.params[0].fate, Fate::Kept, "sloppy arguments[0] aliases a");
+    assert_eq!(ff.arg(7).fate, Fate::Kept);
+    // Without rest or `arguments` an extra argument reaches no binding.
+    let f = fates(&[func(1, &[10], vec![])], &TestProof::default());
+    assert!(f.of_fn(1).unwrap().arg(3).proven_dropped());
+}
+
+// ─── FATE2 rule b: typeof, truthiness and conversions of a primitive ────
+
+fn logical(op: perry_hir::LogicalOp, l: Expr, r: Expr) -> Expr {
+    Expr::Logical {
+        op,
+        left: Box::new(l),
+        right: Box::new(r),
+    }
+}
+
+fn not(e: Expr) -> Expr {
+    Expr::Unary {
+        op: perry_hir::UnaryOp::Not,
+        operand: Box::new(e),
+    }
+}
+
+fn cond(c: Expr, t: Expr, e: Expr) -> Expr {
+    Expr::Conditional {
+        condition: Box::new(c),
+        then_expr: Box::new(t),
+        else_expr: Box::new(e),
+    }
+}
+
+#[test]
+fn typeof_and_truthiness_drop() {
+    use perry_hir::LogicalOp::{And, Coalesce, Or};
+    let body = vec![
+        // if (typeof a === "string") {}
+        if_(eq(Expr::TypeOf(Box::new(lg(10))), Expr::String("string".into())), vec![]),
+        // if (a) {}  while (!a) {}
+        if_(lg(10), vec![]),
+        Stmt::While {
+            condition: not(lg(10)),
+            body: vec![Stmt::Break],
+        },
+        // let x = a ? 1 : 2; let y = Boolean(b)
+        let_(12, cond(lg(10), Expr::Number(1.0), Expr::Number(2.0))),
+        let_(13, Expr::BooleanCoerce(Box::new(lg(11)))),
+        // if (a || b && (a ?? b)) {}  a && b;
+        if_(logical(Or, lg(10), logical(And, lg(11), logical(Coalesce, lg(10), lg(11)))), vec![]),
+        Stmt::Expr(logical(And, lg(10), lg(11))),
+        Stmt::Expr(lg(11)),
+    ];
+    let f = fates(&[func(1, &[10, 11], body)], &TestProof::default());
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    assert!(f.of_fn(1).unwrap().params[1].proven_dropped());
+}
+
+#[test]
+fn a_value_that_flows_on_from_a_test_keeps() {
+    use perry_hir::LogicalOp::{Coalesce, Or};
+    // let x = a || {}; kept.push(x): the result of `||` is `a` itself.
+    let f1 = func(1, &[10], vec![let_(12, logical(Or, lg(10), Expr::Object(vec![]))), push(lg(12))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Logical)");
+    // kept.push(a ?? b)
+    let f2 = func(1, &[10, 11], vec![push(logical(Coalesce, lg(10), lg(11)))]);
+    let f2 = fates(&[f2], &TestProof::default());
+    assert_eq!(why(&f2, 1, 0), "use(Logical)");
+    assert_eq!(why(&f2, 1, 1), "use(Logical)");
+    // return c ? a : 0, in value position
+    let f3 = func(1, &[10, 11], vec![push(cond(lg(11), lg(10), Expr::Number(0.0)))]);
+    let f3 = fates(&[f3], &TestProof::default());
+    assert_eq!(why(&f3, 1, 0), "use(Conditional)");
+    assert!(f3.of_fn(1).unwrap().params[1].proven_dropped(), "the condition is only tested");
+}
+
+#[test]
+fn a_conversion_drops_a_proven_number_only() {
+    let numbers = TestProof {
+        numbers: [10].into_iter().collect(),
+        ..TestProof::default()
+    };
+    let lt = |l, r| Expr::Compare {
+        op: CompareOp::Lt,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let loose = |l, r| Expr::Compare {
+        op: CompareOp::LooseEq,
+        left: Box::new(l),
+        right: Box::new(r),
+    };
+    let body = || {
+        vec![
+            let_(12, add(lg(10), Expr::Number(1.0))),
+            let_(13, lt(lg(10), Expr::Number(3.0))),
+            let_(14, loose(lg(10), Expr::Number(3.0))),
+            let_(15, Expr::TemplateStringCoerce(Box::new(lg(10)))),
+            let_(
+                16,
+                Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(lg(10)),
+                },
+            ),
+        ]
+    };
+    let f = fates(&[func(1, &[10], body())], &numbers);
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+    // Not proven: `a + 1`, `a < 3`, `a == 3`, `${a}`, `-a` call user code.
+    let f = fates(&[func(1, &[10], body())], &TestProof::default());
+    assert_eq!(why(&f, 1, 0), "use(Binary)");
+    for (e, w) in [
+        (lt(lg(10), Expr::Number(3.0)), "use(Compare)"),
+        (loose(lg(10), Expr::Number(3.0)), "use(Compare)"),
+        (Expr::TemplateStringCoerce(Box::new(lg(10))), "use(TemplateStringCoerce)"),
+    ] {
+        let f = fates(&[func(1, &[10], vec![let_(12, e)])], &TestProof::default());
+        assert_eq!(why(&f, 1, 0), w);
+    }
+}
+
+// ─── FATE2 rule c: reassignment and never-written copies ────────────────
+
+fn assign(id: u32, v: Expr) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(id, Box::new(v)))
+}
+
+#[test]
+fn reassigning_a_parameter_keeps_nothing() {
+    use perry_hir::LogicalOp::{Coalesce, Or};
+    // a = a || {}; b = b ?? (c ? b : 0); return a.x + b.x
+    let body = vec![
+        assign(10, logical(Or, lg(10), Expr::Object(vec![]))),
+        assign(11, logical(Coalesce, lg(11), cond(lg(12), lg(11), Expr::Number(0.0)))),
+        ret(add(get(lg(10), "x"), get(lg(11), "x"))),
+    ];
+    let f = fates(&[func(1, &[10, 11, 12], body)], &TestProof::reading(&[(1, "x")]));
+    for i in 0..3 {
+        assert!(f.of_fn(1).unwrap().params[i].proven_dropped(), "param {i}");
+    }
+}
+
+#[test]
+fn assigning_one_parameter_into_another_keeps_it() {
+    // a = b || a; kept.push(a): b flows into a's binding.
+    let body = vec![
+        assign(10, logical(perry_hir::LogicalOp::Or, lg(11), lg(10))),
+        push(lg(10)),
+    ];
+    let f = fates(&[func(1, &[10, 11], body)], &TestProof::default());
+    assert_eq!(why(&f, 1, 1), "use(Logical)");
+    assert_eq!(fate(&f, 1, 0), Fate::Kept);
+}
+
+#[test]
+fn a_never_written_copy_is_the_parameter() {
+    // const q = a; const r = q; if (r) {} return q.x
+    let body = vec![
+        let_(20, lg(10)),
+        let_(21, lg(20)),
+        if_(lg(21), vec![]),
+        ret(get(lg(20), "x")),
+    ];
+    let f = fates(&[func(1, &[10], body)], &TestProof::reading(&[(1, "x")]));
+    assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
+}
+
+#[test]
+fn a_copy_that_keeps_keeps_the_parameter() {
+    // const q = a; kept.push(q)
+    let f1 = func(1, &[10], vec![let_(20, lg(10)), push(lg(20))]);
+    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+    // const g = () => q; const q = a: the capture reads the copy.
+    let mut c = closure(vec![ret(lg(20))], false);
+    if let Expr::Closure { captures, .. } = &mut c {
+        captures.push(20);
+    }
+    let f2 = func(1, &[10], vec![let_(30, c), let_(20, lg(10))]);
+    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "captured");
+    // let q = a; q = b; return q.x: q is written, so it is a plain local.
+    let f3 = func(1, &[10, 11], vec![let_(20, lg(10)), assign(20, lg(11)), ret(get(lg(20), "x"))]);
+    let f3 = fates(&[f3], &TestProof::reading(&[(1, "x")]));
+    assert_eq!(why(&f3, 1, 0), "use(Let)");
+    assert_eq!(why(&f3, 1, 1), "use(LocalSet)");
+    // a copy inside a nested list counts too: if (c) { const q = a; kept.push(q) }
+    let f4 = func(1, &[10, 11], vec![if_(lg(11), vec![let_(20, lg(10)), push(lg(20))])]);
+    assert_eq!(why(&fates(&[f4], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+}
+
+// ─── FATE2 rule d: a literal shape's constructor stores into the new object
+
+fn shape_class(name: &str, extra: Vec<Stmt>) -> perry_hir::Class {
+    let field = |n: &str| perry_hir::ClassField {
+        origin: perry_hir::ClassFieldOrigin::Definition,
+        name: n.to_string(),
+        key_expr: None,
+        ty: Type::Any,
+        init: None,
+        is_private: false,
+        is_readonly: false,
+        decorators: vec![],
+    };
+    let mut body = vec![
+        Stmt::Expr(set(Expr::This, "a", lg(10))),
+        Stmt::Expr(set(Expr::This, "b", lg(11))),
+    ];
+    body.extend(extra);
+    perry_hir::Class {
+        id: 1,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![field("a"), field("b")],
+        constructor: Some(func(3, &[10, 11], body)),
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+#[test]
+fn a_literal_shape_constructor_keeps_by_receiver() {
+    let c = shape_class("__AnonShape_t", vec![]);
+    assert!(c.is_literal_shape());
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    let ff = f.of_fn(3).unwrap();
+    assert_eq!(ff.params[0].fate, Fate::KeptByReceiver);
+    assert_eq!(ff.params[1].fate, Fate::KeptByReceiver);
+    assert!(ff.this.proven_dropped());
+    assert_eq!(f.construction_arg("__AnonShape_t", 1).fate, Fate::KeptByReceiver);
+}
+
+#[test]
+fn a_class_that_is_no_literal_shape_needs_the_store_proof() {
+    // A user class of the same body: the proof (here none) decides.
+    let c = shape_class("P", vec![]);
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    assert_eq!(why(&f, 3, 0), "use(PropertySet.value-to-this)");
+    // An anon-named class whose constructor does more than its stores.
+    let c = shape_class("__AnonShape_u", vec![push(lg(10))]);
+    assert!(!c.is_literal_shape());
+    let f = Fates::compute(&[], &[&c], &TestProof::default());
+    assert_eq!(fate(&f, 3, 0), Fate::Kept);
 }

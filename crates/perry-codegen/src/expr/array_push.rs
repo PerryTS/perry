@@ -54,7 +54,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
-use super::array_push_own::{OwnPushJoin, PUSH_SPEC_OR_OWN};
+use super::array_push_own::{method_tiers_enabled, push_entry, OwnPushJoin};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::{
@@ -1006,6 +1006,35 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
                     ctx.current_block = fast_idx;
+                    // The guard proved a live, unforwarded Array with room and
+                    // a numeric layout. It does NOT prove that `push` is the
+                    // builtin on it: it reads the named layout only for element
+                    // descriptors and never the array's own `[[Prototype]]`
+                    // bit, so an own `push` (data or accessor) or a prototype
+                    // installed on this one array passed it. The same word
+                    // test the inline tier's admission makes; a miss takes the
+                    // fallback, whose entry resolves the method.
+                    if method_tiers_enabled() {
+                        let plain_idx = ctx.new_block("apush.numeric_plain");
+                        let plain_label = ctx.block_label(plain_idx);
+                        let blk = ctx.block();
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let flags_addr = blk.sub(I64, &arr_handle, "6");
+                        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+                        let obj_flags = blk.load(I16, &flags_ptr);
+                        let default_proto =
+                            crate::expr::array_proto_guard::emit_array_method_admission(
+                                blk, &obj_flags,
+                            );
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk,
+                            &arr_handle,
+                        );
+                        let no_named = blk.xor(I1, &has_named, "true");
+                        let plain = blk.and(I1, &default_proto, &no_named);
+                        blk.cond_br(&plain, &plain_label, &fallback_label);
+                        ctx.current_block = plain_idx;
+                    }
                     {
                         let blk = ctx.block();
                         let arr_handle = unbox_to_i64(blk, &arr_box);
@@ -1075,7 +1104,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.record_lowered_value_with_access_mode_and_facts(
                         "NumericArrayPush",
                         Some(*array_id),
-                        PUSH_SPEC_OR_OWN,
+                        push_entry(),
                         &fallback,
                         Some(BoundsState::Unknown),
                         None,

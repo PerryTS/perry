@@ -361,9 +361,10 @@ pub extern "C" fn js_array_map(
         // callback is ever invoked. For the common case (plain array whose
         // constructor is the intrinsic `Array`) this returns a fresh plain
         // array, identical to the prior `js_array_alloc_with_length`.
-        let result_box =
+        // Only the default arm's fresh plain array takes slot writes: a
+        // species constructor may return a frozen, short or pre-filled Array.
+        let (result_box, is_plain) =
             crate::array::species::array_species_create(rooted.receiver(), length as usize);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
         // Root the result too: it must survive (and be re-derived after)
         // every callback-triggered collection during the fill loop.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -412,8 +413,8 @@ pub extern "C" fn js_array_map(
                     written_run += 1;
                 }
             } else {
-                // Custom species container: CreateDataPropertyOrThrow via [[Set]].
-                crate::array::species::species_result_set(
+                // Species constructor's result: CreateDataPropertyOrThrow.
+                crate::array::species::species_result_define(
                     result_rooted.get_nanbox_f64(),
                     i,
                     mapped,
@@ -569,8 +570,8 @@ pub extern "C" fn js_array_filter(
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
         // poisoned getter or non-constructor species before the callback runs).
-        let result_box = crate::array::species::array_species_create(rooted.receiver(), 0);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
+        let (result_box, is_plain) =
+            crate::array::species::array_species_create(rooted.receiver(), 0);
         // Root the result across callbacks; a push can also REALLOCATE the
         // plain array, so write the returned pointer back into the handle.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -616,10 +617,11 @@ pub extern "C" fn js_array_filter(
                         crate::value::JSValue::pointer(result as *const u8).bits(),
                     ));
                 } else {
-                    crate::array::species::species_result_set(
+                    // CreateDataPropertyOrThrow(A, to, kValue).
+                    crate::array::species::species_result_define(
                         result_rooted.get_nanbox_f64(),
                         to,
-                        element,
+                        element_root.get_nanbox_f64(),
                     );
                     to += 1;
                 }
@@ -941,6 +943,11 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         if idx < 0 || idx >= length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
+        // A sparse Array keeps a short store under its length: an index past
+        // the store is read by the complete accessor, never as a raw slot.
+        if idx >= i64::from((*arr).capacity) {
+            return crate::array::js_array_get_f64(arr, idx as u32);
+        }
         let elements_ptr = array_elements_ptr(arr);
         array_element_get_value(elements_ptr, idx as usize)
     }
@@ -1208,6 +1215,18 @@ pub extern "C" fn js_array_flatMap(
         return js_array_alloc(0);
     }
     unsafe {
+        let recv_value = array_receiver_value(arr);
+        if !crate::array::species::default_species_is_certain(recv_value) {
+            // An own `constructor`, a recorded prototype or a `constructor`
+            // accessor: ArraySpeciesCreate(O, 0) can run user code and the
+            // result may be any object.
+            let result = crate::array::js_arraylike_flatMap(
+                recv_value,
+                crate::value::js_nanbox_pointer(callback as i64),
+                undefined_value(),
+            );
+            return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        }
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
@@ -1240,9 +1259,20 @@ pub extern "C" fn js_array_flatMap(
             ));
         };
 
+        // A sparse store, an index accessor or an inherited index: the
+        // receiver is read by HasProperty / Get, as `map` and `filter` do.
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
-            let Some(element) = rooted.present(i) else {
-                continue;
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(rooted.arr(), i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(rooted.arr(), i as u32)
+            } else {
+                match rooted.present(i) {
+                    Some(element) => element,
+                    None => continue,
+                }
             };
             let mapped = cb_site.call(
                 current_callback(),
@@ -1255,7 +1285,18 @@ pub extern "C" fn js_array_flatMap(
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
             let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
-            if !sub_arr.is_null() {
+            if !sub_arr.is_null() && crate::array::array_iteration_is_exotic(sub_arr) {
+                // The callback returned a sparse (or otherwise exotic) Array:
+                // FlattenIntoArray reads it by HasProperty / Get.
+                let sub_len = (*sub_arr).length;
+                for j in 0..sub_len {
+                    let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
+                    if !crate::array::array_spec_has_index(sub_arr, j) {
+                        continue;
+                    }
+                    push_rooted(crate::array::array_spec_get(sub_arr, j));
+                }
+            } else if !sub_arr.is_null() {
                 let sub_len = (*sub_arr).length;
                 for j in 0..sub_len as usize {
                     // Resolve from the rooted value after each allocation so a

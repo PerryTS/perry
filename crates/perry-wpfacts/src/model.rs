@@ -1453,11 +1453,27 @@ pub struct Model {
     /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
     /// them off): the solve records who changes an Array's length.
     pub held_lengths: bool,
+    /// A binding's facts are read off its shared node and its summary
+    /// instance copies (`bindings::BindingNodes`). Off with
+    /// `PERRY_FACTS_INSTANCE_NODES=0` and under the negative control
+    /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
+    /// an instance-born literal's birth state for the Array a callee grew.
+    pub instance_nodes: bool,
     /// Every event that may change Array token `.0`'s length or move its
     /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
     /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
-    /// can place.
-    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool)>,
+    /// can place. `.3`: the node the store's receiver was read from
+    /// (`NO_NODE`: not known here; a call's is its `this`), for
+    /// `named_lengths`.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool, NodeId)>,
+    /// Named lengths (`named_lengths`; `PERRY_FACTS_NAMED_LENGTHS=0` turns
+    /// them off): the events are recorded for them too.
+    pub named_lengths: bool,
+    /// The node a narrowed read of a local sees (`gen::narrow`: a guard's
+    /// or a loop test's start and end node) -> that local's node: a store
+    /// through such a read is a store through the local's name
+    /// (`named_lengths`).
+    pub name_of: FxHashMap<NodeId, NodeId>,
     /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
     pub len_index_stores: crate::pts::FxHashSet<NodeId>,
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
@@ -1586,6 +1602,10 @@ pub struct Model {
     /// store under a Number key counts as in bounds, a wrong claim the
     /// element read's witness must catch (a hole read as a Number).
     pub inbounds_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=nohole`): no Array ever holds
+    /// a hole (`hole`, `mark_hole`): its iteration never yields the
+    /// `undefined` of one, a wrong claim the read's witness must catch.
+    pub no_hole_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
     /// `(call, specifier value)` a computed `require` already resolved

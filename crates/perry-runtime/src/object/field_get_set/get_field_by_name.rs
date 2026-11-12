@@ -62,22 +62,6 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if !key.is_null() {
-        let receiver = crate::value::js_nanbox_pointer(obj as i64);
-        let property_key = crate::value::js_nanbox_string(key as i64);
-        if let Some(result) = super::super::deferred_namespace::with_key_target(
-            receiver,
-            property_key,
-            |target, key| {
-                get_field_by_name_past_data_probe(
-                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>(),
-                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader,
-                )
-            },
-        ) {
-            return result;
-        }
-    }
     let receiver_bits = obj as u64;
     let receiver = JSValue::from_bits(receiver_bits);
     if receiver.is_bool() || receiver.is_bigint() {
@@ -532,9 +516,6 @@ pub(crate) fn get_field_by_name_after_site_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
-    if super::super::deferred_namespace::is_deferred(crate::value::js_nanbox_pointer(obj as i64)) {
-        return js_object_get_field_by_name(obj, key);
-    }
     if let Some(value) = unsafe { super::super::native_get::try_settled_get_by_name(obj, key) } {
         return value;
     }
@@ -1408,31 +1389,7 @@ fn get_field_by_name_past_data_probe(
             // prototype, whose shape owns its constructor property. A replaced
             // global binding does not change that prototype. Other unknown
             // keys still return undefined per #2128 (was SIGSEGV pre-#2128).
-            if !key.is_null() {
-                unsafe {
-                    let key_ptr =
-                        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                    let key_len = (*key).byte_len as usize;
-                    let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
-                    if let Ok(name) = std::str::from_utf8(key_bytes) {
-                        if let Some(v) =
-                            primitive_object_prototype_accessor(name, f64::from_bits(bits))
-                        {
-                            return v;
-                        }
-                    }
-                    if let Some(v) = primitive_builtin_prototype_property(key, f64::from_bits(bits))
-                    {
-                        return v;
-                    }
-                    if let Some(bound) =
-                        bind_primitive_proto_method_static(f64::from_bits(bits), key_bytes)
-                    {
-                        return bound;
-                    }
-                }
-            }
-            return JSValue::undefined();
+            return primitive_number_get(f64::from_bits(bits), key);
         }
     }
     // A named read on a primitive string uses the same own/prototype lookup
@@ -1954,4 +1911,32 @@ fn prime_read_stub(
     if let Some(key_bits) = super::super::read_stub::read_stub_key_bits(key) {
         unsafe { super::super::read_stub::read_stub_prime(obj, key_bits, slot) };
     }
+}
+
+/// [[Get]] of a string key on a Number receiver: the Number.prototype member
+/// (bound as the named read binds it), else `undefined`. The generic named
+/// read and the computed read (`js_dyn_index_get`) share this one lookup.
+#[inline(always)]
+pub(crate) fn primitive_number_get(number: f64, key: *const crate::StringHeader) -> JSValue {
+    let bits = number.to_bits();
+    if !key.is_null() {
+        unsafe {
+            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_len = (*key).byte_len as usize;
+            let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
+            if let Ok(name) = std::str::from_utf8(key_bytes) {
+                if let Some(v) = primitive_object_prototype_accessor(name, f64::from_bits(bits)) {
+                    return v;
+                }
+            }
+            if let Some(v) = primitive_builtin_prototype_property(key, f64::from_bits(bits)) {
+                return v;
+            }
+            if let Some(bound) = bind_primitive_proto_method_static(f64::from_bits(bits), key_bytes)
+            {
+                return bound;
+            }
+        }
+    }
+    JSValue::undefined()
 }

@@ -1179,11 +1179,6 @@ pub(crate) use buffers::registered_buffer_own_keys;
 #[no_mangle]
 pub extern "C" fn js_object_keys(obj: *const ObjectHeader) -> *mut ArrayHeader {
     let obj = refresh_env_receiver(obj);
-    if let Some(result) = super::super::deferred_namespace::enumerable_keys(
-        crate::value::js_nanbox_pointer(obj as i64),
-    ) {
-        return result;
-    }
     if let Some(keys) = ordinary_keys::try_keys(obj) {
         return keys;
     }
@@ -1238,6 +1233,13 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // dereferenced a low-48-bit-of-undefined pointer (~0x1) and
         // segfaulted. Return empty array.
         return crate::array::js_array_alloc(0);
+    }
+    // A deferred namespace (#14421) declines `ordinary_keys::try_keys` (a
+    // synthetic class id); its test runs here, on a validated heap object.
+    if let Some(result) = super::super::deferred_namespace::enumerable_keys(f64::from_bits(
+        JSValue::pointer(obj as *const u8).bits(),
+    )) {
+        return result;
     }
     // Issue #323: arrays land here too (the codegen routes every `Object.keys`
     // call through this entry point, regardless of receiver type). Treating an

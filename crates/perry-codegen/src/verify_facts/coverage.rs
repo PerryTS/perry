@@ -63,9 +63,18 @@ pub(crate) enum Fact {
     /// A loop holds a local Array's length across its calls (wpfacts
     /// `held_lengths`).
     HeldLength,
+    /// A loop without calls keeps a local Array's length beside stores
+    /// through other names (wpfacts `named_lengths`).
+    NamedLength,
+    /// A loop without calls keeps a local Array's length: its reads, stores
+    /// and operators run no program code (wpfacts `quiet_sites`).
+    QuietSites,
     /// A loop's trip bound from its counter's interval
     /// (`stmt::loops::bounded_poll`).
     LoopTrip,
+    /// LIFE G1: no pointer to a claimed birth exists after its death point
+    /// (`verify_facts::life`).
+    Lifetime,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -122,7 +131,10 @@ impl Fact {
             Self::CallKinds => "call kinds",
             Self::LiteralString => "literal string",
             Self::HeldLength => "held length",
+            Self::NamedLength => "named length",
+            Self::QuietSites => "quiet sites",
             Self::LoopTrip => "loop trip bound",
+            Self::Lifetime => "lifetime",
         }
     }
 }

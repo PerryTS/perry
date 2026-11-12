@@ -38,15 +38,18 @@ mod gen_call;
 mod gen_cjs;
 mod gen_const;
 mod gen_expr;
+mod gen_protocol;
 mod gen_rest;
 mod held_lengths;
 mod ledger;
 pub mod list_caps;
 mod literal_strings;
 pub mod model;
+mod named_lengths;
 pub mod native_effects;
 pub mod pts;
 mod push_fills;
+mod quiet_sites;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -550,9 +553,13 @@ fn generate<'a>(
     g.m.slice_births = builtins::slice_births_enabled();
     g.m.inbounds_store = gen::in_bounds::enabled();
     g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.no_hole_sabotage = cfg.sabotage.as_deref() == Some("nohole");
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.instance_nodes =
+        bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
+    g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
     g.m.map_values = solve::map_vals::enabled();
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
@@ -1096,6 +1103,21 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("heldlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    named_lengths::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("namedlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    quiet_sites::collect(
+        &g,
+        &sites,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("quiet"),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2382,6 +2404,12 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
     let mut pf = units::run(&sorted, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
+}
+
+/// `PERRY_FACTS_QUIET_SITES=0` turns the quiet-site facts off
+/// (`quiet_sites`).
+pub fn quiet_sites_enabled() -> bool {
+    quiet_sites::enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).

@@ -211,8 +211,15 @@ pub extern "C" fn js_put_value_set(
                 return value;
             }
             if let Some(name) = key_to_rust_string(property_key) {
-                unsafe {
-                    crate::typedarray_props::typed_array_set_property_by_name(addr, &name, value);
+                let stored = unsafe {
+                    crate::typedarray_props::typed_array_set_property_by_name(addr, &name, value)
+                };
+                // `Set(O, P, V, true)`: a rejected store (a getter-only
+                // accessor such as `length`, a read-only property, a new key
+                // on a non-extensible typed array) throws in strict code.
+                if !stored && strict != 0 {
+                    let msg = format!("Cannot assign to read only property '{name}' of object");
+                    return throw_type_error(&msg);
                 }
                 return value;
             }
@@ -785,8 +792,10 @@ fn object_array_numeric_write_slots(
         // A finite Number preserves Any/F64, but contradicts a ConstFn body
         // fact. The clone writes without the checked slot funnel, so SPECIAL
         // targets must take the ordinary loop before any slot is published.
-        if crate::object::field_rep_store::object_slot_rep_of(LayoutWord(shared_shape_id), slot as u32)
-            == crate::object::field_rep::REP_SPECIAL
+        if crate::object::field_rep_store::object_slot_rep_of(
+            LayoutWord(shared_shape_id),
+            slot as u32,
+        ) == crate::object::field_rep::REP_SPECIAL
         {
             trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
             return None;

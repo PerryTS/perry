@@ -76,6 +76,8 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // #11021: the ArrayPush slow arms' push. Returns the new head with `*own = 0`,
     // or an own `push` method's result bits with `*own = 1`.
     module.declare_function("js_array_push_f64_spec_or_own", I64, &[I64, DOUBLE, PTR]);
+    // The same entry with the real `Get` for a receiver that is no Array.
+    module.declare_function("js_array_push_f64_spec_or_method", I64, &[I64, DOUBLE, PTR]);
     module.declare_function("llvm.expect.i1", I1, &[I1, I1]);
     module.declare_function("llvm.experimental.noalias.scope.decl", VOID, &["metadata"]);
     module.declare_function("js_array_push_guard", VOID, &[I64, I32]);

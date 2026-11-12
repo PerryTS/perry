@@ -30,25 +30,6 @@ pub extern "C" fn js_object_delete_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
 ) -> i32 {
-    if !key.is_null() {
-        if let Some(result) = super::deferred_namespace::with_key_target(
-            crate::value::js_nanbox_pointer(obj as i64),
-            crate::value::js_nanbox_string(key as i64),
-            |target, key| {
-                js_object_delete_field_ordinary(
-                    JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>()
-                        as *mut ObjectHeader,
-                    crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader,
-                )
-            },
-        ) {
-            return result;
-        }
-    }
-    js_object_delete_field_ordinary(obj, key)
-}
-
-fn js_object_delete_field_ordinary(obj: *mut ObjectHeader, key: *const crate::StringHeader) -> i32 {
     #[cfg(perry_contract_checks)]
     crate::contracts::hard_ptr(obj, "delete");
     if obj.is_null() || key.is_null() {
@@ -239,6 +220,20 @@ fn js_object_delete_field_ordinary(obj: *mut ObjectHeader, key: *const crate::St
                     key,
                 );
                 return 1;
+            }
+            // A deferred namespace (#14421): decided once the header read
+            // proved an object, never on the raw receiver word.
+            if crate::gc_type_is_object!((*gc_header).obj_type)
+                && (*obj).class_id == super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID
+            {
+                if let Some((target, key)) = super::deferred_namespace::string_key_target(obj, key)
+                {
+                    return js_object_delete_field(
+                        JSValue::from_bits(target.to_bits()).as_pointer::<ObjectHeader>()
+                            as *mut ObjectHeader,
+                        key,
+                    );
+                }
             }
         }
         // #3655: `delete fn.name` / `delete fn.userProp`. Functions/closures

@@ -57,7 +57,7 @@ fn al_delete(recv: f64, k: i64) {
 /// `length` ACCESSOR fires its setter — and throws TypeError when there is
 /// none (getter-only `length`, test262 splice/S15.4.4.12_A6.1_T3), matching
 /// `Set(..., true)` on a non-writable slot.
-fn al_set_length(recv: f64, len: i64) {
+pub(super) fn al_set_length(recv: f64, len: i64) {
     let raw_addr = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
     if let Some(acc) = crate::object::get_accessor_descriptor(raw_addr, "length") {
         if acc.set != 0 {

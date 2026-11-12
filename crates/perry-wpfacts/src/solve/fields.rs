@@ -55,11 +55,13 @@ impl Model {
             self.add_tok(n, r);
         } else {
             // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`). A
-            // module namespace's named key is resolved by name (DECISIONS
-            // 215): it never reads the namespace's other keys.
+            // (`field_any`) are read under an index only (`named_any`): a
+            // numeric key, the element key or a read under some Number
+            // (`NUM_KEY`, the `[0]`/`[1]` of an `Object.fromEntries` entry),
+            // `is_num_atom`. A module namespace's named key is resolved by
+            // name (DECISIONS 215): it never reads the namespace's other keys.
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
-                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
+                || self.is_elem_array(t) && !self.is_num_atom(a);
             let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
@@ -172,8 +174,11 @@ impl Model {
         // (`store_into`): the setters on the target's chain run with the
         // target as `this` (ECMA-262 20.1.2.1 step 4.b.iii.2), once the
         // source has such a key (an unmodeled source may have any).
+        // It is a write of the target under some key as well: onto a
+        // builtin prototype, every key of it (`note_native_write`).
         if opaque {
             self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s));
+            self.note_unnamed_set(d);
         } else {
             self.cons(fa_s, Cons::UnnamedSet { target: d });
         }
@@ -186,6 +191,14 @@ impl Model {
         let act = ChainAct::Load(fa_d);
         self.any_walk_holders.entry(s).or_default().push((s, act));
         self.accessor_hit(s, s, Key::any(), act);
+    }
+
+    /// A copied key the model does not name was [[Set]] on `t`
+    /// (`spread_into`): a store under some key, as `store_into` notes one.
+    pub(super) fn note_unnamed_set(&mut self, t: Tok) {
+        if !builtins::builtin_function(self, t) {
+            builtins::note_native_write(self, t, None, "copy of an unnamed key");
+        }
     }
 
     /// DECISIONS 241: the join's values of function token `t`'s own
@@ -470,6 +483,7 @@ impl Model {
     /// append (`push`, `unshift`, `splice`: the element key) fills the next
     /// index and leaves none. Unknown code's writes (escape, HARD) put
     /// every primitive among the elements already (`any_key_node`).
+    /// Negative control `PERRY_FACTS_SABOTAGE=nohole`: no Array has one.
     pub fn hole(&mut self, t: Tok) -> NodeId {
         #[cfg(test)]
         if self.packet_scope.is_some() && self.packet_protocol_depth == 0 {
@@ -500,7 +514,7 @@ impl Model {
             }
             _ => false,
         };
-        if !born_dense {
+        if !born_dense && !self.no_hole_sabotage {
             self.add_prim(n, prim::UNDEF);
         }
         n
@@ -508,7 +522,7 @@ impl Model {
 
     /// A write that may leave Array `t` with a hole (`hole`).
     pub fn mark_hole(&mut self, t: Tok) {
-        if t != TOP && self.is_arr(t) {
+        if t != TOP && self.is_arr(t) && !self.no_hole_sabotage {
             let h = self.hole(t);
             self.add_prim(h, prim::UNDEF);
         }
