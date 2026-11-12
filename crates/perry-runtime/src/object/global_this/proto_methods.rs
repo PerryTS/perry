@@ -451,7 +451,16 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 crate::fn_info!(#[realm(Array.prototype.toString)] export crate::object::global_this::array_error::array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_noop_proto_methods(proto_obj, &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length)), ("toSpliced", realm_noop_tospliced_2_metadata!(length))]);
+            install_noop_proto_methods(proto_obj, &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length))]);
+            // A real thunk: the no-op one re-dispatched `toSpliced` by name on
+            // `this` and answered `{}` for every receiver that is no plain
+            // Array (an Array-subclass instance, an array-like, a Proxy).
+            install_proto_method(
+                proto_obj,
+                "toSpliced",
+                crate::fn_info!(#[realm(Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_array_prototype_to_spliced_metadata))] export native_args crate::object::global_this::array_error::array_prototype_to_spliced_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                realm_array_prototype_to_spliced_metadata!(length),
+            );
             install_proto_method(
                 proto_obj,
                 "entries",
