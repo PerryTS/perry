@@ -352,3 +352,17 @@ fn every_generic_mint_site_is_classified() {
     }
     assert!(seen >= 12, "the mint sites were not found ({seen})");
 }
+
+#[test]
+fn the_famreach_sabotage_says_never_at_the_source() {
+    // The negative control of check mode's family claim.
+    let src = "const a = new Uint8Array(4);\nconsole.log(a.length);\n";
+    assert!(reach(src).live("typedarray"));
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    cfg.sabotage = Some("famreach:typedarray".into());
+    let r = facts_cfg(src, &cfg).family_reach.expect("computed");
+    assert!(!r.live("typedarray"));
+    assert_eq!(reason(&r, "typedarray"), "none");
+    assert_ne!(r.never() & families::family_bit("typedarray"), 0);
+}

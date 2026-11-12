@@ -595,12 +595,23 @@ mod realm_info_exports;
 #[path = "src/object/native_module/static_exports_build.rs"]
 mod static_exports_build;
 
+/// The family table for check mode's family claim
+/// (`wpfacts_check/family.rs`, instrumented variant only): the ids in table
+/// order (the claim is a bit per family).
+fn write_family_table(out: &Path) {
+    use perry_runtime_manifest::families::RUNTIME_FAMILIES;
+    let ids: Vec<&str> = RUNTIME_FAMILIES.iter().map(|f| f.id).collect();
+    let text = format!("const FAMILY_IDS: &[&str] = &{ids:?};\n");
+    std::fs::write(out.join("family_table.rs"), text).expect("emit family table");
+}
+
 fn main() {
     static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
+    write_family_table(&out);
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");

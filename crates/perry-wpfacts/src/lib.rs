@@ -2359,8 +2359,8 @@ fn compute_act<'a>(
     } else {
         None
     };
-    let family_reach = (!cfg.unit && family_reach::enabled())
-        .then(|| family_reach::derive(&g, cfg.unit, cfg.dynamic_code.as_deref()));
+    let family_reach =
+        (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let mut pf = ProgramFacts {
         verification_bodies,
         family_reach,
