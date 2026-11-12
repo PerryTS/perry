@@ -796,6 +796,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         // VR-4b: the receiver of a record-array intrinsic.
         module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
+        // family_reach: the families the facts say are never created or
+        // observed, and a compiled read of a global of one of them.
+        module.declare_function(
+            "perry_verify_facts_families",
+            crate::types::VOID,
+            &[I64, I64, I64],
+        );
+        module.declare_function(
+            "perry_verify_facts_family_observed",
+            crate::types::VOID,
+            &[I64, I64],
+        );
         // LIFE G1: the death points of the census's lifetime claims.
         module.declare_function(
             "perry_verify_facts_life_dead",
