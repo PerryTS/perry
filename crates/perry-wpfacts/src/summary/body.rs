@@ -122,6 +122,8 @@ pub(crate) struct BodyInput {
     pub params: Vec<Operand>,
     pub ret: Operand,
     pub this: Operand,
+    /// The rest parameter's local (`Absolute(NO_NODE)`: none).
+    pub rest: Operand,
     pub seeds: Vec<(u32, Vec<Tok>, u16, bool)>,
     pub edges: Vec<(Operand, Operand)>,
     pub cons: Vec<(Operand, BodyCons)>,
@@ -138,6 +140,7 @@ impl BodyInput {
             params: Vec::new(),
             ret: Operand::Absolute(NO_NODE),
             this: Operand::Absolute(NO_NODE),
+            rest: Operand::Absolute(NO_NODE),
             seeds: Vec::new(),
             edges: Vec::new(),
             cons: Vec::new(),
@@ -157,6 +160,7 @@ pub(crate) fn encode_body(input: BodyInput) -> Summary {
         params: input.params.into_iter().map(lower).collect(),
         ret: lower(input.ret),
         this: lower(input.this),
+        rest: lower(input.rest),
         seeds: input.seeds,
         edges: input
             .edges
@@ -234,7 +238,7 @@ pub fn compress(s: &mut Summary) {
         }
     };
     let mut pinned = vec![false; n];
-    for &p in s.params.iter().chain([&s.ret, &s.this]) {
+    for &p in s.params.iter().chain([&s.ret, &s.this, &s.rest]) {
         if let Some(i) = sl(p) {
             pinned[i] = true;
         }
@@ -418,6 +422,7 @@ pub fn compress(s: &mut Summary) {
     s.params = s.params.iter().map(|&p| rn(p)).collect();
     s.ret = rn(s.ret);
     s.this = rn(s.this);
+    s.rest = rn(s.rest);
     s.outer = s.outer.iter().map(|&o| map[o as usize]).collect();
     for (b, _) in s.births.iter_mut() {
         *b = map[*b as usize];

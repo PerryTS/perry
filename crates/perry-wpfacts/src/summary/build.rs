@@ -122,7 +122,7 @@ fn slice(
     let mut d = Vec::new();
     let mut work: Vec<NodeId> = through.to_vec();
     let this = (!fi.lexical_this).then_some(fi.this);
-    for &p in fi.params.iter().chain(this.iter()).chain(roots) {
+    for &p in fi.params.iter().chain(this.iter()).chain(fi.rest.iter()).chain(roots) {
         if ok(p) && seen.insert(p) {
             d.push(p);
             work.push(p);
@@ -260,7 +260,17 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         let is_own = |n: NodeId| own_of.get(&n) == Some(&t);
         // An array's named-key node (a computed-key store fills it) has no
         // birth key, so a token holding one is not born from the summary.
-        let mut ok = own.iter().all(|&n| m.nodes[n as usize].cons.is_empty())
+        // The prototype node's chain closure (and the raise of the code it
+        // may run) is the token's own lookup cache, which every born token
+        // makes for itself on its first lookup (`Model::cp`): no effect of
+        // the body.
+        let pn = m.proto_node.get(&t).copied();
+        let cache = |n: NodeId, c: &Cons| {
+            Some(n) == pn && matches!(c, Cons::ProtoClosure { .. } | Cons::Raise { .. })
+        };
+        let mut ok = own
+            .iter()
+            .all(|&n| m.nodes[n as usize].cons.iter().all(|c| cache(n, c)))
             && !m.named_any.contains_key(&t);
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
@@ -726,7 +736,7 @@ pub(super) fn build_summaries(m: &mut Model) {
     let cand: Vec<bool> = m
         .funcs
         .iter()
-        .map(|fi| !fi.no_summary && fi.rest.is_none() && !fi.has_arguments)
+        .map(|fi| !fi.no_summary && !fi.has_arguments)
         .collect();
     // Closure values: the generation node holding a closure's token in its
     // parent's body.
@@ -1132,6 +1142,12 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     }
     s.params = m.funcs[f as usize].params.iter().map(|&p| enc(p)).collect();
     s.ret = enc(m.funcs[f as usize].ret);
+    if let Some(r) = m.funcs[f as usize].rest {
+        s.rest = enc(r);
+        if matches!(s.rest, Operand::Absolute(_)) {
+            s.rest = Operand::Absolute(NO_NODE);
+        }
+    }
     s.this = if m.funcs[f as usize].lexical_this {
         Operand::Absolute(NO_NODE)
     } else {

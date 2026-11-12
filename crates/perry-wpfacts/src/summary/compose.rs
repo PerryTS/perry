@@ -134,7 +134,8 @@ pub(super) fn compose(
                     let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
                         .map(|i| m.capture_param(g, i))
                         .collect();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps);
+                    let rest_store = (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site()));
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store);
                     any = true;
                     n += 1;
                 }
@@ -161,6 +162,7 @@ pub(super) fn expand(
     g: &Summary,
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
+    rest_store: Option<(Key, SiteId)>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -236,6 +238,16 @@ pub(super) fn expand(
             }
         }
     }
+    // The callee run's fresh rest array takes this call's arguments after
+    // the parameters and its spread elements (8.6.3 BindingRestElement).
+    let rest = rest_store.map(|(key, site)| (tr(g.rest), key, site));
+    if let Some((r, key, site)) = rest {
+        for i in g.params.len()..call.args.len() {
+            if call.args[i] != NO_NODE {
+                s.cons.push((r, Cons::Store { key, src: call.args[i], site }));
+            }
+        }
+    }
     for &sp in &call.spread {
         let elems = fresh(s);
         s.cons.push((
@@ -245,6 +257,9 @@ pub(super) fn expand(
                 dst: elems,
             },
         ));
+        if let Some((r, key, site)) = rest {
+            s.cons.push((r, Cons::Store { key, src: elems, site }));
+        }
         for (i, ds) in dsts.iter().enumerate() {
             if caps.get(i).copied().flatten().is_some() {
                 continue;

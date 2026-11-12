@@ -501,7 +501,7 @@ impl Model {
         self.edge(ret, c.ret);
     }
 
-    pub(super) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
+    pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
         // Elements of whatever array the node holds: a store relay. A rest
         // array is made from the arguments at indices 0..n: the store is an
         // element store (`elem_key`), which no named non-index key of the

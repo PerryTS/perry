@@ -114,6 +114,11 @@ pub struct Summary {
     /// The `this` term (slot, absolute node or `NO_NODE`: an arrow, or a
     /// `this` a closure captured, keeps the shared node).
     pub this: NodeId,
+    /// The rest parameter's local (slot, or `NO_NODE`: none): each run's
+    /// fresh array, born in it, takes that call's extra arguments as its
+    /// elements (ECMA-262 10.2.11 FunctionDeclarationInstantiation with a
+    /// BindingRestElement, 8.6.3: ArrayCreate on every [[Call]]).
+    pub rest: NodeId,
     /// Value seeds and the independent own-test refutation marker.
     pub seeds: Vec<(u32, Vec<Tok>, u16, bool)>,
     pub edges: Vec<(NodeId, NodeId)>,
@@ -159,6 +164,8 @@ pub struct Inst {
     pub params: Vec<NodeId>,
     pub ret: NodeId,
     pub this: NodeId,
+    /// The run's rest array local (`NO_NODE`: no rest parameter).
+    pub rest: NodeId,
     /// The instance's first fresh slot node (`NO_NODE`: none). Its fresh
     /// slots, the summary's slots outside `Summary::outer` in slot order,
     /// are the nodes from here on: the copy of slot `i` is a run of the
@@ -663,6 +670,7 @@ impl Model {
             params: s.params.iter().map(|&p| tr(p)).collect(),
             ret,
             this,
+            rest: tr(s.rest),
             fresh: if (self.nodes.len() as NodeId) > fresh {
                 fresh
             } else {
@@ -969,6 +977,16 @@ impl Model {
                 }
             }
         }
+        // This run's rest array holds this call's arguments after the
+        // parameters (8.6.3 BindingRestElement), and none of another call.
+        let rest = self.sum.insts[inst as usize].rest;
+        let rest_fa = (rest != NO_NODE).then(|| self.field_any_node_of_node(rest));
+        if let Some(fa) = rest_fa {
+            for i in terms.len()..nargs {
+                let a = self.calls[c].args[i];
+                self.edge(a, fa);
+            }
+        }
         for j in 0..self.calls[c].spread.len() {
             let s = self.calls[c].spread[j];
             let elems = self.node_l("spread-elems");
@@ -980,6 +998,9 @@ impl Model {
                     dst: elems,
                 },
             );
+            if let Some(fa) = rest_fa {
+                self.edge(elems, fa);
+            }
             for i in 0..terms.len() {
                 if caps[i].is_some() {
                     continue;
@@ -1286,6 +1307,14 @@ impl Model {
                     }
                 }
             }
+        }
+        // Unknown arguments are the elements of the run's fresh rest array,
+        // never the array itself (as for an unsummarized function).
+        let rest = self.sum.insts[inst as usize].rest;
+        if rest != NO_NODE && !contract_only {
+            let fa = self.field_any_node_of_node(rest);
+            self.add_top(fa, why);
+            self.add_prim(fa, prim::ALL);
         }
         let r = self.sum.insts[inst as usize].ret;
         if r != NO_NODE {
