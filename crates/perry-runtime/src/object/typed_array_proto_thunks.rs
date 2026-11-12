@@ -784,7 +784,7 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
                 args_ptr = args.as_ptr();
             }
             let (addr, _) = recv.live();
-            super::dispatch_buffer_method(addr, method, args_ptr, args.len())
+            super::dispatch_builtin_buffer_method(addr, method, args_ptr, args.len())
         }
         "at" => match uint8_at_index(args, len) {
             Some(index) => uint8_get(recv.live().0, index) as f64,
@@ -1266,7 +1266,7 @@ pub(super) extern "C" fn u8_to_base64_thunk(
     unsafe {
         let addr = uint8_receiver_or_throw(this, "toBase64");
         let args = [opts];
-        super::dispatch_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
+        super::dispatch_builtin_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
     }
 }
 
@@ -1279,7 +1279,7 @@ pub(super) extern "C" fn u8_to_hex_thunk(
 ) -> f64 {
     unsafe {
         let addr = uint8_receiver_or_throw(this, "toHex");
-        super::dispatch_buffer_method(addr, "toHex", std::ptr::null(), 0)
+        super::dispatch_builtin_buffer_method(addr, "toHex", std::ptr::null(), 0)
     }
 }
 
@@ -1293,7 +1293,7 @@ pub(super) extern "C" fn u8_set_from_base64_thunk(
     unsafe {
         let addr = uint8_receiver_or_throw(this, "setFromBase64");
         let args = [str_arg, opts];
-        super::dispatch_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
+        super::dispatch_builtin_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
     }
 }
 
@@ -1307,7 +1307,7 @@ pub(super) extern "C" fn u8_set_from_hex_thunk(
     unsafe {
         let addr = uint8_receiver_or_throw(this, "setFromHex");
         let args = [str_arg];
-        super::dispatch_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
+        super::dispatch_builtin_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
     }
 }
 

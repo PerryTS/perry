@@ -547,22 +547,13 @@ pub(crate) unsafe fn array_buffer_slice(addr: usize, args: &[f64]) -> f64 {
     f64::from_bits(JSValue::pointer(result as *mut u8).bits())
 }
 
-/// `[[Get]](buf, name)` for an own member `name` of `Buffer.prototype`, on
-/// the Buffer at `addr`, once the program has written that prototype: its own
-/// shadow bit (`prototype_unwritten(Buffer)`, which reads clear through the
-/// stand-in until `Buffer.prototype` is built). `None` while it is unwritten,
-/// for a receiver that is not a Buffer, for a name that is not such a member
-/// (an inherited `%TypedArray%` member is not this fact), and when the lookup
-/// still finds the builtin member, whose body is the name dispatch: the caller
-/// then runs exactly what it runs on an unwritten prototype. The receiver's
-/// own properties are the caller's, read before this.
+/// `[[Get]](buf, name)` past the receiver's own properties (the caller's,
+/// read before this) whenever the builtin answer is not proven: see
+/// [`buffer_written_member_lookup`], which takes the gate itself so the
+/// always-linked reader carries only the hook call. An empty slot (no
+/// typed-array install) is the builtin answer.
 #[inline(always)]
 pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> {
-    if crate::object::builtin_proto::prototype_unwritten(
-        crate::object::builtin_proto::BuiltinProto::Buffer,
-    ) {
-        return None;
-    }
     crate::typedarray_hook_slots::buffer_written_member(addr, name)
 }
 
@@ -596,9 +587,41 @@ pub(crate) unsafe fn dispatch_written_buffer_lookup(
 }
 
 /// The lookup behind [`buffer_written_member`], linked through the typed-array
-/// hook group.
+/// hook group. `[[Get]](buf, name)` through the receiver's REAL chain: its
+/// recorded `[[Prototype]]` (its bag's, `Object.setPrototypeOf` /
+/// `__proto__ =`), else `Buffer.prototype` once the program wrote it. `None`
+/// when the builtin answer stands: no bag and an unwritten `Buffer.prototype`
+/// (the birth chain), a written one with a name that is not its own member
+/// (an inherited `%TypedArray%` member is not this fact) or a non-Buffer
+/// receiver, an internal `__perry_` name, an ArrayBuffer / DataView (the
+/// builtin body reads their chain itself), and a lookup that still finds the
+/// builtin member, whose body is the name dispatch. `__proto__` is
+/// `Object.prototype`'s accessor: `[[GetPrototypeOf]](buf)`, absent from a
+/// chain that ends in null before `Object.prototype`.
 pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JSValue> {
-    if !crate::buffer::is_node_buffer(addr)
+    // SAFETY: `addr` is a live byte cell; the bag link is one of its words.
+    let has_bag = unsafe { !crate::buffer::store::bag(addr).is_null() };
+    if name == "__proto__" {
+        if has_bag
+            && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(
+                addr,
+            )
+        {
+            return Some(JSValue::undefined());
+        }
+        let receiver = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+        let proto = crate::object::js_object_get_prototype_of(receiver);
+        return Some(JSValue::from_bits(proto.to_bits()));
+    }
+    let recorded =
+        has_bag && crate::object::prototype_chain::object_static_prototype(addr).is_some();
+    if recorded {
+        if name.starts_with("__perry_") || crate::buffer::is_non_indexed_buffer_view(addr) {
+            return None;
+        }
+    } else if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) || !crate::buffer::is_node_buffer(addr)
         || !crate::object::native_module::callable_exports::is_buffer_prototype_member(name)
     {
         return None;
@@ -648,11 +671,14 @@ fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
 }
 
 /// The name dispatch of a method call on the Buffer (or view) at `addr`.
-/// BUFEQ: once the program has written `Buffer.prototype` (its own shadow bit,
-/// clear through the stand-in until it is built), a Buffer's own member of
-/// that prototype is what `[[Get]](buf, name)` finds: the dispatch is then the
-/// typed-array group's [`dispatch_written_buffer_lookup`]. One bit test
-/// selects it or the builtin dispatch, which stays its own body.
+/// BUFEQ: the builtin body answers `[[Get]](buf, name)` only while the
+/// receiver's chain is its birth chain and that prototype is unwritten. A
+/// receiver with no property bag has neither an own property nor a recorded
+/// `[[Prototype]]` (both live only in the bag, `buffer::store`), so one test
+/// (the `Buffer.prototype` shadow bit, clear through the stand-in until it is
+/// built, and the bag link) selects the builtin body. Anything else is the
+/// typed-array group's [`dispatch_written_buffer_lookup`], which reads the
+/// receiver's real chain.
 ///
 /// # Safety
 /// `addr` is a live Buffer or buffer view; `args_ptr` names `args_len` values
@@ -667,7 +693,8 @@ pub unsafe fn dispatch_buffer_method(
     // One test selects the body; both run with this call's own arguments.
     let dispatch: BufferDispatch = if crate::object::builtin_proto::prototype_unwritten(
         crate::object::builtin_proto::BuiltinProto::Buffer,
-    ) {
+    ) && crate::buffer::store::bag(addr).is_null()
+    {
         dispatch_builtin_buffer_method
     } else {
         crate::typedarray_hook_slots::written_buffer_dispatch()
@@ -1437,6 +1464,10 @@ mod write_args_tests;
 #[cfg(test)]
 #[path = "buffer_written_member_tests.rs"]
 mod written_member_tests;
+
+#[cfg(test)]
+#[path = "buffer_receiver_proto_tests.rs"]
+mod receiver_proto_tests;
 
 #[cfg(test)]
 #[path = "buffer_dispatch_target_tests.rs"]
