@@ -133,7 +133,10 @@ impl Model {
             // Every property of a parsed object is an own enumerable data
             // property (ECMA-262 25.5.1 CreateDataProperty): a name read
             // here may be one of its keys, which a for-in lists.
-            if json {
+            // A JSON object has no symbol-keyed own property (JSON keys are
+            // strings): a symbol or internal key read reaches the prototype
+            // chain only, as on any ordinary object, and births no class.
+            if json && self.enum_string_key(a) {
                 self.json_child(t, JsonStep::Named(a), n);
                 self.enum_key_mark(n, t, a);
             }

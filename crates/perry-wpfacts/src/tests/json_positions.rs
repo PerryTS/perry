@@ -65,3 +65,19 @@ fn a_recursive_walker_terminates_and_keeps_siblings_apart() {
     assert!(reaches(&format!("{walk}j.kids[0].kids[1].x.go();"), "M"));
     assert!(!reaches(&format!("{walk}j.other.x.go();"), "M"));
 }
+
+/// BATCHB27 FOLD: a class is keyed by the last two steps of its path, so
+/// `j.x.a.c` and `j.y.a.c` (and `j.a.c`) are one class; `j.b.c` is not.
+#[test]
+fn the_fold_merges_paths_that_end_in_the_same_two_steps() {
+    assert!(reaches("j.x.a.c.t = new M();\nj.y.a.c.t.go();", "M"), "fold: one class for ..a.c");
+    assert!(!reaches("j.a.c.t = new M();\nj.b.c.t.go();", "M"), "last two steps differ");
+}
+
+/// The element classes of `lights` and `nodes` stay apart at any depth.
+#[test]
+fn lights_elements_and_nodes_elements_stay_apart() {
+    assert!(!reaches("j.lights[0].t = new M();\nj.nodes[0].t.go();", "M"));
+    assert!(!reaches("j.ext.lights[0].t = new M();\nj.nodes[1].t.go();", "M"));
+    assert!(reaches("j.ext.lights[0].t = new M();\nj.lights[1].t.go();", "M"), "fold: one ..lights[] class");
+}

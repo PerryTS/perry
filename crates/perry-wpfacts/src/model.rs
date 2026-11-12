@@ -1673,10 +1673,10 @@ pub struct Model {
     /// JSON tree positions (`solve::json_pos`): the position class each
     /// JSON token stands for. A fact of the token, keyed by the token.
     pub json_pos: FxHashMap<Tok, JsonPos>,
-    /// The receiver node of the constraint being applied (`json_pos` FOLD).
-    pub json_site: NodeId,
-    /// Nodes below this existed when the solve started: the fold's sites.
-    pub json_site_limit: NodeId,
+    /// JSON position classes by key (`solve::json_pos` FOLD): (root object
+    /// token, the parent class's step, the step) -> the class's object and
+    /// array tokens. Compiler-internal: nothing of it reaches the binary.
+    pub json_class: FxHashMap<(Tok, JsonStep, JsonStep), (Tok, Tok)>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
     /// A module namespace's values every name reads (DECISIONS 215).
@@ -2777,7 +2777,7 @@ pub struct AccGroup {
 pub const NO_NODE: NodeId = u32::MAX;
 
 /// The step from a JSON position class to its child (`solve::json_pos`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JsonStep {
     Root,
     Named(Atom),
@@ -2785,14 +2785,13 @@ pub enum JsonStep {
     Elem,
 }
 
-/// A JSON position class: its parent class token (`TOP` at the root), the
-/// step, the receiver node the child was born at (the fold's site) and
-/// the class's object and array tokens.
+/// A JSON position class: the root object token of its parse, the last
+/// step of its path (`Root` at the root) and the class's object and array
+/// tokens.
 #[derive(Clone, Copy, Debug)]
 pub struct JsonPos {
-    pub parent: Tok,
+    pub root: Tok,
     pub step: JsonStep,
-    pub site: NodeId,
     pub obj: Tok,
     pub arr: Tok,
 }
