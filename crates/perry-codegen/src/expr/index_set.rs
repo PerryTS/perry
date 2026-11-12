@@ -1488,6 +1488,10 @@ pub(crate) fn lower(
                 // (#7201): the receiver is live across both. The operand group
                 // derives that from the list order; the index is numeric on
                 // this path, so it takes no slot and the IR is unchanged.
+                // The facts' Arr rep proves the receiver an Array: its slow
+                // store call needs no pointer test.
+                let receiver_test = crate::method_site::annotation_receiver_tests_enabled()
+                    && !super::index_get::proven_array::receiver_is_proven_array(ctx, object);
                 return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
                     let (arr_box, idx_double, val_double) =
                         (vals[0].clone(), vals[1].clone(), vals[2].clone());
@@ -1567,6 +1571,7 @@ pub(crate) fn lower(
                                     &feedback_site_id_c,
                                     &idx_i32_c,
                                     &val_double_c,
+                                    receiver_test,
                                     assignment_strict,
                                 );
                                 let g_ref = format!("@{}", global_name);
@@ -1633,6 +1638,7 @@ pub(crate) fn lower(
                                     &feedback_site_id_c,
                                     &idx_i32_c,
                                     &val_double_c,
+                                    receiver_test,
                                     assignment_strict,
                                 );
                                 if write_back_boxed {
@@ -1694,6 +1700,7 @@ pub(crate) fn lower(
                                         &feedback_site_id,
                                         &idx_i32c,
                                         &val_double,
+                                        receiver_test,
                                         assignment_strict,
                                     );
                                     // The helper owns the precise slot barrier.
@@ -1719,6 +1726,7 @@ pub(crate) fn lower(
                             &feedback_site_id,
                             &idx_i32,
                             &val_double,
+                            receiver_test,
                             assignment_strict,
                         );
                         // The extending runtime setter owns the precise slot
@@ -1946,7 +1954,8 @@ pub(crate) fn lower(
 /// receiver was chosen as an Array from its ANNOTATION, returning the new head
 /// box. The entry takes the receiver's ADDRESS; a String, `null` or a Number
 /// behind the annotation has none (a short string's payload is its bytes), so
-/// with `PERRY_ANNOTATION_RECEIVER_TESTS` on a receiver that is no heap pointer
+/// unless the facts prove the receiver an Array (`receiver_test` false: its
+/// Arr rep, or the switch off) a receiver that is no heap pointer
 /// takes the complete `[[Set]]` (`js_put_value_set_dynamic`, the assignment's
 /// own `Throw` flag) and the head stays the receiver.
 fn emit_annotated_set_extend(
@@ -1955,6 +1964,7 @@ fn emit_annotated_set_extend(
     feedback_site_id: &str,
     idx_i32: &str,
     val_double: &str,
+    receiver_test: bool,
     strict: bool,
 ) -> String {
     let call = |ctx: &mut FnCtx<'_>| {
@@ -1973,7 +1983,7 @@ fn emit_annotated_set_extend(
         );
         nanbox_pointer_inline(blk, &new_handle)
     };
-    if !crate::method_site::annotation_receiver_tests_enabled() {
+    if !receiver_test {
         return call(ctx);
     }
     let heap_idx = ctx.new_block("idxset.recv.heap");
