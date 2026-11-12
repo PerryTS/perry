@@ -1366,9 +1366,10 @@ fn opaque_member(m: &mut Model, dst: NodeId) {
 /// A member of an intrinsic the model does not describe (a typed array's,
 /// a `Date`'s): a builtin function value or any primitive. Unless written
 /// (`opaque_member`), it is no value of the program.
+#[track_caller]
 fn undescribed_member(m: &mut Model, dst: NodeId) {
     let bf = builtin_fn(m, "undescribed member");
-    m.add_tok(dst, bf);
+    m.add_tok_arm(dst, bf, "undescribed_member");
     m.add_prim(dst, prim::ALL);
 }
 

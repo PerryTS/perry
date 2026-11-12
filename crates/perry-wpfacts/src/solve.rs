@@ -70,6 +70,7 @@ impl Model {
     // ---------------------------------------------------------------- nodes
 
     /// Add tokens/prims to a node; schedules it when anything is new.
+    #[track_caller]
     pub fn add(&mut self, n: NodeId, toks: &[Tok], prim: u16) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Seed(
@@ -115,11 +116,16 @@ impl Model {
 
     /// A string that is no copy of another node's is any string
     /// (`Node::strs`).
+    #[track_caller]
     fn add_tokens(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16) {
         self.add_tokens_s(n, toks, prim, STRS_TOP);
     }
 
+    #[track_caller]
     fn add_tokens_s(&mut self, n: NodeId, toks: Tokens<'_>, prim: u16, strs: StrSet) {
+        if self.relations.is_some() {
+            self.rel_generic_fn_arrival(n, &toks);
+        }
         if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
             if !c.injecting
                 && self.cur_src != NO_NODE
@@ -508,9 +514,39 @@ impl Model {
         )
     }
 
+    /// Provenance of the generic builtin function value (`builtin-fn:Any`,
+    /// the one token `builtin_fn` interns) under `PERRY_FACTS_RELATIONS`:
+    /// each new arrival writes `A addbf <node> <tok> src=<cur_src>
+    /// @<file>:<line>` (a propagation names its source node; diagnostic only).
+    #[track_caller]
+    fn rel_generic_fn_arrival(&mut self, n: NodeId, toks: &Tokens<'_>) {
+        let Some(&bf) = self.tok_index.get(&TokKind::BuiltinFn(Native::Any)) else {
+            return;
+        };
+        if !toks.iter().any(|&t| t == bf) || self.nodes[n as usize].pts.contains_tok(bf) {
+            return;
+        }
+        let at = std::panic::Location::caller();
+        let f = at.file();
+        let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
+        let line = format!("A addbf {n} {bf} src={} @{f}:{}", self.cur_src, at.line());
+        if let Some(r) = self.relations.as_mut() {
+            r.push(line);
+        }
+    }
+
     /// Seed a token (an input fact outside the solver rules: logged).
     #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
+        self.add_tok_arm(n, t, "")
+    }
+
+    /// `add_tok` naming the code arm: under `PERRY_FACTS_RELATIONS`, a
+    /// solver-phase add (which writes no `addr` relation) writes the
+    /// provenance line `A addtok <node> <tok> <arm>@<file>:<line>` (the
+    /// caller's location; diagnostic only).
+    #[track_caller]
+    pub fn add_tok_arm(&mut self, n: NodeId, t: Tok, arm: &'static str) {
         if t == TOP
             && self.diagnostic.as_ref().is_some_and(|d| d.census.is_some())
             && !self
@@ -547,6 +583,11 @@ impl Model {
         }
         if self.rel_phase != b'S' {
             self.rel(|| format!("addr {n} {t}"));
+        } else if let Some(r) = self.relations.as_mut() {
+            let at = std::panic::Location::caller();
+            let f = at.file();
+            let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
+            r.push(format!("A addtok {n} {t} {arm}@{f}:{}", at.line()));
         }
         self.add(n, &[t], 0);
     }
