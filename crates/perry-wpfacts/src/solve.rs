@@ -33,6 +33,7 @@ mod store;
 
 mod escape;
 mod fields;
+mod json_pos;
 mod shaped_keys;
 pub(crate) mod strs;
 mod virt;
@@ -860,6 +861,7 @@ impl Model {
 
     fn solve_fixpoint(&mut self) {
         self.rel_phase = b'S';
+        self.json_site_limit = self.nodes.len() as NodeId;
         self.mark_params();
         self.members_settled.get_mut().clear();
         let mut delta = crate::delta::Delta::default();
@@ -1234,7 +1236,9 @@ impl Model {
         if self.profile.is_some() {
             let started = std::time::Instant::now();
             let w0 = self.work.get();
+            let site = std::mem::replace(&mut self.json_site, n);
             self.apply_inner(n, c, toks, prim);
+            self.json_site = site;
             let name = c.kind_name();
             if let Some(p) = self.prof.as_mut() {
                 let e = p.kind.entry(name).or_default();
@@ -1246,7 +1250,9 @@ impl Model {
             e.1 += started.elapsed();
             return;
         }
+        let site = std::mem::replace(&mut self.json_site, n);
         self.apply_inner(n, c, toks, prim);
+        self.json_site = site;
     }
 
     /// Is `site` a construction-phase writer for instances of `tm`?

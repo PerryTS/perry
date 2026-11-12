@@ -757,7 +757,7 @@ impl Run {
             // What JSON.parse makes (`builtins::json_value`).
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
-                let (j, ja) = crate::builtins::json_value(m, self.call);
+                let (j, ja) = crate::builtins::json_value(m, self.call, true);
                 m.add_tok(n, j);
                 m.add_tok(n, ja);
                 m.add_prim(n, prim::ALL);

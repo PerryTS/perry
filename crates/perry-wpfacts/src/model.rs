@@ -1670,6 +1670,13 @@ pub struct Model {
     pub bound: Vec<(NodeId, NodeId, Vec<NodeId>)>,
     pub fields: FxHashMap<(Tok, Atom), NodeId>,
     pub field_any: FxHashMap<Tok, NodeId>,
+    /// JSON tree positions (`solve::json_pos`): the position class each
+    /// JSON token stands for. A fact of the token, keyed by the token.
+    pub json_pos: FxHashMap<Tok, JsonPos>,
+    /// The receiver node of the constraint being applied (`json_pos` FOLD).
+    pub json_site: NodeId,
+    /// Nodes below this existed when the solve started: the fold's sites.
+    pub json_site_limit: NodeId,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
     /// A module namespace's values every name reads (DECISIONS 215).
@@ -2768,6 +2775,27 @@ pub struct AccGroup {
 }
 
 pub const NO_NODE: NodeId = u32::MAX;
+
+/// The step from a JSON position class to its child (`solve::json_pos`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonStep {
+    Root,
+    Named(Atom),
+    Any,
+    Elem,
+}
+
+/// A JSON position class: its parent class token (`TOP` at the root), the
+/// step, the receiver node the child was born at (the fold's site) and
+/// the class's object and array tokens.
+#[derive(Clone, Copy, Debug)]
+pub struct JsonPos {
+    pub parent: Tok,
+    pub step: JsonStep,
+    pub site: NodeId,
+    pub obj: Tok,
+    pub arr: Tok,
+}
 pub const NO_FN: FnIdx = u32::MAX;
 /// The run of a function with one body for every call (`Node::frame`);
 /// instance runs count from 1 below it.

@@ -1932,9 +1932,16 @@ pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 /// The objects `JSON.parse` makes at `call`: ordinary objects and arrays
 /// (`members::box_chain`), as `Gen::json_value` models them, whose fields
 /// and elements are such objects or primitives.
-pub(crate) fn json_value(m: &mut Model, call: CallId) -> (Tok, Tok) {
+///
+/// `positions`: the objects are position classes (`solve::json_pos`); a
+/// reviver parse keeps one object token for the whole tree.
+pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, Tok) {
     let j = site_tmpl(m, call, "json");
     let ja = site_tmpl(m, call, "Array");
+    if positions {
+        m.json_root(j, ja);
+        return (j, ja);
+    }
     let fa = m.field_any(j);
     for f in [fa, m.field_any(ja)] {
         m.add_prim(f, prim::ALL);
@@ -2575,7 +2582,8 @@ fn ns_method_inner(
         }
         (BuiltinNs::Json, "parse") => {
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
-            let (j, ja) = json_value(m, call);
+            let reviver = arg(m, call, 1).is_some();
+            let (j, ja) = json_value(m, call, !reviver);
             let fa = m.field_any(j);
             ret_tok(m, call, j);
             ret_tok(m, call, ja);

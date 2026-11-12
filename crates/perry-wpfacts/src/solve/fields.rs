@@ -119,13 +119,24 @@ impl Model {
             // (`field_any`) are read under an index only (`named_any`). A
             // module namespace's named key is resolved by name (DECISIONS
             // 215): it never reads the namespace's other keys.
+            let json = self.is_json_obj_pos(t);
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
+                || json
                 || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
             let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
             self.edge(any, n);
+            // A JSON object's property named here: its own position class
+            // (`json_pos`), distinct from every other name's.
+            // Every property of a parsed object is an own enumerable data
+            // property (ECMA-262 25.5.1 CreateDataProperty): a name read
+            // here may be one of its keys, which a for-in lists.
+            if json {
+                self.json_child(t, JsonStep::Named(a), n);
+                self.enum_key_mark(n, t, a);
+            }
             // A Number-valued key can name this field, including NaN,
             // Infinity and exponent forms. Other named fields never read
             // numeric-only writes. The range is a value fact, not a type.
@@ -352,6 +363,15 @@ impl Model {
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
         self.rel(|| format!("fieldany {n} {t}"));
+        // A JSON object's properties under keys no read names, or an
+        // array's elements: their own position class (`json_pos`).
+        if self.json_pos.contains_key(&t) {
+            let step = match self.is_json_obj_pos(t) {
+                true => JsonStep::Any,
+                false => JsonStep::Elem,
+            };
+            self.json_child(t, step, n);
+        }
         let all = self.all_fields(t);
         self.edge(n, all);
         // DECISIONS 241: what the units stored under a computed key.
@@ -386,7 +406,7 @@ impl Model {
     /// write under an unknown key goes here: a computed-key store, unknown
     /// code's writes (escape, hard), a spread, a computed-key accessor.
     pub fn any_key_node(&mut self, t: Tok) -> NodeId {
-        match self.is_elem_array(t) {
+        match self.is_elem_array(t) || self.is_json_obj_pos(t) {
             true => self.named_any(t),
             false => self.field_any(t),
         }
