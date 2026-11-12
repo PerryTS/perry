@@ -45,7 +45,7 @@ impl Model {
     pub fn key_fields(&mut self, t: Tok, key: Key) -> NodeId {
         let Some(s) = self.shape_splits(t, key) else {
             return match key {
-                Key::Named(a) => self.field(t, a),
+                Key::Named(a) => self.field_r(t, a),
                 Key::Any(_) => self.all_fields(t),
             };
         };
@@ -60,7 +60,7 @@ impl Model {
         self.edge(any, n);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.key_may_name(key, a) {
-                let f = self.field(t, a);
+                let f = self.field_r(t, a);
                 self.edge(f, n);
             }
         }

@@ -634,7 +634,7 @@ impl Model {
         self.edge(numeric, n);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.is_num_atom(a) {
-                let f = self.field(t, a);
+                let f = self.field_r(t, a);
                 self.edge(f, n);
             }
         }

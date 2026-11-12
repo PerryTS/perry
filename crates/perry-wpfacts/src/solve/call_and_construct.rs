@@ -793,7 +793,7 @@ impl Model {
             },
         );
         let like = self.node_l("from-array-like");
-        let own = self.field(t, wk);
+        let own = self.field_r(t, wk);
         let any = self.field_any(t);
         for test in [inherited, own, any] {
             self.cons(
@@ -1116,7 +1116,7 @@ impl Model {
         // Own function-valued fields, then the prototype chain.
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
-            (Key::Named(a), None) => self.field(t, a),
+            (Key::Named(a), None) => self.field_r(t, a),
             (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);

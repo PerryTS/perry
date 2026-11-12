@@ -102,7 +102,7 @@ impl Model {
             || (shadow && !stored)
             || (stored && marker)
         {
-            let f = self.field(t, a);
+            let f = self.field_r(t, a);
             self.edge(f, n);
         }
         Some(n)
@@ -287,7 +287,7 @@ impl Model {
                     for vt in self.virt_by_class.get(&p).cloned().unwrap_or_default() {
                         if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
                             if self.is_marker(vt) {
-                                let f = self.field(vt, a);
+                                let f = self.field_r(vt, a);
                                 self.edge(f, n);
                             } else {
                                 self.edge(s, n);
@@ -360,7 +360,7 @@ impl Model {
                 };
                 for a in keys {
                     if let Some(&n) = self.virt_nodes.get(&(vt, a)) {
-                        let f = self.field(vt, a);
+                        let f = self.field_r(vt, a);
                         self.edge(f, n);
                     }
                 }
