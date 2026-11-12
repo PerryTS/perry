@@ -53,6 +53,8 @@ If you've used ink, the only real difference at the surface is the **factory cal
 
 ## Architecture in one paragraph
 
+Widget handles use an indexed registry: finding a handle is average O(1), while copying a node still depends on its text or child count. Handles remain valid across renders; this lookup optimization does not reclaim nodes or introduce frame-scoped lifetimes.
+
 `run(component)` enters the alt screen, enables raw mode on stdin, spawns a reader thread, and loops: reset hook index → call the component closure → diff the returned widget tree against the front buffer → emit minimal ANSI to reconcile → drain pending keypresses (dispatching to `useInput` handlers and the focus ring) → if any state changed, immediately re-render; else idle 16 ms. Exit happens when `exit()` (or `useApp().exit()`) flips a flag the loop checks at the top of every iteration. On exit, raw mode is restored and the alt screen is left so your terminal returns to exactly the state it was in before the program ran.
 
 ## What's next
