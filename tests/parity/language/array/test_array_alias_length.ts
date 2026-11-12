@@ -323,6 +323,81 @@ for (let i = 0; i < A24.length; i++) {
   G24.pop();
 }
 
+// T: the loop's other tiers (float elements and a long walk, a store
+// through the walked name beside growth through the other, a nested walk,
+// object elements, string elements).
+function t1(): string {
+  const own: number[] = [];
+  for (let i = 0; i < 1000; i++) own.push(i * 0.5);
+  const xs = k ? own : [1.5];
+  let acc = 0;
+  let n = 0;
+  for (let j = 0; j < xs.length; j++) {
+    acc += xs[j];
+    n++;
+    own.pop();
+  }
+  return acc + ":" + n;
+}
+function t2(a: number[], b: number[]): string {
+  let n = 0;
+  for (let j = 0; j < a.length; j++) {
+    a[j] = a[j] * 2;
+    n++;
+    if (j < 5) b.push(j);
+  }
+  return n + ":" + a.length;
+}
+function t3(a: number[], b: number[]): string {
+  let s = 0;
+  let n = 0;
+  for (let i = 0; i < a.length; i++) {
+    for (let j = 0; j < b.length; j++) {
+      s += b[j];
+      n++;
+    }
+    a.pop();
+  }
+  return s + ":" + n;
+}
+function t4(s: string[], t: string[]): string {
+  let out = "";
+  for (let j = 0; j < s.length; j++) {
+    out += s[j];
+    t.shift();
+  }
+  return out;
+}
+interface Cell {
+  v: number;
+}
+function t5(): string {
+  const own: Cell[] = [{ v: 1 }, { v: 2 }, { v: 3 }, { v: 4 }];
+  const xs = k ? own : [];
+  let n = 0;
+  for (let j = 0; j < xs.length; j++) {
+    xs[j].v = xs[j].v + 1;
+    n++;
+    if (j < 2) own.push({ v: 9 });
+  }
+  let s = "";
+  for (let j = 0; j < own.length; j++) s += own[j].v + ",";
+  return n + ":" + s;
+}
+function t6(): string {
+  const own: Cell[] = [{ v: 1 }, { v: 2 }, { v: 3 }, { v: 4 }, { v: 5 }, { v: 6 }];
+  const other: Cell[] = [{ v: 7 }];
+  const xs = k ? own : other;
+  let acc = 0;
+  let n = 0;
+  for (let j = 0; j < xs.length; j++) {
+    acc += xs[j].v;
+    n++;
+    own.pop();
+  }
+  return acc + ":" + n;
+}
+
 // K: stores through another name into another Array: the loop is the
 // hoisted loop, by the fact.
 function k1(): string {
@@ -431,6 +506,15 @@ const s22 = [1, 2, 3, 4, 5, 6];
 console.log("b22", b22(s22, s22));
 console.log("b23", b23());
 console.log("b24", s24);
+console.log("t1", t1());
+const s2: number[] = [];
+for (let i = 0; i < 10; i++) s2.push(i + 0.5);
+console.log("t2", t2(s2, s2));
+const s3 = [1, 2, 3, 4, 5, 6];
+console.log("t3", t3(s3, s3));
+const s4 = ["a", "b", "c", "d", "e", "f"];
+console.log("t4", t4(s4, s4));
+console.log("t5", t5());
 console.log("k1", k1());
 console.log("k2", k2());
 console.log("k3", k3([1, 2, 3], [9]));
@@ -459,3 +543,5 @@ console.log("n10", b10([1, 2, 3], [4, 5]));
 console.log("n14", b14());
 console.log("n20", b20([1, 2, 3], [0, 0, 0, 0]));
 console.log("n22", b22([1, 2, 3, 4], [5, 6]));
+k = 1;
+console.log("t6", t6());
