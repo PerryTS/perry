@@ -203,6 +203,8 @@ def density(name, exe, sites, tests, go, dense_out):
             bad.append(f"sparse sampled {n:.0f} (want 0 < n < {exact['sampled']})")
         if x["unresolved"]:
             bad.append(f"unresolved {x['unresolved']:.0f}")
+        if name == "r8_shape_remint" and not x.get("meta_objs"):
+            bad.append("meta_objs 0: no key list minted, the fixture does not exercise the exclusion")
         if exact.get("clean") == exact["sampled"] and x["clean"] != n:
             bad.append(f"clean {x['clean']:.0f} of {n:.0f}")
         if exact.get("dirty") == exact["sampled"] and (x["dirty"] != n or x["surv1"] != n or x["surv_objs"] != n):
