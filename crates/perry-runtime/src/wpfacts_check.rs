@@ -576,6 +576,8 @@ pub extern "C" fn perry_verify_facts_tick() {
 // hooks (`gc/diagnostic_hooks.rs`).
 #[cfg(perry_gc_instruments)]
 mod life;
+#[cfg(perry_gc_instruments)]
+mod life_measure;
 mod report;
 pub(crate) mod records;
 use report::Witness;

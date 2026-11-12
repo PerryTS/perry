@@ -196,7 +196,7 @@ impl Drop for Registered {
 
 /// Starts the census of one module (a no-op unless `PERRY_LIFE_CENSUS`).
 pub(crate) fn register(hir: &perry_hir::Module, facts: &Arc<ElisionFacts>) -> Option<Registered> {
-    if path().is_none() && !super::life_claims::wanted() {
+    if path().is_none() && !super::life_claims::wanted() && !super::life_claims::measured() {
         return None;
     }
     let m = Arc::new(ModuleCensus::new(hir, facts));
@@ -345,7 +345,7 @@ pub(crate) fn observe(
     module_globals: &HashMap<u32, String>,
     scalar: &Scalar<'_>,
 ) -> LifeClaims {
-    if path().is_none() && !super::life_claims::wanted() {
+    if path().is_none() && !super::life_claims::wanted() && !super::life_claims::measured() {
         return LifeClaims::default();
     }
     let key = stmts.as_ptr() as usize;
@@ -374,11 +374,19 @@ pub(crate) fn observe(
             pending.push((label.clone(), row));
         }
     }
-    if super::life_claims::wanted() {
-        claims
-    } else {
-        LifeClaims::default()
+    let mut claims = claims;
+    if !super::life_claims::wanted() {
+        claims.frame.clear();
+        claims.dropped_args.clear();
     }
+    if super::life_claims::measured() {
+        claims.body = key;
+        crate::verify_facts::life_measure::write_sites(claims.births.values().map(|(k, _)| k.as_str()));
+    } else {
+        claims.births.clear();
+        claims.loops.clear();
+    }
+    claims
 }
 
 /// The heap birth a row counts.
@@ -513,6 +521,7 @@ fn classify(
         pending_use: None,
         call_site: None,
         claims: LifeClaims::default(),
+        loop_body: 0,
     };
     for s in stmts {
         c.stmt(s);
@@ -637,6 +646,9 @@ struct Census<'a> {
     /// While a direct call's arguments are walked: (byte_offset, byte_end)
     /// of the call and the callee's name.
     call_site: Option<(u32, u32, String)>,
+    /// The innermost loop body being walked (address; 0: none), for the
+    /// measurement's site records.
+    loop_body: usize,
     /// The body's lifetime claims (`life_claims`).
     claims: LifeClaims,
 }
@@ -846,6 +858,8 @@ impl Census<'_> {
                         _ => self.next_ordinal(),
                     };
                     self.defs.insert(*id, at);
+                    let class = birth(init).map(|b| b.1).unwrap_or_default();
+                    self.measured(init, self.cand_kind(*id), &class, at);
                     let saved = self.outer.replace(format!("@cand:{id}"));
                     for a in args {
                         self.expr(a, Some(init));
@@ -927,8 +941,10 @@ impl Census<'_> {
                 }
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
                 self.expr(condition, None);
                 self.stmts(body);
+                self.loop_body = saved;
             }
             Stmt::For {
                 init,
@@ -939,6 +955,7 @@ impl Census<'_> {
                 if let Some(s) = init {
                     self.stmt(s);
                 }
+                let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
                 if let Some(e) = condition {
                     self.expr(e, None);
                 }
@@ -946,6 +963,7 @@ impl Census<'_> {
                     self.expr(e, None);
                 }
                 self.stmts(body);
+                self.loop_body = saved;
             }
             Stmt::Labeled { body, .. } => self.stmt(body),
             Stmt::Try {
@@ -992,6 +1010,24 @@ impl Census<'_> {
         self.pending_use = None;
     }
 
+    /// LIFE I1: the measurement's record of birth `e` (`kind`, `class`, at
+    /// `offset`: a `new`'s byte offset, else its ordinal), keyed as the row.
+    fn measured(&mut self, e: &Expr, kind: Kind, class: &str, offset: u32) {
+        if !super::life_claims::measured() {
+            return;
+        }
+        let label = self.body.map_or("<init>", |b| b.label.as_str());
+        let offset = match kind {
+            Kind::New => offset.to_string(),
+            _ => format!("#{offset}"),
+        };
+        let key = format!("{}\t{label}\t{}\t{class}\t{offset}", self.m.name, kind.word());
+        self.claims.births.insert(e as *const Expr as usize, (key, self.loop_body));
+        if self.loop_body != 0 {
+            self.claims.loops.insert(self.loop_body);
+        }
+    }
+
     fn next_ordinal(&mut self) -> u32 {
         self.ordinal += 1;
         self.ordinal
@@ -1013,6 +1049,7 @@ impl Census<'_> {
         };
         let at = self.next_ordinal();
         self.defs.insert(id, at);
+        self.measured(e, kind, &class, at);
         self.candidates.insert(
             id,
             Cand {
@@ -1066,6 +1103,7 @@ impl Census<'_> {
             Expr::New { byte_offset, .. } if kind == Kind::New => *byte_offset,
             _ => self.next_ordinal(),
         };
+        self.measured(e, kind, &class, offset);
         let outer = match parent {
             Some(p) if birth(p).is_some() => self.outer.clone().unwrap_or_else(|| "-".into()),
             _ => "-".to_string(),

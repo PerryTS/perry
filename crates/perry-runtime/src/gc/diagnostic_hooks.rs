@@ -218,6 +218,24 @@ static LIFE_BEFORE_MINOR: Hook<fn()> = Hook::empty();
 #[cfg(perry_gc_instruments)]
 static LIFE_AFTER_MINOR: Hook<fn()> = Hook::empty();
 
+// LIFE I1 (`wpfacts_check/life_measure.rs`): a synchronous full cycle has
+// complete marks (beside the census's pass 1).
+#[cfg(perry_gc_instruments)]
+static LIFE_FULL_MARKED: Hook<fn()> = Hook::empty();
+
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_full_marked() {
+    if let Some(f) = LIFE_FULL_MARKED.get() {
+        f();
+    }
+}
+
+/// The lifetime measurement's full-cycle hook.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn install_life_full(marked: fn()) {
+    LIFE_FULL_MARKED.set(marked);
+}
+
 #[cfg(perry_gc_instruments)]
 pub(super) fn life_reached(old: usize, new: usize) {
     if let Some(f) = LIFE_REACHED.get() {

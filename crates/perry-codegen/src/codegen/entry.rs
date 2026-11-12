@@ -1443,6 +1443,7 @@ pub(super) fn compile_module_entry(
                     let _ = ctx
                         .block()
                         .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                    crate::verify_facts::life_measure::turn(&mut ctx);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
@@ -1490,6 +1491,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 let _ = ctx.block().call(I32, "js_event_loop_timers_phase", &[]);
                 if cross_module.needs_stdlib {
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);

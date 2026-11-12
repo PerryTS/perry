@@ -38,6 +38,15 @@ pub(crate) struct LifeClaims {
     pub frame: BTreeMap<u32, ClaimBirth>,
     /// Dropped argument births by (call byte_offset, call byte_end, index).
     pub dropped_args: HashMap<(u32, u32, usize), ClaimBirth>,
+    /// LIFE I1 (`PERRY_LIFE_MEASURE`): every census birth of the body by
+    /// expression address: its site key (`module, function, kind, class,
+    /// offset`, tab-separated, the census row's columns) and the body
+    /// address of its innermost enclosing loop (0: in no loop).
+    pub births: HashMap<usize, (String, usize)>,
+    /// The loop bodies (statement-list addresses) that enclose a birth.
+    pub loops: std::collections::HashSet<usize>,
+    /// The body's own statement list (address): its activation.
+    pub body: usize,
 }
 
 impl LifeClaims {
@@ -46,6 +55,11 @@ impl LifeClaims {
 /// The census runs for its claims in this compilation.
 pub(crate) fn wanted() -> bool {
     crate::verify_facts::life_claims_on()
+}
+
+/// The census runs for the measurement's site keys in this compilation.
+pub(crate) fn measured() -> bool {
+    crate::verify_facts::life_measure_on()
 }
 
 /// The `fate:`/`fatebet:` negative control: (function name, index, bet).

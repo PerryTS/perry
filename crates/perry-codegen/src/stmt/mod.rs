@@ -229,8 +229,10 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     crate::verify_facts::life::list_begin(ctx, stmts);
+    crate::verify_facts::life_measure::list_begin(ctx, stmts);
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
     crate::verify_facts::life::list_end(ctx, stmts, lowered.is_ok());
+    crate::verify_facts::life_measure::list_end(ctx, stmts, lowered.is_ok());
     // N2: a function-level base installed in this lowering of the list ends
     // with it.
     fn_base::end_list(ctx, stmts);
@@ -573,6 +575,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             }
             let v = lower_return_expr(ctx, e)?;
             let v = crate::verify_facts::life::at_return(ctx, v)?;
+            let v = crate::verify_facts::life_measure::at_return(ctx, v)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
             // js_promise_resolved (whose Promise.resolve(p) === p identity
@@ -630,6 +633,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             if let Some(r) = ctx.sig_record_return {
                 return crate::codegen::record_sig::lower_return(ctx, r, None);
             }
+            crate::verify_facts::life_measure::at_return(ctx, String::new())?;
             // Bare `return;` returns the NaN-boxed `undefined` value
             // (TAG_UNDEFINED). For async functions, wrap it in a
             // resolved promise.
@@ -744,6 +748,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 update.as_ref(),
                 body,
             );
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }
@@ -755,6 +760,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 loops::bounded_poll::Loop::While { condition, body },
             );
             let lowered = lower_while(ctx, condition, body);
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }
@@ -766,6 +772,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 loops::bounded_poll::Loop::DoWhile { body, condition },
             );
             let lowered = lower_do_while(ctx, body, condition);
+            crate::verify_facts::life_measure::iteration(ctx, body);
             loops::bounded_poll::end(ctx, polls);
             lowered
         }

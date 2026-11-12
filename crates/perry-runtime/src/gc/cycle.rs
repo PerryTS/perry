@@ -1109,6 +1109,8 @@ impl GcCycleState {
             // synchronous full cycle (block persistence has not run yet).
             if self.minor.is_none() && !self.progress_kind.is_budgeted() {
                 super::census::census_pass1_if_armed();
+                #[cfg(perry_gc_instruments)]
+                super::diagnostic_hooks::life_full_marked();
             }
         }
         if DIAGNOSTICS {

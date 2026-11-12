@@ -637,6 +637,13 @@ pub fn run_with_parse_cache(
             super::optimized_libs::instrumented_variant_requested(),
         );
     }
+    // The lifetime measurement's hooks (`PERRY_LIFE_MEASURE`, an instrument
+    // knob) exist only in the instrumented variant, which the knob selects.
+    if perry_codegen::verify_facts::life_measure_requested() {
+        perry_codegen::verify_facts::set_instrumented_variant(
+            super::optimized_libs::instrumented_variant_requested(),
+        );
+    }
     // The lifetime census (`PERRY_LIFE_CENSUS`) writes its rows from codegen;
     // a cache hit skips codegen and would leave the census silently empty.
     // It changes no emitted byte, so it is not a cache key; it forces the
