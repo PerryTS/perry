@@ -5,7 +5,10 @@
 //! `Vector3`'s `*[Symbol.iterator]()`: `_vector.x` read the generator
 //! function, and `attr.setXYZ(i, _vector.x, ...)` stored it into a typed
 //! array the model does not hold.) The method's escape is observed
-//! through the `W` its body yields to whoever runs it.
+//! through the `W` it returns to whoever calls it. A plain method, not a
+//! generator: a generator's yield the lowering leaves untransformed hands
+//! the yielded value on by itself ("untransformed yield"), so a generator
+//! fixture showed that instead of the rule (red with and without it).
 
 use super::*;
 
@@ -30,7 +33,7 @@ fn src(key: &str, stored: &str) -> String {
     format!(
         "const unknown: any = new Function(process.argv[2])();
          class W {{ w = 1; }}
-         class V {{ x = 1; *[{key}]() {{ yield new W(); }} }}
+         class V {{ x = 1; [{key}]() {{ return new W(); }} }}
          const v: any = new V();
          unknown[0] = {stored};
          console.log(v.x);"
@@ -50,7 +53,7 @@ fn a_string_keyed_method_is_not_read_under_another_key() {
 }
 
 /// Control: a key known only at run time may be "x": unknown code gets
-/// the generator function and runs it, so the `W` it yields escapes.
+/// the method and calls it, so the `W` it returns escapes.
 #[test]
 fn an_unknown_key_stays_open() {
     let pf = whole(&src("process.argv[3]", "v.x"));
