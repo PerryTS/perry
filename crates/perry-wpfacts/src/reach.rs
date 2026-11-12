@@ -56,6 +56,17 @@ pub(crate) fn iter_close() -> bool {
     )
 }
 
+/// `PERRY_FACTS_REACH_GEN_MEMBERS=0`: a generator object has `next`,
+/// `return` and `throw` only; `[Symbol.iterator]`, the iterator helpers
+/// and a value read of any of them find nothing
+/// (`builtins::gen_members`).
+pub(crate) fn gen_members() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_REACH_GEN_MEMBERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 impl Model {
     /// The call site of `call` as a hand-written built-in rule reads it by
     /// position (`c.args.first()`, `c.args.get(i)`): its first `n`
