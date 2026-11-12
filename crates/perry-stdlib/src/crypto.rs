@@ -22,6 +22,7 @@ mod prime;
 mod random;
 mod sign;
 pub(crate) mod util;
+mod uuid;
 mod wide_digest;
 mod x509;
 

@@ -3194,7 +3194,6 @@ dependencies = [
  "perry-runtime",
  "perry-tls-session",
  "perry-updater",
- "perry-uuid",
  "rand 0.10.2",
  "rand_core 0.6.4",
  "rsa",
@@ -3246,12 +3245,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "perry-uuid"
-version = "0.5.1654"
-dependencies = [
- "getrandom 0.4.3",
-]
-
 [[package]]
 name = "phf"
 version = "0.11.3"

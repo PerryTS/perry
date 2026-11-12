@@ -134,7 +134,6 @@ pub extern "C" fn js_array_destructure_needs_iterator(value: f64) -> i32 {
     i32::from(dense_spread_source(value).is_none())
 }
 
-
 /// Element-copy an array [`dense_spread_source`] has already proven ordinary.
 ///
 /// `value` is the NaN-boxed receiver rather than a raw pointer because
@@ -264,13 +263,22 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
     if arr.is_null() {
         return js_array_alloc(0);
     }
-    let levels: u32 = if depth.is_nan() || depth <= 0.0 {
-        0
-    } else if depth.is_infinite() || depth > u32::MAX as f64 {
-        u32::MAX
+    // ToIntegerOrInfinity(depth): `flat("2")` spreads two levels, and an
+    // explicit `undefined` is the default of one.
+    let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
+        1.0
     } else {
-        depth as u32
+        crate::builtins::js_number_coerce(depth)
     };
+    let levels = flat_levels(depth);
+    let recv_value = f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits());
+    if !unsafe { crate::array::species::default_species_is_certain(recv_value) } {
+        // An own `constructor`, a recorded prototype or a `constructor`
+        // accessor: the species resolution can run user code and the result
+        // may be any object.
+        let result = super::generic::flat_with_species(recv_value, levels);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr as *mut ArrayHeader);
     let result = js_array_alloc(0);
@@ -285,30 +293,24 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
 pub extern "C" fn js_arraylike_flat(receiver: f64, depth: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
-    let source = js_array_from_arraylike_holey_value(receiver_handle.get_nanbox_f64());
-    let source_handle = scope.root_raw_mut_ptr(source);
     let depth = if depth.to_bits() == crate::value::TAG_UNDEFINED {
         1.0
     } else {
         crate::builtins::js_number_coerce(depth)
     };
-    let result = js_array_flat_depth(source_handle.get_raw_mut_ptr::<ArrayHeader>(), depth);
-    f64::from_bits(crate::value::JSValue::pointer(result as *const u8).bits())
+    // ArraySpeciesCreate(O, 0) on the receiver itself (an Array-subclass
+    // instance bears an instance of its species), then FlattenIntoArray.
+    super::generic::flat_with_species(receiver_handle.get_nanbox_f64(), flat_levels(depth))
 }
 
-/// One `FlattenIntoArray(target, mapped, depth = 1)` step of
-/// `Array.prototype.flatMap` (ECMA-262 §23.1.3.11): an `IsArray` value
-/// (proxies included, as for `flat`) contributes its present elements, any
-/// other value is appended itself. Returns the possibly re-grown `result`.
-///
-/// # Safety
-/// `result` is a live array the caller keeps rooted.
-pub(crate) unsafe fn flat_map_append(result: *mut ArrayHeader, mapped: f64) -> *mut ArrayHeader {
-    let sub_arr = flattenable_array_ptr(mapped);
-    if sub_arr.is_null() {
-        js_array_push_f64(result, mapped)
+/// ToIntegerOrInfinity(depth) as the number of levels to spread.
+fn flat_levels(depth: f64) -> u32 {
+    if depth.is_nan() || depth <= 0.0 {
+        0
+    } else if depth.is_infinite() || depth > u32::MAX as f64 {
+        u32::MAX
     } else {
-        js_array_flat_into(result, sub_arr, 0)
+        depth as u32
     }
 }
 
@@ -324,6 +326,8 @@ unsafe fn js_array_flat_into(
     // and derive its live address for every observable indexed operation.
     let scope = crate::gc::RuntimeHandleScope::new();
     let src_handle = scope.root_raw_mut_ptr(src as *mut ArrayHeader);
+    // An exotic read can run a getter, which can collect and move the result.
+    let result_handle = scope.root_raw_mut_ptr(result);
     let len = (*src_handle.get_raw_mut_ptr::<ArrayHeader>()).length as usize;
     let exotic = crate::array::array_iteration_is_exotic(src);
     for i in 0..len {
@@ -348,6 +352,7 @@ unsafe fn js_array_flat_into(
             }
             element
         };
+        result = result_handle.get_raw_mut_ptr::<ArrayHeader>();
         let mut pushed = false;
         if depth_left > 0 {
             let sub_arr = flattenable_array_ptr(element);
@@ -359,8 +364,9 @@ unsafe fn js_array_flat_into(
         if !pushed {
             result = js_array_push_f64(result, element);
         }
+        result_handle.set_raw_mut_ptr(result);
     }
-    result
+    result_handle.get_raw_mut_ptr::<ArrayHeader>()
 }
 
 /// Flatten an array of arrays into a single array (depth=1).
@@ -368,51 +374,10 @@ unsafe fn js_array_flat_into(
 /// append all its elements; otherwise append the element directly.
 #[no_mangle]
 pub extern "C" fn js_array_flat(arr: *const ArrayHeader) -> *mut ArrayHeader {
-    let arr = clean_arr_ptr(arr);
-    if arr.is_null() {
-        return js_array_alloc(0);
-    }
-    unsafe {
-        // Slots at or past capacity are holes (a pre-sized `new Array(n)` above
-        // the dense limit keeps a small store under a long logical length).
-        let len = ((*arr).length as usize).min((*arr).capacity as usize);
-        let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
-        let mut result = js_array_alloc(0);
-
-        for i in 0..len {
-            let element = *elements.add(i);
-            // Per ECMAScript FlattenIntoArray, holes are absent and skipped.
-            if element.to_bits() == crate::value::TAG_HOLE {
-                continue;
-            }
-            let sub_arr = flattenable_array_ptr(element);
-            if !sub_arr.is_null() {
-                let sub_len = (*sub_arr).length as usize;
-                // Sanity check: if length is unreasonably large, treat as non-array.
-                if sub_len <= 1_000_000 {
-                    let sub_len = sub_len.min((*sub_arr).capacity as usize);
-                    let sub_elements =
-                        crate::array::array_elements_ptr(sub_arr as *const ArrayHeader)
-                            as *const f64;
-                    for j in 0..sub_len {
-                        let sub = *sub_elements.add(j);
-                        // Skip holes in the flattened sub-array too.
-                        if sub.to_bits() == crate::value::TAG_HOLE {
-                            continue;
-                        }
-                        result = js_array_push_f64(result, sub);
-                    }
-                } else {
-                    result = js_array_push_f64(result, element);
-                }
-            } else {
-                // Not an array (non-pointer, or a non-array object) — push as-is.
-                result = js_array_push_f64(result, element);
-            }
-        }
-
-        result
-    }
+    // One level of the rooted walk: it reads a sparse or otherwise exotic
+    // source (and sub-array) by HasProperty / Get, and re-reads the source
+    // after every push, which can collect and move it.
+    js_array_flat_depth(arr, 1.0)
 }
 
 /// Spread (`[...x]`) entry point: spec-mandated `GetIterator(x)` throws
@@ -672,6 +637,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
     let src_h = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(src as i64));
     unsafe {
         let len = (*src).length;
+        if len > (*src).capacity {
+            // A sparse Array keeps a short store under its length: the copy
+            // below would read `length` slots off it. Its present elements are
+            // read by HasProperty / Get into a dense copy, holes kept.
+            return super::exotic_snapshot::exotic_snapshot(src, true);
+        }
         let result_h =
             scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
         let src = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;

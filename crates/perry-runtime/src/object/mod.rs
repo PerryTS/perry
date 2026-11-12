@@ -258,6 +258,8 @@ mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;
 #[cfg(test)]
+mod own_override_array_site_tests;
+#[cfg(test)]
 mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
