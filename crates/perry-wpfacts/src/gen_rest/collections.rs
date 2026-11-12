@@ -56,6 +56,16 @@ impl<'a> Gen<'a> {
                 );
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
+                // The node is the call `a.pop()`: a receiver that holds its
+                // own `pop` (an own property, an own prototype, an object
+                // behind the Array annotation) runs that method, and its
+                // result is the node's value (codegen: the checked entry
+                // `js_array_m_pop0`).
+                if super::array_method_tiers() {
+                    let pop = self.m.atom("pop");
+                    let ret = self.mcall(a, Key::Named(pop), vec![], vec![]);
+                    self.m.edge(ret, out);
+                }
                 out
             }
             // `Array.prototype.reverse.call(r)`: with the length floor on, a

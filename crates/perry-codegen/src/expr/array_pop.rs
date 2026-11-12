@@ -243,7 +243,7 @@ pub(crate) fn lower_array_pop_inline(ctx: &mut FnCtx<'_>, recv_box: &str) -> Str
     ctx.current_block = slow_idx;
     let slow = {
         let blk = ctx.block();
-        blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &handle)])
+        crate::expr::array_proto_guard::emit_array_pop_call(blk, recv_box, &handle)
     };
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
@@ -478,9 +478,9 @@ mod tests {
         let slow = super::super::class_field_barrier_tests::block_body(ir, "apop.slow.")
             .expect("slow block");
         assert!(
-            slow.contains("call double @js_array_pop_f64_site("),
-            "{what}: the runtime pop (behind the builtin-prototype proof) must remain \
-             the fallback:\n{slow}"
+            slow.contains("call double @js_array_m_pop0("),
+            "{what}: the checked runtime pop (the receiver's own proof, else the real \
+             `Get`) must remain the fallback:\n{slow}"
         );
         // An elements-backed Array subclass resolves its payload through the
         // meta record (`ObjectMeta.elements`, word 12) and pops from it with

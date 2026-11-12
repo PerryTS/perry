@@ -270,6 +270,51 @@ pub unsafe extern "C" fn js_receiver_may_own_named_method(recv: f64, key: f64) -
     authoritative_has_own(recv, key)
 }
 
+/// Is `recv` a live ordinary object (`GC_TYPE_OBJECT`: an object literal, a
+/// class instance, an array-like) that is no Array subclass instance?
+///
+/// An Array method site is folded from the receiver's DECLARED type, and a
+/// declared type is a hint: `const a: number[] = obj as any`, a JSON value, a
+/// class instance behind an interface. Such a receiver reads no method from
+/// `%Array.prototype%` unless its own chain says so, and nothing recorded on
+/// the cell proves which method `Get(recv, name)` selects (it may be an own
+/// property, an inherited one, an accessor, or absent: the call's TypeError),
+/// so the site performs the real `Get`. An Array subclass instance keeps the
+/// by-name builtin: its body resolves a class override itself
+/// (`array::subclass`), as before.
+///
+/// # Safety
+/// `recv` is any NaN-boxed value.
+pub(crate) unsafe fn array_site_object_receiver(recv: f64) -> bool {
+    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+        return false;
+    };
+    crate::gc_type_is_object!(header.obj_type)
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && !crate::array::is_array_subclass_instance(recv)
+}
+
+/// THE predicate of every Array method site: must `recv.<key>(..)` perform
+/// the real `Get` (`1`), or does `recv` resolve `key` to the realm's
+/// `Array.prototype` builtin (`0`)?
+///
+/// [`js_receiver_may_own_named_method`] answers for the receiver kinds whose
+/// builtins are lowered directly (an Array from its header and named layout,
+/// a modified prototype, a Proxy); this adds the receiver the annotation lied
+/// about ([`array_site_object_receiver`]). The emitted guard of an Array site
+/// asks this (`PERRY_ARRAY_METHOD_TIERS`, default), and the checked entries
+/// (`builtin_proto_entries::array_admits`) apply the same two tests.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_method_needs_get(recv: f64, key: f64) -> i32 {
+    if array_site_object_receiver(recv) {
+        return 1;
+    }
+    js_receiver_may_own_named_method(recv, key)
+}
+
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
 /// correctly for every cell kind and needs no readable ShapeId.
 ///

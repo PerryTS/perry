@@ -84,6 +84,7 @@ js_array_b_lastIndexOf1	f64	f64,f64
 js_array_b_lastIndexOf2	f64	f64,f64,f64
 js_array_b_map1	f64	f64,f64
 js_array_b_mapDiscard1	f64	f64,f64
+js_array_b_pop0	f64	f64
 js_array_b_reduce1	f64	f64,f64
 js_array_b_reduce2	f64	f64,f64,f64
 js_array_b_reduceRight1	f64	f64,f64
@@ -197,6 +198,7 @@ js_array_m_lastIndexOf1	f64	f64,f64
 js_array_m_lastIndexOf2	f64	f64,f64,f64
 js_array_m_map1	f64	f64,f64
 js_array_m_mapDiscard1	f64	f64,f64
+js_array_m_pop0	f64	f64
 js_array_m_reduce1	f64	f64,f64
 js_array_m_reduce2	f64	f64,f64,f64
 js_array_m_reduceRight1	f64	f64,f64
@@ -215,6 +217,7 @@ js_array_map	ptr	ptr,ptr
 js_array_map_discard	void	ptr,ptr
 js_array_mark_arguments_object	ptr	ptr
 js_array_mark_numeric_f64_layout	i32s	ptr
+js_array_method_needs_get	i32s	f64,f64
 js_array_note_numeric_write	void	ptr,i64
 js_array_note_numeric_write_value	f64	ptr,f64
 js_array_numeric_get_f64_unboxed	f64	ptr,i32u
