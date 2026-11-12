@@ -175,8 +175,18 @@ pub fn prim_method(m: &mut Model, prim: u16, key: Key, call: CallId) {
     match members::prim_member(prim, &name) {
         // `Object.prototype`'s methods on a primitive (no own chain here).
         Some(Mem::Fn) if name == "valueOf" => ret_prim(m, call, prim),
-        Some(Mem::Fn) if name == "toString" || name == "toLocaleString" => {
+        Some(Mem::Fn) if name == "toString" => {
             implicit_args(m, call, "ToString radix", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::STR);
+        }
+        // A Number or BigInt receiver runs its ECMA-402 toLocaleString
+        // (locales and options read by the NumberFormat rule); every other
+        // primitive kind runs Object.prototype.toLocaleString (20.1.3.5),
+        // which Invokes `toString` with no argument: no operand is read.
+        Some(Mem::Fn) if name == "toLocaleString" => {
+            if prim & (prim::NUM | prim::BIGINT) != 0 {
+                string_methods::number_locale_args(m, call);
+            }
             ret_prim(m, call, prim::STR);
         }
         Some(Mem::Fn)

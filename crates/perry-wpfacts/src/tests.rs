@@ -2005,6 +2005,7 @@ mod string_results;
 mod string_this;
 mod top_store_handed_builtins;
 mod typed_array_methods;
+mod typed_locale_args;
 mod web_timer_methods;
 
 /// Export the exact facts fixtures for an independent runtime/Node oracle.

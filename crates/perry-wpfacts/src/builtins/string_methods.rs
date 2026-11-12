@@ -37,6 +37,49 @@ pub(super) fn intl_options(m: &mut Model, o: NodeId, keys: &[&str]) {
     }
 }
 
+/// ECMA-402 19.5.1 / 21.1.1 Number.prototype.toLocaleString and
+/// BigInt.prototype.toLocaleString(locales, options): InitializeNumberFormat
+/// runs CanonicalizeLocaleList on `locales` (`intl_locales`) and reads the
+/// NumberFormat option keys of CoerceOptionsToObject(`options`) by Get
+/// (`intl_options`); later arguments are not read.
+pub(super) fn number_locale_args(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let ops = positions(m, &c);
+    if let Some(&l) = ops.first() {
+        intl_locales(m, l);
+    }
+    if let Some(&o) = ops.get(1) {
+        intl_options(m, o, NUMBER_FORMAT_OPTIONS);
+    }
+}
+
+/// ECMA-402 15.1.2 InitializeNumberFormat with SetNumberFormatDigitOptions
+/// and SetNumberFormatUnitOptions: the option keys read from the options
+/// object.
+const NUMBER_FORMAT_OPTIONS: &[&str] = &[
+    "localeMatcher",
+    "numberingSystem",
+    "style",
+    "currency",
+    "currencyDisplay",
+    "currencySign",
+    "unit",
+    "unitDisplay",
+    "notation",
+    "compactDisplay",
+    "signDisplay",
+    "useGrouping",
+    "minimumIntegerDigits",
+    "minimumFractionDigits",
+    "maximumFractionDigits",
+    "minimumSignificantDigits",
+    "maximumSignificantDigits",
+    "roundingIncrement",
+    "roundingMode",
+    "roundingPriority",
+    "trailingZeroDisplay",
+];
+
 /// Every operand of `call` is read by ToPrimitive: its arguments and the
 /// elements of each spread (CreateListFromArrayLike / the iteration of
 /// `...xs`), read through the element key.
