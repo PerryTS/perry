@@ -1160,6 +1160,18 @@ impl Model {
         // as for a read: the call binds the program prototypes' methods (a
         // superset), not the builtin members, which it takes once the key
         // no longer shadows them (`flush_shadowed`).
+        // ECMA-262 10.1.8.1 OrdinaryGet: a sure own data property is the
+        // callee; the lookup ends at the object (`surely_own_data`).
+        if let Key::Named(a) = key {
+            if self.surely_own_data(t, a) {
+                if virt.is_some() {
+                    let f = self.field_r(t, a);
+                    self.bind_via(f, call, t);
+                }
+                self.note_own_stopped(t, t, a, ChainAct::Call(call));
+                return;
+            }
+        }
         match self.shadow_key(t, key) {
             Some(a) => {
                 let cv = self.cv_of(t, key, false);

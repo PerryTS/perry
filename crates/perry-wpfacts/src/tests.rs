@@ -46,6 +46,7 @@ pub(crate) mod box_computed_read;
 mod for_in_key_read_enumerable;
 mod json_positions;
 mod string_prefix_keys;
+mod uuid_infix_keys;
 mod builtin_fn_absent_member;
 mod sloppy_this_wrapper;
 mod computed_method_key;
@@ -114,6 +115,8 @@ mod for_in_keys;
 mod for_in_runs_per_key;
 mod called_param_runs;
 mod field_truthy_filter;
+mod bool_field_guard;
+mod own_data_stops_chain;
 mod switch_param_runs;
 mod switch_mask_union;
 mod for_in_key_store;
@@ -2008,6 +2011,7 @@ mod string_results;
 mod string_this;
 mod top_store_handed_builtins;
 mod typed_array_methods;
+mod typed_locale_args;
 mod web_timer_methods;
 
 /// Export the exact facts fixtures for an independent runtime/Node oracle.

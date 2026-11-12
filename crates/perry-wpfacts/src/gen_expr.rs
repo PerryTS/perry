@@ -714,7 +714,8 @@ impl<'a> Gen<'a> {
         match e {
             Expr::Undefined => self.prim_node(prim::UNDEF),
             Expr::Null => self.prim_node(prim::NULL),
-            Expr::Bool(_) => self.prim_node(prim::BOOL),
+            Expr::Bool(true) => self.prim_node(prim::TRUE),
+            Expr::Bool(false) => self.prim_node(prim::FALSE),
             Expr::Number(v) => self.num_literal(*v),
             Expr::Integer(v) => self.num_literal(*v as f64),
             Expr::BigInt(_) => self.prim_node(prim::BIGINT),
@@ -2251,7 +2252,9 @@ impl<'a> Gen<'a> {
                 let k = self.m.atom(method_name);
                 self.mcall(c, Key::Named(k), a, vec![])
             }
-            Expr::This => fx.this,
+            Expr::This => self
+                .narrowed_read(fx.module, crate::gen::narrow::THIS_LOCAL)
+                .unwrap_or(fx.this),
             Expr::ModuleTopThis => fx.this,
             Expr::SuperCall(args) => {
                 let a = self.evaluate_all(fx, args);

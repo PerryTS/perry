@@ -180,7 +180,7 @@ pub(super) fn field_truthy_rows(m: &model::Model) -> Vec<String> {
     let mut out = Vec::new();
     for (i, n) in m.nodes.iter().enumerate() {
         for c in &n.cons {
-            let model::Cons::FieldTruthy { key, dst } = *c else { continue };
+            let model::Cons::FieldTruthy { key, dst, .. } = *c else { continue };
             let toks = n.pts.to_sorted();
             let dpts = &m.nodes[dst as usize].pts;
             let top = toks.iter().any(|&t| t == model::TOP);

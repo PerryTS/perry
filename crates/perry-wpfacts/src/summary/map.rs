@@ -117,7 +117,11 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
-        FieldTruthy { key, dst } => FieldTruthy { key, dst: n(dst) },
+        FieldTruthy { key, test, dst } => FieldTruthy {
+            key,
+            test,
+            dst: n(dst),
+        },
         Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },

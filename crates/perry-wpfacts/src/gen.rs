@@ -363,7 +363,7 @@ pub struct Gen<'a> {
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
-    pub prim_const: [NodeId; 7],
+    pub prim_const: [NodeId; 9],
     /// One node per integer literal value, holding that Number with its
     /// point interval (`Gen::num_literal`); shared like `prim_const`.
     pub num_lits: FxHashMap<i64, NodeId>,
@@ -603,7 +603,7 @@ impl<'a> Gen<'a> {
         m.add_tok(top_tok_node, TOP);
         m.add_prim(top_tok_node, prim::ALL);
         m.top_tok_node = top_tok_node;
-        let mut prim_const = [0; 7];
+        let mut prim_const = [0; 9];
         for (i, p) in [
             prim::NUM,
             prim::STR,
@@ -612,6 +612,8 @@ impl<'a> Gen<'a> {
             prim::UNDEF,
             prim::BIGINT,
             prim::SYMBOL,
+            prim::TRUE,
+            prim::FALSE,
         ]
         .into_iter()
         .enumerate()

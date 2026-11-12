@@ -255,11 +255,8 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             ret_prim(m, call, prim::STR);
         }
         "toLocaleString" => {
-            // Intl locale/option processing has no precise primitive
-            // summary here. Keep those operands conservative until its
-            // dictionary and locale-list preconditions are established.
-            implicit_args(m, call, "typed-array Intl locales/options", Protocol::Any);
-            // Each numeric element's toLocaleString is invoked with the
+            // ECMA-262 23.2.3.31 with ECMA-402 19.5.1: the method reads
+            // neither locales nor options itself; each numeric element's toLocaleString is invoked with the
             // supplied locales/options. Number/BigInt's Intl rule decides
             // their dictionary reads; replacements run through lookup.
             let a = m.atom("toLocaleString");
