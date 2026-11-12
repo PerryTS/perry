@@ -518,6 +518,9 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
+            if DIAGNOSTICS {
+                diagnostic_hooks::life_before_copied_minor();
+            }
             gc_collect_minor_copying_fast_path::<DIAGNOSTICS>(&mut trace, start, trigger.kind)
         }
         // Run the ordinary eligibility preflight — it carries the one-shot
@@ -547,6 +550,9 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
                 .record_collection(freed_bytes, elapsed_us);
         });
         diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
+        if DIAGNOSTICS {
+            diagnostic_hooks::life_after_copied_minor();
+        }
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;

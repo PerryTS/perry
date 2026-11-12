@@ -572,6 +572,7 @@ pub extern "C" fn perry_verify_facts_tick() {
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+mod life;
 mod report;
 pub(crate) mod records;
 use report::Witness;
