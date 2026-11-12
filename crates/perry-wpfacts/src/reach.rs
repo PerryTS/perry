@@ -322,6 +322,22 @@ impl Gen<'_> {
         Some(out)
     }
 
+    /// The values the reviver is called with, the rule on:
+    /// InternalizeJSONProperty walks own properties (EnumerableOwnProperties)
+    /// of the holders, the parse objects and what the reviver stored into
+    /// them, never their chain. An any-key read of a parse object also reads
+    /// its chain (`Object.prototype`, its methods), and with the result
+    /// stored back (`json_reviver_calls`) those would come round as content
+    /// of the parse objects. `None`: the rule is off.
+    pub(crate) fn json_reviver_values(&mut self, parsed: NodeId) -> Option<NodeId> {
+        if !self.m.reach_json_replacer {
+            return None;
+        }
+        let own = self.tmp("json-reviver-values");
+        self.m.cons(parsed, Cons::OwnValues { dst: own });
+        Some(own)
+    }
+
     /// `JSON.parse(text, reviver)`, the rule on: what the reviver returns
     /// is stored into its holder under the key (CreateDataProperty,
     /// InternalizeJSONProperty 25.5.1.1), so a named read of the holder

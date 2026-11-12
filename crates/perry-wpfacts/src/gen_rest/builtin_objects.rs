@@ -312,7 +312,11 @@ impl<'a> Gen<'a> {
                 let rv = self.expr(fx, reviver);
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::any());
+                // Own values only, the rule on (`json_reviver_values`).
+                let vals = match self.json_reviver_values(v) {
+                    Some(own) => own,
+                    None => self.load(v, Key::any()),
+                };
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
                 // Stored under its key (`json_reviver_calls`).
