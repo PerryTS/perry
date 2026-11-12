@@ -557,6 +557,14 @@ pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<crate::va
         .get()
         .and_then(|lookup| lookup(addr, name))
 }
+/// `[[HasProperty]]` of a byte cell (`buffer_dispatch::buffer_recorded_has`,
+/// a boolean value): `None` when it records no `[[Prototype]]`. Same group; an empty slot is the birth chain's answer.
+static BUFFER_RECORDED_HAS: Hook<fn(usize, &str, f64) -> Option<f64>> = Hook::empty();
+pub(crate) fn buffer_recorded_has(addr: usize, name: &str, key: f64) -> Option<f64> {
+    BUFFER_RECORDED_HAS
+        .get()
+        .and_then(|has| has(addr, name, key))
+}
 /// The name dispatch on a Buffer once the program wrote `Buffer.prototype`
 /// (`buffer_dispatch::dispatch_buffer_method` behind the shadow bit), same
 /// group; an empty slot is the builtin dispatch.
@@ -570,6 +578,7 @@ pub(crate) fn install() {
     crate::perry_install_once!({
         BUFFER_WRITTEN_MEMBER.set(crate::object::buffer_written_member_lookup);
         BUFFER_WRITTEN_DISPATCH.set(crate::object::dispatch_written_buffer_lookup);
+        BUFFER_RECORDED_HAS.set(crate::object::buffer_recorded_has);
         BUFFER_PROTOTYPE_MEMBERS
             .set(crate::object::native_module::callable_exports::install_buffer_prototype_members);
         COERCE_FOR_KIND.set(crate::typedarray::bigint::coerce_for_kind);

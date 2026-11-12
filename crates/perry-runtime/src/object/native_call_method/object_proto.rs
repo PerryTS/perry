@@ -360,7 +360,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             // the dispatcher would hand back the utf8 DECODE of their backing
             // bytes — a new wrong answer, and a byte leak.
             if crate::buffer::is_byte_indexed_buffer(addr) {
-                return crate::object::dispatch_builtin_buffer_method(
+                return crate::object::dispatch_buffer_method(
                     addr,
                     "toLocaleString",
                     std::ptr::null(),

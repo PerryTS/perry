@@ -587,6 +587,9 @@ impl CoreError {
         Self::with_own_code(js_rangeerror_new, message, code)
     }
 
+    /// The one body of both: out of line, so neither caller carries a copy
+    /// (inlined, the maker becomes a constant and the body is duplicated).
+    #[inline(never)]
     fn with_own_code(
         make: extern "C" fn(*mut StringHeader) -> *mut ErrorHeader,
         message: &[u8],

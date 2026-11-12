@@ -779,12 +779,9 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
 
     let result = match method {
         "set" => {
-            let mut args_ptr = std::ptr::null();
-            if !args.is_empty() {
-                args_ptr = args.as_ptr();
-            }
-            let (addr, _) = recv.live();
-            super::dispatch_builtin_buffer_method(addr, method, args_ptr, args.len())
+            let source = arg_or_undefined(args, 0);
+            let offset = args.get(1).copied().unwrap_or(0.0);
+            u8_set_body(recv.live().0, source, offset)
         }
         "at" => match uint8_at_index(args, len) {
             Some(index) => uint8_get(recv.live().0, index) as f64,
@@ -1256,6 +1253,42 @@ unsafe fn uint8_receiver_or_throw(this: crate::closure::JsThis, method: &str) ->
     }
 }
 
+/// The bodies of the Uint8Array-only members (`set`, `toBase64`, `toHex`,
+/// `setFromBase64`, `setFromHex`) on the byte cell at `addr`: the member's
+/// own, and the arm of the Buffer name dispatch for the same name. A member
+/// that was chosen (by the receiver's chain or an explicit `.call`) runs its
+/// body; the name dispatch would read the chain again and find the member
+/// (or an override below it). Out of line, so each codec keeps one caller.
+#[inline(never)]
+pub(crate) fn u8_set_body(addr: usize, source: f64, offset: f64) -> f64 {
+    crate::buffer::js_buffer_set_from_value(addr as _, source, offset)
+}
+
+/// See [`u8_set_body`].
+#[inline(never)]
+pub(crate) fn u8_to_base64_body(addr: usize, opts: f64) -> f64 {
+    string_value(crate::buffer::js_u8_to_base64(addr as i64, opts))
+}
+
+/// See [`u8_set_body`].
+#[inline(never)]
+pub(crate) fn u8_to_hex_body(addr: usize) -> f64 {
+    string_value(crate::buffer::js_u8_to_hex(addr as i64))
+}
+
+/// See [`u8_set_body`]. `string` is the argument value (its bits are the
+/// handle the codec reads).
+#[inline(never)]
+pub(crate) fn u8_set_from_base64_body(addr: usize, string: f64, opts: f64) -> f64 {
+    crate::buffer::js_u8_set_from_base64(addr as i64, string.to_bits() as i64, opts)
+}
+
+/// See [`u8_set_from_base64_body`].
+#[inline(never)]
+pub(crate) fn u8_set_from_hex_body(addr: usize, string: f64) -> f64 {
+    crate::buffer::js_u8_set_from_hex(addr as i64, string.to_bits() as i64)
+}
+
 pub(super) extern "C" fn u8_to_base64_thunk(
     _c: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -1265,8 +1298,7 @@ pub(super) extern "C" fn u8_to_base64_thunk(
 ) -> f64 {
     unsafe {
         let addr = uint8_receiver_or_throw(this, "toBase64");
-        let args = [opts];
-        super::dispatch_builtin_buffer_method(addr, "toBase64", args.as_ptr(), args.len())
+        u8_to_base64_body(addr, opts)
     }
 }
 
@@ -1279,7 +1311,7 @@ pub(super) extern "C" fn u8_to_hex_thunk(
 ) -> f64 {
     unsafe {
         let addr = uint8_receiver_or_throw(this, "toHex");
-        super::dispatch_builtin_buffer_method(addr, "toHex", std::ptr::null(), 0)
+        u8_to_hex_body(addr)
     }
 }
 
@@ -1292,8 +1324,7 @@ pub(super) extern "C" fn u8_set_from_base64_thunk(
 ) -> f64 {
     unsafe {
         let addr = uint8_receiver_or_throw(this, "setFromBase64");
-        let args = [str_arg, opts];
-        super::dispatch_builtin_buffer_method(addr, "setFromBase64", args.as_ptr(), args.len())
+        u8_set_from_base64_body(addr, str_arg, opts)
     }
 }
 
@@ -1306,8 +1337,7 @@ pub(super) extern "C" fn u8_set_from_hex_thunk(
 ) -> f64 {
     unsafe {
         let addr = uint8_receiver_or_throw(this, "setFromHex");
-        let args = [str_arg];
-        super::dispatch_builtin_buffer_method(addr, "setFromHex", args.as_ptr(), args.len())
+        u8_set_from_hex_body(addr, str_arg)
     }
 }
 

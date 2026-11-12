@@ -505,11 +505,10 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         // A native ArrayBuffer/SharedArrayBuffer constructed with a distinct
         // newTarget (subclassing / Reflect.construct) records that custom
         // [[Prototype]] in the same side table as typed arrays. Honor it before
-        // falling back to the intrinsic buffer prototype.
+        // falling back to the intrinsic buffer prototype; a recorded null is
+        // null (`Object.setPrototypeOf(ab, null)`), not "nothing recorded".
         if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
-            if proto_bits != crate::value::TAG_NULL {
-                return Some(f64::from_bits(proto_bits));
-            }
+            return Some(f64::from_bits(proto_bits));
         }
         let name = if crate::buffer::is_array_buffer(addr) {
             "ArrayBuffer"
@@ -552,11 +551,10 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         // A `Reflect.construct(TA, …, newTarget)` view with a custom
         // `[[Prototype]]` (spec `GetPrototypeFromConstructor`) resolves to the
         // recorded prototype rather than the default per-kind prototype. The
-        // link is stored in the GC-tracked static-prototype side table.
+        // link is stored in the GC-tracked static-prototype side table. A
+        // recorded null is null, not "nothing recorded".
         if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
-            if proto_bits != crate::value::TAG_NULL {
-                return Some(f64::from_bits(proto_bits));
-            }
+            return Some(f64::from_bits(proto_bits));
         }
         let proto = crate::object::builtin_prototype_value(
             crate::typedarray_hook_slots::name_for_kind(kind),

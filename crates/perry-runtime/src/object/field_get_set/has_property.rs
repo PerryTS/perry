@@ -766,13 +766,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                 if let Some(name) = unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
                     .and_then(|b| std::str::from_utf8(b).ok())
                 {
-                    // Own view slots, always present.
-                    if matches!(
-                        name,
-                        "length" | "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" | "buffer"
-                    ) {
-                        return nanbox_true;
-                    }
                     // A CanonicalNumericIndexString (`"0"`, `"100"`, `"-1"`,
                     // `"1.5"`, `"-0"`, `"NaN"`) is resolved ENTIRELY by the
                     // IntegerIndexed [[HasProperty]] (ECMA-262 §10.4.9.2): present
@@ -789,6 +782,21 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                             }
                         }
                         return nanbox_false;
+                    }
+                    // A recorded [[Prototype]] (it lives only in the bag): the
+                    // typed-array group answers own-then-that-chain; none is
+                    // the birth chain, answered below.
+                    if let Some(present) =
+                        crate::typedarray_hook_slots::buffer_recorded_has(obj_addr as usize, name, key)
+                    {
+                        return present;
+                    }
+                    // Own view slots, always present.
+                    if matches!(
+                        name,
+                        "length" | "byteLength" | "byteOffset" | "BYTES_PER_ELEMENT" | "buffer"
+                    ) {
+                        return nanbox_true;
                     }
                     // A Buffer / `Uint8Array` is a `%TypedArray%`, so inherited
                     // prototype members (`subarray`, `map`, `join`, `toString`, …)

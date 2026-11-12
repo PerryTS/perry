@@ -609,7 +609,10 @@ pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JS
         {
             return Some(JSValue::undefined());
         }
-        let receiver = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+        // Reached as a HOLDER on another receiver's chain, the accessor
+        // applies to that receiver (`Object.create(buf).__proto__` is buf).
+        let receiver = crate::object::field_get_set::accessor_receiver_override_take()
+            .unwrap_or_else(|| f64::from_bits(JSValue::pointer(addr as *mut u8).bits()));
         let proto = crate::object::js_object_get_prototype_of(receiver);
         return Some(JSValue::from_bits(proto.to_bits()));
     }
@@ -647,6 +650,35 @@ pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JS
         return None;
     }
     Some(value)
+}
+
+/// `[[HasProperty]](buf, key)` for a byte cell with a bag, linked through the
+/// typed-array hook group: `None` when it records no `[[Prototype]]` (the
+/// birth chain's answer stands); else an own property, then the recorded
+/// chain (`Object.setPrototypeOf(buf, Uint8Array.prototype)` hides
+/// `readUInt8`; null hides everything). `key` is the string key of `name`.
+pub(crate) fn buffer_recorded_has(addr: usize, name: &str, key: f64) -> Option<f64> {
+    let proto = crate::object::prototype_chain::object_static_prototype(addr)?;
+    if crate::buffer::buffer_get_own_prop(addr, name).is_some() {
+        return Some(f64::from_bits(crate::value::TAG_TRUE));
+    }
+    let key_str = crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
+    // SAFETY: `addr` is a live byte cell; `key_str` the live key string.
+    if unsafe {
+        crate::typedarray_props::typed_array_has_own_property(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+            key_str,
+        )
+    } {
+        return Some(f64::from_bits(crate::value::TAG_TRUE));
+    }
+    if proto == crate::value::TAG_NULL {
+        return Some(f64::from_bits(crate::value::TAG_FALSE));
+    }
+    Some(crate::object::field_get_set::js_object_has_property(
+        f64::from_bits(proto),
+        key,
+    ))
 }
 
 /// Call the member [`buffer_written_member`] found, with the Buffer as `this`.
@@ -818,24 +850,15 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         "toString" => buffer_to_string_call(buf_ptr, args),
         // TC39 Uint8Array base64/hex conversion APIs (#2901). Perry aliases
         // Uint8Array → Buffer, so these instance methods reach buffer dispatch.
-        "toBase64" => {
-            let opts = arg_or_zero(0);
-            let s = crate::buffer::js_u8_to_base64(addr as i64, opts);
-            f64::from_bits(JSValue::string_ptr(s).bits())
-        }
-        "toHex" => {
-            let s = crate::buffer::js_u8_to_hex(addr as i64);
-            f64::from_bits(JSValue::string_ptr(s).bits())
-        }
-        "setFromBase64" => {
-            let str_handle = arg_or_zero(0).to_bits() as i64;
-            let opts = arg_or_zero(1);
-            crate::buffer::js_u8_set_from_base64(addr as i64, str_handle, opts)
-        }
-        "setFromHex" => {
-            let str_handle = arg_or_zero(0).to_bits() as i64;
-            crate::buffer::js_u8_set_from_hex(addr as i64, str_handle)
-        }
+        // The bodies are the `Uint8Array.prototype` members' own.
+        "toBase64" => super::typed_array_proto_thunks::u8_to_base64_body(addr, arg_or_zero(0)),
+        "toHex" => super::typed_array_proto_thunks::u8_to_hex_body(addr),
+        "setFromBase64" => super::typed_array_proto_thunks::u8_set_from_base64_body(
+            addr,
+            arg_or_zero(0),
+            arg_or_zero(1),
+        ),
+        "setFromHex" => super::typed_array_proto_thunks::u8_set_from_hex_body(addr, arg_or_zero(0)),
         "inspect" => {
             crate::builtins::js_util_inspect(buf_f64, f64::from_bits(crate::value::TAG_UNDEFINED))
         }
@@ -876,7 +899,7 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                 .first()
                 .copied()
                 .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-            crate::buffer::js_buffer_set_from_value(buf_ptr, source, arg_or_zero(1))
+            super::typed_array_proto_thunks::u8_set_body(addr, source, arg_or_zero(1))
         }
         // #2879: `Uint8Array.prototype.copyWithin` — Buffer/Uint8Array elements
         // are single bytes, so copy at byte granularity. Returns the receiver.
