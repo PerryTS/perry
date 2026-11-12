@@ -160,9 +160,12 @@ elif name in ("f13", "f13s"):
         need(all(int(r["rt"]) > 0 and r["policy"] == "STOP" for r in rp), "no runtime-pc STOP")
     need(0 not in m_init and all(r["init"] != "0" for r in rp), "capture outside an init")
 elif name == "fw":
-    wf = [kv(v) for v in vals("worker_flag")]
-    info = f"rows={wf}"
-    need(len(wf) == 1 and wf[0]["cut"] == "0" and wf[0]["policy"] == "STOP", "no worker_flag STOP row")
+    # SNAPREC2 (SNAPTLS1 T0): no static worker_flag STOP; the primary agent's TLS block is imaged (tls_image at the boundary).
+    tl = [kv(v) for v in vals("tls_image")]
+    info = f"tls_image={tl}"
+    need(not vals("worker_flag"), "a worker_flag row (retired)")
+    need(len(tl) == 1 and tl[0]["policy"] == "image", "no tls_image row")
+    need(not [v for v in vals("worker_spawn") if kv(v)["policy"] == "STOP"], "a worker_spawn STOP row in a program that starts no worker")
 elif name == "f2c":
     e = entry_init()
     c = [kv(v) for v in vals("p_entry") if kv(v).get("rule") == "c"]

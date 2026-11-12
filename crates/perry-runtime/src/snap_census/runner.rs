@@ -713,6 +713,10 @@ struct State {
     /// The walk origin of the async module evaluation now in progress
     /// (0: none, else `WALK_*` in snap_census.rs).
     walk_origin: u8,
+    /// The record the walk in progress was opened for (0: none).
+    walk_root: usize,
+    /// `js_snap_entry_module` was called with a worker program (SNAPTLS1 T0).
+    worker_program: bool,
     /// Global root slots on no tracked page that are not the runtime's own
     /// thread-locals (a program slot the census does not watch): must be 0.
     untracked_slots: u64,
@@ -1023,6 +1027,8 @@ unsafe fn start_census(out: String) {
         entry_module_next: false,
         entry_record: 0,
         walk_origin: 0,
+        walk_root: 0,
+        worker_program: false,
         untracked_slots: 0,
         untracked_first: 0,
         runtime_tls_roots: 0,
@@ -1413,11 +1419,87 @@ pub(super) fn entry_record(addr: usize) {
     }
 }
 
-pub(super) fn walk_origin(origin: u8) -> u8 {
+pub(super) fn walk_origin(origin: u8, root: usize) -> (u8, usize) {
     if !on() {
-        return 0;
+        return (0, 0);
     }
-    std::mem::replace(&mut state().walk_origin, origin)
+    let st = state();
+    (
+        std::mem::replace(&mut st.walk_origin, origin),
+        std::mem::replace(&mut st.walk_root, root),
+    )
+}
+
+/// SNAPREC2: a record leaves the walk stack. The row follows the member's
+/// `init_exit` (the body ran first); `init` is 0 for a record whose body has
+/// not run (a parent that waits on a suspended dependency).
+pub(super) fn record_settle(record: usize, suspended: bool) {
+    if !inputs_on() || !on_main_thread() {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    let init = if record == st.entry_record {
+        st.entry_init
+    } else {
+        st.inits.iter().rposition(|i| i.guard == record).map_or(0, |i| i as u32)
+    };
+    input_record::event(
+        st,
+        "record_settle",
+        format!(
+            "init={init};record={record:x};status={}",
+            if suspended { "ASYNC;policy=STOP" } else { "EVALUATED" }
+        ),
+    );
+}
+
+/// SNAPREC2 (SNAPTLS1 T0): `new Worker` on the main thread. A worker that
+/// starts before the cut cannot be in an image (a blocker); the entry body
+/// re-runs live, so a worker it starts is no blocker.
+pub(super) fn worker_spawn() {
+    if !inputs_on() || !on_main_thread() {
+        return;
+    }
+    let _input_logging = input_record::Scope::enter();
+    let st = state();
+    if !st.worker_rule {
+        return;
+    }
+    let init = top_init(st);
+    let policy = if is_entry(st, init) { "live" } else { "STOP" };
+    input_record::event(st, "worker_spawn", format!("init={init};policy={policy}"));
+}
+
+/// SNAPREC2 (SNAPTLS1 T0): what the primary agent's TLS image would carry,
+/// over the anchored ranges: bytes of `.tdata` and `.tbss`, and the words
+/// that point into those ranges (the module records, their root slots; they
+/// rebase on the block address at restore).
+fn tls_image_row(st: &mut State) {
+    if !st.worker_program || !st.worker_rule || !st.tls_whole {
+        return;
+    }
+    let r = st.tls_ranges;
+    let into = |v: usize| (v >= r[0] && v < r[1]) || (v >= r[2] && v < r[3]);
+    let mut ptr_words = 0usize;
+    for (lo, hi) in [(r[0], r[1]), (r[2], r[3])] {
+        let mut a = lo;
+        while a + 8 <= hi {
+            // SAFETY: whole pages of the main thread's program TLS block.
+            let v = unsafe { std::ptr::read_volatile(a as *const usize) };
+            ptr_words += into(v) as usize;
+            a += 8;
+        }
+    }
+    input_record::event(
+        st,
+        "tls_image",
+        format!(
+            "data={};bss={};tls_ptr_words={ptr_words};policy=image",
+            r[1] - r[0],
+            r[3] - r[2]
+        ),
+    );
 }
 
 pub(super) fn walk_origin_now() -> u8 {
@@ -1676,13 +1758,11 @@ pub(super) fn entry_module(worker: bool) {
     // (entry.rs `entry_in_init`: a worker or top-level await); `worker` tells
     // which. A worker program's init flags are thread-local, which an image
     // cannot initialize (DESIGN27 §1.5), so the cut is 0.
-    if worker && st.worker_rule && inputs_on() && on_main_thread() {
-        let _input_logging = input_record::Scope::enter();
-        input_record::event(
-            st,
-            "worker_flag",
-            "program_has_worker=1;cut=0;policy=STOP".to_owned(),
-        );
+    if worker && inputs_on() && on_main_thread() {
+        // SNAPREC2 (SNAPTLS1 T0): no static STOP. The image carries the
+        // primary agent's TLS block (`tls_image` at the boundary); a worker
+        // started during init is the blocker (`worker_spawn`).
+        st.worker_program = true;
     }
 }
 
@@ -3087,6 +3167,7 @@ pub(super) fn boundary(at: &'static str) {
     if st.boundary_seq != 0 {
         return;
     }
+    tls_image_row(st);
     input_record::event(st, "boundary", at.to_owned());
     charge(st);
     st.seq += 1;
@@ -4103,6 +4184,12 @@ fn write_report(st: &mut State) {
         st.r1 as u8, st.repw.len, st.repw_writes, st.repw_owned, st.repw_reads, st.r2 as u8, st.r3 as u8,
         st.serial as u8, st.keyname as u8, st.symid as u8
     );
+    for (id, i) in st.inits.iter().enumerate().skip(1).filter(|(_, i)| i.guard != 0) {
+        let _ = writeln!(f, "#record\t{:x}\t{id}", i.guard);
+    }
+    if st.entry_record != 0 {
+        let _ = writeln!(f, "#record\t{:x}\t{}", st.entry_record, st.entry_init);
+    }
     let _ = writeln!(f, "#free_space\t{}", st.free_space);
     let _ = writeln!(f, "#reborn\t{}", st.reborn);
     let _ = writeln!(f, "#silent_stores\t{}", st.silent_stores);
@@ -5568,9 +5655,13 @@ fn k2b_enter_rows(st: &mut State) {
                     st,
                     "job_queue",
                     format!(
-                        "init={};pending={};policy=STOP;jobs={}",
+                        "init={};pending={};policy={};walk_root={:x};jobs={}",
                         st.frames.last().map_or(0, |f| f.init),
                         n.map_or("busy".to_owned(), |n| n.to_string()),
+                        // A walk is open: the jobs are held by its root record
+                        // and queued when it starts (SNAP_DESIGN 2.10.24).
+                        if st.walk_root != 0 { "image" } else { "STOP" },
+                        st.walk_root,
                         pending_jobs_field()
                     ),
                 );

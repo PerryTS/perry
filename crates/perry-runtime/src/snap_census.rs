@@ -229,26 +229,46 @@ pub(crate) const WALK_IMPORT: u8 = 2;
 #[cfg(perry_gc_instruments)]
 pub(crate) const WALK_REQUIRE: u8 = 3;
 
-/// An async module walk of `origin` starts; the previous origin returns on drop.
+/// An async module walk of `origin` starts, rooted at the record `root`; the
+/// previous origin and root return on drop.
 #[cfg(perry_gc_instruments)]
-pub(crate) fn walk_scope(origin: u8) -> WalkScope {
+pub(crate) fn walk_scope(origin: u8, root: usize) -> WalkScope {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    return WalkScope(runner::walk_origin(origin));
+    return WalkScope(runner::walk_origin(origin, root));
     #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
     {
-        let _ = origin;
-        WalkScope(0)
+        let _ = (origin, root);
+        WalkScope((0, 0))
     }
 }
 
 #[cfg(perry_gc_instruments)]
-pub(crate) struct WalkScope(u8);
+pub(crate) struct WalkScope((u8, usize));
 
 #[cfg(perry_gc_instruments)]
 impl Drop for WalkScope {
     fn drop(&mut self) {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        runner::walk_origin(self.0);
+        runner::walk_origin(self.0 .0, self.0 .1);
+    }
+}
+
+/// A record leaves the walk stack with its final status for this walk:
+/// EVALUATED, or `suspended` (ASYNC: it or a dependency is suspended).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn record_settle(record: usize, suspended: bool) {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    runner::record_settle(record, suspended);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = (record, suspended);
+}
+
+/// `new Worker` is called (before the thread starts).
+#[inline(always)]
+pub fn worker_spawn() {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::worker_spawn();
     }
 }
 
