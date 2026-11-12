@@ -10,6 +10,9 @@
 //! * the end of an iteration of a loop that encloses a birth:
 //!   `perry_life_iter` at the loop's back-edge poll point (normal end of the
 //!   body and `continue`) and after the loop (`break`, normal exit);
+//! * a throw caught by a `try`: `perry_life_depth` where the handler scope
+//!   is entered, `perry_life_catch(depth)` where the handler starts (the
+//!   activations the throw left are decided there, `late`);
 //! * the end of a turn: `perry_life_turn` after each microtask checkpoint of
 //!   the entry's event loop.
 //!
@@ -116,6 +119,27 @@ pub(crate) fn iteration(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
     }
     let loop_id = (at as u64).to_string();
     ctx.block().call_void("perry_life_iter", &[(I64, &loop_id)]);
+}
+
+/// A `try` is entered: the activation depth its handler restores (`None`
+/// without the knob). Read where the handler scope is entered, so it
+/// dominates the handler.
+pub(crate) fn try_depth(ctx: &mut FnCtx<'_>) -> Option<String> {
+    if !super::life_measure_on() || ctx.block().is_terminated() {
+        return None;
+    }
+    Some(ctx.block().call(I64, "perry_life_depth", &[]))
+}
+
+/// The handler of a `try` entered at activation depth `depth` runs: every
+/// activation deeper than it left on the throw (`perry_life_catch`, decided
+/// `late`). Called before the exception is taken: the runtime's slot roots it.
+pub(crate) fn caught(ctx: &mut FnCtx<'_>, depth: &Option<String>) {
+    if let Some(d) = depth {
+        if !ctx.block().is_terminated() {
+            ctx.block().call_void("perry_life_catch", &[(I64, d)]);
+        }
+    }
 }
 
 /// The entry's event loop finished a microtask checkpoint with an unwound

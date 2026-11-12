@@ -5233,6 +5233,8 @@ perry_ios_get_connected_scene	i64
 perry_key_content_hash	i64	ptr
 perry_layout_index_probe	i32s	ptr,ptr
 perry_life_birth	void	i64,i64,i64
+perry_life_catch	void	i64
+perry_life_depth	i64	
 perry_life_enter	void	
 perry_life_iter	void	i64
 perry_life_return	void	

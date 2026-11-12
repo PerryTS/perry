@@ -764,6 +764,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     if crate::verify_facts::life_measure_on() {
         // LIFE I1: the lifetime measurement's hooks.
         module.declare_function("perry_life_birth", crate::types::VOID, &[I64, I64, I64]);
+        module.declare_function("perry_life_catch", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_depth", I64, &[]);
         module.declare_function("perry_life_enter", crate::types::VOID, &[]);
         module.declare_function("perry_life_iter", crate::types::VOID, &[I64]);
         module.declare_function("perry_life_return", crate::types::VOID, &[]);
