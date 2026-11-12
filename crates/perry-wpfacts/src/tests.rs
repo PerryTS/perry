@@ -155,6 +155,7 @@ mod logical_and;
 mod map_identity_ops;
 mod member_heritage;
 mod static_call_value;
+mod builtin_member_call;
 mod fetch_headers;
 mod json_protocol;
 mod response_body;

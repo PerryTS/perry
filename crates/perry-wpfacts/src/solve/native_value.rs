@@ -290,7 +290,25 @@ impl Model {
             return;
         }
         if builtins::native_prims(fam) == 0 {
-            if self.bind_done.insert((call, f, u32::MAX - 2)) {
+            // A generic `Array.prototype` method ToObject's its `this`
+            // (ECMA-262 23.1.3, 7.1.18): a string, number or boolean share
+            // runs the method on that share's own wrapper object
+            // (`array_method_on_prim`); a symbol or bigint share, and every
+            // other family's, stays an unknown callee's call.
+            let boxed = if fam == Family::Array {
+                foreign & builtins::ARRAY_BOXED_PRIMS
+            } else {
+                0
+            };
+            let mut b = boxed;
+            while b != 0 {
+                let k = b & b.wrapping_neg();
+                b &= !k;
+                if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
+                    self.with_native(call, |m| builtins::array_method_on_prim(m, k, key, call));
+                }
+            }
+            if foreign & !boxed != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {
                 self.unknown_callee_args(call, f, false);
             }
         } else if fam == Family::Str
