@@ -177,6 +177,7 @@ mod records;
 mod recv_call_cycle;
 mod runtime_errors;
 mod reflect_construct;
+mod reflect_new_target;
 mod regexp_exec;
 mod relinked_parent;
 mod rest_element;

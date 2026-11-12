@@ -16,6 +16,16 @@ pub(crate) fn name_folds() -> bool {
     )
 }
 
+/// `PERRY_FACTS_REACH_NEW_TARGET=0`: `Reflect.construct(T, args, N)` whose
+/// result the model holds as unknown (a built-in `T`, a function `N`)
+/// leaves what `N.prototype` holds where it is
+/// (`Model::new_target_unknown`).
+pub(crate) fn new_target() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_REACH_NEW_TARGET").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
 /// `PERRY_FACTS_REACH_STEP_DONE=0`: an iteration consumer reads only the
 /// value of a step result, not its `done` first (`Model::step_done`).
 pub(crate) fn step_done() -> bool {
