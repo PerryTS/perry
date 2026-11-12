@@ -2,7 +2,9 @@
 """LIFE G1 controls: lifetime claims under PERRY_VERIFY_FACTS=1.
 
 Every fixture compiled in check mode (sampling N=1) must print node's output
-with rc 0; a fixture with census claims must execute deaths. Each `fate:`
+with rc 0; a fixture with census claims must execute deaths, and one whose
+statement list is left only by `break` / `continue` must carry exit death
+points (death `exit` in the binary's claim records). Each `fate:`
 sabotage plants a Proven Dropped fate on a parameter the callee keeps: the run
 must exit 86 with one JSON line naming the expected holder. The `fatebet:`
 sabotage must print one PERRY_BET_FAILED line, rc 0 and node's output.
@@ -13,16 +15,18 @@ import os
 from pathlib import Path
 import subprocess
 
-# (fixture, needs deaths) -- the correct arm.
+# (fixture, needs deaths, needs exit death points) -- the correct arm.
 FIXTURES = [
-    ("c1_global", False),
-    ("c3_other_param", False),
-    ("c5_pass_on", False),
-    ("c8_recursion", False),
-    ("c9_dropped", True),
-    ("c10_bet", False),
-    ("c11_returned", False),
+    ("c1_global", False, False),
+    ("c3_other_param", False, False),
+    ("c5_pass_on", False, False),
+    ("c8_recursion", False, False),
+    ("c9_dropped", True, False),
+    ("c10_bet", False, False),
+    ("c11_returned", False, False),
+    ("c12_exit", True, True),
 ]
+EXIT_DEATH = b'"death":{"at":"exit"'
 # (fixture, sabotage, holder phase the report must name), written before any run.
 SABOTAGES = [
     ("c1_global", "fate:keep#0", ("global_root",)),
@@ -69,18 +73,22 @@ def main():
                  str(fixtures / (name + ".ts")), "-o", str(exe)], env=e)
         (out / (exe.name + ".compile")).write_bytes(c.stdout + c.stderr)
         assert c.returncode == 0, (name, sabotage, c.stderr[-2000:])
-        return run([str(exe)], env=e)
+        return run([str(exe)], env=e), exe
 
-    for name, needs_deaths in FIXTURES:
+    for name, needs_deaths, needs_exit in FIXTURES:
         want = (fixtures / (name + ".node.txt")).read_bytes()
-        r = build(name)
+        r, exe = build(name)
         t = totals(r.stderr)
-        ok = r.returncode == 0 and r.stdout == want and (not needs_deaths or (t and t["deaths_executed"] > 0))
-        print(f"fixture {name}: rc={r.returncode} out_eq={r.stdout == want} totals={t} {'OK' if ok else 'FAIL'}")
+        exits = exe.read_bytes().count(EXIT_DEATH)
+        ok = (r.returncode == 0 and r.stdout == want
+              and (not needs_deaths or (t and t["deaths_executed"] > 0))
+              and (not needs_exit or exits > 0))
+        print(f"fixture {name}: rc={r.returncode} out_eq={r.stdout == want} exit_sites={exits} totals={t} "
+              f"{'OK' if ok else 'FAIL'}")
         if not ok:
             failures.append(name)
     for name, sabotage, holders in SABOTAGES:
-        r = build(name, sabotage)
+        r, _ = build(name, sabotage)
         lines = [l for l in r.stderr.decode(errors="replace").splitlines() if "PERRY_FALSE_PROOF" in l]
         phase = None
         if len(lines) == 1:
@@ -97,7 +105,7 @@ def main():
             (out / (name + ".sabotage.stderr")).write_bytes(r.stderr)
     name, sabotage = BET
     want = (fixtures / (name + ".node.txt")).read_bytes()
-    r = build(name, sabotage)
+    r, _ = build(name, sabotage)
     bets = [l for l in r.stderr.decode(errors="replace").splitlines() if "PERRY_BET_FAILED" in l]
     ok = r.returncode == 0 and r.stdout == want and len(bets) == 1
     print(f"bet {name} {sabotage}: rc={r.returncode} out_eq={r.stdout == want} bet_lines={len(bets)} "
