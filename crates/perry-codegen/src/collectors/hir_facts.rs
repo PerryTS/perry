@@ -198,6 +198,8 @@ pub(crate) struct EscapeFacts {
     /// in-progress shape as `PurityFacts` / `ShapeStabilityFacts` above.
     #[allow(dead_code)]
     pub segment_for_of_sites: Vec<super::segview::SegmentForOfSite>,
+    /// LIFE G1: the body's lifetime claims (check builds only, else empty).
+    pub life_claims: std::sync::Arc<super::life_claims::LifeClaims>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -418,6 +420,10 @@ impl TypeFacts {
 
     pub(crate) fn compile_time_constants(&self) -> &HashMap<u32, f64> {
         &self.platform_constants.constants
+    }
+
+    pub(crate) fn life_claims(&self) -> std::sync::Arc<super::life_claims::LifeClaims> {
+        self.escape.life_claims.clone()
     }
 
     pub(crate) fn non_escaping_news(&self) -> &HashMap<u32, String> {
@@ -749,7 +755,7 @@ pub(crate) fn collect_type_facts(
             stmts,
             &non_escaping_object_literals,
         );
-    super::life_census::observe(
+    let life_claims = super::life_census::observe(
         stmts,
         boxed_vars,
         module_globals,
@@ -997,6 +1003,7 @@ pub(crate) fn collect_type_facts(
             non_escaping_object_literals,
             non_escaping_object_literal_used_fields,
             segment_for_of_sites,
+            life_claims: std::sync::Arc::new(life_claims),
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),

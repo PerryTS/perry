@@ -229,6 +229,9 @@ fn lower_stmts_from(
     ctx.ready_cell_roots.push_list();
     ctx.numeric_order_ready.push_list();
     let lowered = lower_stmts_list(ctx, stmts, emit_shadow_clears, version_tails);
+    if lowered.is_ok() {
+        crate::verify_facts::life::list_end(ctx, stmts);
+    }
     // N2: a function-level base installed in this lowering of the list ends
     // with it.
     fn_base::end_list(ctx, stmts);
@@ -570,6 +573,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
             }
             let v = lower_return_expr(ctx, e)?;
+            let v = crate::verify_facts::life::at_return(ctx, v)?;
             // Phase E: async functions wrap their return value in
             // js_async_fn_result so callers can await the result. Unlike
             // js_promise_resolved (whose Promise.resolve(p) === p identity

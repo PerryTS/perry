@@ -785,6 +785,18 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         // VR-4b: the receiver of a record-array intrinsic.
         module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
+        // LIFE G1: the death points of the census's lifetime claims.
+        module.declare_function(
+            "perry_verify_facts_life_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64, I64],
+        );
+        module.declare_function("perry_verify_facts_life_arg", I64, &[I64]);
+        module.declare_function(
+            "perry_verify_facts_life_arg_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64],
+        );
     }
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
