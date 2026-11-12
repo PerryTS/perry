@@ -325,6 +325,30 @@ pub unsafe extern "C" fn js_array_method_needs_get(recv: f64, key: f64) -> i32 {
     js_receiver_may_own_named_method(recv, key)
 }
 
+/// Check mode's test of a method-site verdict (codegen `method_site`): is
+/// `recv` an Array exotic object that holds no own property `key` and has
+/// no `[[Prototype]]` of its own, so that `recv.<key>` reads
+/// `%Array.prototype%`'s member? (That member is the realm's: the runtime
+/// refuses every write of a built-in method, DEC 250.) Unlike the guard's
+/// predicate it does not read the prototype's shadow byte, which a refused
+/// or unrelated write also sets.
+///
+/// # Safety
+/// As [`js_receiver_may_own_named_method`].
+#[no_mangle]
+pub unsafe extern "C" fn js_array_member_witness(recv: f64, key: f64) -> i32 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(recv.to_bits()) else {
+        return 0;
+    };
+    if !(crate::gc_type_is_array!(header.obj_type)
+        || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY)
+        || header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    {
+        return 0;
+    }
+    i32::from(authoritative_has_own(recv, key) == 0)
+}
+
 /// `Object.hasOwn`'s own predicate — the one reflection uses, which answers
 /// correctly for every cell kind and needs no readable ShapeId.
 ///

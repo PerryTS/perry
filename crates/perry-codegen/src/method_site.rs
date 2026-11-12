@@ -223,7 +223,7 @@ pub(crate) fn census_inline_tier(ctx: &FnCtx<'_>, site: Option<Site>, name: &str
 /// record, and in check mode the dropped test on the receiver value `recv`
 /// (an Array that resolves `name` to the built-in), "method site".
 pub(crate) fn witness_array_member(ctx: &mut FnCtx<'_>, recv: &str, name: &str) {
-    use crate::types::{DOUBLE, I1, I32, I64};
+    use crate::types::{DOUBLE, I32};
     crate::facts_consumed::used();
     crate::verify_facts::covered(
         crate::verify_facts::Fact::MethodSite,
@@ -235,17 +235,13 @@ pub(crate) fn witness_array_member(ctx: &mut FnCtx<'_>, recv: &str, name: &str) 
     let idx = ctx.strings.intern(name);
     let key_handle = format!("@{}", ctx.strings.entry(idx).handle_global);
     let blk = ctx.block();
-    let is_array = blk.call(DOUBLE, "js_array_is_array", &[(DOUBLE, recv)]);
-    let bits = blk.bitcast_double_to_i64(&is_array);
-    let array = blk.icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64);
     let key = blk.load(DOUBLE, &key_handle);
-    let needs = blk.call(
+    let member = blk.call(
         I32,
-        "js_array_method_needs_get",
+        "js_array_member_witness",
         &[(DOUBLE, recv), (DOUBLE, &key)],
     );
-    let builtin = blk.icmp_eq(I32, &needs, "0");
-    let holds = blk.and(I1, &array, &builtin);
+    let holds = blk.icmp_ne(I32, &member, "0");
     let miss = ctx.new_block("methodsite.verify_miss");
     let next = ctx.new_block("methodsite.admitted");
     let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
