@@ -1680,21 +1680,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         ("Timer", Some("@@__perry_wk_dispose")) if c.spread.is_empty() => {
             ret_prim(m, call, prim::UNDEF)
         }
-        // A primitive wrapper object (`new Number(x)`, `new String(x)`,
-        // `new Boolean(x)`) owns no methods: [[Get]] walks its realm
-        // prototype (Number / String / Boolean.prototype, ECMA-262 21.1.3,
-        // 22.1.3, 20.3.3) to Object.prototype (10.1.8.1 OrdinaryGet). A name
-        // none of them holds reads undefined and the call throws (13.3.6.2
-        // EvaluateCall, 7.3.14 Call step 2) without handing its evaluated
-        // arguments to anything. The token does not record which of the
-        // three it wraps, so the call acts as each of them.
-        ("BoxedPrimitive", Some(n)) => {
-            for p in ["Number.prototype", "String.prototype", "Boolean.prototype"] {
-                let born = members::realm_entry(p)
-                    .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)
-                    .expect("realm wrapper prototype");
-                realm_born_method(m, t, born, n, call, &format!("argument of {p}.{n}"))
-            }
+        // A primitive wrapper object runs the method of the primitive kind
+        // it wraps, or its realm chain's (`wrapper_method`).
+        ("BoxedNumber" | "BoxedString" | "BoxedBoolean", Some(n)) => {
+            wrapper_method(m, t, &what, n, call)
         }
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {
             string_methods::regexp_method(m, t, n, call)
@@ -1707,8 +1696,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
         }
         (
-            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin"
-            | "BoxedPrimitive" | "Timer",
+            "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "Timer",
             Some(n),
         ) if !n.starts_with("on") && n != "addEventListener" => {
             anyfall("builtin method argument", &what, &n);

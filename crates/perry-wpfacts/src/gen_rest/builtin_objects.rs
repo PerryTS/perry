@@ -687,9 +687,14 @@ impl<'a> Gen<'a> {
                 let name = variant_name(e);
                 self.fail_closed(fx, e, &name)
             }
-            Expr::BoxedPrimitiveNew { .. } => {
+            Expr::BoxedPrimitiveNew { kind, .. } => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "boxed primitive", Protocol::ToPrimitive);
-                self.bobj(mi, "BoxedPrimitive").1
+                let what = match kind {
+                    perry_hir::ir::BoxedPrimitiveKind::Number => "BoxedNumber",
+                    perry_hir::ir::BoxedPrimitiveKind::String => "BoxedString",
+                    perry_hir::ir::BoxedPrimitiveKind::Boolean => "BoxedBoolean",
+                };
+                self.bobj(mi, what).1
             }
             Expr::DateNew(..) => {
                 let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);

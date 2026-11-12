@@ -382,6 +382,53 @@ pub(super) fn realm_born_method(
     }
 }
 
+/// The wrapper kind a `new Number(x)` / `new String(x)` / `new Boolean(x)`
+/// token names: its realm prototype and the primitive kind in its
+/// [[NumberData]] / [[StringData]] / [[BooleanData]] slot.
+pub(super) fn wrapper_kind(what: &str) -> Option<(&'static str, u16)> {
+    match what {
+        "BoxedNumber" => Some(("Number.prototype", prim::NUM)),
+        "BoxedString" => Some(("String.prototype", prim::STR)),
+        "BoxedBoolean" => Some(("Boolean.prototype", prim::BOOL)),
+        _ => None,
+    }
+}
+
+/// `name` called on `t`, a primitive wrapper object of kind `what`
+/// (ECMA-262 7.1.18 ToObject; 21.1.4, 22.1.4, 20.3.4 instances own no
+/// methods): [[Get]] walks its realm prototype to Object.prototype
+/// (10.1.8.1 OrdinaryGet). A member of the kind's own prototype is the
+/// primitive kind's method and runs that method's own rule (`prim_method`,
+/// the written-key check included): its receiver is read through
+/// thisNumberValue / thisBooleanValue (21.1.3, 20.3.3), or, for String,
+/// thisStringValue or ToString(RequireObjectCoercible(this)) (22.1.3), the
+/// ToPrimitive of the wrapper itself (7.1.1: its own or chained
+/// `@@toPrimitive` / `toString` / `valueOf`, run by their rules). A member
+/// found on Object.prototype, or no member at all (undefined: the call
+/// throws, 13.3.6.2 EvaluateCall / 7.3.14 Call step 2, its arguments
+/// handed to nothing), is the realm chain's (`realm_born_method`: a written
+/// key runs what was written).
+pub(super) fn wrapper_method(m: &mut Model, t: Tok, what: &str, name: &str, call: CallId) {
+    let (p, k) = wrapper_kind(what).expect("wrapper kind");
+    let born = members::realm_entry(p)
+        .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)
+        .expect("realm wrapper prototype");
+    match members::realm_chain_find(born, name) {
+        members::RealmFind::Own(_, holder)
+            if holder.name == p && members::prim_member(k, name).is_some() =>
+        {
+            if k == prim::STR && name != "toString" && name != "valueOf" {
+                let recv = m.node_l("String wrapper this");
+                m.add_tok(recv, t);
+                string_methods::to_prim(m, recv, "String method this (ToString)");
+            }
+            let a = m.atom(name);
+            prim_method(m, k, Key::Named(a), call)
+        }
+        _ => realm_born_method(m, t, born, name, call, &format!("argument of {p}.{name}")),
+    }
+}
+
 /// Methods on builtin tokens (the receiver's own builtin behaviour).
 pub fn own_method(m: &mut Model, t: Tok, key: Key, call: CallId) {
     if native_waits(m, NativeRecv::Own(t), key, call) {

@@ -626,7 +626,9 @@ pub(super) fn bobj_family(what: &str) -> Family {
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
         | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
-        "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
+        "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean" => {
+            Family::Wrapper
+        }
         _ => Family::Opaque,
     }
 }

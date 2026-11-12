@@ -236,7 +236,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         // NewTarget: ToNumeric / ToString / ToBoolean of the first operand,
         // then a wrapper object OrdinaryCreateFromConstructor(NewTarget, ...)
         // with the primitive in its internal slot. It is the wrapper the
-        // syntactic form births (gen `BoxedPrimitiveNew` -> "BoxedPrimitive"),
+        // syntactic form births (gen `BoxedPrimitiveNew` -> "BoxedNumber" / "BoxedString" / "BoxedBoolean"),
         // so `new Number(x)` and `new C(x)` with C = Number are one model.
         BuiltinNs::Number | BuiltinNs::String | BuiltinNs::Boolean => {
             let c = m.calls[call as usize].clone();
@@ -249,7 +249,13 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                     );
                 }
             }
-            let o = site_tmpl(m, call, "BoxedPrimitive");
+            // The wrapper records its kind (its realm prototype and slot).
+            let what = match ns {
+                BuiltinNs::Number => "BoxedNumber",
+                BuiltinNs::String => "BoxedString",
+                _ => "BoxedBoolean",
+            };
+            let o = site_tmpl(m, call, what);
             ret_tok(m, call, o);
         }
         BuiltinNs::Array => call_builtin_ns(m, ns, call),

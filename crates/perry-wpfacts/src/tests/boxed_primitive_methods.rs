@@ -107,3 +107,48 @@ fn a_written_wrapper_iterator_takes_the_wrapper() {
     let pf = facts(s);
     assert!(!proven(&pf, "a"), "{s}\n{}", pf.dump_text());
 }
+
+/// A member of the wrapper kind's own prototype runs the primitive kind's
+/// method rule on the wrapped value (ECMA-262 7.1.18 ToObject; 22.1.3
+/// thisStringValue / ToString(this), 21.1.3 thisNumberValue, 20.3.3
+/// thisBooleanValue): `slice`, `split`, `at`, `toFixed`, `valueOf` hand
+/// neither the wrapper (nor what it holds) nor an argument object on.
+#[test]
+fn a_wrapper_prototype_method_runs_the_primitive_rule() {
+    for (wrap, call) in [
+        ("new String('abc')", "w.slice(1)"),
+        ("new String('a,b')", "w.split(',')"),
+        ("new String('abc')", "w.at(1)"),
+        ("new Number(1)", "w.toFixed(2)"),
+        ("new Boolean(true)", "w.valueOf()"),
+    ] {
+        let s = format!(
+            "class A {{ a = 1; }}
+             class B {{ b = 2; }}
+             const a = new A();
+             const b = new B();
+             const w: any = {wrap};
+             w.held = a;
+             try {{ console.log({call}, w.slice ? 0 : w.toFixed(b as any)); }} catch (e) {{ console.log('TypeError'); }}
+             console.log(a.a, b.b);"
+        );
+        let pf = facts(&s);
+        assert!(proven(&pf, "a"), "{s}\n{}", pf.dump_text());
+        assert!(proven(&pf, "b"), "{s}\n{}", pf.dump_text());
+    }
+}
+
+/// Control: unknown code writes `String.prototype.slice`; the wrapper's
+/// call runs it with the wrapper and its arguments.
+#[test]
+fn a_written_wrapper_prototype_method_takes_the_wrapper() {
+    let s = "class A { a = 1; }
+             (String.prototype as any).slice = new Function(process.argv[2])();
+             const a = new A();
+             const w: any = new String('abc');
+             w.held = a;
+             console.log(w.slice(1));
+             console.log(a.a);";
+    let pf = facts(s);
+    assert!(!proven(&pf, "a"), "{s}\n{}", pf.dump_text());
+}
