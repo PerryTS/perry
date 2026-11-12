@@ -2345,6 +2345,8 @@ pub struct Model {
     /// Calls/`new` of a ⊤ callee: with the interpreter linked, one could be
     /// the Function constructor or `vm` (E14).
     pub top_calls: u64,
+    /// Dump only: `index_slots_merge` runs that found a slot to merge.
+    pub index_slot_merges: u64,
     /// The receiver token a builtin method summary runs for.
     pub cur_this: Option<Tok>,
     /// Lookups that stopped at a declared prototype member: resumed if that

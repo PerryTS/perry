@@ -722,6 +722,7 @@ impl Model {
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.atoms[a as usize].starts_with("[[Index") {
                 if let Some(&s) = self.fields.get(&(t, a)) {
+                    self.index_slot_merges += 1;
                     let fa = self.field_any(t);
                     self.edge(fa, s);
                 }
