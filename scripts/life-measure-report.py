@@ -56,6 +56,8 @@ def load(sites, census, measure):
                 k, v = f.split("=", 1)
                 totals[k] = int(v)
             continue
+        if line.startswith("#"):
+            continue
         r = dict(zip(head, line.split("\t")))
         key = keys.get(r["site"], ("?", "?", "?", "?", r["site"]))
         s = sites_.setdefault(r["site"], {

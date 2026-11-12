@@ -5235,7 +5235,7 @@ perry_layout_index_probe	i32s	ptr,ptr
 perry_life_birth	void	i64,i64,i64
 perry_life_catch	void	i64
 perry_life_depth	i64	
-perry_life_enter	void	
+perry_life_enter	void	i64
 perry_life_iter	void	i64
 perry_life_return	void	
 perry_life_turn	void	

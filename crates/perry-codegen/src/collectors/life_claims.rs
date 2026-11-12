@@ -47,6 +47,9 @@ pub(crate) struct LifeClaims {
     pub loops: std::collections::HashSet<usize>,
     /// The body's own statement list (address): its activation.
     pub body: usize,
+    /// LIFE I2: the activation's id in the site file (`body` rows: module,
+    /// label, async/generator), so the run attributes exits per body.
+    pub body_id: u64,
 }
 
 impl LifeClaims {
