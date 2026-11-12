@@ -18,6 +18,8 @@ use super::state::STATE_DIRTY;
 
 fn run_frames(mut frame: impl FnMut()) {
     while !EXIT_FLAG.load(Ordering::Acquire) {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::event_pump::js_loop_turn_bounded(0);
         crate::event_pump::perry_poll();
         if EXIT_FLAG.load(Ordering::Acquire) {
             break;
