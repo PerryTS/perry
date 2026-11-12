@@ -75,6 +75,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_CONST_ARRAYS",
     "PERRY_FACTS_CONST_LENGTH",
     "PERRY_FACTS_CONST_NUMBERS",
+    "PERRY_FACTS_DCE",
     "PERRY_FACTS_DIRECT_NUMBER_CALLS",
     "PERRY_FACTS_ELEM_UNDEF",
     "PERRY_FACTS_ELIDE",
@@ -140,6 +141,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_GLOBAL_SCRIPT_THIS",
     "PERRY_GUARDED_ARITH",
     "PERRY_GUARDED_PREINLINE_MAX_IR_BYTES",
+    "PERRY_INDEX_RAW_I32",
     "PERRY_INERT_MATH",
     "PERRY_INLINE_CTOR",
     "PERRY_INLINE_HOT_SMALL",
@@ -252,6 +254,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_SIZE_OPT",
     "PERRY_SIZE_PANIC",
     "PERRY_SMALL_STRINGS",
+    "PERRY_SNAP_CENSUS",
     "PERRY_SPECIALIZED_ABI",
     "PERRY_SPECIALIZED_ABI_MAX",
     "PERRY_SPEC_INLINE",
@@ -296,7 +299,9 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_WATCHOS_MIN",
     "PERRY_WINDOWS_SYSROOT",
     "PERRY_WORKSPACE_ROOT",
+    "PERRY_WP_ELEMENT_READS",
     "PERRY_WP_REP_P1",
+    "PERRY_WP_REP_P2",
     "PERRY_WP_REP_TEMPS",
     "PERRY_WRITE_BARRIERS",
     "PERRY_XCRUN",
@@ -838,6 +843,30 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_WASM_DEBUG_IMPORTS",
         "Writes IR/report files or diagnostic output without changing emitted objects.",
+    ),
+    (
+        "PERRY_ARRAY_BASE_DIAG",
+        "Prints the array-base, held-length and named-length verdicts to stderr; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_FACTS_ZERO_SIGN_WHY",
+        "Prints why one node's zero sign is unknown; the trace reads the solved facts and changes none.",
+    ),
+    (
+        "PERRY_REST_DIAG",
+        "Prints the at-rest element lowering form per site to stderr; no emitted instructions depend on the report.",
+    ),
+    (
+        "PERRY_SNAP_FACTS",
+        "Writes the snap census facts dump file only; no fact or emitted code depends on it.",
+    ),
+    (
+        "PERRY_TEST_IR_OUT",
+        "Read only by perry-codegen unit tests to keep the IR they compile; the compiler never reads it.",
+    ),
+    (
+        "PERRY_VALUE_RECORDS_TRACE",
+        "Prints the value-record ledger and layouts to stderr; no emitted instructions depend on the report.",
     ),
 ];
 
