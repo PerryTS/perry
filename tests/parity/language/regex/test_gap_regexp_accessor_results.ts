@@ -118,23 +118,33 @@ console.log("own.source", typeof own.source, JSON.stringify(own.source));
 console.log("own.sticky", use(own.sticky), "own.flags", use(own.flags));
 console.log("own via getter", viaCall("global", own), viaCall("source", own));
 
-// Accessors redefined on RegExp.prototype itself, then restored.
+// Accessors redefined on RegExp.prototype itself, then restored. Node takes
+// each redefinition; Perry refuses it (DEC 250: a built-in member is
+// read-only in a compiled program) with a TypeError, so the declared getter
+// stays the one that runs (expected output: tests/parity/expected).
+function redefine(name: string, desc: any): void {
+  try {
+    Object.defineProperty(RegExp.prototype, name, desc);
+  } catch (e) {
+    console.log("DEC 250: " + (e as Error).message);
+  }
+}
 const saved: any = {};
 for (const name of ["global", "source", "flags"]) {
   saved[name] = Object.getOwnPropertyDescriptor(RegExp.prototype, name);
 }
-Object.defineProperty(RegExp.prototype, "global", { get() { return 2; }, configurable: true });
-Object.defineProperty(RegExp.prototype, "source", { get() { return null; }, configurable: true });
+redefine("global", { get() { return 2; }, configurable: true });
+redefine("source", { get() { return null; }, configurable: true });
 const later: any = /later/i;
 console.log("redefined global", use(later.global), later.global * 3);
 console.log("redefined source", use(later.source));
 console.log("flags after redefinition", use(later.flags), use(P.flags));
 console.log("split after redefinition", JSON.stringify("a1b2c".split(/\d/)));
 console.log("replace after redefinition", "a1b2c".replace(/\d/g, "-"));
-Object.defineProperty(RegExp.prototype, "flags", { get() { return 5; }, configurable: true });
+redefine("flags", { get() { return 5; }, configurable: true });
 console.log("redefined flags", use(later.flags));
 for (const name of ["global", "source", "flags"]) {
-  Object.defineProperty(RegExp.prototype, name, saved[name]);
+  redefine(name, saved[name]);
 }
 console.log("restored", use(later.global), use(later.source), use(later.flags));
 
