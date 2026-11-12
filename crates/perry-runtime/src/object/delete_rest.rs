@@ -1373,6 +1373,13 @@ pub extern "C" fn js_object_rest(
         // touch the view again -- everything below uses `keys_handle`/`key_count`.
         // `count()` is 0 for a keyless receiver (`ObjectKeys::NONE`), which is the
         // same 0 the pre-`ObjectKeys` code computed with an explicit null test.
+        // `process.env` holds no host data until enumerated: fill its own keys
+        // from the live environment first (the rooted receiver follows a move).
+        if crate::process::is_process_env_ptr(src as usize) {
+            src_handle.with_const_ptr::<ObjectHeader, _>(|p| {
+                crate::process::refresh_process_env(crate::value::js_nanbox_pointer(p as i64))
+            });
+        }
         let keys_view =
             src_handle.with_const_ptr::<ObjectHeader, _>(|p| crate::object::object_keys(p));
         let keys = keys_view.arr();
