@@ -4,3 +4,4 @@
 ### Fixed
 - Life claims (check mode and lifetime measurement) veto the untraced whole-young in-place promotion: that cycle reaches nothing, so every claimed object read as freed (survivors reported dead; check-mode violations unseen).
 - Lifetime measurement: a throw's skipped activations are decided at the catching handler (`perry_life_depth` at `try` entry, `perry_life_catch` at the handler, counted `late`); activations no longer pop by equal frame pointer, which an inlined body shares with its caller.
+- Lifetime measurement: the birth and body-entry hooks never collect (the birth's value and the body's arguments are not rooted across them; a probe there corrupted semver and postcss runs); activations a throw left are popped by the next hook at a rooted point.
