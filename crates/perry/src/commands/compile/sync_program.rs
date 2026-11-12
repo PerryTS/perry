@@ -19,6 +19,12 @@
 //! The check reads the HIR's `Debug` rendering: string literals are pulled
 //! out first (their contents are data, not constructs), then every remaining
 //! capitalised identifier — a variant or struct name — must be allowlisted.
+//!
+//! One literal names a construct instead of data: the class of a
+//! `New { class_name }`. An unresolved name there is a GLOBAL constructor
+//! (`new Promise(executor)`, `new MessageChannel()`), read by name without a
+//! `GlobalGet`, so it has to be a class the module declares or imports, or a
+//! built-in constructor this file knows to be synchronous.
 
 use std::collections::BTreeSet;
 
@@ -399,6 +405,23 @@ const SYNC_GLOBAL_PROPS: &[&str] = &[
     "DataView",
 ];
 
+/// Built-in constructors `New { class_name }` may name beyond the globals
+/// above: constructing one schedules nothing and hands out no promise.
+///
+/// Deliberately absent: `Promise`, `MessageChannel`, `BroadcastChannel`,
+/// `Worker`, `WebSocket`, `EventSource`, the stream and fetch classes
+/// (`ReadableStream`, `Response`, `Blob`, ...), `FinalizationRegistry`,
+/// `AbortController` (its signal feeds timers and fetch), `Function`.
+const SYNC_CONSTRUCTORS: &[&str] = &[
+    "Proxy",
+    "SharedArrayBuffer",
+    "TextDecoder",
+    "TextEncoder",
+    "URL",
+    "URLSearchParams",
+    "WeakRef",
+];
+
 /// Runtime externs the HIR names directly that are synchronous.
 const SYNC_EXTERNS: &[&str] = &[
     "js_for_of_next",
@@ -438,7 +461,10 @@ pub(crate) fn why_not_synchronous(ctx: &CompilationContext) -> Option<String> {
         return Some("dynamic code (eval / new Function)".into());
     }
     for (path, module) in &ctx.native_modules {
-        if let Some(reason) = why_module_not_synchronous(&format!("{module:?}")) {
+        let declared = declared_constructor_names(module);
+        if let Some(reason) =
+            why_module_not_synchronous_with(&format!("{module:?}"), &|name| declared.contains(name))
+        {
             return Some(format!("{}: {reason}", path.display()));
         }
     }
@@ -482,8 +508,54 @@ fn is_sync_name(name: &str) -> bool {
     SYNC_NAMES.contains(&name) || SYNC_PREFIXES.iter().any(|prefix| name.starts_with(prefix))
 }
 
-/// The per-module half of the proof, over the HIR `Debug` text.
+/// The names a `New { class_name }` of this module can resolve to inside the
+/// program: its own classes (object-literal shapes included) and its imported
+/// value bindings, which are exports of another checked module. Every other
+/// name is a global constructor.
+fn declared_constructor_names(module: &perry_hir::Module) -> BTreeSet<&str> {
+    use perry_hir::ir::ImportSpecifier;
+
+    let mut names: BTreeSet<&str> = module.classes.iter().map(|c| c.name.as_str()).collect();
+    for import in &module.imports {
+        if import.type_only || import.runtime_erased {
+            continue;
+        }
+        for specifier in &import.specifiers {
+            let (ImportSpecifier::Named { local, .. }
+            | ImportSpecifier::Default { local }
+            | ImportSpecifier::Namespace { local }) = specifier;
+            names.insert(local.as_str());
+        }
+    }
+    names
+}
+
+/// Is the literal that follows `before` the class of a `New { class_name }`?
+/// (`JsNew` and the `…New` intrinsics are separate names: `New` must start
+/// the identifier.)
+fn new_class_name_context(before: &str) -> bool {
+    let Some(head) = before.strip_suffix("New { class_name: ") else {
+        return false;
+    };
+    !head
+        .as_bytes()
+        .last()
+        .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+}
+
+/// [`why_module_not_synchronous_with`] for a module that declares no class
+/// and imports nothing.
+#[cfg(test)]
 pub(crate) fn why_module_not_synchronous(debug: &str) -> Option<String> {
+    why_module_not_synchronous_with(debug, &|_| false)
+}
+
+/// The per-module half of the proof, over the HIR `Debug` text.
+/// `declares_constructor` answers [`declared_constructor_names`].
+pub(crate) fn why_module_not_synchronous_with(
+    debug: &str,
+    declares_constructor: &dyn Fn(&str) -> bool,
+) -> Option<String> {
     if debug.contains("is_async: true") {
         return Some("async function".into());
     }
@@ -547,6 +619,13 @@ pub(crate) fn why_module_not_synchronous(debug: &str) -> Option<String> {
         }
         if global_property_context(before) && !SYNC_GLOBAL_PROPS.contains(&lit.as_str()) {
             return Some(format!("global {lit}"));
+        }
+        if new_class_name_context(before)
+            && !declares_constructor(lit)
+            && !SYNC_GLOBAL_PROPS.contains(&lit.as_str())
+            && !SYNC_CONSTRUCTORS.contains(&lit.as_str())
+        {
+            return Some(format!("constructor {lit}"));
         }
     }
     // `__perry_runtime` native methods: only the synchronous iterator helpers.
@@ -725,6 +804,95 @@ mod tests {
         ] {
             assert!(why_module_not_synchronous(&wrap(operand)).is_some());
         }
+    }
+
+    /// `new Promise(executor)` lowers to `New { class_name: "Promise" }`: no
+    /// `GlobalGet`, no variant with an async name. The program
+    /// `new Promise(res => res(1)).then(v => console.log(v))` was proven
+    /// synchronous and printed nothing.
+    #[test]
+    fn a_global_constructor_named_by_new_keeps_the_loop() {
+        let new = |class: &str| {
+            format!(
+                r#"Module {{ init: [Expr(Call {{ callee: PropertyGet {{ object: New {{ class_name: "{class}", args: [Closure {{ func_id: 3, is_async: false }}], type_args: [], byte_offset: 39 }}, property: "then", byte_offset: 39 }}, args: [] }})] }}"#
+            )
+        };
+        for class in [
+            "Promise",
+            "MessageChannel",
+            "BroadcastChannel",
+            "Worker",
+            "AbortController",
+            "SomeFutureGlobal",
+        ] {
+            assert_eq!(
+                why_module_not_synchronous(&new(class)),
+                Some(format!("constructor {class}")),
+            );
+        }
+        for class in ["Map", "Error", "Float64Array", "URL", "Proxy", "WeakRef"] {
+            assert_eq!(why_module_not_synchronous(&new(class)), None, "{class}");
+        }
+        // A class of the module, or an imported one, is checked as program code.
+        let declares = |name: &str| name == "Stack" || name == "__AnonShape_1";
+        for class in ["Stack", "__AnonShape_1"] {
+            assert_eq!(
+                why_module_not_synchronous_with(&new(class), &declares),
+                None
+            );
+        }
+        assert!(why_module_not_synchronous_with(&new("Promise"), &declares).is_some());
+        // The class of another construct is not a constructor read.
+        let brand = r#"Module { init: [Expr(PrivateBrandCheck { class_name: "Promise", object: LocalGet(0) })] }"#;
+        assert_eq!(why_module_not_synchronous(brand), None);
+    }
+
+    #[test]
+    fn declared_constructor_names_are_the_module_classes_and_imports() {
+        use perry_hir::ir::{Import, ImportSpecifier};
+        use perry_hir::{Expr, Module, Stmt};
+
+        let mut module = Module::new("constructors");
+        let new = |class_name: &str| {
+            Stmt::Expr(Expr::New {
+                class_name: class_name.to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+                byte_end: 0,
+            })
+        };
+        module.init = vec![new("Imported"), new("Promise")];
+        let verdict = |module: &Module| {
+            let declared = declared_constructor_names(module);
+            why_module_not_synchronous_with(&format!("{module:?}"), &|name| declared.contains(name))
+        };
+        assert_eq!(verdict(&module), Some("constructor Imported".into()));
+        let import = |type_only: bool| Import {
+            source: "./imported".into(),
+            specifiers: vec![ImportSpecifier::Named {
+                imported: "Original".into(),
+                local: "Imported".into(),
+            }],
+            is_native: false,
+            module_kind: Default::default(),
+            resolved_path: None,
+            type_only,
+            runtime_erased: false,
+            is_dynamic: false,
+            is_deferred: false,
+            is_adopted_require: false,
+            is_deferred_require: false,
+            is_dynamic_target: false,
+        };
+        // A type-only import binds no value: the name stays a global read.
+        module.imports.push(import(true));
+        assert_eq!(verdict(&module), Some("constructor Imported".into()));
+        module.imports.push(import(false));
+        assert_eq!(verdict(&module), Some("constructor Promise".into()));
+        module.init.pop();
+        assert_eq!(verdict(&module), None);
     }
 
     #[test]
