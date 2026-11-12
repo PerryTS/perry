@@ -462,9 +462,13 @@ fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current(
         text.iter().filter(|s| s.0 < start).count() < 64,
         "the hot run leads the runtime text"
     );
-    // The generated code is never part of it.
-    let alpha = user_symbol(&text_symbols(&on), "alpha");
-    assert!(at(&alpha).unwrap() >= end);
+    // The program's own code is never part of it.
+    let generated: Vec<_> = text.iter().filter(|s| s.2.contains("main_ts__")).collect();
+    assert!(!generated.is_empty(), "the program's functions are symbols");
+    assert!(
+        generated.iter().all(|s| s.0 >= end),
+        "generated code stays behind the hot run"
+    );
 
     // Off: no run, and the same named code as on.
     let off_symbols = symbol_addresses(&off);
