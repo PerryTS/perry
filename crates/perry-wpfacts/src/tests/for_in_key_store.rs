@@ -83,3 +83,44 @@ fn for_in_key_store_gains_keys_written_later() {
     let k = field(tmpl(&pf, "R"), "v").kind.clone();
     assert!(k.objs.iter().any(|o| o.ends_with(":K")), "out.late {k:?}");
 }
+
+/// The store whose key alone decides: an unknown function under each key.
+const KEY_LOOP: &str = "for (const k in v) { this[k] = new Function(process.argv[3])(); }";
+
+#[test]
+fn for_in_key_store_skips_names_only_read() {
+    // `valueOf` and `toString` are read on the subject, never written: a
+    // [[Get]] makes no property (ECMA-262 10.1.8.1), so no key of the loop.
+    let pf = mat(
+        KEY_LOOP,
+        "s",
+        "const s: any = { color: 1 }; console.log(s.valueOf(), s.toString(), `${s}`, s.hasOwnProperty(\"color\"));",
+    );
+    assert_eq!(tmpl(&pf, "Mat").escape, None, "a name only read was stored");
+}
+
+#[test]
+fn for_in_key_store_skips_class_methods_and_accessors() {
+    // A class body's methods and accessors are non-enumerable (15.7.14,
+    // 10.2.8): a for-in over its instance yields only `color`. Today a
+    // class-instance subject still stores under any String key (its chain
+    // is not covered: PEELK30 open), so the check is that a method or an
+    // accessor adds nothing to what the field alone gives.
+    let e = |pre: &str| tmpl(&mat(KEY_LOOP, "s", pre), "Mat").escape.clone();
+    let base = e("class Src { color = 1; } const s: any = new Src();");
+    assert_eq!(
+        e("class Src { color = 1; valueOf() { return 1; } } const s: any = new Src(); console.log(s.valueOf());"),
+        base
+    );
+    assert_eq!(
+        e("class Src { color = 1; get toString() { return () => \"s\"; } } const s: any = new Src(); console.log(s.toString());"),
+        base
+    );
+    // Control: valueOf/toString written as fields of a literal are keys.
+    let pf = mat(
+        KEY_LOOP,
+        "s",
+        "const s: any = { color: 1 }; s.valueOf = () => 1; s.toString = () => \"s\";",
+    );
+    assert!(tmpl(&pf, "Mat").escape.is_some(), "written valueOf/toString must be stored");
+}
