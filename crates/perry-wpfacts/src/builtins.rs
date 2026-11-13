@@ -343,6 +343,11 @@ enum Recv {
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     // −0 tolerance: unknown code receives the arguments.
     m.zs_call_args(call);
+    // Unknown code runs, handed values or not: it holds the realm.
+    if !m.realm_held {
+        let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
+        m.hold_realm(r);
+    }
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
         let d = m.diagnostic.as_mut().unwrap();
         let c = d.census.as_mut().unwrap();

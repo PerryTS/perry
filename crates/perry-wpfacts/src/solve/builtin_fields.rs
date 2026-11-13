@@ -14,6 +14,8 @@ impl Model {
         let n = self.field(t, a);
         if self.r1_holders.insert(t) && self.interp_runs {
             self.builtin_fields_sink(t, None);
+        } else if self.realm_held {
+            self.realm_hold_tok(t, None);
         }
         Some(n)
     }
@@ -107,6 +109,8 @@ impl Model {
         if !builtins::builtin_function(self, t) {
             if self.interp_runs && matches!(self.toks[t as usize], TokKind::Builtin(_)) {
                 self.builtin_fields_sink(t, None);
+            } else if self.realm_held {
+                self.realm_hold_tok(t, None);
             }
             return;
         }
@@ -124,8 +128,12 @@ impl Model {
         for (origin, key, act) in uses {
             self.native_field_at(origin, t, key, act);
         }
-        if self.interp_runs {
-            let reason = self.reason("built-in function object interpreted code may read");
+        if self.realm_held {
+            let reason = self.reason(if self.interp_runs {
+                "built-in function object interpreted code may read"
+            } else {
+                "an intrinsic of the realm: unknown code holds the realm"
+            });
             self.escape(t, reason);
         }
     }
@@ -199,8 +207,60 @@ impl Model {
         self.sink_node(all, r);
     }
 
+    /// Unknown code exists: it holds the realm (ECMA-262 9.3: every
+    /// intrinsic is reachable from the global object it can name), not only
+    /// what the program hands it. One seed, once (`realm_held`, monotone):
+    /// each intrinsic token the model has is held (`realm_hold_tok`); each
+    /// one minted later is held when minted (`builtin_token_created`,
+    /// `builtin_field`).
+    pub(crate) fn hold_realm(&mut self, reason: u32) {
+        if self.realm_held {
+            return;
+        }
+        self.realm_held = true;
+        let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
+        hs.extend((0..self.toks.len() as Tok).filter(|&t| {
+            matches!(self.toks[t as usize], TokKind::Builtin(_))
+                || builtins::builtin_function(self, t)
+        }));
+        hs.sort_unstable();
+        hs.dedup();
+        for h in hs {
+            self.realm_hold_tok(h, Some(reason));
+        }
+    }
+
+    /// Unknown code holds intrinsic `t`: a built-in function as one handed
+    /// to it (`escape`: it may store any key on it, call it with anything,
+    /// and the program's reads of its fields see what it stored); a
+    /// namespace's program fields (rule R1) are read there. It never
+    /// replaces an intrinsic's own members: a held function stays that
+    /// native, `console.log` stays the realm's (unlike interpreted code,
+    /// `builtin_fields_sink`, whose writes the model replays).
+    pub(crate) fn realm_hold_tok(&mut self, t: Tok, reason: Option<u32>) {
+        if t == TOP {
+            return;
+        }
+        let r = match reason {
+            Some(r) => r,
+            None => self.reason("an intrinsic of the realm: unknown code holds the realm"),
+        };
+        if builtins::builtin_function(self, t) {
+            return self.escape(t, r);
+        }
+        if self.unit_mode
+            || builtins::global_object(self, t)
+            || !matches!(self.toks[t as usize], TokKind::Builtin(_))
+        {
+            return;
+        }
+        let all = self.all_fields(t);
+        self.sink_node(all, r);
+    }
+
     /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
+        self.realm_held = true;
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
         hs.extend((0..self.toks.len() as Tok).filter(|&t| {
             matches!(self.toks[t as usize], TokKind::Builtin(_))
