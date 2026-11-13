@@ -1376,11 +1376,18 @@ fn through_stack_check(fn_ir: &str, label: &str) -> String {
 /// `sitofp %raw == %v`; every NaN-boxed tag converts to 0 and compares
 /// unequal) and its bits are not `-0`'s. Followed through the data flow: the
 /// round trip compares the converted value with the SAME `%v`, and the `-0`
-/// test reads `%v`'s bits. Replaced the INT32-tag identity test plus range
-/// bounds, and before that `call i32 @js_typed_i32_arg_guard`.
+/// test reads `%v`'s bits, and the two are `and`ed into one predicate.
+/// Replaced the INT32-tag identity test plus range bounds, and before that
+/// `call i32 @js_typed_i32_arg_guard`.
 fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
     let defs = ssa_defs(ir);
+    let def_of = |rhs: &str| -> Vec<&str> {
+        defs.iter()
+            .filter(|(_, d)| **d == rhs)
+            .map(|(r, _)| *r)
+            .collect()
+    };
     defs.iter().any(|(raw, def)| {
         let Some(v) = def
             .strip_prefix("call i32 @llvm.fptosi.sat.i32.f64(double ")
@@ -1388,19 +1395,26 @@ fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
         else {
             return false;
         };
-        let back = format!("sitofp i32 {raw} to double");
-        let bits = format!("bitcast double {v} to i64");
-        defs.iter().any(|(rt, d)| {
-            *d == back.as_str()
-                && defs.values().any(|c| {
-                    *c == format!("fcmp oeq double {rt}, {v}").as_str()
-                        || *c == format!("fcmp oeq double {v}, {rt}").as_str()
+        let round_trips: Vec<&str> = def_of(&format!("sitofp i32 {raw} to double"))
+            .into_iter()
+            .flat_map(|rt| {
+                let mut eq = def_of(&format!("fcmp oeq double {rt}, {v}"));
+                eq.extend(def_of(&format!("fcmp oeq double {v}, {rt}")));
+                eq
+            })
+            .collect();
+        let not_negative_zero: Vec<&str> = def_of(&format!("bitcast double {v} to i64"))
+            .into_iter()
+            .flat_map(|b| def_of(&format!("icmp ne i64 {b}, -9223372036854775808")))
+            .collect();
+        // Both tests decide the one predicate: they are `and`ed together.
+        round_trips.iter().any(|eq| {
+            not_negative_zero.iter().any(|nz| {
+                defs.values().any(|d| {
+                    *d == format!("and i1 {eq}, {nz}").as_str()
+                        || *d == format!("and i1 {nz}, {eq}").as_str()
                 })
-        }) && defs.iter().any(|(b, d)| {
-            *d == bits.as_str()
-                && defs
-                    .values()
-                    .any(|c| *c == format!("icmp ne i64 {b}, -9223372036854775808").as_str())
+            })
         })
     })
 }
@@ -1480,7 +1494,7 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
 
     // The int32 lane: the round trip and the -0 test on the same value. A
     // round trip against another value, or no -0 test, is no guard.
-    let i32_guard = "  %r1 = bitcast double %arg1 to i64\n  %r2 = call i32 @llvm.fptosi.sat.i32.f64(double %arg1)\n  %r3 = sitofp i32 %r2 to double\n  %r4 = fcmp oeq double %r3, %arg1\n  %r5 = icmp ne i64 %r1, -9223372036854775808\n";
+    let i32_guard = "  %r1 = bitcast double %arg1 to i64\n  %r2 = call i32 @llvm.fptosi.sat.i32.f64(double %arg1)\n  %r3 = sitofp i32 %r2 to double\n  %r4 = fcmp oeq double %r3, %arg1\n  %r5 = icmp ne i64 %r1, -9223372036854775808\n  %r6 = and i1 %r4, %r5\n";
     assert!(guards_i32_arg(i32_guard));
     assert!(unboxes_i32_arg(i32_guard));
     assert!(!guards_number_arg(i32_guard));
@@ -1491,6 +1505,9 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
         "icmp ne i64 %r1, -9223372036854775808",
         "add i64 %r1, 0"
     )));
+    assert!(!guards_i32_arg(
+        i32_guard.replace("and i1 %r4, %r5", "or i1 %r4, %r5")
+    ));
     assert!(!guards_i32_arg(number_tier1));
 
     // The constant alone must not satisfy a guard: the opcode has to match too.
