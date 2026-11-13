@@ -1472,6 +1472,9 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if let Some(recv) = super::generic_object::restricted_array_value(arr) {
+        return crate::array::generic_object_pop(recv);
+    }
     // Resolve the header flags ONCE. `array_is_frozen`, `guard_writable_length`
     // and `array_iteration_is_exotic` each re-ran `clean_arr_ptr` on the head
     // this function had just resolved — three classifications per pop on an
@@ -1964,6 +1967,9 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if let Some(recv) = super::generic_object::restricted_array_value(arr) {
+        return crate::array::generic_object_shift(recv);
+    }
     unsafe {
         let length = (*arr).length;
         if length == 0 {
@@ -2082,6 +2088,10 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if arr.is_null() {
         return unshift_non_array_receiver(recv, &[value]);
     }
+    if let Some(boxed) = super::generic_object::restricted_array_value(arr) {
+        super::generic_object::object_unshift(boxed, &value, 1);
+        return arr;
+    }
     if crate::array::array_iteration_is_exotic(arr) {
         return unshift_array_spec_path(arr, &[value]);
     }
@@ -2162,6 +2172,10 @@ pub extern "C" fn js_array_unshift_variadic(
             }
         };
         return unshift_non_array_receiver(recv, values);
+    }
+    if let Some(boxed) = super::generic_object::restricted_array_value(arr) {
+        super::generic_object::object_unshift(boxed, items, count as usize);
+        return arr;
     }
     // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so both
     // a frozen array and a non-writable `length` throw before the no-op early
