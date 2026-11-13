@@ -455,6 +455,9 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         if let Some(value) = non_array_receiver_index_get(arr, index) {
             return value;
         }
+        // `null[i]` / `undefined[i]` behind an Array annotation arrives as the
+        // masked word 0x2 / 0x1: node's TypeError. Asked on this arm only.
+        nullish_receiver_index_get(arr, index);
         return f64::NAN;
     }
     let arr = cleaned;
@@ -695,6 +698,9 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         if let Some(value) = non_array_receiver_index_get(arr, index) {
             return value;
         }
+        // `null[i]` / `undefined[i]` behind an Array annotation arrives as the
+        // masked word 0x2 / 0x1: node's TypeError. Asked on this arm only.
+        nullish_receiver_index_get(arr, index);
         return f64::NAN;
     }
     let arr = cleaned;

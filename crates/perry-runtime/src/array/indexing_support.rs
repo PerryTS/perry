@@ -97,6 +97,27 @@ pub(super) fn non_array_receiver_index_get(arr: *const ArrayHeader, index: u32) 
     Some(crate::value::js_dyn_index_get(receiver, f64::from(index)))
 }
 
+/// `Get(null / undefined, index)` behind an Array annotation: the element
+/// read's receiver is the NaN-boxed word masked to its payload, `0x2` for
+/// null and `0x1` for undefined (no allocation lives there). GetValue's
+/// RequireObjectCoercible throws node's TypeError; any other word returns.
+/// Called only from the element read's failure arm, so no read that
+/// succeeds pays for it.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_index_get(arr: *const ArrayHeader, index: u32) {
+    use crate::value::{POINTER_MASK, TAG_NULL, TAG_UNDEFINED};
+    let word = arr as u64;
+    let bits = if word == TAG_NULL & POINTER_MASK {
+        TAG_NULL
+    } else if word == TAG_UNDEFINED & POINTER_MASK {
+        TAG_UNDEFINED
+    } else {
+        return;
+    };
+    crate::value::js_dyn_index_get(f64::from_bits(bits), f64::from(index));
+}
+
 /// `Set(O, ToString(index), value, strict)` for
 /// [`non_array_object_receiver_word`]: an inherited setter runs, a frozen or
 /// non-extensible receiver rejects, otherwise an own property is created.
