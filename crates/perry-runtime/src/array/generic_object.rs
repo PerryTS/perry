@@ -44,9 +44,18 @@ use std::ptr;
 /// at the first that fails, leaving what node leaves. `None` for every other
 /// receiver (the dense bodies keep it).
 pub(crate) fn restricted_array_value(arr: *mut ArrayHeader) -> Option<f64> {
-    let restricted = super::array_is_frozen(arr)
-        || super::array_is_sealed_or_no_extend(arr)
-        || crate::object::get_property_attrs(arr as usize, "length").is_some_and(|a| !a.writable());
+    // `arr` is a resolved head (the callers ran `clean_arr_ptr_mut`): one
+    // header read for the integrity flags; a non-writable `length` is a key
+    // of the named layout, whose presence is a header bit.
+    let integrity =
+        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    // SAFETY: a resolved head of a live array, or null (no header).
+    let flags = unsafe { super::header::array_gc_header(arr) }
+        .map_or(0, |header| unsafe { (*header)._reserved });
+    let restricted = flags & integrity != 0
+        || (unsafe { array_has_element_descriptors_resolved(arr) }
+            && crate::object::get_property_attrs(arr as usize, "length")
+                .is_some_and(|a| !a.writable()));
     restricted.then(|| nanbox_arr(arr))
 }
 

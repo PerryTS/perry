@@ -1967,9 +1967,6 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    if let Some(recv) = super::generic_object::restricted_array_value(arr) {
-        return crate::array::generic_object_shift(recv);
-    }
     unsafe {
         let length = (*arr).length;
         if length == 0 {
