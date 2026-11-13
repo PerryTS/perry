@@ -2,6 +2,12 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn run_web_source(source: &str) -> String {
+    run_web_source_then(source, "")
+}
+
+/// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
+/// assertion about a runtime helper that TypeScript cannot reach.
+fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
     let module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
     let html =
@@ -28,6 +34,7 @@ globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () =
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
+{after_boot}
 }})().catch(e => {{ console.error(e); process.exitCode = 1; }});
 "#
     );
@@ -179,15 +186,65 @@ fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() 
             r#"
 class T { toString(): string { return "T!"; } }
 class U extends T {}
+class V extends T { other(): string { return "o"; } }
 async function g(): Promise<string> {
   const t = new T();
   const u = new U();
-  return t.toString() + " " + u.toString();
+  const v = new V();
+  return t.toString() + " " + u.toString() + " " + v.toString() + v.other();
 }
 g().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
-        "T! T!"
+        "T! T! T!o"
+    );
+}
+
+// The method property is read once, so an inherited getter runs once.
+#[test]
+fn async_method_lookup_reads_the_property_once() {
+    assert_eq!(
+        run_web_source_then(
+            "",
+            r#"
+let reads = 0;
+class Base {}
+Object.defineProperty(Base.prototype, "m", { get() { reads++; return function () { return "ok"; }; } });
+const o = Object.create(Base.prototype);
+o.__class__ = "NoSuchClass";
+console.log(__jsMethodInvoke(__jsMethodGet(o, "m"), []) + " " + reads);
+"#
+        ),
+        "ok 1"
+    );
+}
+
+// A call to a method nobody defines throws TypeError, as in JS, instead of returning
+// undefined; and a constructor that throws rejects the async function.
+#[test]
+fn async_body_absent_method_and_throwing_constructor_fail_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { a(): number { return 1; } }
+async function absent(): Promise<string> {
+  const k: any = new K();
+  return k.missing();
+}
+absent().then((v) => console.log("absent: " + v)).catch((e) => console.log("absent threw " + e.name));
+class Boom { constructor() { throw new Error("boom"); } }
+async function build(): Promise<string> {
+  const b = new Boom();
+  return "constructed";
+}
+try {
+  build().then((v) => console.log("build: " + v)).catch((e) => console.log("build rejected " + e.message));
+} catch (e) {
+  console.log("sync caught");
+}
+"#
+        ),
+        "absent threw TypeError\nbuild rejected boom"
     );
 }
 

@@ -774,8 +774,11 @@ impl WasmModuleEmitter {
                         call_args.push("TAG_UNDEFINED".to_string());
                     }
                 }
+                // Through the callback boundary: an exception the constructor raised
+                // under an enclosing WASM `try` is left pending, and this rethrows it
+                // here instead of handing back `this` as if it had succeeded.
                 format!(
-                    "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
+                    "u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{}, {}))",
                     ctor_idx,
                     call_args.join(", ")
                 )

@@ -4971,14 +4971,20 @@ function __hostCallback(value) {
 // the method is looked up before the arguments are evaluated. A user-class instance is a
 // `{__class__}` object whose methods live in the WASM function table: a name its class
 // chain defines wins over what the object inherits from Object.prototype (`toString`),
-// and loses only to an own property.
+// and loses only to an own property. Otherwise the property is read exactly once (an
+// inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
+// only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
 function __jsMethodGet(obj, mname) {
-  if (obj && typeof obj === 'object' && obj.__class__ && !Object.prototype.hasOwnProperty.call(obj, mname)) {
-    if (__classHasMethod(obj.__class__, mname) || typeof obj[mname] !== 'function') {
-      return { r: obj, m: mname, user: true };
-    }
+  const tagged = obj && typeof obj === 'object' && obj.__class__
+    && !Object.prototype.hasOwnProperty.call(obj, mname);
+  if (tagged && __classHasMethod(obj.__class__, mname)) {
+    return { r: obj, m: mname, user: true };
   }
-  return { r: obj, m: mname, f: obj[mname] };
+  const f = obj[mname];
+  if (tagged && typeof f !== 'function' && __uiMethodMap[mname]) {
+    return { r: obj, m: mname, user: true };
+  }
+  return { r: obj, m: mname, f };
 }
 
 function __jsMethodInvoke(ref, args) {
@@ -5016,7 +5022,9 @@ function __classDispatch(objVal, mname, rawArgs) {
     let cls = objVal.__class__;
     while (cls) {
       const methods = classMethodTable[cls];
-      if (methods && mname in methods) {
+      // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`
+      // in a subclass's table and hands a host function to Table.get.
+      if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
         if (fn) {
           // Pad for omitted TS optional params (Issue #1035).
