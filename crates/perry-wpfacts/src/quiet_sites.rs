@@ -33,20 +33,16 @@
 //!   (ToPrimitive of a primitive is the identity). A local's own kinds are
 //!   in its `BindingFacts` (`prims`, `other`, `class_ids`).
 //!
-//! - **a String's own `length` and code units** (`PERRY_FACTS_QUIET_STRINGS`):
-//!   a named read `x.length` is quiet, with a primitive value, when every
-//!   receiver node of the site (and every summary instance's copy) holds
-//!   Strings and nothing else: a primitive String's `length` is its own
-//!   non-configurable data property, no chain is consulted. The value of an
-//!   element read is primitive when the site is a quiet element site whose
-//!   receivers all hold Strings and nothing else, and the value node holds
-//!   no object: in range the read is the String's own code unit, out of
-//!   range it goes up `String.prototype` and `Object.prototype`, on which no
-//!   unit solved a write (the quiet element site's own condition), so it is
-//!   `undefined`. The solve leaves the value of such a read without a kind
-//!   (it holds no object, and no primitive either), which is all these two
-//!   rules add; nothing they rely on is derived from syntax or a declared
-//!   type. Dump lines `verdict=quiet by=string`;
+//! - **a String's code unit** (`PERRY_FACTS_QUIET_STRINGS`): the value of
+//!   an element read is primitive when the site is a quiet element site
+//!   whose receivers (and every summary instance's copy) hold Strings and
+//!   nothing else, and the value node holds no object: in range the read is
+//!   the String's own code unit, out of range it goes up `String.prototype`
+//!   and `Object.prototype`, on which no unit solved a write (the quiet
+//!   element site's own condition), so it is `undefined`. The solve leaves
+//!   the value of such a read without a kind (no object, and no primitive
+//!   either), which is all this rule adds; nothing it relies on is derived
+//!   from syntax or a declared type. Dump line `verdict=quiet by=string`;
 //!
 //! No fact for a site means the site may run code: an unknown receiver, a
 //! computed key that may be an object, a value that may be anything. There
@@ -55,9 +51,9 @@
 //!
 //! `PERRY_FACTS_QUIET_SITES=0` exports nothing (and codegen asks nothing:
 //! the walker of before); `PERRY_FACTS_QUIET_STRINGS=0` drops the String
-//! rules alone. The negative control `PERRY_FACTS_SABOTAGE=quiet` claims
+//! rule alone. The negative control `PERRY_FACTS_SABOTAGE=quiet` claims
 //! every site quiet and every value primitive; `quiet-strings` claims the
-//! String rules of every `length` read and every quiet element read. The dump
+//! String rule for every quiet element read. The dump
 //! (`PERRY_FACTS_DUMP`) prints one `# quiet` line per site:
 //! `kind=read|element|value|elemvalue module= offset= verdict=quiet`, or
 //! `refused=<why>`.
@@ -76,7 +72,7 @@ pub fn enabled() -> bool {
     )
 }
 
-/// `PERRY_FACTS_QUIET_STRINGS=0` turns the String rules off (module docs).
+/// `PERRY_FACTS_QUIET_STRINGS=0` turns the String rule off (module docs).
 pub fn strings_enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_QUIET_STRINGS").as_deref(),
@@ -198,26 +194,6 @@ pub(crate) fn collect(
             why,
         );
     }
-    // A String's own `length`: every receiver copy of every read of the
-    // site holds Strings alone (module docs). Keyed like `reads`.
-    let length = m.atom_index.get("length").copied();
-    let mut string_reads: BTreeMap<(u32, u32), bool> = BTreeMap::new();
-    if strings {
-        for r in g
-            .read_sites
-            .iter()
-            .filter(|r| !r.is_call && !r.value_call && r.byte_offset != 0)
-            .filter(|r| length == Some(r.key))
-        {
-            let all = string_sabotage || with_copies(r.recv).all(|n| strings_only(m, n));
-            *string_reads
-                .entry((r.module, r.byte_offset))
-                .or_insert(true) &= all;
-        }
-    }
-    let by_string_read = |mi: u32, offset: u32, key: &str| {
-        key == "length" && string_reads.get(&(mi, offset)) == Some(&true)
-    };
     let mut elements: Sites<()> = BTreeMap::new();
     // Element sites whose every receiver copy holds Strings alone.
     let mut string_elements: BTreeMap<(u32, u32), bool> = BTreeMap::new();
@@ -243,20 +219,13 @@ pub(crate) fn collect(
         );
     }
     let mut values: Sites<String> = BTreeMap::new();
-    let mut string_values: std::collections::BTreeSet<(u32, u32, String)> = Default::default();
     for &(mi, offset, key, dst) in &g.load_sites {
-        let key = m.atoms[key as usize].to_string();
         let all = with_copies(dst).all(|n| primitive(m, n));
-        // A String's `length` is a Number: the value node holds no object.
-        let by_string = !all
-            && by_string_read(mi, offset, &key)
-            && (string_sabotage || with_copies(dst).all(|n| m.nodes[n as usize].pts.is_empty()));
-        if by_string {
-            string_values.insert((mi, offset, key.clone()));
-        }
         join(
-            values.entry((mi, offset, key)).or_insert(None),
-            (!all && !by_string).then_some("value:may-be-object"),
+            values
+                .entry((mi, offset, m.atoms[key as usize].to_string()))
+                .or_insert(None),
+            (!all).then_some("value:may-be-object"),
         );
     }
     let mut elem_values: Sites<()> = BTreeMap::new();
@@ -309,13 +278,8 @@ pub(crate) fn collect(
     // sorted.
     for (kind, map) in [("read", reads), ("value", values)] {
         for ((mi, offset, key), why) in map {
-            // A String's own `length` (module docs).
-            let by_string = match kind {
-                "read" => why.is_some() && by_string_read(mi, offset, &key),
-                _ => string_values.contains(&(mi, offset, key.clone())),
-            };
-            let why = why.filter(|_| !sabotage && !by_string);
-            line(kind, mi, offset, &key, why, by_string);
+            let why = why.filter(|_| !sabotage);
+            line(kind, mi, offset, &key, why, false);
             if let (None, Some(mb)) = (why, bindings.get_mut(mi as usize)) {
                 match kind {
                     "read" => mb.quiet_reads.push((offset, key)),
@@ -339,9 +303,8 @@ pub(crate) fn collect(
     }
     if let Some(p) = probe.as_deref_mut() {
         p.push(format!(
-            "# quiet strings reads={} values={} elemvalues={}",
-            string_reads.values().filter(|all| **all).count(),
-            string_values.len(),
+            "# quiet strings elements={} elemvalues={}",
+            string_elements.values().filter(|all| **all).count(),
             string_elem_values.len()
         ));
     }

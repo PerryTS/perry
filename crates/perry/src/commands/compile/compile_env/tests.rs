@@ -450,9 +450,9 @@ fn quiet_sites_switch_is_a_cache_input() {
     );
 }
 
-/// Quiet sites over Strings: the switch decides whether a String's
-/// `length` and code-unit reads count as running no program code (a loop
-/// keeps its length on that word), so `=0` must never reuse an `=1` object.
+/// Quiet sites over Strings: the switch decides whether a String's code
+/// unit counts as a primitive operand (a loop keeps its length on that
+/// word), so `=0` must never reuse an `=1` object.
 #[test]
 fn quiet_strings_switch_is_a_cache_input() {
     assert!(
