@@ -230,7 +230,8 @@ fn written_by(
     // off) is the global object: a write through either token is a write
     // of the one object.
     let is_global = super::global_object(m, np);
-    let global = match &m.toks[np as usize] {
+    // Taken last: a name match, after the cheap tests of the write.
+    let global = || match &m.toks[np as usize] {
         TokKind::NativeProto(n) => ns_by_name(n).is_some(),
         _ => is_global,
     };
@@ -257,11 +258,11 @@ fn written_by(
             || other_global(np)
             // A prototype write is a chain contribution, separate from
             // the namespace's own hit above and its TOP reachability.
-            || (global
-                && !locked_chain_read(m, np, a)
-                && m.tok_index
-                    .get(&TokKind::ObjectProto)
-                    .is_some_and(|&op| hit(op))),
+            || (m.tok_index
+                .get(&TokKind::ObjectProto)
+                .is_some_and(|&op| hit(op))
+                && global()
+                && !locked_chain_read(m, np, a)),
     )
 }
 
@@ -438,7 +439,20 @@ fn note_write(
             fns.push(f);
         }
     }
-    replay_native_missing(m);
+    if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
+        replay_native_missing(m);
+        return;
+    }
+    // A plain store or a delete adds one stored value (or `undefined`) to
+    // this one entry: only the answered lookups the entry reaches gain it.
+    // Which lookups an entry reaches depends on its token and key and on
+    // the environment events that replay everything (`note_global_in_top`,
+    // `note_handed_to_unknown`), never on the other entries. Lookups parked
+    // unwritten change only when the entry is new.
+    feed_answered(m, (t, k), value);
+    if fresh {
+        replay_pending(m);
+    }
 }
 
 /// Once the worklist is empty: a runtime object given prototype `src`
@@ -606,6 +620,29 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     if m.native_missing.is_empty() && m.native_answered.is_empty() {
         return;
     }
+    replay_pending(m);
+    // Lookups answered by what the writes stored: refilled, or run as
+    // opaque members once an opaque write reaches their key.
+    m.with_b(|m| {
+        let answered: Vec<_> = m.native_answered.iter().map(|(&k, &w)| (k, w)).collect();
+        for ((np, a, miss), w) in answered {
+            match stored_values(m, np, a) {
+                Some((stored, absent)) => fill_stored(m, w, &stored, absent),
+                None => {
+                    m.native_answered.remove(&(np, a, miss));
+                    answer_opaque(m, np, a, miss);
+                }
+            }
+        }
+    });
+}
+
+/// Lookups parked past a native prototype whose key a write may now reach:
+/// answered from the stored values, or run as opaque members.
+fn replay_pending(m: &mut Model) {
+    if m.native_missing.is_empty() {
+        return;
+    }
     let pending = std::mem::take(&mut m.native_missing);
     let mut keep = Vec::with_capacity(pending.len());
     m.with_b(|m| {
@@ -631,21 +668,50 @@ pub(super) fn replay_native_missing(m: &mut Model) {
             }
             answer_opaque(m, np, a, miss);
         }
-        // Lookups answered by what the writes stored: refilled, or run as
-        // opaque members once an opaque write reaches their key.
-        let answered: Vec<_> = m.native_answered.iter().map(|(&k, &w)| (k, w)).collect();
-        for ((np, a, miss), w) in answered {
-            match stored_values(m, np, a) {
-                Some((stored, absent)) => fill_stored(m, w, &stored, absent),
-                None => {
-                    m.native_answered.remove(&(np, a, miss));
-                    answer_opaque(m, np, a, miss);
-                }
-            }
-        }
     });
     keep.append(&mut m.native_missing);
     m.native_missing = keep;
+}
+
+/// A plain store or a delete recorded in write entry `entry` (`value` not
+/// opaque): the answered lookups that entry reaches ([`written_by`]) take
+/// that one value, or `undefined` for a delete (ECMA-262 10.1.9.2, 10.1.10).
+/// No opaque write reaches an answered lookup (one turns it into an opaque
+/// member, `replay_native_missing`), so this is all the lookup gains.
+fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
+    if m.native_answered.is_empty() {
+        return;
+    }
+    let Some(x) = m.native_writes.get(&entry) else {
+        return;
+    };
+    let x: *const crate::model::NativeWrite = x;
+    let t = entry.0;
+    // `written_by` counts an entry only on ⊤, the lookup's own token, the
+    // global object's tokens or `Object.prototype`.
+    let wide = t == TOP
+        || super::global_object(m, t)
+        || matches!(m.toks[t as usize], TokKind::ObjectProto);
+    let reached: Vec<NodeId> = m
+        .native_answered
+        .iter()
+        .filter(|(&(np, a, _), _)| {
+            (wide || np == t) && {
+                let (top, own) = written_by(m, np, a, false, &|y| std::ptr::eq(y, x));
+                top || own
+            }
+        })
+        .map(|(_, &w)| w)
+        .collect();
+    m.with_b(|m| {
+        for w in reached {
+            match value {
+                WriteValue::Value(n) => m.edge(n, w),
+                WriteValue::Absent => m.add_prim(w, prim::UNDEF),
+                WriteValue::Opaque => unreachable!(),
+            }
+        }
+    });
 }
 
 /// The values the writes that may have written native prototype `np`'s key
