@@ -97,10 +97,20 @@ fn a_reassigned_map_binding_keeps_the_generic_entry() {
 /// `size` entry; a miss reads `size` the ordinary way (wa4).
 #[test]
 fn an_unconstructed_map_size_tests_its_brand_and_reads_size_on_a_miss() {
+    let map_type = Type::Generic {
+        base: "Map".to_string(),
+        type_args: vec![Type::Any, Type::Any],
+    };
     let ir = ir_for(
         "kind_entry_unconstructed_size",
         vec![
-            local(M, true, Expr::MapNew),
+            Stmt::Let {
+                id: M,
+                name: format!("v{M}"),
+                ty: map_type,
+                mutable: true,
+                init: Some(Expr::MapNew),
+            },
             Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::MapNew))),
             local(R, false, size_of(M)),
             Stmt::Expr(Expr::MapClear(Box::new(Expr::LocalGet(M)))),
