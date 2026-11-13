@@ -58,6 +58,7 @@ mod summary;
 #[cfg(test)]
 mod tests;
 mod units;
+mod unksrc;
 mod zero_sign;
 
 pub use bindings::{
@@ -701,6 +702,18 @@ fn generate<'a>(
         g.m.refute_own_test(n);
     }
     g.m.summarize_and_replay();
+    if unksrc::on() {
+        let gm = &g;
+        unksrc::flush(if loud { "loud" } else { "quiet" }, |f| {
+            gm.m.funcs
+                .get(f as usize)
+                .map(|fi| {
+                    let p = gm.modules.get(fi.module as usize).map(|(p, _)| p.to_string()).unwrap_or_default();
+                    format!("{}@{}", fi.name, p)
+                })
+                .unwrap_or_else(|| "-".into())
+        });
+    }
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
     if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);

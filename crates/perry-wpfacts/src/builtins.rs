@@ -343,6 +343,13 @@ enum Recv {
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     // −0 tolerance: unknown code receives the arguments.
     m.zs_call_args(call);
+    if crate::unksrc::on() {
+        let f = crate::unksrc::call_fn(m, call);
+        crate::unksrc::note("method", why, call, f);
+        if !m.realm_held {
+            crate::unksrc::held("method", why, call, f);
+        }
+    }
     // Unknown code runs, handed values or not: it holds the realm.
     if !m.realm_held {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");

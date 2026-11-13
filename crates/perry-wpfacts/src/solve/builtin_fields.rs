@@ -260,6 +260,12 @@ impl Model {
 
     /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
+        if crate::unksrc::on() {
+            crate::unksrc::note("interp", "interpreted code runs", u32::MAX, u32::MAX);
+            if !self.realm_held {
+                crate::unksrc::held("interp", "interpreted code runs", u32::MAX, u32::MAX);
+            }
+        }
         self.realm_held = true;
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
         hs.extend((0..self.toks.len() as Tok).filter(|&t| {

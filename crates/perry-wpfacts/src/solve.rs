@@ -773,6 +773,9 @@ impl Model {
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
+        if crate::unksrc::on() {
+            crate::unksrc::note("topval", why, u32::MAX, self.cur_fn as u32);
+        }
         // Explain and the dump name each origin: its own node.
         if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;

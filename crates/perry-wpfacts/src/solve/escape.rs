@@ -48,6 +48,13 @@ impl Model {
         }
         // A value reaches unknown code: unknown code exists and holds the
         // realm (`hold_realm`).
+        if crate::unksrc::on() {
+            let why = format!("{} [tok {t} {:?}]", self.reasons[reason as usize], self.toks[t as usize]);
+            crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
+            if !self.realm_held {
+                crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
+            }
+        }
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             self.hold_realm(r);
