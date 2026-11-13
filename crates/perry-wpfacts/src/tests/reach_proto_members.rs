@@ -82,6 +82,17 @@ const HELD: &[(&str, &str)] = &[
          console.log(f[k]);",
     ),
     (
+        "a getter of an argument of a held constructor's static",
+        "const d: any = Temporal.PlainDate.from({ year: 2020, month: 1, get day() { hit(); return 2; } } as any);\n\
+         console.log(d.day);",
+    ),
+    (
+        "the same static read as a value first",
+        "const from: any = Temporal.PlainDate.from;\n\
+         const d = from.call(Temporal.PlainDate, { year: 2020, month: 1, get day() { hit(); return 2; } });\n\
+         console.log(d.day);",
+    ),
+    (
         "the prototype held in a program object first",
         "const reg: any = { p: Temporal.PlainTime.prototype };\n\
          reg.p.hh = function (this: any) { hit(); return this.hour; };\n\
