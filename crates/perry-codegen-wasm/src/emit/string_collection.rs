@@ -137,6 +137,7 @@ impl WasmModuleEmitter {
             "array_some",
             "array_every",
             "class_new",
+            "class_ref",
             "class_set_method",
             "class_call_method",
             "class_get_field",

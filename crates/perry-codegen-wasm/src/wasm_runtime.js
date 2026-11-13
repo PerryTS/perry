@@ -1642,6 +1642,30 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
+// so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
+// the compiled constructor, which returns `this`. `ctorIdx` is the constructor's
+// table slot, or -1 when the class has none.
+const __classRefs = new Map();
+function __classRef(className, ctorIdx) {
+  let ctor = __classRefs.get(className);
+  if (!ctor) {
+    ctor = function (...args) {
+      if (new.target === undefined) {
+        throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
+      }
+      const self = __classInstance(className);
+      if (ctorIdx < 0) return self;
+      const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    };
+    Object.defineProperty(ctor, 'name', { value: className });
+    __classRefs.set(className, ctor);
+  }
+  return ctor;
+}
+
 // A lowered sync generator drives its resume record, a wasm closure taking
 // `(op, arg)` (op 0 next, 1 return, 2 throw), or `(arg)` when it has no catch,
 // finally or `yield*`. The record's first five captures are the cells it shares
@@ -2106,6 +2130,7 @@ const __memDispatch = {
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
+  class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};

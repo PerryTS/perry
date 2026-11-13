@@ -725,3 +725,23 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// A class used as a value is a constructor: `new` on it runs the class's constructor
+// and field initializers, and the instance keeps its methods and its class.
+#[test]
+fn a_class_used_as_a_value_constructs_its_instances() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { v = 3; constructor(x?: number) { if (x !== undefined) this.v = x; } twice() { return this.v * 2; } }
+class Bare { w = 4; }
+const KK: any = K;
+const kk = new KK(7);
+console.log(typeof KK + " " + kk.v + " " + kk.twice() + " " + (kk instanceof K) + " " + new KK().v);
+const r = { K, Bare };
+console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " + (KK === r.K));
+"#
+        ),
+        "function 7 14 true 3\nfunction 18 4 true"
+    );
+}
