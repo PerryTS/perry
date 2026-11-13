@@ -169,7 +169,10 @@ fn export_of(spelling: &str) -> Option<(String, String)> {
     let text = |hex: &str| {
         let bytes: Option<Vec<u8>> = (0..hex.len())
             .step_by(2)
-            .map(|i| hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .map(|i| {
+                hex.get(i..i + 2)
+                    .and_then(|b| u8::from_str_radix(b, 16).ok())
+            })
             .collect();
         bytes.and_then(|b| String::from_utf8(b).ok())
     };
@@ -515,8 +518,7 @@ pub fn check(
         // archives names holds its address, or an install stored it in a
         // slot no rule delegates to a wrapper.
         let stored = indirect_pred[i].is_empty() && g.taken_by[i].iter().any(|&c| fills[c]);
-        let by_pointer =
-            g.loose[i] || stored || (held_as_value[i] && !g.taken_by[i].is_empty());
+        let by_pointer = g.loose[i] || stored || (held_as_value[i] && !g.taken_by[i].is_empty());
         if called && !by_pointer {
             continue;
         }
@@ -528,44 +530,40 @@ pub fn check(
         let export_of_family = spellings.iter().any(|s| {
             s.contains("::static_exports::")
                 && export_of(s).is_some_and(|(module, _)| {
-                    families::module_families(&module)
-                        .is_none_or(|f| families::close_requires(f) & families::family_bit(FAMILY) != 0)
+                    families::module_families(&module).is_none_or(|f| {
+                        families::close_requires(f) & families::family_bit(FAMILY) != 0
+                    })
                 })
         });
-        let kind =
-            if native_node[i] {
-                "native"
-            } else if export_of_family {
-                "export body of a family module"
-            } else if origin[i] {
-                origins.0 += 1;
-                "by pointer, origin stated"
-            } else if !stored
-                && spellings
-                    .iter()
-                    .any(|s| !s.contains("::") && !s.starts_with('_'))
-            {
-                // An entry point compiled code or a native library calls by
-                // name: what the program's code may call is the fact's node
-                // classification, not this check. (One an install stores in
-                // a slot is called through the slot: it needs its origin.)
-                "exported"
-            } else if !called
-                && !by_pointer
-                && g.taken_by[i].is_empty()
-                && !g.taken[i]
-                && !g.in_data[i]
-            {
-                // An out-of-line copy nothing in the archives refers to:
-                // no call, no address in code or data (its callers hold
-                // inlined copies, which the walk sees in them). Only an
-                // object outside the analyzed archives could call it, and
-                // that is a native library: see the `perry_ffi` rule.
-                "unreferenced"
-            } else {
-                origins.1 += 1;
-                report.failures += 1;
-                report.lines.push(format!(
+        let kind = if native_node[i] {
+            "native"
+        } else if export_of_family {
+            "export body of a family module"
+        } else if origin[i] {
+            origins.0 += 1;
+            "by pointer, origin stated"
+        } else if !stored
+            && spellings
+                .iter()
+                .any(|s| !s.contains("::") && !s.starts_with('_'))
+        {
+            // An entry point compiled code or a native library calls by
+            // name: what the program's code may call is the fact's node
+            // classification, not this check. (One an install stores in
+            // a slot is called through the slot: it needs its origin.)
+            "exported"
+        } else if !called && !by_pointer && g.taken_by[i].is_empty() && !g.taken[i] && !g.in_data[i]
+        {
+            // An out-of-line copy nothing in the archives refers to:
+            // no call, no address in code or data (its callers hold
+            // inlined copies, which the walk sees in them). Only an
+            // object outside the analyzed archives could call it, and
+            // that is a native library: see the `perry_ffi` rule.
+            "unreferenced"
+        } else {
+            origins.1 += 1;
+            report.failures += 1;
+            report.lines.push(format!(
                 "{}: FAIL: it can reach a byte-cell birth and is reached only through a pointer \
                  ({}), and no origin rule says what schedules it\n      {}",
                 g.label(i),
@@ -576,8 +574,8 @@ pub fn check(
                 },
                 path(g, &next, i)
             ));
-                "by pointer, NO ORIGIN"
-            };
+            "by pointer, NO ORIGIN"
+        };
         roots.push(format!("{}\t{kind}", g.label(i)));
     }
     roots.sort();
@@ -730,7 +728,10 @@ mod tests {
             export_of("a::static_exports::js_native_export_70617468_6a6f696e::body"),
             Some(("path".to_owned(), "join".to_owned()))
         );
-        assert_eq!(export_of("a::static_exports::js_native_export_zz_6a::body"), None);
+        assert_eq!(
+            export_of("a::static_exports::js_native_export_zz_6a::body"),
+            None
+        );
     }
 
     #[test]

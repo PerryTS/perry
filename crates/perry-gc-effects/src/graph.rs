@@ -279,7 +279,10 @@ impl Graph {
         let held_by_symbol: HashMap<String, Vec<usize>> = data_global
             .iter()
             .filter_map(|(name, ds)| {
-                let fns: Vec<usize> = ds.iter().flat_map(|&d| data_fns[d].iter().copied()).collect();
+                let fns: Vec<usize> = ds
+                    .iter()
+                    .flat_map(|&d| data_fns[d].iter().copied())
+                    .collect();
                 (!fns.is_empty()).then(|| ((*name).to_owned(), fns))
             })
             .collect();
