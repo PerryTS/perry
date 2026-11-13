@@ -127,10 +127,12 @@ def main():
             assert observed_text in member, value
             assert member.startswith(family + ": ") or value["expectation"] == family, value
             # Without the instrumented variant check mode makes no claim.
-            # The link decision still reads the fact: a family that is left
-            # out and then created aborts at the birth (no answer, no rc 0);
-            # one that is only observed, or whose install the detector still
-            # decides, runs as before.
+            # The link decision still reads the fact: a family the detector
+            # selected (these programs name it) that the fact says is never
+            # used is left out, and a value of it that is created anyway
+            # aborts at the birth (no answer, no rc 0); one that is only
+            # observed, or whose install the detector still decides, runs as
+            # before.
             exe, e = compile_(source, name + "-default", PERRY_FACTS_SABOTAGE="famreach:" + family)
             observed = observe(exe, e)
             if aborts:
@@ -160,17 +162,39 @@ def main():
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(name, status=observed.returncode)
-        # The default build of a program whose family is never: the install
-        # is not linked and the image claims the family. A comparator sort's
-        # two scratch cells are no values and must not abort it.
+        # The link decision only removes. A program whose family is never
+        # and whose text the detector does not match is the detector's
+        # binary: no install, no claim. A comparator sort's two scratch
+        # cells are no values and run there.
         source = fixtures / "family-bytes-scratch.ts"
         exe, e = compile_(source, "family-bytes-scratch-default", PERRY_KEEP_SYMBOLS="1")
         observed = observe(exe, e)
         assert observed.returncode == 0 and observed.stdout == oracle(source), observed
         symbols = run(["nm", str(exe)]).stdout
-        assert b"js_runtime_families_never" in symbols, "the image makes the family claim"
         assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
         save("family-bytes-scratch-default", status=observed.returncode)
+        # A program the detector matches by a name (`class CommandBuffer`)
+        # and the fact says never creates a byte cell: the install is left
+        # out and the image claims the family; with the switch off the
+        # detector's install is back and nothing is claimed.
+        source = fixtures / "family-bytes-detector-only.ts"
+        expected = oracle(source)
+        exe, e = compile_(source, "family-bytes-detector-only", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_families_never" in symbols, "the image makes the family claim"
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        removed = exe.stat().st_size
+        exe, e = compile_(source, "family-bytes-detector-only-nolink", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="0")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_install_typedarray" in symbols, "the detector no longer selects the group"
+        assert b"js_runtime_families_never" not in symbols, "a claim with the switch off"
+        assert removed < exe.stat().st_size, (removed, exe.stat().st_size)
+        save("family-bytes-detector-only", status=0, bytes_removed=exe.stat().st_size - removed)
     else:
         save("family-claims", status="skipped: no instrumented runtime variant")
 

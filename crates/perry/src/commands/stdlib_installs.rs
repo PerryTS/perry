@@ -267,13 +267,31 @@ pub fn runtime_installer_callees(installs: &FeatureInstalls) -> Vec<String> {
 /// still the detector's answer.
 pub const FACT_LINKED_FAMILIES: &[&str] = &["typedarray"];
 
-/// `PERRY_FACTS_FAMILY_LINK=0` (or `off`, `false`): the detector decides the
-/// install of every family, as before, and the image makes no family claim.
-pub fn family_link_enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_FAMILY_LINK").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
+/// How the link decision of a fact-linked family reads `family_reach`
+/// (`PERRY_FACTS_FAMILY_LINK`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FamilyLink {
+    /// `0` / `off` / `false`: the detector decides, no claim.
+    Off,
+    /// The default: the fact only REMOVES. A family the detector selected
+    /// and the fact says is never created or observed is left out of the
+    /// link and claimed; everything else is the detector's answer. A binary
+    /// is the one the detector alone builds, or a smaller one.
+    Shrink,
+    /// `full`: the install follows the fact both ways. A family the fact
+    /// says may be used is linked although the detector saw no name (a
+    /// constructor reached through a constant computed key), and every
+    /// `never` is claimed. Costs the group in every program whose fact is
+    /// live only because a value is unknown.
+    Full,
+}
+
+pub fn family_link() -> FamilyLink {
+    match std::env::var("PERRY_FACTS_FAMILY_LINK").as_deref() {
+        Ok("0") | Ok("off") | Ok("false") => FamilyLink::Off,
+        Ok("full") => FamilyLink::Full,
+        _ => FamilyLink::Shrink,
+    }
 }
 
 /// The families `family_reach` says may be created or observed: the link
@@ -283,7 +301,7 @@ pub fn family_live(
     facts: Option<&perry_wpfacts::ProgramFacts>,
 ) -> Option<perry_runtime_manifest::families::FamilySet> {
     facts
-        .filter(|_| family_link_enabled())
+        .filter(|_| family_link() != FamilyLink::Off)
         .and_then(|pf| pf.family_reach.as_ref())
         .map(|reach| perry_runtime_manifest::families::all_families() & !reach.never())
 }
@@ -291,16 +309,18 @@ pub fn family_live(
 /// The runtime install entry points of the generated installer, and the
 /// image's family claim (a bit per family in table order; 0 = none).
 ///
-/// `live` is the fact ([`family_live`]). For a
-/// family in [`FACT_LINKED_FAMILIES`] with a prebuilt archive:
-/// - live: its install is linked, whatever the detector saw (a program the
-///   detector misses got an empty hook group before);
-/// - never: its install is not named, so the linker drops the group, and the
-///   family is in the claim: a value of it that is born anyway aborts at its
-///   birth (perry-runtime `family_never`) instead of meeting an empty slot.
+/// `live` is the fact ([`family_live`]). For a family in
+/// [`FACT_LINKED_FAMILIES`] with a prebuilt archive:
+/// - never by the fact and selected by the detector: its install is not
+///   named, so the linker drops the group, and the family is in the claim: a
+///   value of it that is born anyway aborts at its birth (perry-runtime
+///   `family_never`) instead of meeting an empty slot;
+/// - otherwise the detector's answer and no claim ([`FamilyLink::Shrink`]);
+///   with [`FamilyLink::Full`] a live family is linked whatever the detector
+///   saw and every never is claimed.
 ///
 /// In check mode with the instrumented runtime, whose witnesses report a
-/// false `never` with verdict `family`, the family is installed and not
+/// false `never` with verdict `family`, the detector decides and nothing is
 /// claimed, so the program runs on to the witness.
 pub fn runtime_installer_callees_by_fact(
     installs: &FeatureInstalls,
@@ -310,6 +330,7 @@ pub fn runtime_installer_callees_by_fact(
         installs,
         live,
         perry_codegen::verify_facts::family_claims_on(),
+        family_link(),
     )
 }
 
@@ -317,25 +338,32 @@ fn callees_by_fact(
     installs: &FeatureInstalls,
     live: Option<perry_runtime_manifest::families::FamilySet>,
     witnessed: bool,
+    mode: FamilyLink,
 ) -> (Vec<String>, u64) {
     use perry_runtime_manifest::families::{family_bit, install_symbol, RUNTIME_FAMILIES};
     let detector = runtime_installer_callees(installs);
-    let (FeatureInstalls::Selected(_), Some(live)) = (installs, live) else {
+    let (FeatureInstalls::Selected(_), Some(live), false) = (installs, live, witnessed) else {
         return (detector, 0);
     };
+    if mode == FamilyLink::Off {
+        return (detector, 0);
+    }
     let mut never = 0;
     let mut callees = Vec::new();
     for (symbol, _) in RUNTIME_INSTALLS {
+        let selected = detector.iter().any(|d| d == symbol);
         let family = RUNTIME_FAMILIES
             .iter()
             .find(|f| install_symbol(f) == *symbol && FACT_LINKED_FAMILIES.contains(&f.id));
         let wanted = match family {
-            Some(f) if witnessed || live & family_bit(f.id) != 0 => true,
+            Some(f) if live & family_bit(f.id) != 0 => selected || mode == FamilyLink::Full,
             Some(f) => {
-                never |= family_bit(f.id);
+                if selected || mode == FamilyLink::Full {
+                    never |= family_bit(f.id);
+                }
                 false
             }
-            None => detector.iter().any(|d| d == symbol),
+            None => selected,
         };
         if wanted {
             callees.push((*symbol).to_string());
@@ -353,46 +381,66 @@ mod tests {
         FeatureInstalls::Selected(features.iter().map(|f| f.to_string()).collect())
     }
 
-    /// The byte-cell family's install follows the fact, every other
-    /// family's the detector; a `never` is the image's claim.
+    /// The byte-cell family's install is the detector's answer minus what
+    /// the fact says is never used; a removed family is the image's claim.
     #[test]
-    fn the_fact_decides_the_byte_cell_install() {
+    fn the_fact_removes_the_byte_cell_install() {
         use perry_runtime_manifest::families::{all_families, family_bit};
+        use FamilyLink::{Full, Off, Shrink};
         let bytes = family_bit("typedarray");
         let typedarray = "js_runtime_install_typedarray".to_string();
         let date = "js_runtime_install_date".to_string();
         let on = selected(&["typedarray", "date"]);
         let off = selected(&["date"]);
+        let never = Some(all_families() & !bytes);
         // Never by the fact: dropped although the detector selected it, and claimed.
-        let (callees, never) = callees_by_fact(&on, Some(all_families() & !bytes), false);
-        assert_eq!(callees, vec![date.clone()]);
-        assert_eq!(never, bytes);
-        // Live by the fact: linked although the detector missed it; no claim.
-        let (callees, never) = callees_by_fact(&off, Some(bytes), false);
-        assert_eq!(callees, vec![date.clone(), typedarray.clone()]);
-        assert_eq!(never, 0);
-        // No fact (or the switch off): the detector, and no claim.
-        for installs in [&on, &off] {
-            assert_eq!(
-                callees_by_fact(installs, None, false),
-                (runtime_installer_callees(installs), 0)
-            );
+        for mode in [Shrink, Full] {
+            let (callees, claim) = callees_by_fact(&on, never, false, mode);
+            assert_eq!(callees, vec![date.clone()]);
+            assert_eq!(claim, bytes);
         }
-        // Check mode with the witnesses: installed, not claimed.
-        let (callees, never) = callees_by_fact(&off, Some(0), true);
-        assert_eq!(callees, vec![date.clone(), typedarray]);
-        assert_eq!(never, 0);
+        // Never, and the detector did not select it: the binary is the
+        // detector's, with no claim; `full` claims.
+        assert_eq!(
+            callees_by_fact(&off, never, false, Shrink),
+            (vec![date.clone()], 0)
+        );
+        assert_eq!(
+            callees_by_fact(&off, never, false, Full),
+            (vec![date.clone()], bytes)
+        );
+        // Live by the fact, missed by the detector: the detector's answer;
+        // `full` links it. No claim.
+        assert_eq!(
+            callees_by_fact(&off, Some(bytes), false, Shrink),
+            (vec![date.clone()], 0)
+        );
+        assert_eq!(
+            callees_by_fact(&off, Some(bytes), false, Full),
+            (vec![date.clone(), typedarray.clone()], 0)
+        );
+        // No fact, the switch off, or check mode with the witnesses: the
+        // detector, and no claim.
+        for installs in [&on, &off] {
+            let detector = (runtime_installer_callees(installs), 0);
+            assert_eq!(callees_by_fact(installs, None, false, Shrink), detector);
+            assert_eq!(callees_by_fact(installs, never, false, Off), detector);
+            assert_eq!(callees_by_fact(installs, never, true, Shrink), detector);
+            assert_eq!(callees_by_fact(installs, never, true, Full), detector);
+        }
         // An archive compiled for the program installs what it was compiled with.
         assert_eq!(
-            callees_by_fact(&FeatureInstalls::Compiled, Some(0), false),
+            callees_by_fact(&FeatureInstalls::Compiled, Some(0), false, Full),
             (vec![RUNTIME_INSTALL_COMPILED_SYMBOL.to_string()], 0)
         );
         // The order is the table's, as the detector's list is.
         let both = selected(&["typedarray", "date", "os"]);
-        assert_eq!(
-            callees_by_fact(&both, Some(all_families()), false).0,
-            runtime_installer_callees(&both)
-        );
+        for mode in [Shrink, Full] {
+            assert_eq!(
+                callees_by_fact(&both, Some(all_families()), false, mode).0,
+                runtime_installer_callees(&both)
+            );
+        }
     }
 
     /// perry-stdlib's `[features]` table as `name -> [entries]`, parsed from
