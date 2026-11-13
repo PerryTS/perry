@@ -135,6 +135,12 @@ pub(super) fn family_member(
                     m.tok(TokKind::BuiltinFn(n))
                 }
                 None => {
+                    // A primitive's or a wrapper's chain is the realm's
+                    // (`wrapper_member`).
+                    if let Some(protos) = members::wrapper_protos(fam, what) {
+                        wrapper_member(m, protos, &name, dst);
+                        return;
+                    }
                     anyfall("described member", &(fam, what), &name);
                     builtin_fn(m, "described member")
                 }
@@ -160,6 +166,43 @@ pub(super) fn family_member(
             m.add_tok(dst, op);
         }
         None => {}
+    }
+}
+
+/// `dst` ⊇ member `name` of a primitive or a primitive wrapper whose
+/// prototype is one of `protos` (`members::wrapper_protos`), as the realm
+/// chain of each finds it (10.1.8.1 OrdinaryGet): the holder's named
+/// native, or `undefined` where no object of that chain holds the key.
+/// The runtime realm declares those prototypes' own keys exactly, the
+/// well-known symbol keys included: none holds `@@toPrimitive` (the
+/// runtime's `Symbol.prototype` holds `constructor`, `toString`,
+/// `valueOf` only; ECMA-262 20.4.3.5 also lists `@@toPrimitive`).
+fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
+    for p in protos {
+        let found = members::realm_entry(p).map(|e| members::realm_chain_find(e, name));
+        let identity = match found {
+            Some(members::RealmFind::Absent) => {
+                m.add_prim(dst, prim::UNDEF);
+                continue;
+            }
+            Some(members::RealmFind::Own(_, at)) => m
+                .declarations
+                .named(at.name, m)
+                .and_then(|h| m.declarations.property(h, name, m))
+                .and_then(|p| p.native),
+            None => None,
+        };
+        let f = match identity {
+            Some(identity) => m.tok(TokKind::BuiltinFn(Native::Member {
+                identity,
+                holder: None,
+            })),
+            None => {
+                anyfall("described member", &p, &name);
+                builtin_fn(m, "described member")
+            }
+        };
+        m.add_tok(dst, f);
     }
 }
 

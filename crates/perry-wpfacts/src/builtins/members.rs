@@ -330,6 +330,39 @@ pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
 }
 
+/// The realm prototypes a value of family `fam` (kind `what`) may have
+/// when it is a primitive or a primitive wrapper (`loads::wrapper_member`):
+/// its kind's prototype; `Object(value)` (20.1.1.1) of a primitive of any
+/// kind is a wrapper of that kind (7.1.18 ToObject), and of `undefined` or
+/// `null` an ordinary object. `None`: any other value.
+pub(super) fn wrapper_protos(fam: Family, what: Option<&str>) -> Option<&'static [&'static str]> {
+    const PRIMS: [&str; 5] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+    ];
+    const ANY: [&str; 6] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+        "Object.prototype",
+    ];
+    Some(match (fam, what) {
+        (Family::Str, None) | (Family::Wrapper, Some("BoxedString")) => &PRIMS[0..1],
+        (Family::Num, None) | (Family::Wrapper, Some("BoxedNumber")) => &PRIMS[1..2],
+        (Family::Bool, None) | (Family::Wrapper, Some("BoxedBoolean")) => &PRIMS[2..3],
+        (Family::Sym, None) | (Family::Wrapper, Some("BoxedSymbol")) => &PRIMS[3..4],
+        (Family::BigInt, None) | (Family::Wrapper, Some("BoxedBigInt")) => &PRIMS[4..5],
+        (Family::Wrapper, Some("Object(prim)")) => &PRIMS,
+        (Family::Wrapper, Some("Object()")) => &ANY,
+        _ => return None,
+    })
+}
+
 /// `name` is a member of some described builtin family (`length`, `size`,
 /// `name`, `then`, ...): a key every program reads off builtins too (I32 at
 /// rest, PR C: such a key is never a field lane, `rest_fields`).

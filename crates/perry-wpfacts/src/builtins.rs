@@ -1354,6 +1354,25 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
     }
 }
 
+/// Whether a `Number`/`Boolean`/`Symbol`/`BigInt` prototype method
+/// (family `fam`) finds no [[NumberData]]/[[BooleanData]]/[[SymbolData]]/
+/// [[BigIntData]] on receiver `r`: `r` is an object that is no primitive
+/// wrapper (a program object, a prototype, a builtin function; not a
+/// builtin namespace: `Number.prototype` is itself a Number object, 21.1.3;
+/// only `Family::Wrapper` objects carry such a slot, 21.1.1.1, 20.3.1.1,
+/// 20.4.1, 21.2.1, 7.1.18). A marker or an unknown value may be one.
+pub(crate) fn no_this_value(m: &Model, fam: Family, r: Tok) -> bool {
+    if !matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt) || m.is_marker(r) {
+        return false;
+    }
+    match &m.toks[r as usize] {
+        // A builtin object of an undescribed kind (`primbox`) may be one.
+        TokKind::Obj(tm, _) => !matches!(&m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+        TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
+        _ => false,
+    }
+}
+
 /// The primitive kinds whose ToObject wrapper an `Array.prototype` method
 /// called with that primitive as `this` runs on (`array_method_on_prim`).
 pub(crate) const ARRAY_BOXED_PRIMS: u16 =
