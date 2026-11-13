@@ -1771,7 +1771,8 @@ fn judge(
 /// 1. One family: every primitive a String and no object, or every object
 ///    an Array exotic object ([`exact_array`]), or every object a
 ///    collection of one kind, or every object a RegExp, or every object a
-///    Buffer (a method `Buffer.prototype` owns); closed markers are skipped (their callers'
+///    native Promise, or every primitive a Number and no object, or every
+///    object a Buffer (a method `Buffer.prototype` owns); closed markers are skipped (their callers'
 ///    values are beside them), ⊤ and other markers are none.
 /// 2. The family's intrinsic chain defines the key: a function for a call,
 ///    a function or a data member for a read (`builtins::native_described`).
@@ -1799,11 +1800,13 @@ fn native_member(
         Some(g) => *g == f,
     };
     if prim != 0 {
-        if prim != crate::model::prim::STR {
-            return Err(None);
-        }
-        join(NativeFamily::Str, &mut fam);
-        receivers.push("primitive:string".to_string());
+        let (f, r) = match prim {
+            crate::model::prim::STR => (NativeFamily::Str, "primitive:string"),
+            crate::model::prim::NUM => (NativeFamily::Num, "primitive:number"),
+            _ => return Err(None),
+        };
+        join(f, &mut fam);
+        receivers.push(r.to_string());
     }
     for &t in toks {
         if m.closed_marker(t) {
@@ -1819,6 +1822,9 @@ fn native_member(
                         ..
                     } => NativeFamily::Collection(w),
                     TmplKind::BObj { what: "RegExp", .. } => NativeFamily::RegExp,
+                    TmplKind::BObj {
+                        what: "Promise", ..
+                    } => NativeFamily::Promise,
                     // The per-unit solve misses a write onto `Buffer.prototype`
                     // through `Object.assign`: it proves no Buffer member.
                     TmplKind::BObj { what: "Buffer", .. } if !m.unit_mode => NativeFamily::Buffer,
@@ -2028,14 +2034,19 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
         })
     };
     match fam {
-        NativeFamily::Str => true,
+        // A primitive owns no property ToObject's wrapper would not get
+        // from its prototype (a Number wrapper owns no string key).
+        NativeFamily::Str | NativeFamily::Num => true,
         // `__proto__` (or a computed key that may be it) stored into it.
         NativeFamily::Array if m.super_relink.contains(&t) => false,
         NativeFamily::Array => match m.fields.get(&(t, a)) {
             Some(n) => empty(Some(n)),
             None => empty(m.named_any.get(&t)) && empty(m.cell_arrs.get(&t)),
         },
-        NativeFamily::Collection(_) | NativeFamily::RegExp | NativeFamily::Buffer => {
+        NativeFamily::Collection(_)
+        | NativeFamily::RegExp
+        | NativeFamily::Buffer
+        | NativeFamily::Promise => {
             let Some(tm) = m.tmpl_of(t) else {
                 return false;
             };
