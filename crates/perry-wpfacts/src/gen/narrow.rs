@@ -40,6 +40,12 @@
 //! tests of such literals of one type select (`Gen::case_narrow`), `x`
 //! holds only the values whose read of `f` may yield a value of the
 //! literal's type (ECMA-262 7.2.16 step 1, 14.12.2 CaseClauseIsSelected).
+//! Rule G4: where `typeof x.f === s` is true (`!==` false), `s` the String
+//! "number", "string" or "undefined", `x` holds only the values whose read
+//! of `f` may yield a value of that type: the G3 test of a literal of the
+//! type (ECMA-262 13.5.3 typeof table, 7.2.15 IsStrictlyEqual of Strings).
+//! The other `typeof` results have no exact test; the false side implies
+//! nothing.
 //!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
@@ -895,6 +901,22 @@ fn implied<'p>(
                 out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
             }
         }
+        // Rule G4: `typeof local.key === s` true (`!==` false), `s` a String
+        // whose type has a G3 test: the read is of that type.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive)
+            && typeof_member_test(left, right).is_some() =>
+        {
+            let Some((object, property, test)) = typeof_member_test(left, right) else {
+                return;
+            };
+            if let Some(id) = host_of(object, subst, depth) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
         // `local == null` (`undefined`) false, `local != null` true: not
         // nullish. `local === undefined` false, `!==` true: not
         // `undefined`. (`=== null` decides no presence a filter keeps.)
@@ -987,6 +1009,31 @@ pub(crate) fn literal_type_test(e: &Expr) -> Option<u8> {
         Expr::Undefined => Some(guard::UNDEF),
         _ => None,
     }
+}
+
+/// Rule G4: `typeof host.key` compared with the String "number", "string"
+/// or "undefined" (either order): the host, the key and the G3 test of that
+/// type (ECMA-262 13.5.3: "number" iff a Number, "string" iff a String,
+/// "undefined" iff `undefined`). "object", "function", "boolean", "bigint"
+/// and "symbol" have no test that admits exactly their values: `None`.
+fn typeof_member_test<'e>(a: &'e Expr, b: &'e Expr) -> Option<(&'e Expr, &'e String, u8)> {
+    use crate::model::guard;
+    let ((Expr::TypeOf(o), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(o))) = (a, b) else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = o.as_ref()
+    else {
+        return None;
+    };
+    let test = match s.as_str() {
+        "number" => guard::IS_NUM,
+        "string" => guard::IS_STR,
+        "undefined" => guard::UNDEF,
+        _ => return None,
+    };
+    Some((object.as_ref(), property, test))
 }
 
 /// A clause body that never completes normally into the next clause: its
