@@ -1222,7 +1222,19 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
         .property(holder, name, m)
         .and_then(|p| p.native)
         .or_else(|| {
-            if members::own(fam, name).is_some() {
+            // Past the holder, `Object.prototype`'s member, where no own
+            // prototype of the family holds the key. A typed array's or a
+            // Buffer's chain is the realm's exactly (`view_chain`): the key
+            // is `Object.prototype`'s when that is where the chain finds it
+            // (10.1.8.1: `valueOf`, `hasOwnProperty`).
+            let past = match loads::view_chain(what) {
+                Some(p) => matches!(
+                    members::realm_chain_find(p, name),
+                    members::RealmFind::Own(_, at) if at.name == "Object.prototype"
+                ),
+                None => members::own(fam, name).is_none(),
+            };
+            if !past {
                 return None;
             }
             let object = m.declarations.family(Family::Object, m)?;

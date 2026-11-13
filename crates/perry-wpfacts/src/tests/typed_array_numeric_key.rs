@@ -66,11 +66,18 @@ case!(
     true,
     "const ta: any = new Float64Array(4); const o: any = new Svc(); const s: any = (globalThis as any).hostKey(); const x: any = k > 0 ? s : 2; ta[x] = o; (globalThis as any).hostTake(ta.toJSON); console.log(g(o));"
 );
-// (e) A plain object receiver keeps the any-name store.
+// (e) A plain object receiver: the key names digits there too (10.1.9
+// OrdinarySet of Number::toString / BigInt::toString), never `toJSON`.
 case!(
-    plain_object_receiver_keeps_any_name,
-    true,
+    plain_object_receiver_names_no_to_json,
+    false,
     "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; (globalThis as any).hostTake(p.toJSON); console.log(g(o));"
+);
+// (e) The plain object's digit names may hold the value.
+case!(
+    plain_object_receiver_digit_name_may_hold_the_value,
+    true,
+    "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; (globalThis as any).hostTake(p[\"12345678901234567890\"]); console.log(g(o));"
 );
 // (f) A Number key is an element store: the element is a Number.
 case!(

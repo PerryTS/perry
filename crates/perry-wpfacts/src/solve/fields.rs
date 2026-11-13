@@ -126,6 +126,54 @@ impl Model {
                 self.edge(n, e);
             }
             self.enum_key_gained(t, a);
+            // The key now passes `enum_own`: the spreads of `t` copy it
+            // (an index name or an escaped token passed before).
+            if !self.is_num_atom(a) && !self.is_escaped(t) {
+                self.spread_replay(t, a, n);
+            }
+        }
+    }
+
+    /// ENUM2/ENUM3: field `f`, key `a` of `t`, is an own key a for-in over
+    /// `t` lists and a spread of `t` copies (ECMA-262 14.7.5.10 with
+    /// 20.1.2.1 step 3.a.iii and 7.3.25 CopyDataProperties: own
+    /// [[Enumerable]] keys only): a store or an enumerable definition made
+    /// it (`Node::enum_key`), it names an index (every index write makes an
+    /// enumerable data property, 10.1.9.2, 7.3.5), or `t` escaped (unknown
+    /// code may redefine any configurable own key as enumerable). Not a
+    /// class prototype's methods or `constructor` (15.7.14, 10.2.8), a
+    /// function's `prototype`, `name`, `length` (10.2.6, 10.2.9, 10.2.10),
+    /// an array's `length` (10.4.2.2): definitions `field_r` makes.
+    pub(crate) fn enum_own(&self, t: Tok, f: NodeId, a: Atom) -> bool {
+        self.nodes[f as usize].enum_key || self.is_num_atom(a) || self.is_escaped(t)
+    }
+
+    /// Key `a` of `t` (field `n`) passed `enum_own`: every spread of `t`
+    /// (`spread_into`) stores it under the same key on its target.
+    pub(crate) fn spread_replay(&mut self, t: Tok, a: Atom, n: NodeId) {
+        if self.is_private_atom(a) || builtins::is_internal_key(&self.atoms[a as usize]) {
+            return;
+        }
+        if let Some(v) = self.spread_to.get(&t).cloned() {
+            for (d, site) in v {
+                self.store_into(d, Key::Named(a), n, site);
+            }
+        }
+    }
+
+    /// `t` escaped: each own key of it may now be enumerable (`enum_own`):
+    /// the fields not enumerable before join its for-in keys and its
+    /// spreads.
+    pub(crate) fn enum_escaped(&mut self, t: Tok) {
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            let f = self.field_r(t, a);
+            if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
+                continue;
+            }
+            if let Some(&e) = self.enum_key_fields.get(&t) {
+                self.edge(f, e);
+            }
+            self.spread_replay(t, a, f);
         }
     }
 
@@ -229,7 +277,7 @@ impl Model {
         }
         let all = self.all_fields(t);
         self.edge(n, all);
-        if self.is_num_atom(a) {
+        if self.is_num_atom(a) || self.is_escaped(t) {
             self.enum_index_field(t, n);
         }
         self.field_shaped(t, a, n);
@@ -238,11 +286,12 @@ impl Model {
                 self.edge(n, nf);
             }
         }
-        // A key gained after a spread of `t`: the targets get it too.
-        if let Some(v) = self.spread_to.get(&t).cloned() {
-            for (d, site) in v {
-                self.store_into(d, Key::Named(a), n, site);
-            }
+        // A key gained after a spread of `t` that a spread copies
+        // (`enum_own`): the targets get it too. Another key joins when it
+        // becomes enumerable (`enum_key_mark`) or `t` escapes
+        // (`enum_escaped`).
+        if self.is_num_atom(a) || self.is_escaped(t) {
+            self.spread_replay(t, a, n);
         }
         // DECISIONS 94: a named field of an array whose elements are a cell.
         if let Some(&seed) = self.cell_arrs.get(&t) {
@@ -258,8 +307,8 @@ impl Model {
     }
 
     /// Object spread of source `s` into target `d` (`{...s}`,
-    /// `Object.assign(d, s)`): every own key of `s`, now and later, is
-    /// stored under the same key on `d`; computed keys and getter results
+    /// `Object.assign(d, s)`): every own enumerable key of `s`
+    /// (`enum_own`), now and later, is stored under the same key on `d`; computed keys and getter results
     /// of `s` reach `d`'s any-key field. An unmodeled source makes `d`'s
     /// keys unknown; an unmodeled target takes `s`'s values.
     pub(super) fn spread_into(&mut self, s: Tok, d: Tok, site: SiteId, from: NodeId) {
@@ -333,7 +382,12 @@ impl Model {
             if self.is_private_atom(a) || builtins::is_internal_key(&self.atoms[a as usize]) {
                 continue;
             }
-            let f = self.field(s, a);
+            // The copy READS the key ([[GetOwnProperty]], [[Get]]): that
+            // makes no key enumerable (`field_r`).
+            let f = self.field_r(s, a);
+            if !self.enum_own(s, f, a) {
+                continue;
+            }
             self.store_into(d, Key::Named(a), f, site);
         }
         let fa_s = self.field_any(s);

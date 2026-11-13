@@ -467,17 +467,49 @@ pub fn settle_native_given(m: &mut Model) -> bool {
     for (t, src) in m.native_given.clone() {
         let mut keys = Vec::new();
         let mut seen = Vec::new();
+        let mut accessors = Vec::new();
         let known = m.nodes[src as usize]
             .pts
             .to_sorted()
             .into_iter()
-            .all(|u| chain_keys(m, u, &mut seen, &mut keys));
+            .all(|u| chain_keys(m, u, &mut seen, &mut keys, &mut accessors));
+        // GP1: on a built-in each key of `src`'s chain holds what a [[Get]]
+        // of it on `src` finds (ECMA-262 10.1.8.1), when the keys are known
+        // and none is an accessor (whose getter would run with `t` as
+        // `this`). Otherwise every member escapes once and the keys hold
+        // opaque values, as for ⊤.
+        let exact = known && accessors.is_empty();
+        if m.gives_exactly(t) && !exact && m.given_inexact.insert((t, src)) {
+            more = true;
+            let members = m.node_l("given-prototype-members");
+            let key = Key::Any(0);
+            m.cons(src, crate::model::Cons::Load { key, dst: members });
+            let r = m.reason("E6 member of a prototype given to a runtime object");
+            m.sink_node(members, r);
+        }
+        let exact = exact && m.gives_exactly(t);
+        if exact {
+            // The runtime's own lookups on `t` (its protocols) may find, and
+            // call, what `src`'s chain holds under their keys.
+            let protocol = crate::model::Protocol::runtime_keys();
+            let r = m.reason("E6 member of a prototype given to a runtime object");
+            for &a in &keys {
+                if protocol.contains(&m.atoms[a as usize].as_str()) {
+                    let n = given_read(m, src, a);
+                    m.sink_node(n, r);
+                }
+            }
+        }
         let ks: Vec<Option<Atom>> = match known {
             true => keys.into_iter().map(Some).collect(),
             false => vec![None],
         };
         for k in ks {
-            if write_covered(m, t, k, true, WriteValue::Opaque) {
+            let value = match k {
+                Some(a) if exact => WriteValue::Value(given_read(m, src, a)),
+                _ => WriteValue::Opaque,
+            };
+            if write_covered(m, t, k, !exact, value) {
                 continue;
             }
             more = true;
@@ -499,7 +531,10 @@ pub fn settle_native_given(m: &mut Model) -> bool {
                 d.cur_call = by_call;
             }
             m.census_settling(Some(src));
-            note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            match value {
+                WriteValue::Opaque => note_native_write(m, t, k.map(Key::Named), "E6 prototype given"),
+                _ => note_native_data_write(m, t, k.map(Key::Named), "E6 prototype given", value),
+            }
             m.census_settling(None);
             if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
                 (d.cur_call, d.cause_node) = saved;
@@ -509,13 +544,31 @@ pub fn settle_native_given(m: &mut Model) -> bool {
     more
 }
 
+/// GP1: the node holding what a [[Get]] of `a` on `src`'s chain finds.
+fn given_read(m: &mut Model, src: NodeId, a: Atom) -> NodeId {
+    if let Some(&n) = m.given_reads.get(&(src, a)) {
+        return n;
+    }
+    let n = m.node_l("given-prototype-read");
+    m.cons(src, crate::model::Cons::Load { key: Key::Named(a), dst: n });
+    m.given_reads.insert((src, a), n);
+    n
+}
+
 /// Collect into `out` every key an object of token `u` or of its chain may
 /// hold. False when that set is unknown. Each key a define (E5) or an
 /// accessor gives it is one of `define_on` / `accessor_keys` (`STAR_KEY`
 /// under a computed key: unknown), so E5 alone keeps the set known. `ObjectProto` adds none: it stands
 /// for every builtin prototype, already on every runtime object's chain. A
 /// write through ⊤ is already a write of its key on every runtime object.
-fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -> bool {
+/// The keys an accessor or a define may give go to `acc` too.
+fn chain_keys(
+    m: &mut Model,
+    u: Tok,
+    seen: &mut Vec<Tok>,
+    out: &mut Vec<Atom>,
+    acc: &mut Vec<Atom>,
+) -> bool {
     if seen.contains(&u) {
         return true;
     }
@@ -564,6 +617,9 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     for a in own {
         add(a, out);
     }
+    for &a in &tpl.accessor_keys {
+        add(a, acc);
+    }
     let late = match m.toks[u as usize] {
         TokKind::Proto(_) => &m.proto_writers,
         _ => &m.writers,
@@ -585,6 +641,7 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     let accessors = m.accessor_keys.get(&u).cloned().unwrap_or_default();
     for a in defined.into_iter().chain(accessors) {
         add(a, out);
+        add(a, acc);
     }
     // A key defined, or an accessor installed, under a computed key.
     let star = m.atom(crate::STAR_KEY);
@@ -593,7 +650,7 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     }
     let pn = m.proto_node(u);
     let protos: Vec<Tok> = m.nodes[pn as usize].pts.to_sorted();
-    protos.into_iter().all(|p| chain_keys(m, p, seen, out))
+    protos.into_iter().all(|p| chain_keys(m, p, seen, out, acc))
 }
 
 /// A built-in object was handed to unknown code: the stores into ⊤ made

@@ -250,7 +250,14 @@ impl Model {
             true => self.named_any.get(&t),
             false => self.field_any.get(&t),
         };
+        // The numeric range (`numeric_field`): a Number or BigInt key's
+        // store names a numeric string no name lists (7.1.19).
+        let numeric = self
+            .atom_index
+            .get(crate::model::NUM_KEY)
+            .and_then(|&a| self.fields.get(&(t, a)));
         any.is_some_and(|&n| held(n))
+            || numeric.is_some_and(|&n| held(n))
             || self
                 .shaped_of
                 .get(&t)
@@ -313,6 +320,15 @@ impl Model {
             let fa = self.field_any(t);
             self.edge(fa, n);
         }
+        // The numeric range (`numeric_field`: values stored under a Number
+        // or BigInt key, ToPropertyKey 7.1.19, made by OrdinarySet as
+        // enumerable data properties 10.1.9.2) made before this node; a
+        // later one links itself (`enum_index_field`). It is no
+        // `field_keys` entry.
+        let num = self.atom(crate::model::NUM_KEY);
+        if let Some(&nf) = self.fields.get(&(t, num)) {
+            self.edge(nf, n);
+        }
         // DECISIONS 241: what the units stored, by key (enumerability not
         // carried): every key, as `all_fields` reads it.
         if let Some(j) = self.joined_of(t) {
@@ -322,7 +338,7 @@ impl Model {
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.fields[&(t, a)];
-            if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
+            if self.enum_own(t, f, a) {
                 self.edge(f, n);
             }
         }
