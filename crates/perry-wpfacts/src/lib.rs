@@ -597,7 +597,7 @@ fn generate<'a>(
         reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
     g.m.reach_spread_args =
         reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
-    g.m.reach_json_replacer = reach::json_replacer(cfg.sabotage.as_deref());
+    reach::configure(&mut g.m, cfg.sabotage.as_deref());
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());

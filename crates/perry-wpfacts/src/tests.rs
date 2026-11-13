@@ -177,6 +177,7 @@ mod method_sites;
 mod quiet_sites;
 mod range_tightening;
 mod reach_accessor;
+mod reach_proto_members;
 mod reach_thenable;
 mod receiver_slots;
 mod receiver_this;

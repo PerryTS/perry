@@ -1841,6 +1841,9 @@ pub struct Model {
     /// A hand-written built-in rule's positions hold what a spread
     /// argument supplies (`Model::positional`, `reach::spread_args`).
     pub reach_spread_args: bool,
+    /// An accessor installed on a built-in prototype is called by reads
+    /// and writes the solve does not walk (`reach::proto_accessors`).
+    pub reach_proto_accessors: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
