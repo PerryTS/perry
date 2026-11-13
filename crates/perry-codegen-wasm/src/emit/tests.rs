@@ -112,3 +112,25 @@ console.log(a.join(','));
         "1,9,2,3"
     );
 }
+
+// `instanceof` a built-in constructor asks the host for host objects (a caught
+// SyntaxError, an Array), and a user-class instance is also an instance of Object.
+#[test]
+fn instanceof_answers_for_host_objects_and_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let caught: any = null;
+try { JSON.parse("{"); } catch (e) { caught = e; }
+console.log(caught.name + " " + (caught instanceof SyntaxError) + " " + (caught instanceof Error) + " " + (caught instanceof TypeError));
+const a: any = [1];
+console.log((a instanceof Array) + " " + (a instanceof Object) + " " + (a instanceof Error));
+class P {}
+class Q extends P {}
+const q: any = new Q();
+console.log((q instanceof Q) + " " + (q instanceof P) + " " + (q instanceof Object) + " " + (q instanceof Array));
+"#
+        ),
+        "SyntaxError true true false\ntrue true false\ntrue true true false"
+    );
+}

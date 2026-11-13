@@ -2054,9 +2054,17 @@ const __memDispatch = {
   },
   class_instanceof: (obj, classId) => {
     if (!obj || typeof obj !== 'object') return 0;
-    let cls = obj.__class__; const target = String(classId);
-    while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
-    return 0;
+    const target = String(classId);
+    // A user-class instance is a `{__class__}` object: its chain is the class table,
+    // and as a plain object it is also an instance of Object.
+    if (obj.__class__) {
+      let cls = obj.__class__;
+      while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
+      return target === 'Object' ? 1 : 0;
+    }
+    // A host object (Error, Array, Map, ...): ask the host constructor of that name.
+    const ctor = globalThis[target];
+    return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
 
