@@ -53,6 +53,7 @@ fn product_element_identity_preserves_codegen_facts() {
     assert!(old_elision.number_element_reads.is_empty());
     assert!(old_elision.primitive_elements.is_empty());
     new_elision.number_element_reads.clear();
-    new_elision.primitive_elements.clear();    assert_eq!(old_elision, new_elision);
+    new_elision.primitive_elements.clear();
+    assert_eq!(old_elision, new_elision);
     assert_eq!(old.digest_for("product.ts"), new.digest_for("product.ts"));
 }
