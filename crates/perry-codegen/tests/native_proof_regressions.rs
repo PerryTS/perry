@@ -1314,23 +1314,121 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
     ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
 }
 
-/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`): the INT32 identity test plus
-/// the plain-double range bounds that admit an integral double.
-/// Replaces `call i32 @js_typed_i32_arg_guard`.
-fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
-    let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
-        && ir_line_with(ir, &["fcmp oge double %", "-2147483648.0"])
-        && ir_line_with(ir, &["fcmp ole double %", "2147483647.0"])
+/// The SSA definitions of `ir`, register -> right-hand side.
+fn ssa_defs(ir: &str) -> std::collections::HashMap<&str, &str> {
+    ir.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect()
 }
 
-/// Int32 unbox: the tagged low lane and the converted double, selected into one
-/// raw `i32`. Replaces `call i32 @js_typed_i32_arg_to_raw`.
+/// The block an edge to `label` reaches past a call-site stack check. The
+/// stack guard (`expr::stack_guard`, 36a74ffa6a) retargets every edge into a
+/// calling block to a `stack_guard.call.*` check whose overflow arm calls
+/// `js_stack_overflow` and rejoins, so the check has exactly one successor
+/// outside itself: the original target. A label that is no check is itself.
+fn through_stack_check(fn_ir: &str, label: &str) -> String {
+    if !label.starts_with("stack_guard.call.") {
+        return label.to_string();
+    }
+    let block = |l: &str| -> &str {
+        let marker = format!("\n{l}:\n");
+        let start = fn_ir
+            .find(&marker)
+            .unwrap_or_else(|| panic!("block `{l}` not found:\n{fn_ir}"))
+            + marker.len();
+        let rest = &fn_ir[start..];
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![label.to_string()];
+    let mut out = std::collections::BTreeSet::new();
+    while let Some(l) = work.pop() {
+        if !seen.insert(l.clone()) {
+            continue;
+        }
+        if !l.starts_with("stack_guard.") {
+            out.insert(l);
+            continue;
+        }
+        for succ in block(&l).split("label %").skip(1) {
+            work.push(
+                succ.split([',', ' ', '\n', ']'])
+                    .next()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+    }
+    assert_eq!(
+        out.len(),
+        1,
+        "the stack check `{label}` must rejoin exactly one target: {out:?}\n{fn_ir}"
+    );
+    out.into_iter().next().unwrap()
+}
+
+/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`, P3 since #14353 /
+/// 09454cd509): a Number is a plain double, so the value admits when it
+/// round-trips the SATURATING conversion exactly (`%raw = fptosi.sat(%v)`,
+/// `sitofp %raw == %v`; every NaN-boxed tag converts to 0 and compares
+/// unequal) and its bits are not `-0`'s. Followed through the data flow: the
+/// round trip compares the converted value with the SAME `%v`, and the `-0`
+/// test reads `%v`'s bits. Replaced the INT32-tag identity test plus range
+/// bounds, and before that `call i32 @js_typed_i32_arg_guard`.
+fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    let defs = ssa_defs(ir);
+    defs.iter().any(|(raw, def)| {
+        let Some(v) = def
+            .strip_prefix("call i32 @llvm.fptosi.sat.i32.f64(double ")
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            return false;
+        };
+        let back = format!("sitofp i32 {raw} to double");
+        let bits = format!("bitcast double {v} to i64");
+        defs.iter().any(|(rt, d)| {
+            *d == back.as_str()
+                && defs.values().any(|c| {
+                    *c == format!("fcmp oeq double {rt}, {v}").as_str()
+                        || *c == format!("fcmp oeq double {v}, {rt}").as_str()
+                })
+        }) && defs.iter().any(|(b, d)| {
+            *d == bits.as_str()
+                && defs
+                    .values()
+                    .any(|c| *c == format!("icmp ne i64 {b}, -9223372036854775808").as_str())
+        })
+    })
+}
+
+/// Int32 unbox: the raw `i32` lane of a guarded value. Behind the guard it is
+/// one conversion, `fptosi double %v to i32`
+/// (`emit_typed_i32_raw_assuming_guarded`), or the guard's own saturating
+/// conversion. Replaces the INT32-tag low lane + converted double selected
+/// into one `i32`, and before that `call i32 @js_typed_i32_arg_to_raw`.
 fn unboxes_i32_arg(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
     ir_line_with(ir, &["fptosi double %", " to i32"])
-        && ir_line_with(ir, &["trunc i64 %", " to i32"])
-        && ir_line_with(ir, &["select i1 %", ", i32 %"])
+        || ir_line_with(ir, &["call i32 @llvm.fptosi.sat.i32.f64(double %"])
+}
+
+/// The raw `i32` result of a call of `callee` is boxed at the ABI edge as the
+/// canonical double (`sitofp i32 %r to double`): a Number has one encoding
+/// (P3), so this replaces the INT32 tag the result was boxed with before.
+fn boxes_i32_result(ir: impl AsRef<str>, callee: &str) -> bool {
+    let ir = ir.as_ref();
+    let call = format!("call i32 @{callee}(");
+    let defs = ssa_defs(ir);
+    defs.iter().any(|(r, def)| {
+        def.starts_with(&call)
+            && defs
+                .values()
+                .any(|d| *d == format!("sitofp i32 {r} to double").as_str())
+    })
 }
 
 /// String lane (`emit_typed_string_guard`): heap STRING_TAG or inline
@@ -1379,6 +1477,21 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     // so the two must not be interchangeable.
     assert!(!guards_number_arg_banded(number_tier1));
     assert!(!guards_bool_arg(number_tier1));
+
+    // The int32 lane: the round trip and the -0 test on the same value. A
+    // round trip against another value, or no -0 test, is no guard.
+    let i32_guard = "  %r1 = bitcast double %arg1 to i64\n  %r2 = call i32 @llvm.fptosi.sat.i32.f64(double %arg1)\n  %r3 = sitofp i32 %r2 to double\n  %r4 = fcmp oeq double %r3, %arg1\n  %r5 = icmp ne i64 %r1, -9223372036854775808\n";
+    assert!(guards_i32_arg(i32_guard));
+    assert!(unboxes_i32_arg(i32_guard));
+    assert!(!guards_number_arg(i32_guard));
+    assert!(!guards_i32_arg(
+        i32_guard.replace("double %r3, %arg1", "double %r3, %arg2")
+    ));
+    assert!(!guards_i32_arg(i32_guard.replace(
+        "icmp ne i64 %r1, -9223372036854775808",
+        "add i64 %r1, 0"
+    )));
+    assert!(!guards_i32_arg(number_tier1));
 
     // The constant alone must not satisfy a guard: the opcode has to match too.
     let constant_only = "  %r2 = add i64 %r1, 9221401712017801215\n";
@@ -12729,7 +12842,6 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
         compile_module(&typed_i32_return_module("positive"), empty_opts()).unwrap(),
     )
     .unwrap();
-    const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_fn_typed_i32_return_positive_ts__mix_i32";
     let typed = "perry_fn_typed_i32_return_positive_ts__mix_i32$typed_i32";
     let generic_body = "perry_fn_typed_i32_return_positive_ts__mix_i32$generic";
@@ -12755,7 +12867,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
         guards_i32_arg(&wrapper_ir)
             && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && wrapper_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&wrapper_ir, typed),
         "public wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
     );
     assert!(
@@ -12768,7 +12880,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
             && guards_i32_arg(&caller_ir)
             && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && caller_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&caller_ir, typed),
         "direct FuncRef lowering should use the raw i32 clone after guards and box at the call boundary:\n{caller_ir}"
     );
     assert!(
@@ -12864,7 +12976,6 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         compile_module(&typed_i32_method_clone_module("eligible"), empty_opts()).unwrap(),
     )
     .unwrap();
-    const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
     let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$typed_i32";
     let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
@@ -12897,7 +13008,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         guards_i32_arg(&wrapper_ir)
             && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && wrapper_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&wrapper_ir, typed),
         "public method wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
     );
     assert!(
@@ -12907,7 +13018,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
             && guards_i32_arg(&caller_ir)
             && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && caller_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&caller_ir, typed),
         "exact direct method call should guard receiver/method identity, then guard/unbox Int32 args and call the clone:\n{caller_ir}"
     );
     assert!(
@@ -13723,8 +13834,12 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         let rest = &caller_ir[start..];
         &rest[..rest.find("\n\n").unwrap_or(rest.len())]
     };
-    let success_block = basic_block(success_label);
-    let failure_block = basic_block(failure_label);
+    // Either edge may enter a call-site stack check first (36a74ffa6a), which
+    // rejoins the edge's own target.
+    let success_label = through_stack_check(caller_ir, success_label);
+    let failure_label = through_stack_check(caller_ir, failure_label);
+    let success_block = basic_block(&success_label);
+    let failure_block = basic_block(&failure_label);
     assert!(
         success_block.contains(&format!("call double @{typed}(i64 ")),
         "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
@@ -16908,13 +17023,29 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         .take_while(|line| line.is_empty() || line.starts_with(' '))
         .collect::<Vec<_>>()
         .join("\n");
+    // The guard's two edges may enter a call-site stack check first
+    // (`stack_guard.call.*`, 36a74ffa6a: the entry check moves to the
+    // calling blocks); the check rejoins the edge's own target.
+    let edges: Vec<String> = deref
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 "))
+        .map(|br| {
+            br.split("label %")
+                .skip(1)
+                .map(|l| through_stack_check(caller, l.split([',', ' ']).next().unwrap()))
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         deref.contains("load i64")
             && deref.contains("icmp eq i64")
             && deref.contains("icmp ult i32")
-            && deref.contains("label %method_direct.fast.")
-            && deref.contains("label %method_direct.fallback."),
-        "the canonical receiver word and ShapeId domain must guard the fast arm: {deref}"
+            && edges.len() == 2
+            && edges[0].starts_with("method_direct.fast.")
+            && edges[1].starts_with("method_direct.fallback."),
+        "the canonical receiver word and ShapeId domain must guard the fast arm \
+         (edges {edges:?}): {deref}\n{caller}"
     );
     assert!(
         caller.contains("call double @perry_method_static_certificate_ts__Bits__mix_i32$pshape(")
