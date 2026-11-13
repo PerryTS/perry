@@ -620,6 +620,17 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
     match members::prim_member(prim, &name) {
         Some(Mem::Fn) => {
             for fam in members::prim_families(prim) {
+                // Per kind (ECMA-262 7.3.2 GetV, 10.1.8.1): a kind whose
+                // wrapper chain has no member of that name read `undefined`
+                // above; one whose member is a data property reads its kind.
+                match members::member(fam, &name) {
+                    None => continue,
+                    Some(Mem::Prim(p)) => {
+                        m.add_prim(dst, p);
+                        continue;
+                    }
+                    Some(_) => {}
+                }
                 let bf = match member_native(m, fam, None, &name) {
                     Some(n) => m.tok(TokKind::BuiltinFn(n)),
                     None => {
