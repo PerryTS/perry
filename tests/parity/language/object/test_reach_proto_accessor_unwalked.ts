@@ -5,6 +5,10 @@
 // value's) ended at the described members, so the getter's body was called
 // inactive although the read below enters it (check mode: "inactive body:
 // body entered"; `PERRY_FACTS_REACH_PROTO_ACCESSORS=0` restores that).
+// A program this size hands the global object to unknown code somewhere, which
+// makes the prototypes unknown and the accessors escape on their own; the
+// small programs that keep the hole open are string/test_reach_string_index_getter.ts
+// and scripts/verify_facts_s0/reach-proto-accessor-negative.ts.
 function read(o: any, k: string): any { return o[k]; }
 const ran: string[] = [];
 
