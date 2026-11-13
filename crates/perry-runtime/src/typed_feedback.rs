@@ -2310,7 +2310,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
     {
         if let Some(key) = crate::buffer::canonical_index_key(index) {
             return crate::buffer::buffer_read_own_prop(raw_addr, &key)
-                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw_addr, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
