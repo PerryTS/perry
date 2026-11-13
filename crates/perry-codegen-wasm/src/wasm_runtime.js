@@ -1657,6 +1657,8 @@ const __memDispatch = {
     return 1;
   },
   js_strict_eq: (a, b) => a === b ? 1 : 0,
+  // `==` / `!=`: the emitter calls this for CompareOp::LooseEq / LooseNe.
+  js_loose_eq: (a, b) => a == b ? 1 : 0,
 
   // Math
   math_floor: (x) => Math.floor(x),
@@ -2037,6 +2039,16 @@ const __memDispatch = {
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));
         }
         cls = classParentTable[cls] || null;
+      }
+      // A compiled method read as a value (`o.m`, and the `o.m?.()` guard, which is
+      // `o.m == null`): it lives in the WASM table, not on the object.
+      if (!Object.prototype.hasOwnProperty.call(obj, fname)) {
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          const methods = classMethodTable[c];
+          if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
+            return __classMethodValue(c, fname);
+          }
+        }
       }
     }
     return obj[fname];
@@ -4996,6 +5008,19 @@ function __hostCallback(value) {
     });
   }
   return hostCallbacks.get(value);
+}
+
+// One function per (class, method name), so a method read twice is the same value
+// (`o.m === o.m`). It dispatches on the `this` it is called with, as a JS method does.
+const __classMethodValues = new Map();
+function __classMethodValue(cls, mname) {
+  const key = cls + '\u0000' + mname;
+  let fn = __classMethodValues.get(key);
+  if (!fn) {
+    fn = function (...args) { return __classDispatch(this, mname, args); };
+    __classMethodValues.set(key, fn);
+  }
+  return fn;
 }
 
 function __classDispatch(objVal, mname, rawArgs) {

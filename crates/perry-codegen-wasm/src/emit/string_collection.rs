@@ -27,6 +27,7 @@ impl WasmModuleEmitter {
             "jsvalue_to_template_string",
             "is_truthy",
             "js_strict_eq",
+            "js_loose_eq",
             "math_floor",
             "math_ceil",
             "math_round",

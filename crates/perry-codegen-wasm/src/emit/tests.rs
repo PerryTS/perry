@@ -246,3 +246,45 @@ console.log(inner());
         "2 2 true\n3 true\n1"
     );
 }
+
+// `==` / `!=` (and the `?.` guard, which is `base == null`) follow JS loose equality.
+#[test]
+fn loose_equality_follows_js() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = null;
+const u: any = undefined;
+const z: any = 0;
+const e: any = "";
+const s1: any = "1";
+const o: any = { value: 7 };
+const p: any = { value: 7 };
+console.log((n == null) + " " + (u == null) + " " + (z == null) + " " + (e == z) + " " + (s1 == 1));
+console.log((NaN == NaN) + " " + (o == o) + " " + (o == p) + " " + (z != 0) + " " + (s1 != "2"));
+function take(): any { return null; }
+console.log(String(take()?.value) + " " + String(o?.value));
+"#
+        ),
+        "true true false true true\nfalse true false false true\nundefined 7"
+    );
+}
+
+// A compiled method read as a value is a function, the same one each time (also
+// through a subclass), so the `o.m?.()` guard lets the call through.
+#[test]
+fn method_read_as_a_value_is_one_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class R { x = 3; constructor() {} read(n: number): number { return this.x + n; } }
+class S extends R { constructor() { super(); } }
+const r: any = new R();
+const s: any = new S();
+console.log(typeof r.read + " " + (r.read === r.read) + " " + (r.read === s.read) + " " + (r.read == null));
+console.log(r.read?.(1) + " " + s.read?.(2) + " " + String(r.missing?.(1)));
+"#
+        ),
+        "function true true false\n4 5 undefined"
+    );
+}
