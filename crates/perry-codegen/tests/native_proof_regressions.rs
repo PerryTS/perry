@@ -17053,9 +17053,17 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         "the guarded layout clone and complete miss must both remain live: {caller}"
     );
     let public = function_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
+    // The method-direct guard and both arms stay in the one shared body. The
+    // public entry is only the routing trampoline (argument guard, then the
+    // specialized clone or `$generic`): out of line, or since 36a74ffa6a a
+    // small one is `alwaysinline` (`PERRY_SPEC_INLINE`), which still holds no
+    // copy of the layout guard.
     assert!(
-        public.contains(") noinline"),
-        "the public wrapper stays shared: {public}"
+        !public.contains("method_direct.")
+            && public.contains("call double @perry_fn_static_certificate_ts__probe$generic(")
+            && public.contains("call double @perry_fn_static_certificate_ts__probe$spec_")
+            && (public.contains(") noinline") || public.contains(") alwaysinline")),
+        "the public wrapper stays a shared routing trampoline: {public}"
     );
     assert!(
         caller.contains("call ptr @perry_class_value_dir_cell("),
