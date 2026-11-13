@@ -288,3 +288,26 @@ console.log(r.read?.(1) + " " + s.read?.(2) + " " + String(r.missing?.(1)));
         "function true true false\n4 5 undefined"
     );
 }
+
+// A method value runs the implementation of the class it was read from, with the
+// receiver it is called on, and works as an array callback.
+#[test]
+fn method_value_keeps_its_implementation_and_serves_as_a_callback() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { k = 40; constructor() {} answer(): number { return 42; } plus(n: number): number { return n + 1; } }
+const c: any = new C();
+console.log([1, 2].map(c.plus).join(",") + " " + [1, 2].filter(c.answer).length);
+class R { x = 3; constructor() {} read(n: number): number { return this.x + n; } }
+class S extends R { constructor() { super(); } read(n: number): number { return 100 + n; } }
+const r: any = new R();
+const s: any = new S();
+const plain: any = { x: 10 };
+const f = r.read;
+console.log(f.call(s, 1) + " " + f.call(plain, 1) + " " + s.read(1));
+"#
+        ),
+        "2,3 2\n4 11 101"
+    );
+}

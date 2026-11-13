@@ -5011,13 +5011,23 @@ function __hostCallback(value) {
 }
 
 // One function per (class, method name), so a method read twice is the same value
-// (`o.m === o.m`). It dispatches on the `this` it is called with, as a JS method does.
+// (`o.m === o.m`). It runs the implementation `cls` defines, with the `this` it is
+// called with, as a JS method does (`f.call(other)` still runs this class's `m`).
+// `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
+// which call it with an undefined `this`, as JS does for a detached method.
 const __classMethodValues = new Map();
 function __classMethodValue(cls, mname) {
   const key = cls + '\u0000' + mname;
   let fn = __classMethodValues.get(key);
   if (!fn) {
-    fn = function (...args) { return __classDispatch(this, mname, args); };
+    const funcIdx = classMethodTable[cls][mname];
+    fn = function (...args) {
+      const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+    };
+    fn.funcIdx = funcIdx;
+    fn.captures = [TAG_UNDEFINED];
     __classMethodValues.set(key, fn);
   }
   return fn;
