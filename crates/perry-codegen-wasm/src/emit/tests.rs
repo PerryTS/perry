@@ -404,3 +404,31 @@ try { decodeURIComponent("%E0%A4%A"); console.log("no throw"); } catch (e) { con
         "%E8%A3%9C%20%E7%B6%B2%26x%3D1\n補 網\n/a%20b?q=%E8%A3%9C\n/a b\nthrew"
     );
 }
+
+#[test]
+fn closures_share_the_variables_they_mutate() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function counter() {
+  let n = 0;
+  const add = (x: number) => { n = n + x; return n; };
+  const read = () => n;
+  return [add, read];
+}
+const c: any = counter();
+console.log(c[0](1) + " " + c[0](2) + " " + c[1]());
+function machine() {
+  let state = 0;
+  return () => { switch (state) { case 0: state = 1; return "a"; case 1: state = 2; return "b"; default: return "-"; } };
+}
+const m = machine();
+console.log(m() + m() + m());
+let total = 0;
+function bump(start: number) { const inc = () => { start++; total++; }; inc(); inc(); return start; }
+console.log(bump(5) + " " + total);
+"#
+        ),
+        "1 3 3\nab-\n7 2"
+    );
+}
