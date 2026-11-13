@@ -129,6 +129,7 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "in-hand",
             "origin",
             "before-claim",
+            "fills",
         ]
         .contains(&kind)
         {

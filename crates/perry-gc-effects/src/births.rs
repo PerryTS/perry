@@ -275,20 +275,25 @@ pub struct Report {
 }
 
 fn path(g: &Graph, next: &[Option<usize>], mut i: usize) -> String {
-    let mut steps = vec![g.label(i)];
+    let short = |i: usize| g.label(i).chars().take(120).collect::<String>();
+    let mut out = short(i);
+    let mut steps = 0;
     while let Some(n) = next[i].filter(|&n| n != i) {
+        // A step that is no call: `i` takes the address of `n`.
+        let how = if g.succ[i].contains(&n) || !g.taken_by[n].contains(&i) {
+            "->"
+        } else {
+            "-> (takes the address of)"
+        };
+        out.push_str(&format!("\n      {how} {}", short(n)));
         i = n;
-        steps.push(g.label(i));
-        if steps.len() > 40 {
-            steps.push("...".into());
+        steps += 1;
+        if steps > 40 {
+            out.push_str("\n      -> ...");
             break;
         }
     }
-    steps
-        .iter()
-        .map(|s| s.chars().take(120).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n      -> ")
+    out
 }
 
 /// Checks every realm native against the graph. `indirect_pred` are the
@@ -339,42 +344,6 @@ pub fn check(
     if !seed.iter().any(|&s| s) {
         bail!("no birth rule: the check would be vacuous");
     }
-    // Backward from the birth; a cut function is not entered (a seed that
-    // is also cut stays a seed for its own callers' cuts to decide).
-    let mut next: Vec<Option<usize>> = vec![None; nn];
-    let mut work = VecDeque::new();
-    for i in 0..nn {
-        if seed[i] {
-            next[i] = Some(i);
-            work.push_back(i);
-        }
-    }
-    // Who can make `t` run: its callers, the wrapper of the slot it is
-    // delegated to, and whoever takes its address (in code, or by naming
-    // data that holds it): that function runs it or hands it to what will
-    // (a completion it schedules, a callback it registers). A `fills`
-    // function only stores the address in a slot.
-    let takers = |t: usize| g.taken_by[t].iter().filter(|&&c| !fills[c]);
-    while let Some(t) = work.pop_front() {
-        for &c in g.pred[t].iter().chain(&indirect_pred[t]).chain(takers(t)) {
-            if next[c].is_none() && !cut[c] {
-                next[c] = Some(t);
-                work.push_back(c);
-            }
-        }
-    }
-    let mut report = Report::default();
-    // What runs before an image's claim is set must bear no byte cell: the
-    // claim would not see it.
-    for i in (0..nn).filter(|&i| early[i] && next[i].is_some()) {
-        report.failures += 1;
-        report.lines.push(format!(
-            "{}: FAIL: it runs before the image's family claim is set and can reach a \
-             byte-cell birth\n      {}",
-            g.label(i),
-            path(g, &next, i)
-        ));
-    }
     let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
     for i in 0..nn {
         for s in g.spellings(i) {
@@ -410,6 +379,61 @@ pub fn check(
     for &i in found.iter().flatten().flatten() {
         native_node[i] = true;
     }
+    let export_body = |i: usize| {
+        g.spellings(i)
+            .iter()
+            .any(|s| s.ends_with("::body") && export_of(s).is_some())
+    };
+    // Backward from the birth; a cut function is not entered (a seed that
+    // is also cut stays a seed for its own callers' cuts to decide).
+    let mut next: Vec<Option<usize>> = vec![None; nn];
+    let mut work = VecDeque::new();
+    for i in 0..nn {
+        if seed[i] {
+            next[i] = Some(i);
+            work.push_back(i);
+        }
+    }
+    // Who can make `t` run: its callers, the wrapper of the slot it is
+    // delegated to, and whoever takes its address (in code, or by naming
+    // data that holds it): that function runs it or hands it to what will
+    // (a completion it schedules, a callback it registers). A `fills`
+    // function only stores the address in a slot.
+    //
+    // Not followed: the takers of a realm native's body or of an export
+    // body. Its address is held to make its function value; a call of that
+    // value is the native, which is checked by name below (a function-value
+    // call is a cut). Nor the takers of a function with an `origin` rule:
+    // the rule says what makes it run.
+    let held_as_value: Vec<bool> = (0..nn)
+        .map(|i| native_node[i] || origin[i] || export_body(i))
+        .collect();
+    let (fills, held_as_value) = (&fills, &held_as_value);
+    let takers = |t: usize| {
+        g.taken_by[t]
+            .iter()
+            .filter(move |&&c| !fills[c] && !held_as_value[t])
+    };
+    while let Some(t) = work.pop_front() {
+        for &c in g.pred[t].iter().chain(&indirect_pred[t]).chain(takers(t)) {
+            if next[c].is_none() && !cut[c] {
+                next[c] = Some(t);
+                work.push_back(c);
+            }
+        }
+    }
+    let mut report = Report::default();
+    // What runs before an image's claim is set must bear no byte cell: the
+    // claim would not see it.
+    for i in (0..nn).filter(|&i| early[i] && next[i].is_some()) {
+        report.failures += 1;
+        report.lines.push(format!(
+            "{}: FAIL: it runs before the image's family claim is set and can reach a \
+             byte-cell birth\n      {}",
+            g.label(i),
+            path(g, &next, i)
+        ));
+    }
     let mut roots = Vec::new();
     let mut origins = (0usize, 0usize);
     for i in 0..nn {
@@ -425,7 +449,8 @@ pub fn check(
         // archives names holds its address, or an install stored it in a
         // slot no rule delegates to a wrapper.
         let stored = indirect_pred[i].is_empty() && g.taken_by[i].iter().any(|&c| fills[c]);
-        let by_pointer = g.loose[i] || stored;
+        let by_pointer =
+            g.loose[i] || stored || (held_as_value[i] && !g.taken_by[i].is_empty());
         if called && !by_pointer {
             continue;
         }
