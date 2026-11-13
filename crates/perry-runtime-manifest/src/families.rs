@@ -376,10 +376,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "typedarray",
         requires: &[],
         holders: BYTE_HOLDERS,
-        // `BigInt.asIntN` / `asUintN` convert their argument with the
-        // group's ToBigInt (an empty hook answers 0n). `process.stdin` hands
-        // its chunks to listeners as Buffers.
-        members: &["BigInt.asIntN", "BigInt.asUintN", "process.stdin"],
+        // `process.stdin` hands its chunks to listeners as Buffers.
+        members: &["process.stdin"],
         modules: &[
             "better-sqlite3",
             "buffer",
@@ -910,14 +908,10 @@ mod tests {
             of("node:url.fileURLToPathBuffer"),
             family_bit("typedarray") | family_bit("url_engine")
         );
-        assert_eq!(
-            of("BigInt.asIntN"),
-            family_bit("typedarray") | family_bit("bigint")
-        );
-        assert_eq!(
-            of("BigInt.asUintN.length") & family_bit("typedarray"),
-            family_bit("typedarray")
-        );
+        // `BigInt.asIntN` / `asUintN` convert with `bigint_coerce` (no
+        // typed-array group), so they are of the bigint family alone.
+        assert_eq!(of("BigInt.asIntN"), family_bit("bigint"));
+        assert_eq!(of("BigInt.asUintN.length") & family_bit("typedarray"), 0);
         assert_eq!(of("BigInt.prototype.toString"), family_bit("bigint"));
         assert_ne!(of("process.stdin.on") & family_bit("typedarray"), 0);
         assert_eq!(of("process.stdout.write") & family_bit("typedarray"), 0);
