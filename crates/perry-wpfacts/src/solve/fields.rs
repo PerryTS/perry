@@ -342,6 +342,13 @@ impl Model {
         self.map_open(d);
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
+        // A typed array's integer indices are own enumerable keys whose
+        // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
+        // stores them under index keys of the target (7.3.25).
+        if !opaque && self.typed_array_elements(s) {
+            let p = self.typed_array_elem_prim(s);
+            self.add_prim(fa_d, p);
+        }
         if opaque && self.explain {
             let from_why = match (s == TOP, from != NO_NODE) {
                 (true, true) => format!(
@@ -632,8 +639,14 @@ impl Model {
     /// runtime gives it no own accessor. A builtin namespace or constructor
     /// the realm gives no enumerable own property
     /// (`builtins::realm_own_props_unenumerable`) holds, for a copy, only
-    /// what the program stored on it: its fields. Every other builtin object
-    /// (Date, RegExp, typed arrays, collections, markers …), a host
+    /// what the program stored on it: its fields. A typed array or a Buffer
+    /// born at a site of this unit (`typed_array_elements`) owns its integer
+    /// indices, then the keys the program gave it (ECMA-262 10.4.5.7
+    /// [[OwnPropertyKeys]]): its elements, each a Number or a BigInt
+    /// (10.4.5.15, `typed_array_elem_prim`), and its fields; its `length`,
+    /// `buffer` and the rest are prototype accessors (23.2.3), not own.
+    /// Every other builtin object
+    /// (Date, collections, markers …), a host
     /// namespace, a builtin function, a native prototype and ⊤ hold own
     /// properties the model does not list. A stand-in (`site: u32::MAX`, another unit's array as this
     /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
@@ -649,6 +662,7 @@ impl Model {
                 TmplKind::BObj { what, site, .. } => {
                     (site != u32::MAX && builtins::own_values_filled(what))
                         || builtins::realm_object_own_props_unenumerable(what)
+                        || (site != u32::MAX && self.typed_array_elements(t))
                 }
                 _ => true,
             },
@@ -666,6 +680,11 @@ impl Model {
         }
         if t == TOP {
             return;
+        }
+        // A typed array's index values (`own_props_modelled`).
+        if !opaque && self.typed_array_elements(t) {
+            let p = self.typed_array_elem_prim(t);
+            self.add_prim(dst, p);
         }
         self.builtin_field_use(t, Key::any(), ChainAct::Load(dst));
         let fields = self.all_fields(t);
@@ -881,6 +900,44 @@ impl Model {
         }
     }
 
+    /// Rule RT: `rec` of an `exec` with input `s` holds tail `pat`'s
+    /// captures in the index slots of the derived groups; a second tail at
+    /// the same record merges its slots.
+    pub(crate) fn exec_attach_tail(&mut self, rec: Tok, pat: u32, s: NodeId) {
+        if *self.regexp_exec_tail.entry(rec).or_insert(pat) != pat {
+            self.index_slots_merge(rec);
+            return;
+        }
+        for g in self.regexp_tails[pat as usize].derived() {
+            self.index_slot(rec, g);
+        }
+        self.cons(s, Cons::Captures { rec, pat });
+    }
+
+    /// Rule M7: `rec` of an `exec` of the `new RegExp(P)` object `t` once P
+    /// is decided (tail `p`, or none): the tail's captures, and each slot a
+    /// read made while P was pending that the tail does not derive holds
+    /// any capture (`field_any`); no tail: every index any capture.
+    pub(crate) fn exec_attach(&mut self, t: Tok, rec: Tok, p: Option<u32>, s: NodeId) {
+        self.regexp_pending_recs.remove(&rec);
+        let Some(pat) = p else {
+            self.index_slots_merge(rec);
+            return;
+        };
+        self.regexp_ctor_recs.entry(t).or_default().push(rec);
+        let derived = self.regexp_tails[pat as usize].derived();
+        for a in self.field_keys.get(&rec).cloned().unwrap_or_default() {
+            match self.index_slot_atom(a) {
+                Some(i) if !derived.contains(&i) => {
+                    let (sl, fa) = (self.field_r(rec, a), self.field_any(rec));
+                    self.edge(fa, sl);
+                }
+                _ => {}
+            }
+        }
+        self.exec_attach_tail(rec, pat, s);
+    }
+
     /// A rest parameter's array (gen: `new_arr_template(.., "rest")`): born
     /// with its arguments in order, each at its index (10.2.11, 8.6.3), so
     /// it is index-exact (`index_slot`) until a write that does not name one
@@ -895,7 +952,9 @@ impl Model {
     /// what its index `i` holds).
     pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
         let i = self.num_literal_index(key)?;
-        if self.is_rest_arr(obj) {
+        // Rule M7: an `exec` record waiting for its RegExp's pattern: the
+        // slot, which the decided pattern fills (`exec_attach`).
+        if self.is_rest_arr(obj) || self.regexp_pending_recs.contains(&obj) {
             return Some(self.index_slot(obj, i));
         }
         let a = self.atom(&format!("[[Index{i}]]"));

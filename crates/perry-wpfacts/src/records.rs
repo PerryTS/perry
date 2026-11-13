@@ -270,7 +270,9 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         // Arithmetic and coercion: ToPrimitive on the record.
         Cons::Implicit { proto, .. } if sanctioned(*proto) => Allowed,
         Cons::Implicit { proto, .. } => Reject(R5Protocol(proto.name().into())),
-        Cons::Arith { .. } | Cons::Plus { .. } | Cons::CaseMap { .. } => Reject(R5Protocol("ToPrimitive".into())),
+        Cons::Arith { .. } | Cons::Plus { .. } | Cons::CaseMap { .. } | Cons::StrReplace { .. } => {
+            Reject(R5Protocol("ToPrimitive".into()))
+        }
         // Stores into the record or its layout.
         Cons::Store { key: k, .. } => Reject(R2Write(key(k))),
         Cons::DeleteKey { key: a, .. } | Cons::DefineKey { key: a, .. } => {
@@ -303,6 +305,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Miss { .. }
         | Cons::BoundCall { .. }
         | Cons::ShareBuffer { .. }
+        | Cons::Captures { .. }
+        | Cons::RegExpPattern { .. }
         | Cons::ViewedBuffer { .. } => Reject(R5Escape(c.kind_name().into())),
         // Prototype and construction.
         Cons::ProtoKey { .. }

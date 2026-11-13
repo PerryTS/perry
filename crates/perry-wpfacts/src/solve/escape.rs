@@ -367,6 +367,11 @@ impl Model {
 
     /// Unknown code calls `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
+        self.diagnostic_entry_begin(ft, reason);
+        self.escape_fn_params_run(ft, reason);
+        self.diagnostic_entry_end();
+    }
+    fn escape_fn_params_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -382,6 +387,9 @@ impl Model {
         if self.unknown_caller(f, reason) {
             let raise = self.raise_of(f);
             let esc = self.esc_raise;
+            if let Some(d) = &mut self.diagnostic {
+                d.raise_by.entry(raise).or_insert(ft);
+            }
             self.edge(raise, esc);
         }
         if self.summarized(f) {
@@ -911,7 +919,7 @@ impl Model {
         if !published {
             self.fn_props_top.insert(t);
             let all = self.all_fields(t);
-            self.add_top(all, |m| {
+            self.add_top_held(all, t, |m| {
                 format!(
                     "property of an escaped function: {}",
                     m.reasons[reason as usize]
@@ -920,7 +928,7 @@ impl Model {
             self.add_prim(all, prim::ALL);
         }
         let w = self.node_l("escaped-store");
-        self.add_top(w, |m| {
+        self.add_top_held(w, t, |m| {
             format!(
                 "stored into an escaped function: {}",
                 m.reasons[reason as usize]
@@ -933,7 +941,7 @@ impl Model {
     /// A named property `n` of function `t` whose properties left
     /// (`escape_props`): unknown code writes it and reads what it holds.
     pub(crate) fn escape_prop(&mut self, t: Tok, n: NodeId, reason: u32) {
-        self.add_top(n, |m| {
+        self.add_top_held(n, t, |m| {
             format!(
                 "property of an escaped function {t}: {}",
                 m.reasons[reason as usize]
@@ -1103,7 +1111,7 @@ impl Model {
             return;
         }
         let any = self.any_key_node(t);
-        self.add_top(any, |m| {
+        self.add_top_held(any, t, |m| {
             format!(
                 "field of escaped {}: {}",
                 m.tok_kind_word(t),
@@ -1115,7 +1123,7 @@ impl Model {
         if self.array_buffer_view(t) {
             let a = self.atom(VIEWED_BUFFER);
             let v = self.field(t, a);
-            self.add_top(v, |m| {
+            self.add_top_held(v, t, |m| {
                 format!("buffer of an escaped view: {}", m.reasons[reason as usize])
             });
             self.cons(v, Cons::TopSink { reason });
@@ -1137,7 +1145,7 @@ impl Model {
         // through the setters of its bindings object); and read any key:
         // every getter runs and its result reaches unknown code.
         let w = self.node_l("escaped-store");
-        self.add_top(w, |m| {
+        self.add_top_held(w, t, |m| {
             format!(
                 "stored into an escaped {}: {}",
                 m.tok_kind_word(t),

@@ -13,6 +13,9 @@ pub(crate) const PREFIX_MARK: &str = "\u{1}prefix\u{1}";
 /// that contains the ASCII character `c`", `c` no IdentifierPart (ECMA-262
 /// 12.7: not `[A-Za-z0-9_$]`), so no built-in member name contains it.
 pub(crate) const INFIX_MARK: &str = "\u{1}infix\u{1}";
+/// The spelling of a rule-M4 suffix entry, `SUFFIX_MARK` + `s`: "a String
+/// that ends with `s`" (`s` not empty).
+pub(crate) const SUFFIX_MARK: &str = "\u{1}suffix\u{1}";
 const PLUS_PREFIXES_K: usize = 256;
 
 impl Model {
@@ -117,6 +120,16 @@ impl Model {
         self.atom(&format!("{INFIX_MARK}{c}"))
     }
 
+    /// The suffix entry of `s`.
+    pub(crate) fn suffix_atom(&mut self, s: &str) -> Atom {
+        self.atom(&format!("{SUFFIX_MARK}{s}"))
+    }
+
+    /// The known suffix of a suffix entry (`None`: no suffix entry).
+    pub(crate) fn atom_suffix(&self, a: Atom) -> Option<&str> {
+        self.atoms[a as usize].strip_prefix(SUFFIX_MARK)
+    }
+
     /// The character an infix entry stands for (`None`: no infix entry).
     pub(crate) fn atom_infix(&self, a: Atom) -> Option<char> {
         self.atoms[a as usize].strip_prefix(INFIX_MARK).and_then(|r| r.chars().next())
@@ -134,7 +147,7 @@ impl Model {
         if let Some(c) = self.atom_infix(a) {
             return Some(c);
         }
-        let t = self.atom_prefix(a).unwrap_or(&self.atoms[a as usize]);
+        let t = self.atom_prefix(a).or_else(|| self.atom_suffix(a)).unwrap_or(&self.atoms[a as usize]);
         t.chars().find(|&c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '_' && c != '$')
     }
 
@@ -216,16 +229,19 @@ impl Model {
             // Rule K7: as a store key an infix entry is any key.
             return 0;
         }
-        let glob = match self.atom_prefix(a) {
-            Some(p) => vec![p.to_string(), String::new()],
-            None => vec![self.atoms[a as usize].clone()],
+        let glob = match (self.atom_prefix(a), self.atom_suffix(a)) {
+            (Some(p), _) => vec![p.to_string(), String::new()],
+            (_, Some(s)) => vec![String::new(), s.to_string()],
+            _ => vec![self.atoms[a as usize].clone()],
         };
         self.key_shape(Some(KeyShape { globs: vec![glob] }))
     }
 
     /// Rule M3 for a computed key node: when it holds Strings, each a
-    /// constant or of a known prefix, and at least one prefix, the shape of
-    /// each entry; else `None` (the site's own read). Rule K8 (ECMA-262
+    /// constant, of a known prefix or suffix or an infix entry, the shape of
+    /// each entry (ECMA-262 7.1.19: a String key is itself, so a set of
+    /// constants names exactly those keys); else `None` (the site's own
+    /// read). Rule K8 (ECMA-262
     /// 7.1.19, 7.1.17): beside the Strings it may hold `undefined`, `null`
     /// and booleans, whose keys are the named "undefined", "null", "true"
     /// and "false" the `IdxKey` rule reads for them.
@@ -240,9 +256,6 @@ impl Model {
             return None;
         }
         let atoms = self.str_atoms(node.strs).to_vec();
-        if !atoms.iter().any(|&a| self.atom_is_mark(a)) {
-            return None;
-        }
         let mut out = Vec::with_capacity(atoms.len());
         for a in atoms {
             // Rule K7: an infix entry reads the names of glob `*c*`.
@@ -255,6 +268,12 @@ impl Model {
             // a Number (`glob_may_be_numeric`): never any key.
             if let Some(p) = self.atom_prefix(a) {
                 let glob = vec![p.to_string(), String::new()];
+                out.push((a, self.glob_shape(glob)));
+                continue;
+            }
+            // Rule M4: a known suffix reads the names of its glob `*s`.
+            if let Some(s) = self.atom_suffix(a) {
+                let glob = vec![String::new(), s.to_string()];
                 out.push((a, self.glob_shape(glob)));
                 continue;
             }
@@ -274,9 +293,15 @@ impl Model {
     /// while the result may be a String gives any string. Prefixes are
     /// only made from constants, never extended, so loops end.
     pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+        if let Some(s) = self.plus_const(l, r) {
+            return s;
+        }
         let m3 = self.plus_strs_m3(l, r);
         if m3 != STRS_TOP {
             return m3;
+        }
+        if let Some(s) = self.suffix_strs(r) {
+            return s;
         }
         // Rule K7, 13.15.3: when one operand is String-only, the result is
         // the concatenation of both ToStrings, so it holds every character
@@ -285,6 +310,125 @@ impl Model {
             Some(s) => s,
             None => STRS_TOP,
         }
+    }
+
+    /// Rule M4, ECMA-262 13.15.3: when the right operand `r` holds only
+    /// Strings, each a non-empty constant or a known suffix, `l + r` is
+    /// ToString(l) followed by one of them: it ends with it.
+    fn suffix_strs(&mut self, r: NodeId) -> Option<StrSet> {
+        let node = &self.nodes[r as usize];
+        if node.prim != prim::STR || !node.pts.is_empty() || node.strs < STRS_SET0 {
+            return None;
+        }
+        let mut out = Vec::new();
+        for a in self.str_atoms(node.strs).to_vec() {
+            if self.atom_suffix(a).is_some() {
+                out.push(a);
+            } else if self.atom_is_mark(a) || self.atoms[a as usize].is_empty() {
+                return None;
+            } else {
+                let c = self.atoms[a as usize].clone();
+                out.push(self.suffix_atom(&c));
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        Some(self.str_set(&out))
+    }
+
+    /// The one constant a String-only node holds when it holds exactly one
+    /// (no prefix, infix or suffix entry, no other value).
+    pub(crate) fn one_str_const(&self, n: NodeId) -> Option<Atom> {
+        self.one_str_const_but(n, 0)
+    }
+
+    /// `one_str_const` of the node's values other than the primitives
+    /// `but` (values the caller's operation throws on).
+    pub(crate) fn one_str_const_but(&self, n: NodeId, but: u16) -> Option<Atom> {
+        let x = &self.nodes[n as usize];
+        if x.prim & !but != prim::STR || !x.pts.is_empty() || x.strs < STRS_SET0 {
+            return None;
+        }
+        match self.str_atoms(x.strs) {
+            &[a] if !self.atom_is_mark(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Rule M5, ECMA-262 13.15.3 (ApplyStringOrNumericBinaryOperator: two
+    /// Strings give their concatenation): a left operand that holds only
+    /// the String `c` and a right operand that holds only the String `d`
+    /// give the one String `cd`. Finite with no bound: sets only grow, so a
+    /// node holds one constant alone during one stretch at most, and each
+    /// `+` makes at most one constant by this rule; every other pair is
+    /// rule M3's (prefixes) and M4's (suffixes).
+    fn plus_const(&mut self, l: NodeId, r: NodeId) -> Option<StrSet> {
+        let (a, b) = (self.one_str_const(l)?, self.one_str_const(r)?);
+        let s = format!("{}{}", self.atoms[a as usize], self.atoms[b as usize]);
+        let c = self.str_const_atom(&s)?;
+        Some(self.str_set(&[c]))
+    }
+
+    /// Rule M6, ECMA-262 22.1.3.19 `String.prototype.replace(searchValue,
+    /// replaceValue)` on a String receiver with a String searchValue (a
+    /// primitive has no own @@replace; a program @@replace on
+    /// String.prototype is the `sym_call` result beside this) and a String
+    /// replaceValue (not callable): the first occurrence of the search
+    /// string (StringIndexOf from 0) replaced by GetSubstitution
+    /// (22.1.3.19.1 with no captures and namedCaptures undefined: `$$`,
+    /// `$&`, `` $` ``, `$'` substitute; every other `$` is itself); no
+    /// occurrence gives the receiver. Exact when each operand holds one
+    /// ASCII constant (code units are bytes); else any string. `None` while
+    /// an operand holds no value yet (its arrival runs the rule again).
+    pub(crate) fn replace_strs(&mut self, recv: NodeId, search: NodeId, repl: NodeId) -> Option<StrSet> {
+        if [recv, search, repl].iter().any(|&n| {
+            let x = &self.nodes[n as usize];
+            x.prim == 0 && x.pts.is_empty()
+        }) {
+            return None;
+        }
+        // Step 1 RequireObjectCoercible: an undefined or null receiver
+        // throws, it gives no result.
+        let one = |m: &Self, n: NodeId, but: u16| {
+            m.one_str_const_but(n, but).map(|a| m.atoms[a as usize].clone()).filter(|s| s.is_ascii())
+        };
+        let nullish = prim::UNDEF | prim::NULL;
+        let (Some(s), Some(q), Some(r)) = (one(self, recv, nullish), one(self, search, 0), one(self, repl, 0)) else {
+            return Some(STRS_TOP);
+        };
+        let out = match s.find(q.as_str()) {
+            None => s,
+            Some(p) => {
+                let (head, rest) = (&s[..p], &s[p + q.len()..]);
+                let mut o = String::from(head);
+                let b = r.as_bytes();
+                let mut i = 0;
+                while i < b.len() {
+                    if b[i] == b'$' && i + 1 < b.len() {
+                        let sub = match b[i + 1] {
+                            b'$' => Some("$"),
+                            b'&' => Some(q.as_str()),
+                            b'`' => Some(head),
+                            b'\'' => Some(rest),
+                            _ => None,
+                        };
+                        if let Some(t) = sub {
+                            o.push_str(t);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    o.push(b[i] as char);
+                    i += 1;
+                }
+                o.push_str(rest);
+                o
+            }
+        };
+        Some(match self.str_const_atom(&out) {
+            Some(a) => self.str_set(&[a]),
+            None => STRS_TOP,
+        })
     }
 
     fn plus_strs_m3(&mut self, l: NodeId, r: NodeId) -> StrSet {
@@ -313,7 +457,7 @@ impl Model {
         for &a in self.str_atoms(rs) {
             let t = match self.atom_prefix(a) {
                 Some(p) => p.to_string(),
-                None if self.atom_infix(a).is_some() => String::new(),
+                None if self.atom_infix(a).is_some() || self.atom_suffix(a).is_some() => String::new(),
                 None => self.atoms[a as usize].clone(),
             };
             tails.push(t);
@@ -324,6 +468,10 @@ impl Model {
         }
         let mut out: Vec<Atom> = Vec::new();
         for a in left {
+            // A left suffix entry: the result's start is unknown.
+            if self.atom_suffix(a).is_some() {
+                return STRS_TOP;
+            }
             if self.atom_is_mark(a) {
                 out.push(a);
                 continue;

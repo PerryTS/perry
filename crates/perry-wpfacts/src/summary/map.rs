@@ -420,6 +420,19 @@ pub fn map_cons(
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
         ShareBuffer { ta } => ShareBuffer { ta },
+        Captures { rec, pat } => Captures { rec, pat },
+        StrReplace {
+            dst,
+            recv,
+            search,
+            repl,
+        } => StrReplace {
+            dst: n(dst),
+            recv: n(recv),
+            search: n(search),
+            repl: n(repl),
+        },
+        RegExpPattern { tok } => RegExpPattern { tok },
         ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
         BoundCall { reason, bound } => BoundCall { reason, bound },
         ThisTo { origin } => ThisTo { origin },
@@ -575,6 +588,9 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NewTargetHard { .. }
             | NativeParent { .. }
             | ShareBuffer { .. }
+            | Captures { .. }
+            | StrReplace { .. }
+            | RegExpPattern { .. }
             | ViewedBuffer { .. }
             | BoundCall { .. }
             | AnnexBDefine { .. }
@@ -605,6 +621,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | Range { dst, .. }
         | ArrayLenArg { dst }
         | CaseMap { dst, .. }
+        | StrReplace { dst, .. }
         | IterNext { dst }
         | FromArrayLike { dst }
         | ProtoOf { dst }

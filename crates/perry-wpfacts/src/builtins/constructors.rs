@@ -146,6 +146,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 string_methods::to_prim(m, f, "RegExp flags ToString");
             }
             let o = site_tmpl(m, call, "RegExp");
+            // Rule M7 (22.2.4.1, 22.2.3.2 RegExpInitialize): a pattern
+            // operand of one String constant and no flags operand is the
+            // object's [[OriginalSource]] with flags "", as a literal's
+            // (`Cons::RegExpPattern`, `Model::regexp_pattern`).
+            if let (Some(&p), None) = (c.args.first(), c.args.get(1)) {
+                m.regexp_ctor_toks.insert(o);
+                m.cons(p, Cons::RegExpPattern { tok: o });
+            }
             ret_tok(m, call, o);
         }
         BuiltinNs::TypedArrayKind(_)

@@ -59,6 +59,7 @@ impl Model {
             if let Some(d) = self.diagnostic.as_mut() {
                 let n = d.cause_node;
                 d.unknown_calls.entry(call).or_insert((n, t == TOP));
+                d.unknown_callee.entry(call).or_insert(t);
             }
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.

@@ -47,6 +47,30 @@ pub(crate) struct Trace {
     pub stand_in_params: Vec<(NodeId, String, u32, Option<String>)>,
     /// `Model::top_predecessors`, built when a chain needs it.
     pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
+    /// ROOTS1: the escaped function whose entry run (unknown code calls
+    /// it: `this`/parameters ⊤) is seeding, innermost last.
+    pub seed_by: Vec<Tok>,
+    /// ROOTS1: a ⊤ seed made while the escape of a token ran (an entry run
+    /// of an escaped function, a field of an escaped object): that token.
+    pub top_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS2: the escaped object a ⊤ seed is made into the fields of
+    /// (`Model::add_top_held`): the seed is that object's escape's, also
+    /// when it is made outside that escape (from the worklist).
+    pub seed_holder: Vec<Tok>,
+    /// ROOTS2: the callee token of each call bound to an unknown callee
+    /// (`TOP` or an undescribed builtin function), first one per call.
+    pub unknown_callee: BTreeMap<CallId, Tok>,
+    /// ROOTS1: each entry run from unknown code: function -> (its token,
+    /// reason, the escaping token that held it, if any).
+    pub entry_runs: BTreeMap<FnIdx, (Tok, u32, Option<Tok>)>,
+    /// ROOTS1: a throw region joined to ESCRAISE -> the escaped function.
+    pub raise_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a walk node joined to ESCACCESSORS -> the escaped holder.
+    pub acc_src: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a sunk node (`Model::sink_node`: what reaches it goes to
+    /// unknown code) -> the node whose rule sank it (an unknown callee or
+    /// receiver, a prototype chain holding ⊤).
+    pub store_top: BTreeMap<NodeId, NodeId>,
 }
 
 /// Diagnostic data only; never consulted by ordinary facts.
@@ -295,8 +319,154 @@ struct Site {
 }
 
 impl Model {
-    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+    /// ROOTS1: unknown code calls escaped `ft` (an entry run): what its
+    /// run seeds is that escape's.
+    pub(crate) fn diagnostic_entry_begin(&mut self, ft: Tok, reason: u32) {
+        if self.diagnostic.is_none() {
+            return;
+        }
+        let f = self.tok_fn(ft);
+        let d = self.diagnostic.as_mut().unwrap();
+        let holder = d.escaping.iter().rev().find(|&&x| x != ft).copied();
+        d.entry_runs.entry(f).or_insert((ft, reason, holder));
+        d.seed_by.push(ft);
+    }
+    pub(crate) fn diagnostic_entry_end(&mut self) {
         if let Some(d) = &mut self.diagnostic {
+            d.seed_by.pop();
+        }
+    }
+    /// ROOTS2: a ⊤ seed into a field of escaped `holder`.
+    #[track_caller]
+    pub(crate) fn add_top_held(
+        &mut self,
+        n: NodeId,
+        holder: Tok,
+        why: impl FnOnce(&Self) -> String,
+    ) {
+        if let Some(d) = &mut self.diagnostic {
+            d.seed_holder.push(holder);
+        }
+        self.add_top(n, why);
+        if let Some(d) = &mut self.diagnostic {
+            d.seed_holder.pop();
+        }
+    }
+    /// ROOTS2: the call ids a reason names (`[call N]`, `[call N,M]`).
+    pub(crate) fn reason_calls(&self, reason: u32) -> Vec<CallId> {
+        let s = self.reasons.get(reason as usize).map_or("", |s| s);
+        let Some(i) = s.rfind("[call ") else {
+            return Vec::new();
+        };
+        s[i + 6..]
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|x| x.trim().parse().ok())
+            .collect()
+    }
+    /// ROOTS1: the escape an escape-first record's unknown value came out
+    /// of: the token whose escape seeded the ⊤ at its deciding node (first
+    /// arrivals walked back to the seed), the holder an escaped accessor was
+    /// read from, the function whose throw region reached ESCRAISE. Dump only.
+    fn diagnostic_esc_via(&self, t: Tok, e: &EscFirst) -> (Option<Tok>, String) {
+        let Some(d) = self.diagnostic.as_ref() else {
+            return (None, "null".into());
+        };
+        let reason = self.reasons.get(e.reason as usize).map_or("", |s| s);
+        let tops = |n: NodeId| {
+            n != NO_NODE && (n as usize) < self.nodes.len() && self.nodes[n as usize].pts.contains_tok(TOP)
+        };
+        // The deciding node: the rule that sank the escape's node, the node
+        // itself, the unknown callee of its call; the first holding ⊤.
+        // ROOTS2: the receiver of (or a value passed to) a call of an
+        // unknown function value escapes because the callee is unknown: the
+        // callee decides, not what else the value's node holds. A callee
+        // that is an undescribed builtin function is the end itself.
+        let callee_first = true; /*ROOTS2-GREEN*/
+        let mut callee_dn = None;
+        if callee_first
+            && (reason.starts_with("receiver of a call of an unknown function value")
+                || reason.starts_with("passed to a call of an unknown function value"))
+        {
+            for c in self.reason_calls(e.reason) {
+                match d.unknown_calls.get(&c) {
+                    Some(&(Some(n), true)) if tops(n) => {
+                        callee_dn = Some(n);
+                        break;
+                    }
+                    Some(&(n, false)) => {
+                        let ct = d.unknown_callee.get(&c).copied();
+                        return (
+                            None,
+                            format!(
+                                "{{\"calleeBuiltin\":{},\"at\":{},\"call\":{c},\"atFunction\":{}}}",
+                                opt(ct),
+                                opt(n),
+                                opt(n.and_then(|n| self.diagnostic_owner(n)))
+                            ),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let dn = callee_dn.or_else(|| {
+            [
+                e.node.and_then(|n| d.store_top.get(&n).copied()),
+                e.node,
+                e.call.and_then(|c| d.unknown_calls.get(&c)).and_then(|(n, _)| *n),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|&n| tops(n))
+        });
+        if let Some(n) = dn {
+            let (seed, why) = self.diagnostic_root(n);
+            let by = d.top_by.get(&seed).copied();
+            let entry = by.and_then(|b| self.tok_fn_opt(b));
+            return (
+                by,
+                format!(
+                    "{{\"at\":{n},\"seed\":{seed},\"why\":{},\"by\":{},\"entryOf\":{}}}",
+                    quote(&why),
+                    by.map_or("null".into(), |b| b.to_string()),
+                    entry.map_or("null".into(), |f| f.to_string())
+                ),
+            );
+        }
+        if reason == "accessor function of a value unknown code holds" {
+            for (&n, &o) in &d.acc_src {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(o), format!("{{\"accessorOf\":{o}}}"));
+                }
+            }
+        }
+        if reason == "thrown into unknown code" {
+            for (&n, &f) in &d.raise_by {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(f), format!("{{\"raisedBy\":{f}}}"));
+                }
+            }
+        }
+        (None, "null".into())
+    }
+    fn tok_fn_opt(&self, t: Tok) -> Option<FnIdx> {
+        Some(self.tok_fn(t)).filter(|&f| f != NO_FN)
+    }
+    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+        let ruled = src == NO_NODE
+            || self
+                .reasons
+                .get(reason as usize)
+                .is_some_and(|s| !s.is_empty());
+        if let Some(d) = &mut self.diagnostic {
+            if ruled && !d.pred.contains_key(&dst) {
+                if let Some(&b) = d.seed_by.last().or(d.escaping.last()) {
+                    d.top_by.entry(dst).or_insert(b);
+                }
+            }
             if let Some(c) = &mut d.census {
                 if !c.arrivals.contains_key(&dst) {
                     let inj = c.inject_at.take().filter(|(n, _)| *n == dst);
@@ -558,6 +728,8 @@ impl Model {
         self.diagnostic.as_ref()?;
         let was = self.is_escaped(t);
         let cause = self.diagnostic_escape_cause();
+        // ROOTS2: the call the reason names, else the current one.
+        let rc = self.reason_calls(reason).first().copied();
         let d = self.diagnostic.as_mut()?;
         d.esc_causes.insert((t, cause));
         if let Some(c) = &mut d.census {
@@ -578,7 +750,7 @@ impl Model {
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
-            call: d.cur_call,
+            call: rc.or(d.cur_call),
             node: d.cause_node,
             seq,
         });
@@ -1176,8 +1348,44 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt(src_call(Some(*c))), m.protocol_calls.contains(c), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
         }
         for (t, e) in &d.esc_first {
-            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{}}}",
-                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node), opt(e.seq)));
+            // ROOTS1: an escape whose unknown value came out of an earlier
+            // escape names it (`via`); a cause-less one takes it as cause.
+            let (via, top) = m.diagnostic_esc_via(*t, e);
+            // `op`: the operation the attempt ran in (the former cause).
+            let c = via.map_or(e.cause, Cause::Tok);
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{},\"via\":{},\"op\":{},\"top\":{top}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&c), opt(src_call(e.call)), opt(e.node), opt(e.seq), opt(via), cause(&e.cause)));
+        }
+        // ROOTS2: each call an escape names, with its source position.
+        let mut named: BTreeSet<CallId> = d.unknown_calls.keys().copied().collect();
+        for e in d.esc_first.values() {
+            named.extend(e.call);
+            named.extend(m.reason_calls(e.reason));
+        }
+        for c in named {
+            let s = src_call(Some(c)).unwrap_or(c);
+            let (file, start, func) = match locations.get(&s) {
+                Some(l) => (
+                    quote(g.modules[l.module as usize].0),
+                    l.start.to_string(),
+                    Some(l.function).filter(|&f| f != NO_FN),
+                ),
+                None => (
+                    "null".to_string(),
+                    "null".to_string(),
+                    m.calls
+                        .get(c as usize)
+                        .and_then(|k| m.diagnostic_owner(k.ret)),
+                ),
+            };
+            out.push(format!(
+                "{{\"record\":\"call\",\"call\":{c},\"source\":{s},\"file\":{file},\"start\":{start},\"function\":{}}}",
+                opt(func)
+            ));
+        }
+        for (f, (ft, r, holder)) in &d.entry_runs {
+            out.push(format!("{{\"record\":\"entry-run\",\"function\":{f},\"token\":{ft},\"reason\":{},\"holder\":{}}}",
+                quote(m.reasons.get(*r as usize).map_or("", |s| s)), opt(*holder)));
         }
         for (t, (w, n)) in &d.esc_why {
             if let Some(&(f, i)) = m.param_marker.get(t) {
@@ -1387,8 +1595,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             };
         }
         let (root, origin) = m.diagnostic_root(n);
-        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topOrigin\":{}}}",
-            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
+        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topBy\":{},\"topOrigin\":{}}}",
+            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),opt(top.then(|| m.diagnostic.as_ref().and_then(|d| d.top_by.get(&root).copied())).flatten()),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
     }
     out
 }

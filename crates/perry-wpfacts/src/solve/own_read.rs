@@ -26,12 +26,18 @@ impl Model {
     /// (IsCallable, `surely_callable`), `Object.prototype` method) holds
     /// every property the program wrote in its field table: a number key
     /// names one numeric string (ECMA-262 7.1.19), so `IdxKey` reads its
-    /// numeric fields and the chain, never a named field.
+    /// numeric fields and the chain, never a named field. A program
+    /// prototype (`C.prototype`) is an ordinary object: `O[P]` is
+    /// ToPropertyKey, then OrdinaryGet (ECMA-262 13.3.2.1, 7.3.2, 10.1.8.1),
+    /// so it yields property P and its chain only; `IdxKey` reads the names
+    /// the key admits (every field for a key of unknown content), never all
+    /// methods and the `constructor` under a known key.
     pub(super) fn index_needs_all_own_fields(&self, t: Tok) -> bool {
         self.is_marker(t)
             || !(matches!(
                 self.toks[t as usize],
                 TokKind::Obj(..)
+                    | TokKind::Proto(_)
                     | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
             ) || crate::builtins::surely_callable(self, t))
     }

@@ -381,7 +381,22 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             replace_value(m, call, rv);
             let r = sym_call(m, call, p, "replace", vec![s, rv]);
             m.edge(r, c.ret);
-            ret_prim(m, call, prim::STR);
+            // Rule M6: a String result, one constant when the three
+            // operands are constants (`Cons::StrReplace`).
+            match c.this {
+                ThisArg::Node(recv) if name == "replace" => {
+                    let k = Cons::StrReplace {
+                        dst: c.ret,
+                        recv,
+                        search: p,
+                        repl: rv,
+                    };
+                    for x in [recv, p, rv] {
+                        m.cons(x, k);
+                    }
+                }
+                _ => ret_prim(m, call, prim::STR),
+            }
             return true;
         }
         // 22.1.3.23: GetMethod(separator, @@split) called with (O, limit);
@@ -495,6 +510,39 @@ pub(super) fn regexp_described(name: &str) -> bool {
     )
 }
 
+/// Rule RT (`regex_tail`): the record `rec` of `exec` on receiver `t`
+/// holds group k and the tail's groups in index slots (`index_slot`) the
+/// input's suffixes derive (`Cons::Captures`). A receiver of no analysable
+/// literal, a second tail at the same record or no input: every index may
+/// hold any capture (`index_slots_merge`).
+fn exec_captures(m: &mut Model, t: Tok, rec: Tok, input: Option<NodeId>) {
+    let pat = match m.toks[t as usize] {
+        TokKind::Obj(tm, _) => m.regexp_tail_of.get(&tm).copied(),
+        _ => None,
+    };
+    // Rule M7: an object of `new RegExp(P)`: P's tail once P is decided;
+    // while it is not, the record waits for it (`Model::regexp_pattern`)
+    // and a read of a constant index reads that index's slot
+    // (`exact_index_slot`).
+    if let (None, Some(s)) = (pat, input) {
+        if m.regexp_ctor_toks.contains(&t) {
+            match m.regexp_ctor_pat.get(&t).copied() {
+                None => {
+                    m.regexp_pending.entry(t).or_default().push((rec, s));
+                    m.regexp_pending_recs.insert(rec);
+                }
+                Some((_, p)) => m.exec_attach(t, rec, p, s),
+            }
+            return;
+        }
+    }
+    let (Some(pat), Some(s)) = (pat, input) else {
+        m.index_slots_merge(rec);
+        return;
+    };
+    m.exec_attach_tail(rec, pat, s);
+}
+
 /// `RegExp.prototype` methods (22.2.6). Each runs the object's `exec`
 /// through a property lookup (RegExpExec), so a replaced or overridden
 /// `exec` is called; the builtin `exec` reads `lastIndex` and ToString's
@@ -560,6 +608,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             let a = m.atom("groups");
             let f = m.field(rec, a);
             m.add_tok(f, g);
+            exec_captures(m, t, rec, c.args.first().copied());
             ret_tok(m, call, rec);
             ret_prim(m, call, prim::NULL);
         }

@@ -745,6 +745,14 @@ impl Model {
             if !self.nodes[n as usize].pts.contains_tok(TOP) {
                 if let Some(d) = &mut self.diagnostic {
                     d.seeds.entry(n).or_insert(w.clone());
+                    if let Some(&b) = d
+                        .seed_holder
+                        .last()
+                        .or(d.seed_by.last())
+                        .or(d.escaping.last())
+                    {
+                        d.top_by.entry(n).or_insert(b);
+                    }
                 }
             }
             if self.explain {
@@ -1610,6 +1618,11 @@ impl Model {
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
+        if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = d.cause_node.filter(|&c| c != n) {
+                d.store_top.entry(n).or_insert(c);
+            }
+        }
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             self.raise_top(
@@ -2024,6 +2037,9 @@ impl Model {
                 reason,
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
+            Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
+            Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
+            Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),
             Cons::ViewedBuffer { view, fresh, share } => {
                 format!("viewedbuffer {n} {view} {fresh:?} {share}")
             }

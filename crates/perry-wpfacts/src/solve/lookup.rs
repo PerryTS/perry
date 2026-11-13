@@ -675,6 +675,23 @@ impl Model {
                 self.add_tok(dst, TOP);
                 return;
             }
+            // ToPropertyKey of an index is a canonical numeric String
+            // (ECMA-262 7.1.19, 10.1.8.1 [[Get]]): an ordinary object's
+            // number-named own fields (`num_fields`: numeric keys, the
+            // element key, what a computed store wrote) and, along its
+            // chain, only number-named members and accessors (`plain_key`),
+            // never an identifier-named method. A marker's fields are its
+            // reach markers, and another value (the global object, a
+            // namespace, a function) keeps the computed read.
+            if origin == t && matches!(self.toks[t as usize], TokKind::Obj(..)) && !self.is_marker(t)
+            {
+                self.builtin_field_use(t, key, ChainAct::Load(dst));
+                let f = self.num_fields(t);
+                self.edge(f, dst);
+                self.add_prim(dst, prim::UNDEF);
+                self.plain_key(t, ChainAct::Load(dst));
+                return;
+            }
             return self.load_from(origin, t, Key::any(), dst);
         }
         if t == TOP {
@@ -1141,7 +1158,14 @@ impl Model {
             }
         };
         match act {
-            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => self.edge(n, dst),
+            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                if dst == self.esc_accessors {
+                    if let Some(d) = &mut self.diagnostic {
+                        d.acc_src.entry(n).or_insert(origin);
+                    }
+                }
+                self.edge(n, dst)
+            }
             ChainAct::Store(src) => match self.walk_store_pending.get_mut(&n) {
                 Some(v) => v.push(src),
                 None => self.edge(src, n),
@@ -1446,7 +1470,7 @@ impl Model {
 
     /// One step of a per-receiver accessor walk: prototype `p` of `origin`.
     /// (Values and methods come from the shared chain nodes `cv`/`cp`.)
-    pub fn chain_step(&mut self, _pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
+    pub fn chain_step(&mut self, pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
         if let ChainAct::Lookup { dst, setter } = act {
             self.lookup_holder(origin, p, key, dst, setter);
             return;
@@ -1457,6 +1481,9 @@ impl Model {
                 ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                 ChainAct::Store(src) => {
                     self.store_live(src);
+                    if let Some(d) = &mut self.diagnostic {
+                        d.store_top.entry(src).or_insert(pn);
+                    }
                     let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                 }
@@ -1611,6 +1638,20 @@ impl Model {
     pub fn accessor_hit(&mut self, origin: Tok, holder: Tok, key: Key, act: ChainAct) {
         if let ChainAct::Lookup { dst, setter } = act {
             self.accessor_functions(holder, key, dst, setter);
+            return;
+        }
+        // A key whose shape splits the holder (`shape_splits`) runs only the
+        // accessors named by a name it admits, and the computed-name ones.
+        if self.shape_splits(holder, key).is_some() {
+            let star = self.atom(crate::STAR_KEY);
+            let names = self.accessor_keys.get(&holder).cloned().unwrap_or_default();
+            for a in names {
+                if (a == star || self.key_may_name(key, a)) && self.accessors.contains_key(&(holder, a)) {
+                    let k = Key::Named(a);
+                    self.acc_group(holder, k);
+                    self.group_hit(origin, holder, k, act);
+                }
+            }
             return;
         }
         // Accessor groups are keyed by the computed key itself.
@@ -2154,6 +2195,7 @@ impl Model {
                     let n = d.cause_node;
                     for &c in calls {
                         d.unknown_calls.entry(c).or_insert((n, t == TOP));
+                        d.unknown_callee.entry(c).or_insert(t);
                     }
                 }
                 let r = if self.explain {

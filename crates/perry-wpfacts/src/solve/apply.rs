@@ -982,6 +982,11 @@ impl Model {
             }
             Cons::StoreTopProto { origin, src } => {
                 if toks.contains(&TOP) {
+                    if let Some(d) = &mut self.diagnostic {
+                        if let Some(pn) = d.cause_node {
+                            d.store_top.entry(src).or_insert(pn);
+                        }
+                    }
                     let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                     self.escape(origin, r);
@@ -2074,6 +2079,28 @@ impl Model {
                 }
                 if let (true, false, Some(fresh)) = (made, share, fresh) {
                     self.add_tok(f, fresh);
+                }
+            }
+            // Rule RT: an `exec` record's derived captures.
+            // Rule M6: String.prototype.replace of constants.
+            Cons::StrReplace {
+                dst,
+                recv,
+                search,
+                repl,
+            } => {
+                if let Some(s) = self.replace_strs(recv, search, repl) {
+                    self.add_s(dst, &[], prim::STR, s);
+                }
+            }
+            // Rule M7: the pattern of `new RegExp(P)`.
+            Cons::RegExpPattern { tok } => self.regexp_pattern(n, tok),
+            Cons::Captures { rec, pat } => {
+                for (g, p, s) in self.capture_strs(n, pat) {
+                    if p != 0 {
+                        let slot = self.index_slot(rec, g);
+                        self.add_s(slot, &[], p, s);
+                    }
                 }
             }
             Cons::ShareBuffer { ta } => {

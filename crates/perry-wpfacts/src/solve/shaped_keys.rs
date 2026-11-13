@@ -23,7 +23,7 @@
 use super::*;
 
 impl Model {
-    fn shape_splits(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
+    pub(crate) fn shape_splits(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
         match key {
             Key::Any(s)
                 if s != 0
@@ -34,6 +34,32 @@ impl Model {
                     && (!self.is_array_like(t)
                         || builtins::ordinary_box(self, t)
                         || self.is_arr(t)) =>
+            {
+                Some(s)
+            }
+            // A class prototype is an ordinary object (ECMA-262 15.7.14
+            // ClassDefinitionEvaluation: OrdinaryObjectCreate) whose own
+            // properties are String-keyed data members and accessors: a key
+            // reads only the names it admits (10.1.8.1 [[Get]], 7.3.2).
+            // A key that may be `__proto__` keeps every member.
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && matches!(self.toks[t as usize], TokKind::Proto(_))
+                    && !self.key_may_name_str(key, "__proto__") =>
+            {
+                Some(s)
+            }
+            // A class prototype is an ordinary object (ECMA-262 15.7.14
+            // ClassDefinitionEvaluation: OrdinaryObjectCreate) whose own
+            // properties are String-keyed data members and accessors: a key
+            // reads only the names it admits (10.1.8.1 [[Get]], 7.3.2).
+            // A key that may be `__proto__` keeps every member.
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && matches!(self.toks[t as usize], TokKind::Proto(_))
+                    && !self.key_may_name_str(key, "__proto__") =>
             {
                 Some(s)
             }
