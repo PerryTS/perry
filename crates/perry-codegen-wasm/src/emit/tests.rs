@@ -586,3 +586,21 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
         "quoted"
     );
 }
+
+// A property name is any string; an async body reads, writes and builds it as a literal.
+#[test]
+fn an_async_body_handles_property_names_that_need_escaping() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const o: any = { "it's": 1, "a\"b": 2 };
+  o["it's"] = o["it's"] + 10;
+  return o["it's"] + " " + o["a\"b"];
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "11 2"
+    );
+}

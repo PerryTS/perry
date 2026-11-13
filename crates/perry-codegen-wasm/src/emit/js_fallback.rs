@@ -403,7 +403,7 @@ impl WasmModuleEmitter {
                             opts.push_str(", ");
                         }
                         let v = self.emit_js_expr(val, locals);
-                        opts.push_str(&format!("'{}': getString({})", key, v));
+                        opts.push_str(&format!("{}: getString({})", js_string_literal(key), v));
                     }
                     opts.push('}');
                 }
@@ -418,7 +418,11 @@ impl WasmModuleEmitter {
                 object, property, ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
-                format!("fromJsValue(toJsValue({}).{})", obj, property)
+                format!(
+                    "fromJsValue(toJsValue({})[{}])",
+                    obj,
+                    js_string_literal(property)
+                )
             }
             Expr::PropertySet {
                 object,
@@ -429,15 +433,18 @@ impl WasmModuleEmitter {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
                 format!(
-                    "(toJsValue({}).{} = toJsValue({}), {})",
-                    obj, property, val, val
+                    "(toJsValue({})[{}] = toJsValue({}), {})",
+                    obj,
+                    js_string_literal(property),
+                    val,
+                    val
                 )
             }
             Expr::Object(fields) => {
                 let mut parts = Vec::new();
                 for (key, val) in fields {
                     let v = self.emit_js_expr(val, locals);
-                    parts.push(format!("'{}': toJsValue({})", key, v));
+                    parts.push(format!("{}: toJsValue({})", js_string_literal(key), v));
                 }
                 format!("fromJsValue({{{}}})", parts.join(", "))
             }
