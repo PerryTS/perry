@@ -784,3 +784,30 @@ main().catch((e: any) => console.log("caught " + e.message));
         "42\n7\ncaught boom"
     );
 }
+
+#[test]
+fn an_arrow_function_reads_the_this_it_was_created_with() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class B {
+  children: any;
+  n = 1;
+  add = (c: any) => { this.children = c; };
+  nested = () => { const f = () => this.n * 10; return f(); };
+  later() { return () => this.n + 1; }
+}
+const b = new B();
+b.add([7]);
+const detached = b.add;
+console.log(b.children[0]);
+detached("d");
+console.log(b.children);
+console.log(b.nested());
+const f = b.later();
+console.log(f());
+"#
+        ),
+        "7\nd\n10\n2"
+    );
+}

@@ -31,6 +31,9 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) pending_label: Option<String>,
     /// Current class name (set when compiling class methods/constructors)
     pub(super) current_class: Option<String>,
+    /// The local `this` reads: the receiver (local 0) in a method or constructor,
+    /// the captured `this` parameter in an arrow function that captures it.
+    pub(super) this_local: u32,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
     /// Completion kind while transferring to a shared finalizer.
@@ -68,6 +71,7 @@ impl<'a> FuncEmitCtx<'a> {
             label_stack: Vec::new(),
             pending_label: None,
             current_class: None,
+            this_local: 0,
             temp_local,
             temp_local_i32,
             temp_store_local: temp_local + 1,
