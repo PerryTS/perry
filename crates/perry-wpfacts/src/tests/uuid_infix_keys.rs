@@ -100,3 +100,30 @@ fn field_joined_with_argv_drops_infix() {
     let v = recv(&facts(&src));
     assert!(v.len() > 1, "{v:?}");
 }
+
+// Rule K8 (ECMA-262 7.1.19 ToPropertyKey, 7.1.17 ToString): a key that is a
+// dash-infix String or `undefined` / `null` reads the infix names and the
+// named key "undefined" / "null"; neither names an Object.prototype member.
+// three.js `_bindAction`: `root.uuid` of a root that may lack `uuid`.
+
+#[test]
+fn dash_infix_or_absent_uuid_key_reads_no_builtin_member() {
+    let v = recv(&facts(&prog(
+        "(Math.random() < 0.5 ? root : ({} as any)).uuid",
+    )));
+    assert_eq!(v, vec!["A"], "{v:?}");
+}
+
+#[test]
+fn dash_infix_or_null_key_reads_no_builtin_member() {
+    let v = recv(&facts(&prog("(Math.random() < 0.5 ? root.uuid : null)")));
+    assert_eq!(v, vec!["A"], "{v:?}");
+}
+
+#[test]
+fn argv_or_undefined_key_reads_builtin_members() {
+    let v = recv(&facts(&prog(
+        "(Math.random() < 0.5 ? process.argv[2] : undefined)",
+    )));
+    assert!(v.len() > 1, "{v:?}");
+}

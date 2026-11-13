@@ -184,12 +184,20 @@ impl Model {
         self.key_shape(Some(KeyShape { globs: vec![glob] }))
     }
 
-    /// Rule M3 for a computed key node: when it holds only Strings, each a
+    /// Rule M3 for a computed key node: when it holds Strings, each a
     /// constant or of a known prefix, and at least one prefix, the shape of
-    /// each entry; else `None` (the site's own read).
+    /// each entry; else `None` (the site's own read). Rule K8 (ECMA-262
+    /// 7.1.19, 7.1.17): beside the Strings it may hold `undefined`, `null`
+    /// and booleans, whose keys are the named "undefined", "null", "true"
+    /// and "false" the `IdxKey` rule reads for them.
     pub(crate) fn key_entry_shapes(&mut self, n: NodeId) -> Option<Vec<(Atom, KeyShapeId)>> {
         let node = &self.nodes[n as usize];
-        if node.prim != prim::STR || !node.pts.is_empty() || node.strs < STRS_SET0 {
+        let named = prim::STR | prim::BOOL | prim::NULL | prim::UNDEF;
+        if node.prim & prim::STR == 0
+            || node.prim & !named != 0
+            || !node.pts.is_empty()
+            || node.strs < STRS_SET0
+        {
             return None;
         }
         let atoms = self.str_atoms(node.strs).to_vec();

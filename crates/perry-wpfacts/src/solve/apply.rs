@@ -1516,18 +1516,17 @@ impl Model {
                     let f = self.num_fields(obj);
                     self.edge(f, dst);
                 }
-                // ToPropertyKey of `true`, `null`, `undefined` is a named key.
-                if !named {
-                    for (bit, keys) in [
-                        (prim::BOOL, &["true", "false"][..]),
-                        (prim::NULL, &["null"][..]),
-                        (prim::UNDEF, &["undefined"][..]),
-                    ] {
-                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
-                            for k in keys {
-                                let a = self.atom(k);
-                                self.load_program_key(obj, a, dst);
-                            }
+                // ToPropertyKey of `true`, `null`, `undefined` is a named key,
+                // also beside Strings read per entry (rule K8).
+                for (bit, keys) in [
+                    (prim::BOOL, &["true", "false"][..]),
+                    (prim::NULL, &["null"][..]),
+                    (prim::UNDEF, &["undefined"][..]),
+                ] {
+                    if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
+                        for k in keys {
+                            let a = self.atom(k);
+                            self.load_program_key(obj, a, dst);
                         }
                     }
                 }
