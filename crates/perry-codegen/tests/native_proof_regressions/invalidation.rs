@@ -197,6 +197,192 @@ fn inner_loop_bounded_buffer_fact_is_removed_after_outer_fact_invalidation() {
     assert_buffer_store_uses_dynamic_fallback(&ir);
 }
 
+/// A stale length source never certifies a native store. A counter-versioned
+/// loop (fa6faf8bfa, 97ce0b74eb) has two copies: the CHECKED copy keeps the
+/// `js_buffer_set` fallback, and the FAST copy is entered only when the entry
+/// guard proves the counter's last value is within the length the runtime
+/// returned for this buffer (`js_buffer_length`), not the invalidated source.
+/// So every unchecked native element address must sit in the fast copy, and a
+/// conjunct of its guard must compare against that runtime length.
+fn assert_stale_length_store_is_checked_or_runtime_versioned(ir: &str) {
+    let body = probe_body(ir);
+    let geps = native_proof_support::native_buffer_element_geps(body);
+    if geps.is_empty() {
+        assert_buffer_store_uses_dynamic_fallback(ir);
+        return;
+    }
+    assert!(
+        body.contains("call void @js_buffer_set"),
+        "the checked copy must keep the Buffer store fallback:\n{body}"
+    );
+    let defs: std::collections::HashMap<&str, &str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect();
+    let guard = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 ") && line.contains("label %for.counter.fast."))
+        .unwrap_or_else(|| {
+            panic!("native buffer GEP(s) {geps:?} outside a counter-versioned loop:\n{body}")
+        });
+    let label_after = |line: &str, prefix: &str| -> String {
+        let at = line.find(prefix).expect("branch label") + "label %".len();
+        line[at..]
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let copy_entry = |dispatch: &str| -> usize {
+        let block = block_between(body, &format!("\n{dispatch}:"), "\n\n");
+        let target = label_after(block, "label %");
+        body.find(&format!("\n{target}:"))
+            .unwrap_or_else(|| panic!("missing loop copy {target}:\n{body}"))
+    };
+    let fast = copy_entry(&label_after(guard, "label %for.counter.fast."));
+    let checked = copy_entry(&label_after(guard, "label %for.counter.checked."));
+    for gep in &geps {
+        let at = body.find(&format!("\n  {gep} = ")).expect("GEP definition");
+        let in_fast = if fast < checked {
+            (fast..checked).contains(&at)
+        } else {
+            at >= fast
+        };
+        assert!(
+            in_fast,
+            "native buffer GEP {gep} outside the guarded fast copy:\n{body}"
+        );
+    }
+    // The guard: `and i1` conjuncts down to an `icmp sle i64 %last, %len` whose
+    // `%len` widens a slot written only from `js_buffer_length`.
+    let runtime_length_slot = |slot: &str| {
+        let stores: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("store i32 ") && line.ends_with(&format!(", ptr {slot}"))
+            })
+            .collect();
+        !stores.is_empty()
+            && stores.iter().all(|line| {
+                let value = line["store i32 ".len()..].split(',').next().unwrap();
+                defs.get(value)
+                    .is_some_and(|def| def.starts_with("call i32 @js_buffer_length("))
+            })
+    };
+    let runtime_bound = |def: &str| {
+        def.strip_prefix("icmp sle i64 ")
+            .and_then(|ops| ops.split(", ").nth(1))
+            .and_then(|len| defs.get(len))
+            .and_then(|def| def.strip_prefix("zext i32 "))
+            .and_then(|wide| defs.get(wide.split(' ').next().unwrap()))
+            .and_then(|def| def.strip_prefix("load i32, ptr "))
+            .is_some_and(runtime_length_slot)
+    };
+    let mut work = vec![guard["br i1 ".len()..].split(',').next().unwrap()];
+    let mut found = false;
+    while let Some(reg) = work.pop() {
+        let Some(def) = defs.get(reg) else { continue };
+        if let Some(ops) = def.strip_prefix("and i1 ") {
+            work.extend(ops.split(", ").filter(|op| op.starts_with('%')));
+        } else if runtime_bound(def) {
+            found = true;
+        }
+    }
+    assert!(
+        found,
+        "fast copy with native buffer GEP(s) {geps:?} is not guarded by the runtime \
+         buffer length:\n{body}"
+    );
+}
+
+/// What the local length bound cannot prove, the entry guard of a
+/// counter-versioned loop must test: for `i <= n` the guard's end is the
+/// bound PLUS ONE (`counter_entry_check`: `last = bound` for `<=`, the end is
+/// `last + 1`), and for a counter that may start below zero the guard tests
+/// the counter's entry value `>= 0`. Either the store stays the checked
+/// `js_buffer_set` alone, or [`assert_stale_length_store_is_checked_or_runtime_versioned`]
+/// holds AND the guard carries these conjuncts.
+fn assert_out_of_range_counter_store_is_entry_guarded(ir: &str, inclusive: bool) {
+    assert_stale_length_store_is_checked_or_runtime_versioned(ir);
+    let body = probe_body(ir);
+    if native_proof_support::native_buffer_element_geps(body).is_empty() {
+        return;
+    }
+    let defs: std::collections::HashMap<&str, &str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect();
+    let guard = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 ") && line.contains("label %for.counter.fast."))
+        .expect("checked above: a counter-versioned loop");
+    let mut conjuncts = Vec::new();
+    let mut work = vec![guard["br i1 ".len()..].split(',').next().unwrap()];
+    while let Some(reg) = work.pop() {
+        let Some(def) = defs.get(reg) else { continue };
+        if let Some(ops) = def.strip_prefix("and i1 ") {
+            work.extend(ops.split(", ").filter(|op| op.starts_with('%')));
+        } else {
+            conjuncts.push(*def);
+        }
+    }
+    // The counter slot: the one the fast copy's condition compares.
+    let fast_entry = guard
+        .split("label %")
+        .nth(1)
+        .and_then(|l| l.split([',', ' ']).next())
+        .expect("fast label");
+    let entry_block = block_between(body, &format!("\n{fast_entry}:"), "\n\n");
+    let cond_label = entry_block
+        .rsplit("label %")
+        .next()
+        .and_then(|l| l.split([',', ' ', '\n']).next())
+        .expect("fast copy branches to its condition");
+    let cond_block = block_between(body, &format!("\n{cond_label}:"), "\n\n");
+    let counter_slot = cond_block
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.split_once(" = load i32, ptr ").map(|(_, slot)| slot))
+        .unwrap_or_else(|| panic!("the fast condition loads its counter:\n{cond_block}"));
+    let counter_floor = conjuncts.iter().any(|def| {
+        def.strip_prefix("icmp sge i32 ")
+            .and_then(|ops| ops.strip_suffix(", 0"))
+            .and_then(|x| defs.get(x))
+            .is_some_and(|load| *load == format!("load i32, ptr {counter_slot}"))
+    });
+    assert!(
+        counter_floor,
+        "the fast copy's guard must test the counter's entry value >= 0 \
+         (counter slot {counter_slot}); conjuncts {conjuncts:?}:\n{body}"
+    );
+    if inclusive {
+        // `end = last + 1` with `last` the sign-extended bound itself, not `bound - 1`.
+        let end_is_bound_plus_one = conjuncts.iter().any(|def| {
+            def.strip_prefix("icmp sle i64 ")
+                .and_then(|ops| ops.split(", ").next())
+                .and_then(|end| defs.get(end))
+                .and_then(|end| end.strip_prefix("add i64 "))
+                .and_then(|ops| ops.strip_suffix(", 1"))
+                .and_then(|last| defs.get(last))
+                .is_some_and(|last| last.starts_with("sext i32 "))
+        });
+        assert!(
+            end_is_bound_plus_one,
+            "for `i <= n` the guard must admit only `n + 1 <= length`; \
+             conjuncts {conjuncts:?}:\n{body}"
+        );
+    }
+}
+
 #[test]
 fn localset_invalidates_buffer_view_local_length_sources() {
     let body = vec![
@@ -208,7 +394,7 @@ fn localset_invalidates_buffer_view_local_length_sources() {
     ];
 
     let ir = compile_ir("buffer_length_source_invalidation.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    assert_stale_length_store_is_checked_or_runtime_versioned(&ir);
 }
 
 #[test]
@@ -295,6 +481,13 @@ fn inclusive_length_loop_does_not_emit_inbounds_buffer_gep() {
     let ir = compile_ir("inclusive_length_loop_buffer_bounds.ts", body);
     assert_buffer_store_uses_dynamic_fallback(&ir);
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
+    // An overflow-exit counter leaves on its overflow flag first; the bound
+    // compare is in the in-range block that branch continues to.
+    let cond_ir = if cond_ir.contains("label %for.cond.in_range.") {
+        block_between(&ir, "\nfor.cond.in_range.", "\n\n")
+    } else {
+        cond_ir
+    };
     assert!(
         cond_ir.contains("icmp sle i32"),
         "`i <= buf.length` with hoisted i32 length must lower as signed <=:\n{cond_ir}"
@@ -708,6 +901,12 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
     );
 }
 
+/// The loops below are compiled with the quiet-site facts the solve gives a
+/// local Array literal (`with_quiet_sites`): since #14537 a facts-less
+/// compile refuses every ordinary hoist, so without them these claims would
+/// hold whatever the walker does with the alias. With every site claimed
+/// quiet, the only reason left to drop the proof is the length change
+/// itself.
 fn assert_array_alias_blocks_loop_proof(ir: &str) {
     let cond_ir = block_between(ir, "\nfor.cond.", "\nfor.body.");
     assert!(
@@ -745,7 +944,7 @@ fn local_array_alias_push_blocks_length_and_bounds_proofs() {
         field_writeback: None,
     });
 
-    let ir = compile_ir("array_alias_push_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_push_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -753,7 +952,7 @@ fn local_array_alias_push_blocks_length_and_bounds_proofs() {
 fn local_array_alias_pop_blocks_length_and_bounds_proofs() {
     let body = aliased_array_loop(Expr::ArrayPop(2));
 
-    let ir = compile_ir("array_alias_pop_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_pop_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -766,7 +965,7 @@ fn local_array_alias_splice_blocks_length_and_bounds_proofs() {
         items: vec![int(1)],
     });
 
-    let ir = compile_ir("array_alias_splice_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_splice_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -780,7 +979,7 @@ fn local_array_alias_length_set_blocks_length_and_bounds_proofs() {
         byte_end: 0,
     });
 
-    let ir = compile_ir("array_alias_length_set_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_length_set_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -817,7 +1016,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_container_alias_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_container_alias_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -842,7 +1041,7 @@ fn direct_array_length_set_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_length_set_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_length_set_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -859,7 +1058,7 @@ fn non_mutating_array_alias_preserves_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_non_mutating_alias_keeps_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_non_mutating_alias_keeps_loop_proof.ts", body);
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
     assert!(
         !cond_ir.contains("plen."),
@@ -886,7 +1085,7 @@ fn loop_length_effect_artifact_records_consumed_preservation_fact() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_loop_length_effect_preserves.ts", body.clone());
+    let ir = compile_ir_quiet("array_loop_length_effect_preserves.ts", body.clone());
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
     assert!(
         !cond_ir.contains("plen."),
@@ -897,7 +1096,8 @@ fn loop_length_effect_artifact_records_consumed_preservation_fact() {
         "accepted length effect should keep bounded IndexSet facts:\n{ir}"
     );
 
-    let artifact = compile_artifact_json("artifact_array_loop_length_effect_preserves.ts", body);
+    let artifact =
+        compile_artifact_json_quiet("artifact_array_loop_length_effect_preserves.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -929,7 +1129,7 @@ fn async_microtask_effect_blocks_length_and_bounds_proofs_with_artifact_reason()
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_await_blocks_loop_proof.ts", body.clone());
+    let ir = compile_ir_quiet("array_await_blocks_loop_proof.ts", body.clone());
     assert_array_alias_blocks_loop_proof(&ir);
 
     let artifact = compile_artifact_json("artifact_array_await_blocks_loop_proof.ts", body);
@@ -961,7 +1161,7 @@ fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
         vec![int(1)],
     ));
 
-    let ir = compile_ir("array_alias_generic_call_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_generic_call_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -981,7 +1181,11 @@ fn generic_call_blocks_length_and_bounds_proofs_even_without_direct_array_arg() 
     ];
     let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
 
-    let ir = compile_ir_with_opts("array_unknown_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_unknown_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1005,7 +1209,11 @@ fn nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
-    let ir = compile_ir_with_opts("array_nested_escape_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_nested_escape_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1029,7 +1237,11 @@ fn object_nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
-    let ir = compile_ir_with_opts("array_object_escape_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_object_escape_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1048,7 +1260,7 @@ fn native_method_call_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_native_call_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_native_call_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1072,7 +1284,7 @@ fn loop_local_array_alias_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("loop_local_array_alias_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("loop_local_array_alias_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1189,7 +1401,9 @@ fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
     ];
 
     let ir = compile_ir("inclusive_local_length_bound.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    // The loop is counter-versioned (fa6faf8bfa / 97ce0b74eb): its fast copy
+    // takes native stores only behind an entry guard on the runtime length.
+    assert_out_of_range_counter_store_is_entry_guarded(&ir, true);
 }
 
 #[test]
@@ -1208,7 +1422,7 @@ fn negative_loop_counter_does_not_use_local_length_bound_fact() {
     ];
 
     let ir = compile_ir("negative_counter_local_length_bound.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    assert_out_of_range_counter_store_is_entry_guarded(&ir, false);
 }
 
 #[test]

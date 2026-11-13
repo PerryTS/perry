@@ -974,7 +974,7 @@ pub(super) fn is_array_like_value(value: f64) -> bool {
     unsafe {
         matches!(
             gc_type_for_ptr(raw),
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY)
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY)
         )
     }
 }
@@ -1828,7 +1828,7 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
 
     unsafe {
         match gc_type_for_ptr(raw) {
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunks(raw, out, depth);
             }
             Some(crate::gc_object_type_pat!()) => {

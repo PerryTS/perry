@@ -125,7 +125,9 @@ impl<'a> Gen<'a> {
             }
         }
         let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
-        if byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
+        // Every call with a source offset: a method call, a direct call of
+        // a function, a call of any other callee value.
+        if byte_offset != 0 {
             self.call_results_at.push((fx.module, byte_offset, result));
         }
         result
@@ -197,6 +199,10 @@ impl<'a> Gen<'a> {
                     }
                 }
                 self.own_test_recv = Some(o);
+                if property == "push" {
+                    // A `push` site, for the list births it may reach.
+                    self.list_push(o, spread.is_empty().then_some(args.len() as u32));
+                }
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 let (off, end) = if *pb != 0 {
@@ -563,6 +569,7 @@ impl<'a> Gen<'a> {
         // default is not.
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (false, 0);
+        let list_saved = self.list_enter_body();
         #[cfg(test)]
         let packet_prior = self.m.packet_body(f);
         #[cfg(test)]
@@ -590,6 +597,7 @@ impl<'a> Gen<'a> {
             self.m.packet_end(packet_prior, true);
         }
         (self.order_ok, self.loop_depth) = saved;
+        self.list_body = list_saved;
         let _: &Vec<Stmt> = body;
     }
 
@@ -686,6 +694,12 @@ impl<'a> Gen<'a> {
             let site = self.m.calls[call as usize].site;
             if let Some(k) = birth_len {
                 self.m.arr_len_at_site.entry(site).or_default().len = Some(k);
+            }
+            // A push-filled `new Array()` (`push_fills`): born empty, so
+            // without a hole, and with its fill's final length.
+            if let Some(fill) = self.push_fill_new.take() {
+                self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
+                self.m.push_fill_new_sites.insert(site, fill);
             }
             // The fused fill (`call_with`) marks this birth after it.
             self.new_array_site = Some(site);
@@ -1164,6 +1178,7 @@ impl<'a> Gen<'a> {
                 // generator's step closure (a generator object is its step).
                 let nk = Key::Named(self.m.atom("next"));
                 let res = self.mcall(it, nk, vec![v], vec![]);
+                self.step_done(res);
                 let va = self.m.atom("value");
                 let raw = self.load(res, Key::Named(va));
                 let out = self.tmp("delegate-step");
@@ -1191,6 +1206,7 @@ impl<'a> Gen<'a> {
                 };
                 let a = self.m.atom(k);
                 let out = self.mcall(it, Key::Named(a), vec![v], vec![]);
+                self.step_done(out);
                 if k == "throw" {
                     let ra = self.m.atom("return");
                     let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);

@@ -638,3 +638,21 @@ mod installer_registration_tests {
         });
     }
 }
+
+/// `family_never`: a family is claimed never only when every registered
+/// image claims it. The number of images, an image's registration index,
+/// and the most there can be.
+pub(crate) const MAX_IMAGES: usize = MAX_FEATURE_INSTALLERS;
+pub(crate) fn registered_images() -> usize {
+    FEATURE_INSTALLER_COUNT
+        .load(Ordering::Acquire)
+        .min(MAX_FEATURE_INSTALLERS)
+}
+pub(crate) fn image_index(installer: extern "C" fn()) -> Option<usize> {
+    FEATURE_INSTALLERS[..registered_images()]
+        .iter()
+        .position(|slot| {
+            slot.peek()
+                .is_some_and(|known| known as usize == installer as usize)
+        })
+}

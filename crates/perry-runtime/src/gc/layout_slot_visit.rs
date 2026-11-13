@@ -216,7 +216,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
         // uninitialised padding into the address and hide the edge.
         let descriptor = if matches!(
             (*header).obj_type,
-            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | crate::gc_array_type_pat!()
         ) {
             pointer_slot(slot.cast())
         } else {
@@ -638,6 +638,11 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
             }
         }
         GcRewriteDescriptorKind::Box => visit(fixed_slot(user_ptr as *mut u64)),
+        GcRewriteDescriptorKind::RecordArray => {
+            // The head's only traced edge: its element buffer, a pointer-free
+            // leaf, or null while the capacity is 0.
+            visit(pointer_slot(crate::record_array::elems_slot(user_ptr)));
+        }
         GcRewriteDescriptorKind::Scope => {
             let slots = user_ptr as *mut u64;
             for i in 0..crate::r#box::scope::scope_slot_count(header) {

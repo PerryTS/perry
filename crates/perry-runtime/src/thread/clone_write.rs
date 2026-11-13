@@ -555,7 +555,7 @@ impl Writer<'_> {
             return self.pointer(POINTER_TAG | live as u64);
         }
         match header.obj_type {
-            gc::GC_TYPE_ARRAY => self.array(addr, addr),
+            crate::gc_array_type_pat!() => self.array(addr, addr),
             gc::GC_TYPE_LAZY_ARRAY => {
                 let lazy = addr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
@@ -670,7 +670,10 @@ impl Writer<'_> {
         let capacity = (*arr).capacity as usize;
         if self.mode == CloneMode::Message {
             let data_layout = self.data_array_layout(arr);
+            // A sparse Array (`length > capacity`) has no `length` slots to
+            // copy, whatever its layout word says.
             if data_layout
+                && len <= capacity
                 && crate::array::array_numeric_layout_resolved(arr)
                     == Some(crate::array::NumericArrayLayout::RawF64)
             {

@@ -32,6 +32,12 @@ mod async_lifecycle;
 mod mock;
 mod phases;
 mod store;
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(unused_imports)
+)]
+pub(crate) use store::snap_pending_timers;
 
 use crate::promise::{js_promise_new, Promise};
 use async_lifecycle::enqueue_destroy_ids;

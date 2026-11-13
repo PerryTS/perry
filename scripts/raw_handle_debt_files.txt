@@ -82,13 +82,6 @@
 13 crates/perry-runtime/src/event_target.rs
 3 crates/perry-runtime/src/frame.rs
 3 crates/perry-runtime/src/fs/dir_glob_watch/watch.rs
-3 crates/perry-runtime/src/gc/tests/copying.rs
-1 crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs
-4 crates/perry-runtime/src/gc/tests/helper_stores.rs
-47 crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs
-4 crates/perry-runtime/src/gc/tests/runtime_roots/fs_options_object.rs
-3 crates/perry-runtime/src/gc/tests/runtime_roots/hook_dispatch_handles.rs
-10 crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs
 11 crates/perry-runtime/src/json/replacer.rs
 26 crates/perry-runtime/src/json/reviver.rs
 1 crates/perry-runtime/src/json/stringify_scalars.rs
@@ -99,10 +92,7 @@
 2 crates/perry-runtime/src/node_stream_dispatch.rs
 8 crates/perry-runtime/src/node_stream_iter_helpers.rs
 26 crates/perry-runtime/src/node_stream_pipeline.rs
-7 crates/perry-runtime/src/node_stream_tests.rs
-10 crates/perry-runtime/src/node_stream_tests_extra.rs
 4 crates/perry-runtime/src/node_submodules/mod.rs
-4 crates/perry-runtime/src/node_submodules/test.rs
 3 crates/perry-runtime/src/object/alloc.rs
 2 crates/perry-runtime/src/object/array_object_ops.rs
 7 crates/perry-runtime/src/object/assign.rs  # moved-from: crates/perry-runtime/src/object/alloc.rs
@@ -116,7 +106,6 @@
 8 crates/perry-runtime/src/object/field_set_by_name/fast_paths.rs
 9 crates/perry-runtime/src/object/field_set_by_name/tail.rs
 8 crates/perry-runtime/src/object/global_this/populate.rs
-5 crates/perry-runtime/src/object/global_this_webassembly.rs
 2 crates/perry-runtime/src/object/meta_accessors.rs
 3 crates/perry-runtime/src/object/namespace_create.rs
 1 crates/perry-runtime/src/object/native_call_method/object_proto.rs

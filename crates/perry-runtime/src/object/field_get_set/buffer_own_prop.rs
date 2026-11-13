@@ -42,6 +42,12 @@ pub(super) fn buffer_own_prop_or_method(
     if let Some(v) = crate::buffer::buffer_get_own_prop(obj as usize, name) {
         return Some(JSValue::from_bits(v.to_bits()));
     }
+    // BUFEQ: once the program wrote `Buffer.prototype`, its own member is
+    // what the chain holds; the bound builtin below is the unwritten answer.
+    if let Some(member) = crate::object::buffer_dispatch::buffer_written_member(obj as usize, name)
+    {
+        return Some(member);
+    }
     // The bound closure keeps the name POINTER and re-reads it at call time
     // (`dispatch_bound_method`), so it must not point into the key string:
     // that is a movable GC heap allocation, and `key_bytes` borrows its
@@ -91,7 +97,9 @@ fn view_kind_getter(addr: usize, key_bytes: &[u8]) -> Option<JSValue> {
                 )
                 .to_bits(),
             )),
-            b"byteOffset" => Some(JSValue::number(crate::buffer::buffer_byte_offset(addr) as f64)),
+            b"byteOffset" => Some(JSValue::number(
+                crate::buffer::buffer_byte_offset(addr) as f64
+            )),
             _ => None,
         };
     }

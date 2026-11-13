@@ -78,6 +78,10 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         m.diagnostic_builtin(call, |_| format!("Function.prototype.{name}"));
     }
 
+    // A generator object's inherited members (`gen_members`).
+    if gen_members::call(m, t, name, call) {
+        return;
+    }
     let c = m.calls[call as usize].clone();
     match name {
         // A well-known-symbol member of `Function.prototype`: only
@@ -251,6 +255,20 @@ fn gen_throw_passes(
 }
 
 // ------------------------------------------------------------- arrays
+
+/// Position value `n` of `c` where the position may also be absent: with
+/// a spread argument (`Model::positional`) the argument list may end before
+/// it, and the rule then reads `undefined` there (a `thisArg`).
+fn maybe_absent(m: &mut Model, c: &CallSite, n: NodeId) -> NodeId {
+    if c.spread.is_empty() {
+        return n;
+    }
+    let v = m.node_l("spread-arg-or-absent");
+    m.nodes[v as usize].frame = m.nodes[n as usize].frame;
+    m.edge(n, v);
+    m.add_prim(v, prim::UNDEF);
+    v
+}
 
 pub(super) fn cb_call(
     m: &mut Model,
@@ -558,6 +576,16 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
+    m.step_done(r1);
+    m.step_done(r2);
+    // IteratorClose (ECMA-262 7.4.11): a built-in consumer that stops
+    // before the iterator is done (its callback or adder threw, an entry
+    // was no object) calls `return` on it.
+    if m.reach_iter_close {
+        let ra = Key::Named(m.atom("return"));
+        let _ = sub(m, it, ra);
+        let _ = sub(m, v, ra);
+    }
     out
 }
 
@@ -605,8 +633,8 @@ pub(super) fn entry_pairs(m: &mut Model, call: CallId, values: NodeId, index: bo
 /// Methods of a builtin iterator: `next()` gives `{ value, done }` over its
 /// values; `[Symbol.iterator]()` is itself; the iterator helpers run their
 /// callback on the values. Builtin iterators have no `return`/`throw`.
-fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
-    let c = m.calls[call as usize].clone();
+pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
+    let c = m.positional(call, 2);
     let elems = iter_elems(m, t);
     let num = m.node_l("num");
     m.add_prim(num, prim::NUM);
@@ -676,6 +704,9 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
             match c.args.get(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
+            }
+            if !c.spread.is_empty() {
+                m.edge(elems, acc);
             }
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num]);
             m.edge(r, acc);
@@ -1023,6 +1054,10 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if !crate::const_arrays::method_reads_only(name) {
         m.arr_written(t);
     }
+    if !keeps_length {
+        // `push` included: it is no `keeps_length` name (`held_lengths`).
+        m.len_event(t, call, true);
+    }
     if name == Some("push") {
         m.arr_len_append(t);
     } else if !keeps_length {
@@ -1032,7 +1067,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     } else if matches!(name, Some("reverse" | "copyWithin")) {
         m.arr_len_permuted(t);
     }
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 3);
     let elems = m.field_any(t);
     // Every method here reads or writes the receiver's indices through its
     // [[Get]] and [[Set]] (ECMA-262 23.1.3), hand-modeled or declared: the
@@ -1046,8 +1081,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // I32 at rest: the fused fill's own receiver relay (`rest_elems`).
         m.rest_fill_relays.push(recv);
     }
-    let this_arg = |i: usize| match c.args.get(i) {
-        Some(&n) => ThisArg::Node(n),
+    let this_arg = |m: &mut Model, i: usize| match c.args.get(i) {
+        Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
         None => ThisArg::Undef,
     };
     match name {
@@ -1122,7 +1157,11 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             // `flat` keep the general birth.
             let dense =
                 matches!(name, Some("slice" | "toReversed" | "with" | "toSpliced")) && m.is_arr(t);
-            let out = if dense {
+            // `slice` of an Array bears a plain Array (`site_slice_arr`).
+            let plain_copy = name == Some("slice") && m.slice_births && dense;
+            let out = if plain_copy {
+                site_slice_arr(m, call)
+            } else if dense {
                 site_dense_arr(m, call)
             } else {
                 site_tmpl(m, call, "Array")
@@ -1196,7 +1235,8 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             let Some(&cb) = c.args.first() else {
                 return;
             };
-            let r = cb_call(m, call, cb, this_arg(1), vec![elems, num, recv]);
+            let this = this_arg(m, 1);
+            let r = cb_call(m, call, cb, this, vec![elems, num, recv]);
             match name {
                 Some("flatMap") => {
                     let out = site_tmpl(m, call, "Array");
@@ -1228,6 +1268,9 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             match c.args.get(1) {
                 Some(&i) => m.edge(i, acc),
                 None => m.edge(elems, acc),
+            }
+            if !c.spread.is_empty() {
+                m.edge(elems, acc);
             }
             let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
             m.edge(r, acc);
@@ -1332,7 +1375,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
     }
 
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 2);
     let elems = m.field_any(t);
     // The four collection kinds share one model of their contents; a
     // member no arm models is looked up on the kind's own chain.
@@ -1392,13 +1435,18 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             for &a in &c.args {
                 m.edge(a, elems);
             }
+            if kind == "Map" && name == Some("set") {
+                m.map_set(t, &c.args, !c.spread.is_empty());
+            }
             ret_tok(m, call, t);
         }
         ("Collection", Some("get")) => {
             if let Some(&k) = c.args.first() {
                 m.identity(k, IdentityRoute::Collection);
             }
-            m.edge(elems, c.ret);
+            // A Map's values, not its keys (`solve/map_vals.rs`).
+            let vals = if kind == "Map" { m.map_vals(t) } else { elems };
+            m.edge(vals, c.ret);
             ret_prim(m, call, prim::UNDEF);
         }
         ("Collection", Some("has" | "delete")) => {
@@ -1422,7 +1470,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 let recv = m.node_l("coll");
                 m.add_tok(recv, t);
                 let this = match c.args.get(1) {
-                    Some(&n) => ThisArg::Node(n),
+                    Some(&n) => ThisArg::Node(maybe_absent(m, &c, n)),
                     None => ThisArg::Undef,
                 };
                 let _ = cb_call(m, call, cb, this, vec![elems, elems, recv]);
@@ -1460,7 +1508,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     adopt(m, call, r, ov);
                 }
             }
-            if name == Some("finally") || on_ok.is_none() {
+            if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
                 m.edge(v, ov);
             }
             ret_tok(m, call, out);
@@ -1719,7 +1767,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "mapGroups" | "hostrecord",
+            | "fromEntries" | "hostrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

@@ -289,7 +289,7 @@ unsafe fn object_value_to_array(
     bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
 ) -> Option<*mut ArrayHeader> {
-    value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_ARRAY)
+    value_points_to_gc_type(bits, valid_ptrs, crate::gc_array_type_pat!())
         .map(|ptr| ptr as *mut ArrayHeader)
 }
 
@@ -831,7 +831,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         weak_target_should_clear_copied(target_bits, self.ptrs)
     }
     unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
-        classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
+        classify_gc_type_child(bits, self.ptrs, crate::gc_array_type_pat!())
             .map(|ptr| ptr as *mut ArrayHeader)
     }
     unsafe fn as_live_object_with_class(

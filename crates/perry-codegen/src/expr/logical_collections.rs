@@ -276,7 +276,7 @@ fn lower_captureless_some_inline(
             let type_addr = blk.sub(I64, &raw, "8");
             let type_ptr = blk.inttoptr(I64, &type_addr);
             let obj_type = blk.load(I8, &type_ptr);
-            let is_array = blk.icmp_eq(I8, &obj_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &obj_type);
             let flags_addr = blk.sub(I64, &raw, "7");
             let flags_ptr = blk.inttoptr(I64, &flags_addr);
             let gc_flags = blk.load(I8, &flags_ptr);
@@ -588,7 +588,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             Ok(ctx.block().bitcast_i64_to_double(bits))
         }
-        Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
+        Expr::Logical { op, left, right } => {
+            // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+            if matches!(op, perry_hir::LogicalOp::Coalesce) {
+                if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+                    return Ok(ctx
+                        .block()
+                        .sitofp(crate::types::I32, &v, crate::types::DOUBLE));
+                }
+                // An Array of Numbers: the nullish test is on the read's
+                // miss arm only (`index_get::rep_default`).
+                if let Some(v) = super::index_get::rep_default::try_lower(ctx, left, right, false)?
+                {
+                    return Ok(v);
+                }
+            }
+            lower_logical(ctx, *op, left, right)
+        }
 
         // -------- arr.filter(callback) --------
         // Mirrors ArrayMap: takes a closure header pointer, returns
@@ -1555,6 +1571,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         } else {
                             // The helper returns the current (possibly new or
                             // evacuated) accumulator; publish it in the root.
+                            // It is born with room for the keys the literal
+                            // defines after this part.
+                            let tail = parts[index + 1..]
+                                .iter()
+                                .filter(|(key, _)| key.is_some())
+                                .count()
+                                .to_string();
                             acc.advance(
                                 ctx,
                                 if index == 0 {
@@ -1562,7 +1585,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 } else {
                                     "js_object_spread_fresh"
                                 },
-                                &[Arg::Plain(DOUBLE, &value)],
+                                &[Arg::Plain(DOUBLE, &value), Arg::Plain(I32, &tail)],
                             );
                         }
                     }
@@ -1585,12 +1608,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(site) = crate::layout_desc::create_families::site(ctx, expr) {
                 return crate::layout_desc::create_families::lower_assign(ctx, &site, expr);
             }
-            let target_box = lower_expr(ctx, target)?;
-            let acc = ctx.block().call(
-                DOUBLE,
-                "js_object_assign_validate_target",
-                &[(DOUBLE, &target_box)],
-            );
+            // `Object.assign({}, s, ...)`: the empty literal (`Expr::Object`,
+            // or the keyless literal-shape class it lowers to) is visible to
+            // nothing until the first copy, so it is created after `s` is
+            // evaluated, born with room for `s`'s own keys.
+            let empty_literal = match &**target {
+                Expr::Object(props) => props.is_empty(),
+                Expr::New {
+                    class_name, args, ..
+                } => {
+                    args.is_empty()
+                        && ctx
+                            .classes
+                            .get(class_name)
+                            .is_some_and(|c| c.is_literal_shape() && c.fields.is_empty())
+                }
+                _ => false,
+            };
+            let (acc, sources) = match sources.split_first() {
+                Some((first, rest)) if empty_literal => {
+                    let first_box = lower_expr(ctx, first)?;
+                    let acc =
+                        ctx.block()
+                            .call(DOUBLE, "js_object_assign_fresh", &[(DOUBLE, &first_box)]);
+                    (acc, rest)
+                }
+                _ => {
+                    let target_box = lower_expr(ctx, target)?;
+                    let acc = ctx.block().call(
+                        DOUBLE,
+                        "js_object_assign_validate_target",
+                        &[(DOUBLE, &target_box)],
+                    );
+                    (acc, sources.as_slice())
+                }
+            };
             // Stash target in a temp slot if there are multiple sources, so
             // each helper call uses the same SSA value (defensive: helper
             // returns target_f64 unchanged, but the chain is clearer when we

@@ -14,10 +14,40 @@ fn site_top(pf: &ProgramFacts, key: &str) -> bool {
     pf.sites.iter().filter(|s| s.key == key).any(|s| s.top)
 }
 
+/// No ⊤ origin of the dump names a host global. The `# family_reach` lines
+/// are not ⊤ origins: since #14563 a family's reason names what made it live,
+/// and `L2:global Intl` says the solve resolved the read of `Intl` to the
+/// realm's declared namespace (the opposite of ⊤), so they are not searched.
 fn no_host_top(pf: &ProgramFacts) {
     let d = pf.dump_text();
-    for t in ["global Intl", "global performance", "native module ref node:perf_hooks.performance"] {
-        assert!(!d.contains(t), "`{t}` still read as ⊤:\n{d}");
+    let origins: Vec<&str> = d
+        .lines()
+        .filter(|l| !l.starts_with("# family_reach"))
+        .collect();
+    for t in [
+        "global Intl",
+        "global performance",
+        "native module ref node:perf_hooks.performance",
+    ] {
+        assert!(
+            !origins.iter().any(|l| l.contains(t)),
+            "`{t}` still read as ⊤:\n{d}"
+        );
+    }
+}
+
+/// No node of the program holds ⊤: with the family_reach fact computed, no
+/// family is live by rule L1 ("a value is unknown"), which fires for the first
+/// node that holds ⊤ anywhere in the solve.
+fn no_unknown_value(pf: &ProgramFacts) {
+    let d = pf.dump_text();
+    if let Some(fr) = &pf.family_reach {
+        let l1: Vec<String> = fr
+            .dump_lines()
+            .into_iter()
+            .filter(|l| l.contains(" reason=L1:"))
+            .collect();
+        assert!(l1.is_empty(), "a value of the program is ⊤: {l1:?}\n{d}");
     }
 }
 
@@ -40,6 +70,7 @@ fn intl_collator_reads_its_options_and_gives_them_to_no_one() {
     "#,
     );
     no_host_top(&pf);
+    no_unknown_value(&pf);
     assert!(!esc(&pf, "P"), "{}", pf.dump_text());
     assert!(!site_top(&pf, "usage"), "{}", pf.dump_text());
 }

@@ -1277,6 +1277,7 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
         hir,
         &super::definite_init::collect(hir),
         &Default::default(),
+        &Default::default(),
     )
 }
 
@@ -1287,6 +1288,7 @@ pub fn collect_spec_abi_facts_with(
     hir: &Module,
     definite: &super::DefiniteInit,
     proven_int32: &std::collections::BTreeSet<u32>,
+    native_member_calls: &std::collections::BTreeSet<u32>,
 ) -> SpecAbiModuleFacts {
     let mut scan = scan_whole_module(hir);
 
@@ -1383,7 +1385,7 @@ pub fn collect_spec_abi_facts_with(
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
     // storage, and `buffer.transfer()` detaches it.
-    let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
+    let exposed = super::sealed_buffers::buffer_exposure(hir, native_member_calls).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
             let Stmt::Let {

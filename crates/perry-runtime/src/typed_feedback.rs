@@ -651,7 +651,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
                 STABLE_VALUE_POINTER,
             );
         }
-        if gc_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(gc_type) {
             return (
                 0,
                 gc_type as u16,
@@ -707,7 +707,7 @@ fn helper_return_facts(bits: u64) -> (LayoutWord, u32, u16, u64, u16) {
     }
 
     match raw_heap_type(addr) as u8 {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
             let (class_id, heap_type, aux, element_kind) = classify_array(addr, None);
             (LayoutWord(0), class_id, heap_type, aux, element_kind)
         }
@@ -1273,7 +1273,7 @@ fn plain_array_index_guard_impl(
         // patterns. Same applies to the sibling check in
         // `numeric_array_push_guard`. Do not remove either arm without
         // routing the guard through `clean_arr_ptr`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1409,7 +1409,7 @@ fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
     unsafe {
         // A pre-grow pointer is rejected before any length/capacity read
         // (#6486); see `plain_array_index_guard_impl`.
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -1805,7 +1805,7 @@ fn numeric_array_push_guard(arr: *const ArrayHeader, value: f64) -> bool {
         return false;
     };
     unsafe {
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header).obj_type)
             || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -2278,6 +2278,11 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
+        // A null / undefined receiver behind an Array annotation: node's
+        // TypeError (RequireObjectCoercible), never `undefined`.
+        if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+            return crate::value::js_dyn_index_get(receiver, index);
+        }
         return f64::from_bits(TAG_UNDEFINED);
     }
 
@@ -2310,7 +2315,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
     {
         if let Some(key) = crate::buffer::canonical_index_key(index) {
             return crate::buffer::buffer_read_own_prop(raw_addr, &key)
-                .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw_addr, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
@@ -2338,7 +2343,7 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // Fast path: a plain non-negative integer double indexes
                 // element storage directly.
                 if is_plain_number_bits(index.to_bits())
@@ -2372,7 +2377,12 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
                     key_ptr,
                 )
             }
-            _ => f64::from_bits(TAG_UNDEFINED),
+            // Any other object behind a `T[]` site (a Date, a Promise, an
+            // Error, a RegExp, ...): its ordinary [[Get]] of the key.
+            _ => crate::value::js_dyn_index_get(
+                crate::value::js_nanbox_pointer(raw_addr as i64),
+                index,
+            ),
         }
     }
 }
@@ -2595,7 +2605,7 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
         return numeric_array_push_guard(raw_addr as *const ArrayHeader, value) as i32;
     }
     let push_index = match gc_header_for_user_addr(raw_addr) {
-        Some(header) if unsafe { (*header).obj_type == crate::gc::GC_TYPE_ARRAY } => unsafe {
+        Some(header) if unsafe { crate::gc_type_is_array!((*header).obj_type) } => unsafe {
             (*(raw_addr as *const ArrayHeader)).length
         },
         _ => u32::MAX,
@@ -2622,6 +2632,19 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     } else {
         0
     }
+}
+
+/// `null[k] = v` / `undefined[k] = v`: the TypeError of `PutValue`'s
+/// `ToObject` (node: "Cannot set properties of null").
+#[cold]
+#[inline(never)]
+fn throw_nullish_index_set(receiver: f64) -> ! {
+    let what = if receiver.to_bits() == crate::value::TAG_NULL {
+        "null"
+    } else {
+        "undefined"
+    };
+    crate::collection_iter::throw_type_error(&format!("Cannot set properties of {what}"))
 }
 
 /// Cold continuation of a source-level `arr[index] = value` after the inline
@@ -2656,6 +2679,11 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
+        // A null / undefined receiver behind an Array annotation: `PutValue`
+        // throws node's TypeError (ToObject), in sloppy code too.
+        if matches!(receiver.to_bits(), TAG_NULL | TAG_UNDEFINED) {
+            throw_nullish_index_set(receiver);
+        }
         return receiver;
     }
 
@@ -2680,10 +2708,10 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if let Some(index) = finite_nonnegative_i32_index(index) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw_addr as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
         }
         return receiver;
@@ -2697,7 +2725,7 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
         let gc_header =
             (raw_addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         match (*gc_header).obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 // #9220: the inherited-descriptor walk must run in BOTH
                 // modes — a prototype setter fires on a sloppy assignment
                 // too, and the pre-#9220 non-strict helper bypassed it
@@ -2748,7 +2776,14 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
                 }
                 f64::from_bits(receiver_handle.get_nanbox_u64())
             }
-            _ => receiver,
+            // Any other object behind a `T[]` site (a Date, a Map, a Promise,
+            // an Error, a RegExp, ...): its ordinary [[Set]] of the key, with
+            // the assignment's own `Throw` flag. The store was dropped.
+            _ => {
+                let target = crate::value::js_nanbox_pointer(raw_addr as i64);
+                crate::proxy::js_put_value_set(target, index, value, target, strict);
+                receiver
+            }
         }
     }
 }

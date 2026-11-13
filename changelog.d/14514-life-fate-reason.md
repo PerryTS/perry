@@ -1,0 +1,1 @@
+- LIFE census: a `Kept` parameter fate now carries its first keeping use (`effects_fate::Why`, from the same walk that raises the fate; no fate or compiled output changes). Census column 9 prints `compiled:<route>:Kept:<reason>`, and `PERRY_LIFE_CENSUS=<path>` also writes `<path>.params.tsv`: one row per parameter and `this` of every body with a fate.

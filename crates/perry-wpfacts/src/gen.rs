@@ -13,6 +13,7 @@ mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+pub(crate) mod in_bounds;
 pub(crate) mod narrow;
 mod native_result;
 mod once;
@@ -41,6 +42,15 @@ pub struct ReadSite {
     /// the atom `()`.
     pub value_call: bool,
     pub func: FnIdx,
+}
+
+/// A folded builtin-method node (`perry_hir::folded_call`): the call
+/// `recv.key(..)` at the site its receiver names (`method_sites`).
+pub(crate) struct FoldedSite {
+    pub module: u32,
+    pub site: perry_hir::folded_call::Site,
+    pub key: Atom,
+    pub recv: NodeId,
 }
 
 /// A computed member operation over nodes already generated for the solve.
@@ -154,10 +164,23 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// The folded method nodes that have a site (`method_sites`).
+    pub(crate) folded_sites: Vec<FoldedSite>,
     pub(crate) element_sites: Vec<ElementSite>,
     /// `(module, element_offset, value node)` of every `IndexGet` copy
     /// (`canonical_numbers`, P3 B1).
     pub(crate) element_values: Vec<(u32, u32, NodeId)>,
+    /// The result node of every named property read codegen lowers as a
+    /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
+    /// `rest_fields`' use record admits (I32 at rest, PR C).
+    pub(crate) field_reads: Vec<NodeId>,
+    /// VR-4b: each named read with a source offset, `(module, offset, key,
+    /// result node)`. A member chain's reads share their offset, so the key
+    /// tells them apart.
+    pub(crate) load_sites: Vec<(u32, u32, Atom, NodeId)>,
+    /// VR-4b: the holder of the array literal about to be walked
+    /// (`Model::arr_birth_holder`); the literal's arm takes it.
+    pub(crate) direct_arr: Option<crate::records::ArrBirth>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -275,6 +298,8 @@ pub struct Gen<'a> {
     pub(crate) for_binding: Option<(u32, u32, NodeId)>,
     /// Loop-test narrowings being walked (`gen/narrow.rs`).
     pub(crate) narrow: Vec<narrow::Narrow>,
+    /// In-bounds index stores (`gen/in_bounds.rs`).
+    pub(crate) in_bounds: in_bounds::InBounds,
     /// The function body being walked and its locals a guard may narrow
     /// (`narrow::scope_locals`).
     pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
@@ -285,9 +310,19 @@ pub struct Gen<'a> {
     /// `(module, byte offset, argument nodes)` of each method call site
     /// (`bindings::ModuleBindings::call_arg_ranges`).
     pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
-    /// `(module, byte offset, result node)` of each method call site
-    /// (`bindings::ModuleBindings::number_calls`).
+    /// `(module, byte offset, result node)` of each call site with a source
+    /// offset (`bindings::ModuleBindings::number_calls`).
     pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// `(module, byte offset, byte end, result node)` of every call with a
+    /// source offset, whatever its callee (`call_kinds`).
+    pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
+    /// The list births and the push sites of the bodies walked, the body
+    /// the walk is in (a serial; its loop depth is `loop_depth`) and the
+    /// number of bodies entered so far (`list_caps`).
+    pub(crate) list_births: Vec<crate::list_caps::Birth>,
+    pub(crate) list_pushes: Vec<crate::list_caps::Push>,
+    pub(crate) list_body: u32,
+    pub(crate) list_bodies: u32,
     /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
     /// identity (the callee expression's address), whether it spreads, and
     /// for a direct call its callee node (`signatures::typed_calls`).
@@ -348,6 +383,9 @@ pub struct Gen<'a> {
     /// DECISIONS 225: the bodies not walked yet because they are not
     /// active (`Gen::walk_activated` walks each once it is).
     pub(crate) pending_walk: FxHashMap<FnIdx, Vec<PendingWalk<'a>>>,
+    /// DECISIONS 225: the bodies never walked (the activation set is final
+    /// and does not hold them): `family_reach` reads their text.
+    pub(crate) unwalked: Vec<PendingWalk<'a>>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
     /// sources (module path → source → module path). A re-export declares
@@ -364,12 +402,21 @@ pub struct Gen<'a> {
     /// The source site of the last `new Array(...)` of the builtin
     /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
     pub new_array_site: Option<SiteId>,
+    /// The push-filled births and their fill pushes (`push_fills`), by
+    /// expression identity.
+    pub(crate) push_fill: crate::push_fills::Fills,
+    /// The fill whose birth is the `new Array()` being generated.
+    pub(crate) push_fill_new: Option<u32>,
     /// Guards narrow locals and one-unit Strings carry codes
     /// (`FactsConfig::no_guard_ranges`).
     pub guard_ranges: bool,
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
+    /// A name-keyed fold (`Expr::WeakRefDeref`, the FinalizationRegistry
+    /// pair) is also the ordinary method call its helper makes on a
+    /// receiver of another kind (`reach::name_folds`).
+    pub name_folds: bool,
     /// R1: a write of a narrowed local in a branch that always leaves past
     /// the narrowing's code does not end its narrowed reads after the branch
     /// (`gen::narrow`, "Writes on a leaving path";
@@ -629,8 +676,12 @@ impl<'a> Gen<'a> {
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            folded_sites: Vec::new(),
             element_sites: Vec::new(),
             element_values: Vec::new(),
+            field_reads: Vec::new(),
+            load_sites: Vec::new(),
+            direct_arr: None,
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -676,10 +727,16 @@ impl<'a> Gen<'a> {
             binding_writes: FxHashMap::default(),
             for_binding: None,
             narrow: Vec::new(),
+            in_bounds: Default::default(),
             narrow_scope: None,
             narrow_consts: Default::default(),
             call_args_at: Vec::new(),
             call_results_at: Vec::new(),
+            call_kinds_at: Vec::new(),
+            list_births: Vec::new(),
+            list_pushes: Vec::new(),
+            list_body: 0,
+            list_bodies: 0,
             call_sites_at: Vec::new(),
             str_lits: Default::default(),
             for_of_walks: Default::default(),
@@ -706,6 +763,7 @@ impl<'a> Gen<'a> {
             num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
+            unwalked: Vec::new(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
@@ -713,8 +771,11 @@ impl<'a> Gen<'a> {
             int_ranges: true,
             arr_lengths: true,
             new_array_site: None,
+            push_fill: Default::default(),
+            push_fill_new: None,
             guard_ranges: true,
             guard_presence: true,
+            name_folds: true,
             leaving_writes: true,
             zs_ok: false,
             leaving_write_sabotage: false,

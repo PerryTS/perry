@@ -433,7 +433,13 @@ pub(crate) fn emit_nullish_write_guard(
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    // I32 at rest (PR C): a store of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower_set(ctx, expr, assignment_strict)? {
+        return Ok(value);
+    }
     if let Expr::PropertySet { object, value, .. } = expr {
+        // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+        super::record_witness::store_into_copy(ctx, object)?;
         return super::write_barrier::with_static_child(ctx, object, value, |ctx| {
             lower_store(ctx, expr, assignment_strict)
         });
@@ -565,6 +571,13 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
                 // collector rewrites; the register is not.
                 return rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
                     let (arr_box, val_double) = (&vals[0], &vals[1]);
+                    // The arm was chosen from the receiver's ANNOTATION: a
+                    // String, `null` or an ordinary object may stand behind
+                    // it, and the runtime entry takes an address. Its own
+                    // admission (a heap pointer whose header says Array) sends
+                    // every other value to the complete strict `[[Set]]`.
+                    let done = crate::method_site::annotation_receiver_tests_enabled()
+                        .then(|| emit_length_set_admission(ctx, arr_box, val_double));
                     let blk = ctx.block();
                     let arr_bits = blk.bitcast_double_to_i64(arr_box);
                     let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
@@ -575,6 +588,11 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
                         "js_array_set_length_strict",
                         &[(I64, &arr_handle), (DOUBLE, val_double)],
                     );
+                    if let Some(done_idx) = done {
+                        let done_label = ctx.block_label(done_idx);
+                        ctx.block().br(&done_label);
+                        ctx.current_block = done_idx;
+                    }
                     Ok(val_double.clone())
                 });
             }
@@ -1228,9 +1246,18 @@ fn emit_proven_class_field_store(
             // records), and every atom is born `refcount = 0`, already shared:
             // the addref would find nothing to demote. The write barrier
             // stays: an atom minted earlier at runtime can be young.
+            // Nor would it for a value the facts prove is, as a String,
+            // only ever a literal's value (`literal_strings`): the field's
+            // every writer, or the local the value reads.
             let string_addref_needed = class_field_store_needs_string_addref(ctx, value)
                 && wpf.is_none_or(|w| w.proof.may_hold_string())
-                && !super::helpers::expr_is_pool_atom_literal(value);
+                && !super::helpers::expr_is_pool_atom_literal(value)
+                && !super::literal_strings::store(
+                    ctx,
+                    wpf.map(|w| (&w.proof, property)),
+                    value,
+                    &val_double,
+                );
             let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
             // #7511: whatever these three flags could not
             // be proved away statically is decided by ONE
@@ -1319,3 +1346,68 @@ fn emit_proven_class_field_store(
 #[cfg(test)]
 #[path = "collecting_root_tests.rs"]
 mod collecting_root_tests;
+
+/// The admission of the annotated `arr.length = v` arm: continue in the
+/// current block when `arr_box` is a heap pointer whose header is an Array's
+/// (the runtime entry's precondition), else perform the complete strict
+/// `Set(arr, "length", v, true)` and join at the returned block, which the
+/// caller branches to after its own call.
+fn emit_length_set_admission(ctx: &mut FnCtx<'_>, arr_box: &str, val_double: &str) -> usize {
+    let hdr_idx = ctx.new_block("alenset.hdr");
+    let array_idx = ctx.new_block("alenset.array");
+    let generic_idx = ctx.new_block("alenset.generic");
+    let done_idx = ctx.new_block("alenset.done");
+    let (hdr_label, array_label, generic_label, done_label) = (
+        ctx.block_label(hdr_idx),
+        ctx.block_label(array_idx),
+        ctx.block_label(generic_idx),
+        ctx.block_label(done_idx),
+    );
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            super::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+        );
+        let heap = blk.icmp_ult(
+            I64,
+            &biased,
+            super::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+        );
+        blk.cond_br(&heap, &hdr_label, &generic_label);
+    }
+    ctx.current_block = hdr_idx;
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+        let kind_addr = blk.sub(I64, &handle, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind = blk.load(crate::types::I8, &kind_ptr);
+        let array = crate::target_layout::emit_gc_type_is_array(blk, crate::types::I8, &kind);
+        blk.cond_br(&array, &array_label, &generic_label);
+    }
+    ctx.current_block = generic_idx;
+    {
+        let key_idx = ctx.strings.intern("length");
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let _ = blk.call(
+            DOUBLE,
+            "js_put_value_set",
+            &[
+                (DOUBLE, arr_box),
+                (DOUBLE, &key_box),
+                (DOUBLE, val_double),
+                (DOUBLE, arr_box),
+                (crate::types::I32, "1"),
+            ],
+        );
+        blk.br(&done_label);
+    }
+    ctx.current_block = array_idx;
+    done_idx
+}

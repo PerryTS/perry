@@ -257,6 +257,8 @@ const ITERATOR: &[(&str, Mem)] = &[
     ("find", Mem::Fn),
     ("flatMap", Mem::Fn),
     ("forEach", Mem::Fn),
+    ("includes", Mem::Fn),
+    ("join", Mem::Fn),
     ("map", Mem::Fn),
     ("next", Mem::Fn),
     ("reduce", Mem::Fn),
@@ -326,6 +328,28 @@ pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
 
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
+}
+
+/// `name` is a member of some described builtin family (`length`, `size`,
+/// `name`, `then`, ...): a key every program reads off builtins too (I32 at
+/// rest, PR C: such a key is never a field lane, `rest_fields`).
+pub(crate) fn builtin_member_name(name: &str) -> bool {
+    [
+        Family::Object,
+        Family::Function,
+        Family::Array,
+        Family::Str,
+        Family::Num,
+        Family::Bool,
+        Family::Sym,
+        Family::BigInt,
+        Family::Collection,
+        Family::Iterator,
+        Family::Promise,
+        Family::Error,
+    ]
+    .into_iter()
+    .any(|f| member(f, name).is_some())
 }
 
 /// The families of a primitive mask (`null`/`undefined` have none).
@@ -618,7 +642,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
+        | "fromEntries" | "hostrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
         _ => Family::Opaque,
     }
@@ -631,8 +655,8 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// own-keys results are arrays (`CreateArrayFromList`); a match's `groups`
 /// and an `Object.groupBy` result have a null prototype (`perex_results.rs`
 /// `null_groups`, `groupby.rs`). The result of an undescribed method
-/// (`primbox`) and a `Map.groupBy` Map (`mapGroups`, whose entries the model
-/// keeps as a container's) have no chain the model describes.
+/// (`primbox`) has no chain the model describes. (A `Map.groupBy` result is
+/// a Map, `Family::Collection`, not a box.)
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
         "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
@@ -739,7 +763,6 @@ pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
     (parent.kind == RealmKind::Constructor).then_some(parent.name)
 }
 
-
 /// What a method lookup of a named key finds on the [[Prototype]] chain of
 /// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
 /// the own property of the first declaration on `P`'s declared chain that
@@ -776,7 +799,10 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
 /// (`realm_born`): its realm-declared own properties, then those of its
 /// declared [[Prototype]]s, to `null`.
-pub(super) fn realm_chain_find(born: &'static perry_hir::realm_manifest::RealmEntry, name: &str) -> RealmFind {
+pub(super) fn realm_chain_find(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> RealmFind {
     let mut at = born;
     loop {
         if let Some(p) = at.own.iter().find(|p| realm_key_is(p, name)) {
@@ -1100,10 +1126,9 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
         // `Other`, the HIR global sentinel (what a bare global name is read
         // off), is the global object: an ordinary object, not callable.
-        BuiltinNs::GlobalThis
-        | BuiltinNs::Other
-        | BuiltinNs::Process
-        | BuiltinNs::Module(_) => (NsProto::Object, None),
+        BuiltinNs::GlobalThis | BuiltinNs::Other | BuiltinNs::Process | BuiltinNs::Module(_) => {
+            (NsProto::Object, None)
+        }
         BuiltinNs::Require => (NsProto::Unknown(Family::Function), None),
     };
     NsStatics {
@@ -1460,18 +1485,29 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
         _ => p.key.to_string(),
     };
     for (what, chain) in [
-        ("Response.prototype", &["Response.prototype", "Object.prototype"][..]),
+        (
+            "Response.prototype",
+            &["Response.prototype", "Object.prototype"][..],
+        ),
         (
             "TypeError.prototype",
             &["TypeError.prototype", "Error.prototype", "Object.prototype"][..],
         ),
         (
             "DOMException.prototype",
-            &["DOMException.prototype", "Error.prototype", "Object.prototype"][..],
+            &[
+                "DOMException.prototype",
+                "Error.prototype",
+                "Object.prototype",
+            ][..],
         ),
         (
             "AbortSignal.prototype",
-            &["AbortSignal.prototype", "EventTarget.prototype", "Object.prototype"][..],
+            &[
+                "AbortSignal.prototype",
+                "EventTarget.prototype",
+                "Object.prototype",
+            ][..],
         ),
     ] {
         let born = realm_born(what).unwrap_or_else(|| panic!("{what} is realm-born"));
@@ -1508,10 +1544,20 @@ fn a_realm_born_object_reads_exactly_its_declared_chain() {
         found("Response.prototype", "hasOwnProperty"),
         RealmOwnValue::Reference("Object.prototype.hasOwnProperty")
     );
-    assert_eq!(found("Response.prototype", "@@__perry_wk_toStringTag"), RealmOwnValue::String);
+    assert_eq!(
+        found("Response.prototype", "@@__perry_wk_toStringTag"),
+        RealmOwnValue::String
+    );
     // A described family is not realm-born (its own description decides),
     // nor is a kind no declaration names.
-    for what in ["Promise", "Error", "Map", "hostrecord", "Response", "builtin"] {
+    for what in [
+        "Promise",
+        "Error",
+        "Map",
+        "hostrecord",
+        "Response",
+        "builtin",
+    ] {
         assert!(realm_born(what).is_none(), "{what}");
     }
 }

@@ -349,6 +349,11 @@ impl Model {
         // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::any() } else { key };
+        // A computed store may be a runtime helper's write of a Map's
+        // contents (`solve/map_vals.rs`).
+        if matches!(key, Key::Any(_)) {
+            self.map_open(t);
+        }
         // DECISIONS 242(2): a [[Set]] of a key the object does not own
         // definitely meets the chain's setters (and may add the key).
         if t != TOP {
@@ -416,7 +421,8 @@ impl Model {
                 && builtins::getter_only(self, t, &self.atoms[a as usize])
                 && !builtins::native_written(self, t, a)
             {
-                self.native_missing.push((t, a, NativeMiss::Store(src, site)));
+                self.native_missing
+                    .push((t, a, NativeMiss::Store(src, site)));
                 return;
             }
         }

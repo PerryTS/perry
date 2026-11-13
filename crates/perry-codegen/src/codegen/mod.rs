@@ -239,6 +239,7 @@ mod closure_capture_cells;
 mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
+mod deferred_namespace;
 #[cfg(test)]
 mod number_local_root_tests;
 mod shared_class_method_bodies;
@@ -283,6 +284,8 @@ mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub(crate) mod record_array;
+pub(crate) mod record_sig;
 pub(crate) mod signature_entry;
 pub mod split_regions;
 #[cfg(test)]
@@ -314,7 +317,8 @@ mod program_facts_view;
 pub use program_facts_view::{
     ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc,
     FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction,
-    FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
+    FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv,
+    FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -561,6 +565,11 @@ fn lower_module(
     crate::layout_desc::create_families::clear();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
+    // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
+    // value (`value_records`); every lowering below sees the rewritten body.
+    let mut opts = opts;
+    let records_hir = crate::value_records::rewrite_module(hir, &mut opts.program_facts.elision);
+    let hir = records_hir.as_ref().unwrap_or(hir);
     // The driver supplies whole-program ownership in opts. Direct callers
     // without callback prefixes also need local launch detection for their
     // string-preparation callback. All decisions remain per compile.
@@ -2146,7 +2155,10 @@ fn lower_module(
     // proven-`this` admission consults them (§5.2 shape barriers, the
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
-    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts_with(
+        hir,
+        &opts.program_facts.elision.native_member_calls,
+    );
     let imported_return_shapes = opts
         .imported_classes
         .iter()
@@ -2634,10 +2646,54 @@ fn lower_module(
                 imported_stub_names.contains(class_name.as_str()),
                 class_name,
             );
+            // I32 at rest (PR C): a class born with its keys carries its I32
+            // lanes in its birth rep (`expr::rest_fields`); a class born
+            // keyless gets them after its field definitions.
+            let rep = match class_table.get(class_name) {
+                Some(class)
+                    if !imported_stub_names.contains(class_name.as_str())
+                        && crate::lower_call::new_alloc::keys_defined_at_birth(class) =>
+                {
+                    let lanes = crate::expr::rest_fields::class_lanes(
+                        &opts.program_facts.elision,
+                        &opts.program_layouts,
+                        &class_table,
+                        &class_ids,
+                        class_name,
+                    );
+                    crate::expr::rest_fields::with_lanes(rep, lanes)
+                }
+                _ => rep,
+            };
             let entry = reps.entry(keys_global.clone()).or_insert(rep);
             if *entry != rep {
                 *entry = 0;
             }
+        }
+        // I32 at rest (PR C): a class born with its keys keeps every lane the
+        // facts give it; other modules read those lanes from the facts.
+        for (class_name, keys_global) in &class_keys_globals_map {
+            let Some(class) = class_table.get(class_name) else {
+                continue;
+            };
+            if imported_stub_names.contains(class_name.as_str())
+                || !crate::lower_call::new_alloc::keys_defined_at_birth(class)
+            {
+                continue;
+            }
+            let lanes = crate::expr::rest_fields::class_lanes(
+                &opts.program_facts.elision,
+                &opts.program_layouts,
+                &class_table,
+                &class_ids,
+                class_name,
+            );
+            let rep = reps.get(keys_global).copied().unwrap_or(0);
+            assert_eq!(
+                crate::expr::rest_fields::lanes_of_rep(rep) & lanes,
+                lanes,
+                "I32 at rest: class {class_name} lost its I32 lanes in its birth rep"
+            );
         }
         reps
     };
@@ -2953,8 +3009,16 @@ fn lower_module(
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
     if opts.program_has_tla {
-        llmod.declare_function("js_async_module_configure", crate::types::VOID, &[I64, I64, I64, I64, I64, I64]);
-        llmod.declare_function("js_async_module_visit", crate::types::VOID, &[I64, I64, I64]);
+        llmod.declare_function(
+            "js_async_module_configure",
+            crate::types::VOID,
+            &[I64, I64, I64, I64, I64, I64],
+        );
+        llmod.declare_function(
+            "js_async_module_visit",
+            crate::types::VOID,
+            &[I64, I64, I64],
+        );
         llmod.declare_function("js_async_module_import", DOUBLE, &[I64]);
         llmod.declare_function("js_async_module_require", crate::types::VOID, &[I64]);
         llmod.declare_function("js_async_module_entry", crate::types::VOID, &[I64]);
@@ -2964,6 +3028,12 @@ fn lower_module(
             }
         }
     }
+    // The births pre-pass (`module_birth_shapes`) runs this function up to
+    // the layout emission below and lowers no body: registering there wrote
+    // every module's parameter rows twice.
+    let _life_census = (!collect_births)
+        .then(|| crate::collectors::life_census::register(hir, &opts.program_facts.elision))
+        .flatten();
     let mut cross_module = CrossModuleCtx {
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,
@@ -2986,6 +3056,7 @@ fn lower_module(
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
+        deferred_namespace_imports: opts.deferred_namespace_imports,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -3152,8 +3223,6 @@ fn lower_module(
         loop_pushed_arrays: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
-        program_shadows_buffer_read_method:
-            crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can
@@ -3302,6 +3371,8 @@ fn lower_module(
         lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        module_deferred_init_deps: opts.module_deferred_init_deps.clone(),
+        module_deferred_readiness: opts.module_deferred_readiness.clone(),
         program_has_tla: opts.program_has_tla,
         module_graph_has_tla: opts.module_graph_has_tla,
         is_dynamic_import_target: opts.is_dynamic_import_target,
@@ -3699,6 +3770,7 @@ fn lower_module(
             hir,
             &cross_module.definite_init,
             proven_int32,
+            &cross_module.wpfacts.native_member_calls,
         );
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
@@ -3923,6 +3995,7 @@ fn lower_module(
                         signature: None,
                         sig_defaults: Vec::new(),
                         sig_public: Default::default(),
+                        record: None,
                     }
                 }
                 None => {
@@ -3948,6 +4021,7 @@ fn lower_module(
                             signature: None,
                             sig_defaults: Vec::new(),
                             sig_public: Default::default(),
+                            record: None,
                         }
                     } else {
                         reject(
@@ -4100,7 +4174,7 @@ fn lower_module(
         let sig_body = plan
             .signature
             .is_some()
-            .then(|| signature_entry::sig_function(f, &plan.sig_defaults))
+            .then(|| record_sig::sig_body(f, &plan.sig_defaults, plan.record.as_ref()))
             .flatten();
         let f = sig_body.as_ref().unwrap_or(f);
         compile_function(
@@ -4196,20 +4270,44 @@ fn lower_module(
     if hir.async_init_function.is_some() {
         let id = entry_outline::max_func_id(hir) + 1;
         let finish = perry_hir::Function {
-            id, name: "async module completion".into(), type_params: Vec::new(),
-            params: Vec::new(), return_type: perry_hir::types::Type::Any,
-            body: Vec::new(), is_async: false, is_generator: false,
-            is_strict: hir.init_is_strict, is_exported: false, captures: Vec::new(),
-            decorators: Vec::new(), was_plain_async: false, was_unrolled: false,
+            id,
+            name: "async module completion".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: perry_hir::types::Type::Any,
+            body: Vec::new(),
+            is_async: false,
+            is_generator: false,
+            is_strict: hir.init_is_strict,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
         };
         let mut finish_names = func_names.clone();
         finish_names.insert(id, format!("{module_prefix}__async_finish"));
         compile_function(
-            &mut llmod, &finish, &finish_names, &mut strings, &class_table, &method_names,
-            &module_globals, &module_global_types, &opts.import_function_prefixes,
-            &enum_table, &static_field_globals, &class_ids, &func_signatures,
-            &func_synthetic_arguments, &module_boxed_vars, &closure_rest_params,
-            &cross_module, None, None, Some(hir),
+            &mut llmod,
+            &finish,
+            &finish_names,
+            &mut strings,
+            &class_table,
+            &method_names,
+            &module_globals,
+            &module_global_types,
+            &opts.import_function_prefixes,
+            &enum_table,
+            &static_field_globals,
+            &class_ids,
+            &func_signatures,
+            &func_synthetic_arguments,
+            &module_boxed_vars,
+            &closure_rest_params,
+            &cross_module,
+            None,
+            None,
+            Some(hir),
         )?;
     }
 

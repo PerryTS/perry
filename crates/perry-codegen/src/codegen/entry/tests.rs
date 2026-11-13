@@ -30,6 +30,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -65,6 +66,8 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
         program_has_tla: false,
         module_graph_has_tla: false,
         is_dynamic_import_target: false,
@@ -117,6 +120,29 @@ fn empty_module() -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
     }
+}
+
+#[test]
+fn staticlib_entry_retains_embedded_asset_registration_member() {
+    let ir = emitted_ir("staticlib");
+    assert!(ir.contains("declare void @perry_embedded_assets_link_anchor()"));
+    assert!(ir.contains("call void @perry_embedded_assets_link_anchor()"));
+}
+
+#[test]
+fn wasi_staticlib_entry_does_not_reference_native_embedded_asset_anchor() {
+    assert!(!super::staticlib_asset_anchor_enabled(
+        "staticlib",
+        "wasm32-wasip1"
+    ));
+    assert!(super::staticlib_asset_anchor_enabled(
+        "staticlib",
+        "aarch64-apple-macosx"
+    ));
+    assert!(!super::staticlib_asset_anchor_enabled(
+        "dylib",
+        "aarch64-apple-macosx"
+    ));
 }
 
 fn emitted_ir(output_type: &str) -> String {
@@ -684,6 +710,31 @@ fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
 }
 
 #[test]
+fn deferred_namespace_creation_is_cached_rooted_and_does_not_evaluate() {
+    let mut opts = entry_opts("executable");
+    opts.is_entry_module = false;
+    opts.is_dynamic_import_target = true;
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    let getter = ir
+        .split("define ")
+        .find(|body| body.contains("__deferred_namespace()"))
+        .expect("deferred namespace getter");
+    assert!(getter.contains("call void @js_gc_register_global_root"));
+    assert!(getter.contains("call double @js_create_deferred_namespace"));
+    assert!(
+        !getter.contains("__init()"),
+        "constructing the identity must not evaluate"
+    );
+    let evaluator = ir
+        .split("define ")
+        .find(|body| body.contains("__deferred_evaluate()"))
+        .expect("deferred evaluator");
+    assert!(evaluator.contains("__init()"));
+    assert!(evaluator.contains("@js_deferred_namespace_not_ready"));
+    assert!(evaluator.contains("__deferred_ready"));
+}
+
+#[test]
 fn module_stack_identity_is_static_without_startup_registration() {
     let mut opts = entry_opts("executable");
     opts.target = Some("x86_64-unknown-linux-gnu".into());
@@ -733,7 +784,9 @@ fn tla_program_emits_record_owned_dependency_visitor_in_source_order() {
     opts.program_has_tla = true;
     opts.module_init_deps = vec!["first".into(), "second".into()];
     let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
-    let start = ir.find("__async_dependencies(i64 %walk, i64 %parent)").unwrap();
+    let start = ir
+        .find("__async_dependencies(i64 %walk, i64 %parent)")
+        .unwrap();
     let body = &ir[start..];
     let first = body.find("call i64 @first__async_record()").unwrap();
     let second = body.find("call i64 @second__async_record()").unwrap();

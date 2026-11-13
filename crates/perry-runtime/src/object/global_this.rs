@@ -112,7 +112,7 @@ pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
 pub(crate) use fetch_globals::init_fetch_backed_receiver;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
-#[cfg(perry_gc_instruments)]
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
@@ -163,11 +163,13 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of, default_prepare_stack_trace_func_ptr,
-    populate_global_this_builtins, scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    populate_global_this_builtins, scan_error_constructor_root_mut, unborn_declared_statics_of,
+    ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_builtin_well_known_symbol_method, install_error_prototype_data_properties, populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_error_prototype_data_properties,
+    populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,

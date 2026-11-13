@@ -658,7 +658,7 @@ fn link_parent(cache: f64, record: f64, parent_filename: &str) {
     let mut children_ptr = if children.is_pointer() {
         let ptr = children.as_pointer::<u8>();
         if unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             ptr as *mut crate::array::ArrayHeader
         } else {
@@ -1279,8 +1279,7 @@ static MODULE_INIT_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::A
 /// the guard is its first byte, bytes 4..8 are this number.
 unsafe fn module_init_record_number(guard_addr: i64) -> u32 {
     use std::sync::atomic::Ordering::Relaxed;
-    let slot =
-        std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
+    let slot = std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
     let number = slot.load(Relaxed);
     if number != 0 {
         return number;

@@ -201,7 +201,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
     let (header, addr) = match header {
         Some(h)
             if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-                && h.obj_type == crate::gc::GC_TYPE_ARRAY =>
+                && crate::gc_type_is_array!(h.obj_type) =>
         {
             let live =
                 crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader) as usize;
@@ -243,7 +243,7 @@ unsafe fn prepare(recv: f64, method_id: i64) -> f64 {
             // An array owns properties beyond its elements only in its named
             // layout (`ArrayHeader.named`, carried by growth; a pre-growth
             // alias was resolved to the live head above).
-            let own = if kind == Some(crate::gc::GC_TYPE_ARRAY)
+            let own = if kind == Some(crate::gc_array_type_pat!())
                 && !crate::array::array_has_named_properties_resolved(
                     addr as *const crate::array::ArrayHeader,
                 ) {
@@ -304,7 +304,7 @@ unsafe fn cell_chain_has_accessor(recv: f64, kind: Option<u8>, name: &[u8]) -> b
     if object == 0 {
         return lookup_is_observable(recv, name);
     }
-    if kind == Some(crate::gc::GC_TYPE_ARRAY) {
+    if kind == Some(crate::gc_array_type_pat!()) {
         // An array whose [[Prototype]] was replaced sets the process latch.
         let array = crate::array::array_prototype_addr();
         if super::prototype_chain::array_static_proto_recorded() {
@@ -355,7 +355,7 @@ unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8
             linked.then(|| super::key_attrs::object_key_is_accessor(p, name))
         }
         Some(h)
-            if h.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(h.obj_type)
                 && !super::prototype_chain::array_static_proto_recorded() =>
         {
             Some(super::descriptor_state::owner_key_is_accessor(proto, name))
@@ -594,6 +594,12 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
     let mut cur = recv;
     // A prototype chain is acyclic; the bound only guards a corrupt one.
     for _ in 0..256 {
+        // Deferred namespaces perform module evaluation as part of [[Get]].
+        // Resolve the callee before arguments and keep the original receiver
+        // for the existing value-call path, rather than late by-name dispatch.
+        if super::deferred_namespace::is_deferred(cur) {
+            return true;
+        }
         let b = cur.to_bits();
         if is_pointer(b) {
             let addr = (b & crate::value::POINTER_MASK) as usize;
@@ -651,10 +657,8 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
     // The canonical interned key: no allocation per read.
     let key = crate::string::canonical_key(name);
     let recv_value = recv_h.get_nanbox_f64();
-    let value = crate::object::js_object_get_field_by_name_f64(
-        recv_value.to_bits() as usize as *const ObjectHeader,
-        key,
-    );
+    // `recv` is a value: a Number with clear top 16 bits is no handle.
+    let value = crate::object::field_get_set::get_field_by_name_of_value(recv_value, key);
     if value.to_bits() == METHOD_SITE_BY_NAME || value.to_bits() == METHOD_SITE_BY_NAME_DIRECT {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -662,8 +666,44 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
         if let Some(inherited) = function_receiver_inherited_get(recv_value, key) {
             return inherited;
         }
+        // The field get may have collected: re-read the rooted receiver.
+        if let Some(inherited) = weak_receiver_inherited_get(recv_h.get_nanbox_f64(), key) {
+            return inherited;
+        }
     }
     value
+}
+
+/// The generic field get answers a NaN-boxed WeakMap / WeakSet / WeakRef /
+/// FinalizationRegistry receiver's inherited methods with `undefined`: its
+/// weak-wrapper arms resolve the prototype thunks for an untagged receiver
+/// word only. A miss there made [`spec_get`]'s caller
+/// (`builtin_proto::select_and_call`, the generic arm of a folded `Map`
+/// site given a WeakMap behind `Map<K, V>`) throw `value is not a function`
+/// where node calls `WeakMap.prototype.get`.
+///
+/// Resolve the name off the wrapper's REAL `[[Prototype]]` (a replaced one
+/// too; `null` finds nothing), as [`function_receiver_inherited_get`] does
+/// for a function. `None` for any receiver that is no weak wrapper.
+unsafe fn weak_receiver_inherited_get(
+    recv: f64,
+    key: *const crate::string::StringHeader,
+) -> Option<f64> {
+    crate::object::weak_wrapper_class_id(recv)?;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        recv.get_nanbox_f64(),
+    ));
+    if proto.get_nanbox_f64().to_bits() == crate::value::TAG_NULL {
+        return None;
+    }
+    Some(crate::proxy::js_reflect_get(
+        proto.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        recv.get_nanbox_f64(),
+    ))
 }
 
 /// The generic field get is not a faithful `[[Get]]` for a FUNCTION receiver:
@@ -724,7 +764,7 @@ pub unsafe extern "C-unwind" fn js_array_slice_method(
     {
         let addr = (recv.to_bits() & crate::value::POINTER_MASK) as usize;
         if crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|h| (*h).obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|h| crate::gc_type_is_array!((*h).obj_type))
         {
             let array = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
             if !array.is_null() && crate::array::array_has_plain_shape_resolved(array) {

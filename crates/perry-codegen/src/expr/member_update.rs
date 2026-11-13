@@ -46,6 +46,10 @@ use crate::types::{DOUBLE, I32, I64};
 use super::{emit_root_nanbox_store_on_block, lower_expr, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // I32 at rest (PR C): an update of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     match expr {
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
         // Lowered as: load → fadd/fsub 1.0 → store. Same as the
@@ -293,7 +297,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let derive_handles = |ctx: &mut FnCtx<'_>, obj_box: &str| {
                     let blk = ctx.block();
                     let obj_bits = blk.bitcast_double_to_i64(obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    // Only a heap pointer is masked: the low 48 bits of any
+                    // other value (a Number above all) are no address.
+                    let obj_handle =
+                        super::index_get::classref_preserving_handle(blk, &obj_bits, false);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -305,10 +312,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         super::private_field_site::lower_static_get_operands(ctx, site, &obj_box)?
                     } else {
                         let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
-                        ctx.block().call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &obj_handle), (I64, &key_handle)],
+                        // The receiver is any value: a Number whose top 16
+                        // bits are clear must not reach the handle entry,
+                        // which reads it as a raw pointer.
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                        super::index_get::named_get_on_unproven_receiver(
+                            ctx,
+                            &obj_bits,
+                            &key_handle,
+                            "0",
+                            |ctx| {
+                                ctx.block().call(
+                                    DOUBLE,
+                                    "js_object_get_field_by_name_f64",
+                                    &[(I64, &obj_handle), (I64, &key_handle)],
+                                )
+                            },
                         )
                     }
                 };

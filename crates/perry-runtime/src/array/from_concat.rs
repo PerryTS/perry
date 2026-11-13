@@ -5,6 +5,7 @@
 //! (`js_array_clone`, `js_array_from_arraylike`, ...) stay in their own
 //! modules; this module layers the spec validation (`TypeError` for nullish
 //! sources, callability checks, `Symbol.isConcatSpreadable`) on top of them.
+use super::generic::to_object;
 use super::{
     clean_arr_ptr, js_array_alloc, js_array_clone, js_array_is_array, js_array_push_f64,
     js_array_set_f64_extend, ArrayHeader,
@@ -98,6 +99,28 @@ fn array_from_family_not_pristine(value: f64) -> bool {
     dirty || crate::object::map_set_subclass::plain_collection_default_iteration(value).is_none()
 }
 
+/// A source value `ToObject` boxes into a `Number` / `Boolean` / `Symbol` /
+/// `BigInt` wrapper: not a string (its own paths), not a pointer-shaped
+/// reference, and not a registered class ref (which shares the INT32 tag with
+/// small integers, #6454). #13486: `Array.from` must GetMethod these through
+/// the wrapper's prototype chain instead of reinterpreting the primitive's
+/// raw bits as a heap address.
+fn boxed_primitive_source(value: f64, bits: u64) -> bool {
+    let jsv = JSValue::from_bits(bits);
+    if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
+        return true;
+    }
+    if jsv.is_any_string() || jsv.is_reference() {
+        return false;
+    }
+    if jsv.is_bool() || jsv.is_bigint() {
+        return true;
+    }
+    // Numbers: real doubles and INT32-tagged small integers — the latter are
+    // bit-identical to a registered class ref, so the registry decides.
+    (jsv.is_number() || jsv.is_int32()) && crate::object::class_ref_id(value).is_none()
+}
+
 #[no_mangle]
 pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     let bits = boxed.to_bits();
@@ -117,7 +140,7 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
     // indexed array-like operation, while other methods drive their protocol.
     // The layout-proven intrinsic dense walk shares spread's bulk element copy.
     if crate::value::addr_class::pointer_value_header(bits)
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
     {
         if super::flat_clone::dense_spread_source(boxed).is_some() {
             return super::flat_clone::dense_spread_copy(boxed);
@@ -157,10 +180,21 @@ pub extern "C" fn js_array_from_value(boxed: f64) -> *mut ArrayHeader {
         let iter = crate::symbol::js_get_iterator(boxed);
         return crate::array::js_iterator_to_array(iter);
     }
-    // Numbers / booleans / strings handled inside js_array_clone:
-    //  - numbers/booleans aren't pointers → empty array.
+    // #13486: a primitive source (number / boolean / symbol / bigint) is not a
+    // pointer: GetMethod must consult its wrapper's prototype chain — a patched
+    // `Number.prototype[Symbol.iterator]` drives iteration, an unpatched one
+    // answers undefined and the array-like branch yields `[]` — and the raw
+    // bits must never reach the pointer tail below. The spec-complete
+    // algorithm already implements every case.
+    if boxed_primitive_source(boxed, bits) {
+        let undefined = f64::from_bits(TAG_UNDEFINED);
+        let result = array_from_full(undefined, boxed, undefined, undefined);
+        return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+    }
+    // Strings handled inside js_array_clone:
     //  - strings → per-codepoint materialization.
     // Pointers (objects/arrays/iterables) materialize via js_array_clone.
+    // Primitives were routed to the spec-complete algorithm above (#13486).
     let ptr_bits = if (bits >> 48) >= 0x7FF8 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
     } else {
@@ -282,27 +316,23 @@ pub extern "C" fn js_array_concat_variadic(
     // (unobservable), so it runs before the observable species resolution
     // without reordering anything the spec sequences.
     let cap_hint = unsafe { concat_capacity_hint(recv, args_ptr, count) };
-    let (result_box, species_was_default) = unsafe {
-        crate::array::species::array_species_create_with_capacity(recv_value, 0, cap_hint)
-    };
-    let result_is_plain = species_was_default
-        || unsafe { crate::array::species::species_result_is_plain_array(result_box) };
-    let result = if result_is_plain {
-        crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader
-    } else {
-        // Custom species container: build the elements in a plain staging
-        // array first, then CreateDataProperty them onto the container below.
-        js_array_alloc(cap_hint)
-    };
-    // #6386 all-dense bulk path: when the DEFAULT species ran (so the result
-    // is guaranteed fresh, empty, and unfrozen — a custom `@@species` ctor
-    // can return a plain-typed array that is none of those), the spreadable
-    // gate is closed, and every source is a plain dense hole-free array (or
-    // a non-pointer single value), fill the pre-sized result with one copy
-    // pass and ONE layout/barrier rebuild — no per-source rebuild, no
-    // spreadable reads, no growth. Falls through (result still empty) when
-    // anything exotic shows up.
-    if species_was_default && !crate::symbol::concat_spreadable_symbol_ever_set() {
+    if !unsafe { crate::array::species::default_species_is_certain(recv_value) } {
+        // The full resolution can run user code (a `constructor` getter, the
+        // species constructor): the receiver and the arguments are rooted
+        // there, and the result may be any object.
+        return unsafe { concat_with_species(recv, args_ptr, count, cap_hint) };
+    }
+    // The default species: ArrayCreate(0), sized once (#6386).
+    let result = unsafe { crate::array::species::default_species_array(0, cap_hint) };
+    // #6386 all-dense bulk path: the DEFAULT species ran (so the result is
+    // fresh, empty, and unfrozen — a custom `@@species` ctor can return a
+    // plain-typed array that is none of those; that is `concat_with_species`).
+    // When the spreadable gate is closed, and every source is a plain dense
+    // hole-free array (or a non-pointer single value), fill the pre-sized
+    // result with one copy pass and ONE layout/barrier rebuild — no
+    // per-source rebuild, no spreadable reads, no growth. Falls through
+    // (result still empty) when anything exotic shows up.
+    if !crate::symbol::concat_spreadable_symbol_ever_set() {
         if let Some(out) = unsafe { try_concat_all_dense(result, recv, args_ptr, count) } {
             return out;
         }
@@ -317,21 +347,79 @@ pub extern "C" fn js_array_concat_variadic(
             result = append_concat_arg(result, value);
         }
     }
-    if !result_is_plain {
-        unsafe {
-            let len = (*result).length as usize;
-            let elems =
-                crate::array::array_elements_ptr(result as *const ArrayHeader) as *const f64;
-            for i in 0..len {
-                let v = *elems.add(i);
-                if v.to_bits() != crate::value::TAG_HOLE {
-                    crate::array::species::species_result_set(result_box, i, v);
-                }
-            }
-            return crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
-        }
-    }
     result
+}
+
+/// `concat` for a receiver whose species needs the full resolution
+/// (ECMA-262 §23.1.3.2): `ArraySpeciesCreate(O, 0)` first, then the elements,
+/// then `Set(A, "length", n, true)`. The default species (an own
+/// `constructor` that is `Array`, an undefined or null `@@species`) fills its
+/// plain array directly. For a species constructor's result the elements are
+/// gathered in a plain staging array and then defined on the result with
+/// CreateDataPropertyOrThrow, a hole staying absent.
+#[cold]
+#[inline(never)]
+unsafe fn concat_with_species(
+    recv: *const ArrayHeader,
+    args_ptr: *const f64,
+    count: i32,
+    cap_hint: u32,
+) -> *mut ArrayHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_raw_const_ptr(recv);
+    // `args_ptr` is caller-owned raw storage a moving collection cannot
+    // rewrite: root every argument before the species constructor runs.
+    let arg_handles = if args_ptr.is_null() || count <= 0 {
+        Vec::new()
+    } else {
+        scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, count as usize))
+    };
+    let recv_value = f64::from_bits(JSValue::pointer(recv_handle.get_raw_const_ptr::<u8>()).bits());
+    let (result_box, species_was_default) =
+        crate::array::species::array_species_create_with_capacity(recv_value, 0, cap_hint);
+    let result_handle = scope.root_nanbox_f64(result_box);
+    let staging = if species_was_default {
+        crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader
+    } else {
+        js_array_alloc(cap_hint)
+    };
+    let staging_handle = scope.root_raw_mut_ptr(staging);
+    let grown = append_spread_array(
+        staging_handle.get_raw_mut_ptr::<ArrayHeader>(),
+        recv_handle.get_raw_const_ptr::<ArrayHeader>(),
+    );
+    staging_handle.set_raw_mut_ptr(grown);
+    for handle in &arg_handles {
+        let grown = append_concat_arg(
+            staging_handle.get_raw_mut_ptr::<ArrayHeader>(),
+            handle.get_nanbox_f64(),
+        );
+        staging_handle.set_raw_mut_ptr(grown);
+    }
+    if species_was_default {
+        return staging_handle.get_raw_mut_ptr::<ArrayHeader>();
+    }
+    let len = (*staging_handle.get_raw_mut_ptr::<ArrayHeader>()).length as usize;
+    let value_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    for i in 0..len {
+        let staging = staging_handle.get_raw_mut_ptr::<ArrayHeader>();
+        if i >= (*staging).capacity as usize {
+            break; // past the backing store: holes
+        }
+        let elems = crate::array::array_elements_ptr(staging as *const ArrayHeader) as *const f64;
+        let v = *elems.add(i);
+        if v.to_bits() == crate::value::TAG_HOLE {
+            continue;
+        }
+        value_handle.set_nanbox_f64(v);
+        crate::array::species::species_result_define(
+            result_handle.get_nanbox_f64(),
+            i,
+            value_handle.get_nanbox_f64(),
+        );
+    }
+    crate::array::species::species_result_set_length(result_handle.get_nanbox_f64(), len);
+    crate::value::js_nanbox_get_pointer(result_handle.get_nanbox_f64()) as *mut ArrayHeader
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -833,6 +921,15 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     } else {
         scope.root_nanbox_f64(items)
     };
+    // #13486: GetMethod on a primitive consults its wrapper's prototype chain.
+    // Box number / boolean / symbol / bigint sources so the iterable probes
+    // and array-like reads below see an object; an unpatched wrapper answers
+    // undefined and the array-like branch yields `LengthOfArrayLike` 0 (`[]`).
+    let items = if boxed_primitive_source(items.get_nanbox_f64(), item_bits) {
+        scope.root_nanbox_f64(to_object(items.get_nanbox_f64()))
+    } else {
+        items
+    };
 
     // Proxy GetMethod is observable. Resolve it once, retain it across
     // construction, and root iterator state across callbacks that can collect.
@@ -855,7 +952,7 @@ pub fn array_from_full(c: f64, items: f64, mapfn: f64, this_arg: f64) -> f64 {
     // access, and only the intrinsic permits the live element walk.
     let (iterable, method) =
         if crate::value::addr_class::pointer_value_header(items.get_nanbox_u64())
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             let proto = crate::array::array_prototype_addr();
             let arr =
@@ -998,7 +1095,7 @@ unsafe fn peek_plain_array_len(arr: *const ArrayHeader) -> Option<u32> {
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     Some((*arr).length)
@@ -1074,7 +1171,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     if crate::set::is_registered_set(raw)
@@ -1227,7 +1324,7 @@ unsafe fn try_append_spread_array_dense(
     // Only a genuine dense array: sets/maps/typed-arrays/buffers/lazy arrays
     // materialize element values through `js_array_clone` on the slow path.
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*hdr).obj_type) {
         return None;
     }
     if crate::set::is_registered_set(raw)
@@ -1347,7 +1444,7 @@ unsafe fn real_array_source(src: *const ArrayHeader, len: u32) -> Option<*const 
         return None;
     }
     let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*hdr).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*hdr).obj_type)
         || crate::set::is_registered_set(raw)
         || crate::map::is_registered_map(raw)
         || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()

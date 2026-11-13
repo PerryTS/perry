@@ -41,7 +41,18 @@ impl Model {
                 }
             }
             Cons::LenIndex { lo, hi } => {
+                // An index store's rule comes with its `Cons::Store`, which
+                // records the event; `pop` and a generic permutation have
+                // only this rule (`held_lengths`).
+                let at = match self.len_index_sites.get(&n) {
+                    _ if self.len_index_stores.contains(&n) => None,
+                    Some(&site) => Some(site),
+                    None => Some(u32::MAX),
+                };
                 for &t in toks {
+                    if let Some(at) = at {
+                        self.len_event_through(t, at, false, n);
+                    }
                     self.arr_len_index(t, Iv { lo, hi, nz: false });
                 }
             }
@@ -49,6 +60,11 @@ impl Model {
             Cons::IndexHole => {
                 for &t in toks {
                     self.mark_hole(t);
+                }
+            }
+            Cons::IndexKept => {
+                for &t in toks {
+                    self.index_kept(t);
                 }
             }
             Cons::OwnValues { dst } => {
@@ -398,6 +414,8 @@ impl Model {
                         t == TOP
                             || if self.is_marker(t) {
                                 !self.beside_values(t)
+                            } else if test == guard::NOT_CALLABLE {
+                                !crate::builtins::surely_callable(self, t)
                             } else {
                                 guard::objects(test)
                             }
@@ -427,6 +445,63 @@ impl Model {
                     let saved = self.cur_range.replace(self.rg(n));
                     self.add_s(dst, &[], prim & !strip, strs);
                     self.cur_range = saved;
+                }
+            }
+            Cons::Fulfil { dst } => {
+                // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
+                // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+                for &t in toks {
+                    if t == TOP || self.is_marker(t) {
+                        self.add_tok(dst, t);
+                        continue;
+                    }
+                    // The token's own read of `then` (steps 9-13): it fulfils
+                    // as itself once that read may hold a value no call
+                    // takes; a callable `then` adopts it (`builtins::adopt`).
+                    let then_a = self.atom("then");
+                    let then = Key::Named(then_a);
+                    let one = self.node_l("fulfil-token");
+                    self.add_tok(one, t);
+                    let read = self.node_l("fulfil-then");
+                    self.cons(
+                        read,
+                        Cons::Guard {
+                            test: guard::NOT_CALLABLE,
+                            from: one,
+                            dst,
+                        },
+                    );
+                    if crate::builtins::locked_chain_defines(self, t, then_a) {
+                        // A native promise: its chain ends at a locked
+                        // `then` (Promise.prototype.then), so the read is
+                        // never the chain end's `undefined`; its own values
+                        // (a stored `undefined` among them) count as they are.
+                        let chain = self.node_l("fulfil-then-chain");
+                        self.cons(chain, Cons::Defined { dst: read });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: chain,
+                            },
+                        );
+                        let own = self.field(t, then_a);
+                        self.edge(own, read);
+                    } else {
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: read,
+                            },
+                        );
+                    }
                 }
             }
             Cons::Falsy { dst } => {
@@ -461,6 +536,24 @@ impl Model {
                     if from != dst {
                         self.edge(from, dst);
                     }
+                }
+            }
+            Cons::RequireSpec { call } => {
+                // R-SPEC: each string constant resolves once, as that
+                // literal does; any string, a token or ⊤ once as a value
+                // no constant spells.
+                let strs = self.nodes[n as usize].strs;
+                let any_str = prim & prim::STR != 0 && strs == STRS_TOP;
+                if prim & prim::STR != 0 && !any_str {
+                    let atoms = self.str_atoms(strs).to_vec();
+                    for a in atoms {
+                        if self.require_spec_done.insert((call, Some(a))) {
+                            self.with_b(|m| builtins::require_by_spec(m, call, Some(a)));
+                        }
+                    }
+                }
+                if (any_str || !toks.is_empty()) && self.require_spec_done.insert((call, None)) {
+                    self.with_b(|m| builtins::require_by_spec(m, call, None));
                 }
             }
             Cons::TopIfTop { dst, reason } => {
@@ -518,6 +611,7 @@ impl Model {
                     let k = &self.atoms[key as usize];
                     if crate::solve::numeric_key(k) || k == "length" {
                         self.mark_hole(t);
+                        self.len_event_through(t, u32::MAX, false, NO_NODE);
                         self.arr_len_top(t);
                     }
                     if self.is_marker(t) {
@@ -667,6 +761,7 @@ impl Model {
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
                     self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.note_unnamed_set(target);
                 }
             }
             Cons::CreateProto { reason } => {
@@ -1034,6 +1129,15 @@ impl Model {
                             );
                         }
                         self.note_objproto_accessor();
+                        // `ObjectProto` stands for every built-in prototype:
+                        // the lookups of a primitive (`prim_load`) and of an
+                        // unknown value (⊤) end there too, and no walk runs
+                        // for them. Any of them may call the accessor, with
+                        // any receiver.
+                        if self.reach_proto_accessors {
+                            let r = self.reason("accessor on a built-in prototype");
+                            self.escape(f, r);
+                        }
                     }
                     self.accessor_installed(t, key, f, setter, !objproto);
                 }
@@ -1407,6 +1511,7 @@ impl Model {
                 len_ivs.extend(index_strs.iter().map(|&v| Iv::int(v, v)));
                 for iv in len_ivs {
                     self.indexed_store_sites.insert(site);
+                    self.len_index_stores.insert(o);
                     if self.len_index_done.insert((site, o, iv.lo, iv.hi)) {
                         self.cons(
                             o,
@@ -1420,8 +1525,26 @@ impl Model {
                 if index && self.index_store_done.insert((n, site, 1)) {
                     let ek = self.elem_key();
                     self.cons(o, Cons::Store { key: ek, src, site });
-                    // `a[i] = v` may write past the end; `push` appends.
-                    self.cons(o, Cons::IndexHole);
+                }
+                if index {
+                    // `a[i] = v` may write past the end; `push` appends. At
+                    // a site whose key is at most the length
+                    // (`inbounds_sites`) it does not, while the key is a
+                    // Number and nothing else (a key that may be anything
+                    // else was not what gen compared).
+                    let node = &self.nodes[n as usize];
+                    let kept = self.inbounds_store
+                        && (self.inbounds_sabotage || self.inbounds_sites.contains(&site))
+                        && node.prim == prim::NUM
+                        && node.pts.is_empty()
+                        && index_strs.is_empty();
+                    let (kind, c) = match kept {
+                        true => (3, Cons::IndexKept),
+                        false => (4, Cons::IndexHole),
+                    };
+                    if self.index_store_done.insert((n, site, kind)) {
+                        self.cons(o, c);
+                    }
                 }
                 // A key that may be no String (an object to ToPrimitive, a
                 // symbol, a BigInt) keeps the any-key store; any String
@@ -1666,6 +1789,7 @@ impl Model {
                 for &d in toks {
                     // A copy into an Array (`Object.assign`) may write any
                     // index, past its end too.
+                    self.len_event(d, site, false);
                     self.arr_len_top(d);
                     self.spread_into(src, d, site, from);
                 }

@@ -32,9 +32,7 @@ use super::*;
 /// self.unsafeMap)` over an untyped Map).
 #[no_mangle]
 pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
-    use crate::gc::{
-        GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET,
-    };
+    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET};
     use crate::value::{js_nanbox_pointer, JSValue};
 
     let jsv = JSValue::from_bits(val_f64.to_bits());
@@ -119,7 +117,7 @@ pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
         // Already an array: return unchanged — the index loop reads it in
         // place, no allocation. Lazy arrays are arrays from the iterator's
         // perspective and `js_array_length` / indexing materialize lazily.
-        t if t == GC_TYPE_ARRAY || t == GC_TYPE_LAZY_ARRAY => val_f64,
+        t if crate::gc_type_is_array!(t) || t == GC_TYPE_LAZY_ARRAY => val_f64,
         // Map → `[k, v]` pair array (=== `map.entries()` spread).
         GC_TYPE_MAP => {
             let arr = js_map_entries_for_for_of(raw_ptr);
@@ -937,7 +935,16 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let value = &value_h;
-    let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer: it has no address.
+    let raw_ptr = || {
+        let value = value_h.get_nanbox_f64();
+        if value.to_bits() >> 48 == 0 {
+            0
+        } else {
+            js_nanbox_get_pointer(value) as usize
+        }
+    };
 
     let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
     if jsv.is_null() || jsv.is_undefined() {

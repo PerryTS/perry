@@ -1,0 +1,211 @@
+//! LIFE I1: the hooks of the lifetime measurement (`PERRY_LIFE_MEASURE` at
+//! compile time; instrumented runtime variant only).
+//!
+//! * every census birth that is lowered calls `perry_life_birth` with its
+//!   value, its site key (the census row's `module, function, kind, class,
+//!   offset`) and its innermost loop;
+//! * a body's activation: `perry_life_enter` where its statement list begins,
+//!   `perry_life_return` at each `return` (the returned value rooted across
+//!   it) and at the normal end of the list;
+//! * the end of an iteration of a loop that encloses a birth:
+//!   `perry_life_iter` at the loop's back-edge poll point (normal end of the
+//!   body and `continue`) and after the loop (`break`, normal exit);
+//! * a throw caught by a `try`: `perry_life_depth` where the handler scope
+//!   is entered, `perry_life_catch(depth)` where the handler starts (the
+//!   activations the throw left are decided there, `late`);
+//! * the end of a turn: `perry_life_turn` after each microtask checkpoint of
+//!   the entry's event loop.
+//!
+//! The runtime (`wpfacts_check/life_measure.rs`) counts births per site,
+//! samples some and probes them at each boundary. Without the knob the census
+//! records no birth and nothing here emits.
+use perry_hir::{Expr, Stmt};
+
+use crate::expr::FnCtx;
+use crate::types::I64;
+
+/// The site id the binary carries for site key `key`: FNV-1a 64 of the key
+/// text. The compile writes `id<TAB>key` lines to the file the compile-time
+/// knob names (a value other than `1`), so the run's TSV joins by id.
+pub(crate) fn site_id(key: &str) -> u64 {
+    key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
+}
+
+/// Appends the site keys of one body to the compile-time site file.
+pub(crate) fn write_sites<'a>(keys: impl Iterator<Item = &'a str>) {
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
+    let Some(path) = std::env::var("PERRY_LIFE_MEASURE")
+        .ok()
+        .filter(|p| !p.is_empty() && p != "1")
+    else {
+        return;
+    };
+    let mut seen = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .expect("life measure sites");
+    let mut text = String::new();
+    for k in keys {
+        let id = site_id(k);
+        if seen.insert(id) {
+            text.push_str(&format!("{id}\t{k}\n"));
+        }
+    }
+    if text.is_empty() {
+        return;
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = f.write_all(text.as_bytes());
+    }
+}
+
+/// LIFE I3: the stable id of the loop with body address `at` (its `loop` row
+/// in the site file; 0: in no loop).
+fn loop_id(ctx: &FnCtx<'_>, at: usize) -> u64 {
+    if at == 0 {
+        return 0;
+    }
+    ctx.life_claims
+        .loop_ids
+        .get(&at)
+        .copied()
+        .unwrap_or(at as u64)
+}
+
+fn on(ctx: &FnCtx<'_>) -> bool {
+    ctx.life_claims.body != 0
+}
+
+/// A census birth was lowered to `value`.
+pub(crate) fn birth(ctx: &mut FnCtx<'_>, e: &Expr, value: &str) {
+    if !on(ctx) {
+        return;
+    }
+    let Some((key, loop_body)) = ctx
+        .life_claims
+        .births
+        .get(&(e as *const Expr as usize))
+        .cloned()
+    else {
+        return;
+    };
+    if ctx.block().is_terminated() {
+        return;
+    }
+    let site = (site_id(&key) as i64).to_string();
+    let bits = ctx.block().bitcast_double_to_i64(value);
+    let loop_id = (loop_id(ctx, loop_body) as i64).to_string();
+    ctx.block().call_void(
+        "perry_life_birth",
+        &[(I64, &bits), (I64, &site), (I64, &loop_id)],
+    );
+}
+
+/// The statement list `stmts` begins: the body's own list starts its
+/// activation; a loop body's list starts an iteration (`perry_life_loop`).
+pub(crate) fn list_begin(ctx: &mut FnCtx<'_>, stmts: &[Stmt]) {
+    if !on(ctx) || ctx.block().is_terminated() {
+        return;
+    }
+    let at = stmts.as_ptr() as usize;
+    if at == ctx.life_claims.body {
+        let body = (ctx.life_claims.body_id as i64).to_string();
+        ctx.block().call_void("perry_life_enter", &[(I64, &body)]);
+    } else if !stmts.is_empty() && ctx.life_claims.loops.contains(&at) {
+        let loop_id = (loop_id(ctx, at) as i64).to_string();
+        ctx.block().call_void("perry_life_loop", &[(I64, &loop_id)]);
+    }
+}
+
+/// The statement list `stmts` ended normally: the body's own list returns.
+pub(crate) fn list_end(ctx: &mut FnCtx<'_>, stmts: &[Stmt], lowered: bool) {
+    if lowered
+        && on(ctx)
+        && stmts.as_ptr() as usize == ctx.life_claims.body
+        && ctx.inline_ctor_return.is_empty()
+        && !ctx.block().is_terminated()
+    {
+        ctx.block().call_void("perry_life_return", &[]);
+    }
+}
+
+/// A `return` of `value` leaves the body. The hook can collect, so `value`
+/// is rooted across it and the relocated value is returned.
+pub(crate) fn at_return(ctx: &mut FnCtx<'_>, value: String) -> anyhow::Result<String> {
+    if !on(ctx) || !ctx.inline_ctor_return.is_empty() || ctx.block().is_terminated() {
+        return Ok(value);
+    }
+    if value.is_empty() {
+        ctx.block().call_void("perry_life_return", &[]);
+        return Ok(value);
+    }
+    crate::rooting::with_scoped_values(ctx, &[(&value, None)], |ctx, reads| {
+        ctx.block().call_void("perry_life_return", &[]);
+        crate::expr::lower_expr(ctx, &reads[0])
+    })
+}
+
+/// A standalone constructor's shared completion block (every `return` and the
+/// normal end branch to it; `at_return` and `list_end` skip while its target
+/// is open): the body returns. The completion value in `slot` (a plain
+/// alloca) is rooted across the hook and stored back relocated.
+pub(crate) fn ctor_return(ctx: &mut FnCtx<'_>, slot: &str) -> anyhow::Result<()> {
+    if !on(ctx) || ctx.block().is_terminated() {
+        return Ok(());
+    }
+    let raw = ctx.block().load(crate::types::DOUBLE, slot);
+    let moved = at_return(ctx, raw)?;
+    ctx.block().store(crate::types::DOUBLE, &moved, slot);
+    Ok(())
+}
+
+/// An iteration of the loop with body `body` ends (back-edge or loop exit).
+pub(crate) fn iteration(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
+    let at = body.as_ptr() as usize;
+    if !on(ctx)
+        || body.is_empty()
+        || !ctx.life_claims.loops.contains(&at)
+        || ctx.block().is_terminated()
+    {
+        return;
+    }
+    let loop_id = (loop_id(ctx, at) as i64).to_string();
+    ctx.block().call_void("perry_life_iter", &[(I64, &loop_id)]);
+}
+
+/// A `try` is entered: the activation depth its handler restores (`None`
+/// without the knob). Read where the handler scope is entered, so it
+/// dominates the handler.
+pub(crate) fn try_depth(ctx: &mut FnCtx<'_>) -> Option<String> {
+    if !super::life_measure_on() || ctx.block().is_terminated() {
+        return None;
+    }
+    Some(ctx.block().call(I64, "perry_life_depth", &[]))
+}
+
+/// The handler of a `try` entered at activation depth `depth` runs: every
+/// activation deeper than it left on the throw (`perry_life_catch`, decided
+/// `late`). Called before the exception is taken: the runtime's slot roots it.
+pub(crate) fn caught(ctx: &mut FnCtx<'_>, depth: &Option<String>) {
+    if let Some(d) = depth {
+        if !ctx.block().is_terminated() {
+            ctx.block().call_void("perry_life_catch", &[(I64, d)]);
+        }
+    }
+}
+
+/// The entry's event loop finished a microtask checkpoint with an unwound
+/// JS stack: the turn ends.
+pub(crate) fn turn(ctx: &mut FnCtx<'_>) {
+    if super::life_measure_on() && !ctx.block().is_terminated() {
+        ctx.block().call_void("perry_life_turn", &[]);
+    }
+}

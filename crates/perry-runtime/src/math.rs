@@ -269,13 +269,13 @@ pub extern "C" fn js_math_exp(x: f64) -> f64 {
     const U_THRESHOLD: f64 = -7.45133219101941108420e+02; // 0xC0874910 D52D3051
     const LN2_HI: [f64; 2] = [6.93147180369123816490e-01, -6.93147180369123816490e-01];
     const LN2_LO: [f64; 2] = [1.90821492927058770002e-10, -1.90821492927058770002e-10];
-    const INV_LN2: f64 = 1.44269504088896338700e+00; // 0x3FF71547 652B82FE
+    const INV_LN2: f64 = std::f64::consts::LOG2_E; // 0x3FF71547 652B82FE
     const P1: f64 = 1.66666666666666019037e-01; // 0x3FC55555 5555553E
     const P2: f64 = -2.77777777770155933842e-03; // 0xBF66C16C 16BEBD93
     const P3: f64 = 6.61375632143793436117e-05; // 0x3F11566A AF25DE2C
     const P4: f64 = -1.65339022054652515390e-06; // 0xBEBBBD41 C5D26BF1
     const P5: f64 = 4.13813679705723846039e-08; // 0x3E663769 72BEA4D0
-    const E: f64 = 2.718281828459045; // 0x4005BF0A 8B145769
+    const E: f64 = std::f64::consts::E; // 0x4005BF0A 8B145769
     const HUGE: f64 = 1.0e+300;
     const TWOM1000: f64 = 9.33263618503218878990e-302; // 2**-1000
     const TWO1023: f64 = 8.988465674311579539e307; // 2**1023
@@ -436,9 +436,21 @@ pub extern "C" fn js_math_hypot(a: f64, b: f64) -> f64 {
 /// Math.random() -> number (0 <= x < 1)
 #[no_mangle]
 pub extern "C" fn js_math_random() -> f64 {
-    crate::effect!(host_read, random);
-    let mut rng = rand::rng();
-    rng.random::<f64>()
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("random.Math", &format!("{:?}", ()), || {
+            crate::effect!(host_read, random);
+            let mut rng = rand::rng();
+            rng.random::<f64>()
+        });
+    }
+
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, random);
+        let mut rng = rand::rng();
+        rng.random::<f64>()
+    }
 }
 
 /// Math.min(...array) -> number — find minimum value in an array
@@ -603,15 +615,26 @@ mod tests {
             // (x, arm64 Node, x86-64 Node)
             (-0.27762589510530233, 0.7575801829621506, 0.7575801829621505),
             (1.0231953831389546, 2.782070356661735, 2.7820703566617344),
-            (-25.956580764614046, 5.335808135302985e-12, 5.335808135302986e-12),
+            (
+                -25.956580764614046,
+                5.335808135302985e-12,
+                5.335808135302986e-12,
+            ),
         ];
         for (x, arm64, x86) in split {
-            let want = if cfg!(target_arch = "aarch64") { arm64 } else { x86 };
+            let want = if cfg!(target_arch = "aarch64") {
+                arm64
+            } else {
+                x86
+            };
             assert_eq!(js_math_exp(x).to_bits(), want.to_bits(), "exp({x})");
         }
         let common: [(f64, f64); 8] = [
             // three.js BloomNode's 22-tap Gaussian weight: libm gives ...564.
-            (-0.5 * 16.0 / ((22.0 / 3.0) * (22.0 / 3.0)), 0.8617756314171563),
+            (
+                -0.5 * 16.0 / ((22.0 / 3.0) * (22.0 / 3.0)),
+                0.8617756314171563,
+            ),
             (1.0, std::f64::consts::E),
             (-1.0, 0.36787944117144233),
             (709.78, 1.7928227943945155e308),

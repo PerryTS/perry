@@ -83,6 +83,11 @@ pub mod guard {
     /// A primitive but `undefined`/`null`, no object: what a sloppy
     /// function boxes as its `this`.
     pub const BOXED: u8 = 7;
+    /// A value no call can take (IsCallable false, ECMA-262 7.2.3): every
+    /// primitive, and an object token that is surely no function
+    /// (`builtins::methods::surely_callable`); the `then` read of a value
+    /// a promise resolves with (`Cons::Fulfil`).
+    pub const NOT_CALLABLE: u8 = 11;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -96,6 +101,7 @@ pub mod guard {
             TRUTHY => p::NUM | p::STR | p::BOOL | p::BIGINT | p::SYMBOL,
             NOT_STR => p::ALL & !p::STR,
             BOXED => p::ALL & !(p::UNDEF | p::NULL),
+            NOT_CALLABLE => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::BOOL | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -497,7 +503,8 @@ pub struct Template {
     /// Birth keys reserved for a constructor store
     /// (`ClassFieldOrigin::ConstructorStore`) that are not `definite`: code
     /// can observe the instance before the constructor stores them (a method
-    /// call on `this`, ...). Known slots, holding the hole (absent) until
+    /// call on `this`, ...), or a run skips the store (a branch, a loop body,
+    /// in first-store order among the others). Known slots, holding the hole (absent) until
     /// stored; each read pairs its load with the hole compare.
     pub reserved: Vec<Atom>,
     /// Parent template (class `extends`), when statically known.
@@ -1316,7 +1323,7 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrundef`): `ElemUndef`
     /// takes a key that reaches the length's lower bound as below it.
     pub elem_undef_sabotage: bool,
-    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every method
+    /// Negative control (`PERRY_FACTS_SABOTAGE=numbercall`): every
     /// call is a Number call (`ModuleBindings::number_calls`), a wrong
     /// claim the call-result witness must catch.
     pub number_call_sabotage: bool,
@@ -1378,9 +1385,22 @@ pub struct Model {
     /// observations are recorded (`Cons::Identity`). Off, the model is the
     /// one without the lever.
     pub value_records: bool,
+    /// A record crosses a program call in a `Record` signature slot
+    /// (DESIGN-p4l4 §5.2, VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
+    /// off: such a call slot then rejects the template, as in VR-3a).
+    pub record_signatures: bool,
     /// The admitted value-record templates (`TemplateFacts::record` is
     /// `Ok`), set after the record derive; `bindings::rep_of` reads it.
     pub records: crate::pts::FxHashSet<TmplId>,
+    /// The admitted record arrays (VR-4b): Arr template -> the record
+    /// template of its elements. Set with `records`; such an Array is no
+    /// plain program Array (`bindings::arr_rep`), it is a
+    /// `GC_TYPE_RECORD_ARRAY` only the record-array intrinsics touch.
+    pub record_arrays: FxHashMap<TmplId, TmplId>,
+    /// S0 negative control `vrarrjoin` (DESIGN-p4l4 §10.3): a holder of a
+    /// record array and of other Arrays is typed a record array (R6's join
+    /// ignored), a wrong claim the receiver witness must catch.
+    pub record_array_join_sabotage: bool,
     /// Negative control (`PERRY_FACTS_SABOTAGE=arrconst`): a write to an
     /// Array is not recorded (`Model::arr_written`), so a literal that is
     /// stored into keeps its constant contents, a wrong claim the constant
@@ -1400,6 +1420,78 @@ pub struct Model {
     pub rest_field_sabotage: bool,
     /// I32 at rest, PR B (`rest_elems`; `PERRY_REST_ELEMS=0` turns it off).
     pub rest_elems: bool,
+    /// The at-rest capacity reservation (`rest_elems::reserve`;
+    /// `PERRY_REST_CAPACITY=0` turns it off).
+    pub rest_capacity: bool,
+    /// Fill births (`fill_births`; `PERRY_ARRAY_FILL_BIRTH=0` turns them off).
+    pub fill_births: bool,
+    /// I32 at rest, PR C (`rest_fields`; `PERRY_REST_FIELDS=0` turns it off).
+    pub rest_fields: bool,
+    /// The key signs (`element_keys::collect_signs`;
+    /// `PERRY_FACTS_KEY_SIGN=0` turns them off).
+    pub key_sign: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=keysign`): every int32 key
+    /// is claimed non-negative, a wrong claim the witness at the element
+    /// site must catch.
+    pub key_sign_sabotage: bool,
+    /// A `slice` of an Array bears a plain Array (`builtins::
+    /// site_slice_arr`; `PERRY_FACTS_SLICE_BIRTHS=0` turns it off).
+    pub slice_births: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=slicebirth`): a `slice`
+    /// birth is claimed a plain Array whatever its species constructor (an
+    /// `Object` species makes a Number object), a wrong claim the array rep
+    /// witness must catch.
+    pub slice_birth_sabotage: bool,
+    /// The wide keys (`element_keys::collect_wide`;
+    /// `PERRY_FACTS_WIDE_KEYS=0` turns them off).
+    pub wide_keys: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=widekey`): a key past int32
+    /// that may be negative is claimed non-negative, a wrong claim the
+    /// witness at the element site must catch.
+    pub wide_key_sabotage: bool,
+    /// Literal strings (`literal_strings`;
+    /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
+    pub literal_strings: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=litstr`): every binding and
+    /// field that may hold a String is claimed to hold only literals'
+    /// values, a wrong claim the witness at the store or alias must catch.
+    pub literal_strings_sabotage: bool,
+    /// Held lengths (`held_lengths`; `PERRY_FACTS_HELD_LENGTHS=0` turns
+    /// them off): the solve records who changes an Array's length.
+    pub held_lengths: bool,
+    /// A binding's facts are read off its shared node and its summary
+    /// instance copies (`bindings::BindingNodes`). Off with
+    /// `PERRY_FACTS_INSTANCE_NODES=0` and under the negative control
+    /// `PERRY_FACTS_SABOTAGE=instlit`: the shared node alone, which claims
+    /// an instance-born literal's birth state for the Array a callee grew.
+    pub instance_nodes: bool,
+    /// Every event that may change Array token `.0`'s length or move its
+    /// elements (`Model::len_event`): the store site `.1`, or with `.2` the
+    /// call `.1` (a builtin method), or with `u32::MAX` nothing the solve
+    /// can place. `.3`: the node the store's receiver was read from
+    /// (`NO_NODE`: not known here; a call's is its `this`), for
+    /// `named_lengths`.
+    pub len_events: crate::pts::FxHashSet<(Tok, u32, bool, NodeId)>,
+    /// Named lengths (`named_lengths`; `PERRY_FACTS_NAMED_LENGTHS=0` turns
+    /// them off): the events are recorded for them too.
+    pub named_lengths: bool,
+    /// The node a narrowed read of a local sees (`gen::narrow`: a guard's
+    /// or a loop test's start and end node) -> that local's node: a store
+    /// through such a read is a store through the local's name
+    /// (`named_lengths`).
+    pub name_of: FxHashMap<NodeId, NodeId>,
+    /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
+    pub len_index_stores: crate::pts::FxHashSet<NodeId>,
+    /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
+    /// with no store) -> a store site that names its function.
+    pub len_index_sites: FxHashMap<NodeId, SiteId>,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=restlane`): a field whose
+    /// rep is F64 is admitted as an I32 lane too (`rest_fields`), a wrong
+    /// claim the proven store's witness must catch.
+    pub rest_lane_sabotage: bool,
+    /// Object tokens a generic reader may touch (`Model::rest_obj_used`):
+    /// their class gets no I32 lane.
+    pub obj_used: crate::pts::FxHashSet<Tok>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=restelem`): a builtin
     /// method's use of an Array is not recorded (`Model::rest_used`), so an
     /// Array a native writes may be admitted at rest, a wrong claim the
@@ -1410,8 +1502,35 @@ pub struct Model {
     pub arr_used: crate::pts::FxHashSet<Tok>,
     /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
     pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
+    /// DESIGN-p4l4 VR-4b: an array literal that is the whole value of a
+    /// `let`, of a local assignment, of a named store or of a class field
+    /// initializer: the holder codegen births it for
+    /// (`records::ArrBirth`).
+    pub(crate) arr_birth_holder: FxHashMap<TmplId, crate::records::ArrBirth>,
+    /// VR-4b: the bindings of a for-of's source and of its iterator arm's
+    /// temporaries (`perry_hir::lower::for_of_guard`), whose iteration
+    /// protocol uses are the for-of intrinsic's.
+    pub(crate) for_of_relays: crate::pts::FxHashSet<NodeId>,
+    /// VR-4b: the receivers of a generic in-place permutation
+    /// (`Gen::permuted_len`), whose `Cons::LenIndex` is not a `pop`'s.
+    pub(crate) arr_permuted: crate::pts::FxHashSet<NodeId>,
     /// The receiver relays `array_method` makes for a fused fill's call.
     pub rest_fill_relays: Vec<NodeId>,
+    /// Push-filled births (`push_fills`; `PERRY_REST_PUSH_FILL=0` turns them
+    /// off), and the negative control `PERRY_FACTS_SABOTAGE=restpush`.
+    pub push_fills: bool,
+    pub push_fill_sabotage: bool,
+    /// Each fill's final length, by its index (`push_fills::Fills::lens`).
+    pub push_fill_lens: Vec<u32>,
+    /// The templates a fill births (`push_fills::born`), with the fill.
+    pub push_fill_tmpls: FxHashMap<TmplId, u32>,
+    /// The store sites of fill pushes, with the fill: no append and no
+    /// generic use for an Array of that fill.
+    pub push_fill_sites: FxHashMap<SiteId, u32>,
+    /// `new Array()` call sites that are a fill's birth, with the fill.
+    pub push_fill_new_sites: FxHashMap<SiteId, u32>,
+    /// The fill pushes the generator walked.
+    pub(crate) push_fill_pushes: Vec<crate::push_fills::FillPush>,
     /// The templates admitted at rest (`rest_elems::admit`), and why each
     /// other candidate was not (`rest_elems::probe`).
     pub rest_tmpls: crate::pts::FxHashSet<TmplId>,
@@ -1453,11 +1572,51 @@ pub struct Model {
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,
+    /// `Map.prototype.get` reads a Map's values, not its keys
+    /// (`solve/map_vals.rs`; `PERRY_FACTS_MAP_VALUES=0` turns it off).
+    pub map_values: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=mapvals`): `set`'s key is
+    /// taken for its value, a wrong claim about what `get` returns.
+    pub map_values_sabotage: bool,
+    /// The value node of each Map `get` or `set` ran on (`Model::map_vals`).
+    pub map_vals: FxHashMap<Tok, NodeId>,
+    /// Maps the program's `new Map(...)` bore (`Model::map_born`).
+    pub map_seen: crate::pts::FxHashSet<Tok>,
+    /// Maps whose every content write is a modelled `set`
+    /// (`Model::map_born`, `Model::map_open`).
+    pub map_closed: crate::pts::FxHashSet<Tok>,
     /// Store sites of `a[i] = v` whose element stores `Cons::LenIndex`
     /// judges against the birth length (`Model::arr_len_store`).
     pub indexed_store_sites: crate::pts::FxHashSet<SiteId>,
+    /// Store sites of `a[k] = v` whose key gen proved at most the length
+    /// of the Array the local `a` holds there (`gen/in_bounds.rs`): the
+    /// store overwrites an element or appends, so it leaves no hole in an
+    /// Array whose length never shrinks (`Cons::IndexKept`).
+    pub inbounds_sites: crate::pts::FxHashSet<SiteId>,
+    /// Arrays whose length may shrink: every event that makes a length ⊤
+    /// (`Model::arr_len_top`: a `length` store, `pop`, `shift`, `splice`,
+    /// an escape, a HARD marker, ...). An Array of this unit that is not
+    /// here only ever grows.
+    pub arr_shrunk: crate::pts::FxHashSet<Tok>,
+    /// Arrays an in-bounds store kept hole-free (`Cons::IndexKept`): a
+    /// later shrink marks the hole it withheld (`Model::arr_len_top`).
+    pub inbounds_kept: crate::pts::FxHashSet<Tok>,
+    /// In-bounds index stores leave no hole (`gen/in_bounds.rs`;
+    /// `PERRY_FACTS_INBOUNDS_STORE=0` turns it off).
+    pub inbounds_store: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=inbounds`): every index
+    /// store under a Number key counts as in bounds, a wrong claim the
+    /// element read's witness must catch (a hole read as a Number).
+    pub inbounds_sabotage: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=nohole`): no Array ever holds
+    /// a hole (`hole`, `mark_hole`): its iteration never yields the
+    /// `undefined` of one, a wrong claim the read's witness must catch.
+    pub no_hole_sabotage: bool,
     /// `(site, holder, lo, hi)` index intervals already judged.
     pub len_index_done: crate::pts::FxHashSet<(SiteId, NodeId, i64, i64)>,
+    /// `(call, specifier value)` a computed `require` already resolved
+    /// (`Cons::RequireSpec`; `None`: a value no constant spells).
+    pub require_spec_done: crate::pts::FxHashSet<(CallId, Option<Atom>)>,
     /// `builtins::arr_iterated`: what iterating Array `t` yields.
     pub arr_iterated: FxHashMap<Tok, NodeId>,
     /// `builtins::species_from`: the `constructor` ArraySpeciesCreate
@@ -1651,6 +1810,40 @@ pub struct Model {
     pub inst_lose: crate::pts::FxHashSet<TmplId>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
+    /// The ordinary dispatch behind a name-keyed fold
+    /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
+    /// serves itself: `method_on` makes it on every other receiver.
+    pub name_fold_calls: FxHashMap<CallId, &'static str>,
+    /// The `prototype` of the new target of a `Reflect.construct` whose
+    /// result is unknown goes to ⊤ with it (`Model::new_target_unknown`,
+    /// `reach::new_target`).
+    pub reach_new_target: bool,
+    /// An iteration consumer reads `done` of each step result
+    /// (`Model::step_done`, `reach::step_done`).
+    pub reach_step_done: bool,
+    /// A `JSON.stringify` replacer function is called with the values
+    /// serialized and their holders (`Model::json_replacer_calls`,
+    /// `reach::json_replacer`).
+    pub reach_json_replacer: bool,
+    /// The JSON.parse revivers called with the parse objects' own values:
+    /// the parse's templates, the parsed node and the value argument
+    /// (`Model::json_reviver_flush`).
+    pub json_reviver_own: Vec<(Vec<TmplId>, NodeId, NodeId)>,
+    /// A generator object has the members it inherits
+    /// (`builtins::gen_members`, `reach::gen_members`).
+    pub reach_gen_members: bool,
+    /// A built-in consumer that can stop early closes its iterator
+    /// (`Gen::iterate_closed`, `builtins::iterate`; `reach::iter_close`).
+    pub reach_iter_close: bool,
+    /// A promise adopts a thenable it is resolved with (`Cons::Fulfil`,
+    /// `builtins::resolver`; `reach::thenable`).
+    pub reach_thenable: bool,
+    /// A hand-written built-in rule's positions hold what a spread
+    /// argument supplies (`Model::positional`, `reach::spread_args`).
+    pub reach_spread_args: bool,
+    /// An accessor installed on a built-in prototype is called by reads
+    /// and writes the solve does not walk (`reach::proto_accessors`).
+    pub reach_proto_accessors: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).
@@ -1691,6 +1884,8 @@ pub struct Model {
     pub ta_exact_len: FxHashMap<TmplId, u32>,
     pub ta_birth_input: FxHashMap<TmplId, NodeId>,
     pub resolvers: FxHashMap<NodeId, Tok>,
+    /// The reject functions (`builtins::rejecter`) by the node they feed.
+    pub rejecters: FxHashMap<NodeId, Tok>,
     /// The executors of promise capabilities (`builtins::capability_executor`),
     /// by the node of the value their capability is resolved with.
     pub executors: FxHashMap<NodeId, Tok>,
@@ -2385,6 +2580,8 @@ pub struct Model {
     /// DECISIONS 225: the function bodies that can run, when the analysis
     /// gates bodies on it (`None`: every body runs).
     pub act: Option<Act>,
+    /// What the solve observed of the runtime families (`family_reach`).
+    pub(crate) family_reach: crate::family_reach::State,
 }
 
 /// DECISIONS 225: which function bodies can run. A body is active once its

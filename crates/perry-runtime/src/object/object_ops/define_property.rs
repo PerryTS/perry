@@ -225,6 +225,26 @@ pub(crate) unsafe fn define_own_property_decoded(
     key: &crate::gc::RuntimeHandle<'_>,
     descriptor: &DescView<'_>,
 ) -> bool {
+    if let Some(result) = super::super::deferred_namespace::with_key_target(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        |target, property_key| {
+            let receiver = scope.root_nanbox_f64(target);
+            let key = scope.root_nanbox_f64(property_key);
+            define_own_property_decoded_ordinary(scope, &receiver, &key, descriptor)
+        },
+    ) {
+        return result;
+    }
+    define_own_property_decoded_ordinary(scope, receiver, key, descriptor)
+}
+
+unsafe fn define_own_property_decoded_ordinary(
+    scope: &crate::gc::RuntimeHandleScope,
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: &crate::gc::RuntimeHandle<'_>,
+    descriptor: &DescView<'_>,
+) -> bool {
     // Object model §3.2: defining an optional layout key whose slot holds the
     // hole defines a new property (`layout_desc::prepare_hole_define`); a
     // data definition with exactly the attributes the layout carries the key

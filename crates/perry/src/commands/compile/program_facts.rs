@@ -153,6 +153,10 @@ pub(crate) fn run(
         ),
         // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -483,6 +487,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         .collect();
     out.super_unrelinked = pf.super_unrelinked.clone();
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
+    out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
@@ -579,26 +584,101 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             out.call_arg_ranges.insert(*offset, iv.clone());
         }
         out.number_calls.extend(mb.number_calls.iter().copied());
+        out.call_kinds
+            .extend(mb.call_kinds.iter().map(|&(o, e, k)| ((o, e), k)));
         out.number_element_reads
             .extend(mb.number_element_reads.iter().copied());
+        out.int32_element_reads
+            .extend(mb.int32_element_reads.iter().copied());
         out.element_floors.extend(mb.element_floors.iter().copied());
         out.const_numbers.extend(mb.const_numbers.iter().copied());
         out.element_keys.extend(mb.element_keys.iter().copied());
+        out.key_signs.extend(mb.key_signs.iter().copied());
+        out.wide_keys.extend(mb.wide_keys.iter().copied());
+        out.inbounds_stores
+            .extend(mb.inbounds_stores.iter().copied());
         out.rest_reads.extend(mb.rest_reads.iter().copied());
         out.rest_writes.extend(mb.rest_writes.iter().copied());
         out.rest_births.extend(mb.rest_births.iter().copied());
+        out.rest_reserves.extend(mb.rest_reserves.iter().copied());
+        out.list_capacities
+            .extend(mb.list_capacities.iter().copied());
+        out.rest_pushes.extend(mb.rest_pushes.iter().copied());
+        out.fill_push_recvs
+            .extend(mb.fill_push_recvs.iter().copied());
+        out.fill_births.extend(mb.fill_births.iter().copied());
+        out.rest_lane_reads
+            .extend(mb.rest_lane_reads.iter().copied());
+        // DESIGN-p4l4 VR-4b: the record arrays. Their record's layout is
+        // this module's (wpfacts rejects a record array held in another
+        // module); without it codegen refuses the module.
+        {
+            let mut layout = |r: u32| {
+                if let Some(l) = record_layout(pf, path, r) {
+                    out.record_layouts.insert(r, l);
+                }
+                r
+            };
+            for (id, r) in &mb.record_array_locals {
+                out.record_array_locals.insert(*id, layout(*r));
+            }
+            for (at, k, r) in &mb.record_array_reads {
+                out.record_array_reads.insert((*at, k.clone()), layout(*r));
+            }
+            for (id, r) in &mb.record_array_birth_locals {
+                out.record_array_birth_locals.insert(*id, layout(*r));
+            }
+            for (at, r) in &mb.record_array_birth_stores {
+                out.record_array_birth_stores.insert(*at, layout(*r));
+            }
+            for (c, k, r) in &mb.record_array_birth_fields {
+                out.record_array_birth_fields
+                    .insert((*c, k.clone()), layout(*r));
+            }
+        }
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
-            out.signatures.insert(
-                *id,
-                perry_codegen::FactsSignature {
-                    params: sig.params.iter().map(rep).collect(),
-                    ranges: sig.ranges.clone(),
-                    ret: rep(&sig.ret),
-                    this_class: sig.this_class,
-                    zero_ok: pf.zero_sign_tolerated > 0,
-                },
-            );
+            // DESIGN-p4l4 VR-3b: a Record slot whose layout this module
+            // lowers (`record_layout`: the literal is born here).
+            let mut record = |r: &perry_wpfacts::Rep| match r {
+                perry_wpfacts::Rep::Record(r) => {
+                    let layout = record_layout(pf, path, r.tmpl)?;
+                    out.record_layouts.insert(r.tmpl, layout);
+                    Some(perry_codegen::FactsRecRep {
+                        tmpl: r.tmpl,
+                        opt: r.opt,
+                    })
+                }
+                _ => None,
+            };
+            let mut record_params: Vec<_> = sig.params.iter().map(&mut record).collect();
+            if record_params.iter().all(Option::is_none) {
+                record_params.clear();
+            }
+            let record_ret = record(&sig.ret);
+            let sig = perry_codegen::FactsSignature {
+                params: sig.params.iter().map(rep).collect(),
+                ranges: sig.ranges.clone(),
+                ret: rep(&sig.ret),
+                this_class: sig.this_class,
+                zero_ok: pf.zero_sign_tolerated > 0,
+                record_params,
+                record_ret,
+            };
+            // A signature whose every slot is Boxed here (a record this
+            // module does not lower) is none.
+            if sig.record_ret.is_none()
+                && sig.record_params.is_empty()
+                && sig.this_class.is_none()
+                && sig.ret.encoding() == perry_codegen::FactsEnc::Boxed
+                && sig
+                    .params
+                    .iter()
+                    .all(|r| r.encoding() == perry_codegen::FactsEnc::Boxed)
+            {
+                continue;
+            }
+            out.signatures.insert(*id, sig);
         }
         // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
         let module_index = pf.module_paths.iter().position(|p| p == path);
@@ -639,6 +719,29 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
         }
     }
+    // Method sites (wpfacts `method_sites`): no typed-array receiver fact
+    // with `PERRY_FACTS_TYPED_ARRAY_SITES=0`, no Array-member fact with
+    // `PERRY_FACTS_ARRAY_METHOD_SITES=0`, none when interpreted code can
+    // run. Two records under one key hold a fact only when both do.
+    if !interp {
+        for (site, key, flags) in &mb.method_sites {
+            out.method_sites
+                .entry((*site, key.clone()))
+                .and_modify(|f| *f &= *flags)
+                .or_insert(*flags);
+        }
+    }
+    // Quiet sites (wpfacts `quiet_sites`): empty with
+    // `PERRY_FACTS_QUIET_SITES=0`, and when interpreted code can run.
+    let quiet = !interp && perry_wpfacts::quiet_sites_enabled();
+    if quiet {
+        out.quiet_reads.extend(mb.quiet_reads.iter().cloned());
+        out.quiet_elements.extend(mb.quiet_elements.iter().copied());
+        out.primitive_reads
+            .extend(mb.primitive_reads.iter().cloned());
+        out.primitive_elements
+            .extend(mb.primitive_elements.iter().copied());
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {
@@ -652,6 +755,14 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     },
                 );
             }
+            // A Number or `undefined` and nothing else (the negative control
+            // `undefnum` claims it for anything that may be a Number).
+            if b.prims & prim::NUM != 0
+                && (!b.other && b.class_ids.is_empty() && b.prims & !(prim::NUM | prim::UNDEF) == 0
+                    || std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("undefnum"))
+            {
+                out.undef_number_inputs.insert(*id);
+            }
             if !b.other && b.class_ids.is_empty() && b.prims == prim::NUM {
                 out.number_inputs.insert(*id);
                 // A Number binding whose interval proof lies in the int32
@@ -660,6 +771,9 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX))
                 {
                     out.int32_inputs.insert(*id);
+                    if let Some(range) = b.int_range {
+                        out.int32_ranges.insert(*id, range);
+                    }
                     if b.zero_tol {
                         out.zero_tolerant_locals.insert(*id);
                     }
@@ -669,6 +783,22 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 }
             }
             out.local_reps.insert(*id, facts_rep(b.rep));
+            // DESIGN-p4l4 VR-3a: a binding of one admitted value record is
+            // its fields by value (`perry_codegen::value_records`). The
+            // template's literal must be born in this module (its class is
+            // this module's, or it stays an `Expr::Object`).
+            if let perry_wpfacts::Rep::Record(r) = b.rep {
+                if let Some(layout) = record_layout(pf, path, r.tmpl) {
+                    out.record_layouts.insert(r.tmpl, layout);
+                    out.record_locals.insert(
+                        *id,
+                        perry_codegen::FactsRecRep {
+                            tmpl: r.tmpl,
+                            opt: r.opt,
+                        },
+                    );
+                }
+            }
             if b.length_number {
                 out.length_number_inputs.insert(*id);
             }
@@ -677,6 +807,24 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if b.immutable_array {
                 out.immutable_arrays.insert(*id);
+            }
+            if b.literal_strings {
+                out.literal_string_locals.insert(*id);
+            }
+            if b.stable_length {
+                out.stable_length_locals.insert(*id, b.stable_front);
+            }
+            if b.named_length {
+                out.named_length_locals.insert(*id);
+            }
+            // A primitive and no object at all: an operator converts
+            // nothing of it (`perry_codegen` `quiet`).
+            // The negative control `quiet` claims it for every local.
+            if quiet
+                && (!b.other && b.class_ids.is_empty() && b.prims != 0
+                    || pf.sabotage.as_deref() == Some("quiet"))
+            {
+                out.primitive_locals.insert(*id);
             }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());
@@ -750,6 +898,13 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                 if f.zero_tol {
                     out.zero_tolerant_fields.insert((cid, f.key.clone()));
                 }
+                if f.rest {
+                    out.rest_keys.insert(f.key.clone());
+                }
+                // Interpreted code can store any string.
+                if f.literal_strings && !interp {
+                    out.literal_string_fields.insert((cid, f.key.clone()));
+                }
                 Some(FactsField {
                     classes,
                     nullable,
@@ -763,6 +918,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
                     declared: f.declared,
                     reserved: f.reserved,
                     rep: facts_rep(f.rep),
+                    rest: f.rest,
                 })
             })
             .collect();
@@ -942,6 +1098,10 @@ pub(crate) fn activation(
         ),
         // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
+        no_record_signatures: matches!(
+            std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_array_fields: matches!(
             std::env::var("PERRY_FACTS_ARRAY_FIELDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -1085,6 +1245,43 @@ fn element_reads_enabled() -> bool {
         std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// The layout codegen lowers an admitted value record of template `tmpl`
+/// with, when its literal is born in module `path` (DESIGN-p4l4 VR-3a).
+fn record_layout(
+    pf: &perry_wpfacts::ProgramFacts,
+    path: &str,
+    tmpl: u32,
+) -> Option<perry_codegen::FactsRecordLayout> {
+    let t = match pf.templates.get(tmpl as usize) {
+        Some(t) if t.id == tmpl => t,
+        _ => pf.templates.iter().find(|t| t.id == tmpl)?,
+    };
+    let layout = t.record.as_ref().ok()?;
+    let module = pf.module_paths.iter().position(|p| p == path)?;
+    if t.module != Some(module as u32) {
+        return None;
+    }
+    Some(perry_codegen::FactsRecordLayout {
+        class_id: t.class_id,
+        keys: layout.fields.iter().map(|(k, _)| k.clone()).collect(),
+        numeric: layout
+            .fields
+            .iter()
+            .map(|(_, r)| {
+                matches!(
+                    r,
+                    perry_wpfacts::records::FieldRep::F64 | perry_wpfacts::records::FieldRep::I32
+                )
+            })
+            .collect(),
+        int32: layout
+            .fields
+            .iter()
+            .map(|(_, r)| matches!(r, perry_wpfacts::records::FieldRep::I32))
+            .collect(),
+    })
 }
 
 /// wpfacts `Rep` as codegen's `FactsRep`, one to one.

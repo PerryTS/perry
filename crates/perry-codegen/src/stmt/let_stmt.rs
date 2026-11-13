@@ -775,7 +775,7 @@ pub(crate) fn lower_let(
     // load directly from the corresponding slot. See the
     // `collect_non_escaping_arrays` pass in collectors.rs for the
     // escape criteria.
-    if let Some(perry_hir::Expr::Array(elements, _)) = init {
+    if let Some(literal @ perry_hir::Expr::Array(elements, _)) = init {
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
@@ -802,10 +802,17 @@ pub(crate) fn lower_let(
                 .unwrap_or_default();
             for (i, elem) in elements.iter().enumerate() {
                 let index_is_observed = used_indices.contains(&(i as u32));
-                if !index_is_observed && lower_unused_expr(ctx, elem)? {
+                // SNAP census: the element's parent is the literal.
+                let unused = !index_is_observed
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, elem)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, elem)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, elem)
+                })?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
                 // #6968: same rooting hole as the object-literal fields —
                 // the element alloca is the only reference to a heap value
@@ -867,7 +874,7 @@ pub(crate) fn lower_let(
     // unique field; PropertyGet/Set already resolve through
     // `ctx.scalar_replaced`, so no additional read path is needed.
     // See `collect_non_escaping_object_literals` in collectors.rs.
-    if let Some(perry_hir::Expr::Object(props)) = init {
+    if let Some(literal @ perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
             let existing = ctx.scalar_replaced.get(&id).cloned();
             let mut field_slots: std::collections::HashMap<String, String> =
@@ -887,10 +894,17 @@ pub(crate) fn lower_let(
                 .cloned()
                 .unwrap_or_default();
             for (key, value_expr) in props {
-                if !used_fields.contains(key) && lower_unused_expr(ctx, value_expr)? {
+                // SNAP census: the field value's parent is the literal.
+                let unused = !used_fields.contains(key)
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, value_expr)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, value_expr)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, value_expr)
+                })?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
                     // #6968: the field alloca is this heap value's only
@@ -1494,6 +1508,10 @@ pub(crate) fn lower_let(
                     init_expr,
                     ExpectedNativeRep::U32,
                 )?)
+            } else if crate::codegen::facts_int32_locals::checked_init(ctx, id) {
+                // Check mode: a proven local's initializer is lowered as a
+                // value and witnessed below (`accept_let_value`).
+                None
             } else if matches!(
                 refined_ty,
                 perry_hir::types::Type::Number | perry_hir::types::Type::Int32
@@ -1616,6 +1634,7 @@ pub(crate) fn lower_let(
                     // then left this alias invisible to self-append (#7846).
                     if matches!(init_expr, perry_hir::Expr::LocalGet(_))
                         && !const_array_walk::holds_no_string(ctx, id, &v)
+                        && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
                     {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
@@ -1644,6 +1663,7 @@ pub(crate) fn lower_let(
                 // `start-try`.
                 if matches!(init_expr, perry_hir::Expr::LocalGet(_))
                     && !const_array_walk::holds_no_string(ctx, id, &v)
+                    && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
                 {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }

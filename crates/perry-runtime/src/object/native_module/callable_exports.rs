@@ -510,11 +510,37 @@ pub(crate) extern "C" fn buffer_prototype_to_string(
     }
 }
 
+/// A builtin `Buffer.prototype` member called with an explicit `this`
+/// (`Buffer.prototype.copy.call(src, dst)`, `.apply`, `.bind`,
+/// `Reflect.apply`): the member's name is its closure's capture 0 (its index
+/// in `BUFFER_PROTOTYPE_METHODS`), the receiver must be a `Uint8Array` view
+/// (a Buffer, a plain `Uint8Array` or a subclass instance; anything else is
+/// Node's TypeError), and the body is the builtin method of that name. The
+/// member was chosen by the caller, so the receiver's prototype chain is not
+/// consulted again.
 extern "C" fn buffer_prototype_method_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    let index = crate::closure::js_closure_get_capture_f64(closure, 0) as usize;
+    let Some(method) = BUFFER_PROTOTYPE_METHODS.get(index) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let this_bits = this.bits();
+    let addr = (this_bits & crate::value::POINTER_MASK) as usize;
+    if !(crate::value::JSValue::from_bits(this_bits).is_pointer()
+        && addr != 0
+        && crate::buffer::is_uint8_view_buffer(addr))
+    {
+        crate::collection_iter::throw_type_error(
+            "The \"this\" argument must be an instance of Buffer or Uint8Array.",
+        );
+    }
+    unsafe {
+        crate::object::buffer_dispatch::dispatch_builtin_buffer_method(addr, method, args, argc)
+    }
 }
 
 /// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
@@ -737,6 +763,29 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "utf8Slice",
     "utf8Write",
 ];
+
+/// Is `name` an own builtin member of `Buffer.prototype`
+/// (`BUFFER_PROTOTYPE_METHODS`)?
+pub(crate) fn is_buffer_prototype_member(name: &str) -> bool {
+    BUFFER_PROTOTYPE_METHODS.contains(&name)
+}
+
+/// Is `value` a builtin method member of `Buffer.prototype` that shares
+/// [`buffer_prototype_method_thunk`]? That thunk has no behaviour of its own:
+/// the member's body is the receiver's name dispatch
+/// (`buffer_dispatch::dispatch_buffer_method`). Decided by the closure's body.
+pub(crate) fn is_buffer_prototype_method_thunk(value: crate::value::JSValue) -> bool {
+    if !value.is_pointer() {
+        return false;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_CLOSURE
+        && crate::closure::js_closure_get_func(addr as *const crate::closure::ClosureHeader)
+            == buffer_prototype_method_thunk as *const u8
+}
 
 const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "fail",
@@ -1862,3 +1911,7 @@ pub(crate) unsafe fn nm_attach_util(
     }
     value
 }
+
+#[cfg(test)]
+#[path = "buffer_proto_call_tests.rs"]
+mod buffer_proto_call_tests;

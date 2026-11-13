@@ -112,24 +112,30 @@ fn throw_unknown_encoding(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
 }
 
-/// True when `value` is a `Buffer` or `Uint8Array` (the acceptance set of
-/// node's `Buffer.prototype.copy/compare/equals` target argument).
-fn is_buffer_or_uint8array(value: f64) -> bool {
-    let bits = value.to_bits() as i64;
-    if crate::buffer::js_buffer_is_buffer(bits) == 1 {
-        return true;
-    }
-    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    raw >= 0x1000 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+/// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
+/// target, answered from the one view classification
+/// ([`super::view_brand::view_brand`]), and only for a view that carries the
+/// byte storage the copy and compare routines then read
+/// ([`super::view_brand::ViewBrand::has_storage`]). `copy` (`any_view`)
+/// takes every `ArrayBufferView` (node's `ArrayBuffer.isView`), subclass
+/// instances included; `compare`/`equals` take node's `isUint8Array` set: a
+/// `Buffer`, a `Uint8Array` or an instance of a subclass of either. An
+/// `ArrayBuffer`, key material, an object without view storage and every
+/// non-view are rejected by both.
+fn is_buffer_target(value: f64, any_view: bool) -> bool {
+    super::view_brand::view_brand(value).is_some_and(|brand| {
+        (any_view && brand.has_storage())
+            || brand.typed_array_kind() == Some(crate::typedarray_hook_slots::KIND_UINT8)
+    })
 }
 
-/// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
-/// target with `TypeError [ERR_INVALID_ARG_TYPE]` — and without this guard a
-/// number/boolean argument's bit pattern is masked into a bogus pointer and
-/// dereferenced (segfault). `name` is node's parameter name (`target` /
-/// `otherBuffer`).
-fn validate_buffer_target(value: f64, name: &str) {
-    if is_buffer_or_uint8array(value) {
+/// `Buffer.prototype.copy/compare/equals` reject a target outside
+/// [`is_buffer_target`]'s set with `TypeError [ERR_INVALID_ARG_TYPE]` — and
+/// without this guard a number/boolean argument's bit pattern is masked into a
+/// bogus pointer and dereferenced (segfault). `name` is node's parameter name
+/// (`target` / `otherBuffer`); `any_view` is set for `copy`.
+fn validate_buffer_target(value: f64, name: &str, any_view: bool) {
+    if is_buffer_target(value, any_view) {
         return;
     }
     crate::validators::throw_invalid_arg_type(name, "an instance of Buffer or Uint8Array", value);
@@ -541,7 +547,141 @@ pub(crate) unsafe fn array_buffer_slice(addr: usize, args: &[f64]) -> f64 {
     f64::from_bits(JSValue::pointer(result as *mut u8).bits())
 }
 
+/// `[[Get]](buf, name)` for an own member `name` of `Buffer.prototype`, on
+/// the Buffer at `addr`, once the program has written that prototype: its own
+/// shadow bit (`prototype_unwritten(Buffer)`, which reads clear through the
+/// stand-in until `Buffer.prototype` is built). `None` while it is unwritten,
+/// for a receiver that is not a Buffer, for a name that is not such a member
+/// (an inherited `%TypedArray%` member is not this fact), and when the lookup
+/// still finds the builtin member, whose body is the name dispatch: the caller
+/// then runs exactly what it runs on an unwritten prototype. The receiver's
+/// own properties are the caller's, read before this.
+#[inline(always)]
+pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> {
+    if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        return None;
+    }
+    crate::typedarray_hook_slots::buffer_written_member(addr, name)
+}
+
+/// The name dispatch once the program has written `Buffer.prototype`, linked
+/// through the typed-array hook group (`dispatch_buffer_method` reaches it
+/// behind the shadow bit). A Buffer's own property and a non-Buffer receiver
+/// are [`dispatch_builtin_buffer_method`]'s, as is a name whose lookup still
+/// finds the builtin member; any other own member of `Buffer.prototype` is
+/// what `[[Get]](buf, name)` finds, called with the Buffer as `this`.
+///
+/// # Safety
+/// As [`dispatch_buffer_method`].
+pub(crate) unsafe fn dispatch_written_buffer_lookup(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if !crate::buffer::buffer_has_own_prop(addr, method_name) {
+        if let Some(member) = buffer_written_member_lookup(addr, method_name) {
+            let buf_f64 = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+            let args = if !args_ptr.is_null() && args_len > 0 {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            };
+            return call_buffer_member(member, buf_f64, args);
+        }
+    }
+    dispatch_builtin_buffer_method(addr, method_name, args_ptr, args_len)
+}
+
+/// The lookup behind [`buffer_written_member`], linked through the typed-array
+/// hook group.
+pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JSValue> {
+    if !crate::buffer::is_node_buffer(addr)
+        || !crate::object::native_module::callable_exports::is_buffer_prototype_member(name)
+    {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(addr as *mut u8).bits()));
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    let raw = || crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+    let proto_bits = crate::object::prototype_chain::object_static_prototype(raw())
+        .unwrap_or_else(|| crate::object::builtin_prototype_value("Buffer").to_bits());
+    let value = key.with_const_ptr(|key: *const crate::StringHeader| {
+        crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+            raw(),
+            proto_bits,
+            key,
+        )
+        .unwrap_or_else(JSValue::undefined)
+    });
+    if crate::object::native_module::callable_exports::is_buffer_prototype_method_thunk(value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Call the member [`buffer_written_member`] found, with the Buffer as `this`.
+fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(buf_f64);
+    let member = scope.root_nanbox_f64(f64::from_bits(member.bits()));
+    if matches!(
+        member.get_nanbox_f64().to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        crate::closure::throw_not_callable();
+    }
+    match crate::collection_iter::call_with_this_capturing_throw(
+        member.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+        args,
+    ) {
+        Ok(value) => value,
+        Err(error) => crate::exception::rethrow_caught(error),
+    }
+}
+
+/// The name dispatch of a method call on the Buffer (or view) at `addr`.
+/// BUFEQ: once the program has written `Buffer.prototype` (its own shadow bit,
+/// clear through the stand-in until it is built), a Buffer's own member of
+/// that prototype is what `[[Get]](buf, name)` finds: the dispatch is then the
+/// typed-array group's [`dispatch_written_buffer_lookup`]. One bit test
+/// selects it or the builtin dispatch, which stays its own body.
+///
+/// # Safety
+/// `addr` is a live Buffer or buffer view; `args_ptr` names `args_len` values
+/// (or is null).
+#[inline(never)]
 pub unsafe fn dispatch_buffer_method(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // One test selects the body; both run with this call's own arguments.
+    let dispatch: BufferDispatch = if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        dispatch_builtin_buffer_method
+    } else {
+        crate::typedarray_hook_slots::written_buffer_dispatch()
+    };
+    dispatch(addr, method_name, args_ptr, args_len)
+}
+
+/// The signature of [`dispatch_buffer_method`] and of the bodies it selects.
+pub(crate) type BufferDispatch = unsafe fn(usize, &str, *const f64, usize) -> f64;
+
+/// The builtin name dispatch: the receiver's own property, the `#BUFNS` view
+/// members, then the Buffer and typed-array method bodies by name.
+#[inline(never)]
+pub(crate) unsafe fn dispatch_builtin_buffer_method(
     addr: usize,
     method_name: &str,
     args_ptr: *const f64,
@@ -753,9 +893,9 @@ pub unsafe fn dispatch_buffer_method(
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
         "copy" => {
             if args.is_empty() {
-                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target");
+                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target", true);
             }
-            validate_buffer_target(args[0], "target");
+            validate_buffer_target(args[0], "target", true);
             let dst_bits = args[0].to_bits();
             let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
                 dst_bits & 0x0000_FFFF_FFFF_FFFF
@@ -876,6 +1016,7 @@ pub unsafe fn dispatch_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "otherBuffer",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -892,6 +1033,7 @@ pub unsafe fn dispatch_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "target",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -1291,3 +1433,11 @@ pub unsafe fn dispatch_buffer_method(
 #[cfg(test)]
 #[path = "buffer_dispatch_write_args_tests.rs"]
 mod write_args_tests;
+
+#[cfg(test)]
+#[path = "buffer_written_member_tests.rs"]
+mod written_member_tests;
+
+#[cfg(test)]
+#[path = "buffer_dispatch_target_tests.rs"]
+mod target_tests;

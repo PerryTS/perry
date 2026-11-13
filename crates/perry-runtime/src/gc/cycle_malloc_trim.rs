@@ -268,8 +268,9 @@ pub(crate) const fn mimalloc_purge_available() -> bool {
     cfg!(all(target_pointer_width = "64", feature = "alloc-mimalloc"))
 }
 
-/// Apple GC blocks are their own regions (`arena/region/apple.rs`), so block
-/// allocation no longer passes through mimalloc. mimalloc runs its deferred
+/// Apple and Windows GC blocks are their own regions (`arena/region/apple.rs`,
+/// `arena/region/windows.rs`), so block allocation no longer passes through
+/// mimalloc. mimalloc runs its deferred
 /// purges on its own allocation traffic, and GC block churn used to be much of
 /// it: freed collector and runtime memory then stayed dirty until the next
 /// full collection's [`run_allocator_purge`] (+5 MiB peak footprint on an
@@ -279,7 +280,7 @@ pub(crate) const fn mimalloc_purge_available() -> bool {
 /// per mimalloc's default purge delay on each thread, so memory freed since
 /// the last drain leaves the footprint before the heap takes new pages.
 /// `PERRY_GC_MALLOC_PURGE=0` disables this along with the cycle purge.
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub(crate) fn purge_allocator_on_region_growth() {
     thread_local! {
         static LAST_REGION_GROWTH_PURGE: Cell<Option<Instant>> = const { Cell::new(None) };
@@ -301,10 +302,10 @@ pub(crate) fn purge_allocator_on_region_growth() {
 }
 
 /// mimalloc's default `purge_delay`.
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 const REGION_GROWTH_PURGE_INTERVAL: Duration = Duration::from_millis(10);
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 fn region_growth_purge_due(last: &Cell<Option<Instant>>, now: Instant) -> bool {
     if last
         .get()
@@ -316,17 +317,17 @@ fn region_growth_purge_due(last: &Cell<Option<Instant>>, now: Instant) -> bool {
     true
 }
 
-#[cfg(all(test, target_vendor = "apple"))]
+#[cfg(all(test, any(target_vendor = "apple", windows)))]
 thread_local! {
     static TEST_REGION_GROWTH_PURGE_CHECKS: Cell<usize> = const { Cell::new(0) };
 }
 
-#[cfg(all(test, target_vendor = "apple"))]
+#[cfg(all(test, any(target_vendor = "apple", windows)))]
 pub(crate) fn test_region_growth_purge_checks() -> usize {
     TEST_REGION_GROWTH_PURGE_CHECKS.with(Cell::get)
 }
 
-#[cfg(all(test, target_vendor = "apple"))]
+#[cfg(all(test, any(target_vendor = "apple", windows)))]
 mod region_growth_purge_tests {
     use super::*;
 

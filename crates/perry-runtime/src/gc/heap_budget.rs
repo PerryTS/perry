@@ -39,6 +39,9 @@ use super::policy::{
 pub(crate) fn gc_heap_budget_bytes() -> Option<usize> {
     static CACHED: OnceLock<Option<usize>> = OnceLock::new();
     *crate::once_init::get_or_init(&CACHED, || {
+        // The heap budget is the collector's own sizing (first asked by an
+        // allocation slow path, outside any collection).
+        crate::snap_funnel!(Gc);
         if let Ok(v) = std::env::var("PERRY_GC_HEAP_LIMIT") {
             if let Ok(mb) = v.trim().parse::<u64>() {
                 if mb > 0 {

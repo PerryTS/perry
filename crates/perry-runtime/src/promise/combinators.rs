@@ -561,9 +561,16 @@ static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
 #[used(compiler)]
 static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
 
+/// One scheduled resolution: the promise and its value. The instrumented
+/// cohort's entry also names the init that queued it (SNAPK4 census).
+#[cfg(not(perry_gc_instruments))]
+pub(in crate::promise) type ScheduledResolve = (*mut Promise, f64);
+#[cfg(perry_gc_instruments)]
+pub(in crate::promise) type ScheduledResolve = (*mut Promise, f64, u32);
+
 // Queue for scheduled promise resolutions
 crate::perry_thread_local! {
-    pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<(*mut Promise, f64)>> = const { RefCell::new(Vec::new()) };
+    pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<ScheduledResolve>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Schedule a promise to be resolved with a value when microtasks run
@@ -571,7 +578,11 @@ crate::perry_thread_local! {
 #[no_mangle]
 pub extern "C" fn js_promise_schedule_resolve(promise: *mut Promise, value: f64) {
     SCHEDULED_RESOLVES.with(|q| {
+        #[cfg(not(perry_gc_instruments))]
         q.borrow_mut().push((promise, value));
+        #[cfg(perry_gc_instruments)]
+        q.borrow_mut()
+            .push((promise, value, crate::snap_census::job_owner()));
     });
 }
 
@@ -581,7 +592,7 @@ pub(super) fn process_scheduled_resolves() -> i32 {
     loop {
         let item = SCHEDULED_RESOLVES.with(|q| q.borrow_mut().pop());
         match item {
-            Some((promise, value)) => {
+            Some((promise, value, ..)) => {
                 js_promise_resolve(promise, value);
                 count += 1;
             }

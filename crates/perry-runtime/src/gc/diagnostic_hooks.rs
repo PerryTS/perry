@@ -204,6 +204,91 @@ pub(super) fn log_burst_boundary(arm: &'static str) {
     }
 }
 
+// LIFE G1 (`wpfacts_check/life.rs`): a copied minor reached a young object
+// (old and new user address), and the brackets of each copied minor. Compiled
+// only into the instrumented variant (`perry_gc_instruments`), which a
+// `PERRY_VERIFY_FACTS=1` compile links; the default archives carry no life hook
+// and no life check (`wpfacts_check/life.rs` is compiled out with them, so a
+// check build linked against them fails to link instead of running unchecked).
+// Filled at the first lifetime death, together with the diagnostic minor.
+#[cfg(perry_gc_instruments)]
+static LIFE_REACHED: Hook<fn(usize, usize)> = Hook::empty();
+#[cfg(perry_gc_instruments)]
+static LIFE_BEFORE_MINOR: Hook<fn()> = Hook::empty();
+#[cfg(perry_gc_instruments)]
+static LIFE_AFTER_MINOR: Hook<fn()> = Hook::empty();
+
+// LIFE I1 (`wpfacts_check/life_measure.rs`): a synchronous full cycle has
+// complete marks (beside the census's pass 1).
+#[cfg(perry_gc_instruments)]
+static LIFE_FULL_MARKED: Hook<fn()> = Hook::empty();
+
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_full_marked() {
+    if let Some(f) = LIFE_FULL_MARKED.get() {
+        f();
+    }
+}
+
+/// The lifetime measurement's full-cycle hook.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn install_life_full(marked: fn()) {
+    LIFE_FULL_MARKED.set(marked);
+}
+
+/// Are the life hooks armed (check mode or lifetime measurement)? Their
+/// subject is the copied minor's trace: a cycle that reaches nothing would
+/// read every claimed object as unreached (freed), so an untraced promotion
+/// is vetoed while they are (`copying.rs`, `untraced_promotion_instrument_veto`).
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_hooks_armed() -> bool {
+    LIFE_REACHED.get().is_some()
+}
+
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_reached(old: usize, new: usize) {
+    if let Some(f) = LIFE_REACHED.get() {
+        f(old, new);
+    }
+}
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_before_copied_minor() {
+    if let Some(f) = LIFE_BEFORE_MINOR.get() {
+        f();
+    }
+}
+#[cfg(perry_gc_instruments)]
+pub(super) fn life_after_copied_minor() {
+    if let Some(f) = LIFE_AFTER_MINOR.get() {
+        f();
+    }
+}
+
+/// The holder the copied minor is following now: its walk phase and, for a
+/// native stack-map slot, the owning frame (function address, ip, slot).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn life_holder() -> (Option<&'static str>, Option<(usize, usize, usize)>) {
+    (
+        super::pin::copying_walk_phase(),
+        super::pin::native_root_slot_context().map(|c| (c.function_address, c.ip, c.slot_addr)),
+    )
+}
+
+/// The collections run so far (minor and full).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn life_collection_count() -> u64 {
+    super::GC_STATS.with(|s| s.borrow().collection_count)
+}
+
+/// Check mode for lifetime claims: the diagnostic minor and the life hooks.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn install_life(reached: fn(usize, usize), before: fn(), after: fn()) {
+    MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);
+    LIFE_REACHED.set(reached);
+    LIFE_BEFORE_MINOR.set(before);
+    LIFE_AFTER_MINOR.set(after);
+}
+
 pub(crate) fn install() {
     LOG_BURST_BOUNDARY.set(super::allocation_pacing::report_burst_boundary);
     MINOR_COLLECTION.set(super::gc_collect_minor_with_diagnostics::<true>);

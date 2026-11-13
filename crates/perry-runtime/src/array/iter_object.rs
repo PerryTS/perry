@@ -259,7 +259,7 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
 /// unconditionally. The registries remain the layout proof for everything else.
 #[inline]
 fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(crate::array::array_receiver_gc_tag(arr).0) {
         return arr;
     }
     let addr = arr as usize;

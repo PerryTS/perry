@@ -482,3 +482,25 @@ fn json_of(value: f64) -> String {
         String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
     }
 }
+
+/// Every numeric key of a non-indexed view is an ordinary property key, its
+/// ToString: `dv[-1]`, `dv[1.5]` and `dv[4294967295]` store and read back (wa4).
+#[test]
+fn a_data_view_keeps_non_canonical_numeric_keys_as_properties() {
+    let dv = data_view(&[1, 2]);
+    crate::value::js_dyn_index_set(boxed(dv), -1.0, 5.0);
+    crate::value::js_dyn_index_set(boxed(dv), 1.5, 6.0);
+    crate::value::js_dyn_index_set(boxed(dv), 4294967295.0, 8.0);
+    assert_eq!(crate::value::js_dyn_index_get(boxed(dv), -1.0), 5.0);
+    assert_eq!(crate::value::js_dyn_index_get(boxed(dv), 1.5), 6.0);
+    assert_eq!(crate::value::js_dyn_index_get(boxed(dv), 4294967295.0), 8.0);
+    assert_eq!(
+        crate::buffer::canonical_index_key(-1.0).as_deref(),
+        Some("-1")
+    );
+    assert_eq!(
+        crate::buffer::canonical_index_key(1.5).as_deref(),
+        Some("1.5")
+    );
+    assert_eq!(crate::buffer::canonical_index_key(key("x")), None);
+}

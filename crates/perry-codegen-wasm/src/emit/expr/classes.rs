@@ -196,7 +196,8 @@ impl<'a> FuncEmitCtx<'a> {
                             align: 3,
                             memory_index: 0,
                         }));
-                        self.emit_memcall(func, "date_new", 1);
+                        // Same bridge as `Expr::DateNew`; see date_error.rs.
+                        self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
                         return true;
                     }
                     // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
@@ -295,29 +296,13 @@ impl<'a> FuncEmitCtx<'a> {
                 // If no compiled constructor, just leave the instance handle on stack
             }
             Expr::NewDynamic { callee, args, .. } => {
-                // Dynamic new — approximate with regular call via mem_call
+                // `new_dynamic` constructs a host constructor and calls a Perry closure.
                 self.emit_frame_begin(func, (args.len() + 1) as u32);
                 self.emit_store_arg(func, 0, callee);
                 for (i, arg) in args.iter().enumerate() {
                     self.emit_store_arg(func, (i + 1) as u32, arg);
                 }
-                match args.len() {
-                    0 => {
-                        self.emit_memcall(func, "closure_call_0", 1);
-                    }
-                    1 => {
-                        self.emit_memcall(func, "closure_call_1", 2);
-                    }
-                    2 => {
-                        self.emit_memcall(func, "closure_call_2", 3);
-                    }
-                    3 => {
-                        self.emit_memcall(func, "closure_call_3", 4);
-                    }
-                    _ => {
-                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    }
-                }
+                self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
             Expr::This => {
                 // 'this' is passed as first parameter (local 0) in methods

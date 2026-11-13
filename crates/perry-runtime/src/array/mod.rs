@@ -21,6 +21,10 @@ pub(crate) use element_kind::{
     ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
+mod exotic_snapshot;
+pub(crate) use exotic_snapshot::array_for_each_own_element;
+mod fill_birth;
+pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
 mod flat_clone;
 mod forwarding;
@@ -81,7 +85,11 @@ mod small_capacity_tests;
 mod sort;
 mod sort_numeric;
 pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
+#[cfg(test)]
+mod sparse_reader_tests;
 mod species;
+#[cfg(test)]
+mod species_tests;
 mod splice_slice;
 mod storage;
 #[cfg(test)]
@@ -103,6 +111,8 @@ mod dense_move_tests;
 mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
+#[cfg(test)]
+mod from_primitive_tests;
 #[cfg(test)]
 mod hole_tail_tests;
 #[cfg(test)]
@@ -194,8 +204,8 @@ pub use self::generic_mutators::{
 };
 pub use self::generic_object::{js_arraylike_concat, js_arraylike_sort, js_arraylike_splice};
 pub(crate) use self::generic_object::{
-    object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
-    object_splice,
+    object_pop as generic_object_pop, object_reverse as generic_object_reverse,
+    object_shift as generic_object_shift, object_sort, object_splice, restricted_array_value,
 };
 pub(crate) use self::header::canonical_raw_f64;
 pub(crate) use self::header::{
@@ -323,6 +333,8 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::array_set_length_reflect;
+pub(crate) use self::push_pop::reserve_capacity;
 #[cfg(test)]
 pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};

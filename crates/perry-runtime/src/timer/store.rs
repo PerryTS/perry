@@ -140,6 +140,13 @@ impl Entry {
         trigger_async_id: u64,
         scheduled: Option<super::ref_states::ScheduledTimerId>,
     ) -> Self {
+        // SNAPK4 census: the entry names the init that queued it.
+        #[cfg(perry_gc_instruments)]
+        let context = {
+            let mut context = context;
+            context.snap_init = crate::snap_census::job_owner();
+            context
+        };
         Self {
             _scheduled: scheduled,
             id,
@@ -213,7 +220,16 @@ impl Entry {
             callback: 0,
             js_handle: f64::from_bits(crate::value::TAG_UNDEFINED),
             args: Vec::new(),
-            context: crate::async_context::AsyncContextSnapshot::default(),
+            context: {
+                #[allow(unused_mut)]
+                let mut context = crate::async_context::AsyncContextSnapshot::default();
+                // SNAPK4 census: the entry names the init that queued it.
+                #[cfg(perry_gc_instruments)]
+                {
+                    context.snap_init = crate::snap_census::job_owner();
+                }
+                context
+            },
             async_id: 0,
             trigger_async_id: 0,
             heap_pos: NO_POS,
@@ -411,6 +427,8 @@ impl AgentTimers {
 
     /// Insert a timers-phase entry.
     pub(super) fn insert_timer(&mut self, entry: Entry) -> usize {
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        crate::snap_census::clock_input("clock.timer", entry.delay_ms);
         crate::effect!(host_write, timer);
         debug_assert!(entry.class.is_timer());
         let index = self.alloc(entry);
@@ -1015,6 +1033,68 @@ pub(crate) fn any_pending() -> bool {
     with_current_existing(|t| t.any_pending()).unwrap_or(false)
 }
 
+/// SNAPK4 census: one scheduled entry as the census names it, read from the
+/// entry itself: its class, the init that queued it
+/// (`AsyncContextSnapshot::snap_init`, stamped when the entry is built), its
+/// callback's code address (0 for a promise timer, which runs no callback), its
+/// delay and whether it repeats.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SnapPendingTimer {
+    pub kind: &'static str,
+    pub owner: u32,
+    pub code: usize,
+    pub delay_ms: u64,
+    pub repeat: bool,
+}
+
+/// SNAPK4 census: the calling agent's live entries (timer heaps, the check
+/// queue of immediates, the poll queues of native completions) in scheduling
+/// order. None while the store is locked.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
+pub(crate) fn snap_pending_timers() -> Option<Vec<SnapPendingTimer>> {
+    let agent = crate::agent::current_agent();
+    let store = match STORE.try_lock() {
+        Ok(store) => store,
+        Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return None,
+    };
+    let Some(timers) = store.agents.get(&agent) else {
+        return Some(Vec::new());
+    };
+    let mut live: Vec<&Entry> = timers.slab.iter().flatten().collect();
+    live.sort_by_key(|e| e.seq);
+    Some(
+        live.into_iter()
+            .map(|e| SnapPendingTimer {
+                kind: match e.class {
+                    Class::Promise => "promise",
+                    Class::Timeout => "timeout",
+                    Class::Interval => "interval",
+                    Class::Immediate => "immediate",
+                    Class::Pending => "native",
+                },
+                owner: e.context.snap_init,
+                code: crate::promise::snap_closure_code(e.callback as crate::promise::ClosurePtr),
+                delay_ms: e.delay_ms,
+                repeat: e.class == Class::Interval,
+            })
+            .collect(),
+    )
+}
+
 /// `PERRY_GC_CENSUS`: one row for the calling agent's timer store.
 pub(super) fn census_rows() -> Vec<crate::gc::census::SideTableRow> {
     match with_current_existing(|timers| timers.census()) {
@@ -1035,3 +1115,7 @@ pub(super) fn reset_for_test() {
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+
+#[cfg(all(test, perry_gc_instruments))]
+#[path = "snap_pending_timer_tests.rs"]
+mod snap_pending_timer_tests;

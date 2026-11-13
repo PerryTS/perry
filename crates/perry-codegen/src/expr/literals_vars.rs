@@ -440,6 +440,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // site we just load the cached NaN-boxed handle from the pool's
         // `.handle` global. ONE instruction, no per-use allocation.
         Expr::String(s) => {
+            // A marked short literal is its inline string (`short_string`).
+            if let Some(inline) = super::short_string::inline_literal(expr, s) {
+                return Ok(inline);
+            }
             let idx = ctx.strings.intern(s);
             let entry = ctx.strings.entry(idx);
             // Clone the global name out so we don't keep `entry` borrowed
@@ -639,6 +643,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // carry no heap edge). Exits write the value back.
             if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let v = lower_expr(ctx, value)?;
+                // Check mode: the redirected write of a proven local is
+                // witnessed like its slot's (`accept_let_value`).
+                let v = if crate::verify_facts::enabled() {
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, *id, value, v)
+                } else {
+                    v
+                };
                 ctx.block().store(DOUBLE, &v, &f64_slot);
                 return Ok(v);
             }
@@ -740,7 +751,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ..
                     } if matches!(right.as_ref(), Expr::Integer(0))
                         && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
-                ) && !ctx.stable_packed_loop_facts.is_empty();
+                ) && !ctx.stable_packed_loop_facts.is_empty()
+                    // Check mode witnesses a proven int32 local's interval
+                    // on the double path.
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
                     && (structurally_i32 || explicit_numeric_toint32)
@@ -1062,6 +1076,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Unboxed Number scopes redirect every read and write to this
             // F64 slot. Updating the tagged slot instead leaves the induction
             // value unchanged and makes the guarded loop repeat forever.
+            let increment = matches!(op, UpdateOp::Increment);
             if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let blk = ctx.block();
                 let old = blk.load(DOUBLE, &slot);
@@ -1071,6 +1086,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 // GC_STORE_AUDIT(STACK): this admitted Number slot has no heap edge.
                 blk.store(DOUBLE, &new, &slot);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1093,6 +1109,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.store(I32, &new_i32, &i32_slot);
                 let old = blk.sitofp(I32, &old_i32, DOUBLE);
                 let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1114,6 +1131,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         blk.store(I32, &new_i32, &i32_slot);
                         (old_i32, new_i32)
                     };
+                    if crate::codegen::facts_int32_locals::checked(ctx, *id) {
+                        let old = ctx.block().sitofp(I32, &old_i32, DOUBLE);
+                        crate::codegen::facts_int32_locals::witness_update(
+                            ctx, *id, &old, increment,
+                        );
+                    }
                     super::record_int_facts_for_update(ctx, *id, *op);
                     let ret_i32 = if *prefix { &new_i32 } else { &old_i32 };
                     return Ok(ctx.block().sitofp(I32, ret_i32, DOUBLE));
@@ -1201,6 +1224,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
+            }
+            if !storage_is_root {
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
             }
             super::record_int_facts_for_update(ctx, *id, *op);
             Ok(if *prefix { new } else { old })
@@ -1377,6 +1403,15 @@ pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) 
 /// plain-slot store with its shadow-frame mirror and i32 mirror, module
 /// globals, the arena owner, buffer views and int facts.
 ///
+/// `id = v` for a value lowering holds already (a value record lane,
+/// `codegen::record_sig`): the write obligations of the `LocalSet` arm, then
+/// the one binding. `hint` is the expression the boxed program assigns.
+pub(crate) fn bind_local(ctx: &mut FnCtx<'_>, id: u32, v: &str, hint: &Expr) -> Result<()> {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, hint);
+    bind_lowered_value_to_local(ctx, id, v, hint)
+}
+
 /// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
 /// a caller holding a value it did not lower through `lower_expr` — a
 /// region's fast arm, which loads the slot directly — binds it through the
@@ -1410,7 +1445,11 @@ pub(crate) fn bind_lowered_value_to_local(
     // A guarded scalar lane or the all-writes numeric fixed point proves
     // this alias cannot share a string buffer. An annotation alone never
     // satisfies is_numeric_expr for a local read.
-    if string_alias && !fixed_slot && !crate::type_analysis::is_numeric_expr(ctx, value) {
+    if string_alias
+        && !fixed_slot
+        && !crate::type_analysis::is_numeric_expr(ctx, value)
+        && !super::literal_strings::alias(ctx, id, value, v)
+    {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {

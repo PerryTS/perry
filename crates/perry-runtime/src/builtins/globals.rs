@@ -404,7 +404,7 @@ fn gc_type_for_pointer(addr: usize) -> Option<u8> {
 
 fn is_array_value(value: f64) -> bool {
     pointer_addr(value)
-        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc::GC_TYPE_ARRAY))
+        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc_array_type_pat!()))
 }
 
 fn get_object_property(value: f64, name: &[u8]) -> f64 {
@@ -818,6 +818,51 @@ pub(crate) fn test_seed_queued_job_owner(async_id: u64, resource: f64) {
             resource,
             args: Vec::new(),
         });
+    });
+}
+
+/// SNAPK4 census: the queued nextTick jobs in queue order, one
+/// `(owner, code)` per job: the init that queued it
+/// (`AsyncContextSnapshot::snap_init`, stamped at enqueue) and its callback's
+/// code address. None while the queue is borrowed.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
+pub(crate) fn snap_pending_ticks() -> Option<Vec<(u32, usize)>> {
+    QUEUED_MICROTASKS.with(|q| {
+        q.try_borrow().ok().map(|q| {
+            q.iter()
+                .map(|job| {
+                    (
+                        job.context.snap_init,
+                        crate::promise::snap_closure_code(
+                            job.callback as *const crate::closure::ClosureHeader,
+                        ),
+                    )
+                })
+                .collect()
+        })
+    })
+}
+
+/// SNAPK4 census tests: queue a nextTick job owned by `owner` directly.
+#[cfg(all(test, perry_gc_instruments))]
+pub(crate) fn test_push_tick(callback: i64, owner: u32) {
+    let mut context = crate::async_context::capture_context();
+    context.snap_init = owner;
+    QUEUED_MICROTASKS.with(|q| {
+        q.borrow_mut().push_back(QueuedMicrotask {
+            callback,
+            context,
+            async_id: 0,
+            trigger_async_id: 0,
+            resource: f64::from_bits(crate::value::TAG_UNDEFINED),
+            args: Vec::new(),
+        })
     });
 }
 

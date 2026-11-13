@@ -767,18 +767,8 @@ fn native_instanceof(
             // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
         }
-        let top16 = (bits >> 48) as u16;
-        if top16 == 0 && bits >= 0x1000 {
-            let addr = bits as usize;
-            // #10694: a raw word must be allocator-owned before the brand read.
-            if crate::buffer::buffer_family_type_owned(addr).is_some()
-                || crate::set::is_registered_set(addr)
-                || crate::map::is_registered_map(addr)
-                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
-            {
-                return true_val;
-            }
-        }
+        // A word whose top 16 bits are clear is a Number (a denormal, or
+        // +0), not a raw object pointer.
         return false_val;
     }
 
@@ -794,7 +784,7 @@ fn native_instanceof(
         // byte below it.
         let is_array = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| {
-                header.obj_type == crate::gc::GC_TYPE_ARRAY
+                crate::gc_type_is_array!(header.obj_type)
                     || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             });
         return if is_array { true_val } else { false_val };

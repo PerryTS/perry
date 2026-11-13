@@ -57,7 +57,7 @@ fn is_native_array_value(value: f64) -> bool {
         let header = (ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         matches!(
             (*header).obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     }
 }

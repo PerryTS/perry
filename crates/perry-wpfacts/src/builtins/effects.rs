@@ -254,6 +254,18 @@ pub(super) fn declared_getter(proto: &str, key: &str) -> Option<&'static RealmEn
     declared_at(&format!("{proto}.{key}"), "<get>")
 }
 
+/// `PERRY_FACTS_DECLARED_GETTER_RESULTS=0`: a load of an accessor whose
+/// getter the runtime declares, on a builtin object whose realm holder
+/// locks it (a RegExp's `flags`), reads an unknown value as before
+/// (`loads::bobj_declared_getter`); a declared object's own prototype
+/// (`AbortController.prototype`) keeps its declared results.
+pub(super) fn declared_getter_results() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_DECLARED_GETTER_RESULTS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 /// `dst` ⊇ what getter `e` (`declared_getter`) of key `a` returns on
 /// receiver `t`: its declaration runs as a member call's does (`run_native`,
 /// one evaluator of declared results), in the one getter call on `t`
@@ -780,7 +792,8 @@ impl Run {
     fn held(&mut self, m: &mut Model, o: &RealmOperand, holder: Tok) -> NodeId {
         match o {
             RealmOperand::Native(path) => {
-                let e = declared_member(path).expect("interpretable() takes a declared native only");
+                let e =
+                    declared_member(path).expect("interpretable() takes a declared native only");
                 if !names_callee(e.effects) {
                     return self.operand(m, o);
                 }
@@ -984,6 +997,7 @@ fn run(
     callee: Option<Tok>,
     call: CallId,
 ) {
+    crate::family_reach::run(m, entry.name);
     if let Some(p) = m.prof.as_mut() {
         let site = m.calls[call as usize].site;
         let (runs, sites) = p.natives.entry(entry.name).or_default();
@@ -1108,7 +1122,9 @@ fn run(
                 let Some(value) = run.node(m, src) else {
                     continue;
                 };
-                if let (RealmSlotRoot::Callee, [], RealmSlotStep::Internal(k)) = (dst.root, inner, st) {
+                if let (RealmSlotRoot::Callee, [], RealmSlotStep::Internal(k)) =
+                    (dst.root, inner, st)
+                {
                     if k != CALLEE_SELF {
                         let at = run.callee_slot(m, k);
                         m.edge(value, at);
@@ -1141,6 +1157,7 @@ fn run(
                 // A store into the receiver's elements writes the Array.
                 if let (RealmSlotRoot::This, Some(t)) = (dst.root, run.t) {
                     m.arr_written(t);
+                    m.len_event(t, run.call, true);
                 }
                 let v = run.slot(m, src);
                 if let Some(d) = run.node(m, dst) {

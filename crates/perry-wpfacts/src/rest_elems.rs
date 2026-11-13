@@ -12,12 +12,17 @@
 //! template is at rest when:
 //! - it is a fused fill birth `new Array(k).fill(v)` (`Model::rest_fills`):
 //!   the one birth whose element words codegen encodes, right after the
-//!   native fill returns (`codegen expr::rest_elems`);
+//!   native fill returns (`codegen expr::rest_elems`); or a push-filled
+//!   birth (`push_fills`: `k = []` filled by `this.k.push(v)` in the
+//!   constructor before anything else can see it), whose fill pushes store
+//!   the words encoded, and every fill push site of it holds only Arrays of
+//!   that fill (else `mixed push`);
 //! - every token is a plain program Array (`bindings::arr_rep`'s refusals:
 //!   no marker, not foreign, escaped or hard, no metadata write, not in a
-//!   unit's cell), with an I32 element rep, a fixed length, dense below a
-//!   floor > 0 (its storage never grows or moves and has no hole), and not
-//!   immutable (an immutable Array is N3's, read as constants);
+//!   unit's cell), with an I32 element rep, a fixed length or a reserved
+//!   capacity (below), dense below a floor > 0 (its storage never grows or
+//!   moves and has no hole below the floor), and not immutable (an immutable
+//!   Array is N3's, read as constants);
 //! - no generic reader touches a token (**the use record**, `uses`): every
 //!   constraint on a node that holds one, and every constraint naming such a
 //!   node as the object it stores into, is one codegen lowers with the
@@ -49,6 +54,23 @@
 //! floor; the `fill` call offsets of at-rest births. A field read call (b1)
 //! carries its body read's own verdict (`site_floor`).
 //!
+//! **The capacity reservation** (`reserve`; owner decision 2026-11-11). A
+//! length that moves is still admitted when its hull over the template's
+//! Arrays is finite and small: `0 < lo`, `hi <= 2 * lo` and `hi <=
+//! REST_CAP`. The birth then reserves `hi` slots (`rest_reserves`, the
+//! runtime's `js_array_rest_reserve`), so every index store the facts allow
+//! (its key is below `hi`, `solve::arr_len`) lands below the capacity and
+//! the runtime lengthens the Array where it stands: the storage never grows,
+//! so it is never reallocated or forwarded, and a slot below the floor `lo`
+//! keeps its address. Slots in `[lo, hi)` may be holes (`[length, capacity)`
+//! is hole-filled, and a store past the length leaves a gap), so only the
+//! floor is dense, as for any Array. The two bounds: the slack is at most the
+//! dense part (one runtime growth step doubles as well), and the reserved
+//! cell stays a small young cell (at most 8 KiB of slots), never a large
+//! object. `ArrRep::fixed` is unchanged; codegen reads "never moves" as
+//! `fixed || at_rest`. `PERRY_REST_CAPACITY=0` (also `off`, `false`) admits
+//! no moving length: main's facts.
+//!
 //! `PERRY_REST_ELEMS=0` (also `off`, `false`) admits nothing: main's facts.
 //! Negative control `PERRY_FACTS_SABOTAGE=restelem`: a builtin method and the
 //! stores it makes are no use (`builtins::collections::array_method`,
@@ -66,6 +88,54 @@ pub(crate) fn enabled() -> bool {
         std::env::var("PERRY_REST_ELEMS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// `PERRY_REST_CAPACITY=0` turns the capacity reservation off.
+pub(crate) fn capacity_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REST_CAPACITY").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The most slots an at-rest birth reserves (module docs).
+pub(crate) const REST_CAP: i64 = 1024;
+
+/// The capacity the births of template `tm` reserve (module docs):
+/// `Ok(None)` when every Array of it keeps its length (nothing to reserve),
+/// `Ok(Some(hi))` when the length hull allows the reservation, else the
+/// refusal.
+pub(crate) fn reserve(m: &Model, tm: TmplId) -> Result<Option<u32>, &'static str> {
+    let mut hull = crate::model::Iv::EMPTY;
+    let mut fixed = true;
+    for t in m.tmpl_toks(tm) {
+        if !m.all_fields.contains_key(&t) {
+            continue;
+        }
+        let len = match m.arr_len.get(&t) {
+            Some(&n) => m.nodes[n as usize].range,
+            None => match m.arr_birth_len.get(&tm) {
+                Some(&k) => crate::model::Iv::int(k, k),
+                None => crate::model::Iv::TOP,
+            },
+        };
+        if len.is_top() || len.is_empty() {
+            return Err("length moves");
+        }
+        fixed &= len.lo == len.hi;
+        hull = hull.join(len);
+    }
+    if fixed {
+        return Ok(None);
+    }
+    if !m.rest_capacity || hull.is_top() || hull.is_empty() {
+        return Err("length moves");
+    }
+    if hull.lo > 0 && hull.hi <= hull.lo.saturating_mul(2) && hull.hi <= REST_CAP {
+        Ok(Some(hull.hi as u32))
+    } else {
+        Err("length over cap")
+    }
 }
 
 /// A fused fill birth `new Array(k).fill(v)` (`Gen::call_with`): the
@@ -87,6 +157,8 @@ impl Model {
         if self.rest_elems && t != TOP && self.is_arr(t) {
             self.arr_used.insert(t);
         }
+        // PR C: an object's slots, read by the same generic reader.
+        self.rest_obj_used(t);
     }
 }
 
@@ -98,7 +170,7 @@ pub(crate) fn fused_fill(m: &Model, call: crate::model::CallId) -> bool {
 }
 
 /// Every copy a summarized body's node has (`Inst::fresh`), by original.
-fn node_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
+pub(crate) fn node_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
     let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
     for inst in 0..m.sum.insts.len() as u32 {
         m.inst_copies(inst, |orig, copy| {
@@ -140,7 +212,10 @@ fn tok_refusal(m: &Model, t: Tok, tm: TmplId) -> Option<&'static str> {
         });
     }
     if !r.fixed {
-        return Some("length moves");
+        // A moving length needs the capacity reservation (module docs).
+        if let Err(why) = reserve(m, tm) {
+            return Some(why);
+        }
     }
     if !r.dense || r.floor == 0 {
         return Some("not dense");
@@ -183,11 +258,14 @@ fn use_of(m: &Model, c: &Cons, fill_recv: bool, reads: &FxHashSet<NodeId>) -> Op
                 || reads.contains(&dst)
         }
         Cons::IdxLoad { dst, .. } | Cons::IdxOwnLoad { dst, .. } => reads.contains(&dst),
-        Cons::Store { site, .. } => index_store(m, site) || m.rest_elem_sabotage,
+        Cons::Store { site, .. } => {
+            index_store(m, site) || m.push_fill_sites.contains_key(&site) || m.rest_elem_sabotage
+        }
         Cons::MCall { call, .. } => fill_recv || fused_fill(m, call) || m.rest_elem_sabotage,
         Cons::Identity { .. }
         | Cons::Raise { .. }
         | Cons::IndexHole
+        | Cons::IndexKept
         | Cons::LenIndex { .. }
         | Cons::Guard { .. }
         | Cons::Defined { .. }
@@ -280,7 +358,12 @@ pub(crate) fn admit(
     let m = &g.m;
     let mut refused: FxHashMap<TmplId, String> = FxHashMap::default();
     let mut cand: FxHashSet<TmplId> = FxHashSet::default();
-    if !m.rest_elems || !m.array_reps || m.aborted || m.unit_mode || m.rest_fills.is_empty() {
+    if !m.rest_elems
+        || !m.array_reps
+        || m.aborted
+        || m.unit_mode
+        || (m.rest_fills.is_empty() && m.push_fill_tmpls.is_empty())
+    {
         return (cand, refused);
     }
     // The plain `new Array` template of each fill's site (`builtins::
@@ -291,6 +374,8 @@ pub(crate) fn admit(
         .filter_map(|f| m.site_tmpls.get(&(f.site, "Array", true)))
         .filter_map(|&t| m.tmpl_of(t))
         .collect();
+    // The push-filled births (`push_fills`).
+    births.extend(m.push_fill_tmpls.keys().copied());
     births.sort_unstable();
     births.dedup();
     for tm in births {
@@ -396,11 +481,42 @@ pub(crate) fn admit(
             refuse(&mut cand, hit, "mixed site");
             changed = true;
         }
+        // A fill push stores encoded words: its receiver holds only Arrays
+        // of its own fill, all at rest.
+        for p in &m.push_fill_pushes {
+            let recvs = push_recvs(p, &copies);
+            let hit: Vec<TmplId> = recvs
+                .iter()
+                .flat_map(|&r| held(m, r, &cand, &mut buf))
+                .collect();
+            if hit.is_empty() {
+                continue;
+            }
+            if p.offset != 0
+                && recvs
+                    .iter()
+                    .all(|&r| crate::push_fills::only_fill(m, r, &cand, p.fill))
+            {
+                continue;
+            }
+            refuse(&mut cand, hit, "mixed push");
+            changed = true;
+        }
         if !changed {
             break;
         }
     }
     (cand, refused)
+}
+
+/// The receiver of fill push `p`, with its copies.
+fn push_recvs(
+    p: &crate::push_fills::FillPush,
+    copies: &FxHashMap<NodeId, Vec<NodeId>>,
+) -> Vec<NodeId> {
+    let mut recvs = vec![p.recv];
+    recvs.extend(copies.get(&p.recv).into_iter().flatten().copied());
+    recvs
 }
 
 /// The least floor of what `recvs` hold, when every one holds only Arrays
@@ -426,8 +542,6 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
     floor
 }
 
-/// Fill `ModuleBindings::rest_reads`, `rest_writes` and `rest_births`
-/// (module docs).
 /// I32 at rest B2: `derive` gives each field its representation before the
 /// at-rest admission runs (the admission reads element reps the demand
 /// settles), so an `Arr` field rep learns its storage kind here. It is at
@@ -435,14 +549,16 @@ pub(crate) fn site_floor(m: &Model, recvs: &[NodeId]) -> Option<u32> {
 /// template, as `tok_arr_rep` joins it for a binding (co-occurrence makes a
 /// node all-or-none). Codegen reads it as `FactsArrRep::at_rest`: the
 /// rep-keyed loads and the held bases of a field decode the I32 word.
+///
+/// The mark is the storage the admission gives the Array (its births encode
+/// I32 words), so it is made whatever tier reads it: `PERRY_REST_TIERS=0`
+/// is a codegen switch (`expr::rest_elems::tiers_enabled`, the at-rest
+/// tiers), as it is for a local's rep (`bindings::tok_arr_rep`). A field
+/// rep left unmarked claimed double slots for I32 words, and every
+/// rep-keyed consumer that refuses an at-rest rep (`a[k] ?? n`, the
+/// rep-keyed store, the held lengths) read or wrote the words as doubles.
 pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFacts]) {
-    // `PERRY_REST_TIERS=0` (codegen `expr::rest_elems::tiers_enabled`) keeps
-    // PR B's field reps.
-    let off = matches!(
-        std::env::var("PERRY_REST_TIERS").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    );
-    if m.rest_tmpls.is_empty() || off {
+    if m.rest_tmpls.is_empty() {
         return;
     }
     for tf in templates.iter_mut() {
@@ -475,6 +591,8 @@ pub(crate) fn mark_fields(m: &Model, templates: &mut [crate::derive::TemplateFac
     }
 }
 
+/// Fill `ModuleBindings::rest_reads`, `rest_writes`, `rest_births`,
+/// `rest_reserves` and `rest_pushes` (module docs).
 pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
     let m = &g.m;
     if m.rest_tmpls.is_empty() {
@@ -502,28 +620,70 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         if site_floor(m, &recvs).is_some() {
             if let Some(mb) = bindings.get_mut(f.module as usize) {
                 mb.rest_births.push(f.offset);
+                // The capacity this birth reserves: its own template's.
+                let cap = m
+                    .site_tmpls
+                    .get(&(f.site, "Array", true))
+                    .and_then(|&t| m.tmpl_of(t))
+                    .filter(|tm| m.rest_tmpls.contains(tm))
+                    .and_then(|tm| reserve(m, tm).ok().flatten());
+                if let Some(cap) = cap {
+                    mb.rest_reserves.push((f.offset, cap));
+                }
             }
         }
     }
+    // The fill pushes of at-rest fills (`push_fills`), with the final length.
+    let mut buf = Vec::new();
+    for p in &m.push_fill_pushes {
+        let recvs = push_recvs(p, &copies);
+        let holds = recvs
+            .iter()
+            .any(|&r| !held(m, r, &m.rest_tmpls, &mut buf).is_empty());
+        let only = recvs
+            .iter()
+            .all(|&r| crate::push_fills::only_fill(m, r, &m.rest_tmpls, p.fill));
+        if let (true, true, Some(&len), Some(mb)) = (
+            holds && p.offset != 0,
+            only,
+            m.push_fill_lens.get(p.fill as usize),
+            bindings.get_mut(p.module as usize),
+        ) {
+            mb.rest_pushes.push((p.offset, len));
+        }
+    }
     for mb in bindings.iter_mut() {
+        mb.rest_pushes.sort_unstable();
+        mb.rest_pushes.dedup();
         mb.rest_reads.sort_unstable();
         mb.rest_reads.dedup();
         mb.rest_writes.sort_unstable();
         mb.rest_writes.dedup();
         mb.rest_births.sort_unstable();
         mb.rest_births.dedup();
+        mb.rest_reserves.sort_unstable();
+        mb.rest_reserves.dedup();
     }
 }
 
-/// The probe (`PERRY_FACTS_DUMP`): one `# rest arr` line per fused fill
-/// template, at rest or with the reason it is not.
+/// The probe (`PERRY_FACTS_DUMP`): one `# rest arr` line per fused fill or
+/// push-filled template, at rest (with the capacity its births reserve, or
+/// the length its fill pushes give it, if any) or with the reason it is not.
 pub(crate) fn probe(m: &Model) -> Vec<String> {
     let mut out = Vec::new();
     for (tm, tpl) in m.tmpls.iter().enumerate() {
         let tm = tm as TmplId;
         let what = tpl.display.replace(' ', "_");
         if m.rest_tmpls.contains(&tm) {
-            out.push(format!("# rest arr {what} at_rest=1"));
+            let fill = m
+                .push_fill_tmpls
+                .get(&tm)
+                .and_then(|&f| m.push_fill_lens.get(f as usize));
+            match (reserve(m, tm), fill) {
+                (Ok(Some(cap)), _) => out.push(format!("# rest arr {what} at_rest=1 cap={cap}")),
+                (_, Some(len)) => out.push(format!("# rest arr {what} at_rest=1 push_fill={len}")),
+                _ => out.push(format!("# rest arr {what} at_rest=1")),
+            }
         } else if let Some(refusal) = m.rest_refused.get(&tm) {
             // The length interval over the template's tokens (`solve::arr_len`).
             let mut len = crate::model::Iv::EMPTY;

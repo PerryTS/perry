@@ -1550,7 +1550,11 @@ pub(crate) fn array_object_index_set(recv: f64, index: u32, value: f64) {
         index as f64,
         value,
     );
-    maintain_array_exotic_length(handle.get_nanbox_f64(), index);
+    // Only an Array-subclass instance has the exotic `length`: an object
+    // literal behind a `T[]` site gains the index and nothing else.
+    if is_array_subclass_value(handle.get_nanbox_f64()) {
+        maintain_array_exotic_length(handle.get_nanbox_f64(), index);
+    }
 }
 
 /// The Array-exotic post-step for an indexed own-property write, applied by

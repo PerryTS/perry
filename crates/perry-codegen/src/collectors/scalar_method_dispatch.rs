@@ -525,6 +525,16 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
 /// (constructor, field initializers, methods, accessors, computed members) —
 /// for expressions that can rewrite a class's prototype.
 pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
+    collect_module_dispatch_facts_with(hir, &Default::default())
+}
+
+/// [`collect_module_dispatch_facts`] with the module's proven method sites
+/// (`ElisionFacts::native_member_calls`): a proven Buffer read keeps its
+/// buffer sealed (`sealed_buffers::buffer_exposure`).
+pub fn collect_module_dispatch_facts_with(
+    hir: &Module,
+    native_member_calls: &std::collections::BTreeSet<u32>,
+) -> ModuleDispatchFacts {
     let mut facts = ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
@@ -542,7 +552,10 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
         new_bindings: HashMap::new(),
         ocreate_bindings: HashMap::new(),
-        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(hir)),
+        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(
+            hir,
+            native_member_calls,
+        )),
         array_record_protocol_dead: false,
     };
 

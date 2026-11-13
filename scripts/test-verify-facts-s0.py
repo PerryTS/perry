@@ -96,6 +96,118 @@ def main():
                 assert observed.returncode == 0 and observed.stdout == expected, observed
             save(arm, status=observed.returncode)
 
+    # family_reach (check mode's family claim). Its witnesses exist only in
+    # the instrumented runtime variant, which PERRY_GC_INSTRUMENTS=1 links.
+    runtime_dir = Path(os.environ.get("PERRY_RUNTIME_DIR", str(args.perry.parent)))
+    if (runtime_dir / "libperry_runtime_instr.a").exists():
+        instr = dict(PERRY_GC_INSTRUMENTS="1")
+        # `aborts`: the family's install follows the fact (the byte cells do,
+        # `PERRY_FACTS_FAMILY_LINK`), and the program creates a value of it:
+        # without the witnesses the sabotaged `never` leaves the family out
+        # of the link, and the birth must abort, not answer.
+        for name, family, observed_text, aborts in [
+            ("family-bytes-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-observe-negative", "typedarray", "is observed", False),
+            ("family-bytes-poolsize-negative", "typedarray", "is observed", False),
+            ("family-regex-negative", "regex_engine", "a RegExp is born", False),
+        ]:
+            source = fixtures / (name + ".ts")
+            expected = oracle(source)
+            exe, e = compile_(source, name + "-correct", **instr)
+            observed = observe(exe, e)
+            assert observed.returncode == 0 and observed.stdout == expected, observed
+            dump = args.out / (name + ".facts")
+            exe, e = compile_(source, name + "-false", PERRY_FACTS_SABOTAGE="famreach:" + family,
+                              PERRY_FACTS_DUMP=str(dump), **instr)
+            assert f"# family_reach {family} never reason=none" in dump.read_text(), name
+            value = report(observe(exe, e))
+            assert value["verdict"] == "family" and value["predicate"] == "family", value
+            member = value["observed_member"] or ""
+            assert observed_text in member, value
+            assert member.startswith(family + ": ") or value["expectation"] == family, value
+            # Without the instrumented variant check mode makes no claim.
+            # The link decision still reads the fact: a family the detector
+            # selected (these programs name it) that the fact says is never
+            # used is left out, and a value of it that is created anyway
+            # aborts at the birth (no answer, no rc 0); one that is only
+            # observed, or whose install the detector still decides, runs as
+            # before.
+            exe, e = compile_(source, name + "-default", PERRY_FACTS_SABOTAGE="famreach:" + family)
+            observed = observe(exe, e)
+            if aborts:
+                assert observed.returncode not in (0, 86), observed
+                assert observed.stdout == b"", observed
+                assert b"family_reach" in observed.stderr and family.encode() in observed.stderr, observed
+            else:
+                assert observed.returncode == 0 and observed.stdout == expected, observed
+            # With the link switch off the sabotaged fact has no consumer.
+            exe, e = compile_(source, name + "-nolink", PERRY_FACTS_SABOTAGE="famreach:" + family,
+                              PERRY_FACTS_FAMILY_LINK="0")
+            observed = observe(exe, e)
+            assert observed.returncode == 0 and observed.stdout == expected, observed
+            save(name, status=86, default="aborts" if aborts else "runs")
+        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live"),
+                              ("family-bytes-write-encoding", "never")]:
+            source = fixtures / (name + ".ts")
+            dump = args.out / (name + ".facts")
+            exe, e = compile_(source, name, PERRY_FACTS_DUMP=str(dump), **instr)
+            assert f"# family_reach typedarray {verdict} " in dump.read_text(), name
+            observed = observe(exe, e)
+            if name == "family-bytes-unwalked" and observed.returncode == 86:
+                # The spread callback is a call edge the activation reach
+                # does not see yet: its own claim ("inactive body") reports.
+                # The family claim does not: the text made the family live.
+                assert report(observed)["verdict"] == "Activation", observed
+            else:
+                assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+            save(name, status=observed.returncode)
+        # The link decision only removes. A program whose family is never
+        # and whose text the detector does not match is the detector's
+        # binary: no install, no claim. A comparator sort's two scratch
+        # cells are no values and run there.
+        source = fixtures / "family-bytes-scratch.ts"
+        exe, e = compile_(source, "family-bytes-scratch-default", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        save("family-bytes-scratch-default", status=observed.returncode)
+        # A program the detector matches by a name (`class CommandBuffer`)
+        # and the fact says never creates a byte cell: the install is left
+        # out and the image claims the family; with the switch off the
+        # detector's install is back and nothing is claimed.
+        source = fixtures / "family-bytes-detector-only.ts"
+        expected = oracle(source)
+        exe, e = compile_(source, "family-bytes-detector-only", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_families_never" in symbols, "the image makes the family claim"
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        removed = exe.stat().st_size
+        exe, e = compile_(source, "family-bytes-detector-only-nolink", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="0")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == expected, observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_install_typedarray" in symbols, "the detector no longer selects the group"
+        assert b"js_runtime_families_never" not in symbols, "a claim with the switch off"
+        assert removed < exe.stat().st_size, (removed, exe.stat().st_size)
+        save("family-bytes-detector-only", status=0, bytes_removed=exe.stat().st_size - removed)
+        # `full`: the install follows the fact both ways. A program the
+        # detector misses (constructors through constant computed keys) links
+        # the group and answers like node.
+        source = fixtures / "family-bytes-link-full.ts"
+        exe, e = compile_(source, "family-bytes-link-full", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="full")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        assert b"js_runtime_install_typedarray" in run(["nm", str(exe)]).stdout
+        save("family-bytes-link-full", status=observed.returncode)
+    else:
+        save("family-claims", status="skipped: no instrumented runtime variant")
+
     for source in sorted(fixtures.glob("existing-*.ts")):
         exe, e = compile_(source, source.stem)
         observed = observe(exe, e)
@@ -116,6 +228,14 @@ def main():
         ("array-fwd-negative", "arrfwd", "proven element read"),
         ("array-dense-negative", "arrdense", "array rep"),
         ("array-elem-negative", "arrelem", "array rep"),
+        ("array-store-negative", "arrelem", "array rep"),
+        ("rep-default-negative", "arrelem", "array rep"),
+        ("slice-birth-negative", "slicebirth", "array rep"),
+        ("inbounds-store-negative", "inbounds", "array rep"),
+        # A false "no hole" claim made at its source (not at a store) is
+        # reported where the for-of reads the slot.
+        ("forof-hole-negative", "nohole", "array rep"),
+        ("forof-dense-birth-negative", "arrdense", "array rep"),
         ("array-lazy-negative", "arrlazy", "array rep"),
         ("array-front-negative", "arrfront", "array rep"),
         ("const-array-negative", "arrconst", "constant array"),
@@ -126,22 +246,61 @@ def main():
         ("array-base-negative", "arrbase", "array rep"),
         ("array-base-admit-negative", "arrbaseadm", "array rep"),
         ("fn-base-admit-negative", "fnbaseadm", "array rep"),
+        ("walk-fixed-negative", "walkfixed", "array rep"),
         ("unsigned-bound-negative", "unsignedbound", "unsigned bound"),
+        ("key-sign-negative", "keysign", "key sign"),
+        ("wide-key-negative", "widekey", "wide key"),
+        ("literal-string-negative", "litstr", "literal string"),
+        ("held-length-negative", "heldlen", "held length"),
+        ("instance-literal-negative", "instlit", "array constant length"),
+        ("named-length-negative", "namedlen", "named length"),
+        ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("quiet-strings-negative", "quiet-strings", "quiet sites"),
+        ("typed-array-site-negative", "tasite", "method site"),
+        ("array-site-negative", "arraysite", "method site"),
+        ("collection-site-negative", "collsite", "method site"),
         ("number-call-negative", "numbercall", "numeric result"),
+        ("number-call-direct-negative", "numbercall", "numeric result"),
         ("field-read-call-negative", "fieldreadcall", "field read call"),
         ("array-undef-negative", "arrundef", "element floor"),
         ("const-number-negative", "constnum", "constant number"),
         ("signature-negative", "signature", "signature"),
+        ("map-values-negative", "mapvals", "signature"),
         ("signature-escape-negative", "signature-escape", "signature"),
         ("signature-range-negative", "signature-range", "signature"),
+        ("signed-index-negative", "signature-range", "signature"),
+        ("local-range-negative", "localrange", "int32 input"),
+        ("int32-read-negative", "int32read", "int32 input"),
+        ("int-product-negative", "intprod", "int32 input"),
+        # The int32 claim is witnessed on every binding shape: a `const`
+        # read once (an F64 local with the collectors' i32 slot), and the
+        # facts' I32 slot in module init, a closure and a static method.
+        ("int32-const-negative", "range", "int32 input"),
+        ("int32-init-negative", "range", "int32 input"),
+        ("int32-closure-negative", "range", "int32 input"),
+        ("undef-number-negative", "undefnum", "canonical number"),
         ("rest-field-negative", "restfield", "field rep"),
         ("rest-field-zero-negative", "restfield", "field rep"),
         ("rest-elem-negative", "restelem", "array rep"),
+        ("rest-default-negative", "restelem", "array rep"),
         ("rest-raw-negative", "restraw", "array rep"),
+        ("rest-lane-negative", "restlane", "field rep"),
+        ("rest-lane-raw-negative", "restlaneraw", "field rep"),
         ("rest-held-negative", "restheld", "field read call"),
         ("rest-rep-negative", "restrep", "array rep"),
+        ("rest-cap-negative", "restcap", "array rep"),
+        ("rest-push-negative", "restpush", "array rep"),
+        ("fill-birth-negative", "fillbirth", "array rep"),
         ("zero-sign-negative", "zerosign", "zero sign"),
         ("zero-sign-elem-negative", "zerosign", "zero sign"),
+        ("birth-image-negative", "birthimage", "birth image"),
+        ("string-call-negative", "stringcall", "call kinds"),
+        ("loop-trip-negative", "looptrip", "loop trip bound"),
+        # Activation reach, members on a built-in prototype (class H): each
+        # arm turns one rule off, and the body the program enters through
+        # the member reports "inactive body".
+        ("reach-held-keys-negative", "noreachheldkeys", "inactive body"),
+        ("reach-proto-accessor-negative", "noreachprotoaccessors", "inactive body"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the
@@ -170,10 +329,22 @@ def main():
     # claims every instance of an admitted template at birth; the facts say
     # its identity is never compared, so a compiled identity compare that
     # sees a claimed operand reports "value record identity".
-    for name, wrong_claim in [
-        ("vr-ident-negative", "vrident"),
-        ("vr-switch-negative", "vrswitch"),
-        ("vr-inline-negative", "vrinline"),
+    # VR-3a: a record binding is its fields, and every other use takes a
+    # materialized copy, claimed in check mode: a store into a copy reports
+    # "value record mutation".
+    for name, wrong_claim, predicate in [
+        ("vr-ident-negative", "vrident", "value record identity"),
+        ("vr-switch-negative", "vrswitch", "value record identity"),
+        ("vr-inline-negative", "vrinline", "value record identity"),
+        ("vr-write-negative", "vrwrite", "value record mutation"),
+        # VR-3b: a record crosses a typed call as its lanes; a call that is
+        # no typed call would hand a copy to the callee's boxed entry, which
+        # reports "value record boxed entry".
+        ("vr-untyped-negative", "vruntyped", "value record boxed entry"),
+        # VR-4b: a record array is touched only by its intrinsics, whose
+        # receiver holds nothing else; a body that also serves another
+        # Array reports "value record array" at the intrinsic.
+        ("vr-arrjoin-negative", "vrarrjoin", "value record array"),
     ]:
         source = fixtures / (name + ".ts")
         for claim in ["", wrong_claim]:
@@ -182,7 +353,7 @@ def main():
             observed = observe(exe, e)
             if claim:
                 value = report(observed)
-                assert value["predicate"] == "value record identity", value
+                assert value["predicate"] == predicate, value
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
@@ -203,6 +374,20 @@ def main():
         assert value["predicate"] == "canonical number", value
         save("canonical-number-negative-false", status=86)
 
+    # An interval rule's bounds are those of doubles (`model::range`): the
+    # repro of the false int32 claim is right and unreported, and the rule
+    # before it (`PERRY_FACTS_INT_BOUNDS=0`: a product past 2^60 is the empty
+    # interval) is a false proof the int32 witness reports.
+    source = fixtures / "int-bounds-negative.ts"
+    exe, e = compile_(source, "int-bounds-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("int-bounds-negative-correct", status=0)
+    exe, e = compile_(source, "int-bounds-negative-false", PERRY_FACTS_INT_BOUNDS="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "int32 input", value
+    save("int-bounds-negative-false", status=86)
+
     source = fixtures / "parallel-bodies.ts"
     exe, e = compile_(source, "parallel-bodies")
     observed = observe(exe, e)
@@ -219,6 +404,23 @@ def main():
     observed = observe(exe, e)
     assert observed.returncode == 0 and observed.stdout == oracle(source), observed
     save("slot-key", status=86, key=value["key"])
+
+    # A class with reservations (#14485): a reserved key's witness admits
+    # the hole at its slot behind the read's hole compare, and a key added
+    # out of the layout's order through its overflow entry
+    # (WPF_MAYBE_ABSENT, `slot_ref`). A real false slot claim on such a class
+    # still reports: with the facts' constructor order check off
+    # (`PERRY_FACTS_CTOR_ORDER=0`), `d`'s store after an out-of-order add
+    # bypasses the overflow and its slot holds a key the object does not
+    # name.
+    source = fixtures / "slot-key-reserved.ts"
+    exe, e = compile_(source, "slot-key-reserved-false", PERRY_FACTS_CTOR_ORDER="0")
+    value = report(observe(exe, e))
+    assert value["predicate"] == "F3 slot" and value["key"] == "d", value
+    exe, e = compile_(source, "slot-key-reserved-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("slot-key-reserved", status=86, key=value["key"])
 
     for name, wrong_claim in [("copy-store", "kind:Box.v=num"), ("copy-body", "activation:call"), ("copy-inline", "activation:this")]:
         source = fixtures / (name + ".ts")

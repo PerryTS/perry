@@ -43,6 +43,11 @@ pub extern "C" fn js_put_value_set(
 ) -> f64 {
     #[cfg(perry_contract_checks)]
     crate::contracts::put_value(target, key, value, receiver);
+    // A Number target with clear top 16 bits (a denormal, or +0) is not a
+    // raw object pointer: see `number_receiver_for_dispatch`.
+    let same_receiver = target.to_bits() == receiver.to_bits();
+    let target = crate::value::addr_class::number_receiver_for_dispatch(target);
+    let receiver = if same_receiver { target } else { receiver };
     // Short strings and heap strings name the same property. Reuse the
     // existing allocation-free atom resolver before asking the shape, as
     // the transition-only entry did, so a warm short key keeps that answer.
@@ -211,8 +216,15 @@ pub extern "C" fn js_put_value_set(
                 return value;
             }
             if let Some(name) = key_to_rust_string(property_key) {
-                unsafe {
-                    crate::typedarray_props::typed_array_set_property_by_name(addr, &name, value);
+                let stored = unsafe {
+                    crate::typedarray_props::typed_array_set_property_by_name(addr, &name, value)
+                };
+                // `Set(O, P, V, true)`: a rejected store (a getter-only
+                // accessor such as `length`, a read-only property, a new key
+                // on a non-extensible typed array) throws in strict code.
+                if !stored && strict != 0 {
+                    let msg = format!("Cannot assign to read only property '{name}' of object");
+                    return throw_type_error(&msg);
                 }
                 return value;
             }
@@ -325,7 +337,11 @@ pub extern "C" fn js_put_value_set(
         stored
     };
     if !ok && strict != 0 {
-        let key_name = key_to_rust_string(property_key).unwrap_or_else(|| "property".to_string());
+        // `ordinary_set_with_receiver` above may have evaluated a deferred
+        // namespace and moved the heap; read the key back through its handle
+        // rather than the pre-set local.
+        let key_name = key_to_rust_string(property_key_handle.get_nanbox_f64())
+            .unwrap_or_else(|| "property".to_string());
         let receiver = receiver_handle.get_nanbox_f64();
         if let Some(class_name) = getter_only_accessor_owner_name(receiver, &key_name) {
             crate::collection_iter::throw_type_error(&format!(
@@ -629,7 +645,7 @@ fn object_array_numeric_write_slots(
         unsafe { crate::value::addr_class::try_read_gc_header(array_addr) },
         "array header is unavailable",
     )?;
-    if array_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(array_gc.obj_type)
         || array_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || crate::array::array_has_element_descriptors(
             array_addr as *const crate::array::ArrayHeader,
@@ -727,7 +743,7 @@ fn object_array_numeric_write_slots(
             return None;
         }
         let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-        if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_gc.obj_type)
             || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -781,8 +797,10 @@ fn object_array_numeric_write_slots(
         // A finite Number preserves Any/F64, but contradicts a ConstFn body
         // fact. The clone writes without the checked slot funnel, so SPECIAL
         // targets must take the ordinary loop before any slot is published.
-        if crate::object::field_rep_store::object_slot_rep_of(LayoutWord(shared_shape_id), slot as u32)
-            == crate::object::field_rep::REP_SPECIAL
+        if crate::object::field_rep_store::object_slot_rep_of(
+            LayoutWord(shared_shape_id),
+            slot as u32,
+        ) == crate::object::field_rep::REP_SPECIAL
         {
             trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
             return None;
@@ -818,7 +836,7 @@ fn object_array_numeric_write_slots(
         let Some(gc) = crate::value::addr_class::try_read_gc_header(spill as usize) else {
             return false;
         };
-        if gc.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(gc.obj_type)
             || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
@@ -914,7 +932,7 @@ pub extern "C" fn js_object_array_keytable_write_guard(
     let Some(kt_gc) = (unsafe { crate::value::addr_class::try_read_gc_header(kt_addr) }) else {
         return 0;
     };
-    if kt_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(kt_gc.obj_type)
         || kt_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return 0;

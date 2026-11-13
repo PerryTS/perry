@@ -509,7 +509,7 @@ pub(super) unsafe fn bounded_keys_are_dense(
     let Some(header) = crate::value::addr_class::try_read_gc_header(keys as usize) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && header.size as usize
             >= crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>() + fields * 8

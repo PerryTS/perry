@@ -107,6 +107,11 @@ pub enum Cons {
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
+    /// A store under an index of each Array in the node, at a site whose
+    /// key gen proved at most the Array's length there
+    /// (`Model::inbounds_sites`): it leaves no hole in an Array whose length
+    /// never shrinks (`Model::index_kept`), and may leave one in any other.
+    IndexKept,
     /// `registerPathModule`: dst ⊇ a CommonJS record's live `exports` (the
     /// wrapper's record literal carries `__perry_cjs_record` at birth), or
     /// the published value itself for a raw publication.
@@ -206,6 +211,12 @@ pub enum Cons {
         from: NodeId,
         reason: Option<u32>,
     },
+    /// The specifier of `require` call `call` (R-SPEC): each string
+    /// constant that reaches the node resolves as that literal does
+    /// (`builtins::require_by_spec`); a value no constant spells (any
+    /// string, a token, ⊤) resolves as anything. Other primitives resolve
+    /// to nothing: the loader throws on a specifier that is no string.
+    RequireSpec { call: CallId },
     /// Once ⊤ reaches the node, `dst` holds ⊤ (all kinds) for `reason`; a
     /// data value or a marker leaves it inert (an instance's ⊤ arrives as
     /// ⊤). The result of a rule that is unknown only when the node is: an
@@ -227,6 +238,18 @@ pub enum Cons {
     /// of the program text, so a summary replays it per call; `Defined` is
     /// the solver's, decided for the values one solve saw.
     NotNullish { dst: NodeId },
+    /// A value a promise is resolved with (Promise Resolve Functions,
+    /// ECMA-262 27.2.1.3.2 steps 7-15; a then-callback's result,
+    /// `Promise.resolve`, `await`): it fulfils the promise as itself only
+    /// when its `then` read is not callable. Its primitives, ⊤ and markers
+    /// flow into `dst`; an object token flows once its read of `then` (own
+    /// field, chain, accessor; `Model::load_from`) may hold a value no call
+    /// takes (`guard::NOT_CALLABLE`: a primitive, `undefined` of a missing
+    /// key, a non-function object, ⊤), re-checked as the read grows
+    /// (monotone). A token whose `then` is callable is adopted instead
+    /// (`builtins::adopt`: its settled value, its `then` called with
+    /// resolve functions). One predicate for every resolution.
+    Fulfil { dst: NodeId },
     /// The left operand of `l && r`: its falsy part flows into `dst` (the
     /// result is `l` only when it is falsy, and every object is truthy):
     /// its primitive kinds that have a falsy value, ⊤ as those kinds only,
@@ -630,8 +653,10 @@ impl Cons {
         matches!(
             self,
             Cons::StoreIndexed { .. }
+                | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::Fulfil { .. }
                 | Cons::NotUndefined { .. }
         )
     }
@@ -649,6 +674,7 @@ impl Cons {
                 | Cons::RetInto { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
+                | Cons::Fulfil { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
         )
@@ -661,6 +687,7 @@ impl Cons {
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::IndexHole => "indexhole",
+            Cons::IndexKept => "indexkept",
             Cons::CjsPublish { .. } => "cjspublish",
             Cons::Store { .. } => "store",
             Cons::Call { .. } => "call",
@@ -682,10 +709,12 @@ impl Cons {
             Cons::ContractThis { .. } => "contractthis",
             Cons::OverrideThis { .. } => "overridethis",
             Cons::TopIfAny { .. } => "topifany",
+            Cons::RequireSpec { .. } => "requirespec",
             Cons::TopIfTop { .. } => "topiftop",
             Cons::Guard { .. } => "guard",
             Cons::Defined { .. } => "defined",
             Cons::NotNullish { .. } => "notnullish",
+            Cons::Fulfil { .. } => "fulfil",
             Cons::Falsy { .. } => "falsy",
             Cons::NotUndefined { .. } => "notundefined",
             Cons::Hard { .. } => "hard",

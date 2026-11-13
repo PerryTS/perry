@@ -58,10 +58,15 @@ pub(crate) use helpers::{
 };
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // A fused fill the facts name one birth: born once, in its final words.
+    if let Some(born) = super::fill_birth::lower(ctx, expr)? {
+        return Ok(born);
+    }
     if super::rest_elems::is_birth(ctx, expr) {
         // I32 at rest: the fill births the Array, which is then encoded.
+        let reserve = super::rest_elems::birth_reserve(ctx, expr);
         let born = lower_call_expr(ctx, expr)?;
-        return Ok(super::rest_elems::encode_birth(ctx, &born));
+        return Ok(super::rest_elems::encode_birth(ctx, &born, reserve));
     }
     lower_call_expr(ctx, expr)
 }
@@ -842,6 +847,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee,
             args,
             byte_offset,
+            byte_end,
             ..
         } => {
             super::downgrade_buffer_aliases_in_expr(
@@ -866,9 +872,11 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if ctx.strings.debug_locations_enabled() {
                 ctx.strings.set_pending_call_offset(*byte_offset);
             }
-            crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
+            let watched = crate::verify_facts::life::watch_call(ctx, *byte_offset, *byte_end, args);
+            let value = crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
                 lower_call(ctx, callee, args)
-            })
+            });
+            crate::verify_facts::life::end_call(ctx, watched, value?)
         }
 
         // -------- Proxy / Reflect (metaprogramming) --------

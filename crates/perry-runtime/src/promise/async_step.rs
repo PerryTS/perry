@@ -221,7 +221,8 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
                 {
                     let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
                     // Allocating the key can move x: re-read it from its root.
-                    let addr = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+                    let addr =
+                        crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
                     let ctor = if key.is_null() {
                         None
                     } else {
@@ -1313,7 +1314,7 @@ fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
     }
     unsafe {
         let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        ((*gc).obj_type == crate::gc::GC_TYPE_ARRAY)
+        (crate::gc_type_is_array!((*gc).obj_type))
             .then_some(raw as *const crate::array::ArrayHeader)
     }
 }

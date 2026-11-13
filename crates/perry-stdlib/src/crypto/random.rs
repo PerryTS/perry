@@ -52,22 +52,63 @@ fn validate_random_bytes_size(size: f64) -> usize {
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    perry_runtime::effect!(host_read, random);
-    let size = validate_random_bytes_size(size);
-    let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
-        perry_runtime::buffer::bytes::Brand::Buffer,
-        size,
-        perry_runtime::buffer::bytes::Init::Uninit,
-    );
-    unsafe {
-        rand::rng().fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.bytes",
+            &format!("{:?}", (size,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let size = validate_random_bytes_size(size);
+                let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+                    perry_runtime::buffer::bytes::Brand::Buffer,
+                    size,
+                    perry_runtime::buffer::bytes::Init::Uninit,
+                );
+                unsafe {
+                    rand::rng()
+                        .fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+                    perry_runtime::census_inputs! {
+                    perry_runtime::snap_census::record_input_value(
+                        "crypto.random.bytes",
+                        &std::slice::from_raw_parts(pin.as_ptr(), pin.len()).to_vec(),
+                    ); }
+                }
+                JSValue::from_bits(value.to_bits())
+                    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+                    .cast_mut()
+            },
+        );
     }
-    JSValue::from_bits(value.to_bits())
-        .as_pointer::<perry_runtime::buffer::BufferHeader>()
-        .cast_mut()
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let size = validate_random_bytes_size(size);
+        let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            size,
+            perry_runtime::buffer::bytes::Init::Uninit,
+        );
+        unsafe {
+            rand::rng().fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+            perry_runtime::census_inputs! {
+            perry_runtime::snap_census::record_input_value(
+                "crypto.random.bytes",
+                &std::slice::from_raw_parts(pin.as_ptr(), pin.len()).to_vec(),
+            ); }
+        }
+        JSValue::from_bits(value.to_bits())
+            .as_pointer::<perry_runtime::buffer::BufferHeader>()
+            .cast_mut()
+    }
 }
 
 /// `crypto.randomBytes(size, callback)` — callback form.
@@ -114,35 +155,98 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
 /// Generate random bytes and return as hex string
 /// crypto.randomBytes(size).toString('hex') -> string
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
-    perry_runtime::effect!(host_read, random);
-    let size = validate_random_bytes_size(size);
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.hex",
+            &format!("{:?}", (size,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let size = validate_random_bytes_size(size);
 
-    let mut bytes = vec![0u8; size];
-    rand::rng().fill_bytes(&mut bytes);
-    let hex_str = perry_hex::encode(&bytes);
+                let mut bytes = vec![0u8; size];
+                rand::rng().fill_bytes(&mut bytes);
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value("crypto.random.bytes", &bytes); }
+                let hex_str = perry_hex::encode(&bytes);
 
-    js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+                js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let size = validate_random_bytes_size(size);
+
+        let mut bytes = vec![0u8; size];
+        rand::rng().fill_bytes(&mut bytes);
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.bytes", &bytes); }
+        let hex_str = perry_hex::encode(&bytes);
+
+        js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+    }
 }
 
 /// Generate a random UUID v4 using crypto-secure random
 /// crypto.randomUUID([options]) -> string
 ///
-/// #10523: served from perry-uuid's per-thread entropy cache (one
+/// #10523: served from the crypto uuid module's per-thread entropy cache (one
 /// `getrandom` per 128 UUIDs, like Node) unless the caller passes
 /// `{ disableEntropyCache: true }`, which draws fresh OS entropy.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
-    perry_runtime::effect!(host_read, random);
-    let uuid = if validate_random_uuid_options(options_bits) {
-        perry_uuid::v4_uncached()
-    } else {
-        perry_uuid::v4()
-    };
-    // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
-    // UTF-8 on every UUID only for the string constructor to copy them.
-    let uuid_bytes = uuid.as_bytes();
-    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.uuid",
+            &format!("{:?}", (options_bits,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let uuid = if validate_random_uuid_options(options_bits) {
+                    super::uuid::v4_uncached()
+                } else {
+                    super::uuid::v4()
+                };
+                // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+                // UTF-8 on every UUID only for the string constructor to copy them.
+                let uuid_bytes = uuid.as_bytes();
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value(
+                    "crypto.random.uuid",
+                    &uuid_bytes.to_vec(),
+                ); }
+                js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let uuid = if validate_random_uuid_options(options_bits) {
+            super::uuid::v4_uncached()
+        } else {
+            super::uuid::v4()
+        };
+        // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+        // UTF-8 on every UUID only for the string constructor to copy them.
+        let uuid_bytes = uuid.as_bytes();
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.uuid", &uuid_bytes.to_vec()); }
+        js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    }
 }
 
 /// Generate an RFC 9562 version 7 UUID — a 48-bit millisecond Unix
@@ -152,11 +256,39 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 /// optional `options` object (Node's `{ disableEntropyCache }`) is
 /// accepted for shape parity but does not change the generated value.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
-    perry_runtime::effect!(host_read, random);
-    let uuid = perry_uuid::v7();
-    let uuid_bytes = uuid.as_bytes();
-    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.uuidv7",
+            &format!("{:?}", ()),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let uuid = super::uuid::v7();
+                let uuid_bytes = uuid.as_bytes();
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value(
+                    "crypto.random.uuid",
+                    &uuid_bytes.to_vec(),
+                ); }
+                js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let uuid = super::uuid::v7();
+        let uuid_bytes = uuid.as_bytes();
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.uuid", &uuid_bytes.to_vec()); }
+        js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    }
 }
 
 /// Validates `randomUUID`'s options bag and returns `disableEntropyCache`.
@@ -182,7 +314,7 @@ unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+    if perry_runtime::gc_type_is_array!(header.obj_type) {
         let message = format!(
             "The \"options\" argument must be of type object. Received {}",
             perry_runtime::fs::validate::describe_received(options_bits)
@@ -251,26 +383,62 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
 /// `crypto.randomInt(max)` / `crypto.randomInt(min, max)` synchronous form.
 /// Returns a uniformly distributed integer in `[min, max)`.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
-    perry_runtime::effect!(host_read, random);
-    let min = validate_random_int_arg(min_bits, "min");
-    let max = validate_random_int_arg(max_bits, "max");
-    if max <= min {
-        let message = format!(
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.int",
+            &format!("{:?}", (min_bits, max_bits,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let min = validate_random_int_arg(min_bits, "min");
+                let max = validate_random_int_arg(max_bits, "max");
+                if max <= min {
+                    let message = format!(
             "The value of \"max\" is out of range. It must be greater than the value of \"min\" ({}). Received {}",
             min, max
         );
-        perry_runtime::fs::validate::throw_range_error_with_code(&message);
-    }
-    let range = max as i128 - min as i128;
-    if range > RANDOM_INT_MAX_RANGE as i128 {
-        let message = format!(
-            "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
-            RANDOM_INT_MAX_RANGE, range
+                    perry_runtime::fs::validate::throw_range_error_with_code(&message);
+                }
+                let range = max as i128 - min as i128;
+                if range > RANDOM_INT_MAX_RANGE as i128 {
+                    let message = format!(
+                        "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
+                        RANDOM_INT_MAX_RANGE, range
+                    );
+                    perry_runtime::fs::validate::throw_range_error_with_code(&message);
+                }
+                rand::rng().random_range(min..max) as f64
+            },
         );
-        perry_runtime::fs::validate::throw_range_error_with_code(&message);
     }
-    rand::rng().random_range(min..max) as f64
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let min = validate_random_int_arg(min_bits, "min");
+        let max = validate_random_int_arg(max_bits, "max");
+        if max <= min {
+            let message = format!(
+                "The value of \"max\" is out of range. It must be greater than the value of \"min\" ({}). Received {}",
+                min, max
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        let range = max as i128 - min as i128;
+        if range > RANDOM_INT_MAX_RANGE as i128 {
+            let message = format!(
+                "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
+                RANDOM_INT_MAX_RANGE, range
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        rand::rng().random_range(min..max) as f64
+    }
 }
 
 /// One-shot `crypto.hash(alg, data, encoding = "hex")` uses the same
@@ -648,6 +816,11 @@ pub extern "C" fn js_crypto_random_fill_sync(
     perry_runtime::buffer::bytes::no_gc(|scope| unsafe {
         let data = perry_runtime::buffer::bytes::bytes_mut(value, scope)?;
         rand::rng().fill_bytes(&mut data[start..start + count]);
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value(
+            "crypto.random.fill",
+            &data[start..start + count].to_vec(),
+        ); }
         #[cfg(test)]
         if b2c_sabotage("random_fill_range") && count > 0 {
             // Make the wrong-window witness deterministic rather than depend

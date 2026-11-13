@@ -2,6 +2,7 @@
 use super::*;
 
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("new {ns:?}"));
     // A spread shifts argument positions, so a summary that reads fixed
     // positions cannot be trusted. Every fixed and spread value may land in
@@ -32,6 +33,12 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             };
             let c = site_tmpl(m, call, what);
             let fa = m.field_any(c);
+            if ns == BuiltinNs::Map {
+                // Born without an iterable, its contents are what `set`
+                // stores (`solve/map_vals.rs`).
+                let empty = arg(m, call, 0).is_none();
+                m.map_born(c, empty);
+            }
             if let Some(src) = arg(m, call, 0) {
                 let vals = iterate(m, call, src);
                 if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
@@ -48,9 +55,9 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             let p = site_tmpl(m, call, "Promise");
             let v = promise_value(m, p);
             if let Some(ex) = arg(m, call, 0) {
-                let res = resolver(m, v);
+                let res = resolver(m, call, v);
                 let thrown = m.thrown;
-                let rej = resolver(m, thrown);
+                let rej = rejecter(m, thrown);
                 let rn = m.node_l("resolver");
                 m.add_tok(rn, res);
                 let jn = m.node_l("rejecter");
@@ -221,13 +228,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
 
 /// `new Name(...)` where `Name` is not a program class: a builtin by name.
 pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
+    crate::family_reach::global(m, name);
     m.diagnostic_builtin(call, |_| format!("new {name}"));
     if let Some(ns) = ns_by_name(name) {
         return new_builtin_ns(m, ns, call);
     }
     match name {
         "URL" => {
-            let c = m.calls[call as usize].clone();
+            let c = m.positional(call, 2);
             for &a in c.args.iter().take(2) {
                 string_methods::to_prim(m, a, "URL constructor USVString");
             }

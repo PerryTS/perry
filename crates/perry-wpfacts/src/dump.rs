@@ -181,6 +181,13 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             ));
         }
     }
+    // Each call whose result the facts prove a Number (a canonical double
+    // for its consumers), by the call's source offset.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for offset in &bindings.number_calls {
+            out.push_str(&format!("# number_call module={mi} call={offset}\n"));
+        }
+    }
     // N1: what decides each Number local's representation.
     for l in &pf.rep_probe {
         out.push_str(l);
@@ -201,6 +208,35 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 "# signature module={mi} func={func} params=({}) ret={}\n",
                 params.join(","),
                 s.ret.name()
+            ));
+        }
+        for func in &bindings.record_demoted {
+            out.push_str(&format!(
+                "# record-signature module={mi} func={func} DEMOTED a source call is not a typed call of its module\n"
+            ));
+        }
+        // Value records VR-4b: what codegen lowers as a record array.
+        for (id, r) in &bindings.record_array_locals {
+            out.push_str(&format!("# record_array module={mi} local={id} of={r}\n"));
+        }
+        for (at, k, r) in &bindings.record_array_reads {
+            out.push_str(&format!(
+                "# record_array module={mi} read={at}.{k} of={r}\n"
+            ));
+        }
+        for (id, r) in &bindings.record_array_birth_locals {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-local={id} of={r}\n"
+            ));
+        }
+        for (at, r) in &bindings.record_array_birth_stores {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-store={at} of={r}\n"
+            ));
+        }
+        for (c, k, r) in &bindings.record_array_birth_fields {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-field={c}.{k} of={r}\n"
             ));
         }
     }
@@ -239,6 +275,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         out.push_str(&format!("# activation {a}\n"));
     }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
+    for l in pf.family_reach.iter().flat_map(|f| f.dump_lines()) {
+        out.push_str(&l);
+        out.push('\n');
+    }
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }

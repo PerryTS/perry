@@ -37,7 +37,11 @@ fn serialize_then_deserialize_keeps_small_integers_raw() {
         while bytes[at] & 0x80 != 0 {
             at += 1;
         }
-        assert_eq!(bytes.get(at + 1), Some(&b'I'), "{n} is written as a wire int32");
+        assert_eq!(
+            bytes.get(at + 1),
+            Some(&b'I'),
+            "{n} is written as a wire int32"
+        );
         assert_eq!(v8_deserialize(&bytes).to_bits(), f64::to_bits(n), "{n}");
     }
 }

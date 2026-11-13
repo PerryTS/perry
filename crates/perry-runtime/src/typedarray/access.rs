@@ -365,12 +365,12 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
             // out-of-bounds coercion on a non-plain-number value so the hot
             // in-bounds and primitive-value paths are untouched (test262
             // Set/tonumber-value-throws, key-is-out-of-bounds-*).
-            if value_needs_coercion_side_effect(value) {
-                if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
-                    let _ = bigint::to_bigint_for_store(value);
-                } else {
-                    let _ = jsvalue_to_f64(value);
-                }
+            // A BigInt view converts every value: ToBigInt of a Number, a
+            // string or a Boolean is a TypeError (or a parse) too.
+            if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+                let _ = bigint::to_bigint_for_store(value);
+            } else if value_needs_coercion_side_effect(value) {
+                let _ = jsvalue_to_f64(value);
             }
             return;
         }
@@ -493,7 +493,7 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
         let header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let obj_type = (*header).obj_type;
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             let arr = addr as *const ArrayHeader;
             let len = crate::array::js_array_length(arr) as usize;
             return Some(SetSource::Array(arr, len));

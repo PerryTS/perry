@@ -132,6 +132,16 @@ pub const GC_TYPE_BOOL_BOX: u8 = 24;
 /// A scope context object: N NaN-boxed binding slots shared by the closures of
 /// one lexical scope activation (`box/scope.rs`).
 pub const GC_TYPE_SCOPE: u8 = 25;
+/// A value-record array head (`record_array::RecordArrayHeader`): counts, the
+/// template's shape id and one traced edge, the raw pointer to its element
+/// buffer. Its own kind, so no array or object reader admits it; only the
+/// `js_record_array_*` entries compiled code calls touch one.
+pub const GC_TYPE_RECORD_ARRAY: u8 = 42;
+const _: () = assert!(GC_TYPE_RECORD_ARRAY == perry_abi::GC_TYPE_RECORD_ARRAY);
+/// A record array's element buffer: `capacity * words` JSValue words that are
+/// all immediates (canonical doubles, undefined, null, booleans). A leaf.
+pub const GC_TYPE_RECORD_ELEMS: u8 = 43;
+const _: () = assert!(GC_TYPE_RECORD_ELEMS == perry_abi::GC_TYPE_RECORD_ELEMS);
 
 // Buffer-family flavors (#10694). Every one of these is a `BufferHeader` cell
 // with exactly `GC_TYPE_BUFFER`'s layout, tracing, size and lifetime; the type
@@ -356,7 +366,7 @@ pub fn json_wide_birth_permits(total_size: usize, obj_type: u8) -> bool {
     }
     let mask = JSON_WIDE_BIRTH_MASK.with(|c| c.get());
     (mask == json_wide_birth::OBJECTS && obj_type == GC_TYPE_OBJECT)
-        || (mask == json_wide_birth::KEYS_ARRAY && obj_type == GC_TYPE_ARRAY)
+        || (mask == json_wide_birth::KEYS_ARRAY && crate::gc_type_is_array!(obj_type))
 }
 
 #[inline]
@@ -477,6 +487,9 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,
     NativePodView,
+    /// A value-record array head: its one traced edge is the raw pointer to
+    /// its element buffer (`record_array::RecordArrayHeader::elems`).
+    RecordArray,
 }
 
 #[allow(dead_code)]
@@ -1022,6 +1035,36 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_RECORD_ARRAY,
+        "record_array",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::RecordArray,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::None,
+        GcLargeObjectPolicy::NotApplicable,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
+    Some(gc_type_info_entry(
+        GC_TYPE_RECORD_ELEMS,
+        "record_elems",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::Leaf,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::ArenaWhenOverThreshold,
+        true,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::None,
+        GcFinalizeHookKind::None,
+    )),
     // Indexed by type id: the buffer-family flavors, GC_TYPE_BUFFER_UINT8ARRAY
     // through GC_TYPE_BUFFER_CRYPTO_KEY, in order.
     Some(buffer_family_type_info(
@@ -1296,7 +1339,7 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return Some(&GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize]);
@@ -1318,7 +1361,7 @@ pub(crate) fn gc_type_is_arena_walkable(obj_type: u8) -> bool {
 #[inline(always)]
 pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescriptorKind {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY
+    if crate::gc_type_is_array!(obj_type)
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
         return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].rewrite_descriptor_kind;

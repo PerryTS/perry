@@ -42,14 +42,16 @@ use super::{
 
 pub(crate) mod array_rep;
 mod const_array;
-pub(crate) mod field_base;
-mod foreign_counter;
 pub(crate) mod descriptor_read;
 pub(crate) mod elem_floor;
+pub(crate) mod field_base;
+mod foreign_counter;
 pub(super) mod guarded_array;
 pub(crate) mod proven_array;
 #[cfg(test)]
 mod proven_array_tests;
+pub(crate) mod rep_default;
+pub(crate) mod walk_read;
 pub(crate) use foreign_counter::{
     affine_counter_occurrences, affine_index_fits_i64, emit_affine_index_i64_with,
     packed_f64_loop_index_parts, packed_f64_loop_offset_read,
@@ -327,7 +329,77 @@ pub(crate) fn classref_preserving_handle(
     let masked_tag = blk.and(I64, &top16, "65533"); // 0xFFFD
     let is_heap_ptr = blk.icmp_eq(I64, &masked_tag, "32765"); // 0x7FFD
     let masked = blk.and(I64, obj_bits, POINTER_MASK_I64);
-    blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, obj_bits)
+    // A value whose top 16 bits are clear is a Number (a denormal, or +0):
+    // in value context an object always carries POINTER_TAG. The handle
+    // entries read a word with clear top bits as a raw object pointer, so
+    // such a Number must not reach them with its own bits. These entries do
+    // not observe WHICH Number the receiver is: they take an integer-index
+    // read (`undefined` on a Number), an indexed store and a string-keyed
+    // store (the primitive [[Set]]). So 1.0 is only a placeholder meaning
+    // "a Number, not an object"; it is never the `this` of a call or the
+    // result of a read. A site where the Number itself is observed (a named
+    // read: `e["toFixed"]`, `e["constructor"]` bind or answer from the
+    // receiver) uses `named_get_on_unproven_receiver` instead, and symbol
+    // and string keys of a computed read go through the keyed probe with
+    // the boxed receiver, not through this handle.
+    let is_raw_shaped_number = blk.icmp_ult(I64, obj_bits, RAW_SHAPE_LIMIT_I64);
+    let non_pointer = blk.select(
+        crate::types::I1,
+        &is_raw_shaped_number,
+        I64,
+        NUMBER_ONE_BITS_I64,
+        obj_bits,
+    );
+    blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, &non_pointer)
+}
+
+/// `1 << 48`: a value word below it has its top 16 bits clear.
+pub(crate) const RAW_SHAPE_LIMIT_I64: &str = "281474976710656";
+/// The bits of the Number `1.0` (`0x3FF0_0000_0000_0000`).
+const NUMBER_ONE_BITS_I64: &str = "4607182418800017408";
+
+/// A named read whose receiver the site cannot prove to be an object.
+///
+/// The by-name entries (`js_object_get_field_by_name_f64` and the typed
+/// feedback wrapper) take a receiver HANDLE: a word with clear top 16 bits is
+/// a raw object pointer there. In value context that same shape is a Number
+/// (a denormal, or +0), so such a receiver takes the VALUE entry
+/// (`js_object_get_field_value`), which reads it as the Number it is. Every
+/// other receiver runs `handle_read`, the site's own read through the handle
+/// entry.
+pub(crate) fn named_get_on_unproven_receiver(
+    ctx: &mut FnCtx<'_>,
+    obj_bits: &str,
+    key_raw: &str,
+    site_id: &str,
+    handle_read: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
+    let number_idx = ctx.new_block("nget.number");
+    let handle_idx = ctx.new_block("nget.handle");
+    let merge_idx = ctx.new_block("nget.merge");
+    let number_lbl = ctx.block_label(number_idx);
+    let handle_lbl = ctx.block_label(handle_idx);
+    let merge_lbl = ctx.block_label(merge_idx);
+    let is_raw_shaped_number = ctx.block().icmp_ult(I64, obj_bits, RAW_SHAPE_LIMIT_I64);
+    ctx.block()
+        .cond_br(&is_raw_shaped_number, &number_lbl, &handle_lbl);
+    ctx.current_block = number_idx;
+    let v_number = ctx.block().call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[(I64, obj_bits), (I64, key_raw), (I64, site_id)],
+    );
+    let number_end_lbl = ctx.block().label.clone();
+    ctx.block().br(&merge_lbl);
+    ctx.current_block = handle_idx;
+    let v_handle = handle_read(ctx);
+    let handle_end_lbl = ctx.block().label.clone();
+    ctx.block().br(&merge_lbl);
+    ctx.current_block = merge_idx;
+    ctx.block().phi(
+        DOUBLE,
+        &[(&v_number, &number_end_lbl), (&v_handle, &handle_end_lbl)],
+    )
 }
 
 fn lower_class_method_bind(
@@ -422,10 +494,19 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
     if let Some(v) = const_array::try_lower(ctx, expr)? {
         return Ok(Some(v));
     }
-    array_rep::witness(ctx, expr)?;
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, true)? {
+        return Ok(Some(v));
+    }
+    if let Some(v) = super::held_len::lower_read(ctx, object, index, *element_offset, true)? {
         return Ok(Some(v));
     }
     // A planned-bare region read lowers through the value path's hook.
@@ -581,6 +662,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
                 false,
                 repair_slot.as_deref(),
                 proven,
+                super::index_key::split_key_fact(ctx, *element_offset),
             )
             .map(Some)
         });
@@ -647,8 +729,14 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     let Expr::LocalGet(id) = object.as_ref() else {
         return Ok(None);
     };
-    array_rep::witness(ctx, expr)?;
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
+        return Ok(Some(v));
+    }
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // #6750 follow-up: an active masked-window fact wins over the guarded
     // inline-TA probe — the fact's entry guard already proved storage + the
     // whole index window, so the read needs no per-access cache probe at all.
@@ -787,7 +875,7 @@ fn lower_bounded_array_index_get_checked(
     let gc_type_addr = blk.sub(I64, &arr_handle, "8");
     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
     let gc_type = blk.load(I8, &gc_type_ptr);
-    let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+    let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
     let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
     let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -868,8 +956,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(v) = const_array::try_lower(ctx, expr)? {
         return Ok(v);
     }
-    array_rep::witness(ctx, expr)?;
+    if let Some(v) = walk_read::try_lower(ctx, expr)? {
+        return Ok(v);
+    }
+    // The floor's own witness first: a key past it is that claim's miss,
+    // which the read's value claim (`array_rep::claimed_number`) would
+    // report too.
     elem_floor::witness(ctx, expr)?;
+    array_rep::witness(ctx, expr)?;
     // b2: a loop's descriptor read (`descriptor_read`).
     if let Some(v) = descriptor_read::try_lower(ctx, expr, false)? {
         return Ok(v);
@@ -883,6 +977,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             element_offset,
             ..
         } => {
+            // A loop that holds the receiver's length by the facts reads at
+            // its bounded counter (`held_len`).
+            if let Some(value) =
+                super::held_len::lower_read(ctx, object, index, *element_offset, false)?
+            {
+                return Ok(value);
+            }
             // The private record cursor starts at zero, advances only after a
             // successful read, and is bounded by the array's u32 length here.
             // Consume that proof in the ordinary guarded indexed backend.
@@ -1461,6 +1562,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 true,
                                 repair_slot.as_deref(),
                                 proven,
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
@@ -1475,6 +1577,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let repair_slot = receiver_repair_slot(ctx, object);
                     let confined = confined_receiver(ctx, object);
                     let proven = proven_array::fact(ctx, object, *element_offset);
+                    // A key the range proofs bound to int32 (of either sign)
+                    // is lowered as that i32: the split takes it as a native
+                    // key, with no normalizer call (`int32_key`).
+                    if super::int32_key::proven(ctx, index) {
+                        return rooting::with_operands_rooted_across(
+                            ctx,
+                            &[object],
+                            &[index],
+                            |ctx| super::int32_key::lower(ctx, index),
+                            |ctx, vals, key| {
+                                with_confined_read(ctx, confined, |ctx| {
+                                    lower_array_index_get_via_canonical_i32_split(
+                                        ctx,
+                                        &vals[0],
+                                        &key,
+                                        index,
+                                        false,
+                                        false,
+                                        false,
+                                        repair_slot.as_deref(),
+                                        proven,
+                                        // The key is already its i32 here
+                                        // (`int32_key::lower`): the split
+                                        // takes it as a native key, so no
+                                        // key-sign fact applies to it.
+                                        None,
+                                    )
+                                })
+                            },
+                        );
+                    }
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         with_confined_read(ctx, confined, |ctx| {
                             lower_array_index_get_via_canonical_i32_split(
@@ -1487,6 +1620,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                 false,
                                 repair_slot.as_deref(),
                                 proven,
+                                super::index_key::split_key_fact(ctx, *element_offset),
                             )
                         })
                     });
@@ -1620,8 +1754,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
                 let blk = ctx.block();
                 let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-                let obj_handle =
-                    classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
                 let key_box = blk.load(DOUBLE, &key_handle_global);
                 let key_bits = blk.bitcast_double_to_i64(&key_box);
                 let key_raw = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -1631,10 +1763,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     literal,
                     TypedFeedbackContract::object_get_by_name(),
                 );
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_typed_feedback_object_get_field_by_name_f64",
-                    &[(I64, &site_id), (I64, &obj_handle), (I64, &key_raw)],
+                let handle_read = |ctx: &mut FnCtx<'_>| {
+                    let blk = ctx.block();
+                    let obj_handle =
+                        classref_preserving_handle(blk, &obj_bits, preserve_class_ref_bits);
+                    blk.call(
+                        DOUBLE,
+                        "js_typed_feedback_object_get_field_by_name_f64",
+                        &[(I64, &site_id), (I64, &obj_handle), (I64, &key_raw)],
+                    )
+                };
+                if preserve_class_ref_bits {
+                    // A class or `.prototype` reference is never a Number.
+                    return Ok(handle_read(ctx));
+                }
+                return Ok(named_get_on_unproven_receiver(
+                    ctx,
+                    &obj_bits,
+                    &key_raw,
+                    &site_id,
+                    handle_read,
                 ));
             }
             if is_string_expr(ctx, index) {

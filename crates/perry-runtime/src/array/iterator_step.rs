@@ -161,7 +161,11 @@ pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle
                     super::iterator_method::property_at(h, slot as u32),
                 );
             }
-            holder = if h == obj { crate::object::iterator_next_property_owner(obj) } else { None };
+            holder = if h == obj {
+                crate::object::iterator_next_property_owner(obj)
+            } else {
+                None
+            };
         }
     }
     let key = crate::string::intern_ascii_literal(b"next");
@@ -328,7 +332,7 @@ unsafe fn array_record_enter(
         return array_record_refused(value, record, None);
     };
     let array = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let raw = raw as *const crate::array::ArrayHeader;
             // Admission above already proved this header belongs to the receiver.
             // Reuse it for arena arrays without repeating the raw-pointer ownership

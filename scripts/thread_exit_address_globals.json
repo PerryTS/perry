@@ -3861,20 +3861,20 @@
    "why": "Process-global list of the function-record images registered so far (it replaced the old OWNERS map). Each element is either a &'static FunctionRecordBounds (the linker-owned record section of a permanent image) or a leaked &'static [&'static OwnerState] for an unloadable image, whose CopiedEntry holds a static code address and Arc<[u8]> name/source bytes, with overrides keyed by owner ordinal. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
   },
   {
-   "file": "crates/perry-runtime/src/builtins/fn_metadata_owner.rs",
-   "names": [
-    "INDEX"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Function-local cache of (owner key, entries sorted by code address) plus an Arc of (code address, &'static [u8]) pairs: code addresses and static name/source bytes of the image or of a leaked owner, rebuilt when the owner key changes. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
-  },
-  {
    "file": "crates/perry-runtime/src/feature_hooks.rs",
    "names": [
     "FEATURE_INSTALLERS"
    ],
    "verdict": "no_heap_address",
    "why": "Slots of extern \"C\" fn() installers registered by static constructors of linked images: code addresses only, no heap or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_sea.rs",
+   "names": [
+    "SEA_BLOB_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores only the stdlib Blob factory function address installed through js_sea_install_blob_factory; the AtomicUsize is loaded and transmuted back to that code pointer."
   },
   {
    "file": "crates/perry-runtime/src/object/layout_desc/literal_birth.rs",

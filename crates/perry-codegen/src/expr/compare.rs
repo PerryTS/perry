@@ -1302,6 +1302,18 @@ fn finite_numeric_literal(ctx: &mut FnCtx<'_>, operand: &Expr) -> Result<Option<
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
         Expr::Compare { op, left, right } => {
+            // An integer product, sum or difference the intervals bound is
+            // compared as integers (`int_product`).
+            if let Some(bit) = super::int_product::try_lower_compare(ctx, *op, left, right)? {
+                let tagged = ctx.block().select(
+                    I1,
+                    &bit,
+                    I64,
+                    crate::nanbox::TAG_TRUE_I64,
+                    crate::nanbox::TAG_FALSE_I64,
+                );
+                return Ok(ctx.block().bitcast_i64_to_double(&tagged));
+            }
             // `typeof` always yields a string, so loose and strict equality
             // against a string literal are the same comparison.
             if matches!(
@@ -1382,6 +1394,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                 let l = operand_value(ctx, &left_literal);
                 let r = operand_value(ctx, &right_literal);
+                // SNAPK2b census (instrumented compiles only): the hook reads
+                // the two values this compare reads, here, where they are
+                // live. A numeric-literal operand is never a string, so that
+                // compare keeps no row and emits none.
+                if left_literal.is_none() && right_literal.is_none() {
+                    super::snap_compare_site::emit(ctx, *op, left, right, &l, &r);
+                }
                 // Value records' check mode (DESIGN-p4l4 L4).
                 crate::expr::record_witness::compare(ctx, op, left, right, &l, &r);
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values

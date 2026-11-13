@@ -197,7 +197,7 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     else {
         return stable_miss("invalid_keys_header");
     };
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || descriptor.logical_key_count != 1
     {
@@ -231,6 +231,8 @@ fn stable_single_own_for_in_keys(value: f64) -> Option<*mut ArrayHeader> {
     unsafe {
         let keys_gc =
             (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        #[cfg(perry_gc_instruments)]
+        crate::arena::alloc_life::shape_shared(keys_gc);
         (*keys_gc).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     }
     Some(keys)

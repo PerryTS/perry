@@ -380,7 +380,7 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
             let obj_type = crate::value::addr_class::try_read_gc_header(addr)
                 .map(|header| header.obj_type)
                 .unwrap_or(0);
-            if obj_type == crate::gc::GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+            if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
                 let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
                 let s = crate::array::js_array_to_locale_string(
                     addr as *const crate::array::ArrayHeader,
@@ -540,7 +540,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         // prototype chain via `js_object_get_prototype_of`.
         if target_gc_type != crate::gc::GC_TYPE_CLOSURE
             && target_gc_type != crate::gc::GC_TYPE_ERROR
-            && target_gc_type != crate::gc::GC_TYPE_ARRAY
+            && crate::gc_type_is_not_array!(target_gc_type)
             && !crate::gc::is_typed_array_type(target_gc_type)
             && !crate::gc::is_buffer_family_type(target_gc_type)
         {

@@ -20,6 +20,7 @@ fn shared_intrinsic_families_keep_their_abi_slots() {
         (BuiltinProto::Error, 13),
         (BuiltinProto::WeakMap, 14),
         (BuiltinProto::WeakSet, 15),
+        (BuiltinProto::Buffer, 16),
     ];
     for (family, byte) in expected {
         assert_eq!(family as u8, byte);
@@ -64,7 +65,10 @@ unsafe fn add_key(obj: *mut ObjectHeader, name: &[u8], value: f64) {
 
 unsafe fn meta_of(obj: *mut ObjectHeader) -> *mut super::super::ObjectMeta {
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj));
-    assert!(!meta.is_null(), "premise: a sealed object has a meta record");
+    assert!(
+        !meta.is_null(),
+        "premise: a sealed object has a meta record"
+    );
     meta
 }
 
@@ -143,7 +147,11 @@ fn a_locked_intrinsic_refuses_its_image_members_and_admits_additions() {
         // The program adds `p` (slot 1): re-setting or deleting it is fine,
         // the image member is still locked.
         add_key(proto, b"p", 1.0);
-        assert_eq!(image_key_count(meta, own_keys(proto)), 1, "recorded at the first write");
+        assert_eq!(
+            image_key_count(meta, own_keys(proto)),
+            1,
+            "recorded at the first write"
+        );
         assert_eq!(locked_violation(proto, meta, Mutation::Replace(1)), None);
         assert_eq!(
             locked_violation(proto, meta, Mutation::Delete(Key::Bytes(b"p"))),
@@ -202,8 +210,13 @@ fn the_lock_set_is_the_builtin_prototype_families() {
         assert!(locked_family(family), "{family}");
         assert!(!add_locked(family), "{family}");
     }
+    // DEC 250 locks the ECMA intrinsics; Buffer.prototype stays patchable.
     for (family, _) in BuiltinProto::ALL {
-        assert!(locked_family(family as usize), "{family:?}");
+        assert_eq!(
+            locked_family(family as usize),
+            family.realm_intrinsic(),
+            "{family:?}"
+        );
     }
     for name in ["Math", "JSON", "Date", "Object", "Array", "Reflect"] {
         let family = perry_abi::builtin_namespace_family(name).unwrap();
@@ -219,15 +232,21 @@ fn object_prototype_withdraws_every_family() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
-        let protos: Vec<_> = BuiltinProto::ALL.iter().map(|(f, _)| sealed_with_constructor(*f)).collect();
+        let protos: Vec<_> = BuiltinProto::REALM
+            .iter()
+            .map(|(f, _)| sealed_with_constructor(*f))
+            .collect();
         // A definition that adds no key (a value refresh) withdraws nothing; a
         // definition ADD withdraws (a_definition_add_on_an_add_locked_prototype_…).
         super::super::own_override::as_builtin_definition(|| add_key(protos[0], b"k", 1.5));
-        for (family, _) in BuiltinProto::ALL {
-            assert!(pristine(family), "{family:?}: a definition that adds nothing withdraws nothing");
+        for (family, _) in BuiltinProto::REALM {
+            assert!(
+                pristine(family),
+                "{family:?}: a definition that adds nothing withdraws nothing"
+            );
         }
         add_key(protos[0], b"constructor", 2.0);
-        for (family, _) in BuiltinProto::ALL {
+        for (family, _) in BuiltinProto::REALM {
             assert!(!pristine(family), "{family:?} inherits Object.prototype");
         }
     }
@@ -424,7 +443,10 @@ fn the_add_locked_prototypes_refuse_every_new_key() {
         }
         let map = sealed(BuiltinProto::Map);
         let meta = meta_of(map);
-        assert_eq!(locked_violation(map, meta, Mutation::Add(Key::Bytes(b"p"))), None);
+        assert_eq!(
+            locked_violation(map, meta, Mutation::Add(Key::Bytes(b"p"))),
+            None
+        );
         assert_eq!(
             locked_violation(map, meta, Mutation::Redefine(Key::Bytes(b"absent"))),
             None
@@ -444,14 +466,20 @@ fn the_iterator_prototypes_are_sealed_and_add_locked() {
             super::super::iterator_prototypes::array_iterator_prototype_addr() as *mut ObjectHeader;
         assert!(!array_iterator.is_null());
         let meta = meta_of(array_iterator);
-        assert_ne!((*meta).flags & super::super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC, 0);
+        assert_ne!(
+            (*meta).flags & super::super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC,
+            0
+        );
         assert_eq!(sealed_family((*meta).flags), ARRAY_ITERATOR_FAMILY);
         assert_eq!(
             locked_violation(array_iterator, meta, Mutation::Add(Key::Bytes(b"foo"))),
             Some(Violation::Add(".foo".into()))
         );
         assert_eq!(locked_object_name(ITERATOR_FAMILY), "Iterator.prototype");
-        assert_eq!(locked_object_name(ARRAY_ITERATOR_FAMILY), "%ArrayIteratorPrototype%");
+        assert_eq!(
+            locked_object_name(ARRAY_ITERATOR_FAMILY),
+            "%ArrayIteratorPrototype%"
+        );
         // A stand-in sealed into the family refuses an image member too.
         let proto = crate::object::js_object_alloc(0, 1);
         add_key(proto, b"k", 1.0);
@@ -473,7 +501,10 @@ fn an_index_add_is_refused_outside_builtin_definition() {
         refuse_index_add(BuiltinProto::Object);
     });
     assert!(add_locked(BuiltinProto::Object as usize));
-    assert!(!add_locked(BuiltinProto::Array as usize), "named adds stay admitted");
+    assert!(
+        !add_locked(BuiltinProto::Array as usize),
+        "named adds stay admitted"
+    );
 }
 
 /// The message of a thrown error, read out of its `ErrorHeader`.
@@ -485,8 +516,11 @@ unsafe fn thrown_message(exception: f64) -> String {
         return String::new();
     }
     let data = crate::string::string_data(message);
-    String::from_utf8_lossy(std::slice::from_raw_parts(data, (*message).byte_len as usize))
-        .into_owned()
+    String::from_utf8_lossy(std::slice::from_raw_parts(
+        data,
+        (*message).byte_len as usize,
+    ))
+    .into_owned()
 }
 
 /// WPOQ3: a definition reports its key to the lock as a key, never a symbol
@@ -498,7 +532,8 @@ fn a_symbol_keyed_definition_names_the_symbol_in_the_add_error() {
     unsafe {
         let proto = sealed(BuiltinProto::Object);
         let description = crate::string::js_string_from_bytes(b"desc".as_ptr(), 4);
-        let symbol = crate::symbol::js_symbol_new(crate::value::js_nanbox_string(description as i64));
+        let symbol =
+            crate::symbol::js_symbol_new(crate::value::js_nanbox_string(description as i64));
         let bag = crate::object::js_object_alloc(0, 1);
         add_key(bag, b"value", 1.0);
         let thrown = crate::exception::catch_js_throw(|| {
@@ -528,7 +563,8 @@ fn a_deleted_layout_key_readded_through_the_overflow_is_an_add() {
         let proto = sealed(BuiltinProto::Object);
         let meta = meta_of(proto);
         let keys = own_keys(proto);
-        let pos = image_position_of_key(keys, keys.count(), Key::Bytes(b"k")).expect("premise: k is own");
+        let pos =
+            image_position_of_key(keys, keys.count(), Key::Bytes(b"k")).expect("premise: k is own");
         let slot = keys.storage_slot(pos) as usize;
         assert_eq!(
             locked_violation(proto, meta, Mutation::Replace(slot)),
@@ -540,7 +576,10 @@ fn a_deleted_layout_key_readded_through_the_overflow_is_an_add() {
             super::super::overflow::ensure(proto);
             super::super::js_object_delete_field(proto, key);
         });
-        assert!(super::super::overflow::has_overflow(proto), "premise: an overflow table");
+        assert!(
+            super::super::overflow::has_overflow(proto),
+            "premise: an overflow table"
+        );
         assert_eq!(
             locked_violation(proto, meta, Mutation::Replace(slot)),
             None,
@@ -568,9 +607,8 @@ fn a_definition_add_on_an_add_locked_prototype_withdraws_the_absent_answer() {
     unsafe {
         for family in [BuiltinProto::Object, BuiltinProto::Function] {
             let proto = sealed(family);
-            let child = crate::object::js_object_create(crate::value::js_nanbox_pointer(
-                proto as i64,
-            ));
+            let child =
+                crate::object::js_object_create(crate::value::js_nanbox_pointer(proto as i64));
             let child = crate::value::js_nanbox_get_pointer(child) as *const ObjectHeader;
             let key = crate::string::js_string_from_bytes(b"q".as_ptr(), 1);
             let read = || crate::object::js_object_get_field_by_name_f64(child, key);
@@ -590,7 +628,10 @@ fn a_definition_add_on_an_add_locked_prototype_withdraws_the_absent_answer() {
             crate::object::own_override::as_builtin_definition(|| {
                 crate::object::store_object_field_slot(proto, 0, 3.0f64.to_bits());
             });
-            assert!(prototype_unwritten(family), "{family:?}: a value refresh is the builtin");
+            assert!(
+                prototype_unwritten(family),
+                "{family:?}: a value refresh is the builtin"
+            );
             // The lazy install: a definition-mode add after the seal.
             crate::object::own_override::as_builtin_definition(|| add_key(proto, b"q", 7.0));
             assert!(
@@ -608,7 +649,10 @@ fn a_definition_add_on_an_add_locked_prototype_withdraws_the_absent_answer() {
         // is the builtin's own population and withdraws nothing.
         let map = sealed(BuiltinProto::Map);
         crate::object::own_override::as_builtin_definition(|| add_key(map, b"q", 1.0));
-        assert!(prototype_unwritten(BuiltinProto::Map), "a definition add on Map is not a withdrawal");
+        assert!(
+            prototype_unwritten(BuiltinProto::Map),
+            "a definition add on Map is not a withdrawal"
+        );
     }
 }
 
@@ -636,7 +680,8 @@ fn a_definition_add_on_a_sealed_iterator_prototype_is_a_runtime_bug() {
                 "{name}: an add aborts, naming the prototype and the key"
             );
             assert!(
-                iterator_definition_add(family, proto, Mutation::Redefine(Key::Bytes(b"absent"))).is_some(),
+                iterator_definition_add(family, proto, Mutation::Redefine(Key::Bytes(b"absent")))
+                    .is_some(),
                 "{name}: a definition of a key it does not own is an add"
             );
             assert_eq!(
@@ -644,7 +689,10 @@ fn a_definition_add_on_a_sealed_iterator_prototype_is_a_runtime_bug() {
                 None,
                 "{name}: redefining an own key adds nothing"
             );
-            assert_eq!(iterator_definition_add(family, proto, Mutation::Replace(0)), None);
+            assert_eq!(
+                iterator_definition_add(family, proto, Mutation::Replace(0)),
+                None
+            );
             // A value refresh through the definition funnel reaches the gate and survives.
             crate::object::own_override::as_builtin_definition(|| {
                 crate::object::store_object_field_slot(proto, 0, 3.0f64.to_bits());
@@ -673,7 +721,8 @@ fn every_growth_of_array_prototype_is_refused() {
             let thrown = crate::exception::catch_js_throw(f)
                 .expect_err(&format!("{what} on Array.prototype is refused"));
             assert!(
-                thrown_message(thrown).starts_with("Cannot add an array index to built-in Array.prototype"),
+                thrown_message(thrown)
+                    .starts_with("Cannot add an array index to built-in Array.prototype"),
                 "{what}: {}",
                 thrown_message(thrown)
             );
@@ -705,25 +754,46 @@ fn reflect_reports_a_refused_write_as_false() {
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let key = |b: &[u8]| {
-            crate::value::js_nanbox_string(crate::string::js_string_from_bytes(b.as_ptr(), b.len() as u32) as i64)
+            crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+                b.as_ptr(),
+                b.len() as u32,
+            ) as i64)
         };
         let proto = sealed(BuiltinProto::Object);
         let pv = crate::value::js_nanbox_pointer(proto as i64);
-        assert!(lock_refuses_write(pv, key(b"zz")), "an add on an add-locked prototype");
+        assert!(
+            lock_refuses_write(pv, key(b"zz")),
+            "an add on an add-locked prototype"
+        );
         assert!(lock_refuses_write(pv, key(b"k")), "an image member");
-        assert!(!lock_refuses_write(pv, key(b"constructor")), "constructor is exempt");
+        assert!(
+            !lock_refuses_write(pv, key(b"constructor")),
+            "constructor is exempt"
+        );
         super::super::own_override::as_builtin_definition(|| {
-            assert!(!lock_refuses_write(pv, key(b"zz")), "the runtime's own definition");
+            assert!(
+                !lock_refuses_write(pv, key(b"zz")),
+                "the runtime's own definition"
+            );
         });
         crate::object::js_get_global_this();
         let ap = crate::array::array_prototype_addr();
         assert!(ap != 0, "premise: the realm is populated");
         let apv = crate::value::js_nanbox_pointer(ap as i64);
         assert!(lock_refuses_write(apv, 0.0), "an index on Array.prototype");
-        assert!(lock_refuses_write(apv, key(b"0")), "an index key string on Array.prototype");
-        assert!(!lock_refuses_write(apv, key(b"wplk1Named")), "a named add on Array.prototype");
+        assert!(
+            lock_refuses_write(apv, key(b"0")),
+            "an index key string on Array.prototype"
+        );
+        assert!(
+            !lock_refuses_write(apv, key(b"wplk1Named")),
+            "a named add on Array.prototype"
+        );
         let plain = crate::object::js_object_alloc(0, 1);
-        assert!(!lock_refuses_write(crate::value::js_nanbox_pointer(plain as i64), key(b"zz")));
+        assert!(!lock_refuses_write(
+            crate::value::js_nanbox_pointer(plain as i64),
+            key(b"zz")
+        ));
 
         let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
         let set = crate::exception::catch_js_throw(|| {
@@ -756,7 +826,10 @@ fn an_exempt_constructor_is_never_refused_as_an_add() {
     unsafe {
         let proto = sealed(BuiltinProto::Object);
         let meta = meta_of(proto);
-        assert_eq!(locked_violation(proto, meta, Mutation::Add(Key::Bytes(b"constructor"))), None);
+        assert_eq!(
+            locked_violation(proto, meta, Mutation::Add(Key::Bytes(b"constructor"))),
+            None
+        );
         assert_eq!(
             locked_violation(proto, meta, Mutation::Redefine(Key::Bytes(b"constructor"))),
             None
@@ -949,13 +1022,19 @@ fn unknown_collection_method_recursion_throws_the_stack_range_error() {
         add_key(obj, b"bar", bar.get_nanbox_f64());
 
         let nested = call_unknown_collection_method(recv.get_nanbox_f64(), b"baz", &[]);
-        assert_eq!(nested, 7.0, "a nested call of another name is an ordinary call");
+        assert_eq!(
+            nested, 7.0,
+            "a nested call of another name is an ordinary call"
+        );
 
         let thrown = crate::exception::catch_js_throw(|| {
             call_unknown_collection_method(recv.get_nanbox_f64(), b"foo", &[])
         });
         let exception = match thrown {
-            Ok(value) => panic!("a same-name cycle must throw, answered {:#x}", value.to_bits()),
+            Ok(value) => panic!(
+                "a same-name cycle must throw, answered {:#x}",
+                value.to_bits()
+            ),
             Err(exception) => exception,
         };
         let message = thrown_message(exception);

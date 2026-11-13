@@ -163,9 +163,18 @@ console.log(v.len());
 /// function and `obj` stays the program's.
 #[test]
 fn a_spread_of_a_realm_namespace_copies_no_unknown_value() {
-    for ns in ["Object", "Math", "JSON", "Map", "Object.prototype.hasOwnProperty"] {
+    for ns in [
+        "Object",
+        "Math",
+        "JSON",
+        "Map",
+        "Object.prototype.hasOwnProperty",
+    ] {
         assert!(verdicts(ns, "{ a: obj, ...src }").1, "spread of {ns}");
-        assert!(verdicts(ns, "Object.assign({ a: obj }, src)").1, "assign of {ns}");
+        assert!(
+            verdicts(ns, "Object.assign({ a: obj }, src)").1,
+            "assign of {ns}"
+        );
     }
 }
 

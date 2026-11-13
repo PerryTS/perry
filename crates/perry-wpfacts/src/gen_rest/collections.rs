@@ -6,7 +6,9 @@ impl<'a> Gen<'a> {
     /// The receiver of a generic in-place permutation (`reverse`,
     /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
     /// length floor on (`solve::arr_len`).
-    fn permuted_len(&mut self, r: NodeId) {
+    fn permuted_len(&mut self, fx: &Fx, r: NodeId) {
+        self.len_index_site(fx, r, "permuted");
+        self.m.arr_permuted.insert(r);
         if !self.m.arr_floor_off {
             self.m.cons(
                 r,
@@ -18,6 +20,17 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// Where the storeless `Cons::LenIndex` of receiver `r` runs
+    /// (`Model::len_index_sites`). One site per node: a second function's
+    /// rule on a node the first owns is a capture, which ends the fact.
+    fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
+        if (self.m.held_lengths || self.m.named_lengths) && !self.m.len_index_sites.contains_key(&r)
+        {
+            let site = self.store_site(fx.module, fx.f, what.into(), None, false);
+            self.m.len_index_sites.insert(r, site);
+        }
+    }
+
     pub(super) fn expr_rest_collections(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -26,11 +39,13 @@ impl<'a> Gen<'a> {
                 let a = self.local(mi, *array_id);
                 let s = self.expr(fx, source);
                 let it = self.iterate(s);
+                self.list_push(a, None);
                 self.elem_store(fx, a, it, "push...");
                 self.prim_node(prim::NUM)
             }
             Expr::ArrayPop(id) => {
                 let a = self.local(mi, *id);
+                self.len_index_site(fx, a, "pop");
                 // `pop` sets `length` (ArraySetLength): the array's length
                 // moves (`solve::arr_len`).
                 self.m.cons(
@@ -42,6 +57,17 @@ impl<'a> Gen<'a> {
                 );
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
+                // The node is the call `a.pop()`: a receiver that holds its
+                // own `pop` (an own property, an own prototype, an object
+                // behind the Array annotation) runs that method, and its
+                // result is the node's value (codegen: the checked entry
+                // `js_array_m_pop0`).
+                if super::array_method_tiers() {
+                    let pop = self.m.atom("pop");
+                    self.folded_site(fx, &perry_hir::folded_call::Receiver::Local(*id), pop, a);
+                    let ret = self.mcall(a, Key::Named(pop), vec![], vec![]);
+                    self.m.edge(ret, out);
+                }
                 out
             }
             // `Array.prototype.reverse.call(r)`: with the length floor on, a
@@ -50,7 +76,7 @@ impl<'a> Gen<'a> {
             // every array receiver, as `pop` does.
             Expr::ArrayReverseValue { receiver } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 r
             }
             Expr::ArrayCopyWithinValue {
@@ -60,7 +86,7 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
-                self.permuted_len(r);
+                self.permuted_len(fx, r);
                 let _ = self.prim_op(
                     fx,
                     &[target, start],
@@ -102,12 +128,16 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::MapNew => {
+                let (t, n) = self.bobj(mi, "Map");
+                self.m.map_born(t, true);
+                n
+            }
             Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let ek = self.m.elem_key();
                 let inner = self.load(it, ek);
                 let (t, n) = self.bobj(mi, "Map");
@@ -117,7 +147,7 @@ impl<'a> Gen<'a> {
             }
             Expr::SetNewFromArray(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let (t, n) = self.bobj(mi, "Set");
                 let fa = self.m.field_any(t);
                 self.m.edge(it, fa);
@@ -147,7 +177,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectFromEntries(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 // Each entry's key and value: its `"0"` and `"1"` (a
                 // [[Get]] under a number key), not every member of its chain.
                 let num = Key::Named(self.m.atom(crate::model::NUM_KEY));
@@ -171,7 +201,7 @@ impl<'a> Gen<'a> {
             }
             e @ (Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn }) => {
                 let v = self.expr(fx, items);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let f = self.expr(fx, key_fn);
                 let num = self.prim_node(prim::NUM);
                 let k = self.callback(f, vec![it, num]);
@@ -184,10 +214,13 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let group = self.new_arr_from(mi, "group", &[it]);
-                // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
-                // a Map (`members::box_chain`).
+                // `Object.groupBy` makes a null-prototype object
+                // (`members::box_chain`); `Map.groupBy` a Map, whose keys and
+                // groups are its contents. Born from groups, not by `new
+                // Map()`, it is never closed (`solve/map_vals.rs`): `get`
+                // reads its contents.
                 let kind = if matches!(e, Expr::MapGroupBy { .. }) {
-                    "mapGroups"
+                    "Map"
                 } else {
                     "groups"
                 };
@@ -195,11 +228,14 @@ impl<'a> Gen<'a> {
                 let fa = self.m.field_any(t);
                 self.m.edge(group, fa);
                 self.m.edge(k, fa);
+                if kind == "Map" {
+                    self.m.map_born(t, false);
+                }
                 n
             }
             Expr::ArrayFrom(x, _) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 self.m.cons(v, Cons::FromArrayLike { dst: it });
                 self.new_arr_from(mi, "from", &[it])
             }
@@ -210,7 +246,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ForAwaitToArray(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let aw = self.awaited(it);
                 let arr = self.new_arr_from(mi, "fromAsync", &[aw]);
                 self.promise_of(mi, arr)
@@ -227,7 +263,7 @@ impl<'a> Gen<'a> {
                 this_arg,
             } => {
                 let v = self.expr(fx, iterable);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 self.m.cons(v, Cons::FromArrayLike { dst: it });
                 let f = self.expr(fx, map_fn);
                 let this = match this_arg {
@@ -242,7 +278,7 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, x);
                 // The iterator yields what iterating `v` yields (holes
                 // included, `Model::hole` of `v`), and nothing else.
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let out = self.new_dense_arr_from(mi, "iterator", &[it]);
                 self.m.edge(v, out);
                 out

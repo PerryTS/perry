@@ -54,7 +54,7 @@ pub(crate) fn invalidate_object_proto_tojson_state() {
 /// Request/Response` handles, and native-module namespace objects. Returns
 /// `true` (= caller must take the full slow-path resolution) on any match or
 /// whenever the array doesn't look like a well-formed keys array.
-unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> bool {
+pub(super) unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> bool {
     let keys = keys_view.arr();
     let keys_addr = keys as usize;
     if keys_addr & 0x7 != 0 {
@@ -63,7 +63,7 @@ unsafe fn keys_array_may_carry_to_json(keys_view: crate::object::ObjectKeys) -> 
     let Some(keys_gc) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return true;
     };
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(keys_gc.obj_type) {
         return true;
     }
     // The receiver's own count; it names a prefix of the array.
@@ -108,7 +108,7 @@ unsafe fn member_keys_scan(keys_view: crate::object::ObjectKeys) -> Option<bool>
     }
     let keys_gc = crate::value::addr_class::try_read_gc_header(keys_addr)?;
     let key_count = keys_view.count() as usize;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(keys_gc.obj_type)
         || key_count > (*keys).capacity as usize
         || key_count > (*keys).length as usize
         || key_count > 4096
@@ -284,7 +284,7 @@ unsafe fn object_proto_tojson_signature() -> Option<ObjectProtoToJsonSignature> 
     } else {
         let keys_addr = keys as usize;
         let keys_header = crate::value::addr_class::try_read_tracked_gc_header(keys_addr)?.as_ref();
-        if keys_header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(keys_header.obj_type)
             || keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || keys_view.count() > (*keys).capacity
         {
@@ -383,7 +383,7 @@ unsafe fn object_proto_tojson_signature_matches(cached: &ObjectProtoToJsonSignat
     let Some(keys_header) = crate::value::addr_class::try_read_gc_header(keys_addr) else {
         return false;
     };
-    keys_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(keys_header.obj_type)
         && keys_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && keys_view.count() == cached.keys_len
         && keys_view.count() <= (*keys).capacity
@@ -606,7 +606,7 @@ pub(crate) unsafe fn to_json_definitely_absent(ptr: *const u8) -> bool {
 pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) -> bool {
     let obj = ptr as *const crate::ObjectHeader;
     let class_id = (*obj).class_id;
-    if class_id != 0 && class_chain_may_have_to_json(class_id) {
+    if class_id != 0 && class_chain_may_have_to_json(class_id) && !class_holders_lack_to_json(ptr) {
         return false;
     }
     if crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize) {
@@ -616,6 +616,30 @@ pub(super) unsafe fn to_json_definitely_absent_after_own_keys(ptr: *const u8) ->
         return false;
     }
     true
+}
+
+/// Does no holder of the declared class instance `ptr` list `toJSON`? The
+/// question is asked of the holders' shapes directly: `Some(undefined)` from
+/// [`class_instance_inherited_read`] means neither the instance's chain of
+/// declared prototypes nor `%Object.prototype%` lists the name, read live from
+/// each holder's shape, so a member, accessor or relink added later is seen by
+/// the next call. Everything that walk does not decide alone (a `toJSON`
+/// found anywhere, an accessor, a recorded or per-instance `[[Prototype]]`, a
+/// registered prototype object, a runtime or per-evaluation class, a
+/// prototype not built yet, a cold `%Object.prototype%`) answers `false`, and
+/// the caller keeps the generic `toJSON` read.
+///
+/// Allocation-free, never collects and runs no user code, so the unrooted
+/// walk may ask it (`inherited_to_json_possible_without_gc`).
+///
+/// [`class_instance_inherited_read`]: crate::object::native_call_method::class_holder::class_instance_inherited_read
+#[inline]
+unsafe fn class_holders_lack_to_json(ptr: *const u8) -> bool {
+    crate::object::native_call_method::class_holder::class_instance_inherited_read(
+        JSValue::from_bits(make_pointer_bits(ptr)),
+        b"toJSON",
+    )
+    .is_some_and(|value| value.bits() == crate::value::TAG_UNDEFINED)
 }
 
 /// The plain-data emitter cannot enter the allocating first-time lookup of
@@ -650,7 +674,7 @@ pub(super) unsafe fn inherited_to_json_possible_without_gc(
     ptr: *const u8,
     class_plain_record: bool,
 ) -> bool {
-    !class_plain_record
+    (!class_plain_record && !class_holders_lack_to_json(ptr))
         || crate::object::prototype_chain::object_static_prototype_is_linked(ptr as usize)
         || (OBJECT_PROTO_TOJSON_STATE.with(|c| c.get()) == PROTO_TOJSON_DIRTY
             && CACHED_OBJECT_PROTO_BITS.with(|c| c.get()) == 0)

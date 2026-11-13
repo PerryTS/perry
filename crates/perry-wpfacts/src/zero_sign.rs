@@ -121,6 +121,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         Cons::Guard { from, dst, .. } => Use::Between(from, dst),
         Cons::Defined { dst }
         | Cons::NotNullish { dst }
+        | Cons::Fulfil { dst }
         | Cons::Falsy { dst }
         | Cons::NotUndefined { dst } => Use::To(dst),
         Cons::RetInto { call, .. } | Cons::ArgInto { call, .. } => {
@@ -167,6 +168,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::IterNext { .. }
         | Cons::FromArrayLike { .. }
         | Cons::IndexHole
+        | Cons::IndexKept
         | Cons::AddsKeys
         | Cons::Call { .. }
         | Cons::New { .. }
@@ -237,7 +239,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::CallerValue { .. }
         | Cons::ContractThis { .. }
         | Cons::OverrideThis { .. }
-        | Cons::TopIfAny { .. } => Use::Observe,
+        | Cons::TopIfAny { .. }
+        | Cons::RequireSpec { .. } => Use::Observe,
     }
 }
 

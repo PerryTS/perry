@@ -25,7 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 
-use super::try_emit_buffer_read_intrinsic;
+use super::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 
 #[path = "console_promise/util_types.rs"]
 mod util_types;
@@ -1240,7 +1240,18 @@ pub fn try_lower_native_method_str_dispatch(
                 if ctx.receiver_descriptors.byte_view_param(*id).is_some_and(|access|
                     access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
             if is_buffer_class || guarded_buffer_param {
-                if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)?
+                if let Some(lowered) =
+                    try_emit_buffer_equals_intrinsic(ctx, callee, object, property, args)?
+                {
+                    let materialized = crate::expr::materialize_js_value(
+                        ctx,
+                        lowered,
+                        crate::native_value::MaterializationReason::FunctionAbi,
+                    );
+                    return Ok(Some(materialized));
+                }
+                if let Some(lowered) =
+                    try_emit_buffer_read_intrinsic(ctx, callee, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(
                         ctx,
@@ -1795,10 +1806,20 @@ fn lower_closure_call_rooted<'a>(
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &obj_bits), (I64, &key_handle)],
+        // The receiver is any value: a Number whose top 16 bits are clear
+        // must not reach the handle entry, which reads it as a raw pointer.
+        crate::expr::index_get::named_get_on_unproven_receiver(
+            ctx,
+            &obj_bits,
+            &key_handle,
+            "0",
+            |ctx| {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_field_by_name_f64",
+                    &[(I64, &obj_bits), (I64, &key_handle)],
+                )
+            },
         )
     } else {
         lower_expr(ctx, callee)?

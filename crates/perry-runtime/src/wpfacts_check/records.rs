@@ -66,6 +66,20 @@ pub extern "C" fn perry_verify_facts_record_identity(
     0
 }
 
+/// DESIGN-p4l4 VR-4b: the receiver of a record-array intrinsic. The facts
+/// say it holds only record arrays (R6); anything else is a false proof.
+/// Returns 0.
+#[no_mangle]
+pub extern "C" fn perry_verify_facts_record_array(value: f64, site: i64, site_len: i64) -> i32 {
+    CHECKS.fetch_add(1, Ordering::Relaxed);
+    if !crate::record_array::is_record_array(value) {
+        Witness::raw(site, site_len)
+            .receiver(value.to_bits())
+            .fail_static("the receiver of a record-array intrinsic is no record array".into())
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

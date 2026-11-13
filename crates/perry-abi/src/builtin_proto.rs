@@ -21,6 +21,9 @@ pub enum BuiltinProto {
     Error = 13,
     WeakMap = 14,
     WeakSet = 15,
+    /// `Buffer.prototype`: node's host prototype, not an ECMA-262 intrinsic
+    /// (see [`BuiltinProto::realm_intrinsic`]).
+    Buffer = 16,
 }
 
 impl BuiltinProto {
@@ -42,7 +45,33 @@ impl BuiltinProto {
         (BuiltinProto::Error, "Error"),
         (BuiltinProto::WeakMap, "WeakMap"),
         (BuiltinProto::WeakSet, "WeakSet"),
+        (BuiltinProto::Buffer, "Buffer"),
     ];
+
+    /// Is this family's prototype an ECMA-262 intrinsic: built with the realm,
+    /// sealed by the realm seal and under DEC 250's lock? `Buffer.prototype`
+    /// is node's host prototype: it is built on first observation and sealed
+    /// then (until it exists its slot names the pristine stand-in), and the
+    /// program may patch it as in node, so a write only sets its shadow bit.
+    pub const fn realm_intrinsic(self) -> bool {
+        (self as usize) < Self::REALM_INTRINSICS
+    }
+
+    /// The ECMA-262 intrinsic families are the first `REALM_INTRINSICS` of
+    /// [`BuiltinProto::ALL`]; the host families (`Buffer`) follow them.
+    pub const REALM_INTRINSICS: usize = BuiltinProto::Buffer as usize;
+
+    /// The families the realm seal seals: the prefix of [`BuiltinProto::ALL`]
+    /// that [`BuiltinProto::realm_intrinsic`] admits.
+    pub const REALM: [(BuiltinProto, &'static str); Self::REALM_INTRINSICS] = {
+        let mut realm = [(BuiltinProto::Object, ""); Self::REALM_INTRINSICS];
+        let mut i = 0;
+        while i < Self::REALM_INTRINSICS {
+            realm[i] = Self::ALL[i];
+            i += 1;
+        }
+        realm
+    };
 
     pub fn from_index(i: usize) -> Option<BuiltinProto> {
         Self::ALL.get(i).map(|(f, _)| *f)

@@ -129,6 +129,7 @@ fn entry_opts() -> CompileOptions {
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -227,6 +228,15 @@ fn console_log(args: Vec<Expr>) -> Stmt {
 /// Every assertion below is scoped to one function rather than to the module,
 /// so a bind emitted in an unrelated helper cannot satisfy or break a claim
 /// about this one.
+/// A statement that roots by construction and touches no scalar-replaced
+/// local: `console.log({k: 1}, {k: 1})` keeps its first argument in a pooled
+/// temp root while the second allocates. The numeric-only fixtures need it as
+/// their non-vacuity witness: since P3 their own `console.log(p.x, p.y)` passes
+/// two proven Numbers, which need no root, so that call binds nothing.
+fn rooting_anchor() -> Stmt {
+    console_log(vec![heap_value(), heap_value()])
+}
+
 fn main_ir(ir: &str) -> &str {
     perry_codegen::testing::root_slots::function_slice(ir, "main")
 }
@@ -319,6 +329,7 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
+            rooting_anchor(),
         ],
     );
 
@@ -329,15 +340,16 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
         "a scalar-replaced literal with only numeric fields must not pay for \
          GC rooting:\n{main}"
     );
-    // Non-vacuity, in the same test: this module DOES bind — three times, for
-    // the `console.log` argument accumulator. Before #7504 those three were
-    // counted as the literal's, which is what made `== 0` fail; before #7493
-    // the count was zero for every program under the native default, which is
-    // what made it pass for nothing. Assert the witness so neither can recur
-    // silently.
+    // Non-vacuity, in the same test: this module DOES bind, for the
+    // `rooting_anchor` argument accumulator (the literal's own `console.log`
+    // passes two proven Numbers and binds nothing since P3). Before #7504
+    // accumulator binds were counted as the literal's, which is what made
+    // `== 0` fail; before #7493 the count was zero for every program under the
+    // native default, which is what made it pass for nothing. Assert the
+    // witness so neither can recur silently.
     assert!(
         temp_root_slot_binds(main) > 0,
-        "this fixture's `console.log` must still bind its pooled argument \
+        "the rooting anchor's `console.log` must still bind its pooled argument \
          accumulator — with no bind anywhere in the module, `zero value-slot \
          binds` is a claim about an empty set (#7504):\n{main}"
     );
@@ -756,6 +768,7 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
+            rooting_anchor(),
         ],
     );
 
@@ -775,7 +788,7 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
     );
     assert!(
         temp_root_slot_binds(main) > 0,
-        "the `console.log` accumulator must still bind, so both zeroes above \
-         are claims about a module in which rooting exists (#7504):\n{main}"
+        "the rooting anchor's `console.log` accumulator must still bind, so both \
+         zeroes above are claims about a module in which rooting exists (#7504):\n{main}"
     );
 }

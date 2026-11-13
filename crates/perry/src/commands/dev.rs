@@ -300,6 +300,7 @@ fn build_once(
         output_type: "executable".to_string(),
         bundle_extensions: None,
         embed: Vec::new(),
+        sea: false,
         bunfs_root: None,
         asset_module: Vec::new(),
         module_alias: Vec::new(),

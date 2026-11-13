@@ -18,7 +18,11 @@ impl Model {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;
-            self.raise_top(region, ret, "a native hands a value to unknown code, which may throw");
+            self.raise_top(
+                region,
+                ret,
+                "a native hands a value to unknown code, which may throw",
+            );
         }
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
@@ -308,6 +312,7 @@ impl Model {
         }
         self.escaped.insert(t, reason);
         self.arr_len_top(t);
+        self.map_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
@@ -1103,6 +1108,7 @@ impl Model {
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
         self.arr_len_top(t);
+        self.map_open(t);
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);

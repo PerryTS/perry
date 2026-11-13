@@ -34,6 +34,7 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         IndexHole => IndexHole,
+        IndexKept => IndexKept,
         Identity { route } => Identity { route },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
@@ -116,6 +117,7 @@ pub fn map_cons(
         },
         Defined { dst } => Defined { dst: n(dst) },
         NotNullish { dst } => NotNullish { dst: n(dst) },
+        Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
@@ -123,7 +125,11 @@ pub fn map_cons(
             from: n(from),
             reason,
         },
-        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
+        RequireSpec { call } => RequireSpec { call: k(call) },
+        TopIfTop { dst, reason } => TopIfTop {
+            dst: n(dst),
+            reason,
+        },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },
@@ -471,9 +477,11 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ContractThis { .. }
             | OverrideThis { .. }
             | TopIfAny { .. }
+            | RequireSpec { .. }
             | TopIfTop { .. }
             | Guard { .. }
             | NotNullish { .. }
+            | Fulfil { .. }
             | Falsy { .. }
             | NotUndefined { .. }
             | Hard { .. }

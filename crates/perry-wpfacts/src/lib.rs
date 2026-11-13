@@ -18,6 +18,7 @@
 
 pub mod bindings;
 mod builtins;
+pub mod call_kinds;
 pub mod canonical_numbers;
 mod const_arrays;
 mod const_numbers;
@@ -30,21 +31,33 @@ mod diagnostics;
 mod dump;
 mod element_floors;
 mod element_keys;
+pub mod family_reach;
 pub mod field_read_calls;
+mod fill_births;
 mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_const;
 mod gen_expr;
+mod gen_protocol;
 mod gen_rest;
+mod held_lengths;
 mod ledger;
+pub mod list_caps;
+mod literal_strings;
+mod method_sites;
 pub mod model;
+mod named_lengths;
 pub mod native_effects;
 pub mod pts;
+mod push_fills;
+mod quiet_sites;
+mod reach;
 pub mod records;
 mod rest_elems;
-pub mod signatures;
+mod rest_fields;
 mod rooted;
+pub mod signatures;
 mod solve;
 mod summary;
 #[cfg(test)]
@@ -55,13 +68,14 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
-pub use field_read_calls::{FieldReadCall, FieldReadDefault};
-pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
+pub use family_reach::{FamilyReach, FamilyVerdict};
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 use perry_hir::Module;
+pub use signatures::Signature;
 
 /// Reserved atom for computed-key accessors ("any key").
 pub(crate) const STAR_KEY: &str = "\u{1}*";
@@ -70,7 +84,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
     pub verify_facts: bool,
-    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`).
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`,
+    /// on by default; `0` turns it off).
     pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.
@@ -97,6 +112,10 @@ pub struct FactsConfig {
     /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
     /// set until VR-6): identity observations become `Cons::Identity`.
     pub value_records: bool,
+    /// No record signature slots (`PERRY_FACTS_RECORD_SIGNATURES=0`,
+    /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
+    /// rejects its template.
+    pub no_record_signatures: bool,
     /// No `Rep::Arr` for a field and no in-floor field read call
     /// (`PERRY_FACTS_ARRAY_FIELDS=0`, DESIGN-p4l1 PR-C3).
     pub no_array_fields: bool,
@@ -280,6 +299,11 @@ pub struct ProgramFacts {
     /// Completed whole-program reach, or an incomplete conservative view
     /// when activation was unavailable or the solve stopped early.
     pub body_reach: BodyReach,
+    /// Per runtime family, whether the program may ever create or observe a
+    /// value of it (`family_reach`). `None`: not computed
+    /// (`PERRY_FACTS_FAMILY_REACH=0`, a per-unit run): every family is live.
+    /// Nothing reads it yet but the dump.
+    pub family_reach: Option<FamilyReach>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
@@ -522,11 +546,35 @@ fn generate<'a>(
     g.m.const_arrays = g.m.array_reps && !cfg.no_const_arrays;
     g.m.arr_const_sabotage = cfg.sabotage.as_deref() == Some("arrconst");
     g.m.value_records = cfg.value_records;
+    g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
+    g.m.rest_capacity = rest_elems::capacity_enabled();
+    g.m.fill_births = fill_births::enabled();
+    g.m.push_fills = push_fills::enabled();
+    g.m.push_fill_sabotage = cfg.sabotage.as_deref() == Some("restpush");
     g.m.rest_elem_sabotage = cfg.sabotage.as_deref() == Some("restelem");
+    g.m.rest_fields = rest_fields::enabled();
+    g.m.key_sign = element_keys::sign_enabled();
+    g.m.key_sign_sabotage = cfg.sabotage.as_deref() == Some("keysign");
+    g.m.wide_keys = element_keys::wide_enabled();
+    g.m.slice_births = builtins::slice_births_enabled();
+    g.m.inbounds_store = gen::in_bounds::enabled();
+    g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.no_hole_sabotage = cfg.sabotage.as_deref() == Some("nohole");
+    g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
+    g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
+    g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.instance_nodes =
+        bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
+    g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
+    g.m.map_values = solve::map_vals::enabled();
+    g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
+    g.m.literal_strings = literal_strings::enabled();
+    g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");
+    g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
     g.m.zero_sign =
@@ -538,6 +586,18 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
+    g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
+    g.m.reach_new_target =
+        reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
+    g.m.reach_step_done = reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_gen_members =
+        reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
+    g.m.reach_thenable = reach::thenable() && cfg.sabotage.as_deref() != Some("noreachthenable");
+    g.m.reach_iter_close =
+        reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
+    g.m.reach_spread_args =
+        reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
+    reach::configure(&mut g.m, cfg.sabotage.as_deref());
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -555,6 +615,7 @@ fn generate<'a>(
         g.m.budget = Some((t0, std::time::Duration::from_secs(secs)));
     }
     g.m.unit_mode = cfg.unit;
+    g.m.family_reach.on = !cfg.unit && family_reach::enabled();
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.widen = !cfg.unit;
@@ -960,6 +1021,7 @@ fn compute_act<'a>(
     };
     // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
     // the templates and sites, before any representation reads them.
+    g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
     let record_arrays = records::derive(
         &g,
         &mut templates,
@@ -972,6 +1034,12 @@ fn compute_act<'a>(
         .filter(|t| t.record.is_ok())
         .map(|t| t.id)
         .collect();
+    g.m.record_arrays = record_arrays
+        .iter()
+        .filter(|a| a.verdict.is_ok() && g.m.records.contains(&a.elems_of))
+        .map(|a| (a.tmpl, a.elems_of))
+        .collect();
+    records::mark_fields(&g.m, &mut templates);
     if g.m.value_records && std::env::var("PERRY_VALUE_RECORDS_TRACE").as_deref() == Ok("1") {
         for l in records::ledger_lines(&templates, &record_arrays) {
             eprintln!("perry: wpfacts: {}", l.trim_start_matches("# "));
@@ -994,8 +1062,20 @@ fn compute_act<'a>(
     }
     let mut bindings = bindings::collect(&g);
     rest_elems::export(&g, &mut bindings);
-    let rep_probe = if cfg.diagnostics && !g.m.aborted {
+    records::export(&g, &mut bindings);
+    fill_births::export(&g.m, &mut bindings);
+    push_fills::export(&g.m, &mut bindings);
+    // I32 at rest (PR C): the I32 field lanes (`FieldFacts::rest`).
+    let rest_lanes = if g.m.aborted {
+        Vec::new()
+    } else {
+        rest_fields::admit(&g, &mut templates, interp_guard.is_some())
+    };
+    rest_fields::export_reads(&g, &templates, &mut bindings);
+    let mut rep_probe = if cfg.diagnostics && !g.m.aborted {
         let mut p = bindings::rep_probe(&g);
+        p.extend(rest_lanes);
+        p.extend(literal_strings::probe(&g, &templates));
         if g.m.zero_sign {
             p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
         }
@@ -1014,8 +1094,22 @@ fn compute_act<'a>(
         );
     }
     if canonical_numbers::enabled() {
-        canonical_numbers::collect(&g, &mut bindings);
+        canonical_numbers::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
     }
+    if call_kinds::enabled() {
+        call_kinds::collect(
+            &g,
+            &mut bindings,
+            cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
+        );
+    }
+    list_caps::collect(&g, &mut bindings, cfg.diagnostics.then_some(&mut rep_probe));
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
@@ -1023,7 +1117,39 @@ fn compute_act<'a>(
         const_numbers::collect(&g, &mut bindings);
     }
     const_arrays::collect(&g, &mut bindings);
+    held_lengths::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("heldlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    named_lengths::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("namedlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    quiet_sites::collect(
+        &g,
+        &sites,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref(),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    method_sites::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref(),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
     element_keys::collect(&g, &mut bindings);
+    element_keys::collect_signs(&g, &mut bindings);
+    element_keys::collect_wide(&g, &mut bindings);
+    gen::in_bounds::collect(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,
@@ -1031,6 +1157,7 @@ fn compute_act<'a>(
             &mut bindings,
             interp_guard.is_some(),
             cfg.sabotage.as_deref(),
+            cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
     if g.m.aborted {
@@ -2230,8 +2357,11 @@ fn compute_act<'a>(
     } else {
         None
     };
+    let family_reach =
+        (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let mut pf = ProgramFacts {
         verification_bodies,
+        family_reach,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,
@@ -2303,6 +2433,24 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
     let mut pf = units::run(&sorted, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
+}
+
+/// `PERRY_FACTS_QUIET_SITES=0` turns the quiet-site facts off
+/// (`quiet_sites`).
+pub fn quiet_sites_enabled() -> bool {
+    quiet_sites::enabled()
+}
+
+/// `PERRY_FACTS_TYPED_ARRAY_SITES=0` turns the typed-array receiver fact
+/// off (`method_sites`).
+pub fn typed_array_sites_enabled() -> bool {
+    method_sites::typed_array_enabled()
+}
+
+/// `PERRY_FACTS_ARRAY_METHOD_SITES=0` turns the Array-member fact off
+/// (`method_sites`).
+pub fn array_method_sites_enabled() -> bool {
+    method_sites::array_member_enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).

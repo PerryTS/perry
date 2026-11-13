@@ -325,6 +325,7 @@ fn enable_react_automatic_jsx(module: &mut Module, ctx: &mut LoweringContext) {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -1345,6 +1346,28 @@ pub fn lower_module_full_with_platform_globals(
         }
     }
 
+    // `import defer * as ns` hoists, so an `export { ns }` written above the
+    // import still exports a deferred namespace. The phase therefore has to be
+    // known before any declaration is lowered.
+    let deferred_namespace_locals: std::collections::HashSet<String> = ast_module
+        .body
+        .iter()
+        .filter_map(|item| match item {
+            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import))
+                if import.phase == ast::ImportPhase::Defer =>
+            {
+                import
+                    .specifiers
+                    .iter()
+                    .find_map(|specifier| match specifier {
+                        ast::ImportSpecifier::Namespace(ns) => Some(ns.local.sym.to_string()),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        })
+        .collect();
+
     // Main pass: lower everything
     for item in &ast_module.body {
         let init_start = module.init.len();
@@ -1354,7 +1377,7 @@ pub fn lower_module_full_with_platform_globals(
                 lower_stmt(&mut ctx, &mut module, stmt)?;
             }
             ast::ModuleItem::ModuleDecl(decl) => {
-                lower_module_decl(&mut ctx, &mut module, decl)?;
+                lower_module_decl(&mut ctx, &mut module, decl, &deferred_namespace_locals)?;
             }
         }
         // #11826: a class this statement defined directly exists from here

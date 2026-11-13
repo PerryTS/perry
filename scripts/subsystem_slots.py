@@ -20,9 +20,14 @@ The runtime now refuses a duplicate, which turns silent misrouting into a clean
 decline. This gate is the other half: it makes the collision fail the BUILD
 rather than quietly cost one binding its transport at runtime.
 
-Slot numbers live in two places by design — each binding's own crate, and
-`perry-db-turnloop::subsystem` for the database band — so this reads both and
-resolves the indirection.
+Slot numbers live in one place — each binding's own crate, as a
+`const <NAME>_SUBSYSTEM: u8 = <n>;` declaration next to its sink. The database
+band 9..=12 is retired: its bindings were replaced by pure-TypeScript drivers
+and their shared ledger (`perry-db-turnloop::subsystem`) was removed with
+them, so this gate no longer resolves any slot symbol through a ledger. It is
+not vacuous: every `= <SYMBOL>` reference must resolve to a literal declared
+in the same crate, and a symbol with no local definition fails the gate as
+unresolved instead of being silently skipped.
 """
 from __future__ import annotations
 import re, sys
@@ -31,8 +36,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
 
-# `pub const PG: u8 = 9;` in the database ledger.
-NAMED = re.compile(r"^\s*pub const ([A-Z][A-Z0-9_]*)\s*:\s*u8\s*=\s*(\d+)\s*;", re.M)
 # `const SUBSYSTEM: u8 = 7;` or `= subsystem::PG;` in a binding.
 SLOT = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?const ((?:[A-Z][A-Z0-9_]*_)?SUBSYSTEM)\s*:\s*u8\s*=\s*"
@@ -41,11 +44,6 @@ SLOT = re.compile(
 )
 
 def main() -> int:
-    ledger_path = CRATES / "perry-db-turnloop" / "src" / "lib.rs"
-    ledger = {}
-    if ledger_path.exists():
-        ledger = {n: int(v) for n, v in NAMED.findall(ledger_path.read_text(encoding="utf-8"))}
-
     # Every `const <NAME>: u8 = <n>;` per crate, so an alias inside a crate can
     # be resolved to the slot it names instead of reading as unresolved.
     same_crate: dict[str, dict[str, int]] = {}
@@ -66,14 +64,12 @@ def main() -> int:
         for name, literal, symbol in SLOT.findall(path.read_text(encoding="utf-8")):
             if literal:
                 value = int(literal)
-            elif symbol in ledger:
-                value = ledger[symbol]
             elif symbol in same_crate.get(path.parts[len(CRATES.parts)], {}):
                 # An alias re-exporting this crate's own slot under another
                 # name. It is the same slot, so record it once, not twice.
                 continue
             else:
-                unresolved.append(f"{rel}: {name} = {symbol} (not in perry-db-turnloop::subsystem)")
+                unresolved.append(f"{rel}: {name} = {symbol} (no local SUBSYSTEM constant in this crate)")
                 continue
             claims.setdefault(value, []).append(f"{rel}: {name}")
 
@@ -95,8 +91,9 @@ def main() -> int:
         print(
             "\nEvery completion for that slot is routed to whichever binding registered\n"
             "last, which reads the token's low bits as one of its own connection ids.\n"
-            "Pick a free slot below MAX_SUBSYSTEMS; the database band is\n"
-            "perry-db-turnloop::subsystem and the full map is documented in\n"
+            "Pick a free slot below MAX_SUBSYSTEMS; the database band 9..=12 is\n"
+            "retired (its bindings were replaced by pure-TypeScript drivers) and\n"
+            "the full map is documented in\n"
             "crates/perry-runtime/src/turnloop_net/sink.rs.",
             file=sys.stderr,
         )

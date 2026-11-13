@@ -22,6 +22,26 @@ mod nodes;
 mod reflection;
 mod web;
 
+/// `PERRY_PUSH_METHOD_TIERS=0` (`off`, `false`): the native array push
+/// (`perry_hir::folded_call::native_array_push`) is an element store with no
+/// method call, as codegen then lowers it (no test of the receiver).
+fn push_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_PUSH_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `PERRY_ARRAY_METHOD_TIERS=0` (`off`, `false`): `Expr::ArrayPop` is the
+/// builtin's own effects with no method call, as codegen then lowers it (the
+/// builtin runs whatever `pop` the receiver holds).
+fn array_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_ARRAY_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -131,7 +151,10 @@ impl<'a> Gen<'a> {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
                 } else if let (true, Some(o)) = (
-                    matches!(module.as_str(), "readable_stream" | "readable_stream_reader"),
+                    matches!(
+                        module.as_str(),
+                        "readable_stream" | "readable_stream_reader"
+                    ),
                     o,
                 ) {
                     // The HIR's dispatch of a member of a stream or reader it
@@ -145,12 +168,27 @@ impl<'a> Gen<'a> {
                     } else {
                         self.mcall(o, key, a, vec![])
                     }
-                } else if let (true, Some(o)) =
-                    (module == "array" && method == "push_field_single", o)
-                {
+                } else if let (true, Some(o)) = (
+                    module == "array"
+                        && (method == "push_field_single"
+                            || (matches!(method.as_str(), "push_single" | "push")
+                                && push_method_tiers()
+                                && !self
+                                    .push_fill
+                                    .pushes
+                                    .contains_key(&(e as *const Expr as usize)))),
+                    o,
+                ) {
                     // `push_field_single` checks the receiver and runs its own
-                    // `push` otherwise, which is the method call itself.
+                    // `push` otherwise, which is the method call itself. So
+                    // does the native push arm (`perry_hir::folded_call::
+                    // native_array_push`), a fill push of a push-filled birth
+                    // excepted: its Array has no other holder yet.
                     let push = self.m.atom("push");
+                    self.list_push(o, Some(a.len() as u32));
+                    if let Some(call) = perry_hir::folded_call::native_array_push(e) {
+                        self.folded_site(fx, &call.receiver, push, o);
+                    }
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
                     // The array push the HIR folds for a receiver it proved an
@@ -160,8 +198,19 @@ impl<'a> Gen<'a> {
                     // holder stores the same array.
                     match o {
                         Some(o) => {
+                            self.list_push(o, Some(a.len() as u32));
+                            // A fill push (`push_fills`): its site is marked
+                            // before the store exists (the solve is online).
+                            let fill = self
+                                .push_fill
+                                .pushes
+                                .get(&(e as *const Expr as usize))
+                                .copied();
                             for v in a {
-                                self.elem_store(fx, o, v, "push");
+                                match fill {
+                                    Some(fill) => self.fill_push(fx, e, o, v, fill),
+                                    None => self.elem_store(fx, o, v, "push"),
+                                }
                             }
                         }
                         None => {
@@ -518,7 +567,13 @@ impl<'a> Gen<'a> {
                 // an internal slot): ToPrimitive (`@@toPrimitive`, else
                 // `valueOf` / `toString`) runs on it; no other key is read and
                 // no function found under some key is called back.
-                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::ToPrimitive)
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "primitive builtin operand",
+                    Protocol::ToPrimitive,
+                )
             }
             Expr::StringRaw { .. }
             | Expr::StringFromCharCodeSpread(..)

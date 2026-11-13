@@ -98,7 +98,9 @@ pub(crate) fn constfn_mask(infos: &[ConstFnSlotInfo], live_inline: u32) -> Optio
 #[inline(never)]
 #[optimize(size)]
 pub(crate) fn tail_constfn_slot(infos: &[ConstFnSlotInfo], slot: u32) -> bool {
-    infos.binary_search_by_key(&slot, |entry| entry.slot).is_ok()
+    infos
+        .binary_search_by_key(&slot, |entry| entry.slot)
+        .is_ok()
 }
 
 /// Does the sorted body list reach a slot >= 32?
@@ -620,6 +622,12 @@ impl ShapeRecord {
         }
     }
 
+    /// The I32 lanes (I32 at rest, PR C; `field_rep::i32_lane_slots`).
+    #[inline]
+    pub(crate) fn i32_lanes(&self) -> u32 {
+        crate::object::field_rep::i32_lane_slots(self.rep, self.special_constfn_mask)
+    }
+
     /// Is `slot` a ConstFn lane? Slots 0..32 are the `rep` word's SPECIAL lanes
     /// gated by the mask; a slot past it has the lane exactly when the
     /// record's own body list names it (the list is identity).
@@ -666,9 +674,10 @@ impl ShapeRecord {
         }
         // SAFETY: the extension is owned by this live record.
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
-        extras.tail_to_any.get(word).map_or(0, |w| {
-            w.load(std::sync::atomic::Ordering::Acquire)
-        })
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
     }
 
     /// Any learned deprecation, word 0 or tail, is pending.

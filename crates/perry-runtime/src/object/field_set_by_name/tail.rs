@@ -77,7 +77,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(gc_type) {
             if key.is_null() {
                 return;
             }

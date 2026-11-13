@@ -44,9 +44,11 @@ use super::{
 
 mod archive_cache;
 mod build_and_run;
+mod elf_linker;
 mod function_layout;
 mod glibc_version;
 mod harmonyos_objects;
+mod hot_text_order;
 mod link_cache;
 mod linux_dylib_libs;
 mod linux_ui_libs;
@@ -165,9 +167,10 @@ fn add_node_api_host_link_args(
     is_harmonyos: bool,
     is_cross_macos: bool,
 ) -> Result<()> {
-    // A native addon reaches what its Node-API imports reach: the host
-    // retains and exports those symbols (all of them for an open addon).
-    let exports = ctx.node_api_host_exports();
+    // Export the addons' Node-API imports and Perry's supplemental C surface.
+    // An open addon can still reach the full Node-API host.
+    let mut exports = ctx.node_api_host_exports();
+    exports.extend(ctx.perry_c_host_exports());
     if exports.is_empty() {
         return Ok(());
     }
@@ -211,7 +214,7 @@ fn add_node_api_host_link_args(
 
 #[cfg(test)]
 mod node_api_symbol_inventory_tests {
-    use perry_runtime_manifest::node_api_host_symbols;
+    use perry_runtime_manifest::{node_api_host_symbols, perry_c_host_symbols};
     use std::collections::BTreeSet;
 
     #[test]
@@ -242,6 +245,23 @@ mod node_api_symbol_inventory_tests {
             .map(|capture| capture[1].to_string())
             .collect::<BTreeSet<_>>();
         let inventory = node_api_host_symbols()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(inventory, source_exports);
+    }
+
+    #[test]
+    fn perry_c_inventory_matches_exported_runtime_functions() {
+        let source = include_str!("../../../../../perry-runtime/src/embedded.rs");
+        let export_re = perry_perex::tooling::Regex::new(
+            r#"(?s)#\[no_mangle\]\s*pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(perry_[A-Za-z0-9_]+)"#,
+        )
+        .unwrap();
+        let source_exports = export_re
+            .captures_iter(source)
+            .map(|capture| capture[1].to_string())
+            .collect::<BTreeSet<_>>();
+        let inventory = perry_c_host_symbols()
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
         assert_eq!(inventory, source_exports);

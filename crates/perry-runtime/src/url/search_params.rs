@@ -220,7 +220,7 @@ fn known_iterable_to_array(raw_ptr: i64) -> Option<*mut ArrayHeader> {
     }
     let raw = raw_ptr as *const u8;
     match gc_object_type(raw) {
-        Some(t) if t == crate::gc::GC_TYPE_ARRAY => Some(raw as *mut ArrayHeader),
+        Some(t) if crate::gc_type_is_array!(t) => Some(raw as *mut ArrayHeader),
         _ => None,
     }
 }
@@ -980,7 +980,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         // share that layout, so reject it (a real URLSearchParams shape never
         // has a lazy keys_array; returning false is correct).
         match crate::value::addr_class::try_read_gc_header(keys_arr as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
             _ => return false,
         }
         if keys_arr_view.count() == 0 {

@@ -1,17 +1,14 @@
 //! Ordinary receiver-aware property assignment.
 use super::*;
 
-/// Extract a raw heap pointer (48-bit) from either a NaN-boxed value
-/// (POINTER_TAG / STRING_TAG) or a raw i64/f64-reinterpreted pointer
-/// (module-level globals store Arrays/Objects as raw I64s, not NaN-boxed).
+/// Extract the heap pointer (48-bit) of a NaN-boxed value (POINTER_TAG /
+/// STRING_TAG / a native id). Every other value answers 0: a word whose top
+/// 16 bits are clear is a Number (a denormal, or +0), not a raw pointer.
 pub(crate) fn extract_pointer(bits: u64) -> u64 {
     let top = bits >> 48;
     // A native id reaches the by-name/handle dispatch as its raw id.
     if top == 0x7FFD || top == 0x7FFF || top == (crate::value::HANDLE_TAG >> 48) {
         bits & POINTER_MASK
-    } else if top == 0 {
-        // Raw untagged pointer (module-level I64 global).
-        bits
     } else {
         0
     }
@@ -195,7 +192,7 @@ pub(crate) fn array_ptr_from_value(value: f64) -> Option<*mut crate::array::Arra
     }
     unsafe {
         let gc = crate::value::addr_class::try_read_gc_header(raw)?;
-        if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!((*gc).obj_type)
             || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         {
             Some(raw as *mut crate::array::ArrayHeader)
@@ -303,7 +300,7 @@ pub(crate) fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> b
         return true;
     }
     if crate::buffer::is_registered_buffer(raw) {
-        crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
+        crate::buffer::js_buffer_set_value(raw as *mut crate::buffer::BufferHeader, index, value);
         return true;
     }
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
@@ -381,7 +378,7 @@ pub(crate) fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescript
                     && (*meta).overflow == 0)
                     .then_some(addr)
             }
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(header) if crate::gc_type_is_array!(header.obj_type) => {
                 let bag = crate::object::shape_store::named_bag(
                     addr as *const crate::ObjectHeader,
                     key.to_bits(),
@@ -862,6 +859,10 @@ pub(crate) unsafe fn build_value_only_descriptor(value: f64) -> f64 {
 }
 
 pub(crate) fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
+    if crate::object::deferred_namespace::with_key_target(receiver, key, |_, _| ()).is_some() {
+        return false;
+    }
+
     if !reflect_value_is_object(receiver) {
         return false;
     }
@@ -953,6 +954,9 @@ pub(crate) fn create_or_update_receiver_property(receiver: f64, key: f64, value:
 }
 
 pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) -> bool {
+    if crate::object::deferred_namespace::is_deferred(target) {
+        return false;
+    }
     if let Some(ok) = set_handle_property(target, key, value) {
         return ok;
     }
@@ -1393,5 +1397,23 @@ pub extern "C" fn js_super_put_value_set(
     // for a missing key + no inherited setter creates an own data property on
     // the receiver. Do that ordinary set instead of throwing. (Test262
     // syntax/class-body-method-definition-super-property.)
+    if crate::object::deferred_namespace::is_deferred(receiver) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
+        let key = scope.root_nanbox_f64(key);
+        let value = scope.root_nanbox_f64(value);
+        crate::object::deferred_namespace::with_key_target(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            |_, _| (),
+        );
+        return js_put_value_set(
+            receiver.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            value.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            strict,
+        );
+    }
     js_put_value_set(receiver, key, value, receiver, strict)
 }

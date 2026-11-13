@@ -1054,8 +1054,11 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             ) =>
         {
             let l = lower_expr_native_i32(ctx, left)?.value;
-            let r = lower_expr_native_i32(ctx, right)?.value;
+            let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
+            if matches!(op, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) {
+                r = blk.js_shift_count(&r);
+            }
             Some(match op {
                 BinaryOp::Add => blk.add(I32, &l, &r),
                 BinaryOp::Sub => blk.sub(I32, &l, &r),
@@ -1367,9 +1370,24 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         );
         return Ok(lowered);
     }
+    // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+    if let Expr::Logical {
+        op: perry_hir::LogicalOp::Coalesce,
+        left,
+        right,
+    } = e
+    {
+        if let Some(value) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(i32_lowered(value));
+        }
+    }
     if let Some(floor) = super::rest_elems::read_floor(ctx, e) {
         let want = super::rest_elems::Want::I32;
         let value = super::rest_elems::lower_read(ctx, e, floor, want)?;
+        return Ok(i32_lowered(value));
+    }
+    // I32 at rest (PR C): an I32 lane's read is the i32 in the slot.
+    if let Some(value) = super::rest_fields::try_lower_i32(ctx, e)? {
         return Ok(i32_lowered(value));
     }
     if let Some(lowered) = lower_packed_i32_loop_index_get(ctx, e)? {
@@ -1478,8 +1496,11 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         }
         Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
             let l = lower_expr_native_i32(ctx, left)?.value;
-            let r = lower_expr_native_i32(ctx, right)?.value;
+            let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
+            if matches!(op, BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr) {
+                r = blk.js_shift_count(&r);
+            }
             match op {
                 BinaryOp::Add => blk.add(I32, &l, &r),
                 BinaryOp::Sub => blk.sub(I32, &l, &r),
@@ -1678,6 +1699,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         } => {
             let l = lower_expr_native_u32(ctx, left)?.value;
             let r = lower_expr_native_u32(ctx, right)?.value;
+            let r = ctx.block().js_shift_count(&r);
             ctx.block().lshr(I32, &l, &r)
         }
         _ => {
@@ -1786,6 +1808,10 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             vec!["slot_kind=raw_f64_or_coerced_jsvalue".to_string()],
         );
         return Ok(lowered);
+    }
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, e)? {
+        return Ok(f64_lowered(value));
     }
     if let Some(value) =
         crate::expr::property_get::lower_raw_f64_class_field_get_for_number_context(ctx, e)?

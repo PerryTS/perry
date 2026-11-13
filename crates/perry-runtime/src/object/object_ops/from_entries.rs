@@ -41,7 +41,9 @@ unsafe fn object_from_entries_gc_type(raw_ptr: i64) -> Option<u8> {
 unsafe fn object_from_entries_array_ptr(value: f64) -> *mut ArrayHeader {
     let raw = crate::value::js_nanbox_get_pointer(value);
     let gc_type = object_from_entries_gc_type(raw);
-    if gc_type != Some(crate::gc::GC_TYPE_ARRAY) && gc_type != Some(crate::gc::GC_TYPE_LAZY_ARRAY) {
+    if gc_type != Some(crate::gc_array_type_pat!())
+        && gc_type != Some(crate::gc::GC_TYPE_LAZY_ARRAY)
+    {
         throw_from_entries_not_iterable();
     }
     raw as *mut ArrayHeader
@@ -53,7 +55,7 @@ unsafe fn object_from_entries_has_iterator(value: f64, raw: i64, gc_type: Option
         return true;
     }
     match gc_type {
-        Some(crate::gc::GC_TYPE_ARRAY)
+        Some(crate::gc_array_type_pat!())
         | Some(crate::gc::GC_TYPE_LAZY_ARRAY)
         | Some(crate::gc::GC_TYPE_MAP)
         | Some(crate::gc::GC_TYPE_SET) => return true,
@@ -155,7 +157,9 @@ unsafe fn object_from_entries_entry_values(entry_val: f64) -> (f64, f64) {
         throw_from_entries_non_object_entry();
     }
 
-    if gc_type == Some(crate::gc::GC_TYPE_ARRAY) || gc_type == Some(crate::gc::GC_TYPE_LAZY_ARRAY) {
+    if gc_type == Some(crate::gc_array_type_pat!())
+        || gc_type == Some(crate::gc::GC_TYPE_LAZY_ARRAY)
+    {
         let arr = raw as *const ArrayHeader;
         return (
             crate::array::js_array_get_f64(arr, 0),

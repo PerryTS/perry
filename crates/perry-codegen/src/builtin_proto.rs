@@ -33,26 +33,44 @@ pub(crate) use perry_abi::BuiltinProto;
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
 /// the agent's intrinsic, two loads and a compare.
 pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
-    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
-    let own = ctx.block().load(I32, &at);
-    let own = ctx.block().icmp_uge(I32, &own, &end);
+    let own = emit_shadow_bit(ctx, family);
     let patched = if family == BuiltinProto::Object {
         own
     } else {
-        let object =
-            crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
-        let at = ctx.block().gep(crate::types::I8, &object, &[(I64, "4")]);
-        let parent = ctx.block().load(I32, &at);
-        let parent = ctx.block().icmp_uge(I32, &parent, &end);
+        let parent = emit_shadow_bit(ctx, BuiltinProto::Object);
         ctx.block().or(I1, &own, &parent)
     };
-    let blk = ctx.block();
-    // Unlikely, and said so: a guard's generic arm must not cost the
-    // function's hot loops their register assignment (the same reason
-    // `array_push_own`'s exit carries the hint).
-    blk.call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
+    emit_unlikely(ctx.block(), &patched)
+}
+
+/// `i1`: true when the agent's intrinsic prototype of `family` ITSELF was
+/// written, defined, deleted or relinked: its own shadow bit, one slot load,
+/// one word load and a compare. The runtime reads the same word
+/// (`object::builtin_proto::prototype_unwritten`). It is the exact fact for a
+/// member the realm declares OWN on that prototype (a Buffer reader on
+/// Buffer.prototype): `%Object.prototype%` lies behind it on the chain.
+pub(crate) fn emit_prototype_written(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    family: BuiltinProto,
+) -> String {
+    let own = emit_shadow_bit(ctx, family);
+    emit_unlikely(ctx.block(), &own)
+}
+
+/// The shadow bit of the agent's intrinsic prototype of `family`.
+fn emit_shadow_bit(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
+    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
+    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
+    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
+    let word = ctx.block().load(I32, &at);
+    ctx.block().icmp_uge(I32, &word, &end)
+}
+
+/// Unlikely, and said so: a guard's generic arm must not cost the function's
+/// hot loops their register assignment (the same reason `array_push_own`'s
+/// exit carries the hint).
+fn emit_unlikely(blk: &mut LlBlock, patched: &str) -> String {
+    blk.call(I1, "llvm.expect.i1", &[(I1, patched), (I1, "false")])
 }
 
 /// [`emit_patched_test`] over several families (a borrowed call also reads
@@ -211,10 +229,27 @@ pub(crate) fn console_intrinsic_proven(
     if GUARDED_CALLEE.with(|g| g.get()) == callee as *const perry_hir::Expr as usize {
         return true;
     }
-    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
-        return false;
-    };
-    *byte_offset != 0 && !ctx.wpfacts_off && ctx.wpfacts.native_member_calls.contains(byte_offset)
+    native_member_proven(ctx, callee)
+}
+
+/// Do the whole-program facts prove that the method call with callee
+/// `callee` (`PropertyGet`) reads its intrinsic member? The solver's
+/// NativeMember verdict (`ElisionFacts::native_member_calls`, keyed by the
+/// callee read's offset): no write may reach the member, so the call runs
+/// the builtin body and no other code.
+pub(crate) fn native_member_proven(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> bool {
+    !ctx.wpfacts_off && native_member_site_proven(&ctx.wpfacts.native_member_calls, callee)
+}
+
+/// [`native_member_proven`] over a module's proven set, for the module
+/// collectors that run before any function context exists. An empty set
+/// proves nothing.
+pub(crate) fn native_member_site_proven(
+    native_member_calls: &std::collections::BTreeSet<u32>,
+    callee: &perry_hir::Expr,
+) -> bool {
+    matches!(callee, perry_hir::Expr::PropertyGet { byte_offset, .. }
+        if *byte_offset != 0 && native_member_calls.contains(byte_offset))
 }
 
 /// `console.<member>(args...)` as the real call: read `globalThis.console`
@@ -460,6 +495,9 @@ pub(crate) const ARRAY_ENTRIES: &[(&str, usize, usize)] = &[
     ("values", 0, 0),
     ("slice", 1, 2),
     ("shift", 0, 0),
+    // `Expr::ArrayPop` and the inline pop's slow arm
+    // (`array_proto_guard::emit_array_pop_call`).
+    ("pop", 0, 0),
     // `arr.map(f)` whose result is discarded (`stmt/unused_expr.rs`).
     ("mapDiscard", 1, 1),
 ];

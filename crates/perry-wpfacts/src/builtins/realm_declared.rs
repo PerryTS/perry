@@ -102,7 +102,9 @@ pub(super) fn getter_returns_receiver(ns: BuiltinNs, key: &str) -> bool {
 pub(super) fn namespace_own_key(identity: &str, key: &str) -> bool {
     DECLARED.lines().any(|line| {
         let mut row = line.split('\t');
-        row.next() == Some("ns") && row.next() == Some(identity) && row.next() == Some(key)
+        matches!(row.next(), Some("ns" | "held"))
+            && row.next() == Some(identity)
+            && row.next() == Some(key)
     })
 }
 
@@ -156,7 +158,7 @@ fn missing(list: &str) -> Vec<String> {
         let known = match kind {
             // A global the solver does not name as a namespace is no R1 holder;
             // an undescribed namespace (`ns_member` None) keeps every key opaque.
-            "ns" | "accessor" => {
+            "ns" | "held" | "accessor" => {
                 ns_by_name(holder).is_none_or(|ns| members::ns_member(ns, key) != Some(None))
             }
             "proto" | "fn" => members::member(Family::Function, key).is_some(),

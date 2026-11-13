@@ -1179,9 +1179,10 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 
 /// `process.env` as a materialized JS object.
 ///
-/// Built lazily from the current agent's effective environment. The rooted
-/// cache preserves object identity; enumeration refreshes its field mirror
-/// to observe mutations made by agents sharing the native backing.
+/// Built empty and lazily: taking the object reads no variable. The rooted
+/// cache preserves object identity; every enumeration fills the field mirror
+/// from the current agent's effective environment (`refresh_process_env`),
+/// which also observes mutations made by agents sharing the native backing.
 ///
 /// Returns an f64 NaN-boxed POINTER_TAG value so the codegen can hand
 /// it straight to subsequent PropertyGet dispatch.
@@ -1487,6 +1488,10 @@ pub(crate) fn refresh_process_env(value: f64) -> f64 {
         .into_iter()
         .map(|(name, value)| (env_cache_name_for_set(&name), value))
         .collect();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if crate::snap_census::runner_on_for_inputs() {
+        crate::snap_census::record_input_value("env_block", &vars);
+    }
     let names: std::collections::HashSet<_> = vars.iter().map(|(name, _)| name.as_str()).collect();
     with_env_cache_mutation(|| {
         let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(
@@ -1581,7 +1586,10 @@ fn js_process_env_impl() -> f64 {
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
-    refresh_process_env(boxed)
+    // Node's `process.env` is an interceptor object: getting it reads no
+    // variable. Host data enters only through the observing funnels (by-name
+    // reads, and `refresh_process_env` at enumeration).
+    boxed
 }
 
 /// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.

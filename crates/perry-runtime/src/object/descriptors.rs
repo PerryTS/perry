@@ -190,6 +190,14 @@ unsafe fn boxed_string_own_property_names(obj_value: f64, str_value: f64) -> f64
 /// TAG_UNDEFINED if the property doesn't exist.
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_value: f64) -> f64 {
+    // A Number has no own property, whichever Number it is. The decodes
+    // below read the low 48 bits of some Numbers as an address (clear top 16
+    // bits; a negative denormal), so every Number takes one placeholder.
+    let obj_value = if crate::JSValue::from_bits(obj_value.to_bits()).is_number() {
+        1.0
+    } else {
+        obj_value
+    };
     unsafe {
         own_property(obj_value, key_value)
             .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |property| {
@@ -227,6 +235,17 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
     {
         return process_env_own_property(key_value);
     }
+    if let Some(result) =
+        super::deferred_namespace::with_key_target(obj_value, key_value, |obj, key| {
+            own_property_ordinary(obj, key)
+        })
+    {
+        return result;
+    }
+    own_property_ordinary(obj_value, key_value)
+}
+
+unsafe fn own_property_ordinary(obj_value: f64, key_value: f64) -> Option<OwnProperty> {
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());
@@ -905,7 +924,7 @@ pub(crate) unsafe fn own_property(obj_value: f64, key_value: f64) -> Option<OwnP
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Accessors and attributes follow array growth, just like reads.
                 let arr = super::array_object_ops::array_header(obj);
                 let obj = arr as *mut ObjectHeader;
@@ -1094,6 +1113,11 @@ pub(crate) use builders::{
 #[no_mangle]
 pub extern "C" fn js_object_get_own_property_names(obj_value: f64) -> f64 {
     let obj_value = crate::process::refresh_process_env(obj_value);
+    if let Some(result) = super::deferred_namespace::with_keys_target(obj_value, |target| {
+        js_object_get_own_property_names(target)
+    }) {
+        return result;
+    }
     // A class object stores everything it owns except `prototype`
     // (`class_object_has_prototype_property`), which was created with it,
     // right after `length` and `name`.
@@ -1173,10 +1197,13 @@ fn real_array_receiver(value: f64) -> bool {
     }
     let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
     unsafe { crate::value::addr_class::try_read_gc_header(raw) }
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
+    // A Number has no own property names, whichever Number it is: one with
+    // clear top 16 bits must not reach the raw-pointer decodes below.
+    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
     unsafe {
         // #2818: ToObject(null/undefined) throws TypeError, matching Node.
         let obj_jv = crate::JSValue::from_bits(obj_value.to_bits());

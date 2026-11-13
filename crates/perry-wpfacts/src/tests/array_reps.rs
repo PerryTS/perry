@@ -149,7 +149,8 @@ fn an_array_slot_is_encoded_boxed() {
         let want = match r {
             Rep::F64 => Enc::F64,
             Rep::I32 => Enc::I32,
-            Rep::Boxed | Rep::Arr(_) | Rep::Record(_) => Enc::Boxed,
+            Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
         };
         assert_eq!(r.encoding(), want);
     }
@@ -239,7 +240,49 @@ fn a_json_array_is_not_plain() {
 fn a_runtime_born_array_is_not_plain() {
     let src = "const o = { a: 1, b: 2 };\nconst K = Object.keys(o);\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
-    let src = "const L = [3, 1, 2];\nconst K = L.slice();\nconsole.log(K[0]);";
+    let src = "const L = [3, 1, 2];\nconst K = L.concat([4]);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = L.toReversed();\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+}
+
+/// A `slice` of an Array bears a plain Array (`builtins::site_slice_arr`):
+/// floor 0, not dense, not fixed, with the elements it holds.
+#[test]
+fn a_slice_of_an_array_is_plain() {
+    let src = "const L = [3, 1, 2];\nconst K = L.slice();\nK[1] = 7;\nconsole.log(K[0]);";
+    let k = arr(src, "K");
+    assert_eq!(
+        (k.floor, k.dense, k.fixed, k.im, k.at_rest),
+        (0, false, false, false, false)
+    );
+    assert_ne!(k.elem, ElemRep::Boxed);
+    // A string stored into the copy makes its elements Boxed; the source's
+    // stay Numbers.
+    let src = "const L = [3, 1, 2];\nconst K: any[] = L.slice();\nK[1] = \"s\";\nconsole.log(K[0], L[0]);";
+    assert_eq!(arr(src, "K").elem, ElemRep::Boxed);
+    assert_ne!(arr(src, "L").elem, ElemRep::Boxed);
+}
+
+/// Negative controls: a species constructor that is not `%Array%` (the
+/// result may be no Array), an array-like receiver, an escaped copy, and the
+/// switch's sabotage.
+#[test]
+fn a_slice_with_another_species_or_receiver_is_not_plain() {
+    let src = "const L: any = [3, 1, 2];\nL.constructor = { [Symbol.species]: Object };\n\
+               const K = L.slice();\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let cfg = FactsConfig {
+        sabotage: Some("slicebirth".to_string()),
+        ..Default::default()
+    };
+    assert!(matches!(rep_with(src, "K", cfg), Rep::Arr(_)));
+    let src = "const o: any = { length: 2, 0: 1, 1: 2 };\n\
+               const K = Array.prototype.slice.call(o);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = L.slice();\n(globalThis as any).hostTake(K);\nconsole.log(K[0]);";
+    assert_eq!(rep(src, "K"), Rep::Boxed);
+    let src = "const L = [3, 1, 2];\nconst K = Object.freeze(L.slice());\nconsole.log(K[0]);";
     assert_eq!(rep(src, "K"), Rep::Boxed);
 }
 

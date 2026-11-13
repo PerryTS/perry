@@ -1,6 +1,6 @@
-// DESIGN-p4l4 §3: a chess-like make/unmake over a played stack. Until the
-// VR-4b intrinsics the stack rejects the record (R6, or its for-of iterator).
-// vr-expect: move,piece,captured,flags REJECTED
+// DESIGN-p4l4 §3: a chess-like make/unmake over a played stack, a record
+// array since the VR-4b intrinsics (push, pop).
+// vr-expect: move,piece,captured,flags ADMITTED
 class Game {
   played: { move: number; piece: number; captured: number; flags: boolean }[] = [];
   board: number[] = new Array(64).fill(0);

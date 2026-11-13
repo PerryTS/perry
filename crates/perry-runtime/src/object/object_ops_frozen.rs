@@ -215,7 +215,7 @@ unsafe fn integrity_flags_are_writable(obj: *const ObjectHeader) -> bool {
 unsafe fn set_integrity_flags(obj: *mut ObjectHeader, flags: u16) {
     // Array growth aliases retain their old header. Integrity must restrict
     // the live owner, just like the descriptor and element readers do.
-    let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+    let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
         super::array_object_ops::array_header(obj) as *mut ObjectHeader
     } else {
         obj
@@ -563,7 +563,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
         }
     }
     // Growth aliases share the live array's integrity.
-    let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+    let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
         super::array_object_ops::array_header(obj) as *mut ObjectHeader
     } else {
         obj
@@ -641,7 +641,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     }
     // Dense indices and length use the array's integrity facts; customized
     // indices, named properties and symbols share its ordinary holder.
-    if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!((*gc).obj_type) {
         let arr = super::array_object_ops::array_header(obj);
         if frozen
             && crate::array::js_array_length(arr) != 0
@@ -798,7 +798,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
         }
-        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID
+            || (*obj).class_id == super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID
+        {
             // 10.4.6.5: every export is a writable data property (its live
             // binding's accessor is internal), so a namespace is frozen only
             // when it exports nothing.
@@ -928,7 +930,7 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
                 );
             }
         }
-        let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+        let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
             super::array_object_ops::array_header(obj) as *mut ObjectHeader
         } else {
             obj

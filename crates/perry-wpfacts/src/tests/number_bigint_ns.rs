@@ -25,9 +25,18 @@ fn a_number_and_a_bigint_read_their_own_prototype() {
         ("(5).toString", "builtin-fn:Number.prototype.toString"),
         ("(5).toFixed", "builtin-fn:Number.prototype.toFixed"),
         ("(5n).toString", "builtin-fn:BigInt.prototype.toString"),
-        ("(5n).toLocaleString", "builtin-fn:BigInt.prototype.toLocaleString"),
-        ("Number.prototype.toString", "builtin-fn:Number.prototype.toString"),
-        ("BigInt.prototype.valueOf", "builtin-fn:BigInt.prototype.valueOf"),
+        (
+            "(5n).toLocaleString",
+            "builtin-fn:BigInt.prototype.toLocaleString",
+        ),
+        (
+            "Number.prototype.toString",
+            "builtin-fn:Number.prototype.toString",
+        ),
+        (
+            "BigInt.prototype.valueOf",
+            "builtin-fn:BigInt.prototype.valueOf",
+        ),
         ("(5).constructor", "builtin:Number"),
         ("(5n).constructor", "builtin:BigInt"),
     ];

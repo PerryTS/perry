@@ -165,7 +165,7 @@ mod tests {
             let result = match header.gc_type {
                 perry_abi::gc_object_type_pat!() => object_word(&cell, header),
                 GC_TYPE_CLOSURE => closure_word(&cell, header),
-                GC_TYPE_ARRAY => {
+                perry_abi::gc_array_type_pat!() => {
                     match super::super::arrays::ArrayParts::from_cell(&cell) {
                         Ok(parts) => array_word(&cell, header, &parts.elements),
                         // Provider-born arrays have no image elements.

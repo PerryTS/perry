@@ -30,7 +30,9 @@ use perry_hir::Expr;
 use std::cell::Cell;
 
 use super::{lower_expr, FnCtx};
-use crate::lower_call::property_get::own_override_guard::emit_own_override_branch;
+use crate::lower_call::property_get::own_override_guard::{
+    emit_annotated_array_branch, emit_own_override_branch,
+};
 use crate::rooting;
 use crate::types::DOUBLE;
 
@@ -84,6 +86,44 @@ fn guarded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
         return None;
     }
     folded_call(expr)
+}
+
+/// The native array push (`perry_hir::folded_call::native_array_push`:
+/// `this.items.push(v)` in value position or in a constructor) as the call it
+/// is. Its arm appends with no test of the receiver, so the node gets the
+/// diamond here; the test is the inline push tiers' admission
+/// (`array_proto_guard::emit_plain_array_method_branch`), behind a heap-pointer
+/// test because the receiver is only annotated an Array. Not guarded: a fill
+/// push of a push-filled birth (`rest_elems::push_len`), whose Array nothing
+/// but its constructor has seen; and nothing with
+/// `PERRY_PUSH_METHOD_TIERS=0`.
+fn native_push_call<'a>(ctx: &FnCtx<'_>, expr: &'a Expr) -> Option<FoldedCall<'a>> {
+    if !super::array_push_own::method_tiers_enabled() || folded_call(expr).is_some() {
+        return None;
+    }
+    let call = perry_hir::folded_call::native_array_push(expr)?;
+    match call.receiver {
+        Receiver::Expr(recv) if super::rest_elems::push_len(ctx, recv).is_some() => None,
+        _ => Some(call),
+    }
+}
+
+/// Is this folded ARRAY method node's receiver one the function's own
+/// analysis did not prove an Array (a module binding read inside a function)?
+/// Its guard then reads the Array header behind a heap-pointer test
+/// (`own_override_guard::emit_annotated_array_branch`) instead of the global
+/// install flag, which no Array arms. `PERRY_ARRAY_METHOD_TIERS=0` keeps the
+/// flag. With the method-site facts (`PERRY_FACTS_ARRAY_METHOD_SITES`) every
+/// Array node the facts do not prove takes this guard: the function's own
+/// analysis is no proof of the value, and a `null` or `undefined` behind the
+/// annotation must reach the ordinary call, not a header read.
+fn annotated_array_receiver(
+    receiver_is_array: bool,
+    family: crate::builtin_proto::BuiltinProto,
+) -> bool {
+    (!receiver_is_array || crate::method_site::array_sites_enabled())
+        && family == crate::builtin_proto::BuiltinProto::Array
+        && super::array_proto_guard::method_tiers_enabled()
 }
 
 /// The builtin-prototype family a folded node's method belongs to (#11915):
@@ -140,7 +180,22 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     if SUPPRESSED_NODE.with(|s| s.get()) == node {
         return Ok(None);
     }
-    let Some(call) = guarded_call(expr) else {
+    match expr {
+        Expr::ArrayPush { array_id, .. } => crate::method_site::census_inline_tier(
+            ctx,
+            Some(perry_hir::folded_call::Site::Local(*array_id)),
+            "push",
+        ),
+        Expr::ArrayPop(id) => crate::method_site::census_inline_tier(
+            ctx,
+            Some(perry_hir::folded_call::Site::Local(*id)),
+            "pop",
+        ),
+        _ => {}
+    }
+    let native_push = native_push_call(ctx, expr);
+    let is_native_push = native_push.is_some();
+    let Some(call) = native_push.or_else(|| guarded_call(expr)) else {
         return Ok(None);
     };
 
@@ -159,6 +214,54 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         && crate::type_analysis::is_numeric_expr(ctx, receiver_expr)
     {
         return Ok(None);
+    }
+    // A receiver annotated a typed array whose values the facts do not prove
+    // typed arrays (`method_site`): the node is the ordinary method call.
+    if crate::method_site::unproven_typed_array_call(
+        ctx,
+        perry_hir::folded_call::receiver_site(&call.receiver),
+        receiver_expr,
+        call.method,
+    )? {
+        return emit_generic(ctx, receiver_expr, call.method, &call.args).map(Some);
+    }
+    // An Array method node whose site the facts prove (`method_site`: every
+    // receiver value an Array, the member the realm's built-in on each) is
+    // the plain fold, with no test of its receiver. Check mode runs the
+    // dropped test on the receiver value first.
+    let array_family =
+        is_native_push || folded_family(expr) == Some(crate::builtin_proto::BuiltinProto::Array);
+    if array_family
+        && crate::method_site::array_member_proven(
+            ctx,
+            perry_hir::folded_call::receiver_site(&call.receiver),
+            call.method,
+        )
+    {
+        if !crate::verify_facts::enabled() {
+            crate::method_site::witness_array_member(ctx, "", call.method);
+            return Ok(None);
+        }
+        let key = receiver_expr as *const Expr as usize;
+        let method = call.method;
+        let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
+            let recv = match rooting::materialized_receiver_reread(ctx, key) {
+                Some(value) => value,
+                None => lower_expr(ctx, receiver_expr)?,
+            };
+            crate::method_site::witness_array_member(ctx, &recv, method);
+            let _suppressed = Suppressed::enter(node);
+            lower_expr(ctx, expr)
+        };
+        let free_reread = matches!(call.receiver, Receiver::Local(_))
+            || matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
+        let value = if free_reread {
+            emit(ctx)?
+        } else {
+            let receiver_value = lower_expr(ctx, receiver_expr)?;
+            rooting::with_materialized_receiver(ctx, key, &receiver_value, emit)?
+        };
+        return Ok(Some(value));
     }
     // A local receiver (and a fold that captured one) is already in a slot the
     // collector rewrites, so re-lowering it IS the re-read the rooting
@@ -192,8 +295,20 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         && !matches!(receiver_expr, Expr::LocalGet(_) | Expr::This);
     let receiver_is_array = matches!(expr, Expr::ArrayIndexOf { .. } | Expr::ArraySlice { .. })
         || crate::type_analysis::is_array_expr(ctx, receiver_expr);
-    let family = folded_family(expr).unwrap_or(crate::builtin_proto::BuiltinProto::Object);
+    let family = if is_native_push {
+        crate::builtin_proto::BuiltinProto::Array
+    } else {
+        folded_family(expr).unwrap_or(crate::builtin_proto::BuiltinProto::Object)
+    };
+    let annotated_array = annotated_array_receiver(receiver_is_array, family);
     let method = call.method;
+    let brand = super::collection_brand::needed(
+        ctx,
+        family,
+        perry_hir::folded_call::receiver_site(&call.receiver),
+        receiver_expr,
+        method,
+    );
 
     let receiver_value = lower_expr(ctx, receiver_expr)?;
     let key = receiver_expr as *const Expr as usize;
@@ -209,15 +324,49 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
             Some(value) => value,
             None => lower_expr(ctx, receiver_expr)?,
         };
-        emit_own_override_branch(
-            ctx,
-            method,
-            &recv,
-            receiver_is_array,
-            Some(family),
-            &generic_label,
-            &builtin_label,
-        );
+        if is_native_push {
+            super::array_proto_guard::emit_plain_array_method_branch(
+                ctx,
+                &recv,
+                &builtin_label,
+                &generic_label,
+            );
+        } else if annotated_array {
+            emit_annotated_array_branch(
+                ctx,
+                method,
+                &recv,
+                Some(family),
+                &generic_label,
+                &builtin_label,
+            );
+        } else {
+            // A Map / Set node the facts do not prove: the receiver's brand
+            // first, a miss is the generic arm (`collection_brand`).
+            if let Some((brand, check)) = brand {
+                let ok_idx = ctx.new_block("collbrand.ok");
+                let ok_label = ctx.block_label(ok_idx);
+                super::collection_brand::emit_brand_branch(
+                    ctx,
+                    brand,
+                    check,
+                    method,
+                    &recv,
+                    &ok_label,
+                    &generic_label,
+                );
+                ctx.current_block = ok_idx;
+            }
+            emit_own_override_branch(
+                ctx,
+                method,
+                &recv,
+                receiver_is_array,
+                Some(family),
+                &generic_label,
+                &builtin_label,
+            );
+        }
 
         ctx.current_block = generic_idx;
         let generic_value = emit_generic(ctx, receiver_expr, method, &call.args)?;
@@ -308,15 +457,26 @@ fn lower_pre_read_entry(
     let failed_label = ctx.block_label(failed_idx);
     let held_label = ctx.block_label(held_idx);
     let args_label = ctx.block_label(args_idx);
-    emit_own_override_branch(
-        ctx,
-        call.method,
-        &recv,
-        receiver_is_array,
-        Some(crate::builtin_proto::BuiltinProto::Array),
-        &failed_label,
-        &held_label,
-    );
+    if annotated_array_receiver(receiver_is_array, crate::builtin_proto::BuiltinProto::Array) {
+        emit_annotated_array_branch(
+            ctx,
+            call.method,
+            &recv,
+            Some(crate::builtin_proto::BuiltinProto::Array),
+            &failed_label,
+            &held_label,
+        );
+    } else {
+        emit_own_override_branch(
+            ctx,
+            call.method,
+            &recv,
+            receiver_is_array,
+            Some(crate::builtin_proto::BuiltinProto::Array),
+            &failed_label,
+            &held_label,
+        );
+    }
     ctx.current_block = failed_idx;
     ctx.block().br(&args_label);
     ctx.current_block = held_idx;

@@ -648,6 +648,26 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     object_assign_one(target_f64, source_f64, false)
 }
 
+/// `Object.assign({}, source, ...)`'s first link, when the target is an empty
+/// object literal written at the call. That object is created here, after
+/// `source` was evaluated (creating `{}` first runs no code and is visible to
+/// nothing), and is born with room for the own keys a plain data source's
+/// shape lists, so the copy fills inline slots instead of spilling. Any other
+/// source (a proxy, an array, a string, a primitive, an accessor or dictionary
+/// object) gets the empty literal's own width. The copy is the unchanged
+/// `Object.assign` of one source.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_assign_fresh(source_f64: f64) -> f64 {
+    let width = super::spread::plain_data_key_count(source_f64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source_f64);
+    let target = super::alloc_basic::object_alloc_plain(width);
+    js_object_assign_one(
+        crate::value::js_nanbox_pointer(target as i64),
+        source.get_nanbox_f64(),
+    )
+}
+
 /// `{ ...src }` inside a source-ordered object literal: CopyDataProperties
 /// into the literal's own fresh object. The same enumeration of `src` as
 /// `Object.assign`, but every property is DEFINED on the target
@@ -715,7 +735,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let target_is_array = {
         let gc_header =
             (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!((*gc_header).obj_type)
     };
 
     let source = JSValue::from_bits(source_f64.to_bits());
@@ -889,7 +909,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         Some(h) => h.obj_type,
         None => return target_f64,
     };
-    let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
+    let source_is_array = crate::gc_type_is_array!(source_obj_type);
 
     // #7341: a RegExp source has no ObjectHeader keys array and must not enter
     // the plain-object copy arm. Its dedicated GC kind makes that decision
@@ -916,7 +936,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!()
         )
     {
         // Assign's [[Set]] can run a setter even for a plain data source, so
@@ -955,6 +975,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let tgt_h = scope.root_raw_mut_ptr(target);
     let src_h = scope.root_raw_const_ptr(src);
     let source_h = scope.root_nanbox_f64(source_f64);
+    // [[OwnPropertyKeys]] is one snapshot taken before any copy: a source
+    // whose shape proves it has no symbol key has none to copy, whatever a
+    // getter or setter does to it later, and needs no symbol list.
+    let source_has_no_symbols = super::spread::proves_no_symbols(source_f64);
 
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
@@ -1147,7 +1171,9 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
     //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
     //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
-    let sym_keys: Vec<usize> = {
+    let sym_keys: Vec<usize> = if source_has_no_symbols {
+        Vec::new()
+    } else {
         let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_h.get_nanbox_f64());
         let mut v = Vec::new();
         if arr_raw != 0 {

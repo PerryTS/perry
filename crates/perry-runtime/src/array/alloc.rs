@@ -98,13 +98,13 @@ unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, al
 
 /// Publish the birth layout word of a fresh array.
 #[inline(always)]
-unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
+pub(super) unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
     use crate::gc::{
         GC_ARRAY_ELEMENT_SHAPE, GC_ARRAY_RAW_F64_HOLES, GC_ARRAY_RAW_F64_LAYOUT,
         GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
     };
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert!(crate::gc_type_is_array!((*header).obj_type));
     debug_assert_eq!(
         (*header)._reserved
             & (GC_LAYOUT_STATE_MASK
@@ -360,6 +360,8 @@ fn alloc_key_list(
         (*ptr).ek_kind = 0;
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(header);
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
         if with_attrs {
@@ -476,6 +478,11 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
             let arr = js_array_alloc(0);
             unsafe {
                 (*arr).length = length;
+                // The empty birth carries the dense raw-f64 claim (vacuously
+                // true at length 0). With a length over the 16-slot store it
+                // is false: its readers (the message serializer's bulk copy,
+                // the guarded numeric element read) take `length` raw slots.
+                clear_array_numeric_layout(arr);
             }
             arr
         } else {

@@ -446,7 +446,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
                 .obj_type
         };
         match obj_type {
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
                 return "[object Array]".to_string();
             }
             crate::gc::GC_TYPE_PROMISE => return "#<Promise>".to_string(),

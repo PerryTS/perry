@@ -796,6 +796,14 @@ pub(super) fn compile_function(
     let sig_return = spec_entry
         .and_then(|plan| plan.signature.as_ref())
         .map(|sig| sig.ret);
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
+    let sig_record_return = spec_entry
+        .and_then(|plan| plan.record.as_ref())
+        .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((PTR, super::record_sig::RESULT_PARAM.to_string()));
+    }
     let lf = llmod.define_function(
         &llvm_name,
         super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
@@ -1177,6 +1185,7 @@ pub(super) fn compile_function(
     // `ModuleDispatchFacts`, so it is the only one that can say whether this
     // body's `return new C(...)` sites are already served by #7107's
     // return-shape mechanism. Read by nothing but the report.
+    let _life_scope = crate::collectors::life_census::compiling(Some(f.id));
     let _opt_report_scope = crate::opt_report::enter_function_region(
         &f.name,
         cross_module
@@ -1411,6 +1420,7 @@ pub(super) fn compile_function(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -1486,7 +1496,7 @@ pub(super) fn compile_function(
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
         loop_pushed_arrays: &cross_module.loop_pushed_arrays,
-        pushed_array_birth: false,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1510,6 +1520,7 @@ pub(super) fn compile_function(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -1576,6 +1587,8 @@ pub(super) fn compile_function(
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
         fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         repsel_context_allows_canonical_i32: repsel_allows,
@@ -1602,6 +1615,7 @@ pub(super) fn compile_function(
         spec_i32_params: spec_i32_params.clone(),
         spec_bool_params,
         sig_return: None,
+        sig_record_return: None,
         typed_methods: &cross_module.typed_methods,
         typed_element_locals: HashSet::new(),
         create_families: Default::default(),
@@ -1632,6 +1646,7 @@ pub(super) fn compile_function(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
+        life_claims: native_facts.life_claims(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
@@ -1687,7 +1702,6 @@ pub(super) fn compile_function(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -1695,6 +1709,8 @@ pub(super) fn compile_function(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(&f.body),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -1708,8 +1724,11 @@ pub(super) fn compile_function(
 
     if let Some(plan) = spec_entry.filter(|plan| plan.signature.is_some()) {
         ctx.sig_return = sig_return;
+        ctx.sig_record_return = sig_record_return;
         ctx.nonnegative_integer_locals
             .extend(super::signature_entry::nonnegative_params(f, plan));
+        ctx.int_range_facts
+            .extend(super::signature_entry::param_range_facts(f, plan));
     }
     let wrapper_name = format!("__perry_wrap_{}", public_llvm_name);
     super::arguments::materialize_arguments_object(
@@ -1718,6 +1737,9 @@ pub(super) fn compile_function(
         Some(&f.body),
         super::arguments::ArgumentsCallee::FunctionWrapper(&wrapper_name),
     );
+    for p in &f.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
     if reads_this && !f.is_strict {
         let slot = ctx.this_stack[0].clone();
         crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
@@ -1920,6 +1942,12 @@ pub(super) fn compile_function(
     // does `f() === undefined` / `f() !== undefined` observes the
     // correct value. For async functions, wrap undefined in a
     // resolved promise so callers can await the result.
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
     if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
         // P2: the facts prove an I32 entry never completes normally.
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));

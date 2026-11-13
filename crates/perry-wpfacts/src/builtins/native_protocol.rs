@@ -43,7 +43,10 @@ pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
         ns
     };
     let identity = m.namespace_property(ns, &name)?.native?;
-    Some(m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+        identity,
+        holder: None,
+    })))
 }
 
 /// `super(...)` into a native parent.
@@ -660,7 +663,7 @@ pub(super) fn native_method(
     if native_skips(m, np, Key::Named(a), NativeMiss::Call(origin, call)) {
         return;
     }
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 2);
     match (native, name) {
         (
             "EventEmitter",
