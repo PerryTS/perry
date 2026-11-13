@@ -638,8 +638,13 @@ impl WasmModuleEmitter {
                     }
                 }
             }
+            // One function per FuncId: a closure the HIR reaches by two paths (a static
+            // field initializer is also in `init`) is emitted once.
+            let mut seen = std::collections::HashSet::new();
             for (fid, params, body, caps, mut_caps) in module_closures {
-                closure_funcs.push((fid, params, body, caps, mut_caps, mod_idx));
+                if seen.insert(fid) {
+                    closure_funcs.push((fid, params, body, caps, mut_caps, mod_idx));
+                }
             }
         }
 

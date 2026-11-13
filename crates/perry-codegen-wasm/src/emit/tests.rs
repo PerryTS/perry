@@ -143,3 +143,50 @@ console.log("b");
         "a 1 true\n\nb"
     );
 }
+
+#[test]
+fn json_stringify_honors_value_replacer_and_space() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { a: 1, b: "x", c: [true, null] };
+console.log(JSON.stringify(o));
+console.log(JSON.stringify(o, ["a", "b"]));
+console.log(JSON.stringify(o, (k: string, v: any) => (k === "a" ? 2 : v)));
+console.log(JSON.stringify({ d: 1 }, null, "--"));
+console.log(JSON.stringify(undefined) === undefined);
+"#
+        ),
+        "{\"a\":1,\"b\":\"x\",\"c\":[true,null]}\n{\"a\":1,\"b\":\"x\"}\n{\"a\":2,\"b\":\"x\",\"c\":[true,null]}\n{\n--\"d\": 1\n}\ntrue"
+    );
+}
+
+#[test]
+fn a_closure_under_any_expression_is_emitted() {
+    assert_eq!(
+        run_web_source(
+            r#"
+console.log([1, 2].map((x: number) => x * 2).join(","));
+class Static { static value = (() => 5)(); }
+console.log(Static.value);
+"#
+        ),
+        "2,4\n5"
+    );
+}
+
+#[test]
+fn an_instance_serializes_only_its_own_fields() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Point { x: number; constructor() { this.x = 1; } }
+const p = new Point();
+console.log(JSON.stringify(p) + " " + Object.keys(p).join(","));
+const q: any = { y: 2 };
+console.log(JSON.stringify({ ...q }) + " " + Object.keys(q).join(","));
+"#
+        ),
+        "{\"x\":1} x\n{\"y\":2} y"
+    );
+}

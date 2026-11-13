@@ -254,15 +254,15 @@ function buildImports() {
       },
       object_keys: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__") : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj) : []));
       },
       object_values: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : []));
+        return nanboxPointer(allocHandle(obj ? Object.keys(obj).map(k => obj[k]) : []));
       },
       object_entries: (handle) => {
         const obj = getHandle(handle);
-        return nanboxPointer(allocHandle(obj ? Object.entries(obj).filter(([k]) => k !== "__class__") : []));
+        return nanboxPointer(allocHandle(obj ? Object.entries(obj) : []));
       },
       object_has_property: (handle, key) => {
         const obj = getHandle(handle);
@@ -658,9 +658,7 @@ function buildImports() {
       // Class registry: class_name -> { methods: Map, statics: Map, parent: string|null }
       // class_new(class_name_str, field_count) -> handle
       class_new: (classNameVal, fieldCount) => {
-        const obj = {};
-        obj.__class__ = getString(classNameVal);
-        return nanboxPointer(allocHandle(obj));
+        return nanboxPointer(allocHandle(__classInstance(getString(classNameVal))));
       },
       // class_set_method(class_id_str, method_name_str, func_table_idx)
       class_set_method: (classId, methodName, funcIdx) => {
@@ -1629,6 +1627,12 @@ const classParentTable = {};
 // Core bridge dispatch table — maps bridge function names to their implementations.
 // Args are decoded from NaN-boxed BigInt bits to plain JS values by __bitsToJsValue before dispatch.
 // Return values are plain JS values, converted back to BigInt bits by __jsValueToBits in mem_call.
+// The class name is non-enumerable, so Object.keys, for-in, spread and
+// JSON.stringify see only the fields the program declared.
+function __classInstance(className) {
+  return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
+}
+
 const __memDispatch = {
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
@@ -1716,9 +1720,9 @@ const __memDispatch = {
   },
   object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
-  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__") : [],
-  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).filter(k => k !== "__class__").map(k => obj[k]) : [],
-  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj).filter(([k]) => k !== "__class__") : [],
+  object_keys: (obj) => obj && typeof obj === 'object' ? Object.keys(obj) : [],
+  object_values: (obj) => obj && typeof obj === 'object' ? Object.keys(obj).map(k => obj[k]) : [],
+  object_entries: (obj) => obj && typeof obj === 'object' ? Object.entries(obj) : [],
   object_has_property: (obj, key) => {
     if (!obj || typeof obj !== 'object') return 0;
     return (key in obj) ? 1 : 0;
@@ -1935,9 +1939,9 @@ const __memDispatch = {
   },
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
-  // class_new returns a plain object with __class__ property.
+  // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
-  class_new: (className, fieldCount) => { const obj = {}; obj.__class__ = String(className); return obj; },
+  class_new: (className, fieldCount) => __classInstance(String(className)),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -2062,7 +2066,10 @@ const __memDispatch = {
 
   // JSON — args are plain JS values
   json_parse: (str) => { try { return JSON.parse(String(str)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
-  json_stringify: (val) => JSON.stringify(val),
+  // A Perry closure arrives as {funcIdx, captures}; JSON.stringify needs a function.
+  json_stringify: (val, replacer, space) => JSON.stringify(val,
+    replacer && typeof replacer.funcIdx !== 'undefined'
+      ? (key, value) => callWasmClosure(replacer, key, value) : replacer, space),
 
   // Map — args are plain JS values (m is the Map object itself)
   map_new: () => new Map(),

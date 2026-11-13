@@ -969,6 +969,11 @@ impl WasmModuleEmitter {
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);
             }
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                self.collect_strings_in_expr(val);
+                self.collect_strings_in_expr(replacer);
+                self.collect_strings_in_expr(space);
+            }
             Expr::NumberCoerce(e)
             | Expr::IsNaN(e)
             | Expr::IsUndefinedOrBareNan(e)
