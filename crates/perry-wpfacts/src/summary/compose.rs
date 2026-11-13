@@ -139,7 +139,8 @@ pub(super) fn compose(
                     let first = if m.funcs[g as usize].has_arguments { 0 } else { sg.params.len() };
                     let rest_store =
                         (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site(), first));
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store);
+                    let elem = m.elem_key();
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem);
                     any = true;
                     n += 1;
                 }
@@ -159,7 +160,9 @@ pub(super) fn compose(
 /// (and into `g`'s observation parameters `gobs`), missing ones undefined,
 /// spread elements into every parameter, `g`'s result into the call's.
 /// A hidden capture parameter (`caps`) takes its class environment slot,
-/// not the call's argument (DECISIONS 117, 127).
+/// not the call's argument (DECISIONS 117, 127). A spread entry is the
+/// List CreateListFromIterable built (13.3.8.1): it is read at its
+/// elements (`elem`), never at a member of a prototype chain.
 pub(super) fn expand(
     s: &mut Summary,
     ci: usize,
@@ -167,6 +170,7 @@ pub(super) fn expand(
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
     rest_store: Option<(Key, SiteId, usize)>,
+    elem: Key,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -257,13 +261,7 @@ pub(super) fn expand(
     }
     for &sp in &call.spread {
         let elems = fresh(s);
-        s.cons.push((
-            sp,
-            Cons::Load {
-                key: Key::any(),
-                dst: elems,
-            },
-        ));
+        s.cons.push((sp, Cons::Load { key: elem, dst: elems }));
         if let Some((r, key, site, _)) = rest {
             s.cons.push((r, Cons::Store { key, src: elems, site }));
         }

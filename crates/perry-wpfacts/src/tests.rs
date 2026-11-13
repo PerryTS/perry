@@ -233,6 +233,7 @@ mod runtime_helpers;
 mod set_proto_result;
 mod specialized_prototype;
 mod spread_arguments;
+mod spread_compose_elems;
 mod spread_elements;
 mod spread_iterable_args;
 mod summary;
