@@ -62,8 +62,10 @@ impl Model {
             }
             let (callee, _, mut args) = self.bound[b as usize].clone();
             args.extend(c.args.iter().copied());
-            let call2 = self.solver_call(
+            let Some(call2) = self.solver_call_keyed(
                 call,
+                (crate::summary::MK_BOUND_REFLECT, b, new_target),
+                None,
                 CallSite {
                     this: ThisArg::Undef,
                     args,
@@ -72,7 +74,9 @@ impl Model {
                     site: c.site,
                     region: self.thrown,
                 },
-            );
+            ) else {
+                return;
+            };
             self.bound_synth.insert(call2);
             let nt = self.node_l("bound-construct-new-target");
             self.add_tok(nt, new_target);

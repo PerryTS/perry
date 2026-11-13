@@ -135,6 +135,7 @@ pub(in crate::units) fn merge_unit(
     a.instances += s.instances;
     a.shared_instances += s.shared_instances;
     a.composed += s.composed;
+    a.solver_calls += s.solver_calls;
     a.contexts += s.contexts;
     a.work += s.work;
     a.top_calls += s.top_calls;

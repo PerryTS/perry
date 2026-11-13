@@ -42,6 +42,7 @@ mod body_identity;
 mod body_packets;
 mod bound_class;
 mod bound_in_summary;
+mod bound_call_memo;
 mod box_chain;
 mod boxed_primitive_methods;
 pub(crate) mod box_computed_read;

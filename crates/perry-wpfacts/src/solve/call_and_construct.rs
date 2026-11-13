@@ -415,7 +415,7 @@ impl Model {
             return;
         };
         if self.bound_synth.contains(&call) {
-            self.into_merged(call, b, false);
+            self.into_merged(call, b, 0);
             return;
         }
         let c = self.calls[call as usize].clone();
@@ -426,8 +426,10 @@ impl Model {
         }
         let mut args: Vec<NodeId> = bargs.clone();
         args.extend(c.args.iter().copied());
-        let call2 = self.solver_call(
+        let Some(call2) = self.solver_call_keyed(
             call,
+            (crate::summary::MK_BOUND_CALL, b, 0),
+            None,
             CallSite {
                 this: ThisArg::Node(bthis),
                 args,
@@ -436,7 +438,9 @@ impl Model {
                 site: c.site,
                 region: self.thrown,
             },
-        );
+        ) else {
+            return;
+        };
         self.bound_synth.insert(call2);
         self.rel(|| format!("boundcall {call2} {call} {b}"));
         // Positions shift when the bound args are not a prefix of the
@@ -451,11 +455,13 @@ impl Model {
         self.cons(target, Cons::Call { call: call2 });
     }
 
-    /// Bound value `b`'s merged call (`new` or not): bound args first, then
-    /// every argument of every call routed here as a spread (the target
-    /// may itself hold bound values, so these calls must not nest).
-    fn bound_merged(&mut self, b: u32, new: bool) -> CallId {
-        if let Some(&c) = self.bound_merged.get(&(b, new)) {
+    /// Bound value `b`'s merged call, per use `k` (0: a call, 1: `new`
+    /// (`Cons::New`), 2: `new` of a program constructor (`Cons::NewProgram`)):
+    /// bound args first, then every argument of every call routed here as a
+    /// spread (the target may itself hold bound values, so these calls must
+    /// not nest).
+    fn bound_merged(&mut self, b: u32, k: u8) -> CallId {
+        if let Some(&c) = self.bound_merged.get(&(b, k)) {
             return c;
         }
         let (target, bthis, bargs) = self.bound[b as usize].clone();
@@ -466,7 +472,7 @@ impl Model {
         let ret = self.node_l("bound-ret");
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
-            this: if new {
+            this: if k != 0 {
                 ThisArg::Undef
             } else {
                 ThisArg::Node(bthis)
@@ -477,15 +483,15 @@ impl Model {
             site: 0,
             region: self.thrown,
         });
-        self.bound_merged.insert((b, new), call);
+        self.bound_merged.insert((b, k), call);
         self.bound_synth.insert(call);
-        self.rel(|| format!("boundmerged {call} {b} {}", new as u8));
+        self.rel(|| format!("boundmerged {call} {b} {k}"));
         self.cons(
             target,
-            if new {
-                Cons::New { call }
-            } else {
-                Cons::Call { call }
+            match k {
+                0 => Cons::Call { call },
+                1 => Cons::New { call },
+                _ => Cons::NewProgram { call },
             },
         );
         call
@@ -493,8 +499,8 @@ impl Model {
 
     /// A solver-made call `call` through bound value `b`: its arguments
     /// join the merged call's, its result is the merged call's.
-    fn into_merged(&mut self, call: CallId, b: u32, new: bool) {
-        let m = self.bound_merged(b, new);
+    fn into_merged(&mut self, call: CallId, b: u32, k: u8) {
+        let m = self.bound_merged(b, k);
         if m == call {
             return;
         }
@@ -731,14 +737,16 @@ impl Model {
             TokKind::Bound(b) => {
                 self.zs_call_args(call);
                 if self.bound_synth.contains(&call) {
-                    self.into_merged(call, b, true);
+                    self.into_merged(call, b, 1);
                     return;
                 }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                let call2 = self.solver_call(
+                let Some(call2) = self.solver_call_keyed(
                     call,
+                    (crate::summary::MK_BOUND_NEW, b, 0),
+                    None,
                     CallSite {
                         this: ThisArg::Undef,
                         args,
@@ -747,7 +755,9 @@ impl Model {
                         site: c.site,
                         region: self.thrown,
                     },
-                );
+                ) else {
+                    return;
+                };
                 self.bound_synth.insert(call2);
                 self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
@@ -770,12 +780,21 @@ impl Model {
                 if !self.construct_done.insert((call, t)) {
                     return;
                 }
+                // A call this construct made through a bound value: the
+                // target may hold bound values again, so it joins `b`'s one
+                // merged construct instead of nesting (as `Cons::New` does).
+                if self.bound_synth.contains(&call) {
+                    self.into_merged(call, b, 2);
+                    return;
+                }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let c = self.calls[call as usize].clone();
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                let call2 = self.solver_call(
+                let Some(call2) = self.solver_call_keyed(
                     call,
+                    (crate::summary::MK_BOUND_NEW_PROGRAM, b, 0),
+                    None,
                     CallSite {
                         this: ThisArg::Undef,
                         args,
@@ -784,7 +803,10 @@ impl Model {
                         site: c.site,
                         region: self.thrown,
                     },
-                );
+                ) else {
+                    return;
+                };
+                self.bound_synth.insert(call2);
                 self.cons(target, Cons::NewProgram { call: call2 });
             }
             _ => {}

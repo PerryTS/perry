@@ -2197,8 +2197,18 @@ pub struct Model {
     /// `construct`): a bound target reached by one of them goes through
     /// that bound value's one merged call (`Model::bound_merged`).
     pub bound_synth: crate::pts::FxHashSet<CallId>,
+    /// Calls `Model::solver_call` made (`Stats::solver_calls`).
+    pub solver_made: u64,
     /// (bound value, `new`) → its merged call.
-    pub bound_merged: FxHashMap<(u32, bool), CallId>,
+    pub bound_merged: FxHashMap<(u32, u8), CallId>,
+    /// Solver-made call → the call its chain of solver-made calls started
+    /// at (`Model::solver_call`): a program call, or a call no solver
+    /// maker made.
+    pub made_root: FxHashMap<CallId, CallId>,
+    /// (root, maker, aux, aux2, args, spreads) → the one call that maker
+    /// makes for every call of that root, and the node its callee
+    /// constraint sits on (`Model::solver_call_keyed`).
+    pub solver_keyed: FxHashMap<(CallId, u8, u32, u32, u32, u32), (CallId, Option<NodeId>)>,
     /// (receiver, member, getter) → the one call a builtin method makes of
     /// that member of the receiver (`collections::recv_call`), or, with
     /// `true`, the one run of the member's declared getter on the receiver

@@ -227,6 +227,9 @@ pub struct Stats {
     pub instances: u64,
     pub shared_instances: u64,
     pub composed: u64,
+    /// Calls the solver made (a builtin calling back, a bound target, a
+    /// protocol step: `Model::solver_call`).
+    pub solver_calls: u64,
     /// Closure contexts made (design §14.2).
     pub contexts: u64,
     /// Solve work done (see `FactsConfig::max_work`).
@@ -1184,6 +1187,7 @@ fn compute_act<'a>(
             .filter(|k| k.0 == 1 && k.1 == summary::LAY_NONE && k.3 == summary::NO_VAL)
             .count() as u64,
         composed: g.m.sum.ncomposed as u64,
+        solver_calls: g.m.solver_made,
         contexts: g.m.sum.ctx_nodes.len() as u64,
         work: g.m.work.get(),
         aborted: g.m.aborted,
