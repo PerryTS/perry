@@ -1202,6 +1202,23 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             });
         }
     }
+    // A typed array's chain starts at its kind's prototype
+    // (`loads::view_chain`): a method only `Uint8Array.prototype` holds
+    // (`toHex`, `toBase64`, `setFromHex`, `setFromBase64`; 23.3.2) is that
+    // native (on another kind `undefined`: `loads::family_load`).
+    if matches!(what, Some("TypedArray" | "Buffer")) {
+        if let Some(identity) = m
+            .declarations
+            .named("Uint8Array.prototype", m)
+            .and_then(|h| m.declarations.property(h, name, m))
+            .and_then(|p| p.native)
+        {
+            return Some(Native::Member {
+                identity,
+                holder: None,
+            });
+        }
+    }
     // The prototype of an object a declaration made
     // (`AbortController.prototype`): a method whose effects it declares
     // (`effects::declared_at`); any other member stays opaque.
@@ -1224,11 +1241,13 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
         .and_then(|p| p.native)
         .or_else(|| {
             // Past the holder, `Object.prototype`'s member, where no own
-            // prototype of the family holds the key. A typed array's or a
-            // Buffer's chain is the realm's exactly (`view_chain`): the key
-            // is `Object.prototype`'s when that is where the chain finds it
+            // prototype of the family holds the key. A chain the realm
+            // declares link by link (`loads::realm_chain_start`: a typed
+            // array's, a Buffer's, an ArrayBuffer's, a DataView's, a
+            // realm-born object's) is the realm's exactly: the key is
+            // `Object.prototype`'s when that is where the chain finds it
             // (10.1.8.1: `valueOf`, `hasOwnProperty`).
-            let past = match loads::view_chain(what) {
+            let past = match loads::realm_chain_start(what) {
                 Some(p) => matches!(
                     members::realm_chain_find(p, name),
                     members::RealmFind::Own(_, at) if at.name == "Object.prototype"

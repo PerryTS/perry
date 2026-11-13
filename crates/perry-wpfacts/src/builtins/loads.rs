@@ -105,6 +105,18 @@ pub(super) fn family_load(
         }
         return;
     }
+    // A method only `Uint8Array.prototype` holds (`toHex`, `toBase64`,
+    // `setFromHex`, `setFromBase64`; `member_native`): a typed array's
+    // template does not keep its kind, and on any other kind the chain
+    // finds no such key (10.1.8.1 step 3.b: `undefined`).
+    if what == Some("TypedArray")
+        && matches!(
+            view_chain(what).map(|p| members::realm_chain_find(p, &name)),
+            Some(members::RealmFind::Own(_, at)) if at.name == "Uint8Array.prototype"
+        )
+    {
+        m.add_prim(dst, prim::UNDEF);
+    }
     family_member(m, fam, what, a, dst);
     // Described or not, a key a store into ⊤ may have written onto the
     // chain reads what was stored, unless the read is final (DEC 250).
@@ -260,7 +272,7 @@ fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
     use perry_hir::realm_manifest::RealmOwnValue as V;
     // A typed array's or a Buffer's chain (`view_chain`) too:
     // `BYTES_PER_ELEMENT` (23.2.7.2), a Number.
-    let born = members::realm_born(what?).or_else(|| view_chain(what))?;
+    let born = realm_chain_start(what)?;
     let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
         return None;
     };
@@ -296,10 +308,7 @@ fn realm_chain_starts(
     if let Some(protos) = members::wrapper_protos(fam, Some(what)) {
         return protos.iter().map(|p| members::realm_entry(p)).collect();
     }
-    let e = view_chain(Some(what))
-        .or_else(|| members::realm_born(what))
-        .or_else(|| members::realm_born(&format!("{what}.prototype")))?;
-    Some(vec![e])
+    Some(vec![realm_chain_start(Some(what))?])
 }
 
 /// `dst` ⊇ what computed key `key` reads on builtin object `t` whose realm
@@ -307,7 +316,7 @@ fn realm_chain_starts(
 /// 10.1.8.1 OrdinaryGet): its own values (`load_from`; the caller's
 /// primitives and `undefined`), the member under every key some object of
 /// the chain declares and `key` may spell, as its named read finds it
-/// (`wrapper_member`, `family_load`), and what a store into ⊤ wrote onto
+/// (`wrapper_member`, `tok_load`), and what a store into ⊤ wrote onto
 /// the chain unless the chain is final (`family_any`'s tail, DEC 250).
 /// Never a builtin function the realm does not name. A computed key of
 /// unknown string never names the `__proto__` accessor (DECISIONS 217).
@@ -328,16 +337,17 @@ fn realm_chain_any(
             }
             if wrapper {
                 wrapper_member(m, &[s.name], &n, dst);
-            } else if view_chain(Some(what)).is_some() {
-                // A typed array's or a Buffer's member: as its named read
-                // finds it (`tok_load`): an accessor's declared result
-                // (`length`, `byteLength`, `byteOffset`, `buffer`,
-                // `@@toStringTag`), the constructor, the native.
+            } else {
+                // 13.3.2.1, 7.3.2: `o[k]` is the [[Get]] `o.name` is: the
+                // member as its named read finds it (`tok_load`): an
+                // accessor's declared result (a typed array's `length`,
+                // `buffer`, `@@toStringTag`; a buffer's `byteLength`,
+                // `maxByteLength`, `resizable`, `detached`, `growable`; a
+                // DataView's `buffer`, `byteLength`, `byteOffset`), the
+                // constructor, the native, a data property's kind. A named
+                // read with no arm of its own is `family_load`.
                 let a = m.atom(&n);
                 tok_load(m, t, Key::Named(a), dst);
-            } else {
-                let a = m.atom(&n);
-                family_load(m, t, fam, Some(what), a, dst);
             }
         }
     }
@@ -345,6 +355,21 @@ fn realm_chain_any(
     if !super::locked_chain_read(m, t, star) {
         super::any_written(m, dst);
     }
+}
+
+/// The realm prototype the [[Prototype]] chain of a builtin object of kind
+/// `what` starts at when the realm declares every link of it: a typed
+/// array's or a Buffer's (`view_chain`), a realm-born object's
+/// (`members::realm_born`), or that of an object of a realm constructor
+/// `what` whose prototype is realm-born (`ArrayBuffer`, `DataView`,
+/// `SharedArrayBuffer`, `RegExp`). `None`: the realm does not describe it.
+pub(super) fn realm_chain_start(
+    what: Option<&str>,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let w = what?;
+    view_chain(what)
+        .or_else(|| members::realm_born(w))
+        .or_else(|| members::realm_born(&format!("{w}.prototype")))
 }
 
 /// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a key no object of

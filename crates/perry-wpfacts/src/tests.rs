@@ -1,5 +1,6 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod any_key_builtin_read;
 mod absent_key;
 mod accessor_after_data_store;
 mod accessor_keys;

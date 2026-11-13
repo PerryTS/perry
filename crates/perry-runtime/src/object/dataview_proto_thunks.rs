@@ -224,11 +224,11 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         let bf = mk(crate::fn_info!(#[realm("DataView.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_buffer_getter_thunk, 0; with_declared(0)));
         if bf != 0 {
             super::object_ops::install_builtin_getter(proto_obj, "buffer", bf);
-            let bl = mk(crate::fn_info!(#[realm("DataView.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_length_getter_thunk, 0; with_declared(0)));
+            let bl = mk(crate::fn_info!(#[realm("DataView.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::dataview_proto_thunks::dataview_byte_length_getter_thunk, 0; with_declared(0)));
             if bl != 0 {
                 super::object_ops::install_builtin_getter(proto_obj, "byteLength", bl);
             }
-            let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
+            let bo = mk(crate::fn_info!(#[realm("DataView.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::dataview_proto_thunks::dataview_byte_offset_getter_thunk, 0; with_declared(0)));
             if bo != 0 {
                 super::object_ops::install_builtin_getter(proto_obj, "byteOffset", bo);
             }
