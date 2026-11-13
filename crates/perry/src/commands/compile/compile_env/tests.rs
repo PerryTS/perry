@@ -450,6 +450,17 @@ fn quiet_sites_switch_is_a_cache_input() {
     );
 }
 
+/// Quiet sites over Strings: the switch decides whether a String's code
+/// unit counts as a primitive operand (a loop keeps its length on that
+/// word), so `=0` must never reuse an `=1` object.
+#[test]
+fn quiet_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_QUIET_STRINGS"),
+        "PERRY_FACTS_QUIET_STRINGS must key the compile caches"
+    );
+}
+
 /// Activation reach, name-keyed folds: the switch changes which bodies the
 /// solve calls active (and every fact that follows from what they do), so
 /// `=0` must never reuse an `=1` object.
