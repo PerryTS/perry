@@ -1874,6 +1874,19 @@ unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
     )
 }
 
+/// Whether `probe_has` must leave a layout accessor entry of `cur` to the
+/// overflow probe: only an object with an overflow keeps its attributes (and
+/// a deleted accessor's tombstone) there. The shadow bit's absence proves no
+/// overflow (`LAYOUT_SHADOW_BIT`); a shadowed object without a table still
+/// answers from the layout. Out of line so the data-entry path of
+/// `probe_has` keeps its register shape.
+#[cold]
+#[inline(never)]
+unsafe fn accessor_defers_to_overflow(cur: *const ObjectHeader) -> bool {
+    (*cur).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
+        && crate::object::overflow::has_overflow(cur)
+}
+
 /// The probe's presence mode (`in`, `Object.hasOwn`,
 /// `hasOwnProperty`): `1` when `key` is present on the object at `obj_bits`
 /// (own, or along its prototype chain unless `own_only`), `0` when the
@@ -1933,20 +1946,28 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
                 if entry & crate::object::key_attrs::ENTRY_PRIVATE != 0 {
                     return -1;
                 }
+                // The attributes of an object with an overflow live in its
+                // entries, not in its layout (`overflow::set_entry_attrs`),
+                // and a deleted accessor leaves only its tombstone there: the
+                // layout's accessor entry answers only when there is no
+                // overflow, else the overflow probe below does.
                 if entry & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
-                    return 1;
-                }
-                let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-                let v = if slot < (*r).live_inline_slot_count {
-                    *((cur as *const u8)
-                        .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-                        as *const u64)
+                    if !accessor_defers_to_overflow(cur) {
+                        return 1;
+                    }
                 } else {
-                    crate::object::spill::spill_get_present(cur as usize, slot as usize)
-                        .unwrap_or(TAG_HOLE)
-                };
-                if v != TAG_HOLE {
-                    return 1;
+                    let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
+                    let v = if slot < (*r).live_inline_slot_count {
+                        *((cur as *const u8)
+                            .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+                            as *const u64)
+                    } else {
+                        crate::object::spill::spill_get_present(cur as usize, slot as usize)
+                            .unwrap_or(TAG_HOLE)
+                    };
+                    if v != TAG_HOLE {
+                        return 1;
+                    }
                 }
                 // A hole slot: the key is absent here; a re-add lives in the
                 // overflow.
