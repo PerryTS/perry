@@ -204,8 +204,8 @@ pub use self::generic_mutators::{
 };
 pub use self::generic_object::{js_arraylike_concat, js_arraylike_sort, js_arraylike_splice};
 pub(crate) use self::generic_object::{
-    object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
-    object_splice,
+    object_pop as generic_object_pop, object_reverse as generic_object_reverse,
+    object_shift as generic_object_shift, object_sort, object_splice, restricted_array_value,
 };
 pub(crate) use self::header::canonical_raw_f64;
 pub(crate) use self::header::{
