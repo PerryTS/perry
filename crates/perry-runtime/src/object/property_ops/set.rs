@@ -972,11 +972,11 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
     //   - no recorded setPrototypeOf target (prototype chain is exactly
     //     Object.prototype) and no descriptor on Object.prototype,
     //   - string key.
+    // The target names an object by its tag alone: a word with clear top 16
+    // bits is a Number (a denormal), never a heap address.
     let target_top16 = target.to_bits() >> 48;
     if target.to_bits() == receiver.to_bits()
-        // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
-        // (top 16 bits zero).
-        && (target_top16 == 0x7FFD || target_top16 == 0)
+        && target_top16 == 0x7FFD
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
