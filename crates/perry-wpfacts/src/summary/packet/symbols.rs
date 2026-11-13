@@ -457,7 +457,7 @@ impl Model {
                 "AccessorKeyed holder={:?} f={:?} setter={:?}",
                 holder, f, setter
             ),
-            Cons::Arith { dst } => format!("Arith dst={:?}", dst),
+            Cons::Arith { dst, .. } => format!("Arith dst={:?}", dst),
             Cons::Range {
                 op,
                 other,

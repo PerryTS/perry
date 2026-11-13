@@ -391,7 +391,10 @@ pub fn map_cons(
             f: n(f),
             setter,
         },
-        Arith { dst } => Arith { dst: n(dst) },
+        Arith { dst, other } => Arith {
+            dst: n(dst),
+            other: if other == NO_NODE { NO_NODE } else { n(other) },
+        },
         Range {
             op,
             other,
@@ -598,7 +601,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | IdxOwnLoad { dst, .. }
         | IdxOwnKey { dst, .. }
         | OwnTest { dst, .. }
-        | Arith { dst }
+        | Arith { dst, .. }
         | Range { dst, .. }
         | ArrayLenArg { dst }
         | CaseMap { dst }

@@ -624,7 +624,10 @@ pub enum Cons {
     /// The node is a ToNumeric operand (`-`, `*`, `++`, unary `-`, ...):
     /// dst ⊇ the numeric kinds its values turn into (Number; BigInt for a
     /// BigInt; both for an object, whose ToPrimitive may return either).
-    Arith { dst: NodeId },
+    /// `other` is a binary operator's other operand (`NO_NODE`: a unary
+    /// operator or an update): ECMA-262 13.15.3 throws for a BigInt beside
+    /// a Number, so a BigInt result needs `other` to be one as well.
+    Arith { dst: NodeId, other: NodeId },
     /// The node is an operand of a numeric operator whose result `dst`
     /// takes its integer interval from this rule (`range::eval`), the
     /// operand's interval beside `other`'s (`NO_NODE`: a unary operator).
