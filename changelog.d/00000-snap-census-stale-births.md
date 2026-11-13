@@ -1,0 +1,1 @@
+Instrumented builds: the startup-snapshot census no longer reports an object whose memory was later reused as the holder or the target of a held pointer, and its TLS image scan is no longer counted as the cost of a module init. Production builds are unchanged.
