@@ -755,16 +755,20 @@ impl Model {
     /// `obj` has that index slot, or is a rest array (its slot `i` holds
     /// what its index `i` holds).
     pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
+        let i = self.num_literal_index(key)?;
+        if self.is_rest_arr(obj) {
+            return Some(self.index_slot(obj, i));
+        }
+        let a = self.atom(&format!("[[Index{i}]]"));
+        self.fields.get(&(obj, a)).copied()
+    }
+
+    /// The one array index key node `key` holds: a numeric literal
+    /// (`Gen::num_literal`) of one integer in index range.
+    pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);
-        if self.labels[key as usize] != "NUMLIT" || lo != hi || !(0..=u32::MAX as i64).contains(&lo) {
-            return None;
-        }
-        if self.is_rest_arr(obj) {
-            return Some(self.index_slot(obj, lo as u32));
-        }
-        let a = self.atom(&format!("[[Index{lo}]]"));
-        self.fields.get(&(obj, a)).copied()
+        (self.labels[key as usize] == "NUMLIT" && lo == hi && (0..=u32::MAX as i64).contains(&lo)).then_some(lo as u32)
     }
 
     pub(super) fn is_num_atom(&self, a: Atom) -> bool {

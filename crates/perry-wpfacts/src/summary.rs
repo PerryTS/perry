@@ -1292,7 +1292,7 @@ impl Model {
         // rest_instances: the run's read did not see the run's slot store).
         let rest = self.sum.insts[inst as usize].rest;
         let has_arguments = self.funcs[f as usize].has_arguments;
-        let exact = false;
+        let exact = self.calls[c].spread.is_empty() && !has_arguments;
         let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
         let first = if has_arguments { 0 } else { terms.len() };
         if rest != NO_NODE {
