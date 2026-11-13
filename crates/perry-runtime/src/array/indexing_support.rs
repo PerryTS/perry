@@ -106,16 +106,34 @@ pub(super) fn non_array_receiver_index_get(arr: *const ArrayHeader, index: u32) 
 #[cold]
 #[inline(never)]
 pub(super) fn nullish_receiver_index_get(arr: *const ArrayHeader, index: u32) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        crate::value::js_dyn_index_get(receiver, f64::from(index));
+    }
+}
+
+/// [`nullish_receiver_index_get`] for a property-key read (`a[-1]`,
+/// `a[1.5]`, `a["0"]`): called only when no allocation lives at `arr`.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_key_get(arr: *const ArrayHeader, key: *const crate::StringHeader) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        let key = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+        crate::value::js_dyn_index_get(receiver, f64::from_bits(key.bits()));
+    }
+}
+
+/// The null / undefined value whose masked payload is `arr`, if any.
+#[inline]
+fn masked_nullish_receiver(arr: *const ArrayHeader) -> Option<f64> {
     use crate::value::{POINTER_MASK, TAG_NULL, TAG_UNDEFINED};
     let word = arr as u64;
-    let bits = if word == TAG_NULL & POINTER_MASK {
-        TAG_NULL
+    if word == TAG_NULL & POINTER_MASK {
+        Some(f64::from_bits(TAG_NULL))
     } else if word == TAG_UNDEFINED & POINTER_MASK {
-        TAG_UNDEFINED
+        Some(f64::from_bits(TAG_UNDEFINED))
     } else {
-        return;
-    };
-    crate::value::js_dyn_index_get(f64::from_bits(bits), f64::from(index));
+        None
+    }
 }
 
 /// `Set(O, ToString(index), value, strict)` for
