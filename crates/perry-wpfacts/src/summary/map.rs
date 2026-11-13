@@ -126,7 +126,10 @@ pub fn map_cons(
             reason,
         },
         RequireSpec { call } => RequireSpec { call: k(call) },
-        TopIfTop { dst, reason } => TopIfTop { dst: n(dst), reason },
+        TopIfTop { dst, reason } => TopIfTop {
+            dst: n(dst),
+            reason,
+        },
         Hard { kind, reason } => Hard { kind, reason },
         Miss { key } => Miss { key },
         DeleteKey { key, reason } => DeleteKey { key, reason },

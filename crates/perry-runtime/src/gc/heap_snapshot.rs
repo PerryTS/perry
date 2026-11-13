@@ -261,18 +261,31 @@ pub(super) unsafe fn life_label(header: *mut GcHeader) -> String {
             // An element of key/attribute storage is not always a value (attribute words): read a
             // string only behind a tracked string header.
             let target = decode_slot_target(bits);
-            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(target, GC_TYPE_STRING).is_some();
+            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                target,
+                GC_TYPE_STRING,
+            )
+            .is_some();
             let text = tracked
                 .then(|| read_heap_string(bits, 24))
                 .flatten()
-                .or_else(|| v.is_short_string().then(|| crate::value::boxed_text::short_string_content(v)))
+                .or_else(|| {
+                    v.is_short_string()
+                        .then(|| crate::value::boxed_text::short_string_content(v))
+                })
                 .unwrap_or_else(|| format!("{bits:#x}"));
             name.push_str(&text);
             name.push(',');
         }
         name.push(']');
     }
-    format!("type={} size={} flags={:#x} {:?}", rec.obj_type, rec.self_size, (*header).gc_flags, name)
+    format!(
+        "type={} size={} flags={:#x} {:?}",
+        rec.obj_type,
+        rec.self_size,
+        (*header).gc_flags,
+        name
+    )
 }
 
 /// Best-effort property name for inline object field `field_index`,

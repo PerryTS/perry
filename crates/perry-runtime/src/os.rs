@@ -617,7 +617,9 @@ pub extern "C" fn js_process_argv_value() -> f64 {
     {
         crate::effect!(host_read, argv);
         if crate::process::worker_restrictions::in_node_worker() {
-            if let Some(value) = crate::object::native_namespace_prop_override_get("process", "argv") {
+            if let Some(value) =
+                crate::object::native_namespace_prop_override_get("process", "argv")
+            {
                 return value;
             }
         }

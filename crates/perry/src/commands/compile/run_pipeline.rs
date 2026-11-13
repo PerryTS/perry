@@ -68,7 +68,10 @@ mod explicit_target_validation_tests {
             assert!(err.contains(bad), "error must name the bad value: {err}");
             // The diagnostic must list the accepted names, so a typo can be
             // self-corrected without reading docs.
-            assert!(err.contains("linux-x86_64"), "error must list targets: {err}");
+            assert!(
+                err.contains("linux-x86_64"),
+                "error must list targets: {err}"
+            );
         }
     }
 
@@ -78,14 +81,11 @@ mod explicit_target_validation_tests {
     // unknown target at the CLI".
     #[test]
     fn every_documented_target_name_is_accepted_by_the_gate() {
-        for name in perry_codegen::TARGET_NAMES
-            .iter()
-            .chain(
-                BACKEND_TARGET_NAME_GROUPS
-                    .iter()
-                    .flat_map(|group| group.iter()),
-            )
-        {
+        for name in perry_codegen::TARGET_NAMES.iter().chain(
+            BACKEND_TARGET_NAME_GROUPS
+                .iter()
+                .flat_map(|group| group.iter()),
+        ) {
             assert!(validate_explicit_target(Some(*name)).is_ok(), "{name}");
         }
     }
@@ -4187,12 +4187,12 @@ pub fn run_with_parse_cache(
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
             if !program_has_tla {
-            if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| {
-                    deferred_module_prefixes.contains(dep)
-                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
-                });
-            }
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| {
+                        deferred_module_prefixes.contains(dep)
+                            || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                    });
+                }
             }
             if program_has_tla {
                 // A `defer` request is not an evaluation dependency: the
@@ -4209,8 +4209,11 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
-                    .map(|m| sanitize_name(&m.name)).collect();
+                deps = ordered
+                    .iter()
+                    .filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name))
+                    .collect();
             }
             deps
         };

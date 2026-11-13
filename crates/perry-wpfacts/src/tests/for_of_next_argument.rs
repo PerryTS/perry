@@ -25,7 +25,11 @@ fn value_kind(pf: &ProgramFacts, class: &str) -> (bool, u16) {
 
 fn undefined_only(pf: &ProgramFacts, class: &str) {
     let (top, mask) = value_kind(pf, class);
-    assert!(!top && mask & UNDEF != 0, "{class}: top={top} mask={mask:#x}\n{}", pf.dump_text());
+    assert!(
+        !top && mask & UNDEF != 0,
+        "{class}: top={top} mask={mask:#x}\n{}",
+        pf.dump_text()
+    );
 }
 
 fn stays_top(pf: &ProgramFacts, class: &str) {
@@ -132,7 +136,11 @@ fn for_of_next_control_yield_star_forwards_the_resume_value() {
         "#
     ));
     let (top, mask) = value_kind(&pf, "Resumed");
-    assert!(!top && mask & 2 != 0 && mask & UNDEF != 0, "top={top} mask={mask:#x}\n{}", pf.dump_text());
+    assert!(
+        !top && mask & 2 != 0 && mask & UNDEF != 0,
+        "top={top} mask={mask:#x}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: a `next` passed to unknown code may be called with anything.

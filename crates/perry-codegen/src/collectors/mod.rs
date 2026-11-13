@@ -6,8 +6,6 @@
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
 mod all_pointer_arrays;
-pub(crate) mod life_census;
-pub(crate) mod life_claims;
 pub(crate) mod anon_key_adds;
 mod byte_read_key;
 #[cfg(test)]
@@ -35,6 +33,8 @@ mod index_uses;
 mod int_valued_i64_locals;
 mod int_valued_ta_locals;
 mod integer_locals;
+pub(crate) mod life_census;
+pub(crate) mod life_claims;
 mod literal_method_home;
 mod local_refs;
 mod loop_bounded_i32;

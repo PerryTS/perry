@@ -459,7 +459,10 @@ fn why_below_kept_is_none() {
 fn why_not_ordinary_names_the_part() {
     let mut f1 = func(1, &[10], vec![]);
     f1.is_async = true;
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "not-ordinary(async)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "not-ordinary(async)"
+    );
     let mut f2 = func(1, &[10], vec![]);
     f2.params[0].is_rest = true;
     assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "rest");
@@ -468,13 +471,19 @@ fn why_not_ordinary_names_the_part() {
 #[test]
 fn why_use_names_the_parent_node() {
     let f1 = func(1, &[10], vec![ret(add(lg(10), Expr::Number(1.0)))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Binary)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "use(Binary)"
+    );
     let f2 = func(1, &[10], vec![Stmt::Throw(get(lg(10), "x"))]);
     assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "read(x)");
     let f3 = func(
         1,
         &[10],
-        vec![let_(11, lg(10)), Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::Number(1.0))))],
+        vec![
+            let_(11, lg(10)),
+            Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::Number(1.0)))),
+        ],
     );
     assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(Let)");
 }
@@ -483,12 +492,25 @@ fn why_use_names_the_parent_node() {
 fn why_use_names_the_store_role() {
     // `p.v = 1`: stored into; `o.v = p`: stored into another object;
     // `this.v = p` with the store not proven.
-    let f1 = func(1, &[10], vec![Stmt::Expr(set(lg(10), "v", Expr::Number(1.0)))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(PropertySet.object)");
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(set(lg(10), "v", Expr::Number(1.0)))],
+    );
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "use(PropertySet.object)"
+    );
     let f2 = func(1, &[10], vec![Stmt::Expr(set(lg(900), "v", lg(10)))]);
-    assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "use(PropertySet.value)");
+    assert_eq!(
+        why(&fates(&[f2], &TestProof::default()), 1, 0),
+        "use(PropertySet.value)"
+    );
     let f3 = func(1, &[10], vec![Stmt::Expr(set(Expr::This, "v", lg(10)))]);
-    assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "use(PropertySet.value-to-this)");
+    assert_eq!(
+        why(&fates(&[f3], &TestProof::default()), 1, 0),
+        "use(PropertySet.value-to-this)"
+    );
 }
 
 #[test]
@@ -496,9 +518,15 @@ fn why_first_use_wins() {
     let f1 = func(
         1,
         &[10],
-        vec![Stmt::Throw(lg(10)), Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10))))],
+        vec![
+            Stmt::Throw(lg(10)),
+            Stmt::Expr(Expr::LocalSet(901, Box::new(lg(10)))),
+        ],
     );
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Throw)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "use(Throw)"
+    );
 }
 
 #[test]
@@ -509,20 +537,38 @@ fn why_read_names_the_key() {
 
 #[test]
 fn why_store_keeps_this() {
-    let f1 = func(1, &[10], vec![Stmt::Expr(set(Expr::This, "v", Expr::Number(1.0)))]);
-    assert_eq!(this_why(&fates(&[f1], &TestProof::default()), 1), "store(v)");
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(set(Expr::This, "v", Expr::Number(1.0)))],
+    );
+    assert_eq!(
+        this_why(&fates(&[f1], &TestProof::default()), 1),
+        "store(v)"
+    );
 }
 
 #[test]
 fn why_receiver_of_unknown_method() {
-    let f1 = func(1, &[10], vec![Stmt::Expr(call(get(lg(10), "slice"), vec![]))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "receiver(slice)");
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(call(get(lg(10), "slice"), vec![]))],
+    );
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "receiver(slice)"
+    );
 }
 
 #[test]
 fn why_receiver_kept_by_known_method() {
     // `m` keeps its `this` (stores it in a module variable).
-    let m = func(2, &[], vec![Stmt::Expr(Expr::LocalSet(901, Box::new(Expr::This)))]);
+    let m = func(
+        2,
+        &[],
+        vec![Stmt::Expr(Expr::LocalSet(901, Box::new(Expr::This)))],
+    );
     let f1 = func(1, &[10], vec![Stmt::Expr(call(get(lg(10), "m"), vec![]))]);
     let proof = TestProof {
         methods: vec![("m", 2)],
@@ -545,24 +591,45 @@ fn why_argument_of_unresolved_call() {
 #[test]
 fn why_argument_to_a_known_keeper_and_call_arg_carries_its_reason() {
     let g = func(2, &[20], vec![push(lg(20))]);
-    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))]);
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))],
+    );
     let f = fates(&[f1, g], &TestProof::default());
     assert_eq!(why(&f, 1, 0), "arg-to(Kept)");
     let at = f.call_arg(&[2], 0);
-    assert_eq!(at.why.map(|w| w.to_string()).as_deref(), Some("arg-unresolved(PropertyGet.push)"));
+    assert_eq!(
+        at.why.map(|w| w.to_string()).as_deref(),
+        Some("arg-unresolved(PropertyGet.push)")
+    );
 }
 
 #[test]
 fn why_argument_to_a_returner() {
     let g = func(2, &[20], vec![ret(lg(20))]);
-    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))]);
-    assert_eq!(why(&fates(&[f1, g], &TestProof::default()), 1, 0), "arg-to(Returned)");
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(call(Expr::FuncRef(2), vec![lg(10)]))],
+    );
+    assert_eq!(
+        why(&fates(&[f1, g], &TestProof::default()), 1, 0),
+        "arg-to(Returned)"
+    );
 }
 
 #[test]
 fn why_argument_of_a_body_without_fates() {
-    let f1 = func(1, &[10], vec![Stmt::Expr(call(Expr::FuncRef(77), vec![lg(10)]))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-no-fate");
+    let f1 = func(
+        1,
+        &[10],
+        vec![Stmt::Expr(call(Expr::FuncRef(77), vec![lg(10)]))],
+    );
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "arg-no-fate"
+    );
 }
 
 #[test]
@@ -576,7 +643,10 @@ fn why_argument_of_new_unknown_class() {
         cap_args_appended: 0,
     };
     let f1 = func(1, &[10], vec![Stmt::Expr(n)]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "new-unknown(Elsewhere)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "new-unknown(Elsewhere)"
+    );
 }
 
 #[test]
@@ -599,7 +669,10 @@ fn why_reassigned_updated_mutated() {
             push(lg(10)),
         ],
     );
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "arg-unresolved(PropertyGet.push)"
+    );
     let up = Expr::Update {
         id: 10,
         op: perry_hir::UpdateOp::Increment,
@@ -608,7 +681,10 @@ fn why_reassigned_updated_mutated() {
     let f2 = func(1, &[10], vec![Stmt::Expr(up)]);
     assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "updated");
     let f3 = func(1, &[10], vec![Stmt::Expr(Expr::ArrayPop(10))]);
-    assert_eq!(why(&fates(&[f3], &TestProof::default()), 1, 0), "mutated(ArrayPop)");
+    assert_eq!(
+        why(&fates(&[f3], &TestProof::default()), 1, 0),
+        "mutated(ArrayPop)"
+    );
 }
 
 #[test]
@@ -631,7 +707,10 @@ fn with_default(default: Expr, body: Vec<Stmt>) -> Function {
 #[test]
 fn a_default_that_reads_drops() {
     let f = with_default(get(lg(10), "x"), vec![ret(get(lg(11), "x"))]);
-    assert!(!super::ordinary(&f), "effects.rs still sees a default as not ordinary");
+    assert!(
+        !super::ordinary(&f),
+        "effects.rs still sees a default as not ordinary"
+    );
     let f = fates(&[f], &TestProof::reading(&[(1, "x")]));
     assert!(f.of_fn(1).unwrap().params[0].proven_dropped());
     assert!(f.of_fn(1).unwrap().params[1].proven_dropped());
@@ -669,7 +748,11 @@ fn a_rest_parameter_keeps_what_it_collects_and_the_body_is_walked() {
     assert!(ff.params[0].proven_dropped());
     assert_eq!(why(&f, 1, 1), "rest");
     for i in 1..5 {
-        assert_eq!(ff.arg(i).fate, Fate::Kept, "argument {i} lands in the rest array");
+        assert_eq!(
+            ff.arg(i).fate,
+            Fate::Kept,
+            "argument {i} lands in the rest array"
+        );
     }
 }
 
@@ -687,7 +770,11 @@ fn arguments_past_the_parameters_reach_arguments() {
     });
     let f = fates(&[f], &TestProof::default());
     let ff = f.of_fn(1).unwrap();
-    assert_eq!(ff.params[0].fate, Fate::Kept, "sloppy arguments[0] aliases a");
+    assert_eq!(
+        ff.params[0].fate,
+        Fate::Kept,
+        "sloppy arguments[0] aliases a"
+    );
     assert_eq!(ff.arg(7).fate, Fate::Kept);
     // Without rest or `arguments` an extra argument reaches no binding.
     let f = fates(&[func(1, &[10], vec![])], &TestProof::default());
@@ -724,7 +811,13 @@ fn typeof_and_truthiness_drop() {
     use perry_hir::LogicalOp::{And, Coalesce, Or};
     let body = vec![
         // if (typeof a === "string") {}
-        if_(eq(Expr::TypeOf(Box::new(lg(10))), Expr::String("string".into())), vec![]),
+        if_(
+            eq(
+                Expr::TypeOf(Box::new(lg(10))),
+                Expr::String("string".into()),
+            ),
+            vec![],
+        ),
         // if (a) {}  while (!a) {}
         if_(lg(10), vec![]),
         Stmt::While {
@@ -735,7 +828,14 @@ fn typeof_and_truthiness_drop() {
         let_(12, cond(lg(10), Expr::Number(1.0), Expr::Number(2.0))),
         let_(13, Expr::BooleanCoerce(Box::new(lg(11)))),
         // if (a || b && (a ?? b)) {}  a && b;
-        if_(logical(Or, lg(10), logical(And, lg(11), logical(Coalesce, lg(10), lg(11)))), vec![]),
+        if_(
+            logical(
+                Or,
+                lg(10),
+                logical(And, lg(11), logical(Coalesce, lg(10), lg(11))),
+            ),
+            vec![],
+        ),
         Stmt::Expr(logical(And, lg(10), lg(11))),
         Stmt::Expr(lg(11)),
     ];
@@ -748,18 +848,35 @@ fn typeof_and_truthiness_drop() {
 fn a_value_that_flows_on_from_a_test_keeps() {
     use perry_hir::LogicalOp::{Coalesce, Or};
     // let x = a || {}; kept.push(x): the result of `||` is `a` itself.
-    let f1 = func(1, &[10], vec![let_(12, logical(Or, lg(10), Expr::Object(vec![]))), push(lg(12))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "use(Logical)");
+    let f1 = func(
+        1,
+        &[10],
+        vec![
+            let_(12, logical(Or, lg(10), Expr::Object(vec![]))),
+            push(lg(12)),
+        ],
+    );
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "use(Logical)"
+    );
     // kept.push(a ?? b)
     let f2 = func(1, &[10, 11], vec![push(logical(Coalesce, lg(10), lg(11)))]);
     let f2 = fates(&[f2], &TestProof::default());
     assert_eq!(why(&f2, 1, 0), "use(Logical)");
     assert_eq!(why(&f2, 1, 1), "use(Logical)");
     // return c ? a : 0, in value position
-    let f3 = func(1, &[10, 11], vec![push(cond(lg(11), lg(10), Expr::Number(0.0)))]);
+    let f3 = func(
+        1,
+        &[10, 11],
+        vec![push(cond(lg(11), lg(10), Expr::Number(0.0)))],
+    );
     let f3 = fates(&[f3], &TestProof::default());
     assert_eq!(why(&f3, 1, 0), "use(Conditional)");
-    assert!(f3.of_fn(1).unwrap().params[1].proven_dropped(), "the condition is only tested");
+    assert!(
+        f3.of_fn(1).unwrap().params[1].proven_dropped(),
+        "the condition is only tested"
+    );
 }
 
 #[test]
@@ -801,7 +918,10 @@ fn a_conversion_drops_a_proven_number_only() {
     for (e, w) in [
         (lt(lg(10), Expr::Number(3.0)), "use(Compare)"),
         (loose(lg(10), Expr::Number(3.0)), "use(Compare)"),
-        (Expr::TemplateStringCoerce(Box::new(lg(10))), "use(TemplateStringCoerce)"),
+        (
+            Expr::TemplateStringCoerce(Box::new(lg(10))),
+            "use(TemplateStringCoerce)",
+        ),
     ] {
         let f = fates(&[func(1, &[10], vec![let_(12, e)])], &TestProof::default());
         assert_eq!(why(&f, 1, 0), w);
@@ -820,10 +940,16 @@ fn reassigning_a_parameter_keeps_nothing() {
     // a = a || {}; b = b ?? (c ? b : 0); return a.x + b.x
     let body = vec![
         assign(10, logical(Or, lg(10), Expr::Object(vec![]))),
-        assign(11, logical(Coalesce, lg(11), cond(lg(12), lg(11), Expr::Number(0.0)))),
+        assign(
+            11,
+            logical(Coalesce, lg(11), cond(lg(12), lg(11), Expr::Number(0.0))),
+        ),
         ret(add(get(lg(10), "x"), get(lg(11), "x"))),
     ];
-    let f = fates(&[func(1, &[10, 11, 12], body)], &TestProof::reading(&[(1, "x")]));
+    let f = fates(
+        &[func(1, &[10, 11, 12], body)],
+        &TestProof::reading(&[(1, "x")]),
+    );
     for i in 0..3 {
         assert!(f.of_fn(1).unwrap().params[i].proven_dropped(), "param {i}");
     }
@@ -858,7 +984,10 @@ fn a_never_written_copy_is_the_parameter() {
 fn a_copy_that_keeps_keeps_the_parameter() {
     // const q = a; kept.push(q)
     let f1 = func(1, &[10], vec![let_(20, lg(10)), push(lg(20))]);
-    assert_eq!(why(&fates(&[f1], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+    assert_eq!(
+        why(&fates(&[f1], &TestProof::default()), 1, 0),
+        "arg-unresolved(PropertyGet.push)"
+    );
     // const g = () => q; const q = a: the capture reads the copy.
     let mut c = closure(vec![ret(lg(20))], false);
     if let Expr::Closure { captures, .. } = &mut c {
@@ -867,13 +996,24 @@ fn a_copy_that_keeps_keeps_the_parameter() {
     let f2 = func(1, &[10], vec![let_(30, c), let_(20, lg(10))]);
     assert_eq!(why(&fates(&[f2], &TestProof::default()), 1, 0), "captured");
     // let q = a; q = b; return q.x: q is written, so it is a plain local.
-    let f3 = func(1, &[10, 11], vec![let_(20, lg(10)), assign(20, lg(11)), ret(get(lg(20), "x"))]);
+    let f3 = func(
+        1,
+        &[10, 11],
+        vec![let_(20, lg(10)), assign(20, lg(11)), ret(get(lg(20), "x"))],
+    );
     let f3 = fates(&[f3], &TestProof::reading(&[(1, "x")]));
     assert_eq!(why(&f3, 1, 0), "use(Let)");
     assert_eq!(why(&f3, 1, 1), "use(LocalSet)");
     // a copy inside a nested list counts too: if (c) { const q = a; kept.push(q) }
-    let f4 = func(1, &[10, 11], vec![if_(lg(11), vec![let_(20, lg(10)), push(lg(20))])]);
-    assert_eq!(why(&fates(&[f4], &TestProof::default()), 1, 0), "arg-unresolved(PropertyGet.push)");
+    let f4 = func(
+        1,
+        &[10, 11],
+        vec![if_(lg(11), vec![let_(20, lg(10)), push(lg(20))])],
+    );
+    assert_eq!(
+        why(&fates(&[f4], &TestProof::default()), 1, 0),
+        "arg-unresolved(PropertyGet.push)"
+    );
 }
 
 // ─── FATE2 rule d: a literal shape's constructor stores into the new object
@@ -931,7 +1071,10 @@ fn a_literal_shape_constructor_keeps_by_receiver() {
     assert_eq!(ff.params[0].fate, Fate::KeptByReceiver);
     assert_eq!(ff.params[1].fate, Fate::KeptByReceiver);
     assert!(ff.this.proven_dropped());
-    assert_eq!(f.construction_arg("__AnonShape_t", 1).fate, Fate::KeptByReceiver);
+    assert_eq!(
+        f.construction_arg("__AnonShape_t", 1).fate,
+        Fate::KeptByReceiver
+    );
 }
 
 #[test]

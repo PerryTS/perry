@@ -26,7 +26,10 @@ fn at<'a>(pf: &'a ProgramFacts, src: &str, marker: &str, key: &str) -> Vec<&'a S
 }
 
 fn verdicts<'a>(pf: &'a ProgramFacts, src: &str, key: &str) -> Vec<&'a Verdict> {
-    at(pf, src, "// SITE", key).iter().map(|s| &s.verdict).collect()
+    at(pf, src, "// SITE", key)
+        .iter()
+        .map(|s| &s.verdict)
+        .collect()
 }
 
 /// Is every `o.k.m` read on the `// SITE` line proven (`want`) or unproven?

@@ -695,9 +695,10 @@ impl ProvenanceJudge<'_> {
         body: &[Stmt],
     ) -> bool {
         let mut deps = HashSet::new();
-        let proven = super::exact_i32_range::for_step_fits(init, condition, update, body, &mut |e| {
-            self.judged_range(e, &mut deps)
-        });
+        let proven =
+            super::exact_i32_range::for_step_fits(init, condition, update, body, &mut |e| {
+                self.judged_range(e, &mut deps)
+            });
         let Some(counter) = proven.filter(|c| self.candidates.contains(c)) else {
             return false;
         };
@@ -825,7 +826,12 @@ impl ProvenanceJudge<'_> {
                             perry_hir::walker::walk_expr_children(upd, &mut |child| {
                                 self.walk_expr(child)
                             });
-                        } else if !self.judge_for_step(init.as_deref(), condition.as_ref(), upd, body) {
+                        } else if !self.judge_for_step(
+                            init.as_deref(),
+                            condition.as_ref(),
+                            upd,
+                            body,
+                        ) {
                             self.walk_expr(upd);
                         }
                     }
