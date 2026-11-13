@@ -180,7 +180,9 @@ fn the_index_names_a_spilled_accessor_pair() {
         let object = crate::object::js_object_alloc(0, 2);
         crate::object::mark_object_plain_ordinary(object);
         let biased = (object as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
-        let names = ["nxpa2e_a", "nxpa2e_b", "nxpa2e_c", "nxpa2e_d", "nxpa2e_e", "nxpa2e_f"];
+        let names = [
+            "nxpa2e_a", "nxpa2e_b", "nxpa2e_c", "nxpa2e_d", "nxpa2e_e", "nxpa2e_f",
+        ];
         let keys: Vec<(u64, u64)> = names.iter().map(|n| atom(n)).collect();
         for (k, (key, _)) in keys.iter().enumerate() {
             // The last one returns its capture: the probe answers it.
@@ -192,7 +194,10 @@ fn the_index_names_a_spilled_accessor_pair() {
         let mut spilled = 0;
         for (key, hash) in &keys {
             let (pos, pair) = own_entry(r, *key, *hash).expect("own accessor");
-            assert_ne!(pair, NO_PAIR, "the index names every public accessor's slot");
+            assert_ne!(
+                pair, NO_PAIR,
+                "the index names every public accessor's slot"
+            );
             let bits = accessor_slot_bits(object, r, pos).expect("the pair by its attributes");
             assert_eq!(index_pair_bits(object, pair), Some(bits));
             assert_eq!(accessor_in(object, r, pos, pair), Some(bits));
@@ -205,8 +210,16 @@ fn the_index_names_a_spilled_accessor_pair() {
         }
         assert!(spilled > 0, "the fixture spills accessor pairs");
         let (last, lh) = *keys.last().unwrap();
-        assert_eq!(perry_probe_get(dir, biased, last, lh), 25.0, "a spilled capture getter answers");
+        assert_eq!(
+            perry_probe_get(dir, biased, last, lh),
+            25.0,
+            "a spilled capture getter answers"
+        );
         let (first, fh) = keys[keys.len() - 2];
-        assert_eq!(perry_probe_get(dir, biased, first, fh).to_bits(), TAG_HOLE, "the call declines");
+        assert_eq!(
+            perry_probe_get(dir, biased, first, fh).to_bits(),
+            TAG_HOLE,
+            "the call declines"
+        );
     });
 }

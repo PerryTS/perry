@@ -71,7 +71,10 @@ fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
 /// The bodies a call through the local `id` runs, when the facts prove the
 /// local holds only them (`ElisionFacts::local_bodies`). The lowering below
 /// and the LIFE census (`life_census_sides`) resolve a value call by it.
-pub(crate) fn value_call_bodies(facts: &crate::codegen::ElisionFacts, id: u32) -> Option<&[FactsBody]> {
+pub(crate) fn value_call_bodies(
+    facts: &crate::codegen::ElisionFacts,
+    id: u32,
+) -> Option<&[FactsBody]> {
     facts.local_bodies.get(&id).map(Vec::as_slice)
 }
 

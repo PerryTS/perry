@@ -1356,10 +1356,13 @@ pub fn lower_module_full_with_platform_globals(
             ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(import))
                 if import.phase == ast::ImportPhase::Defer =>
             {
-                import.specifiers.iter().find_map(|specifier| match specifier {
-                    ast::ImportSpecifier::Namespace(ns) => Some(ns.local.sym.to_string()),
-                    _ => None,
-                })
+                import
+                    .specifiers
+                    .iter()
+                    .find_map(|specifier| match specifier {
+                        ast::ImportSpecifier::Namespace(ns) => Some(ns.local.sym.to_string()),
+                        _ => None,
+                    })
             }
             _ => None,
         })

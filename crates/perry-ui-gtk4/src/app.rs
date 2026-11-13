@@ -360,7 +360,8 @@ pub fn app_run(_app_handle: i64) {
         // If PERRY_UI_TEST_MODE is set, schedule an automatic exit so doc-example
         // programs can be verified in CI without a human.
         if perry_ui::test_mode::is_test_mode() {
-            let delay = std::time::Duration::from_millis(perry_ui::test_mode::exit_delay_ms() as u64);
+            let delay =
+                std::time::Duration::from_millis(perry_ui::test_mode::exit_delay_ms() as u64);
             let app_clone = app.clone();
             glib::timeout_add_local_once(delay, move || {
                 if let Some(path) = perry_ui::test_mode::screenshot_path() {

@@ -484,11 +484,23 @@ impl Model {
                         // (a stored `undefined` among them) count as they are.
                         let chain = self.node_l("fulfil-then-chain");
                         self.cons(chain, Cons::Defined { dst: read });
-                        self.cons(one, Cons::Load { key: then, dst: chain });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: chain,
+                            },
+                        );
                         let own = self.field(t, then_a);
                         self.edge(own, read);
                     } else {
-                        self.cons(one, Cons::Load { key: then, dst: read });
+                        self.cons(
+                            one,
+                            Cons::Load {
+                                key: then,
+                                dst: read,
+                            },
+                        );
                     }
                 }
             }

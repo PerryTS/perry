@@ -41,12 +41,12 @@ mod rejection_gc_tests;
 mod rejection_loop_tests;
 #[cfg(test)]
 mod resolving_function_kind_tests;
+pub mod scanners;
+mod settled_step;
 #[cfg(all(test, perry_gc_instruments))]
 mod snap_pending_job_tests;
 #[cfg(all(test, perry_gc_instruments))]
 mod snap_pending_queue_tests;
-pub mod scanners;
-mod settled_step;
 pub use settled_step::js_async_step_resume_now;
 pub mod spec_combinators;
 pub(crate) mod step_completion;

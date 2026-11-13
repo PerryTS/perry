@@ -204,15 +204,13 @@ pub(crate) fn install_buffer_prototype_members(proto: *mut ObjectHeader) {
         ));
         proto.with_mut_ptr(|proto: *mut ObjectHeader| {
             key.with_mut_ptr(|key| {
-                method_closure.with_mut_ptr(
-                    |method_closure: *mut crate::closure::ClosureHeader| {
-                        js_object_set_field_by_name(
-                            proto,
-                            key,
-                            crate::value::js_nanbox_pointer(method_closure as i64),
-                        )
-                    },
-                )
+                method_closure.with_mut_ptr(|method_closure: *mut crate::closure::ClosureHeader| {
+                    js_object_set_field_by_name(
+                        proto,
+                        key,
+                        crate::value::js_nanbox_pointer(method_closure as i64),
+                    )
+                })
             })
         });
     }

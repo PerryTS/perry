@@ -151,7 +151,10 @@ impl<'a> Gen<'a> {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
                 } else if let (true, Some(o)) = (
-                    matches!(module.as_str(), "readable_stream" | "readable_stream_reader"),
+                    matches!(
+                        module.as_str(),
+                        "readable_stream" | "readable_stream_reader"
+                    ),
                     o,
                 ) {
                     // The HIR's dispatch of a member of a stream or reader it
@@ -564,7 +567,13 @@ impl<'a> Gen<'a> {
                 // an internal slot): ToPrimitive (`@@toPrimitive`, else
                 // `valueOf` / `toString`) runs on it; no other key is read and
                 // no function found under some key is called back.
-                self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::ToPrimitive)
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "primitive builtin operand",
+                    Protocol::ToPrimitive,
+                )
             }
             Expr::StringRaw { .. }
             | Expr::StringFromCharCodeSpread(..)

@@ -70,9 +70,10 @@ impl<'a> Gen<'a> {
     ) -> Option<NodeId> {
         let e = crate::builtins::declared_member(member)?;
         let args = args.iter().map(|a| self.expr(fx, a)).collect();
-        let t = self
-            .m
-            .tok(TokKind::BuiltinFn(Native::Member { identity: e.name, holder: None }));
+        let t = self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity: e.name,
+            holder: None,
+        }));
         let callee = self.tok_node(t);
         let (call, ret) = self.new_call(ThisArg::Undef, args, vec![]);
         self.m.cons(callee, Cons::Call { call });
@@ -93,7 +94,10 @@ impl<'a> Gen<'a> {
                 .filter(|e| e.kind != perry_hir::realm_manifest::RealmKind::Constructor)
                 .map(|e| e.name)
         })?;
-        Some(self.m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None })))
+        Some(self.m.tok(TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        })))
     }
 
     /// Operands only ever read as primitives by the runtime: objects get the
@@ -1098,11 +1102,15 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                if let (Expr::Array(v, _), Expr::String(_), Expr::PutValueSet { element_offset, .. }) =
-                    (value.as_ref(), key.as_ref(), e)
+                if let (
+                    Expr::Array(v, _),
+                    Expr::String(_),
+                    Expr::PutValueSet { element_offset, .. },
+                ) = (value.as_ref(), key.as_ref(), e)
                 {
                     if *element_offset != 0 && v.is_empty() {
-                        self.direct_arr = Some(crate::records::ArrBirth::Store(mi, *element_offset));
+                        self.direct_arr =
+                            Some(crate::records::ArrBirth::Store(mi, *element_offset));
                     }
                 }
                 let v = self.expr_zs(fx, value);

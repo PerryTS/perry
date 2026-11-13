@@ -131,9 +131,8 @@ pub(crate) fn collect(
             copies.entry(orig).or_default().push(copy)
         });
     }
-    let with_copies = |n: NodeId| {
-        std::iter::once(n).chain(copies.get(&n).into_iter().flatten().copied())
-    };
+    let with_copies =
+        |n: NodeId| std::iter::once(n).chain(copies.get(&n).into_iter().flatten().copied());
     // No index accessor on the chain of any Array.
     let chain = if !m.native_writes.is_empty() {
         Some("chain:native-write")
@@ -207,7 +206,9 @@ pub(crate) fn collect(
                 format!(" key={key}")
             };
             p.push(match why {
-                None => format!("# quiet kind={kind} module={mi} offset={offset}{key} verdict=quiet"),
+                None => {
+                    format!("# quiet kind={kind} module={mi} offset={offset}{key} verdict=quiet")
+                }
                 Some(why) => {
                     format!("# quiet kind={kind} module={mi} offset={offset}{key} refused={why}")
                 }

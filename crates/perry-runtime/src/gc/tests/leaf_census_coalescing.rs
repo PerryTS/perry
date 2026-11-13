@@ -97,7 +97,10 @@ fn leaf_service_runs_while_the_window_left_covers_eden() {
         for _ in 0..CAP / LEAF {
             owed_leaf_birth();
             if super::super::leaf_service::leaf_services_run() > services {
-                assert_eq!(super::super::leaf_service::leaf_services_run(), services + 1);
+                assert_eq!(
+                    super::super::leaf_service::leaf_services_run(),
+                    services + 1
+                );
                 assert_eq!(
                     gc_collection_count(),
                     collections,

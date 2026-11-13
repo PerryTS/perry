@@ -8,6 +8,9 @@ use crate::model::*;
 impl Model {
     /// The interned set of `atoms` (sorted, distinct; `STRS_TOP` past
     /// `STRS_K`).
+    // `STRS_K` is a tuning bound; at `usize::MAX` the cap is off and the
+    // comparison is always false, which clippy flags.
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub(crate) fn str_set(&mut self, atoms: &[Atom]) -> StrSet {
         if atoms.is_empty() {
             return STRS_NONE;
@@ -34,6 +37,8 @@ impl Model {
     }
 
     /// The join (union) of two sets.
+    // See `str_set`: the `STRS_K` comparison is always false while the cap is off.
+    #[allow(clippy::absurd_extreme_comparisons)]
     pub(crate) fn strs_join(&mut self, a: StrSet, b: StrSet) -> StrSet {
         if a == b || b == STRS_NONE || a == STRS_TOP {
             return a;

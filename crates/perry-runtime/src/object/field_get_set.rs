@@ -233,12 +233,12 @@ pub(crate) mod field_ops;
 mod for_in_stable;
 mod get_field_by_name;
 mod get_slow;
+pub(crate) use get_slow::get_field_by_name_of_value;
 pub use get_slow::{
     js_object_get_field_nonptr, js_object_get_field_site_slow, js_object_get_field_slow,
     js_object_get_field_value, js_object_get_field_value_site, js_object_get_keyed_site_slow,
     js_object_get_keyed_slow,
 };
-pub(crate) use get_slow::get_field_by_name_of_value;
 #[cfg(test)]
 mod get_field_by_name_probe_tests;
 mod get_field_by_name_tail;
@@ -247,9 +247,6 @@ pub(crate) mod ic_miss;
 #[cfg(test)]
 #[path = "field_get_set/ic_miss_array_length_tests.rs"]
 mod ic_miss_array_length_tests;
-#[cfg(test)]
-#[path = "field_get_set/undeclared_prototype_tests.rs"]
-mod undeclared_prototype_tests;
 mod map_set_receiver;
 #[cfg(test)]
 mod map_set_receiver_tests;
@@ -259,6 +256,9 @@ mod probe_dispatch;
 mod prototype_override;
 /// A builtin's spec `Get` as a read site: an emitted site's two words, per agent.
 pub(crate) mod runtime_read_site;
+#[cfg(test)]
+#[path = "field_get_set/undeclared_prototype_tests.rs"]
+mod undeclared_prototype_tests;
 #[allow(dead_code)] // #9244: field-get short-circuits removed; kept for the method path.
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline

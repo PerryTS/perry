@@ -606,10 +606,12 @@ mod life_measure;
 mod life_regions;
 /// LIFE I3: the census's fresh-header event and the region measurement.
 #[cfg(perry_gc_instruments)]
-pub(crate) use life_regions::{born as life_regions_born, evacuated as life_regions_evacuated, exit as life_regions_exit,
-    on as life_regions_on};
-mod report;
+pub(crate) use life_regions::{
+    born as life_regions_born, evacuated as life_regions_evacuated, exit as life_regions_exit,
+    on as life_regions_on,
+};
 pub(crate) mod records;
+mod report;
 use report::Witness;
 
 fn key_matches(bits: u64, expected: &[u8]) -> bool {

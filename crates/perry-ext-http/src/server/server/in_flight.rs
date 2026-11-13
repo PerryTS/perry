@@ -190,7 +190,9 @@ pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
         let connection = response_state(response)
             .and_then(|state| state.turnloop.map(|(connection, _)| connection));
         if let Some(connection) = connection {
-            crate::server::turnloop_route::destroy(&connection.root(crate::server::response::response_socket(response)));
+            crate::server::turnloop_route::destroy(
+                &connection.root(crate::server::response::response_socket(response)),
+            );
         }
         let deadline = Instant::now().checked_add(retire_grace);
         finalize_request_handles_deferred(pending.request_handle, response, deadline);
