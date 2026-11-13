@@ -2200,6 +2200,14 @@ pub struct Model {
     /// through its node (the last field), refilled as the writes grow, and
     /// runs today's opaque member once an opaque write reaches the key.
     pub native_answered: FxHashMap<(Tok, Atom, NativeMiss), NodeId>,
+    /// The node of each key (native prototype, key) of the answered
+    /// lookups (`native_answered`): it holds what the writes that may have
+    /// written the key stored, each value once, and every answered lookup
+    /// of the key reads that one node.
+    pub native_answer_nodes: FxHashMap<(Tok, Atom), NodeId>,
+    /// Profile counters of the answered lookups: replays run, values fed.
+    pub native_replays: u64,
+    pub native_fed: u64,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
     /// fields under keys they do not declare.
     pub r1_holders: crate::pts::FxHashSet<Tok>,

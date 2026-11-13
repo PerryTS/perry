@@ -623,16 +623,31 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     replay_pending(m);
     // Lookups answered by what the writes stored: refilled, or run as
     // opaque members once an opaque write reaches their key.
+    m.native_replays += 1;
     m.with_b(|m| {
-        let answered: Vec<_> = m.native_answered.iter().map(|(&k, &w)| (k, w)).collect();
-        for ((np, a, miss), w) in answered {
+        let keys: Vec<_> = m.native_answer_nodes.iter().map(|(&k, &e)| (k, e)).collect();
+        let mut opaque: std::collections::HashSet<(Tok, Atom)> = Default::default();
+        for ((np, a), e) in keys {
             match stored_values(m, np, a) {
-                Some((stored, absent)) => fill_stored(m, w, &stored, absent),
+                Some((stored, absent)) => fill_stored(m, e, &stored, absent),
                 None => {
-                    m.native_answered.remove(&(np, a, miss));
-                    answer_opaque(m, np, a, miss);
+                    m.native_answer_nodes.remove(&(np, a));
+                    opaque.insert((np, a));
                 }
             }
+        }
+        if opaque.is_empty() {
+            return;
+        }
+        let gone: Vec<_> = m
+            .native_answered
+            .keys()
+            .filter(|k| opaque.contains(&(k.0, k.1)))
+            .cloned()
+            .collect();
+        for (np, a, miss) in gone {
+            m.native_answered.remove(&(np, a, miss.clone()));
+            answer_opaque(m, np, a, miss);
         }
     });
 }
@@ -679,7 +694,7 @@ fn replay_pending(m: &mut Model) {
 /// No opaque write reaches an answered lookup (one turns it into an opaque
 /// member, `replay_native_missing`), so this is all the lookup gains.
 fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
-    if m.native_answered.is_empty() {
+    if m.native_answer_nodes.is_empty() {
         return;
     }
     let Some(x) = m.native_writes.get(&entry) else {
@@ -693,9 +708,9 @@ fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
         || super::global_object(m, t)
         || matches!(m.toks[t as usize], TokKind::ObjectProto);
     let reached: Vec<NodeId> = m
-        .native_answered
+        .native_answer_nodes
         .iter()
-        .filter(|(&(np, a, _), _)| {
+        .filter(|(&(np, a), _)| {
             (wide || np == t) && {
                 let (top, own) = written_by(m, np, a, false, &|y| std::ptr::eq(y, x));
                 top || own
@@ -703,6 +718,7 @@ fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
         })
         .map(|(_, &w)| w)
         .collect();
+    m.native_fed += reached.len() as u64;
     m.with_b(|m| {
         for w in reached {
             match value {
@@ -773,7 +789,14 @@ pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -
     if m.native_answered.contains_key(&(np, a, miss)) {
         return true;
     }
-    let w = m.node_l("written-value");
+    let w = match m.native_answer_nodes.get(&(np, a)) {
+        Some(&w) => w,
+        None => {
+            let w = m.node_l("written-value");
+            m.native_answer_nodes.insert((np, a), w);
+            w
+        }
+    };
     match miss {
         NativeMiss::Load(dst) => m.edge(w, dst),
         NativeMiss::Call(origin, call) => m.cons(w, Cons::CallThis { call, this: origin }),

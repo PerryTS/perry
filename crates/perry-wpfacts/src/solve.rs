@@ -378,8 +378,15 @@ impl Model {
         if self.work.get() >= p.next_curve {
             p.next_curve = (self.work.get() / WorkProfile::STEP + 1) * WorkProfile::STEP;
             let cons: usize = self.nodes.iter().map(|n| n.cons.len()).sum();
+            let succ: usize = self.nodes.iter().map(|n| n.succ.len()).sum();
+            let stored_entries = self
+                .native_writes
+                .values()
+                .filter(|w| !w.stored.is_empty())
+                .count();
+            let stored_values: usize = self.native_writes.values().map(|w| w.stored.len()).sum();
             eprintln!(
-                "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={}",
+                "perry: wpfacts curve work={} pops={} nodes={} pts={} cons={} toks={} insts={} wl={} succ={succ} answered={} answer_keys={} stored_entries={stored_entries} stored_values={stored_values} replays={} fed={}",
                 self.work.get(),
                 self.pops,
                 self.nodes.len(),
@@ -387,7 +394,11 @@ impl Model {
                 cons,
                 self.toks.len(),
                 self.sum.insts.len(),
-                self.wl.len()
+                self.wl.len(),
+                self.native_answered.len(),
+                self.native_answer_nodes.len(),
+                self.native_replays,
+                self.native_fed
             );
         }
     }
