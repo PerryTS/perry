@@ -251,6 +251,36 @@
   console.log("reviver:", pp.n * 2, o.a === pp, o2.a.n, kept[0] === o2.a);
 }
 
+// A reviver that deletes or redefines a later key of its holder: the walk's
+// [[Get]] of that key then reads the chain or runs the getter.
+{
+  let seen: any = null;
+  const o: any = JSON.parse('{"a":1,"toString":2}', function (this: any, k: string, v: any) {
+    if (k === "a") delete this.toString;
+    if (k === "toString") seen = v;
+    return v;
+  });
+  console.log("reviver delete:", typeof seen, seen === Object.prototype.toString, typeof o.toString);
+}
+{
+  let seen: any = null;
+  let calls = 0;
+  const o: any = JSON.parse('{"a":1,"b":2}', function (this: any, k: string, v: any) {
+    if (k === "a")
+      Object.defineProperty(this, "b", {
+        get() {
+          calls++;
+          return "got";
+        },
+        configurable: true,
+        enumerable: true,
+      });
+    if (k === "b") seen = v;
+    return v;
+  });
+  console.log("reviver accessor:", seen, calls, o.b);
+}
+
 // Controls: no replacer, null / undefined, an array, a replacer that reads.
 {
   const p = { n: 1, a: [1, 2], s: "x" };

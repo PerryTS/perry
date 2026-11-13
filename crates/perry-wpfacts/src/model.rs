@@ -1825,6 +1825,10 @@ pub struct Model {
     /// serialized and their holders (`Model::json_replacer_calls`,
     /// `reach::json_replacer`).
     pub reach_json_replacer: bool,
+    /// The JSON.parse revivers called with the parse objects' own values:
+    /// the parse's templates, the parsed node and the value argument
+    /// (`Model::json_reviver_flush`).
+    pub json_reviver_own: Vec<(Vec<TmplId>, NodeId, NodeId)>,
     /// A generator object has the members it inherits
     /// (`builtins::gen_members`, `reach::gen_members`).
     pub reach_gen_members: bool,

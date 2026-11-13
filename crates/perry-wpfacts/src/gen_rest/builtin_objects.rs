@@ -310,10 +310,11 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 );
                 let rv = self.expr(fx, reviver);
+                let born = self.m.tmpls.len();
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
-                // Own values only, the rule on (`json_reviver_values`).
-                let vals = match self.json_reviver_values(v) {
+                // Own values while sure, the rule on (`json_reviver_values`).
+                let vals = match self.json_reviver_values(v, born) {
                     Some(own) => own,
                     None => self.load(v, Key::any()),
                 };
