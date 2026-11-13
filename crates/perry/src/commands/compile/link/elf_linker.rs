@@ -126,6 +126,19 @@ pub(super) fn use_lld(eligible: bool) -> Option<Mode> {
     }
 }
 
+/// Whether the link line `args` makes the `cc` driver run lld: its last
+/// `-fuse-ld=` names lld. Besides [`add_link_args`], the cross links to
+/// Linux pass `-fuse-ld=lld` themselves (`platform_cmd`: x86_64 from macOS,
+/// the clang fallbacks of aarch64 and musl), and `PERRY_EXTRA_LINK_ARGS` can.
+/// Those links need the lld flavor of the hot-text script too: lld rejects
+/// the GNU one ("unable to insert .text before .text").
+pub(super) fn driver_runs_lld<'a>(args: impl IntoIterator<Item = &'a std::ffi::OsStr>) -> bool {
+    args.into_iter()
+        .filter_map(|arg| arg.to_str()?.strip_prefix("-fuse-ld="))
+        .last()
+        .is_some_and(|linker| matches!(linker, "lld" | "ld.lld") || linker.ends_with("/ld.lld"))
+}
+
 pub(super) fn add_link_args(cmd: &mut Command, mode: Mode) {
     cmd.arg("-fuse-ld=lld");
     cmd.arg("-Wl,--image-base=0x400000");
@@ -167,6 +180,39 @@ mod tests {
             Some(12)
         );
         assert_eq!(lld_major("GNU ld (GNU Binutils) 2.42"), None);
+    }
+
+    #[test]
+    fn a_link_line_runs_lld_when_its_last_fuse_ld_names_lld() {
+        let runs = |args: &[&str]| driver_runs_lld(args.iter().map(std::ffi::OsStr::new));
+        // The native lld link (`add_link_args`).
+        let mut native = Command::new("cc");
+        add_link_args(&mut native, Mode::Lld);
+        assert!(driver_runs_lld(native.get_args()));
+        // The cross links' own lines (`platform_cmd`).
+        assert!(runs(&[
+            "-target",
+            "x86_64-unknown-linux-gnu",
+            "-fuse-ld=lld"
+        ]));
+        assert!(runs(&[
+            "-target",
+            "aarch64-unknown-linux-gnu",
+            "-fuse-ld=lld"
+        ]));
+        assert!(runs(&[
+            "-target",
+            "x86_64-unknown-linux-musl",
+            "-fuse-ld=lld",
+            "-static"
+        ]));
+        assert!(runs(&["-fuse-ld=/usr/lib/llvm-22/bin/ld.lld"]));
+        // GNU ld: no switch, or a later one that names another linker.
+        assert!(!runs(&[]));
+        assert!(!runs(&["-Wl,--gc-sections", "-no-pie"]));
+        assert!(!runs(&["-fuse-ld=lld", "-fuse-ld=bfd"]));
+        assert!(!runs(&["-fuse-ld=gold"]));
+        assert!(runs(&["-fuse-ld=bfd", "-fuse-ld=lld"]));
     }
 
     #[test]
