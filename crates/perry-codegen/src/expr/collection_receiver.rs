@@ -161,18 +161,83 @@ pub(crate) fn lower_collection_size(
     kind: ConstructedKind,
 ) -> anyhow::Result<String> {
     let recv_box = crate::expr::lower_expr(ctx, object)?;
+    Ok(brand_guarded(
+        ctx,
+        object,
+        &recv_box,
+        kind,
+        "size",
+        |ctx| collection_size_entry(ctx, object, &recv_box, kind),
+        |ctx| {
+            ctx.block()
+                .call(DOUBLE, "js_collection_size_get", &[(DOUBLE, &recv_box)])
+        },
+    ))
+}
+
+/// `m.clear()` / `s.clear()` (HIR `MapClear` / `SetClear`): the entry on a
+/// receiver of the brand, the ordinary `Get` + `Call` of `clear` otherwise
+/// (`brand_guarded`).
+pub(crate) fn lower_collection_clear(
+    ctx: &mut FnCtx<'_>,
+    object: &perry_hir::Expr,
+    kind: ConstructedKind,
+) -> anyhow::Result<String> {
+    let recv_box = crate::expr::lower_expr(ctx, object)?;
+    Ok(brand_guarded(
+        ctx,
+        object,
+        &recv_box,
+        kind,
+        "clear",
+        |ctx| {
+            let handle = unbox_collection_receiver(ctx, &recv_box, "clear");
+            let entry = match kind {
+                ConstructedKind::Map => "js_map_clear",
+                ConstructedKind::Set => "js_set_clear",
+            };
+            ctx.block().call_void(entry, &[(I64, &handle)]);
+            // `clear()` returns undefined, not 0.
+            crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+        },
+        |ctx| {
+            crate::builtin_proto::emit_generic_call(
+                ctx,
+                crate::builtin_proto::GenericRead::Receiver,
+                &recv_box,
+                "clear",
+                &[],
+            )
+        },
+    ))
+}
+
+/// `fast` on a receiver the brand test admits, `miss` on every other (both
+/// leave a double in their last block); `fast` alone when no test is needed
+/// (`collection_brand::needed_unfolded`: the receiver was constructed here,
+/// the switch is off). Nothing between `recv_box`'s lowering and either arm
+/// collects: the test only loads the receiver's header byte.
+fn brand_guarded(
+    ctx: &mut FnCtx<'_>,
+    object: &perry_hir::Expr,
+    recv_box: &str,
+    kind: ConstructedKind,
+    method: &str,
+    fast: impl FnOnce(&mut FnCtx<'_>) -> String,
+    miss: impl FnOnce(&mut FnCtx<'_>) -> String,
+) -> String {
     let family = match kind {
         ConstructedKind::Map => crate::builtin_proto::BuiltinProto::Map,
         ConstructedKind::Set => crate::builtin_proto::BuiltinProto::Set,
     };
     let Some((brand, check)) =
-        super::collection_brand::needed_unfolded(ctx, family, None, object, "size")
+        super::collection_brand::needed_unfolded(ctx, family, None, object, method)
     else {
-        return Ok(collection_size_entry(ctx, object, &recv_box, kind));
+        return fast(ctx);
     };
-    let ok_idx = ctx.new_block("collsize.ok");
-    let miss_idx = ctx.new_block("collsize.miss");
-    let merge_idx = ctx.new_block("collsize.merge");
+    let ok_idx = ctx.new_block("collguard.ok");
+    let miss_idx = ctx.new_block("collguard.miss");
+    let merge_idx = ctx.new_block("collguard.merge");
     let ok_label = ctx.block_label(ok_idx);
     let miss_label = ctx.block_label(miss_idx);
     let merge_label = ctx.block_label(merge_idx);
@@ -180,31 +245,27 @@ pub(crate) fn lower_collection_size(
         ctx,
         brand,
         check,
-        "size",
-        &recv_box,
+        method,
+        recv_box,
         &ok_label,
         &miss_label,
     );
 
     ctx.current_block = ok_idx;
-    let size = collection_size_entry(ctx, object, &recv_box, kind);
+    let hit = fast(ctx);
     let ok_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
-    // Nothing between the receiver's lowering and this call collects: the
-    // brand test only loads its header byte.
     ctx.current_block = miss_idx;
-    let read = ctx
-        .block()
-        .call(DOUBLE, "js_collection_size_get", &[(DOUBLE, &recv_box)]);
+    let other = miss(ctx);
     let miss_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
     ctx.current_block = merge_idx;
-    Ok(ctx.block().phi(
+    ctx.block().phi(
         DOUBLE,
-        &[(size.as_str(), ok_end.as_str()), (read.as_str(), miss_end.as_str())],
-    ))
+        &[(hit.as_str(), ok_end.as_str()), (other.as_str(), miss_end.as_str())],
+    )
 }
 
 /// The size entry call of [`lower_collection_size`] on `recv_box`.

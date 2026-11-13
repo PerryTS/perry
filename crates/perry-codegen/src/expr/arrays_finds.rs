@@ -574,14 +574,11 @@ pub(crate) fn lower(
         }
 
         // -------- Map.clear --------
-        Expr::MapClear(map) => {
-            let m_box = lower_expr(ctx, map)?;
-            let m_handle = super::unbox_collection_receiver(ctx, &m_box, "clear");
-            let blk = ctx.block();
-            blk.call_void("js_map_clear", &[(I64, &m_handle)]);
-            // Map.prototype.clear() returns undefined, not 0.
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-        }
+        Expr::MapClear(map) => super::collection_receiver::lower_collection_clear(
+            ctx,
+            map,
+            super::collection_receiver::ConstructedKind::Map,
+        ),
 
         // -------- Map.entries / Map.keys / Map.values --------
         // All three take a map pointer and return an array pointer.
