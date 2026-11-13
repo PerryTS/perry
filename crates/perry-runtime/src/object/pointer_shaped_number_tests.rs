@@ -197,3 +197,24 @@ fn entries_behind_the_shared_decoder_answer_as_a_number() {
         "Array.from(number) copied the array"
     );
 }
+
+/// `[[Set]]` with the forged Number as target and receiver (`EventEmitter.prototype.on.call(e, ..)`
+/// stores `_events` this way) does not write the object at the Number's bits.
+#[test]
+fn ordinary_set_on_the_number_leaves_the_object_alone() {
+    let (obj, forged) = object_and_forgery();
+    let _ =
+        super::property_ops::set::ordinary_set_with_receiver(forged, key_value("x"), 7.0, forged);
+    let _ =
+        super::property_ops::set::ordinary_set_with_receiver(forged, key_value("y"), 8.0, forged);
+    assert_eq!(f64::from_bits(own(obj, "x")), 42.0);
+    assert_eq!(own(obj, "y"), TAG_UNDEFINED);
+    let tagged = crate::value::js_nanbox_pointer(obj as i64);
+    assert!(super::property_ops::set::ordinary_set_with_receiver(
+        tagged,
+        key_value("x"),
+        7.0,
+        tagged
+    ));
+    assert_eq!(f64::from_bits(own(obj, "x")), 7.0);
+}
