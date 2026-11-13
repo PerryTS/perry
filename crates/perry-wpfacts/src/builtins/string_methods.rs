@@ -285,7 +285,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         // receiver (`Cons::CaseMap`).
         "toLowerCase" | "toUpperCase" if matches!(c.this, ThisArg::Node(_)) => {
             if let ThisArg::Node(r) = c.this {
-                m.cons(r, Cons::CaseMap { dst: c.ret });
+                let upper = name == "toUpperCase";
+                m.cons(r, Cons::CaseMap { dst: c.ret, upper });
             }
             return true;
         }

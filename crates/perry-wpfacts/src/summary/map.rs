@@ -418,7 +418,7 @@ pub fn map_cons(
             right,
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
-        CaseMap { dst } => CaseMap { dst: n(dst) },
+        CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
         ShareBuffer { ta } => ShareBuffer { ta },
         ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
         BoundCall { reason, bound } => BoundCall { reason, bound },
@@ -604,7 +604,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | Arith { dst, .. }
         | Range { dst, .. }
         | ArrayLenArg { dst }
-        | CaseMap { dst }
+        | CaseMap { dst, .. }
         | IterNext { dst }
         | FromArrayLike { dst }
         | ProtoOf { dst }

@@ -156,11 +156,50 @@ impl Model {
         Some(self.str_set(&out))
     }
 
-    /// Rule K7, ECMA-262 22.1.3.28 / .29: `toLowerCase` / `toUpperCase` of
-    /// receiver `n` map an ASCII character no letter to itself, so a
-    /// String-only receiver of infix strings gives those infix entries;
-    /// any other receiver gives any string.
-    pub(crate) fn case_map_strs(&mut self, n: NodeId) -> StrSet {
+    /// Rule K7, ECMA-262 22.1.3.28 / .29: `toLowerCase` / `toUpperCase`
+    /// (`upper`) of receiver `n` map each code point of ToString(receiver)
+    /// on its own, and an ASCII code point by the ASCII case map whatever
+    /// follows it. So a String-only receiver (ToString is the identity) of
+    /// a known set maps each entry exactly: an ASCII constant to its mapped
+    /// constant, a known ASCII prefix to its mapped prefix, an infix entry
+    /// (an ASCII character no letter) to itself. A set with any other entry
+    /// keeps its infix entries (`infix_strs`); any other receiver gives any
+    /// string.
+    pub(crate) fn case_map_strs(&mut self, n: NodeId, upper: bool) -> StrSet {
+        let node = &self.nodes[n as usize];
+        let (p, bare, s) = (node.prim, node.pts.is_empty(), node.strs);
+        if p == prim::STR && bare && s >= STRS_SET0 {
+            let map = |t: &str| if upper { t.to_ascii_uppercase() } else { t.to_ascii_lowercase() };
+            let mut out: Vec<Atom> = Vec::new();
+            let mut exact = true;
+            for a in self.str_atoms(s).to_vec() {
+                if self.atom_infix(a).is_some() {
+                    out.push(a);
+                    continue;
+                }
+                let m = match self.atom_prefix(a) {
+                    Some(q) if q.is_ascii() => Some(self.prefix_atom(&map(q))),
+                    Some(_) => None,
+                    None if self.atom_is_mark(a) => None,
+                    None => match self.atoms[a as usize].clone() {
+                        t if t.is_ascii() => self.str_const_atom(&map(&t)),
+                        _ => None,
+                    },
+                };
+                match m {
+                    Some(m) => out.push(m),
+                    None => {
+                        exact = false;
+                        break;
+                    }
+                }
+            }
+            if exact {
+                out.sort_unstable();
+                out.dedup();
+                return self.str_set(&out);
+            }
+        }
         self.infix_strs(n).unwrap_or(STRS_TOP)
     }
 

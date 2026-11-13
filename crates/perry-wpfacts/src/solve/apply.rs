@@ -1990,8 +1990,8 @@ impl Model {
                 }
             }
             // Rule K7: the case map of the receiver keeps its infix entries.
-            Cons::CaseMap { dst } => {
-                let strs = self.case_map_strs(n);
+            Cons::CaseMap { dst, upper } => {
+                let strs = self.case_map_strs(n, upper);
                 self.add_s(dst, &[], prim::STR, strs);
             }
             Cons::Plus {

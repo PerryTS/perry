@@ -127,3 +127,45 @@ fn argv_or_undefined_key_reads_builtin_members() {
     )));
     assert!(v.len() > 1, "{v:?}");
 }
+
+/// three.js `_lut` is a literal array of constants (three.core.js:2297):
+/// indexed in bounds (`& 3` of four entries, as `& 0xff` of 256 there),
+/// `lut[a] + lut[b]` gives known prefixes (rule M3), the `-` after them is
+/// not kept beside a prefix, and the key reaches the read through
+/// `toLowerCase` of those prefixes (22.1.3.28: an ASCII code point maps on
+/// its own, so a known ASCII prefix stays a known prefix).
+fn literal_lut_prog(lut: &str, key: &str) -> String {
+    let p = prog(key);
+    let q = p
+        .replace("const lut: string[] = [];", &format!("const lut: string[] = [{lut}];"))
+        .replace("for (let i = 0; i < 256; i++) lut[i] = (i < 16 ? '0' : '') + i.toString(16);", "")
+        .replace("& 0xff]", "& 3]");
+    assert!(!q.contains("i.toString(16)") && !q.contains("0xff]"), "{q}");
+    q
+}
+
+#[test]
+fn literal_lut_prefix_key_reads_no_builtin_member() {
+    let v = recv(&facts(&literal_lut_prog("'bc', 'cd', 'db', 'bd'", "root.uuid")));
+    assert_eq!(v, vec!["A"], "{v:?}");
+}
+
+#[test]
+fn literal_lut_prefix_upper_key_reads_no_builtin_member() {
+    let v = recv(&facts(&literal_lut_prog("'bc', 'cd', 'db', 'bd'", "root.uuid.toUpperCase()")));
+    assert_eq!(v, vec!["A"], "{v:?}");
+}
+
+#[test]
+fn literal_lut_member_prefix_key_reads_builtin_members() {
+    // `'co' + 'ns' + ...` may spell `constructor`.
+    let v = recv(&facts(&literal_lut_prog("'co', 'ns', 'co', 'ns'", "root.uuid")));
+    assert!(v.len() > 1, "{v:?}");
+}
+
+#[test]
+fn literal_lut_upper_member_prefix_key_reads_builtin_members() {
+    // `'CO' + 'NS' + ...` lower-cased may spell `constructor`.
+    let v = recv(&facts(&literal_lut_prog("'CO', 'NS', 'CO', 'NS'", "root.uuid")));
+    assert!(v.len() > 1, "{v:?}");
+}

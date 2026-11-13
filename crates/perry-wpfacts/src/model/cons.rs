@@ -658,10 +658,9 @@ pub enum Cons {
     /// the right one; `str`'s string constants and known prefixes are the
     /// pair's (`Model::plus_strs`).
     /// Rule K7: the node is the receiver of `toLowerCase` / `toUpperCase`
-    /// (ECMA-262 22.1.3.28 / .29): `dst` holds a String, the infix entries
-    /// of the receiver when it holds only infix Strings
-    /// (`Model::case_map_strs`).
-    CaseMap { dst: NodeId },
+    /// (ECMA-262 22.1.3.28 / .29, `upper`: `toUpperCase`): `dst` holds a
+    /// String, the receiver's entries case-mapped (`Model::case_map_strs`).
+    CaseMap { dst: NodeId, upper: bool },
     Plus {
         str: NodeId,
         num: NodeId,
