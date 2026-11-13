@@ -87,42 +87,11 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
         return if len == 0 { 0 } else { 1 };
     }
 
-    // Check for raw pointer bits (from bitcast of string literal). This is a
-    // legacy path for compiled-in string literals that were emitted as raw
-    // pointer bitcasts rather than NaN-boxed STRING_TAG values.
-    //
-    // CAUTION: a plain f64 value (e.g., a denormal like `f64::from_bits(0x646e)`
-    // ≈ 1.27e-319, or any other number whose bit pattern happens to fall in
-    // the userspace pointer range) must NOT be misidentified as a string
-    // pointer — dereferencing it as `*StringHeader` will SIGSEGV. Surfaced by
-    // dayjs which passes `bits=0x646e` through here on a utility-object call.
-    //
-    // Defense in depth:
-    //   1. Reject everything below the smallest realistic heap address. On
-    //      macOS/Linux userspace heaps live well above 0x10_0000 (1 MiB); the
-    //      previous 0x1000 (4 KiB) threshold let small integers (including
-    //      0x646e) through.
-    //   2. Require 8-byte alignment. `StringHeader` is `repr(C)` with at
-    //      least one usize-aligned field, so a valid pointer must have its
-    //      low 3 bits clear. Most small denormal/integer bit patterns fail
-    //      this check.
-    // Both filters together make a false-positive astronomically unlikely
-    // while still preserving the legacy bitcast path for real pointers.
-    if crate::value::addr_class::is_above_handle_band(bits as usize)
-        && bits < 0x0001_0000_0000_0000
-        && (bits & 0x7) == 0
-    {
-        // This could be a raw string pointer - check if it's a valid string
-        let str_ptr = bits as *const crate::string::StringHeader;
-        // Try to read the string length - empty string is falsy
-        let len = crate::string::js_string_length(str_ptr);
-        if len == 0 {
-            return 0;
-        }
-        return 1;
-    }
-
-    // Regular f64 number: 0.0, -0.0, and NaN are falsy
+    // A word with clear top 16 bits is a Number (a denormal double, or +0),
+    // never a string: a string is a STRING_TAG or SHORT_STRING_TAG value. (A
+    // legacy arm read an aligned denormal above the handle band as a
+    // `StringHeader` and dereferenced it.) Regular f64 number: 0.0, -0.0
+    // and NaN are falsy.
     if value == 0.0 || value.is_nan() {
         return 0;
     }
