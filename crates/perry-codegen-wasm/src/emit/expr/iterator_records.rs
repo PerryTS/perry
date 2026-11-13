@@ -17,6 +17,7 @@ const EAGER: &[&str] = &[
     "iteratorCloseOnThrow",
     "iteratorRestAppend",
     "iteratorRestToArray",
+    "typedArrayForOfAdmits",
 ];
 
 /// Every bridge this module calls, for the string table.
@@ -36,6 +37,7 @@ pub(in crate::emit) const BRIDGES: &[&str] = &[
     "rt_getIterator",
     "rt_iterableToArray",
     "rt_arrayIterationPatched",
+    "rt_typedArrayForOfAdmits",
 ];
 
 impl<'a> FuncEmitCtx<'a> {
