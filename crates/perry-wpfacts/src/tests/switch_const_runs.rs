@@ -64,7 +64,6 @@ fn late_constants_run_their_clauses_only() {
 
 // P1 + P2: the clauses construct typed arrays from `n`.
 #[test]
-#[ignore = "P1: the typed-array construct refuses the summary"]
 fn late_constants_with_typed_array_construct() {
     let pf = facts(&src(TA, &["'number'", "'quaternion'", "'vector'"], ""));
     let c = recv(&pf, "p");
@@ -75,7 +74,6 @@ fn late_constants_with_typed_array_construct() {
 
 // Control 1: 'string' is one of the constants: its clause runs.
 #[test]
-#[ignore = "P1: the typed-array construct refuses the summary"]
 fn constant_of_the_array_clause_runs_it() {
     let pf = facts(&src(TA, &["'number'", "'string'"], ""));
     let c = recv(&pf, "p");
@@ -110,7 +108,7 @@ fn fallthrough_from_s_runs_b() {
 // shared run is taken and the Array clause is there.
 #[test]
 fn later_unknown_string_rebinds() {
-    let pf = facts(&src(TA, &["'number'", "'quaternion'"], "class Z { T = process.argv[2]; }\nconst z: any = mk(new Z()); console.log(z.c.p);"));
+    let pf = facts(&src(TA, &["'number'", "'quaternion'"], "class Z { T = process.argv[2]; }\nconst z: any = mk(new Z()); console.log(z.c.p, z.b.length);"));
     let c = recv(&pf, "p");
     assert!(c.contains(&"B".to_string()), "{c:?}");
     assert!(has_array(&recv(&pf, "length")));

@@ -12,6 +12,11 @@ struct Index {
     call_refs: FxHashMap<CallId, Vec<(NodeId, u32)>>,
     /// node -> calls with it as an operand (this/args/spread/ret).
     calls_of: FxHashMap<NodeId, Vec<CallId>>,
+    /// Calls some constraint names (a rule runs them). A call no
+    /// constraint names is never run: an operation's record (a typed
+    /// array construct, `typed_array_new`) whose steps are the solver
+    /// calls and constraints it made, each run by its own rule.
+    named: FxHashSet<CallId>,
 }
 
 fn build_index(m: &Model) -> Index {
@@ -23,6 +28,7 @@ fn build_index(m: &Model) -> Index {
         refs: FxHashMap::default(),
         call_refs: FxHashMap::default(),
         calls_of: FxHashMap::default(),
+        named: FxHashSet::default(),
     };
     for (c, cs) in m.calls.iter().enumerate() {
         for x in call_nodes(cs) {
@@ -49,6 +55,7 @@ fn build_index(m: &Model) -> Index {
                 }
             }
             for k in ks {
+                ix.named.insert(k);
                 let cs = &m.calls[k as usize];
                 if call_nodes(cs).into_iter().any(owned) {
                     ix.call_refs.entry(k).or_default().push((a, i as u32));
@@ -725,7 +732,7 @@ fn plan(
                         bad_now.insert(a);
                     }
                 }
-                if !run_calls.contains(&k) {
+                if !run_calls.contains(&k) && ix.named.contains(&k) {
                     note(format!("call {k} run by no rule"), &mut bad, &mut why);
                 }
             }
