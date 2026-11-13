@@ -23,7 +23,7 @@ use crate::value::{js_jsvalue_to_string, js_nanbox_get_pointer, JSValue, TAG_NUL
 /// caller (they never throw), so they are not produced here.
 fn typeof_word(value: f64) -> &'static str {
     let jsv = JSValue::from_bits(value.to_bits());
-    if jsv.is_number() || jsv.is_int32() {
+    if jsv.is_number() {
         "number"
     } else if jsv.is_bool() {
         "boolean"
@@ -315,7 +315,6 @@ pub(crate) fn iterator_next_method(iter: f64) -> f64 {
 pub(crate) fn is_entry_object(value: f64) -> bool {
     let jsv = JSValue::from_bits(value.to_bits());
     if jsv.is_number()
-        || jsv.is_int32()
         || jsv.is_bool()
         || jsv.is_bigint()
         || jsv.is_any_string()

@@ -33,8 +33,6 @@ fn format_table_cell(value: f64) -> String {
             // strings — without the SSO branch a <=5-char cell fell through
             // to the numeric arm and rendered as "NaN".
             format!("'{}'", s)
-        } else if jsval.is_int32() {
-            jsval.as_int32().to_string()
         } else if jsval.is_pointer() {
             // Nested array/object: use the existing pretty-printer (un-quoted strings inside)
             format_jsvalue(value, 0)

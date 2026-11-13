@@ -403,35 +403,7 @@ unsafe fn call_array_this(
         return dispatch_body_args(closure, info, this, &vec![0.0; n]);
     }
     let args = std::slice::from_raw_parts(args_ptr, n);
-    // Defensive decode of INT32-tagged words; class references (the same tag)
-    // stay intact. No caller supplies one today: the V8 embedding that did
-    // (perry-jsruntime) was removed in #1696, `js_create_callback` is a stub
-    // (`closure/v8_stubs.rs`), and the remaining callers (perry-ffi
-    // `Closure::call`, ext-http) pass plain doubles (P3 B1 audit,
-    // perry-wpfacts/NUM_SEEDS.md). Deleted with the other INT32 consumers in
-    // P3 B4b. Only a slice containing a numeric INT32 needs scratch storage.
-    let is_int = |raw: f64| {
-        crate::value::is_int32_bits(raw.to_bits()) && crate::object::class_ref_id(raw).is_none()
-    };
-    if !args.iter().copied().any(is_int) {
-        return dispatch_body_args(closure, info, this, args);
-    }
-    let unbox = |raw: f64| {
-        if is_int(raw) {
-            (raw.to_bits() as u32 as i32) as f64
-        } else {
-            raw
-        }
-    };
-    if n <= 16 {
-        let mut converted = [0.0; 16];
-        for (slot, raw) in converted.iter_mut().zip(args) {
-            *slot = unbox(*raw);
-        }
-        return dispatch_body_args(closure, info, this, &converted[..n]);
-    }
-    let converted: Vec<f64> = args.iter().copied().map(unbox).collect();
-    dispatch_body_args(closure, info, this, &converted)
+    dispatch_body_args(closure, info, this, args)
 }
 
 /// Closure call with regular + spread args: `cb(reg0, reg1, ..., ...spread_arr)`.

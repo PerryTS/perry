@@ -358,13 +358,9 @@ unsafe fn string_of(v: JSValue) -> Option<String> {
     }
 }
 
-/// Read a JS value as an f64 if it is numeric, accepting both the int32 and
-/// double NaN-box representations (`is_number()` alone misses int32 since
-/// INT32_TAG falls inside the tagged range). Returns `None` otherwise.
+/// Read a JS value as an f64 if it is a Number. Returns `None` otherwise.
 fn num_of(v: JSValue) -> Option<f64> {
-    if v.is_int32() {
-        Some(v.as_int32() as f64)
-    } else if v.is_number() {
+    if v.is_number() {
         Some(v.as_number())
     } else {
         None

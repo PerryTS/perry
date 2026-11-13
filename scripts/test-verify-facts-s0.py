@@ -371,7 +371,10 @@ def main():
         runtime = str(args.canonnum_runtime.resolve())
         exe, e = compile_(source, "canonical-number-negative-false", PERRY_RUNTIME_DIR=runtime)
         value = report(observe(exe, e))
-        assert value["predicate"] == "canonical number", value
+        # The value is stored into an Array first, so since `Rep::Arr`
+        # (DESIGN-p4l1 PR-B) the array rep witness reports the word where it
+        # is read; either witness is the report this arm asks for.
+        assert value["predicate"] in ("canonical number", "array rep"), value
         save("canonical-number-negative-false", status=86)
 
     # An interval rule's bounds are those of doubles (`model::range`): the

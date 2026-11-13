@@ -73,11 +73,11 @@ fn test_jsvalue_equals_booleans() {
 
 #[test]
 fn test_jsvalue_equals_int32() {
-    let int5 = f64::from_bits(INT32_TAG | 5);
+    let int5 = f64::from_bits(INTERNAL_WORD_TAG | 5);
     let float5 = 5.0f64;
-    let int0 = f64::from_bits(INT32_TAG | 0);
+    let int0 = f64::from_bits(INTERNAL_WORD_TAG | 0);
     let float0 = 0.0f64;
-    let int_neg = f64::from_bits(INT32_TAG | ((-3i32 as u32) as u64));
+    let int_neg = f64::from_bits(INTERNAL_WORD_TAG | ((-3i32 as u32) as u64));
     let float_neg = -3.0f64;
     // INT32 vs f64 with same numeric value
     assert_eq!(js_jsvalue_equals(int5, float5), 1);
@@ -138,7 +138,7 @@ fn test_short_string_tag_distinct_from_others() {
         bits: POINTER_TAG | 0x5678,
     };
     // A runtime-internal 0x7FFE word (P3 B4a: no API builds an INT32 Number).
-    let int32 = JSValue::from_bits(INT32_TAG | 42);
+    let int32 = JSValue::from_bits(INTERNAL_WORD_TAG | 42);
     let number = JSValue::number(3.14);
     let undef = JSValue::undefined();
     assert!(sso.is_short_string());
@@ -161,7 +161,7 @@ fn test_tagged_values_are_not_numbers() {
     assert!(!JSValue::from_bits(BIGINT_TAG | 0x1234).is_number());
     assert!(!JSValue::from_bits(JS_HANDLE_TAG | 0x5678).is_number());
     assert!(!JSValue::undefined().is_number());
-    assert!(!JSValue::from_bits(INT32_TAG | 42).is_number());
+    assert!(!JSValue::from_bits(INTERNAL_WORD_TAG | 42).is_number());
     assert!(JSValue::from_bits(0x7FF8_0000_0000_0000).is_number());
     assert!(JSValue::number(f64::NAN).is_number());
 }
@@ -220,7 +220,7 @@ fn strict_equality_rejects_equal_and_distinct_numeric_nan_payloads() {
         0.0,
         -0.0,
         1.0,
-        f64::from_bits(INT32_TAG | 1),
+        f64::from_bits(INTERNAL_WORD_TAG | 1),
         f64::from_bits(TAG_UNDEFINED),
         f64::from_bits(TAG_NULL),
         f64::from_bits(TAG_TRUE),

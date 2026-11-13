@@ -35,12 +35,8 @@ extern "C" fn fast_buffer_constructor_thunk(
     length: f64,
 ) -> f64 {
     let value_js = crate::value::JSValue::from_bits(value.to_bits());
-    if value_js.is_int32() || value_js.is_number() {
-        let size = if value_js.is_int32() {
-            value_js.as_int32()
-        } else {
-            value as i32
-        };
+    if value_js.is_number() {
+        let size = value as i32;
         let buf = crate::buffer::js_buffer_alloc(size, 0);
         return crate::value::js_nanbox_pointer(buf as i64);
     }

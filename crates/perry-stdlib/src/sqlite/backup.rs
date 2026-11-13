@@ -251,9 +251,6 @@ pub(crate) unsafe fn path_like_from_value(value: f64, name: &str) -> String {
 }
 
 pub(crate) fn int32_option_value(value: JSValue, name: &str) -> i32 {
-    if value.is_int32() {
-        return value.as_int32();
-    }
     if value.is_number() {
         let number = value.as_number();
         if number.is_finite()

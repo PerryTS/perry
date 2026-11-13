@@ -25,7 +25,8 @@
 //!                             bits 40..=47, data in bits 0..=39)
 //! BIGINT_TAG    = 0x7FFA  (lower 48 = ptr)
 //! POINTER_TAG   = 0x7FFD  (lower 48 = ptr to ObjectHeader / ArrayHeader / etc.)
-//! INT32_TAG     = 0x7FFE  (lower 32 = i32)
+//! 0x7FFE        runtime-internal words, never a JS value (a Number is
+//!               always a plain double)
 //! STRING_TAG    = 0x7FFF  (lower 48 = ptr to StringHeader)
 //! ```
 //!
@@ -44,7 +45,6 @@ const SHORT_STRING_LEN_SHIFT: u64 = 40;
 const SHORT_STRING_LEN_MASK: u64 = 0x0000_FF00_0000_0000;
 const SHORT_STRING_DATA_MASK: u64 = 0x0000_00FF_FFFF_FFFF;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
@@ -260,22 +260,24 @@ impl JsValue {
         self.is_pointer() || self.is_handle()
     }
 
-    /// True if the value is a 32-bit integer.
+    /// Always false: a JS Number has one encoding, the plain double, and no
+    /// value is an INT32-tagged word. Kept so extension crates that call it
+    /// keep compiling; use [`is_number`](Self::is_number).
+    #[deprecated(note = "a JS Number is always a plain double; use is_number")]
     #[inline]
     pub const fn is_int32(self) -> bool {
-        // Bits 32..47 clear as well: other `0x7FFE` words (a `C.prototype`
-        // ref, internal markers) are not Numbers.
-        (self.0 & !0x0000_0000_FFFF_FFFF) == INT32_TAG
+        false
     }
 
-    /// True if the value is a number (real f64 OR int32). Returns
-    /// false for NaN-tagged values like undefined / null / strings.
+    /// True if the value is a number: a plain double, the one encoding of a
+    /// JS Number. Returns false for NaN-tagged values like undefined / null
+    /// / strings.
     #[inline]
     pub fn is_number(self) -> bool {
         let bits = self.0;
         let high = bits & TAG_MASK;
         let tag_band = (0x7FF9_0000_0000_0000..=0x7FFF_0000_0000_0000).contains(&high);
-        (!tag_band && high != perry_abi::HANDLE_TAG) || self.is_int32()
+        !tag_band && high != perry_abi::HANDLE_TAG
     }
 
     // ── accessors ──────────────────────────────────────────────
@@ -288,28 +290,21 @@ impl JsValue {
         self.0 == TAG_TRUE
     }
 
-    /// Decode as a Rust `f64`. For `int32`-tagged values this
-    /// converts via the i32; for real numbers this reads the bits
-    /// directly. For non-numeric values returns NaN.
+    /// Decode as a Rust `f64`: a Number's bits. For non-numeric values
+    /// returns NaN.
     #[inline]
     pub fn to_number(self) -> f64 {
-        if self.is_int32() {
-            (self.0 as u32 as i32) as f64
-        } else if self.is_number() {
+        if self.is_number() {
             f64::from_bits(self.0)
         } else {
             f64::NAN
         }
     }
 
-    /// Extract the i32 of a Number whose value is an exact i32 (a raw
-    /// `f64`, the form `from_int32` builds, or a legacy `INT32_TAG` word).
-    /// Returns 0 for any other value.
+    /// Extract the i32 of a Number whose value is an exact i32 (the form
+    /// `from_int32` builds). Returns 0 for any other value.
     #[inline]
     pub fn to_int32(self) -> i32 {
-        if self.is_int32() {
-            return self.0 as u32 as i32;
-        }
         if self.is_number() {
             let n = f64::from_bits(self.0);
             if n.fract() == 0.0 && n >= i32::MIN as f64 && n <= i32::MAX as f64 {
@@ -358,8 +353,6 @@ impl std::fmt::Debug for JsValue {
             write!(f, "JsValue::NULL")
         } else if self.is_bool() {
             write!(f, "JsValue::from_bool({})", self.to_bool())
-        } else if self.is_int32() {
-            write!(f, "JsValue::from_int32({})", self.to_int32())
         } else if self.is_string() {
             write!(f, "JsValue::from_string_ptr({:p})", self.as_string_ptr())
         } else if self.is_pointer() {
@@ -664,12 +657,6 @@ mod tests {
             let v = JsValue::from_int32(n);
             // One Number encoding: the raw f64 bits, never an INT32 word.
             assert_eq!(v.bits(), (n as f64).to_bits(), "{n}");
-            assert!(
-                !v.is_int32(),
-                "{} must not be an INT32 word, got {:?}",
-                n,
-                v
-            );
             assert_eq!(v.to_int32(), n);
             assert!(v.is_number());
             assert_eq!(v.to_number(), n as f64);
@@ -688,7 +675,7 @@ mod tests {
         ];
         for (val, kind) in cases {
             // Each value should match at most one main predicate
-            // (excluding is_number, which overlaps with int32).
+            // (excluding is_number).
             let mut count = 0;
             if val.is_undefined() {
                 count += 1;
@@ -705,11 +692,8 @@ mod tests {
             if val.is_pointer() {
                 count += 1;
             }
-            if val.is_int32() {
-                count += 1;
-            }
-            // Numbers (non-int32) match only `is_number`, not the
-            // others — count stays at 0.
+            // Numbers match only `is_number`, not the others — count stays
+            // at 0.
             assert!(count <= 1, "{kind} matched multiple main predicates");
         }
     }

@@ -144,9 +144,6 @@ fn json_nested_record_integer_shortcut_preserves_number_spelling() {
         ] {
             check(number);
         }
-        for n in [i32::MIN, -1, 0, 1, i32::MAX] {
-            check(f64::from_bits(INT32_TAG | n as u32 as u64));
-        }
     }
 }
 

@@ -439,12 +439,8 @@ extern "C" fn buffer_constructor_thunk(
     let value_js = crate::value::JSValue::from_bits(value.to_bits());
     let buf = if value_js.is_undefined() || value_js.is_null() {
         crate::buffer::js_buffer_alloc(0, 0)
-    } else if value_js.is_int32() || value_js.is_number() {
-        let size = if value_js.is_int32() {
-            value_js.as_int32()
-        } else {
-            value as i32
-        };
+    } else if value_js.is_number() {
+        let size = value as i32;
         crate::buffer::js_buffer_alloc_unsafe(size)
     } else {
         let second = crate::value::JSValue::from_bits(encoding_or_offset.to_bits());
@@ -454,16 +450,10 @@ extern "C" fn buffer_constructor_thunk(
         if !third.is_undefined() || second_is_offset {
             let len = if third.is_undefined() {
                 -1
-            } else if third.is_int32() {
-                third.as_int32()
             } else {
                 length as i32
             };
-            let offset = if second.is_int32() {
-                second.as_int32()
-            } else {
-                encoding_or_offset as i32
-            };
+            let offset = encoding_or_offset as i32;
             crate::buffer::js_buffer_from_arraybuffer_slice(value.to_bits() as i64, offset, len)
         } else {
             let enc = if second.is_undefined() {

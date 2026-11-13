@@ -15,8 +15,8 @@ use crate::array::ArrayHeader;
 use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::{
-    BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
-    TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG, SHORT_STRING_TAG,
+    STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MASK, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
 };
 
 const POLYMORPHIC_CAP: usize = 4;
@@ -491,9 +491,10 @@ fn stable_value_kind(bits: u64) -> u16 {
         BIGINT_TAG => STABLE_VALUE_BIGINT,
         JS_HANDLE_TAG => STABLE_VALUE_JS_HANDLE,
         SHORT_STRING_TAG => STABLE_VALUE_SHORT_STRING,
-        INT32_TAG if crate::value::is_int32_bits(bits) => STABLE_VALUE_INT32,
-        // A non-Number `0x7FFE` word (a `C.prototype` ref): no stable kind.
-        INT32_TAG => STABLE_VALUE_POINTER,
+        // An I32 slot word (`layout_slot`); no JS value is in this band.
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => STABLE_VALUE_INT32,
+        // Any other internal word: no stable kind.
+        INTERNAL_WORD_TAG => STABLE_VALUE_POINTER,
         _ => STABLE_VALUE_NUMBER,
     }
 }
@@ -1205,11 +1206,6 @@ fn is_numeric_value_bits(bits: u64) -> bool {
 }
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
-    let bits = index.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index < u32::MAX as f64 {
         Some(index as u32)
     } else {
@@ -1218,11 +1214,6 @@ fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
 }
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
-    let bits = index.to_bits();
-    if crate::value::is_int32_bits(bits) {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= i32::MAX as f64 {
         Some(index as i32)
     } else {

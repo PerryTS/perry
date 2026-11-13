@@ -537,8 +537,8 @@ mod tests {
                 crate::value::TAG_FALSE,
                 crate::value::TAG_NULL,
                 crate::value::TAG_UNDEFINED,
-                crate::value::INT32_TAG | 5, // a raw 0x7FFE word
-                0x7FF9_0100_0000_0035,       // short string "5"
+                crate::value::INTERNAL_WORD_TAG | 5, // a raw 0x7FFE word
+                0x7FF9_0100_0000_0035,               // short string "5"
             ] {
                 assert!(
                     !typed_array_fast_index_set(ptr, KIND_FLOAT64, 0.0, f64::from_bits(boxed)),

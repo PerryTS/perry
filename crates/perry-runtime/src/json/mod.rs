@@ -324,9 +324,7 @@ pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub(crate) const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
-pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
 pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 pub(crate) const TYPE_UNKNOWN: u32 = 0;
 pub(crate) const TYPE_OBJECT: u32 = 1;
@@ -1635,7 +1633,7 @@ mod tests {
 
     #[test]
     fn stringify_int32_array_elements_emit_integers_not_null() {
-        // Same INT32_TAG funnel for array elements (drizzle raw-mode rows,
+        // Integer array elements (drizzle raw-mode rows,
         // integer arrays over IPC).
         let mut arr = crate::array::js_array_alloc(3);
         arr = crate::array::js_array_push_f64(arr, f64::from(1));

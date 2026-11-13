@@ -422,9 +422,7 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
     if max_keys.is_undefined() || max_keys.is_null() {
         return Some(1000);
     }
-    let n = if max_keys.is_int32() {
-        max_keys.as_int32() as f64
-    } else if max_keys.is_number() {
+    let n = if max_keys.is_number() {
         max_keys.as_number()
     } else {
         return Some(1000);
@@ -632,9 +630,6 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
     }
     if value.is_bool() {
         return value.as_bool().to_string();
-    }
-    if value.is_int32() {
-        return value.as_int32().to_string();
     }
     if value.is_bigint() {
         let ptr = value.as_bigint_ptr();

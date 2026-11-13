@@ -433,9 +433,7 @@ fn normalize_zero(value: f64) -> f64 {
 #[inline(always)]
 fn normalize_number_value_from_boxed(value: f64) -> Option<f64> {
     let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        Some(normalize_zero(js_value.as_int32() as f64))
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(normalize_zero(value))
     } else {
         None

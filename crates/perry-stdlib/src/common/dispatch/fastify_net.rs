@@ -137,13 +137,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         }
         "getMaxListeners" => js_ext_net_socket_get_max_listeners(handle),
         "setMaxListeners" if !args.is_empty() => {
-            let bits = args[0].to_bits();
-            let n = if (bits >> 48) == 0x7FFE {
-                (bits as u32 as i32) as f64
-            } else {
-                args[0]
-            };
-            js_ext_net_socket_set_max_listeners(handle, n)
+            js_ext_net_socket_set_max_listeners(handle, args[0])
         }
         "eventNames" => json_str_to_value(js_net_socket_event_names(handle)),
         // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`

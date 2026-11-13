@@ -28,10 +28,7 @@ fn class_value_is_one_pinned_function_object_per_class() {
     let b = class_value(cid);
     assert_eq!(a.to_bits(), b.to_bits(), "one function object per class");
     let v = crate::value::JSValue::from_bits(a.to_bits());
-    assert!(
-        !v.is_int32() && !v.is_number(),
-        "a class value is not a number"
-    );
+    assert!(!v.is_number(), "a class value is not a number");
     assert!(v.is_pointer());
     let ptr = (a.to_bits() & crate::value::POINTER_MASK) as usize;
     assert!(
@@ -42,7 +39,7 @@ fn class_value_is_one_pinned_function_object_per_class() {
     assert_eq!(class_closure_id(ptr), Some(cid));
     // The number equal to the class id is not the class.
     assert_ne!(
-        f64::from_bits(crate::value::INT32_TAG | cid as u64).to_bits(),
+        f64::from_bits(crate::value::INTERNAL_WORD_TAG | cid as u64).to_bits(),
         a.to_bits()
     );
     let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }.expect("header");
@@ -528,7 +525,7 @@ fn an_int32_equal_to_a_registered_class_id_is_a_number() {
     let cid = 0x6A10;
     register(cid);
     let class = class_value(cid);
-    let int = f64::from_bits(crate::value::INT32_TAG | cid as u64);
+    let int = f64::from_bits(crate::value::INTERNAL_WORD_TAG | cid as u64);
     assert_eq!(class_value_id(int), None);
     assert_eq!(class_ref_word(int.to_bits()), None);
     assert_eq!(crate::object::class_ref_id(int), None);

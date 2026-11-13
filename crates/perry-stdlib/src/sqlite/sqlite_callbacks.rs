@@ -343,9 +343,7 @@ pub(crate) unsafe extern "C" fn node_sqlite_authorizer_trampoline(
         return ffi::SQLITE_DENY;
     };
     let result = value_from_f64(result);
-    let code = if result.is_int32() {
-        Some(result.as_int32())
-    } else if result.is_number() {
+    let code = if result.is_number() {
         let number = result.as_number();
         (number.is_finite()
             && number.fract() == 0.0
@@ -614,9 +612,6 @@ pub(crate) unsafe extern "C" fn node_sqlite_changeset_conflict(
         return ffi::SQLITE_CHANGESET_ABORT;
     };
     let result = value_from_f64(result);
-    if result.is_int32() {
-        return result.as_int32() as c_int;
-    }
     if result.is_number() {
         let number = result.as_number();
         if number.is_finite()

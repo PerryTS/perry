@@ -250,11 +250,7 @@ fn parse_umask_mask(mask: f64) -> u32 {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
             "The value of \"mask\" is out of range. It must be an integer. Received {}",

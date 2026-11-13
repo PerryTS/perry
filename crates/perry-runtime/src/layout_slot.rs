@@ -3,7 +3,7 @@
 //! decoded to, or encoded from, a JSValue.
 //!
 //! **Elements (PR B).** An Array of an at-rest template (wpfacts
-//! `rest_elems`) holds every element as an I32 word `INT32_TAG | (u32)v`:
+//! `rest_elems`) holds every element as an I32 word `INTERNAL_WORD_TAG | (u32)v`:
 //! the low half is the int32 the proven code loads and stores, the high half
 //! puts the word in the `0x7FFE` band, which the collector never takes for a
 //! pointer (`gc::layout_pointer_bearing_bits`), so the scanner, the layout
@@ -54,7 +54,7 @@
 //! codegen site that names a key some class stores at rest and that wpfacts
 //! does not prove reads and writes through [`js_object_rest_get`] /
 //! [`js_object_rest_set`]. Proven sites load the slot's low half as an i32
-//! and store `INT32_TAG | zext v`. wpfacts admits a class only when no other
+//! and store `INTERNAL_WORD_TAG | zext v`. wpfacts admits a class only when no other
 //! generic reader (JSON, keys/values, spread, inspect, a dynamic key) can
 //! reach its instances (`perry-wpfacts` `rest_fields`); check mode asserts it
 //! in the JSON object writer ([`generic_object_reader`]).
@@ -63,7 +63,7 @@
 //! `get(i) -> JSValue bits`).
 
 use crate::array::ArrayHeader;
-use crate::value::{INT32_TAG, TAG_MASK};
+use crate::value::{INTERNAL_WORD_TAG, TAG_MASK};
 
 /// `GcHeader::_reserved` bit 10 of a `GC_TYPE_ARRAY`: every element slot
 /// holds an I32 word (module docs).
@@ -140,7 +140,7 @@ pub(crate) unsafe fn elem_set(arr: *mut ArrayHeader, i: u32, v: u64) -> bool {
 /// clear, which no class reference word has)?
 #[inline(always)]
 pub(crate) fn is_i32_word(w: u64) -> bool {
-    w >> 32 == INT32_TAG >> 32
+    w >> 32 == INTERNAL_WORD_TAG >> 32
 }
 
 /// The canonical double bits of the I32 word `w`; any other word unchanged.
@@ -204,7 +204,7 @@ pub(crate) unsafe fn slot_set(obj: *mut crate::object::ObjectHeader, slot: u32, 
 }
 
 unsafe fn decode(arr: *const ArrayHeader, w: u64) -> u64 {
-    if w & TAG_MASK == INT32_TAG && is_i32_layout(arr) {
+    if w & TAG_MASK == INTERNAL_WORD_TAG && is_i32_layout(arr) {
         f64::from(w as u32 as i32).to_bits()
     } else {
         w
@@ -214,12 +214,12 @@ unsafe fn decode(arr: *const ArrayHeader, w: u64) -> u64 {
 /// The I32 word of an int32 Number (a canonical double, or an INT32-boxed
 /// word), never `-0`.
 pub(crate) fn encode(v: u64) -> Option<u64> {
-    if v & TAG_MASK == INT32_TAG {
+    if v & TAG_MASK == INTERNAL_WORD_TAG {
         return Some(v);
     }
     let d = f64::from_bits(v);
     let i = d as i32;
-    (f64::from(i) == d && v != (-0.0f64).to_bits()).then(|| INT32_TAG | u64::from(i as u32))
+    (f64::from(i) == d && v != (-0.0f64).to_bits()).then(|| INTERNAL_WORD_TAG | u64::from(i as u32))
 }
 
 /// The I32 word a field's I32 lane stores for the JS value `v` (PR C): an
@@ -228,7 +228,7 @@ pub(crate) fn encode(v: u64) -> Option<u64> {
 /// tolerance), so the word is exact for every observable value.
 pub(crate) fn encode_lane(v: u64) -> Option<u64> {
     if v == (-0.0f64).to_bits() {
-        return Some(INT32_TAG);
+        return Some(INTERNAL_WORD_TAG);
     }
     encode(v)
 }
@@ -520,12 +520,17 @@ mod tests {
 
     #[test]
     fn an_int32_number_encodes_in_the_int32_band() {
-        assert_eq!(encode(5.0f64.to_bits()), Some(INT32_TAG | 5));
-        assert_eq!(encode((-1.0f64).to_bits()), Some(INT32_TAG | 0xFFFF_FFFF));
-        assert_eq!(encode(4096.0f64.to_bits()), Some(INT32_TAG | 4096));
-        assert!(!crate::gc::layout_pointer_bearing_bits(INT32_TAG | 4096));
+        assert_eq!(encode(5.0f64.to_bits()), Some(INTERNAL_WORD_TAG | 5));
+        assert_eq!(
+            encode((-1.0f64).to_bits()),
+            Some(INTERNAL_WORD_TAG | 0xFFFF_FFFF)
+        );
+        assert_eq!(encode(4096.0f64.to_bits()), Some(INTERNAL_WORD_TAG | 4096));
         assert!(!crate::gc::layout_pointer_bearing_bits(
-            INT32_TAG | 0x7FFF_FFF8
+            INTERNAL_WORD_TAG | 4096
+        ));
+        assert!(!crate::gc::layout_pointer_bearing_bits(
+            INTERNAL_WORD_TAG | 0x7FFF_FFF8
         ));
     }
 
@@ -552,7 +557,7 @@ mod tests {
             assert_eq!(decode_word(w), f64::from(v).to_bits());
         }
         // A class reference word (INT32 tag, bit 32 set) is no I32 word.
-        assert!(!is_i32_word(INT32_TAG | (1 << 32) | 7));
+        assert!(!is_i32_word(INTERNAL_WORD_TAG | (1 << 32) | 7));
         for w in [
             1.5f64.to_bits(),
             crate::value::TAG_UNDEFINED,
@@ -596,7 +601,7 @@ mod tests {
             "the elements start behind the header"
         );
         for i in 0..len as usize {
-            assert_eq!(word(a, i), INT32_TAG | 3);
+            assert_eq!(word(a, i), INTERNAL_WORD_TAG | 3);
         }
         for i in len as usize..cap as usize {
             assert_eq!(word(a, i), crate::value::TAG_HOLE);
@@ -633,7 +638,7 @@ mod tests {
             assert_eq!((elem_len(a), (*a).capacity), (12, 16));
             assert_eq!(crate::array::array_elements_ptr(a), base);
             assert_eq!(crate::array::clean_arr_ptr(a), a as *const ArrayHeader);
-            assert_eq!(word(a, 11), INT32_TAG | 4096);
+            assert_eq!(word(a, 11), INTERNAL_WORD_TAG | 4096);
             assert_eq!(js_array_rest_get(v, 11.0), 4096.0);
             // The gap stays holes, and a hole below the length reads
             // `undefined`, as a key at or past the length does.

@@ -435,10 +435,6 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
     if (v.to_bits() & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR {
         return Some(v);
     }
-    let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return Some(jv.as_int32() as f64);
-    }
     match v.to_bits() {
         crate::value::TAG_UNDEFINED => Some(f64::NAN),
         crate::value::TAG_NULL | crate::value::TAG_FALSE => Some(0.0),
@@ -775,8 +771,6 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         ValueTypeofTag::Object
     } else if jsval.is_bigint() {
         ValueTypeofTag::BigInt
-    } else if jsval.is_int32() {
-        ValueTypeofTag::Number
     } else {
         // Issue #654: typed-array pointers arrive as a raw `i64 → f64`
         // bitcast (no NaN-box tag) per the codegen for `new Float64Array(...)`

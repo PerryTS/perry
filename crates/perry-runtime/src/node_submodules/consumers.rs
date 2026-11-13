@@ -207,9 +207,7 @@ fn has_named_callable(value: f64, name: &[u8]) -> bool {
 
 fn invalid_chunk_error(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
-    let (kind, detail) = if jsval.is_int32() {
-        ("number", format!(" ({})", jsval.as_int32()))
-    } else if jsval.is_number() {
+    let (kind, detail) = if jsval.is_number() {
         ("number", format!(" ({})", value))
     } else if jsval.is_bool() {
         ("boolean", String::new())
@@ -267,10 +265,8 @@ fn append_buffer_value_bytes(raw: usize, out: &mut Vec<u8>) {
     });
 }
 
-fn append_number_chunk(value: f64, jsval: JSValue, out: &mut Vec<u8>) {
-    let text = if jsval.is_int32() {
-        jsval.as_int32().to_string()
-    } else if value.is_finite() && value.fract() == 0.0 {
+fn append_number_chunk(value: f64, out: &mut Vec<u8>) {
+    let text = if value.is_finite() && value.fract() == 0.0 {
         (value as i64).to_string()
     } else {
         value.to_string()
@@ -310,11 +306,11 @@ fn append_chunk_bytes_for_consumer(
         append_string_value_bytes(value, out);
         return Ok(());
     }
-    if jsval.is_int32() || (jsval.is_number() && value.is_finite()) {
+    if jsval.is_number() && value.is_finite() {
         if mode == ChunkMode::Text {
             return Err(invalid_chunk_error(value));
         }
-        append_number_chunk(value, jsval, out);
+        append_number_chunk(value, out);
         return Ok(());
     }
 

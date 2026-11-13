@@ -139,10 +139,6 @@ macro_rules! nm_general_closures {
         };
         let $i32_arg = |n: usize| -> i32 {
             let v = $arg(n);
-            let bits = v.to_bits();
-            if crate::value::is_int32_bits(bits) {
-                return (bits & 0xFFFF_FFFF) as u32 as i32;
-            }
             if v.is_nan() || v.is_infinite() {
                 0
             } else {

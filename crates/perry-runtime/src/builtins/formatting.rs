@@ -35,7 +35,7 @@ mod typed_array_equality;
 mod util_format;
 pub(crate) use util_format::install_json_format;
 mod value_repr;
-pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
+pub(crate) use value_repr::is_array_hole;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 pub use util_format::{js_util_format, js_util_format_with_options, js_util_inspect};
@@ -773,7 +773,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                             );
                         }
                         let rendered = format_jsvalue(elem, depth + 1);
-                        let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                        let numeric = value_repr::entry_is_numeric(elem);
                         value_repr::ArrayEntry::new(rendered, numeric)
                     });
                     if inspect_show_hidden() {
@@ -829,10 +829,6 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     "[object Object]".to_string()
                 }
             }
-        } else if jsval.is_int32() {
-            // Shares its tag with a class reference; `int32_or_class_repr` is
-            // the only place that decides which one these bits are (#9415).
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             // A hole that escaped its array. `js_array_get_f64` normalizes one
             // to `undefined`, so that is what it must display as — not the
@@ -1542,7 +1538,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         // `{ h: [ NaN, NaN, NaN ] }`.
                         let mut parts = value_repr::array_entries(maybe_arr, |elem| {
                             let rendered = format_jsvalue_for_json(elem, depth + 1);
-                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
+                            let numeric = value_repr::entry_is_numeric(elem);
                             value_repr::ArrayEntry::new(rendered, numeric)
                         });
                         // #9463: the `showHidden` tail belongs on nested arrays
@@ -1601,8 +1597,6 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     }
                 }
             }
-        } else if jsval.is_int32() {
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             "undefined".to_string()
         } else {

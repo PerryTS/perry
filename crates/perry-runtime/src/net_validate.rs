@@ -57,11 +57,7 @@ fn validate_net_port(value: f64, listen: bool) {
     if !is_numeric(jv) {
         return;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if n.is_finite() && n.fract() == 0.0 && (0.0..65536.0).contains(&n) {
         return;
     }
@@ -104,11 +100,7 @@ pub extern "C" fn js_net_validate_socket_timeout(value: f64) {
         );
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n >= 0.0) {
         let message = format!(
             "The value of \"msecs\" is out of range. It must be a non-negative finite number. Received {}",
@@ -128,11 +120,7 @@ pub extern "C" fn js_net_validate_tos(value: f64) -> i32 {
         );
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if n.is_nan() {
         let message = format!(
             "The \"tos\" argument must be of type number. Received {}",
@@ -167,11 +155,7 @@ pub extern "C" fn js_net_validate_block_list_prefix(prefix: f64, max: f64) -> i3
         );
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
             "The value of \"prefix\" is out of range. It must be an integer. Received {}",
@@ -225,11 +209,7 @@ pub extern "C" fn js_net_validate_default_auto_select_family_attempt_timeout(val
         );
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
             "The value of \"value\" is out of range. It must be an integer. Received {}",
@@ -449,11 +429,7 @@ pub extern "C" fn js_net_validate_socket_address_family(value: f64) -> i32 {
     let received = if let Some(text) = text {
         format!("'{text}'")
     } else if is_numeric(jv) {
-        format_received_number(if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        })
+        format_received_number(jv.as_number())
     } else {
         describe_received(value.get_nanbox_f64())
     };

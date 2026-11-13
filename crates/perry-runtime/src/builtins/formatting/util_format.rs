@@ -235,10 +235,8 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         let bs = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bs).unwrap_or("").to_string()
     }
-    fn util_number_placeholder_coerce(val: f64, jv: &JSValue) -> f64 {
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else if unsafe { crate::symbol::js_is_symbol(val) } != 0 {
+    fn util_number_placeholder_coerce(val: f64) -> f64 {
+        if unsafe { crate::symbol::js_is_symbol(val) } != 0 {
             f64::NAN
         } else {
             js_number_coerce(val)
@@ -338,7 +336,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = util_number_placeholder_coerce(val, &jv);
+                        let f = util_number_placeholder_coerce(val);
                         out.push_str(&format_util_number(f));
                     }
                 }
@@ -348,16 +346,14 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
+                        let f = if jv.is_any_string()
                             && jsvalue_string_content(val)
                                 .map(|s| s.is_empty())
                                 .unwrap_or(false)
                         {
                             f64::NAN
                         } else {
-                            util_number_placeholder_coerce(val, &jv)
+                            util_number_placeholder_coerce(val)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");
@@ -391,16 +387,14 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                             out.push_str(&format_finite_number_js(f));
                         }
                     } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
+                        let f = if jv.is_any_string()
                             && jsvalue_string_content(val)
                                 .map(|s| s.is_empty())
                                 .unwrap_or(false)
                         {
                             f64::NAN
                         } else {
-                            util_number_placeholder_coerce(val, &jv)
+                            util_number_placeholder_coerce(val)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");

@@ -129,8 +129,6 @@ fn bigint_unconvertible_label(value: f64) -> String {
         "null".to_string()
     } else if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
         "a Symbol value".to_string()
-    } else if jsval.is_int32() {
-        jsval.as_int32().to_string()
     } else {
         format!("{value}")
     }

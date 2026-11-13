@@ -3,7 +3,7 @@
 use super::{js_dyn_index_get, js_dyn_index_set_strict};
 
 fn boxed_i32(value: i32) -> f64 {
-    f64::from_bits(crate::value::INT32_TAG | u64::from(value as u32))
+    f64::from_bits(crate::value::INTERNAL_WORD_TAG | u64::from(value as u32))
 }
 
 #[test]

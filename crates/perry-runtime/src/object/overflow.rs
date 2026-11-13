@@ -290,7 +290,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
             let attrs = super::key_attrs::keys_entry(shape.keys as usize as *const ArrayHeader, i);
             let t = rooted.get_raw_mut_ptr::<Table>();
             *key_at(t, i) = TAG_HOLE;
-            *value_at(t, i) = crate::value::INT32_TAG | fixed as u64;
+            *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
             *attrs_at(t, i) = attrs as u64 | SLOT_REF;
             (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
             (*t).length = i + 1;
@@ -312,7 +312,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
             i,
         );
         *key_at(t, i) = atom;
-        *value_at(t, i) = crate::value::INT32_TAG | fixed as u64;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
         *attrs_at(t, i) = attrs as u64 | SLOT_REF;
         (*t).summary |= u32::from(super::key_attrs::entry_summary(attrs));
         (*t).length = i + 1;
@@ -324,7 +324,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     let t = rooted.get_raw_mut_ptr::<Table>();
     for i in count..prefix {
         *key_at(t, i) = TAG_HOLE;
-        *value_at(t, i) = crate::value::INT32_TAG | i as u64;
+        *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | i as u64;
         *attrs_at(t, i) = SLOT_REF;
         (*t).length = i + 1;
     }
@@ -620,7 +620,7 @@ pub(crate) unsafe fn reattach_fixed(obj: *mut ObjectHeader, key: u64) {
     let fixed = super::key_attrs::key_storage_slot(keys, fixed);
     let entry = insert_key_bits(obj, key, crate::value::TAG_UNDEFINED, 0);
     let t = table(obj);
-    *value_at(t, entry) = crate::value::INT32_TAG | fixed as u64;
+    *value_at(t, entry) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
     *attrs_at(t, entry) |= SLOT_REF;
 }
 
@@ -653,7 +653,7 @@ pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u3
         0,
     );
     let t = table(owner.get_raw_mut_ptr::<ObjectHeader>());
-    *value_at(t, entry) = crate::value::INT32_TAG | slot as u64;
+    *value_at(t, entry) = crate::value::INTERNAL_WORD_TAG | slot as u64;
     *attrs_at(t, entry) |= SLOT_REF;
 }
 
@@ -971,7 +971,7 @@ pub(crate) unsafe fn store_routed(
                 let slot = insert(obj, atom, crate::value::TAG_UNDEFINED, 0);
                 let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
                 let t = table(obj);
-                *value_at(t, slot) = crate::value::INT32_TAG | fixed as u64;
+                *value_at(t, slot) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
                 *attrs_at(t, slot) |= SLOT_REF;
             }
             let obj = owner.get_raw_mut_ptr::<ObjectHeader>();

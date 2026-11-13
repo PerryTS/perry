@@ -230,8 +230,6 @@ pub(crate) fn iter_bt_dump(tag: &str, value: f64) {
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
     let kind = if jv.is_number() {
         "number"
-    } else if jv.is_int32() {
-        "int32"
     } else if jv.is_bool() {
         "bool"
     } else if jv.is_undefined() {

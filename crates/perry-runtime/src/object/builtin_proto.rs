@@ -1325,7 +1325,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     if v.is_any_string() {
         return Some(ReceiverFact::Builtin(BuiltinProto::String, false));
     }
-    if v.is_number() || v.is_int32() {
+    if v.is_number() {
         return Some(ReceiverFact::Builtin(BuiltinProto::Number, false));
     }
     if v.is_bool() {
