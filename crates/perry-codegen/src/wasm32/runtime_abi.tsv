@@ -2789,7 +2789,6 @@ js_object_get_field_slow	f64	i64,ptr
 js_object_get_field_value	f64	i64,ptr,i64
 js_object_get_field_value_site	f64	i64,ptr,i64,ptr
 js_object_get_index_polymorphic	f64	i64,f64
-js_object_get_keyed_site_slow	f64	f64,f64,i64,i32u,ptr
 js_object_get_keyed_slow	f64	f64,f64,i64,i32u
 js_object_get_own_field_or_undef	f64	f64,ptr,usize
 js_object_get_own_property_descriptor	f64	f64,f64

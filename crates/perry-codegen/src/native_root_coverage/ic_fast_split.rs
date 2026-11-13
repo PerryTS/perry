@@ -296,7 +296,7 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             let points = statepoints_of(&ir, target, &probe);
             // A fixed-name leaf owns no site storage: the receiver's shape
             // answers (accessors included) and a decline takes the memo-free
-            // collecting exit. The keyed site keeps its keyed memo.
+            // collecting exit. The keyed site owns none either.
             let fixed = if outlined {
                 ("perry_probe_get_value", "js_object_get_field_value")
             } else {
@@ -304,7 +304,7 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             };
             for (fast, slow) in [
                 fixed,
-                ("perry_probe_get_keyed", "js_object_get_keyed_site_slow"),
+                ("perry_probe_get_keyed", "js_object_get_keyed_slow"),
             ] {
                 let calls: Vec<_> = body
                     .lines()

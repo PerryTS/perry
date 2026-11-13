@@ -1758,9 +1758,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx,
                         obj_box,
                         key_box,
-                        |ctx, memo| {
-                            symbol_ic::keyed_site_slow(ctx, obj_box, key_box, &site_id, false, memo)
-                        },
+                        |ctx| symbol_ic::keyed_slow(ctx, obj_box, key_box, &site_id, false),
                     ))
                 });
             }
@@ -1868,8 +1866,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // takes the by-value read (see the dynamic-string arm above).
                 let _ = str_obj_handle;
                 // The probe first (§3.7 case 3), as the dynamic-string arm.
-                let v_str = symbol_ic::emit_keyed_probe(ctx, &obj_box, &idx_box, |ctx, memo| {
-                    symbol_ic::keyed_site_slow(ctx, &obj_box, &idx_box, &site_id, false, memo)
+                let v_str = symbol_ic::emit_keyed_probe(ctx, &obj_box, &idx_box, |ctx| {
+                    symbol_ic::keyed_slow(ctx, &obj_box, &idx_box, &site_id, false)
                 });
                 let str_end_lbl = ctx.block().label.clone();
                 ctx.block().br(&merge_lbl);
