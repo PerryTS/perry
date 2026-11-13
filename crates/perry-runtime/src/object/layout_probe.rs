@@ -974,7 +974,10 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
     if r.is_null() {
-        return array_named_get::<ABSENT>(
+        // An exotic receiver whose named own keys live in an ordinary bag
+        // answers an own key from that bag first, by the ordinary own arm.
+        // Out of line, so the front keeps to caller-saved registers.
+        return bag_first_get::<ABSENT>(
             dir,
             obj,
             key_bits,
@@ -1166,7 +1169,7 @@ unsafe fn array_named_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let v = exotic_get::<ABSENT>(dir, obj, key_bits, hash);
+    let v = exotic_get::<ABSENT, true>(dir, obj, key_bits, hash);
     if ABSENT {
         verify::answer(obj as usize, key_bits, v)
     } else {
@@ -1174,8 +1177,97 @@ unsafe fn array_named_get<const ABSENT: bool>(
     }
 }
 
+/// The read of an exotic receiver (no ordinary record): its bag's own key
+/// by the ordinary own arm ([`bag_own`]), else the exotic continuation.
+#[inline(never)]
+unsafe fn bag_first_get<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    match bag_own(dir, obj, key_bits, hash) {
+        Ok(v) if ABSENT => verify::answer(obj as usize, key_bits, v),
+        Ok(v) => v,
+        Err(true) => array_named_get_past_bag::<ABSENT>(dir, obj, key_bits, hash),
+        Err(false) => array_named_get::<ABSENT>(dir, obj, key_bits, hash),
+    }
+}
+
+/// [`array_named_get`] after [`bag_own`] proved the key absent from the
+/// receiver's bag (or found no bag): the exotic own keys, then the chain.
+#[cold]
+#[inline(never)]
+unsafe fn array_named_get_past_bag<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let v = exotic_get::<ABSENT, false>(dir, obj, key_bits, hash);
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, v)
+    } else {
+        v
+    }
+}
+
+/// `atom_hash(b"length")`: an array's `length` is its header's, never a
+/// key of its bag.
+const LENGTH_HASH: u64 = crate::object::runtime_layouts::atom_hash(b"length");
+
+/// The own key `key_bits` (hash `hash`) of an exotic receiver whose named
+/// own properties live in an ordinary bag object (a function's `props`, an
+/// array's `named`), read by the ordinary own arm on that bag: `Ok(value)`
+/// for a hit (a hole when the entry is no plain data slot, which the site
+/// treats as a decline, as for any receiver), `Err(true)` when the bag's
+/// record proves the key absent or there is no bag, `Err(false)` when the
+/// bag cannot answer here (no ordinary or derived record, an owned table, a
+/// forwarded cell, another receiver kind, an array's `length`).
 #[inline(always)]
-unsafe fn exotic_get<const ABSENT: bool>(
+pub(super) unsafe fn bag_own(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Result<f64, bool> {
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return Err(false);
+    }
+    let bag = match (*header).obj_type {
+        crate::gc_array_type_pat!() => {
+            if hash == LENGTH_HASH {
+                return Err(false);
+            }
+            (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader
+        }
+        crate::gc::GC_TYPE_CLOSURE => {
+            (*(obj as *const crate::closure::ClosureHeader)).props as *const ObjectHeader
+        }
+        _ => return Err(false),
+    };
+    if bag.is_null() {
+        return Err(true);
+    }
+    let word = (*bag).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        return Err(false);
+    }
+    let r = record_of(dir, LayoutWord(word));
+    if r.is_null() {
+        return Err(false);
+    }
+    let pw = (*r).probe;
+    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS
+    {
+        return Err(false);
+    }
+    list_position(r, pw, key_bits, hash).map(|(pos, load)| hit_value(bag, r, pos, load))
+}
+
+#[inline(always)]
+unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
@@ -1228,7 +1320,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
         }
         _ => return hole(),
     };
-    if !named.is_null() {
+    if BAG && !named.is_null() {
         let word = (*named).parent_class_id;
         let r = record_of(dir, LayoutWord(word));
         if r.is_null() {

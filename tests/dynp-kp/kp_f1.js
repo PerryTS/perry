@@ -1,0 +1,3 @@
+const C=[Object,Function,Array,String,Number,Boolean,Symbol,BigInt,Error,TypeError,Map,Set,WeakMap,Promise,RegExp,Date,ArrayBuffer,Uint8Array,DataView];
+const S=[{},function(){},[],"",1,true,Symbol(),1n,new Error(),new TypeError(),new Map(),new Set(),new WeakMap(),Promise.resolve(),/a/,new Date(0),new ArrayBuffer(1),new Uint8Array(1),new DataView(new ArrayBuffer(1))];
+for(let r=0;r<3;r++) for(let i=0;i<C.length;i++){const c=C[i]; const d=Object.getOwnPropertyDescriptor(c,"prototype"); console.log(r, i, c.prototype===Object.getPrototypeOf(Object(S[i])), d.writable, d.enumerable, d.configurable, c.prototype===d.value);}
