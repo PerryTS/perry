@@ -291,10 +291,10 @@ pub extern "C" fn js_nanbox_get_string_pointer(value: f64) -> i64 {
     }
 }
 
-/// Extract a string pointer from an f64 value that may be either:
-/// 1. A properly NaN-boxed string (with STRING_TAG)
-/// 2. A raw pointer bitcast to f64 (for locally-created strings)
-/// This unified function handles both cases for function parameters.
+/// Extract a string pointer from a value: a STRING_TAG string's header, an
+/// SSO string materialized onto the heap, a POINTER_TAG payload, the string
+/// form of a Number (also of a denormal whose bits look like an address: it is
+/// converted, never read as a header), and 0 for any other word.
 // Keep SSO materialization and numeric conversion in one shared entry. LTO
 // otherwise duplicates their allocating arms into unrelated callers when a
 // runtime call graph changes (including bound-function metadata reads).
@@ -329,22 +329,9 @@ pub extern "C" fn js_get_string_pointer_unified(value: f64) -> i64 {
         return (bits & 0x0000_FFFF_FFFF_FFFF) as i64;
     }
 
-    // Raw pointer fallback: only accept values that look like valid heap pointers.
-    // Must be non-NaN, non-zero, within 48-bit address space, AND at least 4-byte aligned.
-    // The alignment check prevents subnormal f64 numbers like 2.16e-314 (bits=0x1100000003)
-    // from being misidentified as pointers.
-    if !value.is_nan() && bits != 0 && bits < 0x0001_0000_0000_0000 {
-        // Must be at least 4-byte aligned (StringHeader starts with u32 length)
-        // and above minimum heap address
-        if (bits & 0x3) == 0 && bits >= 0x10000 {
-            return bits as i64;
-        }
-    }
-
     // For numeric values used as property keys (e.g., obj[pool.id], obj[Direction.Up]),
     // convert the number to a string representation.
-    // Note: 0.0 (bits == 0) is a valid number that should produce "0", so we must
-    // NOT skip it. The bits != 0 guard above is only for the raw-pointer fallback.
+    // 0.0 (bits == 0) is a valid number that produces "0".
     if !value.is_nan() {
         let s = crate::string::js_number_to_string(value);
         if !s.is_null() {
