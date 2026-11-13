@@ -106,3 +106,76 @@ fn an_escape_inside_an_entry_run_names_the_escape_that_made_the_run() {
         "no entry-run record\n{dump}"
     );
 }
+
+/// ROOTS2: `HOLDER.prototype` is passed to code outside the program (the
+/// root). A field of it read later holds ⊤ ("field of escaped prototype")
+/// and is called with argument `r`: the `VICTIM` instance escapes because
+/// the callee is unknown. `r` also holds `v.f`, which holds ⊤ once the
+/// instance escaped (a field of its own): that later ⊤ is not the cause.
+/// The instance's escape must name the prototype's.
+const SRC2: &str = r#"
+declare function external(x: unknown): void;
+class HOLDER { }
+class VICTIM { f: any = null; }
+external(HOLDER.prototype);
+const v = new VICTIM();
+const r: any = Math.random() < 0.5 ? v : v.f;
+const g = (HOLDER.prototype as any).k;
+g(r);
+"#;
+
+#[test]
+fn a_top_seeded_into_a_field_of_an_escaped_prototype_names_the_prototype() {
+    let pf = facts_with(
+        SRC2,
+        FactsConfig {
+            diagnostics: true,
+            ..Default::default()
+        },
+    );
+    let lines: Vec<&String> = pf.diagnostics.iter().flat_map(|d| d.1.iter()).collect();
+    let tok_name = |id: &str| -> String {
+        let needle = format!("\"record\":\"token\",\"id\":{id},");
+        lines
+            .iter()
+            .find(|l| l.contains(&needle))
+            .map(|l| field(l, "name").trim_matches('"').to_string())
+            .unwrap_or_default()
+    };
+    let first = |id: &str| -> Option<&String> {
+        let needle = format!("\"record\":\"escape-first\",\"token\":{id},");
+        lines.iter().copied().find(|l| l.contains(&needle))
+    };
+    let firsts: Vec<&String> = lines
+        .iter()
+        .copied()
+        .filter(|l| l.contains("\"record\":\"escape-first\""))
+        .collect();
+    let dump = firsts
+        .iter()
+        .map(|l| format!("{} {l}", tok_name(field(l, "token"))))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // Each `VICTIM` instance (the program's and unknown code's) escapes
+    // because the callee `g` is unknown, and `g` holds ⊤ only as a field
+    // of the escaped `HOLDER.prototype`: that escape is the cause, the
+    // first hop, not a later ⊤ that `r` holds.
+    let victims: Vec<&&String> = firsts
+        .iter()
+        .filter(|l| tok_name(field(l, "token")).starts_with("obj:") && tok_name(field(l, "token")).contains("VICTIM"))
+        .collect();
+    assert!(!victims.is_empty(), "the VICTIM instance never escaped:\n{dump}");
+    for v in victims {
+        let via = tok_name(field(v, "via"));
+        assert!(
+            via.contains("HOLDER") && via.starts_with("proto:"),
+            "a VICTIM instance's escape names {via:?}, not HOLDER.prototype's: {v}\n{dump}"
+        );
+        assert!(first(field(v, "via")).is_some(), "no escape-first for the cause\n{dump}");
+    }
+    // Every call an escape names has a call record.
+    assert!(
+        lines.iter().any(|l| l.contains("\"record\":\"call\"")),
+        "no call record\n{dump}"
+    );
+}

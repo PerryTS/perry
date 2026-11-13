@@ -2164,6 +2164,7 @@ impl Model {
                     let n = d.cause_node;
                     for &c in calls {
                         d.unknown_calls.entry(c).or_insert((n, t == TOP));
+                        d.unknown_callee.entry(c).or_insert(t);
                     }
                 }
                 let r = if self.explain {

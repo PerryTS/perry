@@ -745,7 +745,12 @@ impl Model {
             if !self.nodes[n as usize].pts.contains_tok(TOP) {
                 if let Some(d) = &mut self.diagnostic {
                     d.seeds.entry(n).or_insert(w.clone());
-                    if let Some(&b) = d.seed_by.last().or(d.escaping.last()) {
+                    if let Some(&b) = d
+                        .seed_holder
+                        .last()
+                        .or(d.seed_by.last())
+                        .or(d.escaping.last())
+                    {
                         d.top_by.entry(n).or_insert(b);
                     }
                 }
