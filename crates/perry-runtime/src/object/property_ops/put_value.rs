@@ -425,24 +425,37 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
-    // A Number key on a typed array is its numeric index, answered before
-    // the ordinary-object probes below read the receiver as an ObjectHeader.
-    if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
-        && crate::typedarray_props::typed_array_set_number_key(
-            (target.to_bits() & POINTER_MASK) as usize,
-            key,
-            value,
-        )
-    {
-        return value;
-    }
-    // The keyed store probe: the key's atom, then the store a static
-    // `target.key = value` site makes when the receiver owns the key.
-    let key = match unsafe {
-        crate::object::layout_probe::probe_overwrite_keyed(target.to_bits(), key.to_bits(), value)
+    use crate::object::layout_probe::KeyedStore;
+    // The keyed store probe: one key resolution (the key's atom), then the
+    // store a static `target.key = value` site makes when the receiver owns
+    // the key, or the append when its own list proves the key absent.
+    let (target, key, value) = match unsafe {
+        crate::object::layout_probe::probe_store_keyed(target.to_bits(), key.to_bits(), value)
     } {
-        Ok(()) => return value,
-        Err(key) => f64::from_bits(key),
+        KeyedStore::Stored => return value,
+        KeyedStore::Append(obj, atom) => match unsafe { keyed_append(obj, atom, value) } {
+            Some(stored) => return stored,
+            None => (target, f64::from_bits(atom), value),
+        },
+        KeyedStore::Complete(key) => (target, f64::from_bits(key), value),
+        KeyedStore::Unresolved => {
+            // A Number key on a typed array is its numeric index, answered
+            // before the ordinary-object steps below read the receiver as an
+            // ObjectHeader. (A string or symbol key is never a Number key.)
+            if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
+                && crate::typedarray_props::typed_array_set_number_key(
+                    (target.to_bits() & POINTER_MASK) as usize,
+                    key,
+                    value,
+                )
+            {
+                return value;
+            }
+            match unsafe { store_minting_key(target, key, value) } {
+                Ok(stored) => return stored,
+                Err(operands) => operands,
+            }
+        }
     };
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
@@ -471,6 +484,62 @@ pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, st
         }
     }
     js_put_value_set(target, key, value, target, strict)
+}
+
+/// The keyed store probe's add ([`KeyedStore::Append`]): `obj` takes `atom`
+/// in its overflow with one append, as `shape_store::try_dynamic_store`
+/// makes it. `None`, having changed nothing but the receiver's layout word,
+/// when the receiver's layout was deprecated and the miss migrated it (the
+/// complete store's step before its own add): the probe's proof was for the
+/// old layout, so the complete store asks again.
+///
+/// # Safety
+/// As [`KeyedStore::Append`] states: `obj` a live ordinary object whose own
+/// list proves `atom` (a property atom value) absent.
+#[inline(never)]
+unsafe fn keyed_append(obj: *mut crate::ObjectHeader, atom: u64, value: f64) -> Option<f64> {
+    let word = (*obj).parent_class_id;
+    crate::object::field_rep_store::migrate_on_miss(obj as usize);
+    if (*obj).parent_class_id != word {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    crate::object::overflow::store_unfixed_routed(
+        obj,
+        (atom & POINTER_MASK) as *const crate::StringHeader,
+        value.get_nanbox_f64(),
+    );
+    Some(value.get_nanbox_f64())
+}
+
+/// A store whose key no atom names yet: the atom is minted once (a key has
+/// its atom from its first store), and the keyed store probe is asked with
+/// it, so a new spelling takes the same path as every later store of it.
+/// `Err` carries the operands the complete store continues with, re-read
+/// from their roots (minting allocates): the minted atom as the key, or the
+/// key as it came when it is not a mintable string (a number, an index-like
+/// text, an object).
+#[cold]
+#[inline(never)]
+unsafe fn store_minting_key(target: f64, key: f64, value: f64) -> Result<f64, (f64, f64, f64)> {
+    use crate::object::layout_probe::KeyedStore;
+    if !crate::object::layout_probe::store_key_mintable(key.to_bits()) {
+        return Err((target, key, value));
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target_h = scope.root_nanbox_f64(target);
+    let value_h = scope.root_nanbox_f64(value);
+    let atom = crate::string::property_atom_from_value(key.to_bits());
+    let (target, value) = (target_h.get_nanbox_f64(), value_h.get_nanbox_f64());
+    match crate::object::layout_probe::probe_store_keyed(target.to_bits(), atom, value) {
+        KeyedStore::Stored => Ok(value),
+        KeyedStore::Append(obj, atom) => match keyed_append(obj, atom, value) {
+            Some(stored) => Ok(stored),
+            None => Err((target, f64::from_bits(atom), value)),
+        },
+        _ => Err((target, f64::from_bits(atom), value)),
+    }
 }
 
 /// The own-key front of [`js_put_value_set_dynamic`]. An own writable data

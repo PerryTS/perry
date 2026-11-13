@@ -456,6 +456,25 @@ impl ShapeSlab {
         &AGENT_SHAPE_DIR[0] as *const BandDir as *const u8
     }
 
+    /// This agent's property-atom index as it published it
+    /// ([`Self::publish_agent_atoms`]), or null.
+    #[inline(always)]
+    pub(crate) fn agent_atoms() -> *const u8 {
+        AGENT_SHAPE_DIR[0].atoms.get()
+    }
+
+    /// The agent's atom index lives at `table` from now on.
+    pub(crate) fn publish_agent_atoms(table: *const u8) {
+        AGENT_SHAPE_DIR[0].atoms.set(table);
+    }
+
+    /// `table` is being dropped: the directory names it no longer.
+    pub(crate) fn retract_agent_atoms(table: *const u8) {
+        if AGENT_SHAPE_DIR[0].atoms.get() == table {
+            AGENT_SHAPE_DIR[0].atoms.set(std::ptr::null());
+        }
+    }
+
     /// The record of ShapeId `id` in the ordinary directory at `dir` (this
     /// thread's [`Self::ordinary_dir_addr`], or `PERRY_EMPTY_SHAPE_DIR`), or
     /// `None` past its pages: the ordinary band of [`Self::agent_record`], for

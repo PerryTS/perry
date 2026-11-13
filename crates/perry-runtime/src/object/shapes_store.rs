@@ -1310,7 +1310,15 @@ pub(crate) struct BandDir {
     pub(crate) word_dir: std::cell::Cell<*const u8>,
     #[cfg(target_pointer_width = "32")]
     _word_dir_high: u32,
+    /// This agent's property-atom index (`string::intern::AtomTable`), for
+    /// the keyed probe's key resolution; null until the agent's first atom
+    /// and after its table is dropped. Offset 56.
+    atoms: std::cell::Cell<*const u8>,
+    #[cfg(target_pointer_width = "32")]
+    _atoms_high: u32,
 }
+
+const _: () = assert!(std::mem::size_of::<BandDir>() == 64);
 
 /// `BandDir.flat_base`'s offset; `flat_ids` follows at +8.
 pub(crate) const FLAT_BASE_OFFSET: usize = crate::codegen_abi::SHAPE_DIR_FLAT_BASE;
@@ -1343,6 +1351,9 @@ impl BandDir {
             word_dir: std::cell::Cell::new(std::ptr::null()),
             #[cfg(target_pointer_width = "32")]
             _word_dir_high: 0,
+            atoms: std::cell::Cell::new(std::ptr::null()),
+            #[cfg(target_pointer_width = "32")]
+            _atoms_high: 0,
         }
     }
 }

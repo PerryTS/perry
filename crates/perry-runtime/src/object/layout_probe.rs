@@ -2156,7 +2156,7 @@ use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;
-pub(crate) use computed::probe_overwrite_keyed;
+pub(crate) use computed::{probe_store_keyed, store_key_mintable, KeyedStore};
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

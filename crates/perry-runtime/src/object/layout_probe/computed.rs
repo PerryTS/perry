@@ -327,9 +327,36 @@ pub unsafe extern "C" fn perry_probe_get_value(
 /// string as its text's property atom when one exists. `None` for anything
 /// else (a number, an object whose ToPropertyKey runs user code, a text no
 /// atom names).
-#[inline]
+#[inline(always)]
 pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
     let tag = key_bits & TAG_MASK;
+    if tag == STRING_TAG {
+        let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if s.is_null() {
+            return None;
+        }
+        if crate::string::is_property_atom(s) {
+            let text =
+                std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+            if index_like(text) {
+                return None;
+            }
+            return Some((key_bits, crate::string::property_atom_hash(s)));
+        }
+        // A shared string that was a key before carries its key word (its
+        // text's folded hash; never written for an index-like text): the
+        // atom index is probed from the word, no bytes are hashed.
+        let word = (*s).refcount;
+        let (a, h) = if word >= crate::string::KEY_WORD_MIN {
+            crate::string::key_word_atom(s, word)
+        } else {
+            heap_key_first(s)
+        };
+        if a.is_null() {
+            return None;
+        }
+        return Some((STRING_TAG | a as u64, h));
+    }
     if tag == crate::value::SHORT_STRING_TAG {
         // A short string's word is its text: hash it from the word (the
         // FNV-1a of `key_bytes_hash`) and find its atom by a word compare.
@@ -351,41 +378,28 @@ pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
         if digits {
             return None;
         }
-        let a = crate::string::short_key_atom(len, data, h)?;
-        return Some((STRING_TAG | a as u64, h));
-    }
-    if tag == STRING_TAG {
-        let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
-        if s.is_null() {
+        let a = crate::string::short_key_atom(len, data, h);
+        if a.is_null() {
             return None;
         }
-        if crate::string::is_property_atom(s) {
-            let text =
-                std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
-            if index_like(text) {
-                return None;
-            }
-            return Some((key_bits, crate::string::property_atom_hash(s)));
-        }
-        // A shared string that was resolved as a key before names its atom
-        // (never recorded for an index-like text, see below).
-        let word = (*s).refcount;
-        if word >= crate::string::KEY_WORD_ATOM_BASE {
-            let a = crate::string::atom_of_key_word(word);
-            if !a.is_null() {
-                return Some((STRING_TAG | a as u64, crate::string::property_atom_hash(a)));
-            }
-        }
-        let text = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
-        if index_like(text) {
-            return None;
-        }
-        let h = crate::object::key_bytes_hash(text.as_ptr(), text.len());
-        let a = crate::string::heap_key_atom(s, text, h)?;
         return Some((STRING_TAG | a as u64, h));
     }
     let h = key_word_hash(key_bits)?;
     Some((key_bits, h))
+}
+
+/// [`computed_key`]'s first sight of plain heap string `s` as a key (no key
+/// word yet, or a unique-owner string that never takes one): its atom and
+/// hash by its bytes; null for an index-like text and for a text no atom
+/// names.
+#[cold]
+#[inline(never)]
+unsafe fn heap_key_first(s: *const crate::StringHeader) -> (*const crate::StringHeader, u64) {
+    let text = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+    if index_like(text) {
+        return (std::ptr::null(), 0);
+    }
+    crate::string::key_first_atom(s)
 }
 
 /// [`computed_key`] for a string value by its bytes (the forms the word
@@ -401,6 +415,27 @@ unsafe fn computed_key_by_bytes(key_bits: u64) -> Option<(u64, u64)> {
     let h = crate::object::key_bytes_hash(text.as_ptr(), text.len());
     let a = crate::string::atom_lookup(text, h)?;
     crate::string::is_property_atom(a).then_some((STRING_TAG | a as u64, h))
+}
+
+/// Is `key_bits` a string value whose text is a property key the keyed
+/// probe resolves (not index-like)? Then a store may mint its atom
+/// (`string::property_atom_from_value`) and ask the probe with it. Allocates
+/// nothing.
+///
+/// # Safety
+/// Any value bits.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn store_key_mintable(key_bits: u64) -> bool {
+    let tag = key_bits & TAG_MASK;
+    if tag != STRING_TAG && tag != crate::value::SHORT_STRING_TAG {
+        return false;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    match crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut sso) {
+        Some(text) => !index_like(text),
+        None => false,
+    }
 }
 
 /// `obj[key]` for a computed `key` (a string or symbol value): the probe
@@ -433,30 +468,160 @@ pub unsafe extern "C" fn perry_probe_get_keyed(
     v
 }
 
-/// `obj[key] = value` for a computed `key` when the store probe finds `key`
-/// as the receiver's own plain writable data property (an inline slot or an
-/// overflow entry): one barriered store, `Ok`. Everything else is `Err` with
-/// the key the complete store continues with: the key's atom once resolved
-/// (the same property), else `key_bits`. A key add stays with the complete
-/// store, which appends a computed key to the receiver's overflow (§3.3).
+/// What the keyed store probe ([`probe_store_keyed`]) did with
+/// `obj[key] = value`.
+pub(crate) enum KeyedStore {
+    /// Stored: `key` is the receiver's own plain writable data property (an
+    /// inline slot or an overflow entry), one barriered store.
+    Stored,
+    /// Nothing stored: the receiver's complete own list proves the key (this
+    /// atom) absent, the receiver may grow and nothing on its prototype
+    /// chain intercepts the add. The caller appends the atom to the
+    /// receiver's overflow (a computed key makes no layout transition, §3.3).
+    Append(*mut ObjectHeader, u64),
+    /// Nothing stored: the complete store continues with this key (the key's
+    /// atom: the same property, resolved once).
+    Complete(u64),
+    /// Nothing stored: the key has no atom (a text no atom names yet, an
+    /// index-like text, or not a string or symbol at all).
+    Unresolved,
+}
+
+/// `obj[key] = value` for a computed `key`: one key resolution, then the
+/// store probe's plan for the receiver, for an overwrite and for an add
+/// alike.
 ///
 /// GC leaf: no allocation on the heap, no collection, no user code.
 ///
 /// # Safety
 /// Any value bits.
-#[inline]
-pub(crate) unsafe fn probe_overwrite_keyed(
-    obj_bits: u64,
-    key_bits: u64,
-    value: f64,
-) -> Result<(), u64> {
+#[inline(always)]
+pub(crate) unsafe fn probe_store_keyed(obj_bits: u64, key_bits: u64, value: f64) -> KeyedStore {
     let Some((key, hash)) = computed_key(key_bits) else {
-        return Err(key_bits);
+        return KeyedStore::Unresolved;
     };
-    match super::set_plan(super::super::ordinary_dir_addr(), obj_bits, key, hash, value) {
-        super::SetPlan::Stored(stored) if stored != 0 => Ok(()),
-        _ => Err(key),
+    let dir = super::super::ordinary_dir_addr();
+    match super::set_plan(dir, obj_bits, key, hash, value) {
+        super::SetPlan::Stored(stored) if stored != 0 => KeyedStore::Stored,
+        super::SetPlan::Add(obj, r, _) => {
+            if append_admitted(dir, obj, r, key, hash) {
+                KeyedStore::Append(obj, key)
+            } else {
+                KeyedStore::Complete(key)
+            }
+        }
+        // A decline: an overflowed receiver whose overflow does not hold the
+        // key is the same add.
+        super::SetPlan::Stored(_) => match overflowed_append(dir, obj_bits, key, hash) {
+            Some(obj) => KeyedStore::Append(obj, key),
+            None => KeyedStore::Complete(key),
+        },
     }
+}
+
+/// [`KeyedStore::Append`] for a receiver that has an overflow already: the
+/// overflow owns every current own key, so a key it does not hold, which the
+/// layout does not name either (a deleted layout key is re-added as a
+/// reference to its slot, by the complete store), is absent, and the add is
+/// [`append_admitted`]'s question. `None` for every other decline of the
+/// store probe.
+#[inline(never)]
+unsafe fn overflowed_append(
+    dir: *const u8,
+    obj_bits: u64,
+    key: u64,
+    hash: u64,
+) -> Option<*mut ObjectHeader> {
+    if obj_bits & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
+        return None;
+    }
+    let obj = payload as *mut ObjectHeader;
+    let word = (*obj).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT == 0 {
+        return None;
+    }
+    let r = record_of(dir, LayoutWord(word));
+    if r.is_null() || (*r).object_kind() != super::super::ShapeObjectKind::Ordinary {
+        return None;
+    }
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if meta.is_null() || (*meta).overflow == 0 {
+        return None;
+    }
+    let t = (*meta).overflow as usize as *mut crate::object::overflow::Table;
+    if crate::object::overflow::find_hashed(t, key, hash).is_some()
+        || own_position(r, key, hash) != Err(true)
+    {
+        return None;
+    }
+    append_admitted(dir, obj, r, key, hash).then_some(obj)
+}
+
+/// May `obj` (record `r`, whose complete own list proves `key` absent; no
+/// overflow) take string atom `key` as a new own data property in its
+/// overflow? The receiver facts the dynamic store asks
+/// (`shape_store::try_dynamic_store`: an ordinary, extensible realm-default
+/// or null-prototype bag with no descriptors and no exotic surface, a key
+/// that is not `__proto__`, a private name or digit-led), read from the
+/// header, the record and the meta the probe already holds, and the chain's
+/// answer from the layouts ([`super::write::chain_admits_add`]). A family
+/// object and a stable-tombstone receiver have their own add paths. `false`
+/// decides nothing: the complete store asks again by name.
+#[inline(never)]
+unsafe fn append_admitted(
+    dir: *const u8,
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    if key & TAG_MASK != STRING_TAG || hash == super::write::PROTO_KEY_HASH {
+        return false;
+    }
+    let first = *crate::string::string_data((key & POINTER_MASK) as *const crate::StringHeader);
+    if first == b'#' || first.is_ascii_digit() {
+        return false;
+    }
+    let gc = crate::gc::header_from_trusted_user_ptr(obj as *const u8);
+    if (*gc)._reserved
+        & (crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND
+            | crate::gc::OBJ_FLAG_HAS_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO)
+        != 0
+        || (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+        || crate::object::layout_desc::is_family_object(obj)
+        || !matches!(
+            (*r).proto_id,
+            super::super::PROTO_ID_DEFAULT | super::super::PROTO_ID_NULL
+        )
+    {
+        return false;
+    }
+    let id = crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id);
+    if id.wrapping_sub(super::super::SHAPE_ID_BASE) >= (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+    {
+        return false;
+    }
+    // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags
+                & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+                    | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
+                != 0)
+    {
+        return false;
+    }
+    super::write::chain_admits_add(dir, obj, r, key, hash)
 }
 
 /// The store twin of [`perry_probe_get_keyed`]: `obj[key] = value` for a

@@ -892,6 +892,23 @@ pub(crate) fn ordinary_dir_addr() -> *const u8 {
     ShapeSlab::ordinary_dir_addr()
 }
 
+/// This agent's property-atom index (`string::intern`), read from the agent's
+/// directory: null until the agent's first atom.
+#[inline(always)]
+pub(crate) fn agent_atoms() -> *const u8 {
+    ShapeSlab::agent_atoms()
+}
+
+/// `string::intern` publishes the agent's atom index when its slots move.
+pub(crate) fn publish_agent_atoms(table: *const u8) {
+    ShapeSlab::publish_agent_atoms(table);
+}
+
+/// `string::intern` retracts the agent's atom index when it is dropped.
+pub(crate) fn retract_agent_atoms(table: *const u8) {
+    ShapeSlab::retract_agent_atoms(table);
+}
+
 /// [`positional_key_words`] for the computed-key read
 /// (`object::dynamic_key_read`), which also refuses a shape whose
 /// [[Prototype]] identity is PER-OBJECT.
