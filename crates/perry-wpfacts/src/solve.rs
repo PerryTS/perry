@@ -296,6 +296,7 @@ impl Model {
                 | Cons::NotNullish { .. }
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
+                | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
                 | Cons::RuntimeStore { .. }
@@ -1702,6 +1703,7 @@ impl Model {
             Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
+            Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

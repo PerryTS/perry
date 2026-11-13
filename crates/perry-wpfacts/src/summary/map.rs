@@ -120,6 +120,7 @@ pub fn map_cons(
         Fulfil { dst } => Fulfil { dst: n(dst) },
         Falsy { dst } => Falsy { dst: n(dst) },
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
+        Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
             from: n(from),
@@ -483,6 +484,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NotNullish { .. }
             | Fulfil { .. }
             | Falsy { .. }
+            | Objects { .. }
             | NotUndefined { .. }
             | Hard { .. }
             | Miss { .. }
