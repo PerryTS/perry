@@ -10,7 +10,7 @@ function protoIndex(t: string, h: { xs: number[] }): string {
   const xs = h.xs;
   let s = "";
   for (let i = 0; i < xs.length; i++) {
-    s += xs[i] + t[i + 2] + ",";
+    s += xs[i] + ":" + t[i + 2] + ",";
   }
   return s;
 }
