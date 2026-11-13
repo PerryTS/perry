@@ -5431,6 +5431,7 @@ dependencies = [
  "llvm-sys",
  "object 0.37.3",
  "perry-abi",
+ "perry-dispatch",
  "perry-perex",
  "perry-runtime-manifest",
  "regex",

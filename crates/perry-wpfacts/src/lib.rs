@@ -84,7 +84,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
     pub verify_facts: bool,
-    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`).
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`,
+    /// on by default; `0` turns it off).
     pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.

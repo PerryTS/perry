@@ -27,6 +27,7 @@ impl WasmModuleEmitter {
             "jsvalue_to_template_string",
             "is_truthy",
             "js_strict_eq",
+            "js_loose_eq",
             "math_floor",
             "math_ceil",
             "math_round",
@@ -124,6 +125,7 @@ impl WasmModuleEmitter {
             "closure_call_1",
             "closure_call_2",
             "closure_call_3",
+            "new_dynamic",
             "closure_call_spread",
             "array_map",
             "array_filter",
@@ -208,6 +210,10 @@ impl WasmModuleEmitter {
             "number_coerce",
             "is_nan",
             "is_finite",
+            "number_is_integer",
+            "number_is_safe_integer",
+            "global_is_nan",
+            "global_is_finite",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -992,10 +998,19 @@ impl WasmModuleEmitter {
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);
             }
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                self.collect_strings_in_expr(val);
+                self.collect_strings_in_expr(replacer);
+                self.collect_strings_in_expr(space);
+            }
             Expr::NumberCoerce(e)
             | Expr::IsNaN(e)
             | Expr::IsUndefinedOrBareNan(e)
             | Expr::IsFinite(e)
+            | Expr::NumberIsNaN(e)
+            | Expr::NumberIsFinite(e)
+            | Expr::NumberIsInteger(e)
+            | Expr::NumberIsSafeInteger(e)
             | Expr::BigIntCoerce(e) => {
                 self.collect_strings_in_expr(e);
             }

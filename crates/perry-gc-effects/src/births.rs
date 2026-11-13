@@ -19,10 +19,16 @@
 //! - it declares the birth: an entry of the family (or of one that
 //!   requires it) is in its own `births`. Its holder's `births` do not
 //!   count: the fact observes members one by one;
-//! - otherwise the check FAILS and prints the call path. A native whose
-//!   body symbol is not in the analyzed archives (a member that shares the
-//!   bound-method sentinel, a body in another archive) is counted as
-//!   unchecked unless one of the two holds for it by name.
+//! - otherwise the check FAILS and prints the call path.
+//!
+//! A native's body is the function its declaration names. A bound-method
+//! member of a native module namespace (and of `process`, `console`,
+//! `Buffer`) shares one sentinel body: [`bodies`] resolves it to the router
+//! plus the export body the runtime's build script emits for (module, key),
+//! or to the module's whole dispatch function. A body the compiler merged
+//! with an identical one is found through the declaration's function-info
+//! record, an export body through its getter, so no native is left
+//! unchecked for want of a symbol.
 //!
 //! The walk stops at an `in-hand` function: one that runs only when a byte
 //! cell already exists (its receiver or an argument is one), or that
@@ -32,16 +38,23 @@
 //! a rule that matches no function fails the check (a renamed function
 //! would otherwise empty a cut, or the seed).
 //!
-//! A birth can also start outside every native's body: in a function the
-//! runtime reaches only through a pointer (a completion the event loop
-//! runs, a callback handed to the host, a scheduled task). Such a function
-//! has no caller in the graph, or its address is taken in code. Each one
-//! that can reach the birth must match an `origin` rule, whose reason says
-//! which observation of the program schedules it; one that matches none
-//! FAILS. (An entry point compiled code calls is listed in the census
-//! only: what compiled code may call is the fact's node classification,
-//! `family_reach/nodes.rs`. An address held only in data, a vtable or a
-//! static table, is not seen.)
+//! A birth can also start outside every native's body: in a completion the
+//! event loop runs, a callback handed on, a scheduled task. The walk
+//! therefore follows, like a call, whoever TAKES a function's address: in
+//! code, or by naming data that holds it at any depth (a vtable, a table of
+//! thunks; `Graph::taken_by`). The native that schedules the completion or
+//! registers the callback then reaches the birth itself and must be
+//! covered: this is the "values handed to callbacks and events" part of
+//! the condition. Not followed are the takers of a realm native's body
+//! (its address is held to make its function value; a call of the value is
+//! a cut, and the native is checked by name) and of an `fills` function's
+//! targets (an install only stores). What the walk cannot attribute needs
+//! an `origin` rule whose reason says what calls it: an operation an
+//! install stores in a slot no GC rule delegates to its wrapper, a function
+//! whose address sits in data no runtime code names, a function without a
+//! caller. One that matches none FAILS. (An entry point compiled code
+//! calls by name is listed in the census only: what compiled code may call
+//! is the fact's node classification, `family_reach/nodes.rs`.)
 //!
 //! A claim is set by the image's installer at the end of `js_gc_init`
 //! (perry-runtime `family_never`). A `before-claim` rule names what runs
@@ -53,7 +66,6 @@
 //! Values handed to callbacks and events, or stored in result fields, need
 //! no rule of their own: whatever the native does with the cell, its body
 //! allocated it.
-use crate::effects::Native;
 use crate::graph::Graph;
 use crate::rules::Rule;
 use anyhow::{bail, Context, Result};
@@ -87,6 +99,179 @@ pub fn declared_births(manifest: &str) -> Result<HashMap<String, Vec<String>>> {
             })
             .unwrap_or_default();
         out.insert(name.to_owned(), births);
+    }
+    Ok(out)
+}
+
+/// The router every call of a bound-method member enters
+/// (`closure::BOUND_METHOD_FUNC_PTR` is a sentinel, no code): it normalizes
+/// the namespace's module name and calls the module's dispatch function
+/// through the registry `js_nm_install_<module>` fills.
+pub const ROUTER: &str =
+    "perry_runtime::object::native_module_dispatch::dispatch_native_module_method";
+
+/// One callable realm declaration and the functions a call of it runs.
+/// A symbol that starts with `::` is the end of a path; one that starts
+/// with `&` names a function and stands for every function whose address
+/// that function takes (an export's getter holds its body in a local
+/// static, and identical bodies are merged, so the body has no name of its
+/// own to rely on).
+pub struct Body {
+    pub name: String,
+    pub symbols: Vec<String>,
+    /// The function-info record of the declaration (a global data symbol
+    /// that holds the body's address): the body when its own symbol is in
+    /// no archive, because the compiler merged it with an identical one.
+    pub info: Option<String>,
+    /// The module's dispatch function, for an export whose getter is in
+    /// no archive.
+    pub bucket: Option<String>,
+    /// How the symbols were found (a census column).
+    pub how: &'static str,
+}
+
+/// The export bodies the runtime's build script emits
+/// (`object/native_module/static_exports_build.rs`), by the (module, key)
+/// they dispatch: `js_native_export_<hex module>_<hex key>::body` calls
+/// `nm_dispatch_<bucket>(ctx, module, key)` with the two names constant, so
+/// its code holds what the module's dispatch function can run for that key
+/// and no other arm's.
+fn export_bodies() -> HashMap<(&'static str, &'static str), String> {
+    use perry_dispatch::native_callable_exports::{
+        canonical_native_callable_module, canonical_native_callable_property, export_bucket,
+        export_value_symbol, CALLABLE_EXPORT_TABLE,
+    };
+    let mut out = HashMap::new();
+    for &(module, properties) in CALLABLE_EXPORT_TABLE {
+        if export_bucket(module).is_none() {
+            continue;
+        }
+        for &property in properties {
+            let Some(symbol) = export_value_symbol(module, property) else {
+                continue;
+            };
+            let key = canonical_native_callable_property(module, property);
+            let module = match canonical_native_callable_module(module, key) {
+                "util/types" => "util.types",
+                m => m,
+            };
+            out.entry((module, key)).or_insert(symbol);
+        }
+    }
+    out
+}
+
+/// The module and key an export body dispatches, from its symbol.
+fn export_of(spelling: &str) -> Option<(String, String)> {
+    let rest = &spelling[spelling.find("js_native_export_")? + "js_native_export_".len()..];
+    let rest = rest.split("::").next()?;
+    let (module, key) = rest.split_once('_')?;
+    let text = |hex: &str| {
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| {
+                hex.get(i..i + 2)
+                    .and_then(|b| u8::from_str_radix(b, 16).ok())
+            })
+            .collect();
+        bytes.and_then(|b| String::from_utf8(b).ok())
+    };
+    Some((text(module)?, text(key)?))
+}
+
+/// Every callable realm declaration with the functions its call runs.
+///
+/// A declaration with a body of its own runs that body. A bound-method
+/// member (a function of a native module namespace, of `process`, `console`,
+/// `Buffer`) shares the sentinel body: its call enters [`ROUTER`] with the
+/// namespace it captured and its key, and runs
+/// - the function its effects-only declaration names (`effects_body`), and
+/// - the export body of (module, key) when the build script emits one;
+/// - with neither, the whole dispatch function of the module's bucket
+///   (every arm: an upper bound);
+/// - for a module without a bucket, the router alone (it answers from the
+///   submodule registry through a function-value call, or throws).
+///
+/// The module is the `native_namespace` of the member's first capture, the
+/// name the namespace object holds in its field 0 at run time.
+pub fn bodies(manifest: &str) -> Result<Vec<Body>> {
+    let v: serde_json::Value = serde_json::from_str(manifest).context("realm manifest JSON")?;
+    let decls = v["declarations"]
+        .as_array()
+        .context("manifest has no declarations")?;
+    let namespaces: HashMap<&str, &str> = decls
+        .iter()
+        .filter_map(|d| Some((d["name"].as_str()?, d["native_namespace"].as_str()?)))
+        .collect();
+    let exports = export_bodies();
+    let mut out = Vec::new();
+    for d in decls {
+        let Some(body) = d.get("body").and_then(|b| b.as_str()) else {
+            continue;
+        };
+        let name = d["name"]
+            .as_str()
+            .context("declaration without name")?
+            .to_owned();
+        let source = |v: &serde_json::Value| {
+            v.as_str()
+                .and_then(|s| s.strip_prefix("source:"))
+                .map(str::to_owned)
+        };
+        if !body.ends_with("::BOUND_METHOD_FUNC_PTR") {
+            let Some(symbol) = source(&d["function_info"]["source_symbol"]) else {
+                continue;
+            };
+            out.push(Body {
+                name,
+                symbols: vec![symbol],
+                info: d["info_symbol"].as_str().map(str::to_owned),
+                bucket: None,
+                how: "own body",
+            });
+            continue;
+        }
+        let capture = |i: usize, kind: &str| {
+            d["captures"]
+                .get(i)
+                .filter(|c| c["kind"] == kind)
+                .and_then(|c| c["value"].as_str())
+        };
+        let module = capture(0, "reference").and_then(|r| namespaces.get(r).copied());
+        let (Some(module), Some(key)) = (module, capture(1, "bytes")) else {
+            out.push(Body {
+                name,
+                symbols: Vec::new(),
+                info: None,
+                bucket: None,
+                how: "a bound method of no module namespace",
+            });
+            continue;
+        };
+        let mut symbols = vec![ROUTER.to_owned()];
+        let mut how = "router alone (no dispatch bucket)";
+        if let Some(symbol) = d.get("effects_body").and_then(source) {
+            symbols.push(symbol);
+            how = "declared body";
+        }
+        let bucket = perry_dispatch::native_callable_exports::export_bucket(module)
+            .map(|bucket| format!("::nm_dispatch_{bucket}"));
+        if let Some(symbol) = exports.get(&(module, key)) {
+            symbols.push(format!("&{symbol}"));
+            how = "export body";
+        } else if symbols.len() == 1 {
+            if let Some(bucket) = &bucket {
+                symbols.push(bucket.clone());
+                how = "module dispatch";
+            }
+        }
+        out.push(Body {
+            name,
+            symbols,
+            info: None,
+            bucket,
+            how,
+        });
     }
     Ok(out)
 }
@@ -128,20 +313,25 @@ pub struct Report {
 }
 
 fn path(g: &Graph, next: &[Option<usize>], mut i: usize) -> String {
-    let mut steps = vec![g.label(i)];
+    let short = |i: usize| g.label(i).chars().take(120).collect::<String>();
+    let mut out = short(i);
+    let mut steps = 0;
     while let Some(n) = next[i].filter(|&n| n != i) {
+        // A step that is no call: `i` takes the address of `n`.
+        let how = if g.succ[i].contains(&n) || !g.taken_by[n].contains(&i) {
+            "->"
+        } else {
+            "-> (takes the address of)"
+        };
+        out.push_str(&format!("\n      {how} {}", short(n)));
         i = n;
-        steps.push(g.label(i));
-        if steps.len() > 40 {
-            steps.push("...".into());
+        steps += 1;
+        if steps > 40 {
+            out.push_str("\n      -> ...");
             break;
         }
     }
-    steps
-        .iter()
-        .map(|s| s.chars().take(120).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n      -> ")
+    out
 }
 
 /// Checks every realm native against the graph. `indirect_pred` are the
@@ -150,7 +340,7 @@ pub fn check(
     g: &Graph,
     indirect_pred: &[Vec<usize>],
     rules: &[Rule],
-    natives: &[Native],
+    natives: &[Body],
     births: &HashMap<String, Vec<String>>,
     undeclared: &[String],
 ) -> Result<Report> {
@@ -158,6 +348,7 @@ pub fn check(
     let mut seed = vec![false; nn];
     let mut cut = vec![false; nn];
     let mut origin = vec![false; nn];
+    let mut fills = vec![false; nn];
     let mut early = vec![false; nn];
     let mut hits = vec![0usize; rules.len()];
     for i in 0..nn {
@@ -169,6 +360,7 @@ pub fn check(
                     "birth" => seed[i] = true,
                     "in-hand" => cut[i] = true,
                     "origin" => origin[i] = true,
+                    "fills" => fills[i] = true,
                     "before-claim" => early[i] = true,
                     other => bail!("{}: kind {other} is no byte-cell rule", rule.description()),
                 }
@@ -190,6 +382,77 @@ pub fn check(
     if !seed.iter().any(|&s| s) {
         bail!("no birth rule: the check would be vacuous");
     }
+    let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
+    for i in 0..nn {
+        for s in g.spellings(i) {
+            by_name.entry(s).or_default().push(i);
+        }
+    }
+    // A symbol given as the end of a path (`::nm_dispatch_fs`).
+    let tails: Vec<(&str, usize)> = (0..nn)
+        .flat_map(|i| g.spellings(i).into_iter().map(move |s| (s, i)))
+        .filter(|(s, _)| s.contains("nm_dispatch_"))
+        .collect();
+    // The functions whose address an export's getter takes.
+    let getters: HashMap<usize, &str> = natives
+        .iter()
+        .flat_map(|n| &n.symbols)
+        .filter_map(|s| s.strip_prefix('&'))
+        .flat_map(|s| by_name.get(s).into_iter().flatten().map(move |&i| (i, s)))
+        .collect();
+    let mut taken_from: HashMap<&str, Vec<usize>> = HashMap::new();
+    for t in 0..nn {
+        for c in &g.taken_by[t] {
+            if let Some(getter) = getters.get(c) {
+                taken_from.entry(getter).or_default().push(t);
+            }
+        }
+    }
+    let find = |symbol: &str| -> Vec<usize> {
+        if let Some(getter) = symbol.strip_prefix('&') {
+            taken_from.get(getter).cloned().unwrap_or_default()
+        } else if symbol.starts_with("::") {
+            tails
+                .iter()
+                .filter(|(s, _)| s.ends_with(symbol))
+                .map(|&(_, i)| i)
+                .collect()
+        } else {
+            by_name.get(symbol).cloned().unwrap_or_default()
+        }
+    };
+    // Per native: the nodes of its symbols; `None`: one is in no archive.
+    let found: Vec<Option<Vec<usize>>> = natives
+        .iter()
+        .map(|n| {
+            let per: Vec<Vec<usize>> = n
+                .symbols
+                .iter()
+                .map(|s| {
+                    let mut nodes = find(s);
+                    if nodes.is_empty() && s.starts_with('&') {
+                        nodes = n.bucket.as_deref().map(&find).unwrap_or_default();
+                    }
+                    if nodes.is_empty() {
+                        let info = n.info.as_ref().and_then(|i| g.held_by_symbol.get(i));
+                        nodes = info.cloned().unwrap_or_default();
+                    }
+                    nodes
+                })
+                .collect();
+            (!per.is_empty() && per.iter().all(|p| !p.is_empty()))
+                .then(|| per.into_iter().flatten().collect())
+        })
+        .collect();
+    let mut native_node = vec![false; nn];
+    for &i in found.iter().flatten().flatten() {
+        native_node[i] = true;
+    }
+    let export_body = |i: usize| {
+        g.spellings(i)
+            .iter()
+            .any(|s| s.contains("::static_exports::") && export_of(s).is_some())
+    };
     // Backward from the birth; a cut function is not entered (a seed that
     // is also cut stays a seed for its own callers' cuts to decide).
     let mut next: Vec<Option<usize>> = vec![None; nn];
@@ -200,8 +463,28 @@ pub fn check(
             work.push_back(i);
         }
     }
+    // Who can make `t` run: its callers, the wrapper of the slot it is
+    // delegated to, and whoever takes its address (in code, or by naming
+    // data that holds it): that function runs it or hands it to what will
+    // (a completion it schedules, a callback it registers). A `fills`
+    // function only stores the address in a slot.
+    //
+    // Not followed: the takers of a realm native's body or of an export
+    // body. Its address is held to make its function value; a call of that
+    // value is the native, which is checked by name below (a function-value
+    // call is a cut). Nor the takers of a function with an `origin` rule:
+    // the rule says what makes it run.
+    let held_as_value: Vec<bool> = (0..nn)
+        .map(|i| native_node[i] || origin[i] || export_body(i))
+        .collect();
+    let (fills, held_as_value) = (&fills, &held_as_value);
+    let takers = |t: usize| {
+        g.taken_by[t]
+            .iter()
+            .filter(move |&&c| !fills[c] && !held_as_value[t])
+    };
     while let Some(t) = work.pop_front() {
-        for &c in g.pred[t].iter().chain(&indirect_pred[t]) {
+        for &c in g.pred[t].iter().chain(&indirect_pred[t]).chain(takers(t)) {
             if next[c].is_none() && !cut[c] {
                 next[c] = Some(t);
                 work.push_back(c);
@@ -220,14 +503,6 @@ pub fn check(
             path(g, &next, i)
         ));
     }
-    let mut by_name: HashMap<&str, Vec<usize>> = HashMap::new();
-    for i in 0..nn {
-        for s in g.spellings(i) {
-            by_name.entry(s).or_default().push(i);
-        }
-    }
-    let native_symbols: std::collections::HashSet<&str> =
-        natives.iter().map(|n| n.symbol.as_str()).collect();
     let mut roots = Vec::new();
     let mut origins = (0usize, 0usize);
     for i in 0..nn {
@@ -237,49 +512,81 @@ pub fn check(
         let called = g.pred[i]
             .iter()
             .chain(&indirect_pred[i])
-            .any(|&c| c != i && next[c].is_some());
-        // A delegated callee (a hook's operation) is reached through its
-        // wrapper, which the walk already follows.
-        let by_pointer = g.taken[i] && indirect_pred[i].is_empty();
+            .chain(takers(i))
+            .any(|&c| c != i && (next[c].is_some() || cut[c]));
+        // Reached in a way the walk cannot attribute: data no code of the
+        // archives names holds its address, or an install stored it in a
+        // slot no rule delegates to a wrapper.
+        let stored = indirect_pred[i].is_empty() && g.taken_by[i].iter().any(|&c| fills[c]);
+        let by_pointer = g.loose[i] || stored || (held_as_value[i] && !g.taken_by[i].is_empty());
         if called && !by_pointer {
             continue;
         }
         let spellings = g.spellings(i);
-        let kind =
-            if spellings.iter().any(|s| native_symbols.contains(s)) {
-                "native"
-            } else if !by_pointer
-                && spellings
-                    .iter()
-                    .any(|s| !s.contains("::") && !s.starts_with('_'))
-            {
-                "exported"
-            } else if origin[i] {
-                origins.0 += 1;
-                "by pointer, origin stated"
-            } else {
-                origins.1 += 1;
-                report.failures += 1;
-                report.lines.push(format!(
+        // An export body the realm declares no member for: the value of
+        // export `key` of `module`, which a program gets only by naming the
+        // module. Covered when the module is of the family (or is one the
+        // table does not classify: every family is live then).
+        let export_of_family = spellings.iter().any(|s| {
+            s.contains("::static_exports::")
+                && export_of(s).is_some_and(|(module, _)| {
+                    families::module_families(&module).is_none_or(|f| {
+                        families::close_requires(f) & families::family_bit(FAMILY) != 0
+                    })
+                })
+        });
+        let kind = if native_node[i] {
+            "native"
+        } else if export_of_family {
+            "export body of a family module"
+        } else if origin[i] {
+            origins.0 += 1;
+            "by pointer, origin stated"
+        } else if !stored
+            && spellings
+                .iter()
+                .any(|s| !s.contains("::") && !s.starts_with('_'))
+        {
+            // An entry point compiled code or a native library calls by
+            // name: what the program's code may call is the fact's node
+            // classification, not this check. (One an install stores in
+            // a slot is called through the slot: it needs its origin.)
+            "exported"
+        } else if !called && !by_pointer && g.taken_by[i].is_empty() && !g.taken[i] && !g.in_data[i]
+        {
+            // An out-of-line copy nothing in the archives refers to:
+            // no call, no address in code or data (its callers hold
+            // inlined copies, which the walk sees in them). Only an
+            // object outside the analyzed archives could call it, and
+            // that is a native library: see the `perry_ffi` rule.
+            "unreferenced"
+        } else {
+            origins.1 += 1;
+            report.failures += 1;
+            report.lines.push(format!(
                 "{}: FAIL: it can reach a byte-cell birth and is reached only through a pointer \
                  ({}), and no origin rule says what schedules it\n      {}",
                 g.label(i),
-                if called { "its address is taken" } else { "no caller" },
+                match (g.loose[i], stored) {
+                    (true, _) => "data no runtime code names holds its address",
+                    (_, true) => "an install stores its address in a slot",
+                    _ => "no caller, and no code takes its address",
+                },
                 path(g, &next, i)
             ));
-                "by pointer, NO ORIGIN"
-            };
+            "by pointer, NO ORIGIN"
+        };
         roots.push(format!("{}\t{kind}", g.label(i)));
     }
     roots.sort();
     report.roots = roots.join("\n") + "\n";
     report
         .census
-        .push_str("name\tsymbol\tfound\treaches\tverdict\n");
+        .push_str("name\tsymbols\thow\tfound\treaches\tverdict\n");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut unchecked = 0usize;
-    for n in natives {
-        let nodes = by_name.get(n.symbol.as_str());
+    for (n, nodes) in natives.iter().zip(&found) {
+        let nodes = nodes.as_ref();
         let reach = nodes.and_then(|ns| ns.iter().copied().find(|&i| next[i].is_some()));
         let known = Some(&n.name)
             .filter(|name| !undeclared.contains(name))
@@ -307,9 +614,10 @@ pub fn check(
         };
         *counts.entry(verdict.clone()).or_default() += 1;
         report.census.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             n.name,
-            n.symbol,
+            n.symbols.join(" "),
+            n.how,
             nodes.is_some() as u8,
             reach.is_some() as u8,
             verdict
@@ -378,8 +686,52 @@ mod tests {
         assert_eq!(rules.iter().filter(|r| r.kind == "birth").count(), 1);
         assert!(rules.iter().all(|r| matches!(
             r.kind.as_str(),
-            "birth" | "in-hand" | "origin" | "before-claim"
+            "birth" | "in-hand" | "origin" | "before-claim" | "fills"
         )));
+    }
+
+    /// A bound-method member resolves through its namespace capture: to
+    /// the router and its export's getter, or to the module's dispatch
+    /// function; a declaration with its own body keeps it and its record.
+    #[test]
+    fn a_bound_method_resolves_to_its_export_body() {
+        let manifest = r#"{"declarations":[
+            {"name":"%NativeNamespace:path%","native_namespace":"path"},
+            {"name":"%NativeNamespace:string_decoder%","native_namespace":"string_decoder"},
+            {"name":"node:path.join","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:path%"},{"kind":"bytes","value":"join"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"node:path.noSuchExport","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:path%"},{"kind":"bytes","value":"noSuchExport"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"node:string_decoder.x","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:string_decoder%"},{"kind":"bytes","value":"x"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"atob","body":"crate::x::atob_thunk","info_symbol":"perry_fn_info_atob",
+             "function_info":{"source_symbol":"source:perry_runtime::x::atob_thunk"}}]}"#;
+        let b = bodies(manifest).unwrap();
+        let of = |name: &str| b.iter().find(|b| b.name == name).unwrap();
+        let join = of("node:path.join");
+        assert_eq!(join.how, "export body");
+        assert_eq!(
+            join.symbols,
+            [ROUTER, "&js_native_export_70617468_6a6f696e"]
+        );
+        assert_eq!(join.bucket.as_deref(), Some("::nm_dispatch_path"));
+        let other = of("node:path.noSuchExport");
+        assert_eq!(other.symbols, [ROUTER, "::nm_dispatch_path"]);
+        assert_eq!(of("node:string_decoder.x").symbols, [ROUTER]);
+        let atob = of("atob");
+        assert_eq!(atob.symbols, ["perry_runtime::x::atob_thunk"]);
+        assert_eq!(atob.info.as_deref(), Some("perry_fn_info_atob"));
+        assert_eq!(
+            export_of("a::static_exports::js_native_export_70617468_6a6f696e::body"),
+            Some(("path".to_owned(), "join".to_owned()))
+        );
+        assert_eq!(
+            export_of("a::static_exports::js_native_export_zz_6a::body"),
+            None
+        );
     }
 
     #[test]
