@@ -497,7 +497,7 @@ pub fn check(
             .iter()
             .chain(&indirect_pred[i])
             .chain(takers(i))
-            .any(|&c| c != i && next[c].is_some());
+            .any(|&c| c != i && (next[c].is_some() || cut[c]));
         // Reached in a way the walk cannot attribute: data no code of the
         // archives names holds its address, or an install stored it in a
         // slot no rule delegates to a wrapper.
