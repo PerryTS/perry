@@ -1714,6 +1714,7 @@ const __memDispatch = {
     return obj[String(key)];
   },
   object_get_dynamic: (obj, key) => {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!obj || typeof obj !== 'object') return undefined;
     return obj[key];
   },
@@ -2027,6 +2028,7 @@ const __memDispatch = {
     return undefined;
   },
   class_get_field: (obj, name) => {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (!obj || typeof obj !== 'object') return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
@@ -5033,7 +5035,16 @@ function __classMethodValue(cls, mname) {
   return fn;
 }
 
+// `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into
+// the pending exception under a WASM `try` and rethrows it outside one.
+function __throwNullReceiver(obj, name) {
+  throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
+  // Only a null/undefined receiver throws: this function is also mem_call's fallback
+  // for bridge names it does not know, where an absent method still yields undefined.
+  if (objVal === null || objVal === undefined) __throwNullReceiver(objVal, mname);
   if (typeof objVal === 'string') {
     const fn = String.prototype[mname];
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
