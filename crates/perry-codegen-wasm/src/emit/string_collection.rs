@@ -293,7 +293,10 @@ impl WasmModuleEmitter {
             "promise_then",
             "await_promise",
         ];
-        for name in &bridge_names {
+        for name in bridge_names
+            .iter()
+            .chain(super::expr::ITERATOR_RECORD_BRIDGES)
+        {
             self.intern_string(name);
         }
 

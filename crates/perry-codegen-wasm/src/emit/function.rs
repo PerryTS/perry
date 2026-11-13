@@ -157,6 +157,13 @@ impl WasmModuleEmitter {
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.emit_box_params(&mut func, params);
+        // A captured cell already exists; a `let` of it in the body (a lowered
+        // generator re-declares its locals per state) fills that cell.
+        for cap in captures.iter().chain(mutable_captures) {
+            if ctx.is_boxed(cap) {
+                ctx.preallocated.insert(*cap);
+            }
+        }
         let _has_ret = body.iter().any(has_return);
 
         for stmt in body {

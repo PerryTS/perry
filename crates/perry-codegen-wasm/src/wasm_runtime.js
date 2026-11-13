@@ -1685,7 +1685,92 @@ const __GeneratorPrototype = Object.create(
   },
 );
 
+// The `__perry_runtime` iterator-record intrinsics the HIR lowers for...of and array
+// destructuring to (perry-hir/src/iterator_record.rs). `iteratorStep` returns `done`
+// and leaves the value for the `iteratorStepOutput()` read emitted right after it.
+const __ArrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const __intrinsicArrayValues = Array.prototype[Symbol.iterator];
+const __intrinsicArrayIteratorNext = __ArrayIteratorPrototype.next;
+const __accessorMarker = {};
+let __iteratorStepValue;
+// The data value `key` resolves to on `obj`'s chain; an accessor is never invoked.
+function __lookupData(obj, key) {
+  for (let o = obj; o !== null && o !== undefined; o = Object.getPrototypeOf(o)) {
+    const d = Object.getOwnPropertyDescriptor(o, key);
+    if (d) return "value" in d ? d.value : __accessorMarker;
+  }
+  return undefined;
+}
+function __arrayIterationPatched() {
+  return __lookupData(Array.prototype, Symbol.iterator) !== __intrinsicArrayValues
+    || __lookupData(__ArrayIteratorPrototype, "next") !== __intrinsicArrayIteratorNext;
+}
+function __isObject(v) {
+  return v !== null && (typeof v === "object" || typeof v === "function");
+}
+function __iteratorClose(iter) {
+  const ret = iter.return;
+  if (ret === undefined || ret === null) return;
+  if (typeof ret !== "function") throw new TypeError(`${String(ret)} is not a function`);
+  const result = ret.call(iter);
+  if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
+}
+function __iteratorStep(iter, next, read) {
+  if (typeof next !== "function") throw new TypeError(`${String(next)} is not a function`);
+  const result = next.call(iter);
+  if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
+  const done = Boolean(result.done);
+  __iteratorStepValue = !done && read !== false ? result.value : undefined;
+  return done;
+}
+function __iterableToArray(v) {
+  if (Array.isArray(v)) return v;
+  if (v !== null && v !== undefined && typeof v[Symbol.iterator] === "function") return Array.from(v);
+  const out = [];
+  if (__isObject(v)) {
+    const next = v.next;
+    while (!__iteratorStep(v, next, true)) out.push(__iteratorStepValue);
+  }
+  return out;
+}
+
 const __memDispatch = {
+  // `()` asks only whether array iteration is patched; `(value[, packed])` whether
+  // `value` must use the iterator protocol instead of its indices.
+  rt_arrayRecordNeedsIterator: (...args) => args.length === 0
+    ? __arrayIterationPatched()
+    : !(Array.isArray(args[0]) && Object.getPrototypeOf(args[0]) === Array.prototype
+      && __lookupData(args[0], Symbol.iterator) === __intrinsicArrayValues
+      && __lookupData(__ArrayIteratorPrototype, "next") === __intrinsicArrayIteratorNext),
+  rt_arrayRecordLength: (array) => array.length,
+  rt_arrayRecordLiteral: (...values) => values,
+  rt_arrayRecordCloseAbsent: () => !("return" in __ArrayIteratorPrototype),
+  // ponytail: closes a fresh intrinsic iterator over `src`; JS cannot place its cursor at `index`.
+  rt_arrayRecordClose: (src, index, done, error, throwing) => {
+    if (done || !("return" in __ArrayIteratorPrototype)) return throwing ? error : undefined;
+    const iter = __intrinsicArrayValues.call(src);
+    if (!throwing) return __iteratorClose(iter);
+    try { __iteratorClose(iter); } catch (_) {}
+    return error;
+  },
+  rt_iteratorNextMethod: (iter) => iter.next,
+  rt_iteratorStep: (iter, next, read) => __iteratorStep(iter, next, read),
+  rt_iteratorStepOutput: () => __iteratorStepValue,
+  rt_iteratorCloseIfNotDone: (iter, done) => { if (!done) __iteratorClose(iter); },
+  rt_iteratorCloseOnThrow: (iter, done, error) => {
+    if (!done) { try { __iteratorClose(iter); } catch (_) {} }
+    return error;
+  },
+  rt_iteratorRestAppend: (array, value) => { array.push(value); return array; },
+  rt_iteratorRestToArray: (iter, next, done) => {
+    const out = [];
+    if (!done) while (!__iteratorStep(iter, next, true)) out.push(__iteratorStepValue);
+    return out;
+  },
+  rt_getIterator: (v) => v !== null && v !== undefined && typeof v[Symbol.iterator] === "function"
+    ? v[Symbol.iterator]() : v,
+  rt_iterableToArray: (v) => __iterableToArray(v),
+  rt_arrayIterationPatched: () => __arrayIterationPatched(),
   generator_new: (record, paramCount) => {
     const gen = Object.create(__GeneratorPrototype);
     __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
