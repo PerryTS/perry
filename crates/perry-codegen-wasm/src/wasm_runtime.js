@@ -1855,6 +1855,18 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, closure.captures.length, [__jsValueToBits(a0), __jsValueToBits(a1), __jsValueToBits(a2)]);
     return __bitsToJsValue(fn(...closure.captures, ...padded));
   },
+  // `new callee(...args)` with a callee known only at run time (`new Map()` reaches here
+  // through `global_property`). A host constructor must be constructed: called without
+  // `new`, Map / Set / URLSearchParams throw. A Perry closure keeps the plain call the
+  // closure_call_N bridges make, for any number of arguments.
+  new_dynamic: (callee, ...args) => {
+    if (typeof callee === 'function') return __constructHostFunction(callee, args);
+    if (!callee || typeof callee.funcIdx === 'undefined' || !wasmInstance) return undefined;
+    const fn = wasmInstance.exports.__indirect_function_table?.get(callee.funcIdx | 0);
+    if (!fn) return undefined;
+    const padded = __padBigintArgs(fn, callee.captures.length, args.map(__jsValueToBits));
+    return __bitsToJsValue(fn(...callee.captures, ...padded));
+  },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (typeof closure === 'function') return __callHostFunction(closure, argArr);
@@ -4952,6 +4964,18 @@ const __uiMethodMap = {
 function __callHostFunction(fn, args, receiver = undefined) {
   try {
     return Reflect.apply(fn, receiver, args.map(__hostCallback));
+  } catch (error) {
+    if (tryDepth === 0) throw error;
+    currentException = error;
+    return undefined;
+  }
+}
+
+// `new fn(...args)` for a host constructor, with the same argument and exception
+// handling as __callHostFunction.
+function __constructHostFunction(fn, args) {
+  try {
+    return Reflect.construct(fn, args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
