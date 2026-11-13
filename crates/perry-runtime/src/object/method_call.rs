@@ -668,8 +668,38 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
         if let Some(inherited) = function_receiver_inherited_get(recv_value, key) {
             return inherited;
         }
+        if let Some(inherited) = weak_receiver_inherited_get(recv_value, key) {
+            return inherited;
+        }
     }
     value
+}
+
+/// The generic field get answers a NaN-boxed WeakMap / WeakSet / WeakRef /
+/// FinalizationRegistry receiver's inherited methods with `undefined`: its
+/// weak-wrapper arms resolve the prototype thunks for an untagged receiver
+/// word only. A miss there made [`spec_get`]'s caller
+/// (`builtin_proto::select_and_call`, the generic arm of a folded `Map`
+/// site given a WeakMap behind `Map<K, V>`) throw `value is not a function`
+/// where node calls `WeakMap.prototype.get`.
+///
+/// Resolve the name off the wrapper's REAL `[[Prototype]]` (a replaced one
+/// too; `null` finds nothing), as [`function_receiver_inherited_get`] does
+/// for a function. `None` for any receiver that is no weak wrapper.
+unsafe fn weak_receiver_inherited_get(
+    recv: f64,
+    key: *const crate::string::StringHeader,
+) -> Option<f64> {
+    crate::object::weak_wrapper_class_id(recv)?;
+    let proto = crate::object::js_object_get_prototype_of(recv);
+    if proto.to_bits() == crate::value::TAG_NULL {
+        return None;
+    }
+    Some(crate::proxy::js_reflect_get(
+        proto,
+        crate::value::js_nanbox_string(key as i64),
+        recv,
+    ))
 }
 
 /// The generic field get is not a faithful `[[Get]]` for a FUNCTION receiver:
