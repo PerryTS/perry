@@ -8,7 +8,7 @@ or a buffer source was dereferenced: `emitter.on("x", e)`, `once`,
 `addListener`, `prependListener`, `off`, `readable.on("data", e)`,
 `writable.write(e)`, `stream.pipeline(e, cb)`, `util.diff(e, "a")`,
 `new TextDecoder().decode(e)`, `fs.writeFileSync(path, e)`, `socket.send(e)`
-and 24 more operations crashed with SIGSEGV for `e = Number.MIN_VALUE * 2 ** 28`
+and 19 more operations crashed with SIGSEGV for `e = Number.MIN_VALUE * 2 ** 28`
 (node: ERR_INVALID_ARG_TYPE). 15 decoders in 15 files lose the arm; such a
 Number is now treated like every other Number there. No switch: the previous
 decode is the memory-unsafe one.
