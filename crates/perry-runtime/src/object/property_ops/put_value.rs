@@ -426,36 +426,47 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
     use crate::object::layout_probe::KeyedStore;
-    // The keyed store probe: one key resolution (the key's atom), then the
-    // store a static `target.key = value` site makes when the receiver owns
-    // the key, or the append when its own list proves the key absent.
-    let (target, key, value) = match unsafe {
-        crate::object::layout_probe::probe_store_keyed(target.to_bits(), key.to_bits(), value)
-    } {
-        KeyedStore::Stored => return value,
-        KeyedStore::Append(obj, atom) => match unsafe { keyed_append(obj, atom, value) } {
-            Some(stored) => return stored,
-            None => (target, f64::from_bits(atom), value),
-        },
-        KeyedStore::Complete(key) => (target, f64::from_bits(key), value),
-        KeyedStore::Unresolved => {
-            // A Number key on a typed array is its numeric index, answered
-            // before the ordinary-object steps below read the receiver as an
-            // ObjectHeader. (A string or symbol key is never a Number key.)
-            if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
-                && crate::typedarray_props::typed_array_set_number_key(
-                    (target.to_bits() & POINTER_MASK) as usize,
-                    key,
-                    value,
-                )
-            {
-                return value;
+    let key_tag = key.to_bits() & crate::value::TAG_MASK;
+    let is_string =
+        key_tag == crate::value::STRING_TAG || key_tag == crate::value::SHORT_STRING_TAG;
+    let (target, key, value) = if is_string || key_tag == POINTER_TAG {
+        // The keyed store probe: one key resolution (the key's atom), then
+        // the store a static `target.key = value` site makes when the
+        // receiver owns the key, or the append when its own list proves the
+        // key absent.
+        match unsafe {
+            crate::object::layout_probe::probe_store_keyed(target.to_bits(), key.to_bits(), value)
+        } {
+            KeyedStore::Stored => return value,
+            KeyedStore::Append(obj, atom) => match unsafe { keyed_append(obj, atom, value) } {
+                Some(stored) => return stored,
+                None => (target, f64::from_bits(atom), value),
+            },
+            KeyedStore::Complete(key) => (target, f64::from_bits(key), value),
+            // A string no atom names yet is minted and asked again.
+            KeyedStore::Unresolved if is_string => {
+                match unsafe { store_minting_key(target, key, value) } {
+                    Ok(stored) => return stored,
+                    Err(operands) => operands,
+                }
             }
-            match unsafe { store_minting_key(target, key, value) } {
-                Ok(stored) => return stored,
-                Err(operands) => operands,
-            }
+            KeyedStore::Unresolved => (target, key, value),
         }
+    } else {
+        // A Number key on a typed array is its numeric index, answered
+        // before the ordinary-object steps below read the receiver as an
+        // ObjectHeader. (A string, a symbol or an object is not a Number
+        // key, `typed_array_set_number_key`.)
+        if (target.to_bits() & !POINTER_MASK) == POINTER_TAG
+            && crate::typedarray_props::typed_array_set_number_key(
+                (target.to_bits() & POINTER_MASK) as usize,
+                key,
+                value,
+            )
+        {
+            return value;
+        }
+        (target, key, value)
     };
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
