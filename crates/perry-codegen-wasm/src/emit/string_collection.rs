@@ -120,6 +120,7 @@ impl WasmModuleEmitter {
             "math_clz32",
             "math_imul",
             "closure_new",
+            "closure_this",
             "closure_set_capture",
             "closure_call_0",
             "closure_call_1",

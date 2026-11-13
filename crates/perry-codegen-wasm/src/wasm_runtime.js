@@ -1631,13 +1631,29 @@ function wrapImportsForI64(imports) {
 // the records closure_new makes, so `typeof` and a call through an object property
 // (`o.h()`) can tell a closure from a plain object that merely has those keys.
 const __perryClosures = new WeakSet();
-function __newClosure(funcIdx, captureCount) {
+// The function expressions whose body reads its own `this`. Called as a method,
+// one receives the receiver through `closure_this`, which its body calls first.
+const __receiverClosures = new WeakSet();
+let __closureReceiver;
+function __newClosure(funcIdx, captureCount, receivesThis) {
   const closure = { funcIdx: funcIdx, captures: new Array(captureCount | 0) };
   __perryClosures.add(closure);
+  if (receivesThis) __receiverClosures.add(closure);
   return closure;
 }
 function __isPerryClosure(v) {
   return __perryClosures.has(v);
+}
+// `receiver.m(...args)` where `m` is a Perry closure. Only a closure that takes
+// the receiver gets it, and it is cleared after the call either way, so no other
+// closure's `closure_this` can see it.
+function __callClosureMethod(closure, receiver, args) {
+  if (__receiverClosures.has(closure)) __closureReceiver = receiver;
+  try {
+    return __memDispatch.closure_call_spread(closure, args);
+  } finally {
+    __closureReceiver = undefined;
+  }
 }
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
@@ -1984,7 +2000,12 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount) => __newClosure(funcIdx, captureCount),
+  closure_new: (funcIdx, captureCount, receivesThis) => __newClosure(funcIdx, captureCount, receivesThis),
+  closure_this: () => {
+    const receiver = __closureReceiver;
+    __closureReceiver = undefined;
+    return receiver;
+  },
   closure_set_capture: (closure, idx, value) => {
     if (closure) closure.captures[idx | 0] = __jsValueToBits(value);
     return closure;
@@ -5249,7 +5270,7 @@ function __jsMethodInvoke(ref, args) {
     return result;
   }
   if (__isPerryClosure(ref.f)) {
-    const result = __memDispatch.closure_call_spread(ref.f, args);
+    const result = __callClosureMethod(ref.f, ref.r, args);
     __memDispatch.propagate_exception(true);
     return result;
   }
@@ -5306,7 +5327,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       const method = objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
-      if (__isPerryClosure(method)) return __memDispatch.closure_call_spread(method, rawArgs);
+      if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
     } catch (error) {
       if (tryDepth === 0) throw error;
       currentException = error;

@@ -15,6 +15,7 @@ impl<'a> FuncEmitCtx<'a> {
                 captures,
                 mutable_captures,
                 captures_this,
+                is_arrow,
                 ..
             } => {
                 // Compile closure body as a function (it was already registered if it's in module.functions)
@@ -28,13 +29,16 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    let this = closure_this(*captures_this, *is_arrow, body);
+                    self.emit_frame_begin(func, 3);
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
-                    self.emit_memcall(func, "closure_new", 2);
+                    let receives_this = this == ClosureThis::Receiver;
+                    self.emit_store_const(func, 2, f64::from(u8::from(receives_this)));
+                    self.emit_memcall(func, "closure_new", 3);
                     // Set captures; the captured `this` follows them (see compile_closure).
                     let cap_ids = captures.iter().chain(mutable_captures.iter()).map(Some);
-                    let this_cap = captures_this.then_some(None);
+                    let this_cap = (this == ClosureThis::Captured).then_some(None);
                     for (i, cap_id) in cap_ids.chain(this_cap).enumerate() {
                         // Duplicate closure handle (it's returned by closure_new)
                         // closure_set_capture(handle, idx, value) -> handle (chaining)
