@@ -1089,6 +1089,12 @@
       "why": "#340/#341 per-realm `perry/tui` singleton HANDLE (`useApp()` / `useStdout()` / `useFocusManager()` must answer the same object on every call, so the object lives here rather than being re-minted). Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut` from the registered `object::scan_object_cache_roots_mut`. Uncovered here only because that scanner is in another file."
     },
     {
+      "file": "crates/perry-runtime/src/tui/run.rs",
+      "name": "CALLBACKS",
+      "verdict": "test_only",
+      "why": "AtomicUsize counting completed callbacks in the #[cfg(test)] TUI run-loop tests. Only zero and fetch_add(1) are stored; it never contains a heap pointer, handle or NaN-boxed value and is absent from production builds."
+    },
+    {
       "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
       "name": "SCANNER_REGISTERED",
       "verdict": "not_a_gc_pointer",
