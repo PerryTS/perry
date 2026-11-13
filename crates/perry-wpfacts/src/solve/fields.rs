@@ -11,6 +11,16 @@ impl Model {
                 TmplKind::BObj { what: "TypedArray" | "Buffer" | "DataView", .. }))
     }
 
+    /// `t` is a typed array or a Buffer, an integer-indexed exotic object
+    /// (ECMA-262 10.4.5): its elements are Numbers (BigInts). Not a
+    /// DataView, not a marker standing for a caller's value.
+    pub(crate) fn typed_array_elements(&self, t: Tok) -> bool {
+        matches!(&self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[*tm as usize].kind,
+                TmplKind::BObj { what: "TypedArray" | "Buffer", .. }))
+            && !self.is_marker(t)
+    }
+
     /// `a` names the buffer the view `t` views (`VIEWED_BUFFER`).
     pub(crate) fn viewed_buffer_field(&self, t: Tok, a: Atom) -> bool {
         self.atoms[a as usize] == VIEWED_BUFFER && self.array_buffer_view(t)

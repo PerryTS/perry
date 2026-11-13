@@ -245,6 +245,7 @@ mod tdz_seed;
 mod top_element_key;
 mod type_export;
 mod typed_array_exact;
+mod typed_array_element_store;
 mod unheld_key;
 mod unit_alias;
 mod unit_cjs;
