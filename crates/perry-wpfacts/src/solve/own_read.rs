@@ -22,21 +22,18 @@ impl Model {
     /// Markers expose reach fields rather than value fields. Other token
     /// kinds use a general view; concrete object tokens and function values
     /// use key ranges. A function value (program function, bound function,
-    /// class, built-in function, `Object.prototype` method) holds every
-    /// property the program wrote in its field table: a number key names
-    /// one numeric string (ECMA-262 7.1.19), so `IdxKey` reads its numeric
-    /// fields and the chain, never a named field.
+    /// class, built-in function, built-in constructor such as `Object`
+    /// (IsCallable, `surely_callable`), `Object.prototype` method) holds
+    /// every property the program wrote in its field table: a number key
+    /// names one numeric string (ECMA-262 7.1.19), so `IdxKey` reads its
+    /// numeric fields and the chain, never a named field.
     pub(super) fn index_needs_all_own_fields(&self, t: Tok) -> bool {
         self.is_marker(t)
-            || !matches!(
+            || !(matches!(
                 self.toks[t as usize],
                 TokKind::Obj(..)
-                    | TokKind::Func(..)
-                    | TokKind::Bound(_)
-                    | TokKind::ClassObj(_)
-                    | TokKind::BuiltinFn(_)
                     | TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
-            )
+            ) || crate::builtins::surely_callable(self, t))
     }
     /// `Cons::IdxLoad` for one object token `t`.
     pub(super) fn idx_load_tok(
