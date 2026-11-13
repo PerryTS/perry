@@ -27,6 +27,7 @@ mod array_record;
 mod array_reps;
 mod at_rest;
 mod computed_delete_absent;
+mod slice_call_array_like;
 mod fill_births;
 mod rest_elems;
 mod rest_fields;
