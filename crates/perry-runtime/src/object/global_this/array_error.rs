@@ -291,7 +291,7 @@ pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(this.bits());
-    super::super::object_ops::js_object_has_own(this_value, key)
+    super::super::object_ops::has_own::object_prototype_has_own_property(this_value, key)
 }
 
 pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
