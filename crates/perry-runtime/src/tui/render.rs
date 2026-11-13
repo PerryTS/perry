@@ -79,38 +79,9 @@ fn sgr_transition(prev: SgrState, next: SgrState, out: &mut Vec<u8>) {
     out.extend_from_slice(b"m");
 }
 
-/// Build the ANSI move-to-position escape for (row, col), 1-based per
-/// the CSI Cursor-Position spec.
+/// Convert zero-based grid indices to a one-based CSI cursor position.
 fn move_to(row: u16, col: u16, out: &mut Vec<u8>) {
-    out.extend_from_slice(b"\x1b[");
-    let mut buf = [0u8; 3];
-    let s = format_u16(row + 1, &mut buf);
-    out.extend_from_slice(s);
-    out.extend_from_slice(b";");
-    let s = format_u16(col + 1, &mut buf);
-    out.extend_from_slice(s);
-    out.extend_from_slice(b"H");
-}
-
-/// Format u16 (0..=999) — sufficient for any reasonable terminal size.
-fn format_u16(n: u16, buf: &mut [u8; 3]) -> &[u8] {
-    let n = n.min(999) as u8;
-    let mut tmp = [0u8; 3];
-    let len = if n >= 100 {
-        tmp[0] = b'0' + (n / 100);
-        tmp[1] = b'0' + ((n / 10) % 10);
-        tmp[2] = b'0' + (n % 10);
-        3
-    } else if n >= 10 {
-        tmp[0] = b'0' + (n / 10);
-        tmp[1] = b'0' + (n % 10);
-        2
-    } else {
-        tmp[0] = b'0' + n;
-        1
-    };
-    buf[..len].copy_from_slice(&tmp[..len]);
-    &buf[..len]
+    let _ = write!(out, "\x1b[{};{}H", u32::from(row) + 1, u32::from(col) + 1);
 }
 
 /// Diff `back` vs `front` and return the ANSI byte-stream that turns
@@ -220,6 +191,35 @@ mod tests {
         let s = String::from_utf8_lossy(&bytes);
         assert_eq!(s.matches("\x1b[1;").count(), 1, "extra move_to: {:?}", s);
         assert!(s.contains("xy"), "chars not adjacent: {:?}", s);
+    }
+
+    #[test]
+    fn cursor_position_preserves_full_coordinates() {
+        for coordinate in [1u32, 255, 256, 300, 999, 1000, 65535, 65536] {
+            let index = (coordinate - 1) as u16;
+            let mut bytes = Vec::new();
+            move_to(index, index, &mut bytes);
+            assert_eq!(bytes, format!("\x1b[{coordinate};{coordinate}H").as_bytes());
+        }
+    }
+
+    #[test]
+    fn diff_preserves_large_row_and_column_coordinates() {
+        for coordinate in [255u16, 256, 300, 999, 1000, 65535] {
+            let mut wide = Grid::new(coordinate, 1);
+            wide.back[usize::from(coordinate) - 1] = cell('x');
+            assert_eq!(
+                diff(&wide),
+                format!("\x1b[1;{coordinate}Hx\x1b[0m").as_bytes()
+            );
+
+            let mut tall = Grid::new(1, coordinate);
+            tall.back[usize::from(coordinate) - 1] = cell('x');
+            assert_eq!(
+                diff(&tall),
+                format!("\x1b[{coordinate};1Hx\x1b[0m").as_bytes()
+            );
+        }
     }
 
     #[test]
