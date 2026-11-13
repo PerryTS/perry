@@ -98,6 +98,7 @@ pub(crate) fn label(header: usize) -> String {
 }
 
 /// Symbol of a code address (`dladdr`), or the address.
+#[cfg(unix)]
 pub(crate) fn symbol(addr: usize) -> String {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
     if addr != 0
@@ -111,5 +112,11 @@ pub(crate) fn symbol(addr: usize) -> String {
             addr - info.dli_saddr as usize
         );
     }
+    format!("{addr:#x}")
+}
+
+/// `dladdr` is POSIX; elsewhere every address is its own label.
+#[cfg(not(unix))]
+pub(crate) fn symbol(addr: usize) -> String {
     format!("{addr:#x}")
 }
