@@ -407,12 +407,12 @@ mod tests {
         f64::from_bits(JSValue::undefined().bits())
     }
 
-    static CAPTURED: StdMutex<Vec<Vec<u8>>> = StdMutex::new(Vec::new());
+    static CAPTURED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
     #[test]
     fn input_bytes_preserves_every_stream_split_and_owned_storage() {
-        let _guard = crate::gc::global_side_table_test_lock();
         let _input_guard = reset();
+        let _guard = crate::gc::global_side_table_test_lock();
         crate::gc::initialize_runtime_fixture();
         let scope = crate::gc::RuntimeHandleScope::new();
         let callback = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
@@ -455,8 +455,8 @@ mod tests {
 
     #[test]
     fn input_bytes_handler_survives_moving_collection() {
-        let _gc_guard = crate::gc::CopyingNurseryTestGuard::new(0);
         let _input_guard = reset();
+        let _gc_guard = crate::gc::CopyingNurseryTestGuard::new(0);
         let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _force = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
         crate::gc::register_runtime_handle_root_scanner_for_tests();
