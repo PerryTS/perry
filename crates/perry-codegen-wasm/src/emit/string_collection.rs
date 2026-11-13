@@ -183,6 +183,8 @@ impl WasmModuleEmitter {
             "number_coerce",
             "is_nan",
             "is_finite",
+            "global_is_nan",
+            "global_is_finite",
             "console_log_multi",
             "class_set_parent",
             "try_start",

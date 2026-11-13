@@ -2141,6 +2141,8 @@ const __memDispatch = {
   number_coerce: (val) => Number(val),
   is_nan: (val) => Number.isNaN(val) ? 1 : 0,
   is_finite: (val) => Number.isFinite(val) ? 1 : 0,
+  global_is_nan: (val) => isNaN(val) ? 1 : 0,
+  global_is_finite: (val) => isFinite(val) ? 1 : 0,
 
   // Try/Catch — args are plain JS values
   try_start: () => { tryDepth++; },
