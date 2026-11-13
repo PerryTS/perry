@@ -10,6 +10,12 @@ impl WasmModuleEmitter {
         &mut self,
         modules: &[(String, perry_hir::ir::Module)],
     ) -> WasmCompileOutput {
+        let classes: BTreeMap<&str, &perry_hir::ir::Class> = modules
+            .iter()
+            .flat_map(|(_, module)| &module.classes)
+            .map(|class| (class.name.as_str(), class))
+            .collect();
+
         // First pass: collect all string literals
         for (_, module) in modules {
             self.collect_strings(module);
@@ -789,7 +795,7 @@ impl WasmModuleEmitter {
                         .insert(class.name.clone(), parent.clone());
                 }
                 // Constructor: params = this + declared params, returns f64 (this)
-                if let Some(ctor) = &class.constructor {
+                if let Some(ctor) = constructor_of(class, &classes) {
                     let param_count = 1 + ctor.params.len();
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
@@ -1142,7 +1148,7 @@ impl WasmModuleEmitter {
         // Class constructors, methods, static methods, getters, setters
         for (_, module) in modules {
             for class in &module.classes {
-                if let Some(ctor) = &class.constructor {
+                if let Some(ctor) = constructor_of(class, &classes) {
                     let param_count = 1 + ctor.params.len();
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
@@ -1372,8 +1378,8 @@ impl WasmModuleEmitter {
             self.func_map = self.module_func_maps[mod_idx].clone();
             self.current_mod_idx = mod_idx;
             for class in &module.classes {
-                if let Some(ctor) = &class.constructor {
-                    let func = self.compile_class_constructor(class, ctor);
+                if let Some(ctor) = constructor_of(class, &classes) {
+                    let func = self.compile_class_constructor(class, &ctor);
                     code_section.function(&func);
                 }
                 for method in &class.methods {

@@ -1,13 +1,57 @@
-//! Function/closure/class compilation + frame-slot helpers extracted from
-//! emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move. `WasmModuleEmitter::{compile_function, compile_closure,
-//! compile_class_constructor, compile_class_method}` and the
+//! Function, closure and class compilation plus the frame-slot helpers:
+//! `WasmModuleEmitter::{compile_function, compile_closure,
+//! compile_class_constructor, compile_class_method}`, `constructor_of`, and the
 //! `FuncEmitCtx` frame-slot helpers (`emit_frame_begin`, `emit_slot_addr`,
-//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`)
-//! each live on a dedicated inherent `impl` block for their struct.
+//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`).
 
 use super::*;
+
+/// The parameters and body `new C(...)` runs for a class.
+pub(super) struct Constructor {
+    pub params: Vec<Param>,
+    pub body: Vec<Stmt>,
+}
+
+/// The declared constructor, or JavaScript's implicit one when `new` has work to
+/// do without it: `constructor() {}` runs the field initializers, and a derived
+/// class's `constructor(...args) { super(...args) }` runs the parent's. A wasm
+/// constructor has fixed parameters, so the derived form forwards the parent's.
+pub(super) fn constructor_of(
+    class: &perry_hir::ir::Class,
+    classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+) -> Option<Constructor> {
+    if let Some(ctor) = &class.constructor {
+        return Some(Constructor {
+            params: ctor.params.clone(),
+            body: ctor.body.clone(),
+        });
+    }
+    let parent = class
+        .extends_name
+        .as_deref()
+        .and_then(|name| classes.get(name))
+        .and_then(|parent| constructor_of(parent, classes));
+    if let Some(parent) = parent {
+        let params: Vec<Param> = parent
+            .params
+            .into_iter()
+            .map(|p| Param { default: None, ..p })
+            .collect();
+        let args = params.iter().map(|p| Expr::LocalGet(p.id)).collect();
+        return Some(Constructor {
+            params,
+            body: vec![Stmt::Expr(Expr::SuperCall(args))],
+        });
+    }
+    class
+        .fields
+        .iter()
+        .any(|f| f.init.is_some())
+        .then(|| Constructor {
+            params: Vec::new(),
+            body: Vec::new(),
+        })
+}
 
 impl WasmModuleEmitter {
     pub(super) fn compile_function(&self, hir_func: &perry_hir::ir::Function) -> Function {
@@ -126,7 +170,7 @@ impl WasmModuleEmitter {
     pub(super) fn compile_class_constructor(
         &self,
         class: &perry_hir::ir::Class,
-        ctor: &perry_hir::ir::Function,
+        ctor: &Constructor,
     ) -> Function {
         // Local 0 = this (the instance handle)
         // Params start at local index 1

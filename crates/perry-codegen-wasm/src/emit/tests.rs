@@ -190,3 +190,21 @@ console.log(JSON.stringify({ ...q }) + " " + Object.keys(q).join(","));
         "{\"x\":1} x\n{\"y\":2} y"
     );
 }
+
+#[test]
+fn a_class_without_a_constructor_runs_its_implicit_one() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { x: number; constructor(v: number) { this.x = v; } }
+class B extends A {}
+class C extends A { y = 2; }
+class D { z = 1; }
+class E extends D {}
+const c = new C(4);
+console.log(new B(3).x + " " + c.x + " " + c.y + " " + new D().z + " " + new E().z);
+"#
+        ),
+        "3 4 2 1 1"
+    );
+}
