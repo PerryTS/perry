@@ -23,6 +23,13 @@ pub type SiteId = u32;
 pub(crate) const VIEWED_BUFFER: &str = "[[ViewedArrayBuffer]]";
 
 pub const ELEM: &str = "#elem";
+/// The key of a computed store whose key is a Number or a BigInt and
+/// may be a BigInt (ECMA-262 7.1.19: its ToPropertyKey is
+/// Number::toString or BigInt::toString, 6.1.6.2.23, an optional "-"
+/// and decimal digits). On a typed array it writes the element and the
+/// digit names (`Model::store_into`), on any other holder it is an
+/// unknown key.
+pub const DIGITS: &str = "#digits";
 /// The key an element store (`push`, `set.add`) writes on a value that may
 /// be a builtin prototype: an index, or no property at all (a collection's
 /// entries). A write under it is a write of every key that may be ToString

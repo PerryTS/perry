@@ -385,15 +385,27 @@ impl Model {
         // an index store: on an Array it writes its elements only, which no
         // named non-index key reads (`is_elem_array`); on another holder
         // it writes the numeric range, never an arbitrary string key.
-        let elem = self.is_elem_key(key);
+        // ECMA-262 10.4.5.5 with 7.1.19: a Number-or-BigInt key (`DIGITS`)
+        // on a typed array is a CanonicalNumericIndexString (an element
+        // store, below) or a BigInt's digits that are none: an
+        // OrdinarySet of a digit-only name, the numeric range (`#num`,
+        // `numeric_field`), never another name. On any other holder it
+        // is an unknown key.
+        let digits_key = self.is_digits_key(key);
+        let digits = digits_key && self.typed_array_elements(t);
+        if digits {
+            self.typed_array_element_store(t, src, site);
+        }
         // Rule C1 (`ta_length_getter`) under the runtime lock: a BufferHeader
         // view (a Node Buffer, a plain Uint8Array) takes a [[Set]] of a
         // non-index name as an own data property (`buffer_set_own_prop`, from
         // `js_object_set_field_by_name` and the computed-key path, without
         // the inherited accessor that ECMA-262 10.1.9.2 finds), and a typed
         // array's template does not keep its kind: a [[Set]] that may name
-        // `length` may make an own `length`.
-        if !elem
+        // `length` may make an own `length`. A Number-or-BigInt key never
+        // names `length` (its ToString is digits, NaN or Infinity).
+        if !self.is_elem_key(key)
+            && !digits_key
             && match key {
                 Key::Named(a) => self.atoms[a as usize] == "length",
                 Key::Any(_) => true,
@@ -401,13 +413,15 @@ impl Model {
         {
             self.ta_len_open(t);
         }
+        let key = if digits_key { Key::any() } else { key };
+        let elem = self.is_elem_key(key) || digits;
         let key = if elem { Key::any() } else { key };
         // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
         // [[Set]] under a numeric key (an element-key store is one: a Number
         // key, an index string, an append) runs TypedArraySetElement, which
         // stores ToNumber(v), or ToBigInt(v) on a BigInt64/BigUint64 array,
         // never `v`; no prototype setter is met.
-        if elem && self.typed_array_elements(t) {
+        if elem && !digits && self.typed_array_elements(t) {
             self.typed_array_element_store(t, src, site);
             return;
         }

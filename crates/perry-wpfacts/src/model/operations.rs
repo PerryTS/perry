@@ -183,6 +183,15 @@ impl Model {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ELEM)
     }
 
+    /// The key of a Number-or-BigInt computed store (`DIGITS`).
+    pub fn digits_key(&mut self) -> Key {
+        Key::Named(self.atom(DIGITS))
+    }
+
+    pub fn is_digits_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == DIGITS)
+    }
+
     /// The iteration key: what iterating a value yields WITHOUT its
     /// protocol (`Gen::iterate` models `[Symbol.iterator]().next().value`
     /// beside it): an array-like's elements; a program object or function

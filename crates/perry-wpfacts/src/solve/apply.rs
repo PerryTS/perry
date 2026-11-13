@@ -1817,6 +1817,14 @@ impl Model {
                 // stores under the any-String shape, which never names a
                 // symbol-keyed property (`key_may_name_str`).
                 let not_str = !toks.is_empty() || prim & (prim::SYMBOL | prim::BIGINT) != 0;
+                // ECMA-262 7.1.19: a key that is a Number or a BigInt and
+                // nothing else (no String, no Symbol, no object, not ⊤) is
+                // ToString of one: decimal digits, never a non-digit name.
+                // Its store is the `DIGITS` key's (`store_into`); a key
+                // that later holds more stores the Any key as well.
+                let digits = toks.is_empty()
+                    && prim & prim::BIGINT != 0
+                    && prim & !(prim::NUM | prim::BIGINT) == 0;
                 let any = not_str || (prim & prim::STR != 0 && strs == STRS_TOP) || any_prefix;
                 // An Any store under no shape or the any-String shape (this
                 // pop's or an earlier one's) is every name's.
@@ -1856,7 +1864,12 @@ impl Model {
                     true => (2, self.any_string_shape()),
                     false => (0, shape),
                 };
-                if any && self.index_store_done.insert((n, site, kind)) {
+                if digits {
+                    if self.index_store_done.insert((n, site, 5)) {
+                        let key = self.digits_key();
+                        self.cons(o, Cons::Store { key, src, site });
+                    }
+                } else if any && self.index_store_done.insert((n, site, kind)) {
                     self.cons(
                         o,
                         Cons::Store {
