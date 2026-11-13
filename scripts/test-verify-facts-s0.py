@@ -101,12 +101,16 @@ def main():
     runtime_dir = Path(os.environ.get("PERRY_RUNTIME_DIR", str(args.perry.parent)))
     if (runtime_dir / "libperry_runtime_instr.a").exists():
         instr = dict(PERRY_GC_INSTRUMENTS="1")
-        for name, family, observed_text in [
-            ("family-bytes-negative", "typedarray", "a byte cell is born"),
-            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born"),
-            ("family-bytes-observe-negative", "typedarray", "is observed"),
-            ("family-bytes-poolsize-negative", "typedarray", "is observed"),
-            ("family-regex-negative", "regex_engine", "a RegExp is born"),
+        # `aborts`: the family's install follows the fact (the byte cells do,
+        # `PERRY_FACTS_FAMILY_LINK`), and the program creates a value of it:
+        # without the witnesses the sabotaged `never` leaves the family out
+        # of the link, and the birth must abort, not answer.
+        for name, family, observed_text, aborts in [
+            ("family-bytes-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-arrive-negative", "typedarray", "a byte cell is born", True),
+            ("family-bytes-observe-negative", "typedarray", "is observed", False),
+            ("family-bytes-poolsize-negative", "typedarray", "is observed", False),
+            ("family-regex-negative", "regex_engine", "a RegExp is born", False),
         ]:
             source = fixtures / (name + ".ts")
             expected = oracle(source)
@@ -122,12 +126,25 @@ def main():
             member = value["observed_member"] or ""
             assert observed_text in member, value
             assert member.startswith(family + ": ") or value["expectation"] == family, value
-            # Without the instrumented variant no claim is made: the same
-            # sabotaged fact has no consumer.
+            # Without the instrumented variant check mode makes no claim.
+            # The link decision still reads the fact: a family that is left
+            # out and then created aborts at the birth (no answer, no rc 0);
+            # one that is only observed, or whose install the detector still
+            # decides, runs as before.
             exe, e = compile_(source, name + "-default", PERRY_FACTS_SABOTAGE="famreach:" + family)
             observed = observe(exe, e)
+            if aborts:
+                assert observed.returncode not in (0, 86), observed
+                assert observed.stdout == b"", observed
+                assert b"family_reach" in observed.stderr and family.encode() in observed.stderr, observed
+            else:
+                assert observed.returncode == 0 and observed.stdout == expected, observed
+            # With the link switch off the sabotaged fact has no consumer.
+            exe, e = compile_(source, name + "-nolink", PERRY_FACTS_SABOTAGE="famreach:" + family,
+                              PERRY_FACTS_FAMILY_LINK="0")
+            observed = observe(exe, e)
             assert observed.returncode == 0 and observed.stdout == expected, observed
-            save(name, status=86)
+            save(name, status=86, default="aborts" if aborts else "runs")
         for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live")]:
             source = fixtures / (name + ".ts")
             dump = args.out / (name + ".facts")
@@ -142,6 +159,17 @@ def main():
             else:
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(name, status=observed.returncode)
+        # The default build of a program whose family is never: the install
+        # is not linked and the image claims the family. A comparator sort's
+        # two scratch cells are no values and must not abort it.
+        source = fixtures / "family-bytes-scratch.ts"
+        exe, e = compile_(source, "family-bytes-scratch-default", PERRY_KEEP_SYMBOLS="1")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        symbols = run(["nm", str(exe)]).stdout
+        assert b"js_runtime_families_never" in symbols, "the image makes the family claim"
+        assert b"js_runtime_install_typedarray" not in symbols, "the typed-array group is linked"
+        save("family-bytes-scratch-default", status=observed.returncode)
     else:
         save("family-claims", status="skipped: no instrumented runtime variant")
 

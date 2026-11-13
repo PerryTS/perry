@@ -16,6 +16,9 @@ pub struct Node {
     pub indirect_calls: usize,
     pub indirect_jmps: usize,
     pub calls: BTreeSet<String>,
+    /// Symbols an instruction that is no call or jump names (an address
+    /// taken in code); emptied once `Graph::taken` is computed.
+    pub refs: BTreeSet<String>,
     pub externs: BTreeSet<String>,
     pub idioms: BTreeSet<String>,
     pub sites: Vec<String>,
@@ -38,6 +41,7 @@ impl Node {
             indirect_calls: 0,
             indirect_jmps: 0,
             calls: BTreeSet::new(),
+            refs: BTreeSet::new(),
             externs: BTreeSet::new(),
             idioms: BTreeSet::new(),
             sites: Vec::new(),
@@ -95,6 +99,10 @@ pub struct Graph {
     pub by_global: HashMap<String, Vec<usize>>,
     pub dem: HashMap<String, String>,
     pub edge_count: usize,
+    /// Per node: some function's code takes its address without calling it
+    /// (a callback handed on, a task scheduled, a slot filled). Addresses
+    /// held only in data (a vtable, a static table) are not seen.
+    pub taken: Vec<bool>,
 }
 fn plain_llvm(s: &str) -> &str {
     rx!(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")
@@ -151,10 +159,27 @@ impl Graph {
             targets.remove(&i);
             succ[i] = targets.into_iter().collect();
         }
+        let mut taken = vec![false; nodes.len()];
+        for n in &nodes {
+            for t in &n.refs {
+                let macho_sec = format!("__TEXT,{t}");
+                if let Some(ts) = local
+                    .get(&(n.obj.as_ref(), t.as_str()))
+                    .or_else(|| by_global.get(t))
+                    .or_else(|| sections.get(&(n.obj.as_ref(), t.as_str())))
+                    .or_else(|| sections.get(&(n.obj.as_ref(), macho_sec.as_str())))
+                {
+                    for &t in ts {
+                        taken[t] = true;
+                    }
+                }
+            }
+        }
         drop(local);
         drop(sections);
         for (n, ex) in nodes.iter_mut().zip(externs) {
             n.externs = ex;
+            n.refs = BTreeSet::new();
         }
         let mut pred = vec![Vec::new(); nodes.len()];
         for (i, ts) in succ.iter().enumerate() {
@@ -180,6 +205,7 @@ impl Graph {
             by_global,
             dem,
             edge_count,
+            taken,
         })
     }
     pub fn label(&self, i: usize) -> String {
@@ -264,6 +290,10 @@ pub struct Classification {
     /// Reach of JS entries and of the write barrier, for effect declarations.
     pub effect_reach: crate::effects::EffectReach,
     pub throw_reach: crate::throw_class::ThrowReach,
+    /// The delegated indirect edges of the rules, callee to callers (a hook
+    /// wrapper and the operations its slot can hold): `Graph::pred` has only
+    /// the direct calls.
+    pub indirect_pred: Vec<Vec<usize>>,
 }
 impl Classification {
     pub fn witness_path(&self, g: &Graph, name: &str, mode: Mode) -> Vec<String> {
@@ -853,6 +883,7 @@ fn classify_inner(
         witness,
         effect_reach,
         throw_reach,
+        indirect_pred: extra_pred,
     })
 }
 

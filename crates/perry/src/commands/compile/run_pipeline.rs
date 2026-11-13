@@ -6923,6 +6923,8 @@ pub fn run_with_parse_cache(
             .collect::<Vec<_>>()
     });
     program_step("module options", Some(options_started));
+    // `family_reach`, for the generated installer below.
+    let family_live = crate::commands::stdlib_installs::family_live(program_facts.as_deref());
     // Per-module options now own the facts needed by lowering. Release the
     // program's preparation inputs before any LLVM worker starts.
     drop((
@@ -7752,14 +7754,17 @@ pub fn run_with_parse_cache(
     // full-feature one. Generated before the stub scan below so the scan sees
     // its install references resolved by the runtime/stdlib archives.
     {
-        let runtime_symbols = crate::commands::stdlib_installs::runtime_installer_callees(
-            &optimized_libs.runtime_installs,
-        );
+        let (runtime_symbols, runtime_never) =
+            crate::commands::stdlib_installs::runtime_installer_callees_by_fact(
+                &optimized_libs.runtime_installs,
+                family_live,
+            );
         let stdlib_symbols = (ctx.needs_stdlib && stdlib_lib_resolved.is_some()).then(|| {
             crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs)
         });
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!("  runtime installs: {}", runtime_symbols.join(", "));
+            eprintln!("  runtime families claimed never: {runtime_never:#x}");
             if let Some(stdlib) = &stdlib_symbols {
                 eprintln!("  stdlib installs: {}", stdlib.join(", "));
             }
@@ -7779,6 +7784,7 @@ pub fn run_with_parse_cache(
             &runtime_symbols,
             stdlib_symbols.as_deref(),
             &registrations,
+            runtime_never,
             target.as_deref(),
         )?;
         let installer_path = object_output_dir.join("_perry_feature_installs.o");

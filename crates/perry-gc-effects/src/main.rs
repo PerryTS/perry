@@ -48,6 +48,29 @@ enum Command {
         #[arg(required = true)]
         symbols: Vec<String>,
     },
+    /// Check that every realm native whose body can reach a byte-cell birth
+    /// is an entry of the typed-array family or declares the birth
+    /// (`family_reach`'s "never" rests on it); print the census.
+    Births {
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Replace the built-in rules (`scripts/gc_call_effects/byte_cell_births.txt`).
+        #[arg(long = "birth-rules")]
+        birth_rules: Option<PathBuf>,
+        /// Per-native census TSV.
+        #[arg(long)]
+        census: Option<PathBuf>,
+        /// The functions that can reach a birth and have no caller in the
+        /// graph, one per line with their kind.
+        #[arg(long)]
+        roots: Option<PathBuf>,
+        /// `Realm.path`: read this native as declaring nothing and being of
+        /// no family (sabotage runs: the check must then fail for it).
+        #[arg(long = "undeclare")]
+        undeclared: Vec<String>,
+        #[arg(long = "archive", required = true)]
+        archives: Vec<PathBuf>,
+    },
     /// Check the effect declarations of realm natives (`realm-v1.json`)
     /// against the call graph; print the census of all realm natives.
     Effects {
@@ -192,6 +215,53 @@ fn run() -> Result<()> {
             if report.failures != 0 {
                 bail!(
                     "{} effect declaration(s) contradict the call graph",
+                    report.failures
+                );
+            }
+        }
+        Command::Births {
+            manifest,
+            birth_rules,
+            census,
+            roots,
+            undeclared,
+            archives,
+        } => {
+            let (g, res) = analyze(&archives, &rules, &root)?;
+            let text = std::fs::read_to_string(&manifest)?;
+            let natives = perry_gc_effects::effects::natives(&text)?;
+            let births = perry_gc_effects::births::declared_births(&text)?;
+            let birth_text = birth_rules
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?
+                .unwrap_or_else(|| perry_gc_effects::births::RULES.into());
+            let birth_rules = load_rules(&birth_text)?;
+            for name in &undeclared {
+                if !natives.iter().any(|n| &n.name == name) {
+                    bail!("--undeclare {name}: no such realm native");
+                }
+            }
+            let report = perry_gc_effects::births::check(
+                &g,
+                &res.indirect_pred,
+                &birth_rules,
+                &natives,
+                &births,
+                &undeclared,
+            )?;
+            if let Some(path) = census {
+                std::fs::write(path, &report.census)?;
+            }
+            if let Some(path) = roots {
+                std::fs::write(path, &report.roots)?;
+            }
+            for line in &report.lines {
+                println!("{line}");
+            }
+            if report.failures != 0 {
+                bail!(
+                    "{} realm native(s) can bear a byte cell the facts do not know of",
                     report.failures
                 );
             }

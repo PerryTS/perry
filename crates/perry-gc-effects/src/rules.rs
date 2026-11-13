@@ -124,6 +124,11 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "closures",
             "target",
             "barrier",
+            // The byte-cell births check (`births.rs`, its own rules file).
+            "birth",
+            "in-hand",
+            "origin",
+            "before-claim",
         ]
         .contains(&kind)
         {

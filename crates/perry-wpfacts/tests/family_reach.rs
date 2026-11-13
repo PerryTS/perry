@@ -113,3 +113,57 @@ fn a_program_without_a_byte_cell_can_have_the_family_never() {
         assert!(!r.live("typedarray"), "{name}: {:#?}", r.dump_lines());
     }
 }
+
+/// The conditions under which the typed-array family's install follows the
+/// fact (DESIGN-family-reach section 11): the text part runs over every
+/// body, walked or not (names, module specifiers, constant and unknown keys
+/// of the global object), and a holder that is not the receiver of a plain
+/// static member chain observes everything below it and what those entries
+/// declare born.
+const TEXT_AND_HOLDERS: &[(&str, &str)] = &[
+    ("import-named-unused", "import { readFileSync } from 'node:fs';\nconsole.log(2);\n"),
+    ("require", "const fs = require('fs');\nconsole.log(typeof fs.readFileSync);\n"),
+    ("require-dead", "function dead() { return require('fs').readFileSync('/etc/hostname'); }\nconsole.log(3);\n"),
+    ("require-dynamic", "const m = require(process.argv[2] ?? 'path');\nconsole.log(typeof m);\n"),
+    ("import-dynamic", "import(process.argv[2] ?? 'path').then((m) => console.log(typeof m));\n"),
+    ("import-dynamic-const", "import('fs').then((m) => console.log(typeof m.readFileSync));\n"),
+    ("name-in-dead-closure", "const t = { f: () => new Float32Array(2) };\nconsole.log(typeof t);\n"),
+    ("name-in-class-field", "class C { static make = (n: number) => new Int16Array(n); x = 1; }\nconsole.log(new C().x);\n"),
+    ("name-in-getter", "const o = { get b() { return Buffer.alloc(2); } };\nconsole.log(typeof o);\n"),
+    ("instanceof", "function f(x: unknown) { return x instanceof Uint8Array; }\nconsole.log(f(1));\n"),
+    ("static-key-isview", "console.log(ArrayBuffer.isView(1));\n"),
+    ("const-key", "const g: any = globalThis;\nconst U8 = g['Uint8' + 'Array'];\nconsole.log(new U8(2).length);\n"),
+    ("global-computed-walked", "const k = ['Uint8', 'Array'].join('');\nconst C = (globalThis as any)[k];\nconsole.log(new C(3).length);\n"),
+    ("global-alias-computed", "const g: any = globalThis;\nfunction pick(k: string) { return g[k]; }\nconsole.log(typeof pick(['Buf', 'fer'].join('')));\n"),
+    ("holder-value", "const P: any = process;\nconsole.log(typeof P);\n"),
+    ("holder-computed", "const k = process.argv[2] ?? 'argv';\nconsole.log(typeof (process as any)[k]);\n"),
+    ("ctor-value", "const B = Blob;\nconsole.log(typeof B);\n"),
+    ("ctor-alias-new", "const T = TextEncoder;\nconsole.log(new T().encode('ab').length);\n"),
+    ("proto-value", "const p = Blob.prototype;\nconsole.log(typeof p);\n"),
+    ("destructure-global", "const { TextDecoder: TD } = globalThis as any;\nconsole.log(typeof TD);\n"),
+    ("crypto-value", "const c = crypto;\nconsole.log(typeof c);\n"),
+    ("wasm", "console.log(typeof WebAssembly);\n"),
+];
+
+/// Their negative twins: a computed key on a value of core, a name that is
+/// only a string, objects with the family's member names.
+const TEXT_NEVER: &[(&str, &str)] = &[
+    ("computed-dead", "function dead(o: any, k: string) { return o[k]; }\nconsole.log(1);\n"),
+    ("computed-on-string", "const s: any = 'abc';\nconst k = ['len', 'gth'].join('');\nconsole.log(s[k]);\n"),
+    ("lookalike", "const o: any = { subarray(a: number) { return a; }, byteLength: 3 };\nconsole.log(o.subarray(1), o.byteLength);\n"),
+    ("map-set", "const m = new Map([[1, 'a']]);\nconst s = new Set([1]);\nconsole.log(m.size, s.has(1));\n"),
+    ("math-json", "console.log(Math.max(1, 2), JSON.stringify({ a: [1] }));\n"),
+    ("string-named", "console.log('Uint8' + 'Arr');\n"),
+];
+
+#[test]
+fn the_text_part_covers_every_body_and_holders_close_over_their_entries() {
+    for (name, src) in TEXT_AND_HOLDERS {
+        let r = reach(src);
+        assert!(r.live("typedarray"), "{name}: {:#?}", r.dump_lines());
+    }
+    for (name, src) in TEXT_NEVER {
+        let r = reach(src);
+        assert!(!r.live("typedarray"), "{name}: {:#?}", r.dump_lines());
+    }
+}

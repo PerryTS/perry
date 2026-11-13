@@ -1,1 +1,0 @@
-The runtime's name dispatch for typed-array methods (`at`, `fill`, `set`, `indexOf` and the rest on a Float64Array, Uint8Array and the other typed arrays) now sits behind the typed-array install hook like the method bodies it calls, so a program that uses no typed arrays no longer links it and its binary gets smaller; programs that use typed arrays behave exactly as before.
