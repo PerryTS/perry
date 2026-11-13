@@ -35,6 +35,11 @@
 //! local's property (`x.f`, `!x.f` false) leaves its values but
 //! `null`/`undefined` and the objects whose read of `f` holds only
 //! `undefined`/`null` (`Cons::FieldTruthy`, solved per token).
+//! Rule G3: where `x.f === lit` is true (a String, Number, `null` or
+//! `undefined` literal), and in a `switch (x.f)` clause that only `case`
+//! tests of such literals of one type select (`Gen::case_narrow`), `x`
+//! holds only the values whose read of `f` may yield a value of the
+//! literal's type (ECMA-262 7.2.16 step 1, 14.12.2 CaseClauseIsSelected).
 //!
 //! The bound is a literal, a local, or a local's `length` (an Array's
 //! carries its length interval, `solve::arr_len`).
@@ -867,6 +872,29 @@ fn implied<'p>(
                 out.push(Implied::Present(id, Presence::NotNullish));
             }
         }
+        // Rule G3: `local.key === lit` true (`!==` false), `lit` a String,
+        // Number, `null` or `undefined` literal: the read is of its type.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+        } if (matches!(op, CompareOp::Eq) == positive)
+            && match (left.as_ref(), right.as_ref()) {
+                (Expr::PropertyGet { .. }, l) | (l, Expr::PropertyGet { .. }) => {
+                    literal_type_test(l).is_some()
+                }
+                _ => false,
+            } =>
+        {
+            let ((Expr::PropertyGet { object, property, .. }, l)
+            | (l, Expr::PropertyGet { object, property, .. })) = (left.as_ref(), right.as_ref())
+            else {
+                return;
+            };
+            if let (Some(test), Some(id)) = (literal_type_test(l), host_of(object, subst, depth)) {
+                out.push(Implied::Present(id, Presence::FieldTruthy(property.clone(), test)));
+            }
+        }
         // `local == null` (`undefined`) false, `local != null` true: not
         // nullish. `local === undefined` false, `!==` true: not
         // `undefined`. (`=== null` decides no presence a filter keeps.)
@@ -948,6 +976,35 @@ fn this_host_bool() -> bool {
 /// guard is in (`depth` 0: a predicate's `this` is its own call's). `this`
 /// is one value in one invocation of a function with its own `this` binding
 /// (ECMA-262 9.4.4 ResolveThisBinding; nothing assigns it).
+/// Rule G3: the guard test `=== e` true implies of the other operand: the
+/// type of the literal `e` (ECMA-262 7.2.16 step 1).
+pub(crate) fn literal_type_test(e: &Expr) -> Option<u8> {
+    use crate::model::guard;
+    match e {
+        Expr::String(_) => Some(guard::IS_STR),
+        Expr::Number(_) | Expr::Integer(_) => Some(guard::IS_NUM),
+        Expr::Null => Some(guard::IS_NULL),
+        Expr::Undefined => Some(guard::UNDEF),
+        _ => None,
+    }
+}
+
+/// A clause body that never completes normally into the next clause: its
+/// last statement leaves (the rule M1 test, `Stmt::Switch` in `walk`).
+fn case_leaves(c: &perry_hir::SwitchCase) -> bool {
+    matches!(
+        c.body.last(),
+        Some(
+            Stmt::Break
+                | Stmt::Continue
+                | Stmt::LabeledBreak(_)
+                | Stmt::LabeledContinue(_)
+                | Stmt::Return(_)
+                | Stmt::Throw(_)
+        )
+    )
+}
+
 fn host_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>, depth: u8) -> Option<u32> {
     match e {
         Expr::This if depth == 0 => Some(THIS_LOCAL),
@@ -1222,6 +1279,49 @@ impl<'a> Gen<'a> {
             pushed += 1;
         }
         pushed
+    }
+
+    /// Rule G3 for clause `i` of `switch (disc)`, `disc` a property read:
+    /// the clauses `j..=i` whose bodies before `i` are empty, entered only
+    /// by their tests (`j` first, or clause `j - 1` leaves), all `case`
+    /// literals of one type (no `default`: 14.12.4 enters it when no test
+    /// is equal), narrow as `disc === test_i` true; any other clause none.
+    pub(crate) fn case_narrow(
+        &mut self,
+        fx: &Fx,
+        disc: &Expr,
+        cases: &[perry_hir::SwitchCase],
+        i: usize,
+    ) -> usize {
+        if !matches!(disc, Expr::PropertyGet { .. }) {
+            return 0;
+        }
+        let mut j = i;
+        while j > 0 && cases[j - 1].body.is_empty() {
+            j -= 1;
+        }
+        if j > 0 && !case_leaves(&cases[j - 1]) {
+            return 0;
+        }
+        let mut test = None;
+        for c in &cases[j..=i] {
+            let Some(k) = c.test.as_ref().and_then(literal_type_test) else {
+                return 0;
+            };
+            if test.is_some_and(|t| t != k) {
+                return 0;
+            }
+            test = Some(k);
+        }
+        let Some(lit) = cases[i].test.as_ref() else {
+            return 0;
+        };
+        let cond = Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(disc.clone()),
+            right: Box::new(lit.clone()),
+        };
+        self.narrow_guard(fx, &cond, true)
     }
 
     pub(crate) fn narrow_pop(&mut self, k: usize) {

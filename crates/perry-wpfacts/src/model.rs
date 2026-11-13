@@ -122,6 +122,12 @@ pub mod guard {
     pub const NOT_FALSE: u8 = 15;
     pub const IS_TRUE: u8 = 16;
     pub const NOT_TRUE: u8 = 17;
+    /// Rule G3: `=== lit` true for a String (Number, `null`) literal: only a
+    /// value of that type can be (ECMA-262 7.2.16 step 1); `=== undefined`
+    /// is `UNDEF`. No object is one.
+    pub const IS_STR: u8 = 18;
+    pub const IS_NUM: u8 = 19;
+    pub const IS_NULL: u8 = 20;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -148,6 +154,9 @@ pub mod guard {
             NOT_FALSE => p::ALL & !p::FALSE,
             IS_TRUE => p::TRUE,
             NOT_TRUE => p::ALL & !p::TRUE,
+            IS_STR => p::STR,
+            IS_NUM => p::NUM,
+            IS_NULL => p::NULL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
