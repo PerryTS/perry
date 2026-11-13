@@ -3410,7 +3410,7 @@ dependencies = [
  "bitflags",
  "inkwell_internals 0.14.0",
  "libc",
- "llvm-sys",
+ "llvm-sys 221.1.1",
  "thiserror 2.0.21",
 ]
 
@@ -3423,7 +3423,7 @@ dependencies = [
  "bitflags",
  "inkwell_internals 0.15.0",
  "libc",
- "llvm-sys",
+ "llvm-sys 221.1.1",
  "thiserror 2.0.21",
 ]
 
@@ -3946,6 +3946,20 @@ name = "llvm-sys"
 version = "221.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d19cbc1fbc2f93b1508959fe2c92a09b6d760ffbea9a89be30fed6327f6c786"
+dependencies = [
+ "anyhow",
+ "cc",
+ "lazy_static",
+ "libc",
+ "regex-lite",
+ "semver",
+]
+
+[[package]]
+name = "llvm-sys"
+version = "231.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21cdb31b2047b57121a31a911af86e4bacb93d165843d27cea1e14e071ac2b4c"
 dependencies = [
  "anyhow",
  "cc",
@@ -5074,7 +5088,7 @@ dependencies = [
  "flate2",
  "inkwell 0.10.0",
  "inkwell 0.9.0",
- "llvm-sys",
+ "llvm-sys 231.0.1",
  "log",
  "memchr",
  "perry-abi",
@@ -5429,7 +5443,7 @@ version = "0.5.1663"
 dependencies = [
  "anyhow",
  "clap",
- "llvm-sys",
+ "llvm-sys 231.0.1",
  "object 0.37.3",
  "perry-abi",
  "perry-dispatch",

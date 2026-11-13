@@ -60,7 +60,7 @@ perry-runtime-manifest = { workspace = true, optional = true }
 perry-dispatch = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
-llvm-sys = { version = "221", optional = true }
+llvm-sys = { version = "231", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 llvm-sys = { version = "221", features = ["no-llvm-linking"], optional = true }
