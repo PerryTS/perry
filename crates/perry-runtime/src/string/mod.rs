@@ -545,7 +545,9 @@ pub struct StringHeader {
     pub byte_len: u32,
     /// Capacity in bytes (allocated space for data)
     pub capacity: u32,
-    /// Reference hint: 0=shared (never mutate in-place), 1=unique (in-place append OK)
+    /// Ownership hint: 0=shared (never mutate in-place), 1=unique (in-place append OK).
+    /// From `intern::KEY_WORD_ATOM_BASE` up: shared, and the word names the
+    /// property atom of this text (`intern::heap_key_atom`).
     pub refcount: u32,
     /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
     pub flags: u32,
@@ -1387,6 +1389,7 @@ pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
 };
+pub(crate) use intern::{atom_of_key_word, heap_key_atom, short_key_atom, KEY_WORD_ATOM_BASE};
 
 pub(crate) mod byte_scan;
 pub(crate) mod quote;

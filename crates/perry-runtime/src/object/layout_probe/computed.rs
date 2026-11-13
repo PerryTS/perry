@@ -329,21 +329,70 @@ pub unsafe extern "C" fn perry_probe_get_value(
 /// atom names).
 #[inline]
 pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
-    if let Some(h) = key_word_hash(key_bits) {
-        if key_bits & TAG_MASK == STRING_TAG {
-            let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+    let tag = key_bits & TAG_MASK;
+    if tag == crate::value::SHORT_STRING_TAG {
+        // A short string's word is its text: hash it from the word (the
+        // FNV-1a of `key_bytes_hash`) and find its atom by a word compare.
+        let len = ((key_bits & crate::value::SHORT_STRING_LEN_MASK)
+            >> crate::value::SHORT_STRING_LEN_SHIFT) as u32;
+        if len == 0 || len as usize > crate::value::SHORT_STRING_MAX_LEN {
+            return computed_key_by_bytes(key_bits);
+        }
+        let data = key_bits & crate::value::SHORT_STRING_DATA_MASK & ((1u64 << (8 * len)) - 1);
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut rest = data;
+        let mut digits = true;
+        for _ in 0..len {
+            let b = rest & 0xFF;
+            h = (h ^ b).wrapping_mul(0x100000001b3);
+            digits &= b.wrapping_sub(b'0' as u64) < 10;
+            rest >>= 8;
+        }
+        if digits {
+            return None;
+        }
+        let a = crate::string::short_key_atom(len, data, h)?;
+        return Some((STRING_TAG | a as u64, h));
+    }
+    if tag == STRING_TAG {
+        let s = (key_bits & POINTER_MASK) as *const crate::StringHeader;
+        if s.is_null() {
+            return None;
+        }
+        if crate::string::is_property_atom(s) {
             let text =
                 std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
             if index_like(text) {
                 return None;
             }
+            return Some((key_bits, crate::string::property_atom_hash(s)));
         }
-        return Some((key_bits, h));
+        // A shared string that was resolved as a key before names its atom
+        // (never recorded for an index-like text, see below).
+        let word = (*s).refcount;
+        if word >= crate::string::KEY_WORD_ATOM_BASE {
+            let a = crate::string::atom_of_key_word(word);
+            if !a.is_null() {
+                return Some((STRING_TAG | a as u64, crate::string::property_atom_hash(a)));
+            }
+        }
+        let text = std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize);
+        if index_like(text) {
+            return None;
+        }
+        let h = crate::object::key_bytes_hash(text.as_ptr(), text.len());
+        let a = crate::string::heap_key_atom(s, text, h)?;
+        return Some((STRING_TAG | a as u64, h));
     }
-    let tag = key_bits & TAG_MASK;
-    if tag != STRING_TAG && tag != crate::value::SHORT_STRING_TAG {
-        return None;
-    }
+    let h = key_word_hash(key_bits)?;
+    Some((key_bits, h))
+}
+
+/// [`computed_key`] for a string value by its bytes (the forms the word
+/// arms above do not take).
+#[cold]
+#[inline(never)]
+unsafe fn computed_key_by_bytes(key_bits: u64) -> Option<(u64, u64)> {
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let text = crate::string::js_string_key_bytes(crate::JSValue::from_bits(key_bits), &mut sso)?;
     if index_like(text) {

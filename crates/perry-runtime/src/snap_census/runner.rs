@@ -4885,7 +4885,8 @@ fn write_env_report(st: &State, f: &mut std::fs::File, rank: &[u64]) {
                 let o = &st.env_obs[t as usize];
                 found[t as usize] += 1;
                 // The alias hint at the boundary (0 shared, 1 unique).
-                let alias = unsafe { (*(o.ptr as *const crate::StringHeader)).refcount };
+                let alias =
+                    u32::from(unsafe { (*(o.ptr as *const crate::StringHeader)).refcount } == 1);
                 let _ = writeln!(
                     f,
                     "#cell\tenv_var\t{name}\t{}\t{}\talias={alias}",

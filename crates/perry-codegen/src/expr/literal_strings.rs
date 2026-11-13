@@ -160,7 +160,7 @@ fn witness(ctx: &mut FnCtx<'_>, value: &str, what: &str) {
     let addr = ctx.block().add(I64, &handle, STRING_REFCOUNT_OFFSET);
     let ptr = ctx.block().inttoptr(I64, &addr);
     let refcount = ctx.block().load(I32, &ptr);
-    let shared = ctx.block().icmp_eq(I32, &refcount, "0");
+    let shared = ctx.block().icmp_ne(I32, &refcount, "1");
     ctx.block().cond_br(&shared, &next_l, &miss_l);
     ctx.current_block = miss;
     let site =

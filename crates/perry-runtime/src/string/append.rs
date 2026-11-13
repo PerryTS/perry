@@ -84,7 +84,7 @@ pub extern "C" fn js_string_append(
         // Do not reuse a uniquely-owned source: storing it into `dest` would
         // create an unrecorded alias while leaving refcount=1, allowing a
         // later append through either binding to mutate the other.
-        if (*dest).byte_len == 0 && (*src).refcount == 0 {
+        if (*dest).byte_len == 0 && (*src).refcount != 1 {
             return src as *mut StringHeader;
         }
     }
@@ -206,7 +206,7 @@ pub extern "C" fn js_string_append_known_heap(
         if (*src).byte_len == 0 {
             return dest;
         }
-        if (*dest).byte_len == 0 && (*src).refcount == 0 {
+        if (*dest).byte_len == 0 && (*src).refcount != 1 {
             return src as *mut StringHeader;
         }
     }

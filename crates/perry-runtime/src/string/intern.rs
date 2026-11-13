@@ -54,6 +54,14 @@ pub(crate) struct AtomTable {
     /// is an empty slot. Entries are never removed.
     slots: Vec<InternEntry>,
     len: usize,
+    /// The atom id of each slot's atom, plus one (0 = none yet): a column
+    /// beside `slots`, empty until the first id is given
+    /// ([`AtomTable::id_of_slot`]).
+    ids: Vec<u32>,
+    /// Atom id -> the atom. Same weak custody as `slots`: repaired with them
+    /// after tracing, zeroed when the atom dies. An id is never given twice,
+    /// so a string that still carries a dead atom's id reads zero here.
+    by_id: Vec<usize>,
 }
 
 impl AtomTable {
@@ -61,6 +69,8 @@ impl AtomTable {
         AtomTable {
             slots: Vec::new(),
             len: 0,
+            ids: Vec::new(),
+            by_id: Vec::new(),
         }
     }
 
@@ -229,19 +239,200 @@ impl AtomTable {
                 cap
             ],
         );
-        for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
-            self.place(entry);
+        self.replace_from(old);
+    }
+
+    /// Re-place the live entries of `old` (the previous `slots`) into the
+    /// fresh `slots`, each with its id.
+    fn replace_from(&mut self, old: Vec<InternEntry>) {
+        let old_ids = std::mem::take(&mut self.ids);
+        if !old_ids.is_empty() {
+            self.ids = vec![0; self.slots.len()];
+        }
+        for (i, entry) in old.into_iter().enumerate() {
+            if entry.string_ptr != 0 {
+                let at = self.place(entry);
+                if let Some(&id) = old_ids.get(i) {
+                    self.ids[at] = id;
+                }
+            }
         }
     }
 
-    fn place(&mut self, entry: InternEntry) {
+    fn place(&mut self, entry: InternEntry) -> usize {
         let mask = self.slots.len() - 1;
         let mut i = Self::home(entry.hash, mask);
         while self.slots[i].string_ptr != 0 {
             i = (i + 1) & mask;
         }
         self.slots[i] = entry;
+        i
     }
+
+    /// The property atom whose text is the `len` (1..=5) bytes of the short
+    /// string payload word `data` (FNV-1a hash `hash`): the entry's hash, then
+    /// one word compare against the atom's first payload word. A property
+    /// atom keeps its creation hash after its text, so that word is inside
+    /// its allocation for every length.
+    ///
+    /// # Safety
+    /// As [`Self::lookup`].
+    #[inline(always)]
+    unsafe fn lookup_short(&self, len: u32, data: u64, hash: u64) -> Option<*const StringHeader> {
+        if self.slots.is_empty() {
+            return None;
+        }
+        let mask = self.slots.len() - 1;
+        let text_mask = (1u64 << (8 * len)) - 1;
+        let mut i = Self::home(hash, mask);
+        loop {
+            let entry = self.slots.get_unchecked(i);
+            if entry.string_ptr == 0 {
+                return None;
+            }
+            if entry.hash == hash {
+                let a = entry.string_ptr as *const StringHeader;
+                if (*a).flags & PROPERTY_ATOM != 0
+                    && (*a).byte_len == len
+                    && std::ptr::read_unaligned(string_data(a) as *const u64) & text_mask == data
+                {
+                    return Some(a);
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// The slot of the tabled string for `bytes`, if any.
+    ///
+    /// # Safety
+    /// As [`Self::lookup`].
+    unsafe fn slot_of(&self, bytes: &[u8], hash: u64) -> Option<usize> {
+        if self.slots.is_empty() {
+            return None;
+        }
+        let mask = self.slots.len() - 1;
+        let mut i = Self::home(hash, mask);
+        loop {
+            let entry = &self.slots[i];
+            if entry.string_ptr == 0 {
+                return None;
+            }
+            if entry.hash == hash {
+                let existing = entry.string_ptr as *const StringHeader;
+                if (*existing).byte_len as usize == bytes.len()
+                    && std::slice::from_raw_parts(string_data(existing), bytes.len()) == bytes
+                {
+                    return Some(i);
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+
+    /// The key word (id + [`KEY_WORD_ATOM_BASE`]) of the atom in slot `at`,
+    /// giving the atom its id on first use. `None` when ids are exhausted.
+    fn key_word_of_slot(&mut self, at: usize) -> Option<u32> {
+        if self.ids.is_empty() {
+            self.ids = vec![0; self.slots.len()];
+        }
+        if self.ids[at] == 0 {
+            let id = self.by_id.len();
+            if id >= (u32::MAX - KEY_WORD_ATOM_BASE) as usize {
+                return None;
+            }
+            self.by_id.push(self.slots[at].string_ptr);
+            self.ids[at] = id as u32 + 1;
+        }
+        Some(self.ids[at] - 1 + KEY_WORD_ATOM_BASE)
+    }
+}
+
+/// `StringHeader::refcount` values from here up name the atom of the
+/// string's text: `KEY_WORD_ATOM_BASE + atom id`. Below it the word is the
+/// ownership hint (0 shared, 1 unique owner). Only a shared string (word 0)
+/// is ever given an atom word, and a shared string's text never changes, so
+/// the word is a fact of the text; in-place append requires the word to be 1.
+pub(crate) const KEY_WORD_ATOM_BASE: u32 = 2;
+
+/// The property atom for the short string payload `data` of `len` bytes
+/// (1..=5) with FNV-1a hash `hash`, without materialising the bytes.
+///
+/// # Safety
+/// `data` holds exactly `len` text bytes from its low byte up, zero above.
+#[inline(always)]
+pub(crate) unsafe fn short_key_atom(len: u32, data: u64, hash: u64) -> Option<*const StringHeader> {
+    let hit = ATOMS
+        .try_with(|t| (*t.get()).lookup_short(len, data, hash))
+        .ok()?;
+    if hit.is_some() {
+        return hit;
+    }
+    short_key_atom_miss(len, data, hash)
+}
+
+/// The never-seeded builtin global names (image atoms in the global
+/// object's static layout), as [`AtomTable::lookup_from`] asks them.
+#[cold]
+#[inline(never)]
+unsafe fn short_key_atom_miss(len: u32, data: u64, hash: u64) -> Option<*const StringHeader> {
+    let bytes = data.to_le_bytes();
+    let a = crate::object::runtime_layouts::builtin_global_atom(&bytes[..len as usize], hash)?;
+    ((*a).flags & PROPERTY_ATOM != 0).then_some(a)
+}
+
+/// The atom a string's key word names (`word >= KEY_WORD_ATOM_BASE`), or
+/// null when that atom has died since.
+#[inline(always)]
+pub(crate) fn atom_of_key_word(word: u32) -> *const StringHeader {
+    ATOMS
+        .try_with(|t| unsafe {
+            (*t.get())
+                .by_id
+                .get((word - KEY_WORD_ATOM_BASE) as usize)
+                .copied()
+                .unwrap_or(0)
+        })
+        .unwrap_or(0) as *const StringHeader
+}
+
+/// The property atom of plain heap string `key`'s text (`bytes`, FNV-1a
+/// `hash`), if one exists; a shared `key` then records it in its key word so
+/// its next use as a key is [`atom_of_key_word`]. Allocates nothing on the
+/// GC heap.
+///
+/// # Safety
+/// `key` is a live heap `StringHeader` that is not a property atom; `bytes`
+/// its text.
+#[inline(never)]
+pub(crate) unsafe fn heap_key_atom(
+    key: *const StringHeader,
+    bytes: &[u8],
+    hash: u64,
+) -> Option<*const StringHeader> {
+    ATOMS
+        .try_with(|t| {
+            let table = &mut *t.get();
+            let Some(at) = table.slot_of(bytes, hash) else {
+                let a = crate::object::runtime_layouts::builtin_global_atom(bytes, hash)?;
+                return ((*a).flags & PROPERTY_ATOM != 0).then_some(a);
+            };
+            let atom = table.slots[at].string_ptr as *const StringHeader;
+            if (*atom).flags & PROPERTY_ATOM == 0 {
+                return None;
+            }
+            // A shared string's text is immutable (in-place append needs the
+            // word to be 1), and an image string is not this agent's to write.
+            let word = (*key).refcount;
+            if word != 1 && !super::is_image_string(key) {
+                if let Some(w) = table.key_word_of_slot(at) {
+                    (*(key as *mut StringHeader)).refcount = w;
+                }
+            }
+            Some(atom)
+        })
+        .ok()
+        .flatten()
 }
 
 crate::perry_thread_local! {
@@ -1053,12 +1244,23 @@ pub(crate) fn scan_property_atoms(visitor: &mut crate::gc::RuntimeRootVisitor<'_
                 visitor.visit_metadata_usize_slot(&mut entry.string_ptr);
             }
         }
+        for atom in &mut (*t.get()).by_id {
+            if *atom != 0 {
+                visitor.visit_metadata_usize_slot(atom);
+            }
+        }
     });
 }
 
 pub(crate) fn prune_property_atoms(is_dead: &dyn Fn(usize) -> bool) {
     let _ = ATOMS.try_with(|t| unsafe {
         let table = &mut *t.get();
+        for atom in &mut table.by_id {
+            if *atom != 0 && is_dead(*atom) {
+                // GC_STORE_AUDIT(POINTER_FREE): Weak atom-id pruning writes 0 after is_dead; removes a pointer rather than installing an edge. The id is never given again.
+                *atom = 0;
+            }
+        }
         let mut removed = false;
         for entry in &mut table.slots {
             if entry.string_ptr != 0 && is_dead(entry.string_ptr) {
@@ -1080,9 +1282,7 @@ pub(crate) fn prune_property_atoms(is_dead: &dyn Fn(usize) -> bool) {
                     capacity
                 ],
             );
-            for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
-                table.place(entry);
-            }
+            table.replace_from(old);
         }
     });
 }
