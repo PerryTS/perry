@@ -365,7 +365,7 @@ impl WasmModuleEmitter {
                     } => {
                         let obj = self.emit_js_expr(object, locals);
                         format!(
-                            "fromJsValue(__jsMethodCall(toJsValue({}), '{}', [{}]))",
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), '{}'), [{}]))",
                             obj,
                             property,
                             args_js
@@ -746,8 +746,10 @@ impl WasmModuleEmitter {
                     args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
                 if !self.user_classes.contains(class_name.as_str()) {
                     // A host constructor (`Map`, `Error`, ...): the class name is a global.
-                    let host_args: Vec<String> =
-                        args_js.iter().map(|a| format!("toJsValue({})", a)).collect();
+                    let host_args: Vec<String> = args_js
+                        .iter()
+                        .map(|a| format!("toJsValue({})", a))
+                        .collect();
                     return format!(
                         "fromJsValue(new globalThis['{}']({}))",
                         class_name,

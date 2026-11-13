@@ -169,3 +169,44 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
         "3 7 bare"
     );
 }
+
+// A user class's method wins over what its `{__class__}` instance inherits from
+// Object.prototype, also through a subclass.
+#[test]
+fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { toString(): string { return "T!"; } }
+class U extends T {}
+async function g(): Promise<string> {
+  const t = new T();
+  const u = new U();
+  return t.toString() + " " + u.toString();
+}
+g().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "T! T!"
+    );
+}
+
+// `r.run(shadow(r))` looks `run` up before it evaluates the argument: the argument gives
+// the instance an own, non-function `run`, which a lookup made afterwards would find.
+#[test]
+fn async_body_method_call_looks_up_the_method_before_the_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class R { run(x: string): string { return "proto " + x; } }
+function shadow(r: any): string { r.run = 5; return "arg"; }
+async function f(): Promise<string> {
+  const r: any = new R();
+  return r.run(shadow(r));
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "proto arg"
+    );
+}

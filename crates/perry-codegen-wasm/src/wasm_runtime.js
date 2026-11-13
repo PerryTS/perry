@@ -4967,14 +4967,33 @@ function __hostCallback(value) {
   return hostCallbacks.get(value);
 }
 
-// A method call emitted in an async (JS) body. A user-class instance is a `{__class__}`
-// object whose methods live in the WASM function table, not on the object, so it goes
-// through the class method table; anything else is called as a JS method.
-function __jsMethodCall(obj, mname, args) {
-  if (obj && typeof obj === 'object' && obj.__class__ && typeof obj[mname] !== 'function') {
-    return __classDispatch(obj, mname, args);
+// A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,
+// the method is looked up before the arguments are evaluated. A user-class instance is a
+// `{__class__}` object whose methods live in the WASM function table: a name its class
+// chain defines wins over what the object inherits from Object.prototype (`toString`),
+// and loses only to an own property.
+function __jsMethodGet(obj, mname) {
+  if (obj && typeof obj === 'object' && obj.__class__ && !Object.prototype.hasOwnProperty.call(obj, mname)) {
+    if (__classHasMethod(obj.__class__, mname) || typeof obj[mname] !== 'function') {
+      return { r: obj, m: mname, user: true };
+    }
   }
-  return obj[mname](...args);
+  return { r: obj, m: mname, f: obj[mname] };
+}
+
+function __jsMethodInvoke(ref, args) {
+  if (ref.user) return __classDispatch(ref.r, ref.m, args);
+  if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
+  return ref.f.apply(ref.r, args);
+}
+
+// Own keys only: `mname in methods` would also find Object.prototype's names.
+function __classHasMethod(cls, mname) {
+  for (let c = cls; c; c = classParentTable[c] || null) {
+    const methods = classMethodTable[c];
+    if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) return true;
+  }
+  return false;
 }
 
 function __classDispatch(objVal, mname, rawArgs) {
