@@ -461,6 +461,17 @@ fn reach_folds_switch_is_a_cache_input() {
     );
 }
 
+/// The calls of a `JSON.stringify` replacer function: the switch changes
+/// which objects the solve sees stored into, so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_json_replacer_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_REACH_JSON_REPLACER"),
+        "PERRY_FACTS_REACH_JSON_REPLACER must key the compile caches"
+    );
+}
+
 /// Activation reach, the `done` read of a step result: the switch changes
 /// which bodies the solve calls active, so `=0` must never reuse an `=1`
 /// object.

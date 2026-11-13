@@ -310,11 +310,18 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 );
                 let rv = self.expr(fx, reviver);
+                let born = self.m.tmpls.len();
                 let v = self.json_value(mi);
                 let s = self.prim_node(prim::STR);
-                let vals = self.load(v, Key::any());
+                // Own values while sure, the rule on (`json_reviver_values`).
+                let vals = match self.json_reviver_values(v, born) {
+                    Some(own) => own,
+                    None => self.load(v, Key::any()),
+                };
                 let holder = v;
                 let ret = self.call_value(rv, ThisArg::Node(holder), vec![s, vals], vec![]);
+                // Stored under its key (`json_reviver_calls`).
+                self.json_reviver_calls(v, ret);
                 // The reviver's results replace values in the parsed tree.
                 let tmp = self.tmp("revived");
                 self.m.edge(ret, tmp);
@@ -342,6 +349,10 @@ impl<'a> Gen<'a> {
                     && replacer.is_some_and(|r| {
                         !matches!(r, Expr::Null | Expr::Undefined | Expr::Array(..))
                     });
+                // It is called back with them (`json_replacer_stringify`).
+                if let Some(out) = self.json_replacer_stringify(fx, &ks, replacer, replaced) {
+                    return out;
+                }
                 let out = if replaced && !ks.is_empty() {
                     let r = self.m.reason("JSON.stringify value");
                     let v = self.expr(fx, ks[0]);
