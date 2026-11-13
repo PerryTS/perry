@@ -2569,18 +2569,24 @@ fn ns_method_inner(
                 let num = m.node_l("num");
                 m.add_prim(num, prim::NUM);
                 let call2 = m.calls.len() as CallId;
-                m.solver_call(
-                    call,
-                    CallSite {
-                        this: ThisArg::Undef,
-                        args: vec![fa, num],
-                        spread: vec![],
-                        ret,
-                        site: call2,
-                        region: m.thrown,
-                    },
-                );
-                m.cons(f, Cons::Call { call: call2 });
+                if m
+                    .solver_call_keyed(
+                        call,
+                        (crate::summary::MK_FROM_MAP, 0, 0),
+                        Some(f),
+                        CallSite {
+                            this: ThisArg::Undef,
+                            args: vec![fa, num],
+                            spread: vec![],
+                            ret,
+                            site: call2,
+                            region: m.thrown,
+                        },
+                    )
+                    .is_some()
+                {
+                    m.cons(f, Cons::Call { call: call2 });
+                }
                 m.edge(ret, fa);
             }
             ret_tok(m, call, arr);
@@ -2601,8 +2607,10 @@ fn ns_method_inner(
                 let len = m.node_l("from-length");
                 m.add_prim(len, prim::NUM | prim::UNDEF);
                 let made = m.node_l("from-constructed");
-                let mc = m.solver_call(
+                let mc = m.solver_call_keyed(
                     call,
+                    (crate::summary::MK_FROM_CONSTRUCT, 0, 0),
+                    Some(this),
                     CallSite {
                         this: ThisArg::Undef,
                         args: vec![len],

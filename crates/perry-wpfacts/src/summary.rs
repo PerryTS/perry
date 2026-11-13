@@ -58,6 +58,16 @@ pub enum Maker {
 }
 /// No value chain: the lexical context is the layout's alone (`Inst::vc`).
 pub const NO_VC: u32 = u32::MAX;
+/// `Model::solver_call_keyed` makers.
+pub const MK_BOUND_CALL: u8 = 1;
+pub const MK_BOUND_NEW: u8 = 2;
+pub const MK_BOUND_NEW_PROGRAM: u8 = 3;
+pub const MK_BOUND_REFLECT: u8 = 4;
+pub const MK_ITERATE: u8 = 5;
+pub const MK_FROM_MAP: u8 = 6;
+pub const MK_FROM_CONSTRUCT: u8 = 7;
+pub const MK_FN_CALL: u8 = 8;
+pub const MK_FN_APPLY: u8 = 9;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -428,6 +438,9 @@ impl Model {
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
+        self.solver_made += 1;
+        let root = self.made_root.get(&by).copied().unwrap_or(by);
+        self.made_root.insert(id, root);
         if !self.sum.ready && self.diagnostic.is_some() {
             // Dump only: a call made before the summaries counts as a
             // program call (`origin_of` never reads it); the dump still
@@ -443,6 +456,52 @@ impl Model {
             }
         }
         id
+    }
+
+    /// The call maker `key` (`MK_*`, with its finite aux: a bound value,
+    /// a token, a step) makes for `by`, one per (root of `by`, key, arity):
+    /// every solver-made call descends from a program call through
+    /// finitely many makers, and a maker reached again under the same root
+    /// (a nested bound value, a protocol step of a protocol step, a
+    /// builtin re-run per receiver) joins that root's one call instead of
+    /// minting a new one: its `this`, arguments and spreads flow into the
+    /// existing call's, `target` (the node its callee constraint sits on)
+    /// into the existing target, and the existing result into `cs.ret`.
+    /// `None`: joined; the caller adds no constraint. So the solver-made
+    /// calls are at most roots x keys, a finite set.
+    pub(crate) fn solver_call_keyed(
+        &mut self,
+        by: CallId,
+        key: (u8, u32, u32),
+        target: Option<NodeId>,
+        cs: CallSite,
+    ) -> Option<CallId> {
+        let root = self.made_root.get(&by).copied().unwrap_or(by);
+        let k = (root, key.0, key.1, key.2, cs.args.len() as u32, cs.spread.len() as u32);
+        if let Some(&(m, tgt)) = self.solver_keyed.get(&k) {
+            let mc = self.calls[m as usize].clone();
+            for (&a, &b) in cs.args.iter().zip(mc.args.iter()) {
+                self.edge(a, b);
+            }
+            for (&a, &b) in cs.spread.iter().zip(mc.spread.iter()) {
+                self.edge(a, b);
+            }
+            if let (ThisArg::Node(a), ThisArg::Node(b)) = (&cs.this, &mc.this) {
+                self.edge(*a, *b);
+            }
+            if mc.ret != cs.ret {
+                self.edge(mc.ret, cs.ret);
+            }
+            if let (Some(a), Some(b)) = (target, tgt) {
+                if a != b {
+                    self.edge(a, b);
+                }
+            }
+            return None;
+        }
+        let id = self.solver_call(by, cs);
+        self.solver_keyed.insert(k, (id, target));
+        Some(id)
     }
 
     /// Is `call` a protocol touch of a token (`Model::implicit`: the

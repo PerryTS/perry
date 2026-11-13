@@ -877,6 +877,28 @@ pub(super) fn realm_chain_find(
     }
 }
 
+/// The keys the realm declares on `start` and on every [[Prototype]] of its
+/// declared chain, spelled as atoms are (a well-known symbol key with
+/// `WK_PREFIX`), each once.
+pub(super) fn realm_chain_keys(start: &'static RealmEntry) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut at = Some(start);
+    while let Some(e) = at {
+        for p in e.own.iter() {
+            let n = match (p.symbol, p.key.strip_prefix("@@")) {
+                (true, Some(wk)) => format!("{}{wk}", super::WK_PREFIX),
+                (true, None) => continue,
+                (false, _) => p.key.to_string(),
+            };
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        at = e.proto.and_then(realm_entry);
+    }
+    out
+}
+
 pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
     let realm = crate::native_effects::realm();
     // The runtime's realm source sorts its declarations by name.

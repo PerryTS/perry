@@ -95,8 +95,10 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                 Some(&n) => ThisArg::Node(n),
                 None => ThisArg::Undef,
             };
-            let call2 = m.solver_call(
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_FN_CALL, t, 0),
+                None,
                 CallSite {
                     this,
                     args: c.args.iter().skip(1).copied().collect(),
@@ -105,8 +107,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     site: c.site,
                     region: m.thrown,
                 },
-            );
-            m.call_tok(call2, t, None);
+            ) {
+                m.call_tok(call2, t, None);
+            }
         }
         Some("apply") => {
             let this = match c.args.first() {
@@ -117,8 +120,10 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             if let Some(&a) = c.args.get(1) {
                 spread.push(a);
             }
-            let call2 = m.solver_call(
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_FN_APPLY, t, 0),
+                None,
                 CallSite {
                     this,
                     args: vec![],
@@ -127,8 +132,9 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     site: c.site,
                     region: m.thrown,
                 },
-            );
-            m.call_tok(call2, t, None);
+            ) {
+                m.call_tok(call2, t, None);
+            }
         }
         // A `Function.prototype` method the runtime declares (`bind`): its
         // declaration runs.
@@ -549,11 +555,13 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     m.nodes[out as usize].frame = m.call_run(call);
     let ik = m.iter_key();
     m.cons(v, Cons::Load { key: ik, dst: out });
-    let sub = |m: &mut Model, this: NodeId, key: Key| -> NodeId {
+    let sub = |m: &mut Model, this: NodeId, key: Key, step: u32| -> NodeId {
         let ret = m.node_l("b-iter-ret");
         m.nodes[ret as usize].frame = m.call_run(call);
-        let c2 = m.solver_call(
+        let Some(c2) = m.solver_call_keyed(
             call,
+            (crate::summary::MK_ITERATE, step, 0),
+            Some(this),
             CallSite {
                 this: ThisArg::Node(this),
                 args: vec![],
@@ -562,16 +570,18 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 site,
                 region: m.thrown,
             },
-        );
+        ) else {
+            return ret;
+        };
         m.protocol_calls.insert(c2);
         m.cons(this, Cons::MCall { key, call: c2 });
         ret
     };
     let wk = Key::Named(m.atom(WK_ITERATOR));
-    let it = sub(m, v, wk);
+    let it = sub(m, v, wk, 0);
     let na = Key::Named(m.atom("next"));
-    let r1 = sub(m, it, na);
-    let r2 = sub(m, v, na);
+    let r1 = sub(m, it, na, 1);
+    let r2 = sub(m, v, na, 2);
     let va = m.yield_key();
     m.cons(r1, Cons::Load { key: va, dst: out });
     m.cons(r2, Cons::Load { key: va, dst: out });
@@ -725,12 +735,14 @@ fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
 pub(crate) fn construct_into(
     m: &mut Model,
     ctor: NodeId,
-    mc: CallId,
+    mc: Option<CallId>,
     out: Tok,
     made: NodeId,
     ret: NodeId,
 ) {
-    m.cons(ctor, Cons::NewProgram { call: mc });
+    if let Some(mc) = mc {
+        m.cons(ctor, Cons::NewProgram { call: mc });
+    }
     let site = m.anon_post_site("elements of an array a program constructor made");
     let elems = m.field_any(out);
     let ek = m.elem_key();
@@ -778,7 +790,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             region: m.thrown,
         },
     );
-    construct_into(m, sc, mc, out, made, c.ret);
+    construct_into(m, sc, Some(mc), out, made, c.ret);
 }
 
 /// The receivers' `constructor`, read off the receivers in `src`.
