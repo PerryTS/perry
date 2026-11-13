@@ -112,3 +112,23 @@ console.log(a.join(','));
         "1,9,2,3"
     );
 }
+
+// UTC getters only, so the expected output does not depend on the host time zone.
+#[test]
+fn date_constructor_keeps_its_argument_and_getters_read_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const iso = "2026-11-12T21:42:35.405Z";
+const fromString = new Date(iso);
+const fromNumber = new Date(1794519755405);
+console.log(fromString.getTime());
+console.log(fromNumber.toISOString());
+console.log(fromString.getUTCFullYear() + "-" + fromString.getUTCMonth() + "-" + fromString.getUTCDate() + " " + fromString.getUTCHours() + ":" + fromString.getUTCMinutes());
+console.log(Date.parse(iso));
+console.log(new Date().getTime() > 0);
+"#
+        ),
+        "1794519755405\n2026-11-12T21:42:35.405Z\n2026-10-12 21:42\n1794519755405\ntrue"
+    );
+}
