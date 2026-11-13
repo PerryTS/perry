@@ -52,6 +52,7 @@ impl ReadSiteMemo {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> [u64; PAIRS] {
         std::array::from_fn(|i| self.pairs[i].load(Relaxed))
     }
