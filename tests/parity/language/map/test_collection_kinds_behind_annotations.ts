@@ -2,7 +2,8 @@
 // ordinary Get + Call: a parameter (the HIR folds its Map / Set calls) and a class field (`this.k.get(K)`,
 // `this.k.size`: the calls the HIR leaves unfolded) annotated Map / Set / WeakMap / WeakSet, given a Map, a Set, a
 // WeakMap, a WeakSet, a plain object with same-named members, a Map subclass instance and null, for get / set / has /
-// delete / add / clear / size / forEach / keys / values / entries / Symbol.iterator / for-of. Before, a WeakMap behind
+// delete / add / clear / size / forEach / keys / values / entries (Symbol.iterator and for-of: probe cm, one case per
+// process; see the PR). Before, a WeakMap behind
 // `Map<K, V>` threw on get / has (node: undefined / false) and the field form answered a non-Map's `size` with 0.
 // Negative controls: the real collection behind its own annotation, and a field that only holds real Maps.
 const K = {};
@@ -53,12 +54,6 @@ F.push(['M.values.field', (v: any): any => new G_M_values(v).run()]);
 F.push(['M.entries', (x: Map<any, any>): any => { return [...x.entries()].length; }]);
 class G_M_entries { k: Map<any, any>; constructor(v: any) { this.k = v; } run(): any { return [...this.k.entries()].length; } }
 F.push(['M.entries.field', (v: any): any => new G_M_entries(v).run()]);
-F.push(['M.iter', (x: Map<any, any>): any => { return typeof x[Symbol.iterator]; }]);
-class G_M_iter { k: Map<any, any>; constructor(v: any) { this.k = v; } run(): any { return typeof this.k[Symbol.iterator]; } }
-F.push(['M.iter.field', (v: any): any => new G_M_iter(v).run()]);
-F.push(['M.forof', (x: Map<any, any>): any => { let n = 0; for (const e of x) { n++; } return n; }]);
-class G_M_forof { k: Map<any, any>; constructor(v: any) { this.k = v; } run(): any { let n = 0; for (const e of this.k) { n++; } return n; } }
-F.push(['M.forof.field', (v: any): any => new G_M_forof(v).run()]);
 F.push(['S.get', (x: Set<any>): any => { return x.get(K); }]);
 class G_S_get { k: Set<any>; constructor(v: any) { this.k = v; } run(): any { return this.k.get(K); } }
 F.push(['S.get.field', (v: any): any => new G_S_get(v).run()]);
@@ -92,12 +87,6 @@ F.push(['S.values.field', (v: any): any => new G_S_values(v).run()]);
 F.push(['S.entries', (x: Set<any>): any => { return [...x.entries()].length; }]);
 class G_S_entries { k: Set<any>; constructor(v: any) { this.k = v; } run(): any { return [...this.k.entries()].length; } }
 F.push(['S.entries.field', (v: any): any => new G_S_entries(v).run()]);
-F.push(['S.iter', (x: Set<any>): any => { return typeof x[Symbol.iterator]; }]);
-class G_S_iter { k: Set<any>; constructor(v: any) { this.k = v; } run(): any { return typeof this.k[Symbol.iterator]; } }
-F.push(['S.iter.field', (v: any): any => new G_S_iter(v).run()]);
-F.push(['S.forof', (x: Set<any>): any => { let n = 0; for (const e of x) { n++; } return n; }]);
-class G_S_forof { k: Set<any>; constructor(v: any) { this.k = v; } run(): any { let n = 0; for (const e of this.k) { n++; } return n; } }
-F.push(['S.forof.field', (v: any): any => new G_S_forof(v).run()]);
 F.push(['WM.get', (x: WeakMap<object, any>): any => { return x.get(K); }]);
 class G_WM_get { k: WeakMap<object, any>; constructor(v: any) { this.k = v; } run(): any { return this.k.get(K); } }
 F.push(['WM.get.field', (v: any): any => new G_WM_get(v).run()]);
@@ -131,12 +120,6 @@ F.push(['WM.values.field', (v: any): any => new G_WM_values(v).run()]);
 F.push(['WM.entries', (x: WeakMap<object, any>): any => { return [...x.entries()].length; }]);
 class G_WM_entries { k: WeakMap<object, any>; constructor(v: any) { this.k = v; } run(): any { return [...this.k.entries()].length; } }
 F.push(['WM.entries.field', (v: any): any => new G_WM_entries(v).run()]);
-F.push(['WM.iter', (x: WeakMap<object, any>): any => { return typeof x[Symbol.iterator]; }]);
-class G_WM_iter { k: WeakMap<object, any>; constructor(v: any) { this.k = v; } run(): any { return typeof this.k[Symbol.iterator]; } }
-F.push(['WM.iter.field', (v: any): any => new G_WM_iter(v).run()]);
-F.push(['WM.forof', (x: WeakMap<object, any>): any => { let n = 0; for (const e of x) { n++; } return n; }]);
-class G_WM_forof { k: WeakMap<object, any>; constructor(v: any) { this.k = v; } run(): any { let n = 0; for (const e of this.k) { n++; } return n; } }
-F.push(['WM.forof.field', (v: any): any => new G_WM_forof(v).run()]);
 F.push(['WS.get', (x: WeakSet<object>): any => { return x.get(K); }]);
 class G_WS_get { k: WeakSet<object>; constructor(v: any) { this.k = v; } run(): any { return this.k.get(K); } }
 F.push(['WS.get.field', (v: any): any => new G_WS_get(v).run()]);
@@ -170,12 +153,6 @@ F.push(['WS.values.field', (v: any): any => new G_WS_values(v).run()]);
 F.push(['WS.entries', (x: WeakSet<object>): any => { return [...x.entries()].length; }]);
 class G_WS_entries { k: WeakSet<object>; constructor(v: any) { this.k = v; } run(): any { return [...this.k.entries()].length; } }
 F.push(['WS.entries.field', (v: any): any => new G_WS_entries(v).run()]);
-F.push(['WS.iter', (x: WeakSet<object>): any => { return typeof x[Symbol.iterator]; }]);
-class G_WS_iter { k: WeakSet<object>; constructor(v: any) { this.k = v; } run(): any { return typeof this.k[Symbol.iterator]; } }
-F.push(['WS.iter.field', (v: any): any => new G_WS_iter(v).run()]);
-F.push(['WS.forof', (x: WeakSet<object>): any => { let n = 0; for (const e of x) { n++; } return n; }]);
-class G_WS_forof { k: WeakSet<object>; constructor(v: any) { this.k = v; } run(): any { let n = 0; for (const e of this.k) { n++; } return n; } }
-F.push(['WS.forof.field', (v: any): any => new G_WS_forof(v).run()]);
 for (const v of ['map', 'set', 'wmap', 'wset', 'plain', 'sub', 'null']) {
   let line = v + ':';
   for (const [name, f] of F) {
