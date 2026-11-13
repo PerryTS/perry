@@ -1,13 +1,57 @@
-//! Function/closure/class compilation + frame-slot helpers extracted from
-//! emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move. `WasmModuleEmitter::{compile_function, compile_closure,
-//! compile_class_constructor, compile_class_method}` and the
+//! Function, closure and class compilation plus the frame-slot helpers:
+//! `WasmModuleEmitter::{compile_function, compile_closure,
+//! compile_class_constructor, compile_class_method}`, `constructor_of`, and the
 //! `FuncEmitCtx` frame-slot helpers (`emit_frame_begin`, `emit_slot_addr`,
-//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`)
-//! each live on a dedicated inherent `impl` block for their struct.
+//! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`).
 
 use super::*;
+
+/// The parameters and body `new C(...)` runs for a class.
+pub(super) struct Constructor {
+    pub params: Vec<Param>,
+    pub body: Vec<Stmt>,
+}
+
+/// The declared constructor, or JavaScript's implicit one when `new` has work to
+/// do without it: `constructor() {}` runs the field initializers, and a derived
+/// class's `constructor(...args) { super(...args) }` runs the parent's. A wasm
+/// constructor has fixed parameters, so the derived form forwards the parent's.
+pub(super) fn constructor_of(
+    class: &perry_hir::ir::Class,
+    classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+) -> Option<Constructor> {
+    if let Some(ctor) = &class.constructor {
+        return Some(Constructor {
+            params: ctor.params.clone(),
+            body: ctor.body.clone(),
+        });
+    }
+    let parent = class
+        .extends_name
+        .as_deref()
+        .and_then(|name| classes.get(name))
+        .and_then(|parent| constructor_of(parent, classes));
+    if let Some(parent) = parent {
+        let params: Vec<Param> = parent
+            .params
+            .into_iter()
+            .map(|p| Param { default: None, ..p })
+            .collect();
+        let args = params.iter().map(|p| Expr::LocalGet(p.id)).collect();
+        return Some(Constructor {
+            params,
+            body: vec![Stmt::Expr(Expr::SuperCall(args))],
+        });
+    }
+    class
+        .fields
+        .iter()
+        .any(|f| f.init.is_some())
+        .then(|| Constructor {
+            params: Vec::new(),
+            body: Vec::new(),
+        })
+}
 
 impl WasmModuleEmitter {
     pub(super) fn compile_function(&self, hir_func: &perry_hir::ir::Function) -> Function {
@@ -126,7 +170,7 @@ impl WasmModuleEmitter {
     pub(super) fn compile_class_constructor(
         &self,
         class: &perry_hir::ir::Class,
-        ctor: &perry_hir::ir::Function,
+        ctor: &Constructor,
     ) -> Function {
         // Local 0 = this (the instance handle)
         // Params start at local index 1
@@ -162,11 +206,12 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        // Emit field initializers: class_set_field(this, field_name, value) via mem_call
-        for field in &class.fields {
-            if let Some(init) = &field.init {
+        // Field initializers: class_set_field(this, field_name, value) via mem_call
+        let emit_field_inits = |func: &mut Function| {
+            for field in &class.fields {
+                let Some(init) = &field.init else { continue };
                 let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-                ctx.emit_frame_begin(&mut func, 3);
+                ctx.emit_frame_begin(func, 3);
                 // Compute base address (sp - 24) and save to temp_i32 local
                 let sp = self.nan_temp_global;
                 func.instruction(&Instruction::GlobalGet(sp));
@@ -198,10 +243,20 @@ impl WasmModuleEmitter {
                     memory_index: 0,
                 }));
                 // Store value to slot 2
-                ctx.emit_store_arg(&mut func, 2, init);
+                ctx.emit_store_arg(func, 2, init);
                 // Call via mem_call
-                ctx.emit_memcall_void(&mut func, "class_set_field", 3);
+                ctx.emit_memcall_void(func, "class_set_field", 3);
             }
+        };
+        // A derived class initializes its fields when `super()` returns, so the parent
+        // constructor sees none of them; a base class initializes them on entry. A
+        // `super()` nested below the top level falls back to entry.
+        let super_at = ctor
+            .body
+            .iter()
+            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::SuperCall(_))));
+        if super_at.is_none() {
+            emit_field_inits(&mut func);
         }
 
         // Emit constructor body.
@@ -215,8 +270,11 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
-        for stmt in &ctor.body {
+        for (index, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
+            if super_at == Some(index) {
+                emit_field_inits(&mut func);
+            }
         }
 
         // Fallthrough: return `this` as the constructor's result.
