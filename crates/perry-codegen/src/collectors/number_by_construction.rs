@@ -304,6 +304,13 @@ impl FlowState {
     }
 }
 
+/// Drop from `set` every local `stmts` writes, at any depth.
+fn remove_written(stmts: &[Stmt], set: &mut HashSet<u32>) {
+    let mut writes = HashMap::new();
+    super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut HashSet::new());
+    set.retain(|id| !writes.contains_key(id));
+}
+
 fn meet_into(slot: &mut Option<FlowState>, state: &FlowState) {
     match slot {
         Some(existing) => existing.meet(state),
@@ -482,7 +489,12 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                 catch,
                 finally,
             } => {
-                let entry = state.clone();
+                // A throw can leave the body after any of its writes, so the
+                // catch is entered with neither the entry state nor the end
+                // state: a local the body writes may hold whatever the write
+                // before the throw stored (#12666).
+                let mut thrown = state.set.clone();
+                remove_written(body, &mut thrown);
                 if let Some(finally) = finally {
                     self.finally_stack.push(finally);
                 }
@@ -490,17 +502,17 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                 self.stmts(body, &mut try_state);
                 let mut merged = try_state;
                 if let Some(catch) = catch {
-                    // The catch is entered from the entry state, as before.
-                    let mut catch_state = FlowState::live(entry.set.clone());
+                    let mut catch_state = FlowState::live(thrown.clone());
                     self.stmts(&catch.body, &mut catch_state);
                     merged.meet(&catch_state);
                     if !merged.live {
                         merged.set.retain(|id| catch_state.set.contains(id));
                     }
+                    remove_written(&catch.body, &mut thrown);
                 }
-                // An exception escaping body or catch also runs the finally;
-                // its own state is at most the entry state.
-                merged.set.retain(|id| entry.set.contains(id));
+                // An exception escaping body or catch also runs the finally,
+                // with any of their writes behind it.
+                merged.set.retain(|id| thrown.contains(id));
                 if let Some(finally) = finally {
                     self.finally_stack.pop();
                     let was_live = merged.live;
@@ -876,6 +888,78 @@ mod tests {
             then_branch,
             else_branch: None,
         }
+    }
+
+    fn try_stmt(body: Vec<Stmt>, catch: Option<Vec<Stmt>>, finally: Option<Vec<Stmt>>) -> Stmt {
+        Stmt::Try {
+            body,
+            catch: catch.map(|body| perry_hir::CatchClause { param: None, body }),
+            finally,
+        }
+    }
+
+    /// #12666: `n = 1; try { n = undefined; if (k) throw 0; n = 2; }
+    /// catch { return n + 1 }` reads undefined in the catch. The throw leaves
+    /// the body after the `undefined` write, so the catch is entered with
+    /// neither the entry state nor the end state of the body.
+    #[test]
+    fn catch_sees_a_write_the_body_made_before_throwing() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(1)),
+            try_stmt(
+                vec![
+                    set_n(Expr::Undefined),
+                    if_then(vec![Stmt::Throw(Expr::Integer(0))]),
+                    set_n(Expr::Integer(2)),
+                ],
+                Some(vec![Stmt::Return(Some(add(
+                    Expr::LocalGet(N),
+                    Expr::Integer(1),
+                )))]),
+                None,
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// The same for a finally reached by an exception escaping the body.
+    #[test]
+    fn finally_sees_a_write_the_body_made_before_throwing() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(1)),
+            try_stmt(
+                vec![
+                    set_n(Expr::Undefined),
+                    if_then(vec![Stmt::Throw(Expr::Integer(0))]),
+                    set_n(Expr::Integer(2)),
+                ],
+                None,
+                Some(vec![Stmt::Expr(add(Expr::LocalGet(N), Expr::Integer(1)))]),
+            ),
+        ];
+        assert!(!run(&stmts).contains(&N));
+    }
+
+    /// A body that does not write the local keeps the entry fact in the catch.
+    #[test]
+    fn catch_keeps_the_entry_fact_of_a_local_the_body_does_not_write() {
+        let stmts = vec![
+            let_n(),
+            set_n(Expr::Integer(1)),
+            try_stmt(
+                vec![if_then(vec![Stmt::Throw(Expr::Integer(0))])],
+                Some(vec![Stmt::Return(Some(add(
+                    Expr::LocalGet(N),
+                    Expr::Integer(1),
+                )))]),
+                None,
+            ),
+            Stmt::Return(Some(Expr::LocalGet(N))),
+        ];
+        assert!(run(&stmts).contains(&N));
     }
 
     /// #12662: `blk: { if (k) break blk; n = 1; } return n` reads undefined
