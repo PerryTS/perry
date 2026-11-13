@@ -80,6 +80,7 @@ mod key_strings;
 mod map_values;
 mod map_entry_pairs;
 mod promise_all_positions;
+mod promise_all_result_instance;
 mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;

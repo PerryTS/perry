@@ -1333,11 +1333,17 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     }
     for &x in d {
         let node = &m.nodes[x as usize];
+        // A token one of this body's own calls made in the template run
+        // (born with that call as its context: `Model::birth_ctx` before
+        // the summaries) is that run's object, never an instance's: each
+        // instance's copy of the call makes its own (ECMA-262 27.2.4.1
+        // step 1: every evaluation of Promise.all makes a new Array).
         let toks: Vec<Tok> = node
             .pts
             .to_sorted()
             .into_iter()
             .filter(|t| !strip.contains(t))
+            .filter(|&t| !matches!(m.toks[t as usize], TokKind::Obj(_, c) if callix.contains_key(&c)))
             .collect();
         if !toks.is_empty() || node.prim != 0 || node.own_refuted {
             s.seeds.push((slot[&x], toks, node.prim, node.own_refuted));
