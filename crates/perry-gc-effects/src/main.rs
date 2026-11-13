@@ -235,7 +235,7 @@ fn run() -> Result<()> {
         } => {
             let (g, res) = analyze(&archives, &rules, &root)?;
             let text = std::fs::read_to_string(&manifest)?;
-            let natives = perry_gc_effects::effects::natives(&text)?;
+            let natives = perry_gc_effects::births::bodies(&text)?;
             let births = perry_gc_effects::births::declared_births(&text)?;
             let birth_text = birth_rules
                 .as_ref()
