@@ -12,5 +12,8 @@ a Number whose bits equal a live object's address is no longer read or written
 as that object (type confusion). Codegen: a named read whose receiver is not
 proven to be an object takes the value entry (`js_object_get_field_value`) for
 such a Number instead of handing its bits to the by-name handle entry, and the
-computed-access handle no longer carries a Number's own bits. No switch: the
+computed-access handle no longer carries a Number's own bits. The reads the
+runtime itself performs on a receiver value (a method call's [[Get]] once
+`Number.prototype` carries an accessor, `value.length`, a method read off
+`F.prototype`) answer such a Number as a Number too. No switch: the
 previous lowering is the memory-unsafe one.
