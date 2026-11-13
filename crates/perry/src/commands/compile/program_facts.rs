@@ -165,6 +165,10 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
+        no_empty_operands: matches!(
+            std::env::var("PERRY_FACTS_EMPTY_OPERANDS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
         no_zero_sign: matches!(
             std::env::var("PERRY_FACTS_ZERO_SIGN").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
@@ -1108,6 +1112,10 @@ pub(crate) fn activation(
         ),
         no_exact_rules: matches!(
             std::env::var("PERRY_FACTS_EXACT_RULES").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        ),
+        no_empty_operands: matches!(
+            std::env::var("PERRY_FACTS_EMPTY_OPERANDS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
         no_zero_sign: matches!(

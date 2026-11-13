@@ -1578,8 +1578,8 @@ pub struct Model {
     /// Negative control (`PERRY_FACTS_SABOTAGE=mapvals`): `set`'s key is
     /// taken for its value, a wrong claim about what `get` returns.
     pub map_values_sabotage: bool,
-    /// The empty-operand fallback (`solve/empty_operands.rs`;
-    /// `PERRY_FACTS_EMPTY_OPERANDS=0` turns it off).
+    /// The empty-operand fallback (`solve/empty_operands.rs`; off with
+    /// `PERRY_FACTS_EMPTY_OPERANDS=0`).
     pub empty_operands: bool,
     /// Each binary numeric rule: (operand, other operand, result).
     pub range_rules: Vec<(NodeId, NodeId, NodeId)>,

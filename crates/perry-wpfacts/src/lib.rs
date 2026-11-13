@@ -123,6 +123,10 @@ pub struct FactsConfig {
     /// `WIDEN_STEPS` growths (`PERRY_FACTS_EXACT_RULES=0`;
     /// `solve::grow_rule_range`).
     pub no_exact_rules: bool,
+    /// The empty-operand fallback off (`PERRY_FACTS_EMPTY_OPERANDS=0`;
+    /// `solve/empty_operands.rs`): an operand that holds nothing leaves a
+    /// numeric rule's result without an interval.
+    pub no_empty_operands: bool,
     /// −0 tolerance off (`PERRY_FACTS_ZERO_SIGN=0`, PR D, `zero_sign`): the
     /// strict interval rules, a possible `-0` makes the result ⊤.
     pub no_zero_sign: bool,
@@ -571,7 +575,7 @@ fn generate<'a>(
         bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
     g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
     g.m.map_values = solve::map_vals::enabled();
-    g.m.empty_operands = solve::empty_operands::enabled();
+    g.m.empty_operands = !cfg.no_empty_operands;
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
     g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");

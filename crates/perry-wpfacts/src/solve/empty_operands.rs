@@ -12,16 +12,10 @@
 //! worklist is empty such a rule's result is ⊤ (`settle_empty_operands`).
 //! Sound: ⊤ covers every Number.
 //!
-//! `PERRY_FACTS_EMPTY_OPERANDS=0` (`off`, `false`) turns the fallback off.
+//! `PERRY_FACTS_EMPTY_OPERANDS=0` (`off`, `false`; `FactsConfig::
+//! no_empty_operands`) turns the fallback off.
 
 use super::*;
-
-pub(crate) fn enabled() -> bool {
-    !matches!(
-        std::env::var("PERRY_FACTS_EMPTY_OPERANDS").as_deref(),
-        Ok("0") | Ok("off") | Ok("false")
-    )
-}
 
 impl Model {
     /// Records a binary numeric rule attached to `n` (`Model::cons`).
