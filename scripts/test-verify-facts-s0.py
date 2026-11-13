@@ -386,6 +386,24 @@ def main():
         assert value["predicate"] == "array rep", value
         save("canonical-number-negative-false-array-rep", status=86)
 
+    # P3 B4b: a birth stores a proven Number into a raw f64 lane with no
+    # number test. The same runtime sabotage hands the birth an INT32-tagged
+    # word; the canonical-number witness at the birth reports it, and with
+    # the consumer off (`PERRY_FACTS_NUMBER_BIRTHS=0`) the birth's own test
+    # sends the word to the ordinary constructor, so nothing is claimed.
+    source = fixtures / "number-birth-negative.ts"
+    exe, e = compile_(source, "number-birth-negative-correct")
+    observed = observe(exe, e)
+    assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+    save("number-birth-negative-correct", status=0)
+    if args.canonnum_runtime:
+        runtime = str(args.canonnum_runtime.resolve())
+        exe, e = compile_(source, "number-birth-negative-false", PERRY_RUNTIME_DIR=runtime)
+        value = report(observe(exe, e))
+        assert value["predicate"] == "canonical number", value
+        assert "birth lane" in value["expectation"], value
+        save("number-birth-negative-false", status=86)
+
     # An interval rule's bounds are those of doubles (`model::range`): the
     # repro of the false int32 claim is right and unreported, and the rule
     # before it (`PERRY_FACTS_INT_BOUNDS=0`: a product past 2^60 is the empty
