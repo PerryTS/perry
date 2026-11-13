@@ -668,7 +668,8 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
         if let Some(inherited) = function_receiver_inherited_get(recv_value, key) {
             return inherited;
         }
-        if let Some(inherited) = weak_receiver_inherited_get(recv_value, key) {
+        // The field get may have collected: re-read the rooted receiver.
+        if let Some(inherited) = weak_receiver_inherited_get(recv_h.get_nanbox_f64(), key) {
             return inherited;
         }
     }
@@ -691,14 +692,19 @@ unsafe fn weak_receiver_inherited_get(
     key: *const crate::string::StringHeader,
 ) -> Option<f64> {
     crate::object::weak_wrapper_class_id(recv)?;
-    let proto = crate::object::js_object_get_prototype_of(recv);
-    if proto.to_bits() == crate::value::TAG_NULL {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    let key = scope.root_nanbox_f64(crate::value::js_nanbox_string(key as i64));
+    let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+        recv.get_nanbox_f64(),
+    ));
+    if proto.get_nanbox_f64().to_bits() == crate::value::TAG_NULL {
         return None;
     }
     Some(crate::proxy::js_reflect_get(
-        proto,
-        crate::value::js_nanbox_string(key as i64),
-        recv,
+        proto.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        recv.get_nanbox_f64(),
     ))
 }
 
