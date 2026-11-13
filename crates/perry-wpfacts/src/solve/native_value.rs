@@ -291,10 +291,10 @@ impl Model {
         }
         if builtins::native_prims(fam) == 0 {
             // A generic `Array.prototype` method ToObject's its `this`
-            // (ECMA-262 23.1.3, 7.1.18): a string, number or boolean share
-            // runs the method on that share's own wrapper object
-            // (`array_method_on_prim`); a symbol or bigint share, and every
-            // other family's, stays an unknown callee's call.
+            // (ECMA-262 23.1.3, 7.1.18): a string, number, boolean, symbol
+            // or bigint share runs the method on that share's own wrapper
+            // object (`array_method_on_prim`); every other family's stays an
+            // unknown callee's call.
             let boxed = if fam == Family::Array {
                 foreign & builtins::ARRAY_BOXED_PRIMS
             } else {

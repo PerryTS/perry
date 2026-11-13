@@ -1344,22 +1344,26 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 
 /// The primitive kinds whose ToObject wrapper an `Array.prototype` method
 /// called with that primitive as `this` runs on (`array_method_on_prim`).
-pub(crate) const ARRAY_BOXED_PRIMS: u16 = prim::STR | prim::NUM | prim::BOOL;
+pub(crate) const ARRAY_BOXED_PRIMS: u16 =
+    prim::STR | prim::NUM | prim::BOOL | prim::SYMBOL | prim::BIGINT;
 
 /// `Array.prototype.<key>` called with `this` a primitive of kind `k`
 /// (one of `ARRAY_BOXED_PRIMS`): the method's ToObject(this) (ECMA-262
 /// 23.1.3, 7.1.18) is a new wrapper object of `k` (22.1.1.1 String
-/// exotic objects, 21.1.1.1, 20.3.1.1), born at the call, and the method
-/// runs on it as on any array-like (`array_method_on`). A String wrapper's
-/// index properties are the characters of its string (10.4.3.5
-/// StringGetOwnProperty): its elements hold the string kind. A Number or
-/// Boolean wrapper has no index property and no own `length` (ToLength
-/// of what its chain gives), so `slice`/`map`/`filter` make a new array of
+/// exotic objects, 21.1.1.1, 20.3.1.1, 20.4.1, 21.2.1), born at the call,
+/// and the method runs on it as on any array-like (`array_method_on`). A
+/// String wrapper's index properties are the characters of its string
+/// (10.4.3.5 StringGetOwnProperty): its elements hold the string kind. A
+/// Number, Boolean, Symbol or BigInt wrapper has no index property and no
+/// own `length` (ToLength of what its chain gives: its realm prototype,
+/// then Object.prototype), so `slice`/`map`/`filter` make a new array of
 /// no elements and callbacks receive none.
 pub(crate) fn array_method_on_prim(m: &mut Model, k: u16, key: Atom, call: CallId) {
     let what = match k {
         prim::STR => "BoxedString",
         prim::NUM => "BoxedNumber",
+        prim::SYMBOL => "BoxedSymbol",
+        prim::BIGINT => "BoxedBigInt",
         _ => "BoxedBoolean",
     };
     let w = site_tmpl(m, call, what);
