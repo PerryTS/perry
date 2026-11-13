@@ -21,6 +21,7 @@ use crate::native_value::NativeRepRecord;
 use crate::types::LlvmType;
 
 mod linkage;
+mod unit_locality;
 pub(crate) use linkage::*;
 mod metadata;
 pub use metadata::BufferAliasScopes;
@@ -1437,32 +1438,15 @@ impl LlModule {
             })
         };
         let n = n.min(funcs.len());
-        // Balance units by estimated byte size, not function count: minified
-        // bundles have a few enormous functions (a 68MB IIFE in the cli.js
-        // case), so contiguous count-chunking can clump them into one outsized
-        // unit whose LLVM optimization time dominates. Greedy largest-first bin-packing
-        // assigns each function to the currently-smallest unit, isolating big
-        // functions and keeping the rest even. (A single function larger than
-        // total/n is irreducible here; that requires structured outlining inside
-        // codegen, not something inter-function partitioning can divide.)
+        // Which unit each function compiles in: `module/unit_locality.rs`.
         let sizes: Vec<usize> = funcs
             .iter()
             .map(|f| f.borrow().estimated_ir_bytes())
             .collect();
-        let mut order: Vec<usize> = (0..funcs.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(sizes[i]));
-        let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut bucket_bytes = vec![0usize; n];
-        for &i in &order {
-            let target = bucket_bytes
-                .iter()
-                .enumerate()
-                .min_by_key(|&(_, &b)| b)
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-            buckets[target].push(i);
-            bucket_bytes[target] += sizes[i];
-        }
+        let buckets = {
+            let refs: Vec<&LlFunction> = funcs.iter().map(|f| f.borrow()).collect();
+            unit_locality::assign_units(&self.symbol_prefix, &refs, &sizes, n)
+        };
         let bucket_names: Vec<Vec<String>> = buckets
             .iter()
             .map(|bucket| {
@@ -1735,7 +1719,7 @@ impl LlModule {
             })
             .collect();
 
-        let mut parts = Vec::with_capacity(n);
+        let mut parts = Vec::with_capacity(buckets.len());
         for (bi, items) in bucket_items.into_iter().enumerate() {
             let defined: HashSet<&str> = bucket_names[bi].iter().map(String::as_str).collect();
             let mut pre = String::new();
