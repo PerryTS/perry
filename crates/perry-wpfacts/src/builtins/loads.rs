@@ -84,6 +84,14 @@ pub(super) fn family_load(
             // .prototype.flags`): the getter's declared result on `t`, as
             // the declared getter of a declaration-made prototype reads.
             super::effects::getter_load(m, e, t, a, dst);
+        } else if let Some(k) = realm_born_data(what, &name) {
+            // A data property of a primitive kind the realm declares on the
+            // chain of a realm-born object (`Error.prototype`'s and each
+            // NativeError prototype's `name` and `message`, Strings:
+            // ECMA-262 20.5.3.2, 20.5.3.3, 20.5.6.3.2, 20.5.6.3.3): that
+            // kind, never a builtin function. A store into the chain is
+            // `intrinsic_miss`'s below.
+            m.add_prim(dst, k);
         } else if realm_accessor(m, fam, what, &name) {
             undeclared_getter_result(m, dst);
         } else {
@@ -220,6 +228,27 @@ fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
     what == Some("RegExp")
         && members::regexp_inherited(name)
             .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+}
+
+/// The primitive kind of `name` on the chain of a realm-born object
+/// (`members::realm_born`) when the realm declares it a data property of
+/// a primitive kind there (10.1.8.1 OrdinaryGet: the first object of the
+/// chain that owns the key gives its value); `None` otherwise.
+fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
+    use perry_hir::realm_manifest::RealmOwnValue as V;
+    let born = members::realm_born(what?)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
+        return None;
+    };
+    Some(match p.value {
+        V::Undefined => prim::UNDEF,
+        V::Null => prim::NULL,
+        V::Boolean => prim::BOOL,
+        V::Number => prim::NUM,
+        V::String => prim::STR,
+        V::Symbol => prim::SYMBOL,
+        _ => return None,
+    })
 }
 
 /// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a key no object of
