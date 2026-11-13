@@ -1640,6 +1640,20 @@ impl Model {
             self.accessor_functions(holder, key, dst, setter);
             return;
         }
+        // A key whose shape splits the holder (`shape_splits`) runs only the
+        // accessors named by a name it admits, and the computed-name ones.
+        if self.shape_splits(holder, key).is_some() {
+            let star = self.atom(crate::STAR_KEY);
+            let names = self.accessor_keys.get(&holder).cloned().unwrap_or_default();
+            for a in names {
+                if (a == star || self.key_may_name(key, a)) && self.accessors.contains_key(&(holder, a)) {
+                    let k = Key::Named(a);
+                    self.acc_group(holder, k);
+                    self.group_hit(origin, holder, k, act);
+                }
+            }
+            return;
+        }
         // Accessor groups are keyed by the computed key itself.
         let key = key.unshaped();
         if let Key::Named(a) = key {

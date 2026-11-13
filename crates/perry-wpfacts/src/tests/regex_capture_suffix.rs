@@ -75,7 +75,6 @@ fn suffix_capture_names_only_position() {
 }
 
 #[test]
-#[ignore = "IdxLoad's program-prototype read (plain_key) takes no key entries: H.prototype's constructor and m"]
 fn suffix_capture_names_only_position_strict() {
     let v = reads(SIMPLE, "String(n) + \".position\"", 2);
     assert_eq!(v, vec!["A"], "{v:?}");

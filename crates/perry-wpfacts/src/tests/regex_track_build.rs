@@ -58,17 +58,46 @@ if (m !== null) {{ const x: any = h[m[{idx}]]; console.log(x.p); }}
     recv(&facts(&src))
 }
 
-/// `constructor` (class `H`) and the method `m` of `H.prototype`: the
-/// program-prototype read takes no key entries yet.
-const PROGRAM_PROTO: &[&str] = &["H", "m"];
+/// `h[k]` for a key expression `k`, with the classes of `track`.
+fn keyed(k: &str) -> Vec<String> {
+    let src = format!(
+        r#"class A {{ p = 1; }}
+class S {{ p = 2; }}
+class H {{
+  position: any = new A(); scale: any = new S();
+  m(): number {{ return 1; }}
+}}
+const h: any = new H();
+const n: any = process.argv[2];
+const k: string = {k};
+const x: any = h[k]; console.log(x.p);
+"#
+    );
+    recv(&facts(&src))
+}
 
+// The program-prototype part of the read takes the key's entries too
+// (ECMA-262 10.1.8.1, 7.3.2): `H.prototype`'s `constructor` and `m` are
+// names `quaternion` is not.
 #[test]
 fn built_track_re_property_is_quaternion() {
     let v = track("_wordChar", 5);
-    assert!(v.iter().any(|x| x == "Q"), "{v:?}");
-    for x in &v {
-        assert!(x == "Q" || PROGRAM_PROTO.contains(&x.as_str()), "{x} {v:?}");
-    }
+    assert_eq!(v, vec!["Q"], "{v:?}");
+}
+
+// Control: a finite key holding `constructor` reads class `H`, not `m`.
+#[test]
+fn constructor_key_reads_the_class() {
+    let v = keyed("n === 'a' ? 'constructor' : 'scale'");
+    assert!(v.iter().any(|x| x == "H") && v.iter().any(|x| x == "S"), "{v:?}");
+    assert!(!v.iter().any(|x| x == "m" || x == "A"), "{v:?}");
+}
+
+// Control: a key of unknown content reads every member.
+#[test]
+fn unknown_key_reads_every_member() {
+    let v = keyed("String(n)");
+    assert!(["A", "S", "H", "m"].iter().all(|w| v.iter().any(|x| x == w)), "{v:?}");
 }
 
 #[test]
