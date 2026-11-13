@@ -254,17 +254,21 @@ pub extern "C" fn js_nanbox_is_pointer(value: f64) -> i32 {
     }
 }
 
-/// Extract a pointer from a NaN-boxed f64 value.
-/// Also handles raw pointer bits (bitcast from i64) for backward compatibility.
-/// Handles POINTER_TAG, STRING_TAG, BIGINT_TAG, JS_HANDLE_TAG and HANDLE_TAG.
-/// Returns the pointer as i64.
+/// The 48-bit payload of a NaN-boxed pointer VALUE: POINTER_TAG, STRING_TAG,
+/// BIGINT_TAG, JS_HANDLE_TAG and HANDLE_TAG. Every other word answers 0.
+///
+/// In a value word an object carries its tag. A word whose top 16 bits are
+/// clear is a Number (a denormal double or +0), never an address: no test can
+/// tell the Number whose bits equal a live object's start from that object, so
+/// this decoder does not look. A word the runtime stored itself as a raw
+/// address (a `js_closure_set_capture_ptr` slot, a shape's keys word) is not a
+/// value: its reader takes the word as the address it is and does not come
+/// here.
 #[no_mangle]
 pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     let bits = value.to_bits();
-    // POINTER, STRING, BIGINT, JS_HANDLE (V8 / UI widget handles) and
-    // HANDLE_TAG (native registry ids) carry a 48-bit payload. Decided on
-    // the top 16 bits so every inlined copy compares small immediates
-    // rather than materializing each 64-bit tag.
+    // Decided on the top 16 bits so every inlined copy compares small
+    // immediates rather than materializing each 64-bit tag.
     const BIGINT: u64 = BIGINT_TAG >> 48;
     const V8_HANDLE: u64 = JS_HANDLE_TAG >> 48;
     const POINTER: u64 = POINTER_TAG >> 48;
@@ -272,11 +276,6 @@ pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     const HANDLE: u64 = crate::value::HANDLE_TAG >> 48;
     if matches!(bits >> 48, BIGINT | V8_HANDLE | POINTER | STRING | HANDLE) {
         return (bits & POINTER_MASK) as i64;
-    }
-    let top = bits >> 48;
-    // Raw pointer bits (bitcast from i64) for backward compatibility.
-    if top == 0 && bits != 0 {
-        return bits as i64;
     }
     0
 }

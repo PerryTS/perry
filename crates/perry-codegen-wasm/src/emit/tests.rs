@@ -2,8 +2,17 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 fn run_web_source(source: &str) -> String {
+    run_web_source_then(source, "")
+}
+
+/// `run_web_source`, then `after_boot` (plain JS) in the runtime's scope, for an
+/// assertion about a runtime helper that TypeScript cannot reach.
+fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
-    let module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
+    let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
+    // The HIR transforms `perry --target web` runs before wasm emission.
+    perry_transform::inline_finally_into_returns(&mut module);
+    perry_transform::transform_generators_without_private_frames(&mut module);
     let html =
         crate::compile_modules_to_wasm_html(&[("splice".into(), module)], "splice", false).unwrap();
     let runtime = html
@@ -28,6 +37,7 @@ globalThis.document = {{createElement: () => ({{...stub}}), getElementById: () =
 (async () => {{
 {runtime}
 await bootPerryWasm("{b64}");
+{after_boot}
 }})().catch(e => {{ console.error(e); process.exitCode = 1; }});
 "#
     );
@@ -110,6 +120,28 @@ console.log(a.join(','));
 "#
         ),
         "1,9,2,3"
+    );
+}
+
+// `instanceof` a built-in constructor asks the host for host objects (a caught
+// SyntaxError, an Array), and a user-class instance is also an instance of Object.
+#[test]
+fn instanceof_answers_for_host_objects_and_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let caught: any = null;
+try { JSON.parse("{"); } catch (e) { caught = e; }
+console.log(caught.name + " " + (caught instanceof SyntaxError) + " " + (caught instanceof Error) + " " + (caught instanceof TypeError));
+const a: any = [1];
+console.log((a instanceof Array) + " " + (a instanceof Object) + " " + (a instanceof Error));
+class P {}
+class Q extends P {}
+const q: any = new Q();
+console.log((q instanceof Q) + " " + (q instanceof P) + " " + (q instanceof Object) + " " + (q instanceof Array));
+"#
+        ),
+        "SyntaxError true true false\ntrue true false\ntrue true true false"
     );
 }
 
@@ -402,5 +434,294 @@ try { decodeURIComponent("%E0%A4%A"); console.log("no throw"); } catch (e) { con
 "#
         ),
         "%E8%A3%9C%20%E7%B6%B2%26x%3D1\n補 網\n/a%20b?q=%E8%A3%9C\n/a b\nthrew"
+    );
+}
+
+// An async body is emitted as JS, where a class name is not a constructor (#14589).
+#[test]
+fn new_inside_an_async_body_builds_literals_and_user_classes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Point {
+  x: number;
+  y: number;
+  constructor(x: number, y: number) { this.x = x; this.y = y; }
+  sum(): number { return this.x + this.y; }
+}
+class Bare { tag(): string { return "bare"; } }
+async function f(): Promise<string> {
+  const o = { a: 1, b: 2 };
+  const p = new Point(3, 4);
+  const b = new Bare();
+  return (o.a + o.b) + " " + p.sum() + " " + b.tag();
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "3 7 bare"
+    );
+}
+
+// A user class's method wins over what its `{__class__}` instance inherits from
+// Object.prototype, also through a subclass.
+#[test]
+fn async_body_method_call_reaches_a_user_override_of_an_object_prototype_name() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T { toString(): string { return "T!"; } }
+class U extends T {}
+class V extends T { other(): string { return "o"; } }
+async function g(): Promise<string> {
+  const t = new T();
+  const u = new U();
+  const v = new V();
+  return t.toString() + " " + u.toString() + " " + v.toString() + v.other();
+}
+g().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "T! T! T!o"
+    );
+}
+
+// The method property is read once, so an inherited getter runs once.
+#[test]
+fn async_method_lookup_reads_the_property_once() {
+    assert_eq!(
+        run_web_source_then(
+            "",
+            r#"
+let reads = 0;
+class Base {}
+Object.defineProperty(Base.prototype, "m", { get() { reads++; return function () { return "ok"; }; } });
+const o = Object.create(Base.prototype);
+o.__class__ = "NoSuchClass";
+console.log(__jsMethodInvoke(__jsMethodGet(o, "m"), []) + " " + reads);
+"#
+        ),
+        "ok 1"
+    );
+}
+
+// A call to a method nobody defines throws TypeError, as in JS, instead of returning
+// undefined; and a constructor that throws rejects the async function.
+#[test]
+fn async_body_absent_method_and_throwing_constructor_fail_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { a(): number { return 1; } }
+async function absent(): Promise<string> {
+  const k: any = new K();
+  return k.missing();
+}
+absent().then((v) => console.log("absent: " + v)).catch((e) => console.log("absent threw " + e.name));
+class Boom { constructor() { throw new Error("boom"); } }
+async function build(): Promise<string> {
+  const b = new Boom();
+  return "constructed";
+}
+try {
+  build().then((v) => console.log("build: " + v)).catch((e) => console.log("build rejected " + e.message));
+} catch (e) {
+  console.log("sync caught");
+}
+"#
+        ),
+        "absent threw TypeError\nbuild rejected boom"
+    );
+}
+
+// `r.run(shadow(r))` looks `run` up before it evaluates the argument: the argument gives
+// the instance an own, non-function `run`, which a lookup made afterwards would find.
+#[test]
+fn async_body_method_call_looks_up_the_method_before_the_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class R { run(x: string): string { return "proto " + x; } }
+function shadow(r: any): string { r.run = 5; return "arg"; }
+async function f(): Promise<string> {
+  const r: any = new R();
+  return r.run(shadow(r));
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "proto arg"
+    );
+}
+
+// A compiled method that throws inside an async body rejects the async function, even
+// when a synchronous `try` encloses the call that starts it.
+#[test]
+fn async_body_user_method_exception_rejects_the_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Bad { boom(): string { throw new Error("boom"); } }
+async function run(): Promise<string> {
+  const b = new Bad();
+  b.boom();
+  return "continued";
+}
+try {
+  run().then((v) => console.log("run: " + v)).catch((e) => console.log("run rejected " + e.message));
+} catch (e) {
+  console.log("sync caught");
+}
+"#
+        ),
+        "run rejected boom"
+    );
+}
+
+// `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
+// user instance throws TypeError instead of reaching the bridge fallback.
+#[test]
+fn async_body_call_of_an_inherited_map_key_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { a(): number { return 1; } }
+async function proto(): Promise<string> {
+  const k: any = new K();
+  return k.__proto__();
+}
+proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto threw " + e.name));
+"#
+        ),
+        "proto threw TypeError"
+    );
+}
+
+// A method name is any string (`q["it's"]()`); the async JS emitter quotes it as a literal.
+#[test]
+fn an_async_body_calls_a_method_whose_name_needs_escaping() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Q { "it's"(): string { return "quoted"; } }
+async function f(): Promise<string> { const q: any = new Q(); return q["it's"](); }
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "quoted"
+    );
+}
+
+// A property name is any string; an async body reads, writes and builds it as a literal.
+#[test]
+fn an_async_body_handles_property_names_that_need_escaping() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const o: any = { "it's": 1, "a\"b": 2 };
+  o["it's"] = o["it's"] + 10;
+  return o["it's"] + " " + o["a\"b"];
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "11 2"
+    );
+}
+
+#[test]
+fn closures_share_the_variables_they_mutate() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function counter() {
+  let n = 0;
+  const add = (x: number) => { n = n + x; return n; };
+  const read = () => n;
+  return [add, read];
+}
+const c: any = counter();
+console.log(c[0](1) + " " + c[0](2) + " " + c[1]());
+function machine() {
+  let state = 0;
+  return () => { switch (state) { case 0: state = 1; return "a"; case 1: state = 2; return "b"; default: return "-"; } };
+}
+const m = machine();
+console.log(m() + m() + m());
+let total = 0;
+function bump(start: number) { const inc = () => { start++; total++; }; inc(); inc(); return start; }
+console.log(bump(5) + " " + total);
+"#
+        ),
+        "1 3 3\nab-\n7 2"
+    );
+}
+
+#[test]
+fn a_generator_resumes_returns_and_throws_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* g() { yield 1; try { yield 2; } finally { console.log("fin"); } }
+const a = g();
+console.log(JSON.stringify(a.next()) + JSON.stringify(a.next()) + JSON.stringify(a.next()));
+const b = g();
+b.next();
+b.next();
+console.log(JSON.stringify(b.return(7)));
+const c = g();
+try { c.throw("boom"); } catch (e) { console.log("threw " + e); }
+console.log(JSON.stringify(c.next()));
+function* echo() { const x = yield "first"; yield "got " + x; }
+const d = echo();
+d.next();
+console.log(d.next("hi").value);
+"#
+        ),
+        "fin\n{\"value\":1,\"done\":false}{\"value\":2,\"done\":false}{\"done\":true}\nfin\n{\"value\":7,\"done\":true}\nthrew boom\n{\"done\":true}\ngot hi"
+    );
+}
+
+#[test]
+fn for_of_and_destructuring_drive_the_iterator_protocol() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* g() { yield 1; try { yield 2; yield 3; } finally { console.log("closed"); } }
+let seen = "";
+for (const x of g()) { seen += x; if (x === 2) break; }
+console.log(seen);
+const m: any = new Map([["a", 1], ["b", 2]]);
+for (const [k, v] of m) console.log(k + "=" + v);
+let chars = "";
+const s: any = "hé";
+for (const ch of s) chars += "[" + ch + "]";
+console.log(chars);
+const src: any = new Set([7, 8, 9]);
+const [first, ...rest] = src;
+console.log(first);
+console.log(rest.join(","));
+function pair(): any { return [4, 5]; }
+const [p, q] = pair();
+console.log(p + q);
+"#
+        ),
+        "closed\n12\na=1\nb=2\n[h][é]\n7\n8,9\n9"
+    );
+}
+
+#[test]
+fn a_generator_keeps_its_locals_across_resumes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* naturals() { let n = 0; while (true) { yield n++; } }
+const first: number[] = [];
+for (const n of naturals()) { if (n >= 4) break; first.push(n); }
+console.log(first.join(","));
+"#
+        ),
+        "0,1,2,3"
     );
 }

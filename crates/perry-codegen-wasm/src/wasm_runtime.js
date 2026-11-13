@@ -114,6 +114,15 @@ function fromJsValue(v) {
   return nanboxPointer(id);
 }
 
+// globalThis as a NaN-boxed value, boxed once: each fromJsValue of an object takes a
+// handle that is never released, so boxing it per read grows handleStore without bound
+// in an async loop that reads builtins.
+let __globalThisBoxed;
+function globalThisValue() {
+  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(globalThis);
+  return __globalThisBoxed;
+}
+
 // Get string from NaN-boxed value (supports both string tag and pointer to string)
 function getString(val) {
   if (isString(val)) return stringTable[getStringId(val)];
@@ -1633,7 +1642,144 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// A lowered sync generator drives its resume record, a wasm closure taking
+// `(op, arg)` (op 0 next, 1 return, 2 throw), or `(arg)` when it has no catch,
+// finally or `yield*`. The record's first five captures are the cells it shares
+// with this driver: state, done, sent, executing, and step (how the call ended:
+// 0 yield, 1 done, 2 an inner iterator result returned as-is).
+const __generatorRecords = new WeakMap();
+function __generatorResume(gen, op, arg, method) {
+  const entry = __generatorRecords.get(gen);
+  if (!entry) throw new TypeError(`Generator.prototype.${method} called on incompatible receiver`);
+  const { record, nextOnly } = entry;
+  const [state, done, sent, executing, step] = record.captures.slice(0, 5).map(__bitsToJsValue);
+  if (executing.value) throw new TypeError("Generator is already executing");
+  if (done.value || (op !== 0 && (nextOnly || state.value === 0))) {
+    done.value = true;
+    if (op === 2) throw arg;
+    step.value = 1;
+    return { value: op === 1 ? arg : undefined, done: true };
+  }
+  executing.value = true;
+  if (op === 0) sent.value = arg;
+  let value;
+  try {
+    const fn = wasmInstance.exports.__indirect_function_table.get(record.funcIdx | 0);
+    const args = (nextOnly ? [arg] : [op, arg]).map(__jsValueToBits);
+    value = __bitsToJsValue(__invokeWasmCallback(fn, ...record.captures, ...args));
+  } catch (error) {
+    done.value = true;
+    throw error;
+  } finally {
+    executing.value = false;
+  }
+  return step.value === 2 ? value : { value, done: step.value === 1 };
+}
+const __GeneratorPrototype = Object.create(
+  Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())),
+  {
+    next: { value(v) { return __generatorResume(this, 0, v, "next"); }, writable: true, configurable: true },
+    return: { value(v) { return __generatorResume(this, 1, v, "return"); }, writable: true, configurable: true },
+    throw: { value(e) { return __generatorResume(this, 2, e, "throw"); }, writable: true, configurable: true },
+    [Symbol.toStringTag]: { value: "Generator", configurable: true },
+  },
+);
+
+// The `__perry_runtime` iterator-record intrinsics the HIR lowers for...of and array
+// destructuring to (perry-hir/src/iterator_record.rs). `iteratorStep` returns `done`
+// and leaves the value for the `iteratorStepOutput()` read emitted right after it.
+const __ArrayIteratorPrototype = Object.getPrototypeOf([][Symbol.iterator]());
+const __intrinsicArrayValues = Array.prototype[Symbol.iterator];
+const __intrinsicArrayIteratorNext = __ArrayIteratorPrototype.next;
+const __accessorMarker = {};
+let __iteratorStepValue;
+// The data value `key` resolves to on `obj`'s chain; an accessor is never invoked.
+function __lookupData(obj, key) {
+  for (let o = obj; o !== null && o !== undefined; o = Object.getPrototypeOf(o)) {
+    const d = Object.getOwnPropertyDescriptor(o, key);
+    if (d) return "value" in d ? d.value : __accessorMarker;
+  }
+  return undefined;
+}
+function __arrayIterationPatched() {
+  return __lookupData(Array.prototype, Symbol.iterator) !== __intrinsicArrayValues
+    || __lookupData(__ArrayIteratorPrototype, "next") !== __intrinsicArrayIteratorNext;
+}
+function __isObject(v) {
+  return v !== null && (typeof v === "object" || typeof v === "function");
+}
+function __iteratorClose(iter) {
+  const ret = iter.return;
+  if (ret === undefined || ret === null) return;
+  if (typeof ret !== "function") throw new TypeError(`${String(ret)} is not a function`);
+  const result = ret.call(iter);
+  if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
+}
+function __iteratorStep(iter, next, read) {
+  if (typeof next !== "function") throw new TypeError(`${String(next)} is not a function`);
+  const result = next.call(iter);
+  if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
+  const done = Boolean(result.done);
+  __iteratorStepValue = !done && read !== false ? result.value : undefined;
+  return done;
+}
+function __iterableToArray(v) {
+  if (Array.isArray(v)) return v;
+  if (v !== null && v !== undefined && typeof v[Symbol.iterator] === "function") return Array.from(v);
+  const out = [];
+  if (__isObject(v)) {
+    const next = v.next;
+    while (!__iteratorStep(v, next, true)) out.push(__iteratorStepValue);
+  }
+  return out;
+}
+
 const __memDispatch = {
+  // `()` asks only whether array iteration is patched; `(value[, packed])` whether
+  // `value` must use the iterator protocol instead of its indices.
+  rt_arrayRecordNeedsIterator: (...args) => args.length === 0
+    ? __arrayIterationPatched()
+    : !(Array.isArray(args[0]) && Object.getPrototypeOf(args[0]) === Array.prototype
+      && __lookupData(args[0], Symbol.iterator) === __intrinsicArrayValues
+      && __lookupData(__ArrayIteratorPrototype, "next") === __intrinsicArrayIteratorNext),
+  rt_arrayRecordLength: (array) => array.length,
+  rt_arrayRecordLiteral: (...values) => values,
+  rt_arrayRecordCloseAbsent: () => !("return" in __ArrayIteratorPrototype),
+  // ponytail: closes a fresh intrinsic iterator over `src`; JS cannot place its cursor at `index`.
+  rt_arrayRecordClose: (src, index, done, error, throwing) => {
+    if (done || !("return" in __ArrayIteratorPrototype)) return throwing ? error : undefined;
+    const iter = __intrinsicArrayValues.call(src);
+    if (!throwing) return __iteratorClose(iter);
+    try { __iteratorClose(iter); } catch (_) {}
+    return error;
+  },
+  rt_iteratorNextMethod: (iter) => iter.next,
+  rt_iteratorStep: (iter, next, read) => __iteratorStep(iter, next, read),
+  rt_iteratorStepOutput: () => __iteratorStepValue,
+  rt_iteratorCloseIfNotDone: (iter, done) => { if (!done) __iteratorClose(iter); },
+  rt_iteratorCloseOnThrow: (iter, done, error) => {
+    if (!done) { try { __iteratorClose(iter); } catch (_) {} }
+    return error;
+  },
+  rt_iteratorRestAppend: (array, value) => { array.push(value); return array; },
+  rt_iteratorRestToArray: (iter, next, done) => {
+    const out = [];
+    if (!done) while (!__iteratorStep(iter, next, true)) out.push(__iteratorStepValue);
+    return out;
+  },
+  rt_getIterator: (v) => v !== null && v !== undefined && typeof v[Symbol.iterator] === "function"
+    ? v[Symbol.iterator]() : v,
+  rt_iterableToArray: (v) => __iterableToArray(v),
+  rt_arrayIterationPatched: () => __arrayIterationPatched(),
+  generator_new: (record, paramCount) => {
+    const gen = Object.create(__GeneratorPrototype);
+    __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
+    return gen;
+  },
+  // A cell holds a local that closures capture and mutate, so all of them share it.
+  box_new: (value) => ({ value }),
+  box_get: (cell) => cell.value,
+  box_set: (cell, value) => { cell.value = value; return value; },
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
   console_warn: (...args) => { console.warn(...args); },
@@ -2084,9 +2230,17 @@ const __memDispatch = {
   },
   class_instanceof: (obj, classId) => {
     if (!obj || typeof obj !== 'object') return 0;
-    let cls = obj.__class__; const target = String(classId);
-    while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
-    return 0;
+    const target = String(classId);
+    // A user-class instance is a `{__class__}` object: its chain is the class table,
+    // and as a plain object it is also an instance of Object.
+    if (obj.__class__) {
+      let cls = obj.__class__;
+      while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
+      return target === 'Object' ? 1 : 0;
+    }
+    // A host object (Error, Array, Map, ...): ask the host constructor of that name.
+    const ctor = globalThis[target];
+    return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
 
@@ -5048,6 +5202,47 @@ function __throwNullReceiver(obj, name) {
   throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
 }
 
+// A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,
+// the method is looked up before the arguments are evaluated. A user-class instance is a
+// `{__class__}` object whose methods live in the WASM function table: a name its class
+// chain defines wins over what the object inherits from Object.prototype (`toString`),
+// and loses only to an own property. Otherwise the property is read exactly once (an
+// inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
+// only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
+function __jsMethodGet(obj, mname) {
+  const tagged = obj && typeof obj === 'object' && obj.__class__
+    && !Object.prototype.hasOwnProperty.call(obj, mname);
+  if (tagged && __classHasMethod(obj.__class__, mname)) {
+    return { r: obj, m: mname, user: true };
+  }
+  const f = obj[mname];
+  if (tagged && typeof f !== 'function' && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
+    return { r: obj, m: mname, user: true };
+  }
+  return { r: obj, m: mname, f };
+}
+
+function __jsMethodInvoke(ref, args) {
+  if (ref.user) {
+    // As __invokeWasmCallback: a compiled method that threw under an enclosing WASM
+    // `try` leaves the exception pending; rethrow it here so the async body rejects.
+    const result = __classDispatch(ref.r, ref.m, args);
+    __memDispatch.propagate_exception(true);
+    return result;
+  }
+  if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
+  return ref.f.apply(ref.r, args);
+}
+
+// Own keys only: `mname in methods` would also find Object.prototype's names.
+function __classHasMethod(cls, mname) {
+  for (let c = cls; c; c = classParentTable[c] || null) {
+    const methods = classMethodTable[c];
+    if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) return true;
+  }
+  return false;
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
   // Only a null/undefined receiver throws: this function is also mem_call's fallback
   // for bridge names it does not know, where an absent method still yields undefined.
@@ -5071,7 +5266,9 @@ function __classDispatch(objVal, mname, rawArgs) {
     let cls = objVal.__class__;
     while (cls) {
       const methods = classMethodTable[cls];
-      if (methods && mname in methods) {
+      // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`
+      // in a subclass's table and hands a host function to Table.get.
+      if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
         if (fn) {
           // Pad for omitted TS optional params (Issue #1035).

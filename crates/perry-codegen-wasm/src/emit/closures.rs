@@ -116,3 +116,21 @@ pub(super) fn collect_closures_from_expr(
         collect_closures_from_stmts(body, out);
     }
 }
+
+/// The captures of the sync generator resume record `body` returns, if it is a
+/// lowered generator. The record writes its control slots and the runtime driver
+/// reads them between calls, so every one of them lives in a cell.
+pub(super) fn generator_record_captures(body: &[Stmt]) -> &[LocalId] {
+    match body.last() {
+        Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
+            obj,
+            is_async: false,
+            fixed_state: true,
+            ..
+        }))) => match obj.as_ref() {
+            Expr::Closure { captures, .. } => captures,
+            _ => &[],
+        },
+        _ => &[],
+    }
+}
