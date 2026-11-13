@@ -53,8 +53,8 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "number_coerce", 1);
             }
-            // The global `isNaN` / `isFinite` coerce with ToNumber (`isNaN("abc")` is
-            // true); `is_nan` / `is_finite` are the non-coercing Number versions.
+            // The global `isNaN` / `isFinite` apply ToNumber first (`isNaN("abc")` is
+            // true), so they cannot share the non-coercing `is_nan` / `is_finite`.
             Expr::IsNaN(val) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);

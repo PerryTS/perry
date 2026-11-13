@@ -113,7 +113,6 @@ console.log(a.join(','));
     );
 }
 
-// The global isNaN / isFinite apply ToNumber first, unlike Number.isNaN / isFinite.
 #[test]
 fn global_is_nan_and_is_finite_coerce_like_node() {
     assert_eq!(
