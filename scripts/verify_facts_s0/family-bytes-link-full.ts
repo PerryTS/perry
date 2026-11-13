@@ -1,9 +1,9 @@
-// family_reach, the byte-cell family is "live" although the program text
-// holds no typed-array name in one piece: the constructors are reached
-// through constant computed keys of the global object. The link decision
-// reads the fact (a static key), so the typed-array group is installed and
-// the method tower answers. (The older text detector saw no "Uint8Array"
-// here and left the group out: constructors answered null.)
+// family_reach with PERRY_FACTS_FAMILY_LINK=full: the byte-cell family is
+// "live" although the program text holds no typed-array name in one piece
+// (the constructors are reached through constant computed keys of the global
+// object, static keys to the fact). In that mode the install follows the
+// fact, so the typed-array group is linked and the method tower answers.
+// (The text detector sees no "Uint8Array" here and leaves the group out.)
 const g: any = globalThis;
 const U8 = g["Uint8" + "Array"];
 const F64 = g["Float64" + "Array"];

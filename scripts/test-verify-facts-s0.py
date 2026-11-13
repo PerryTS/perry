@@ -195,6 +195,16 @@ def main():
         assert b"js_runtime_families_never" not in symbols, "a claim with the switch off"
         assert removed < exe.stat().st_size, (removed, exe.stat().st_size)
         save("family-bytes-detector-only", status=0, bytes_removed=exe.stat().st_size - removed)
+        # `full`: the install follows the fact both ways. A program the
+        # detector misses (constructors through constant computed keys) links
+        # the group and answers like node.
+        source = fixtures / "family-bytes-link-full.ts"
+        exe, e = compile_(source, "family-bytes-link-full", PERRY_KEEP_SYMBOLS="1",
+                          PERRY_FACTS_FAMILY_LINK="full")
+        observed = observe(exe, e)
+        assert observed.returncode == 0 and observed.stdout == oracle(source), observed
+        assert b"js_runtime_install_typedarray" in run(["nm", str(exe)]).stdout
+        save("family-bytes-link-full", status=observed.returncode)
     else:
         save("family-claims", status="skipped: no instrumented runtime variant")
 
