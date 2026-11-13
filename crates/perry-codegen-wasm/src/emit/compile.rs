@@ -923,11 +923,29 @@ impl WasmModuleEmitter {
             );
         }
         // Module-level lets are wasm globals, already shared by every closure.
-        for (_, _, _, _, mutable_captures, mod_idx) in &closure_funcs {
-            for id in mutable_captures {
-                if !self.module_let_globals.contains_key(&(*mod_idx, *id)) {
-                    self.boxed_locals.insert((*mod_idx, *id));
-                }
+        let mut boxed: Vec<(usize, LocalId)> = Vec::new();
+        for (_, _, body, _, mutable_captures, mod_idx) in &closure_funcs {
+            let ids = mutable_captures
+                .iter()
+                .chain(generator_record_captures(body));
+            boxed.extend(ids.map(|id| (*mod_idx, *id)));
+        }
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            let methods = module
+                .classes
+                .iter()
+                .flat_map(|class| class.methods.iter().chain(&class.static_methods));
+            for func in module.functions.iter().chain(methods) {
+                boxed.extend(
+                    generator_record_captures(&func.body)
+                        .iter()
+                        .map(|id| (mod_idx, *id)),
+                );
+            }
+        }
+        for key in boxed {
+            if !self.module_let_globals.contains_key(&key) {
+                self.boxed_locals.insert(key);
             }
         }
 

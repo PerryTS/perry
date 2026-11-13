@@ -114,6 +114,18 @@ fn record_async_generator_func(id: FuncId) {
 
 /// Transform all generator functions in a module into state machine form.
 pub fn transform_generators(module: &mut Module) {
+    lower_generators(module);
+    private_frame::run(module);
+}
+
+/// The state-machine lowering alone, for a backend without the native
+/// private-frame intrinsics (`__perry_runtime.privateResumeFrame` and its steps)
+/// that `transform_generators` rewrites local consumers into.
+pub fn transform_generators_without_private_frames(module: &mut Module) {
+    lower_generators(module);
+}
+
+fn lower_generators(module: &mut Module) {
     // #3664: reset the per-thread async-generator accumulator for this module.
     ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
     // Load the param-prologue lengths recorded by lowering so the transform can
@@ -263,7 +275,6 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
-    private_frame::run(module);
 }
 
 fn transform_generator_closures_in_stmts(

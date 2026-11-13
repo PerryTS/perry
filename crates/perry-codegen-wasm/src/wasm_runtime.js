@@ -1633,7 +1633,55 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// A lowered sync generator drives its resume record, a wasm closure taking
+// `(op, arg)` (op 0 next, 1 return, 2 throw), or `(arg)` when it has no catch,
+// finally or `yield*`. The record's first five captures are the cells it shares
+// with this driver: state, done, sent, executing, and step (how the call ended:
+// 0 yield, 1 done, 2 an inner iterator result returned as-is).
+const __generatorRecords = new WeakMap();
+function __generatorResume(gen, op, arg, method) {
+  const entry = __generatorRecords.get(gen);
+  if (!entry) throw new TypeError(`Generator.prototype.${method} called on incompatible receiver`);
+  const { record, nextOnly } = entry;
+  const [state, done, sent, executing, step] = record.captures.slice(0, 5).map(__bitsToJsValue);
+  if (executing.value) throw new TypeError("Generator is already executing");
+  if (done.value || (op !== 0 && (nextOnly || state.value === 0))) {
+    done.value = true;
+    if (op === 2) throw arg;
+    step.value = 1;
+    return { value: op === 1 ? arg : undefined, done: true };
+  }
+  executing.value = true;
+  if (op === 0) sent.value = arg;
+  let value;
+  try {
+    const fn = wasmInstance.exports.__indirect_function_table.get(record.funcIdx | 0);
+    const args = (nextOnly ? [arg] : [op, arg]).map(__jsValueToBits);
+    value = __bitsToJsValue(__invokeWasmCallback(fn, ...record.captures, ...args));
+  } catch (error) {
+    done.value = true;
+    throw error;
+  } finally {
+    executing.value = false;
+  }
+  return step.value === 2 ? value : { value, done: step.value === 1 };
+}
+const __GeneratorPrototype = Object.create(
+  Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())),
+  {
+    next: { value(v) { return __generatorResume(this, 0, v, "next"); }, writable: true, configurable: true },
+    return: { value(v) { return __generatorResume(this, 1, v, "return"); }, writable: true, configurable: true },
+    throw: { value(e) { return __generatorResume(this, 2, e, "throw"); }, writable: true, configurable: true },
+    [Symbol.toStringTag]: { value: "Generator", configurable: true },
+  },
+);
+
 const __memDispatch = {
+  generator_new: (record, paramCount) => {
+    const gen = Object.create(__GeneratorPrototype);
+    __generatorRecords.set(gen, { record, nextOnly: paramCount === 1 });
+    return gen;
+  },
   // A cell holds a local that closures capture and mutate, so all of them share it.
   box_new: (value) => ({ value }),
   box_get: (cell) => cell.value,
