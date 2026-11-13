@@ -268,6 +268,7 @@ mod typed_array_numeric_key;
 mod typed_array_this_throws;
 mod class_call_throws;
 mod builtin_ctor_call;
+mod realm_present;
 mod null_proto_box_key;
 mod error_proto_data_keys;
 mod namespace_own_members;

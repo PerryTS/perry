@@ -2165,6 +2165,49 @@ pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> 
         .flatten()
 }
 
+/// REALM-PRESENT: is key `a` of builtin object `t` a property the realm
+/// creates (ECMA-262 9.1.1.4, 19.1-19.4: the global object's own
+/// properties, its constructors and namespaces; 21.3.2 and the like: a
+/// namespace's or constructor's own function properties), whose read
+/// `tok_load` answers with the realm's value, and with every primitive and
+/// ⊤ once a write or delete may reach the key? Then the read is never
+/// `undefined` by absence. The unknown-code half is the model's write
+/// record: for a global, `global_value_written` (`native_protocol::
+/// written_by`: an unmodeled writer, an accessor, a write under any key,
+/// the global object in ⊤) with its replay `NativeMiss::Global`
+/// (`loads::declared_global_load`), and a program store is in the
+/// global's field, which the read takes; for a namespace member,
+/// `opaque_written` (`native_written`) with its replay `NativeMiss::Load`
+/// (`loads::ns_load`). A unit sees no other unit's writes
+/// (`declared_global_load` tracks none in unit mode): never there.
+pub(crate) fn declared_present(m: &Model, t: Tok, a: Atom) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let n = m.atoms[a as usize].as_str();
+    match m.toks[t as usize] {
+        TokKind::Builtin(BuiltinNs::Other) => ns_by_name(n).is_some(),
+        TokKind::Builtin(BuiltinNs::GlobalThis) => {
+            !global_user_key(m, n) && ns_by_name(n).is_some()
+        }
+        TokKind::Builtin(
+            BuiltinNs::Require
+            | BuiltinNs::Process
+            | BuiltinNs::Module(_)
+            | BuiltinNs::ObjectProtoMethod
+            | BuiltinNs::ObjectProtoOwn(_),
+        ) => false,
+        TokKind::Builtin(ns) => {
+            !n.starts_with("@@")
+                && n != "prototype"
+                && n != "constructor"
+                && namespace_native(m, t, ns, n).is_some()
+                && !namespace_receiver_getter(m, t, n)
+        }
+        _ => false,
+    }
+}
+
 /// The function value carries its canonical namespace call coordinates.
 /// It runs on the receiver token `this_tok` the call is made for (a method
 /// call binds one per receiver value), else on the call's own `this`: what

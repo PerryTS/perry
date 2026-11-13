@@ -746,13 +746,19 @@ impl Model {
         // absent: its class's guard throws on an object without it first
         // (ECMA-262 PrivateGet).
         let private = matches!(key, Key::Named(a) if self.is_private_atom(a));
+        // REALM-PRESENT (`builtins::declared_present`): a declared realm
+        // global or a builtin namespace's own native member is present; a
+        // write or delete that can reach it gives the read every primitive
+        // (`undefined` too) where `tok_load` answers it. Not `present`: what
+        // reaches the read through the chain keeps its `undefined`.
+        let realm = matches!(key, Key::Named(a) if builtins::declared_present(self, t, a));
         // ECMA-262 10.1.8.1 OrdinaryGet: a sure own data property is the
         // read's value; the lookup ends at the object.
         let stop = match key {
             Key::Named(a) => self.surely_own_data(t, a),
             Key::Any(_) => false,
         };
-        if !present && !private {
+        if !present && !private && !realm {
             self.add_prim(dst, prim::UNDEF);
         }
         // What a closed marker's own load gives (its classes' chain through
@@ -870,9 +876,11 @@ impl Model {
         // `Object.prototype` under that key, a data value or an accessor,
         // is not its value. A store or definition that may replace or
         // delete the static is the namespace's own written key (`tok_load`
-        // reads the opaque member, or replays the read).
+        // reads the opaque member, or replays the read). So is a declared
+        // realm global (`realm`, REALM-PRESENT): the global object's own
+        // property, which `tok_load` read with every write that can reach it.
         if let Key::Named(a) = key {
-            if builtins::namespace_owns(self, t, a) {
+            if builtins::namespace_owns(self, t, a) || realm {
                 return;
             }
         }
