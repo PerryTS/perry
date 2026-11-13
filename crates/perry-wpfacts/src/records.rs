@@ -259,6 +259,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         Cons::OwnTest { .. } => Reject(R5Load("own test".into())),
         // Presence: no protocol, no identity.
         Cons::Falsy { .. }
+        | Cons::Objects { .. }
         | Cons::NotNullish { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -380,6 +381,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
     };
     match c {
         Cons::Falsy { .. }
+        | Cons::Objects { .. }
         | Cons::NotNullish { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -1281,6 +1283,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                             || matches!(
                                 k,
                                 Cons::Falsy { .. }
+                                    | Cons::Objects { .. }
                                     | Cons::NotNullish { .. }
                                     | Cons::NotUndefined { .. }
                                     | Cons::Guard { .. }
@@ -1841,6 +1844,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 Cons::Load { .. }
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
+                | Cons::Objects { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Guard { .. }

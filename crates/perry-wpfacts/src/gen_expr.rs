@@ -1525,8 +1525,13 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::ObjectAssign { target, sources } => {
-                // E4: a writer of every key the sources can carry.
-                let t = self.expr(fx, target);
+                // E4: a writer of every key the sources can carry. The
+                // result, and what the sources copy into, is ToObject(target)
+                // (ECMA-262 20.1.2.1 step 1): never a primitive.
+                let target = self.expr(fx, target);
+                let (wrapper, w) = self.bobj(mi, "Object(prim)");
+                let t = self.tmp("to-object");
+                crate::builtins::to_object_into(&mut self.m, target, wrapper, w, t);
                 for s in sources {
                     let sv = self.expr(fx, s);
                     let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);

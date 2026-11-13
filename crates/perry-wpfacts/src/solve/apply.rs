@@ -447,6 +447,13 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            Cons::Objects { dst } => {
+                // ToObject of an object is the object; a primitive's
+                // wrapper is the caller's `Guard` (`builtins::to_object`).
+                for &t in toks {
+                    self.add_tok(dst, t);
+                }
+            }
             Cons::Fulfil { dst } => {
                 // Nodes per (constraint, token); per-token read node is a planned follow-up (CWN).
                 // A primitive has no `then` (27.2.1.3.2 step 8): it fulfils.

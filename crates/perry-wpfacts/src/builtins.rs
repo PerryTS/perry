@@ -594,6 +594,35 @@ fn site_tmpl_born(
     t
 }
 
+/// ToObject(`v`) (ECMA-262 7.1.18) into a new node (`to_object_into`).
+pub(crate) fn to_object(m: &mut Model, v: NodeId, wrapper: Tok) -> NodeId {
+    let w = m.node_l("to-object-wrapper");
+    m.add_tok(w, wrapper);
+    let to = m.node_l("to-object");
+    to_object_into(m, v, wrapper, w, to);
+    to
+}
+
+/// `to` ⊇ ToObject(`v`) (ECMA-262 7.1.18): `v`'s objects as they are
+/// (`Cons::Objects`), and `wrapper` (a token of the `Object()` family,
+/// which node `w` holds) once `v` may hold a primitive but `undefined` /
+/// `null` (those throw). The primitive itself never reaches `to`. A String
+/// wrapper's own indices hold its characters: the wrapper's elements are
+/// strings.
+pub(crate) fn to_object_into(m: &mut Model, v: NodeId, wrapper: Tok, w: NodeId, to: NodeId) {
+    let fa = m.field_any(wrapper);
+    m.add_prim(fa, prim::STR);
+    m.cons(v, Cons::Objects { dst: to });
+    m.cons(
+        v,
+        Cons::Guard {
+            test: guard::BOXED,
+            from: w,
+            dst: to,
+        },
+    );
+}
+
 /// A synthetic resolve function of the promise whose settled value is
 /// `dst` (ECMA-262 27.2.1.3.2): its first parameter is adopted into `dst`
 /// (`adopt`), so a thenable passes on what it resolves, never itself.
@@ -2059,7 +2088,11 @@ fn ns_method_inner(
         }
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
-            if let Some(&t) = c.args.first() {
+            if let Some(&target) = c.args.first() {
+                // ECMA-262 20.1.2.1 step 1: `to` is ToObject(target), the
+                // result; the sources copy into it.
+                let wrapper = site_tmpl(m, call, "Object()");
+                let t = to_object(m, target, wrapper);
                 let site = m.anon_post_site("Object.assign (value call)");
                 for &s in c.args.iter().skip(1) {
                     m.cons(s, Cons::Spread { into: t, site });
