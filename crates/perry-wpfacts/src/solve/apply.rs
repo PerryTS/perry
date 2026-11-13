@@ -1782,7 +1782,14 @@ impl Model {
                     }
                 }
                 if index && self.index_store_done.insert((n, site, 1)) {
-                    let ek = self.elem_key();
+                    // A key that is one numeric literal and nothing else
+                    // writes that index alone: a rest array's index slot
+                    // (`store_into`), any other holder's elements.
+                    let one = self.num_literal_index(n).filter(|_| prim == prim::NUM && index_strs.is_empty());
+                    let ek = match one {
+                        Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
+                        None => self.elem_key(),
+                    };
                     self.cons(o, Cons::Store { key: ek, src, site });
                 }
                 if index {

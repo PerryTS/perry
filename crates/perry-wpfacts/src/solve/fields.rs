@@ -712,35 +712,64 @@ impl Model {
         let s = self.field(t, a);
         let fa = self.field_any(t);
         self.edge(s, fa);
+        if self.index_merged.contains(&t) {
+            self.edge(fa, s);
+        }
         s
     }
 
-    /// The first write of `t`, a move of its elements or its escape: from
-    /// now on any index may hold any element, so each slot holds them all
-    /// (monotone: a constant read then sees what a numeric read sees).
+    /// The index of slot atom `a` (`[[Index i]]`).
+    pub(crate) fn index_slot_atom(&self, a: Atom) -> Option<u32> {
+        let s = &self.atoms[a as usize];
+        s.strip_prefix("[[Index")?.strip_suffix("]]")?.parse().ok()
+    }
+
+    /// The first write of `t` that does not name one fixed index (an
+    /// append, a computed key, `length`), a move of its elements or its
+    /// escape: from now on any index may hold any element, so each slot
+    /// holds them all (monotone: a constant read then sees what a numeric
+    /// read sees), a slot born later too.
     pub(crate) fn index_slots_merge(&mut self, t: Tok) {
+        if !self.index_merged.insert(t) {
+            return;
+        }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
-            if self.atoms[a as usize].starts_with("[[Index") {
-                if let Some(&s) = self.fields.get(&(t, a)) {
-                    self.index_slot_merges += 1;
-                    let fa = self.field_any(t);
-                    self.edge(fa, s);
-                }
+            if self.index_slot_atom(a).is_some() {
+                self.index_slot_merges += 1;
+                let s = self.field_r(t, a);
+                let fa = self.field_any(t);
+                self.edge(fa, s);
             }
         }
     }
 
+    /// A rest parameter's array (gen: `new_arr_template(.., "rest")`): born
+    /// with its arguments in order, each at its index (10.2.11, 8.6.3), so
+    /// it is index-exact (`index_slot`) until a write that does not name one
+    /// fixed index (`index_slots_merge`).
+    pub(crate) fn is_rest_arr(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _) if self.rest_param_tmpls.contains(&tm))
+    }
+
     /// The slot a read of `obj` under key node `key` reads alone: `key` is
-    /// a numeric literal (`Gen::num_literal`: one fixed integer) and `obj`
-    /// has that index slot.
+    /// a numeric literal (`Gen::num_literal`: one fixed integer `i`) and
+    /// `obj` has that index slot, or is a rest array (its slot `i` holds
+    /// what its index `i` holds).
     pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
+        let i = self.num_literal_index(key)?;
+        if self.is_rest_arr(obj) {
+            return Some(self.index_slot(obj, i));
+        }
+        let a = self.atom(&format!("[[Index{i}]]"));
+        self.fields.get(&(obj, a)).copied()
+    }
+
+    /// The one array index key node `key` holds: a numeric literal
+    /// (`Gen::num_literal`) of one integer in index range.
+    pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);
-        if self.labels[key as usize] != "NUMLIT" || lo != hi || lo < 0 || lo > u32::MAX as i64 {
-            return None;
-        }
-        let a = self.atom(&format!("[[Index{lo}]]"));
-        self.fields.get(&(obj, a)).copied()
+        (self.labels[key as usize] == "NUMLIT" && lo == hi && (0..=u32::MAX as i64).contains(&lo)).then_some(lo as u32)
     }
 
     pub(super) fn is_num_atom(&self, a: Atom) -> bool {

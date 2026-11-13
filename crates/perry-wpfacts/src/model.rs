@@ -1720,6 +1720,12 @@ pub struct Model {
     pub all_fields: FxHashMap<Tok, NodeId>,
     /// `Model::hole`: what an Array's iteration reads at a hole.
     pub holes: FxHashMap<Tok, NodeId>,
+    /// `Model::index_slots_merge`: tokens whose index slots hold every
+    /// element (a slot born later is born merged).
+    pub index_merged: crate::pts::FxHashSet<Tok>,
+    /// Rest parameter arrays (`Model::is_rest_arr`): index-exact
+    /// (`Model::index_slot`) from their birth.
+    pub rest_param_tmpls: crate::pts::FxHashSet<TmplId>,
     /// `Model::arr_len`: the node of an Array token's `length`.
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).

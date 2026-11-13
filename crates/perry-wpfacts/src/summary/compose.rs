@@ -136,11 +136,21 @@ pub(super) fn compose(
                         .collect();
                     // `arguments` takes every argument, a rest array those
                     // after the parameters.
-                    let first = if m.funcs[g as usize].has_arguments { 0 } else { sg.params.len() };
+                    let has_arguments = m.funcs[g as usize].has_arguments;
+                    let first = if has_arguments { 0 } else { sg.params.len() };
                     let rest_store =
-                        (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site(), first));
+                        (sg.rest != NO_NODE).then(|| (m.anon_store_site(), first));
+                    // With no spread argument, argument `i` is the rest
+                    // array's index `i - n` (`Model::rest_elem_node`).
+                    let call = &s.calls[*ci].1;
+                    let slot_keys: Vec<Key> = match call.spread.is_empty() && !has_arguments {
+                        true => (first..call.args.len().max(first))
+                            .map(|i| Key::Named(m.atom(&format!("[[Index{}]]", i - first))))
+                            .collect(),
+                        false => Vec::new(),
+                    };
                     let elem = m.elem_key();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem);
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, elem, &slot_keys);
                     any = true;
                     n += 1;
                 }
@@ -162,15 +172,18 @@ pub(super) fn compose(
 /// A hidden capture parameter (`caps`) takes its class environment slot,
 /// not the call's argument (DECISIONS 117, 127). A spread entry is the
 /// List CreateListFromIterable built (13.3.8.1): it is read at its
-/// elements (`elem`), never at a member of a prototype chain.
+/// elements (`elem`), never at a member of a prototype chain; a rest
+/// array stores its arguments at `elem` too.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expand(
     s: &mut Summary,
     ci: usize,
     g: &Summary,
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
-    rest_store: Option<(Key, SiteId, usize)>,
+    rest_store: Option<(SiteId, usize)>,
     elem: Key,
+    slot_keys: &[Key],
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -251,10 +264,11 @@ pub(super) fn expand(
     }
     // The callee run's fresh rest array takes this call's arguments after
     // the parameters and its spread elements (8.6.3 BindingRestElement).
-    let rest = rest_store.map(|(key, site, first)| (tr(g.rest), key, site, first));
+    let rest = rest_store.map(|(site, first)| (tr(g.rest), elem, site, first));
     if let Some((r, key, site, first)) = rest {
         for i in first..call.args.len() {
             if call.args[i] != NO_NODE {
+                let key = slot_keys.get(i - first).copied().unwrap_or(key);
                 s.cons.push((r, Cons::Store { key, src: call.args[i], site }));
             }
         }

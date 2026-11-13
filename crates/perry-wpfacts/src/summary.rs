@@ -1322,13 +1322,22 @@ impl Model {
         // This run's rest array holds this call's arguments after the
         // parameters (8.6.3 BindingRestElement), its `arguments` object every
         // argument (10.4.4.6), and none of another call.
+        // A summary run's rest array keeps its elements merged: index
+        // slots on its instance token lost the stored argument (OVMB39,
+        // rest_instances: the run's read did not see the run's slot store).
         let rest = self.sum.insts[inst as usize].rest;
-        let rest_fa = (rest != NO_NODE).then(|| self.field_any_node_of_node(rest));
-        let first = if self.funcs[f as usize].has_arguments { 0 } else { terms.len() };
-        if let Some(fa) = rest_fa {
+        let has_arguments = self.funcs[f as usize].has_arguments;
+        let exact = self.calls[c].spread.is_empty() && !has_arguments;
+        let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
+        let first = if has_arguments { 0 } else { terms.len() };
+        if rest != NO_NODE {
             for i in first..nargs {
                 let a = self.calls[c].args[i];
-                self.edge(a, fa);
+                let d = match rest_fa {
+                    Some(fa) => fa,
+                    None => self.rest_elem_node(rest, Some((i - first) as u32)),
+                };
+                self.edge(a, d);
             }
         }
         for j in 0..self.calls[c].spread.len() {

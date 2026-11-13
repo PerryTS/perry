@@ -1381,7 +1381,11 @@ impl<'a> Gen<'a> {
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
                     Some(_) => self.new_args_template(mi),
-                    None => self.new_arr_template(mi, "rest"),
+                    None => {
+                        let t = self.new_arr_template(mi, "rest");
+                        self.m.rest_param_tmpls.insert(t);
+                        t
+                    }
                 };
                 let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);

@@ -332,6 +332,16 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A call binding its rest array's argument at a known position
+        // (`Model::rest_elem_node`), or a store under one constant index
+        // (`Cons::StoreIndexed`): an element store, into index slot `i` of
+        // a rest array.
+        let slot = match key {
+            Key::Named(a) => self.index_slot_atom(a),
+            _ => None,
+        };
+        let key = if slot.is_some() { self.elem_key() } else { key };
+        let slot = slot.filter(|_| self.is_rest_arr(t));
         // A class private field: what its class's code stores (`private_field`);
         // on an object of this unit, its own field too.
         if let Key::Named(a) = key {
@@ -720,7 +730,22 @@ impl Model {
         }
         if self.is_arr(t) {
             self.arr_len_store(t, key, elem, site);
-            self.arr_written(t);
+            // A store under one fixed index of a rest array writes that
+            // index only (`index_slot`) and moves no other element.
+            let fixed = match key {
+                Key::Named(a) if self.is_rest_arr(t) => {
+                    self.atoms[a as usize].parse::<u32>().ok().filter(|i| i.to_string() == self.atoms[a as usize])
+                }
+                _ => None,
+            };
+            if let Some(i) = fixed {
+                let s = self.index_slot(t, i);
+                self.edge(src, s);
+            }
+            match slot.is_some() || fixed.is_some() {
+                true => self.arr_written_at(t),
+                false => self.arr_written(t),
+            }
         }
         // An index past the end, a computed key or a `length` store may
         // leave a hole; an append (`elem`) never does (`hole`).
@@ -760,7 +785,10 @@ impl Model {
         }
         match key {
             Key::Named(a) => {
-                let f = self.field(t, a);
+                let f = match slot {
+                    Some(i) => self.index_slot(t, i),
+                    None => self.field(t, a),
+                };
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
@@ -787,7 +815,11 @@ impl Model {
                 }
             }
             Key::Any(_) => {
-                let f = if elem && self.is_elem_array(t) {
+                // A rest array's argument at its position (`slot`): its index
+                // slot, which flows into its elements (`index_slot`).
+                let f = if let Some(i) = slot {
+                    self.index_slot(t, i)
+                } else if elem && self.is_elem_array(t) {
                     self.field_any(t)
                 } else if elem {
                     self.numeric_field(t)
