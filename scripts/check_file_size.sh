@@ -36,7 +36,7 @@ crates/perry-runtime/src/map.rs	3025
 # Representation-aware set core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/set.rs	2339
 # Representation feedback core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/typed_feedback.rs	2444
+crates/perry-runtime/src/typed_feedback.rs	2460
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	4768
 # Native ABI proof cases; test organization is a separate follow-up.
