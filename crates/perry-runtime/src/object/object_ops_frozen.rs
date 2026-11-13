@@ -186,6 +186,86 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     true
 }
 
+/// An integrity operation on an integer-indexed exotic owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexedIntegrity {
+    Freeze,
+    Seal,
+    PreventExtensions,
+    IsFrozen,
+    IsSealed,
+    IsExtensible,
+}
+
+/// The integrity operations of an integer-indexed exotic owner: a typed
+/// array, a plain `Uint8Array`, or a Node `Buffer` (a `Uint8Array` subclass
+/// instance). `[[Extensible]]` is the owner's cell-header bit, its ordinary
+/// own properties live in its holder, and its elements stay writable and
+/// configurable, so a non-empty owner cannot be frozen or sealed. `None` when
+/// `obj_value` is no such owner.
+#[inline(never)]
+fn integer_indexed_integrity(obj_value: f64, op: IndexedIntegrity) -> Option<f64> {
+    let owner = match crate::typedarray_props::typed_array_addr_from_value(obj_value) {
+        Some(owner) => owner,
+        None => {
+            let value = crate::value::JSValue::from_bits(obj_value.to_bits());
+            let addr = value.as_pointer::<u8>() as usize;
+            if !(value.is_pointer()
+                && addr > 0x10000
+                && crate::buffer::is_registered_buffer(addr)
+                && crate::buffer::is_node_buffer(addr))
+            {
+                return None;
+            }
+            addr
+        }
+    };
+    let length = if crate::buffer::is_node_buffer(owner) {
+        crate::buffer::js_buffer_length(owner as *const crate::buffer::BufferHeader) as u32
+    } else {
+        unsafe { crate::typedarray_props::owner_length(owner) }
+    };
+    let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
+    let boolean = |b: bool| f64::from_bits(crate::value::JSValue::bool(b).bits());
+    let test = |frozen: bool| {
+        holder.is_null() || unsafe { object_integrity_level(holder, frozen) }
+    };
+    let no_extend = crate::typedarray_props::typed_array_owner_no_extend(owner);
+    Some(match op {
+        IndexedIntegrity::IsExtensible => boolean(!no_extend),
+        IndexedIntegrity::IsSealed => boolean(no_extend && test(false)),
+        IndexedIntegrity::IsFrozen => boolean(no_extend && length == 0 && test(true)),
+        IndexedIntegrity::PreventExtensions | IndexedIntegrity::Seal | IndexedIntegrity::Freeze => {
+            crate::typedarray_props::typed_array_mark_no_extend(owner);
+            if op != IndexedIntegrity::PreventExtensions && length != 0 {
+                if !holder.is_null() {
+                    js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
+                }
+                throw_object_type_error(if op == IndexedIntegrity::Freeze {
+                    &b"Cannot freeze array buffer views with elements"[..]
+                } else {
+                    b"Cannot seal array buffer views with elements"
+                });
+            }
+            if op == IndexedIntegrity::Freeze {
+                // An empty owner has only its ordinary holder to restrict.
+                if let Some(_edit) = super::descriptor_state::HolderEdit::new(owner) {
+                    let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
+                    js_object_freeze(crate::value::js_nanbox_pointer(holder as i64));
+                }
+            } else if !holder.is_null() {
+                let holder = crate::value::js_nanbox_pointer(holder as i64);
+                if op == IndexedIntegrity::Seal {
+                    js_object_seal(holder);
+                } else {
+                    js_object_prevent_extensions(holder);
+                }
+            }
+            obj_value
+        }
+    })
+}
+
 /// #10933: may an integrity op write `OBJ_FLAG_*` into this value's header?
 ///
 /// The band check these call sites used to rely on keeps small registry ids
@@ -252,23 +332,8 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             set_integrity_level_proxy(obj_value, /*frozen=*/ true)
         };
     }
-    if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-        crate::typedarray_props::typed_array_mark_no_extend(owner);
-        if unsafe { crate::typedarray_props::owner_length(owner) } != 0 {
-            let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-            if !holder.is_null() {
-                js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-            }
-            throw_object_type_error(b"Cannot freeze array buffer views with elements");
-        }
-        // An empty integer-indexed owner has only its ordinary holder to restrict.
-        if let Some(_edit) = super::descriptor_state::HolderEdit::new(owner) {
-            unsafe {
-                let holder = super::descriptor_state::descriptor_holder(owner);
-                js_object_freeze(crate::value::js_nanbox_pointer(holder as i64));
-            }
-        }
-        return obj_value;
+    if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::Freeze) {
+        return result;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -392,22 +457,8 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     // (`Object.seal(new Uint32Array())` segfaulted on Linux). Seal on a TA
     // only needs the no-extend/sealed flags — integer-indexed elements are
     // exotic and never configurable through this table.
-    if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-        crate::typedarray_props::typed_array_mark_no_extend(owner);
-        if unsafe { crate::typedarray_props::owner_length(owner) } != 0 {
-            let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-            if !holder.is_null() {
-                js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-            }
-            throw_object_type_error(b"Cannot seal array buffer views with elements");
-        }
-        unsafe {
-            let holder = super::descriptor_state::descriptor_holder(owner);
-            if !holder.is_null() {
-                js_object_seal(crate::value::js_nanbox_pointer(holder as i64));
-            }
-        }
-        return obj_value;
+    if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::Seal) {
+        return result;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -506,13 +557,8 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
         }
         return obj_value;
     }
-    if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-        crate::typedarray_props::typed_array_mark_no_extend(owner);
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        if !holder.is_null() {
-            js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-        }
-        return obj_value;
+    if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::PreventExtensions) {
+        return result;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -780,18 +826,8 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
     if is_native_handle_object(obj_value) {
         return f64::from_bits(TAG_FALSE);
     }
-    if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-        let satisfies = crate::typedarray_props::typed_array_owner_no_extend(owner)
-            && unsafe { crate::typedarray_props::owner_length(owner) == 0 };
-        if !satisfies {
-            return f64::from_bits(TAG_FALSE);
-        }
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        return if holder.is_null() || unsafe { object_integrity_level(holder, true) } {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        };
+    if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::IsFrozen) {
+        return result;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -844,17 +880,8 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
     if is_native_handle_object(obj_value) {
         return f64::from_bits(TAG_FALSE);
     }
-    if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-        let satisfies = crate::typedarray_props::typed_array_owner_no_extend(owner);
-        if !satisfies {
-            return f64::from_bits(TAG_FALSE);
-        }
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        return if holder.is_null() || unsafe { object_integrity_level(holder, false) } {
-            f64::from_bits(TAG_TRUE)
-        } else {
-            f64::from_bits(TAG_FALSE)
-        };
+    if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::IsSealed) {
+        return result;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
@@ -908,16 +935,18 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
         // report `false` depending on heap layout. Integer-indexed exotic
         // objects are extensible by default; report that instead of reading a
         // header that may not exist.
-        if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-            return if crate::typedarray_props::typed_array_owner_no_extend(owner) {
-                f64::from_bits(TAG_FALSE)
-            } else {
-                f64::from_bits(TAG_TRUE)
-            };
+        if let Some(result) = integer_indexed_integrity(obj_value, IndexedIntegrity::IsExtensible) {
+            return result;
         }
+        // An ArrayBuffer / DataView cell records `[[Extensible]]` in its
+        // cell header, as an integer-indexed owner does.
         let raw = crate::value::js_nanbox_get_pointer(obj_value) as usize;
         if raw > 0x10000 && crate::buffer::is_registered_buffer(raw) {
-            return f64::from_bits(TAG_TRUE);
+            return f64::from_bits(if crate::typedarray_props::typed_array_owner_no_extend(raw) {
+                TAG_FALSE
+            } else {
+                TAG_TRUE
+            });
         }
         if shapes::shape_word_is_writable(obj) {
             if let Some(shape) = shapes::object_shape_descriptor(obj) {
