@@ -62,6 +62,8 @@ pub use spread::js_object_spread_fresh;
 #[cfg(test)]
 mod pointer_shaped_number_tests;
 #[cfg(test)]
+mod raw_ptr_from_value_tests;
+#[cfg(test)]
 mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
