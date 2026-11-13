@@ -112,3 +112,20 @@ console.log(a.join(','));
         "1,9,2,3"
     );
 }
+
+// The global isNaN / isFinite apply ToNumber first, unlike Number.isNaN / isFinite.
+#[test]
+fn global_is_nan_and_is_finite_coerce_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s: any = "abc";
+const n: any = "1";
+const u: any = undefined;
+console.log(isNaN(s) + " " + isNaN(n) + " " + isNaN(u) + " " + isNaN(NaN) + " " + isNaN(1));
+console.log(isFinite(n) + " " + isFinite(s) + " " + isFinite(Infinity) + " " + isFinite(1));
+"#
+        ),
+        "true false true true false\ntrue false false true"
+    );
+}
