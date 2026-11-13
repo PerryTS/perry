@@ -665,6 +665,18 @@ pub enum Cons {
     /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
     /// derived groups hold the captures (`Model::capture_strs`).
     Captures { rec: Tok, pat: u32 },
+    /// Rule M6: the node is the receiver, search string or replacement of
+    /// `String.prototype.replace` (22.1.3.19): `dst` holds a String, the
+    /// one result of constants (`Model::replace_strs`).
+    StrReplace {
+        dst: NodeId,
+        recv: NodeId,
+        search: NodeId,
+        repl: NodeId,
+    },
+    /// Rule M7: the node is the pattern operand of the `new RegExp(P)` that
+    /// made `tok` (`Model::regexp_pattern`).
+    RegExpPattern { tok: Tok },
     Plus {
         str: NodeId,
         num: NodeId,
@@ -761,6 +773,8 @@ impl Cons {
                 | Cons::IdxKey { .. }
                 | Cons::CaseMap { .. }
                 | Cons::Captures { .. }
+                | Cons::StrReplace { .. }
+                | Cons::RegExpPattern { .. }
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
@@ -897,6 +911,8 @@ impl Cons {
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::Captures { .. } => "captures",
+            Cons::StrReplace { .. } => "strreplace",
+            Cons::RegExpPattern { .. } => "regexppattern",
             Cons::ViewedBuffer { .. } => "viewedbuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",

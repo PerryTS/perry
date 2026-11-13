@@ -2038,6 +2038,8 @@ impl Model {
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
+            Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
+            Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),
             Cons::ViewedBuffer { view, fresh, share } => {
                 format!("viewedbuffer {n} {view} {fresh:?} {share}")
             }

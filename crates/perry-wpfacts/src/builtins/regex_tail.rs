@@ -360,6 +360,74 @@ fn tail_clean(q: &[Quant], out: &mut Vec<u32>) -> bool {
 
 /// Rule RT: the tail analysis of pattern `src` with flags `flags`, or
 /// `None` (no rule).
+/// Rule M8, ECMA-262 22.2.6.13.1: `source` is EscapeRegExpPattern
+/// (22.2.6.10) of [[OriginalSource]], as the runtime renders it
+/// (perry-runtime regex/escape.rs, regex/perex_display.rs): "(?:)" for "",
+/// a `/` outside a class as `\/`, a line terminator escaped, every other
+/// code unit (and each `\` with the unit after it) as it is. So a
+/// non-empty pattern with no `/` outside a class and outside an escape and
+/// no line terminator is its own `source`.
+pub(crate) fn source_is_pattern(p: &str) -> bool {
+    if p.is_empty() {
+        return false;
+    }
+    let (mut class, mut esc) = (false, false);
+    for ch in p.chars() {
+        if matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}') {
+            return false;
+        }
+        if esc {
+            esc = false;
+            continue;
+        }
+        match ch {
+            '\\' => esc = true,
+            '[' if !class => class = true,
+            ']' if class => class = false,
+            '/' if !class => return false,
+            _ => {}
+        }
+    }
+    true
+}
+
+impl Model {
+    /// Rule M7: the pattern node `n` of the `new RegExp(n)` that made `t`.
+    /// While `n` holds one String constant P and nothing else, `t`'s
+    /// [[OriginalSource]] is P and its flags "" (22.2.3.2): its tail is
+    /// `analyse(P, "")`, as a literal's. Any other content: no tail, and
+    /// each `exec` record that took P's tail is index-merged. Monotone: one
+    /// constant, then none.
+    pub(crate) fn regexp_pattern(&mut self, n: NodeId, t: Tok) {
+        let x = &self.nodes[n as usize];
+        if x.prim == 0 && x.pts.is_empty() {
+            return;
+        }
+        let one = self.one_str_const(n);
+        match self.regexp_ctor_pat.get(&t) {
+            Some(&(None, _)) => return,
+            Some(&(a, _)) if a == one => return,
+            Some(_) => {
+                self.regexp_ctor_pat.insert(t, (None, None));
+                for rec in self.regexp_ctor_recs.get(&t).cloned().unwrap_or_default() {
+                    self.index_slots_merge(rec);
+                }
+                return;
+            }
+            None => {}
+        }
+        let pat = one.and_then(|a| analyse(&self.atoms[a as usize].clone(), "")).map(|tail| {
+            let i = self.regexp_tails.len() as u32;
+            self.regexp_tails.push(tail);
+            i
+        });
+        self.regexp_ctor_pat.insert(t, (one, pat));
+        for (rec, s) in self.regexp_pending.remove(&t).unwrap_or_default() {
+            self.exec_attach(t, rec, pat, s);
+        }
+    }
+}
+
 pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
     if !flags.chars().all(|f| f == 'd' || f == 'g') {
         return None;

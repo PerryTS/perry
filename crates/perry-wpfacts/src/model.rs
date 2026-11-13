@@ -1787,6 +1787,19 @@ pub struct Model {
     pub(crate) regexp_tails: Vec<crate::builtins::regex_tail::Tail>,
     pub(crate) regexp_tail_of: crate::pts::FxHashMap<TmplId, u32>,
     pub(crate) regexp_exec_tail: crate::pts::FxHashMap<Tok, u32>,
+    /// Rule M7: per `new RegExp(P)` object, P's one constant (`None`: any
+    /// other pattern) and its tail; the `exec` records that took the tail.
+    pub(crate) regexp_ctor_pat: crate::pts::FxHashMap<Tok, (Option<Atom>, Option<u32>)>,
+    pub(crate) regexp_ctor_recs: crate::pts::FxHashMap<Tok, Vec<Tok>>,
+    /// Rule M7: the `new RegExp(P)` objects of a pattern operand without
+    /// flags; the `exec` records (and inputs) waiting for an undecided P,
+    /// and those records.
+    pub(crate) regexp_ctor_toks: crate::pts::FxHashSet<Tok>,
+    pub(crate) regexp_pending: crate::pts::FxHashMap<Tok, Vec<(Tok, NodeId)>>,
+    pub(crate) regexp_pending_recs: crate::pts::FxHashSet<Tok>,
+    /// Rule M8: each regex literal template whose `source` is its pattern
+    /// text (`regex_tail::source_is_pattern`).
+    pub(crate) regexp_source_of: crate::pts::FxHashMap<TmplId, String>,
     /// `Model::arr_len`: the node of an Array token's `length`.
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).

@@ -2082,6 +2082,19 @@ impl Model {
                 }
             }
             // Rule RT: an `exec` record's derived captures.
+            // Rule M6: String.prototype.replace of constants.
+            Cons::StrReplace {
+                dst,
+                recv,
+                search,
+                repl,
+            } => {
+                if let Some(s) = self.replace_strs(recv, search, repl) {
+                    self.add_s(dst, &[], prim::STR, s);
+                }
+            }
+            // Rule M7: the pattern of `new RegExp(P)`.
+            Cons::RegExpPattern { tok } => self.regexp_pattern(n, tok),
             Cons::Captures { rec, pat } => {
                 for (g, p, s) in self.capture_strs(n, pat) {
                     if p != 0 {

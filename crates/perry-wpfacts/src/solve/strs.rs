@@ -293,6 +293,9 @@ impl Model {
     /// while the result may be a String gives any string. Prefixes are
     /// only made from constants, never extended, so loops end.
     pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+        if let Some(s) = self.plus_const(l, r) {
+            return s;
+        }
         let m3 = self.plus_strs_m3(l, r);
         if m3 != STRS_TOP {
             return m3;
@@ -331,6 +334,101 @@ impl Model {
         out.sort_unstable();
         out.dedup();
         Some(self.str_set(&out))
+    }
+
+    /// The one constant a String-only node holds when it holds exactly one
+    /// (no prefix, infix or suffix entry, no other value).
+    pub(crate) fn one_str_const(&self, n: NodeId) -> Option<Atom> {
+        self.one_str_const_but(n, 0)
+    }
+
+    /// `one_str_const` of the node's values other than the primitives
+    /// `but` (values the caller's operation throws on).
+    pub(crate) fn one_str_const_but(&self, n: NodeId, but: u16) -> Option<Atom> {
+        let x = &self.nodes[n as usize];
+        if x.prim & !but != prim::STR || !x.pts.is_empty() || x.strs < STRS_SET0 {
+            return None;
+        }
+        match self.str_atoms(x.strs) {
+            &[a] if !self.atom_is_mark(a) => Some(a),
+            _ => None,
+        }
+    }
+
+    /// Rule M5, ECMA-262 13.15.3 (ApplyStringOrNumericBinaryOperator: two
+    /// Strings give their concatenation): a left operand that holds only
+    /// the String `c` and a right operand that holds only the String `d`
+    /// give the one String `cd`. Finite with no bound: sets only grow, so a
+    /// node holds one constant alone during one stretch at most, and each
+    /// `+` makes at most one constant by this rule; every other pair is
+    /// rule M3's (prefixes) and M4's (suffixes).
+    fn plus_const(&mut self, l: NodeId, r: NodeId) -> Option<StrSet> {
+        let (a, b) = (self.one_str_const(l)?, self.one_str_const(r)?);
+        let s = format!("{}{}", self.atoms[a as usize], self.atoms[b as usize]);
+        let c = self.str_const_atom(&s)?;
+        Some(self.str_set(&[c]))
+    }
+
+    /// Rule M6, ECMA-262 22.1.3.19 `String.prototype.replace(searchValue,
+    /// replaceValue)` on a String receiver with a String searchValue (a
+    /// primitive has no own @@replace; a program @@replace on
+    /// String.prototype is the `sym_call` result beside this) and a String
+    /// replaceValue (not callable): the first occurrence of the search
+    /// string (StringIndexOf from 0) replaced by GetSubstitution
+    /// (22.1.3.19.1 with no captures and namedCaptures undefined: `$$`,
+    /// `$&`, `` $` ``, `$'` substitute; every other `$` is itself); no
+    /// occurrence gives the receiver. Exact when each operand holds one
+    /// ASCII constant (code units are bytes); else any string. `None` while
+    /// an operand holds no value yet (its arrival runs the rule again).
+    pub(crate) fn replace_strs(&mut self, recv: NodeId, search: NodeId, repl: NodeId) -> Option<StrSet> {
+        if [recv, search, repl].iter().any(|&n| {
+            let x = &self.nodes[n as usize];
+            x.prim == 0 && x.pts.is_empty()
+        }) {
+            return None;
+        }
+        // Step 1 RequireObjectCoercible: an undefined or null receiver
+        // throws, it gives no result.
+        let one = |m: &Self, n: NodeId, but: u16| {
+            m.one_str_const_but(n, but).map(|a| m.atoms[a as usize].clone()).filter(|s| s.is_ascii())
+        };
+        let nullish = prim::UNDEF | prim::NULL;
+        let (Some(s), Some(q), Some(r)) = (one(self, recv, nullish), one(self, search, 0), one(self, repl, 0)) else {
+            return Some(STRS_TOP);
+        };
+        let out = match s.find(q.as_str()) {
+            None => s,
+            Some(p) => {
+                let (head, rest) = (&s[..p], &s[p + q.len()..]);
+                let mut o = String::from(head);
+                let b = r.as_bytes();
+                let mut i = 0;
+                while i < b.len() {
+                    if b[i] == b'$' && i + 1 < b.len() {
+                        let sub = match b[i + 1] {
+                            b'$' => Some("$"),
+                            b'&' => Some(q.as_str()),
+                            b'`' => Some(head),
+                            b'\'' => Some(rest),
+                            _ => None,
+                        };
+                        if let Some(t) = sub {
+                            o.push_str(t);
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    o.push(b[i] as char);
+                    i += 1;
+                }
+                o.push_str(rest);
+                o
+            }
+        };
+        Some(match self.str_const_atom(&out) {
+            Some(a) => self.str_set(&[a]),
+            None => STRS_TOP,
+        })
     }
 
     fn plus_strs_m3(&mut self, l: NodeId, r: NodeId) -> StrSet {

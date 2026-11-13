@@ -481,6 +481,15 @@ impl Model {
             Cons::ShareBuffer { ta } => {
                 format!("ShareBuffer ta={:?}", self.packet_token(ta, packet))
             }
+            Cons::StrReplace {
+                dst,
+                recv,
+                search,
+                repl,
+            } => format!("StrReplace dst={dst:?} recv={recv:?} search={search:?} repl={repl:?}"),
+            Cons::RegExpPattern { tok } => {
+                format!("RegExpPattern tok={:?}", self.packet_token(tok, packet))
+            }
             Cons::Captures { rec, pat } => {
                 format!("Captures rec={:?} pat={pat}", self.packet_token(rec, packet))
             }

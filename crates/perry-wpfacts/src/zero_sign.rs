@@ -209,6 +209,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NativeParent { .. }
         | Cons::ShareBuffer { .. }
         | Cons::Captures { .. }
+        | Cons::StrReplace { .. }
+        | Cons::RegExpPattern { .. }
         | Cons::ViewedBuffer { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }

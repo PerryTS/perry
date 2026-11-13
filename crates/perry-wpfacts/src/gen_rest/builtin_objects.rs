@@ -737,6 +737,11 @@ impl<'a> Gen<'a> {
             }
             Expr::RegExp { pattern, flags } => {
                 let (t, n) = self.bobj(mi, "RegExp");
+                if let &TokKind::Obj(tm, _) = &self.m.toks[t as usize] {
+                    if crate::builtins::regex_tail::source_is_pattern(pattern) {
+                        self.m.regexp_source_of.insert(tm, pattern.to_string());
+                    }
+                }
                 if let (&TokKind::Obj(tm, _), Some(tail)) =
                     (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
                 {
@@ -769,7 +774,15 @@ impl<'a> Gen<'a> {
                     let f = self.expr(fx, f);
                     to_prim(&mut self.m, f, "RegExp flags ToString");
                 }
-                let out = self.bobj(mi, "RegExp").1;
+                let (t, out) = self.bobj(mi, "RegExp");
+                // Rule M7 (22.2.3.2 RegExpInitialize): a pattern of one String
+                // constant and no flags operand is the object's
+                // [[OriginalSource]] with flags "", as a literal's
+                // (`Model::regexp_pattern`).
+                if flags.is_none() {
+                    self.m.regexp_ctor_toks.insert(t);
+                    self.m.cons(p, Cons::RegExpPattern { tok: t });
+                }
                 if *is_call {
                     self.m.edge(p, out);
                 }

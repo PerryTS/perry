@@ -881,6 +881,44 @@ impl Model {
         }
     }
 
+    /// Rule RT: `rec` of an `exec` with input `s` holds tail `pat`'s
+    /// captures in the index slots of the derived groups; a second tail at
+    /// the same record merges its slots.
+    pub(crate) fn exec_attach_tail(&mut self, rec: Tok, pat: u32, s: NodeId) {
+        if *self.regexp_exec_tail.entry(rec).or_insert(pat) != pat {
+            self.index_slots_merge(rec);
+            return;
+        }
+        for g in self.regexp_tails[pat as usize].derived() {
+            self.index_slot(rec, g);
+        }
+        self.cons(s, Cons::Captures { rec, pat });
+    }
+
+    /// Rule M7: `rec` of an `exec` of the `new RegExp(P)` object `t` once P
+    /// is decided (tail `p`, or none): the tail's captures, and each slot a
+    /// read made while P was pending that the tail does not derive holds
+    /// any capture (`field_any`); no tail: every index any capture.
+    pub(crate) fn exec_attach(&mut self, t: Tok, rec: Tok, p: Option<u32>, s: NodeId) {
+        self.regexp_pending_recs.remove(&rec);
+        let Some(pat) = p else {
+            self.index_slots_merge(rec);
+            return;
+        };
+        self.regexp_ctor_recs.entry(t).or_default().push(rec);
+        let derived = self.regexp_tails[pat as usize].derived();
+        for a in self.field_keys.get(&rec).cloned().unwrap_or_default() {
+            match self.index_slot_atom(a) {
+                Some(i) if !derived.contains(&i) => {
+                    let (sl, fa) = (self.field_r(rec, a), self.field_any(rec));
+                    self.edge(fa, sl);
+                }
+                _ => {}
+            }
+        }
+        self.exec_attach_tail(rec, pat, s);
+    }
+
     /// A rest parameter's array (gen: `new_arr_template(.., "rest")`): born
     /// with its arguments in order, each at its index (10.2.11, 8.6.3), so
     /// it is index-exact (`index_slot`) until a write that does not name one
@@ -895,7 +933,9 @@ impl Model {
     /// what its index `i` holds).
     pub(crate) fn exact_index_slot(&mut self, key: NodeId, obj: Tok) -> Option<NodeId> {
         let i = self.num_literal_index(key)?;
-        if self.is_rest_arr(obj) {
+        // Rule M7: an `exec` record waiting for its RegExp's pattern: the
+        // slot, which the decided pattern fills (`exec_attach`).
+        if self.is_rest_arr(obj) || self.regexp_pending_recs.contains(&obj) {
             return Some(self.index_slot(obj, i));
         }
         let a = self.atom(&format!("[[Index{i}]]"));

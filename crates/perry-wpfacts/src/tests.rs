@@ -50,6 +50,7 @@ mod json_positions;
 mod string_prefix_keys;
 mod uuid_infix_keys;
 mod regex_capture_suffix;
+mod regex_track_build;
 mod builtin_fn_absent_member;
 mod sloppy_this_wrapper;
 mod computed_method_key;

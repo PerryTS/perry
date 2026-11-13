@@ -79,6 +79,8 @@ pub(super) fn family_load(
             || view_member_absent(what, &name)
         {
             m.add_prim(dst, prim::UNDEF);
+        } else if let Some(s) = regexp_literal_source(m, t, &name) {
+            m.add_s(dst, &[], prim::STR, s);
         } else if let Some(e) = declared_accessor(m, fam, what, &name) {
             // An accessor whose getter the runtime declares (`RegExp
             // .prototype.flags`): the getter's declared result on `t`, as
@@ -101,6 +103,22 @@ pub(super) fn family_load(
     if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
         opaque_member(m, dst);
     }
+}
+
+/// Rule M8, ECMA-262 22.2.6.13.1: `get RegExp.prototype.source` of a regex
+/// literal's object whose pattern is its own EscapeRegExpPattern
+/// (`regex_tail::source_is_pattern`) is that one String
+/// ([[OriginalSource]] is set once, by RegExpInitialize).
+fn regexp_literal_source(m: &mut Model, t: Tok, name: &str) -> Option<StrSet> {
+    if name != "source" {
+        return None;
+    }
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return None;
+    };
+    let p = m.regexp_source_of.get(&tm)?.clone();
+    let a = m.str_const_atom(&p)?;
+    Some(m.str_set(&[a]))
 }
 
 /// `dst` ⊇ the described member `a` of family `fam`'s intrinsic chain (of a
