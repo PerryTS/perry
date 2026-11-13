@@ -140,6 +140,16 @@ impl<'a> FuncEmitCtx<'a> {
         }
     }
 
+    /// `console.log(a, b)` prints `a b` on one line, so every argument goes to one bridge call.
+    pub(super) fn emit_console_call(&mut self, func: &mut Function, bridge: &str, args: &[Expr]) {
+        let count = args.len() as u32;
+        self.emit_frame_begin(func, count);
+        for (slot, arg) in args.iter().enumerate() {
+            self.emit_store_arg(func, slot as u32, arg);
+        }
+        self.emit_memcall_void(func, bridge, count);
+    }
+
     pub(super) fn emit_memcall_i32(
         &mut self,
         func: &mut Function,

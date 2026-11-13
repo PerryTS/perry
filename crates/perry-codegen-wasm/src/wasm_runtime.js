@@ -1631,9 +1631,9 @@ const classParentTable = {};
 // Return values are plain JS values, converted back to BigInt bits by __jsValueToBits in mem_call.
 const __memDispatch = {
   // Console — args are already decoded by __bitsToJsValue
-  console_log: (val) => { console.log(val); },
-  console_warn: (val) => { console.warn(val); },
-  console_error: (val) => { console.error(val); },
+  console_log: (...args) => { console.log(...args); },
+  console_warn: (...args) => { console.warn(...args); },
+  console_error: (...args) => { console.error(...args); },
   console_log_multi: (args) => { if (Array.isArray(args)) console.log(...args); },
 
   // String core — args are already decoded JS values via __bitsToJsValue
