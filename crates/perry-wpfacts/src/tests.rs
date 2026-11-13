@@ -176,6 +176,7 @@ mod quiet_sites;
 mod quiet_strings;
 mod range_tightening;
 mod reach_accessor;
+mod reach_proto_members;
 mod reach_thenable;
 mod receiver_slots;
 mod receiver_this;

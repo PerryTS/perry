@@ -548,6 +548,23 @@ fn reach_thenable_switch_is_a_cache_input() {
     );
 }
 
+/// Activation reach, members on a built-in prototype (class H): each switch
+/// changes which bodies the solve calls active (the realm table's `held`
+/// rows; an accessor on a built-in prototype), so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_proto_member_switches_are_cache_inputs() {
+    for name in [
+        "PERRY_FACTS_REACH_HELD_KEYS",
+        "PERRY_FACTS_REACH_PROTO_ACCESSORS",
+    ] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// Literal strings: the switch changes the exported facts and every store
 /// and alias that drops its string demote, so `=0` must never reuse an `=1`
 /// object.
