@@ -256,6 +256,7 @@ mod typed_array_length;
 mod typed_array_names;
 mod typed_array_symbol_absent;
 mod wrapper_realm_chain;
+mod realm_chain_computed_key;
 mod typed_array_numeric_key;
 mod typed_array_this_throws;
 mod class_call_throws;

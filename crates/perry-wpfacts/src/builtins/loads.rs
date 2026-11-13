@@ -193,6 +193,10 @@ fn wrapper_member(m: &mut Model, protos: &[&str], name: &str, dst: NodeId) {
                 m.add_prim(dst, prim::UNDEF);
                 continue;
             }
+            Some(members::RealmFind::Own(o, _)) if realm_prim(o).is_some() => {
+                m.add_prim(dst, realm_prim(o).unwrap());
+                continue;
+            }
             Some(members::RealmFind::Own(_, at)) => m
                 .declarations
                 .named(at.name, m)
@@ -240,6 +244,13 @@ fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
     let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
         return None;
     };
+    realm_prim(p)
+}
+
+/// The primitive kind of the realm's own data property `p`; `None` for
+/// any other value.
+fn realm_prim(p: &perry_hir::realm_manifest::RealmOwn) -> Option<u16> {
+    use perry_hir::realm_manifest::RealmOwnValue as V;
     Some(match p.value {
         V::Undefined => prim::UNDEF,
         V::Null => prim::NULL,
@@ -249,6 +260,64 @@ fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
         V::Symbol => prim::SYMBOL,
         _ => return None,
     })
+}
+
+/// The realm prototypes a builtin object of family `fam` and kind `what`
+/// has its [[Prototype]] chain from when the realm declares every link of
+/// it: a primitive wrapper's (`members::wrapper_protos`), a typed array's
+/// or a Buffer's (`view_chain`), a realm-born object's
+/// (`members::realm_born`) or that of an object of a realm constructor
+/// `what` whose prototype is realm-born (`ArrayBuffer`, `RegExp`). `None`:
+/// the realm does not describe the chain.
+fn realm_chain_starts(
+    fam: Family,
+    what: &str,
+) -> Option<Vec<&'static perry_hir::realm_manifest::RealmEntry>> {
+    if let Some(protos) = members::wrapper_protos(fam, Some(what)) {
+        return protos.iter().map(|p| members::realm_entry(p)).collect();
+    }
+    let e = view_chain(Some(what))
+        .or_else(|| members::realm_born(what))
+        .or_else(|| members::realm_born(&format!("{what}.prototype")))?;
+    Some(vec![e])
+}
+
+/// `dst` ⊇ what computed key `key` reads on builtin object `t` whose realm
+/// chain starts at one of `starts` (`realm_chain_starts`; ECMA-262
+/// 10.1.8.1 OrdinaryGet): its own values (`load_from`; the caller's
+/// primitives and `undefined`), the member under every key some object of
+/// the chain declares and `key` may spell, as its named read finds it
+/// (`wrapper_member`, `family_load`), and what a store into ⊤ wrote onto
+/// the chain unless the chain is final (`family_any`'s tail, DEC 250).
+/// Never a builtin function the realm does not name. A computed key of
+/// unknown string never names the `__proto__` accessor (DECISIONS 217).
+fn realm_chain_any(
+    m: &mut Model,
+    t: Tok,
+    fam: Family,
+    what: &'static str,
+    starts: &[&'static perry_hir::realm_manifest::RealmEntry],
+    key: Key,
+    dst: NodeId,
+) {
+    let wrapper = members::wrapper_protos(fam, Some(what)).is_some();
+    for s in starts {
+        for n in members::realm_chain_keys(s) {
+            if Model::proto_link(&n) || !m.key_may_name_str(key, &n) {
+                continue;
+            }
+            if wrapper {
+                wrapper_member(m, &[s.name], &n, dst);
+            } else {
+                let a = m.atom(&n);
+                family_load(m, t, fam, Some(what), a, dst);
+            }
+        }
+    }
+    let star = m.atom(crate::STAR_KEY);
+    if !super::locked_chain_read(m, t, star) {
+        super::any_written(m, dst);
+    }
 }
 
 /// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a key no object of
@@ -1029,6 +1098,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                             family_any(m, Some(t), Family::Array, None, key, dst);
                         } else if members::chain_names(fam).is_some() {
                             family_any(m, Some(t), fam, Some(what), key, dst);
+                        } else if let Some(starts) = realm_chain_starts(fam, what) {
+                            realm_chain_any(m, t, fam, what, &starts, key, dst);
                         } else {
                             let bf = builtin_fn(m, "builtin object computed key");
                             m.add_tok(dst, bf);
