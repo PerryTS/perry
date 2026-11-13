@@ -49,7 +49,6 @@ fn prog(key: &str) -> String {
 }
 
 #[test]
-#[ignore = "K7: a '-'-infix string (generateUUID) still reads Object.prototype members; rule not built"]
 fn dash_infix_key_reads_no_builtin_member() {
     let v = recv(&facts(&prog("root.uuid")));
     assert_eq!(v, vec!["A"], "{v:?}");
@@ -70,5 +69,34 @@ fn argv_lowercase_key_reads_builtin_members() {
 #[test]
 fn to_prefix_argv_key_reads_builtin_members() {
     let v = recv(&facts(&prog("'to' + process.argv[2]")));
+    assert!(v.len() > 1, "{v:?}");
+}
+
+#[test]
+fn argv_then_const_suffix_key_reads_builtin_members() {
+    // `x + 'a'`: no character outside IdentifierPart is sure.
+    let v = recv(&facts(&prog("process.argv[2] + 'a'")));
+    assert!(v.len() > 1, "{v:?}");
+}
+
+#[test]
+fn replace_drops_infix() {
+    let v = recv(&facts(&prog("('x-' + process.argv[2]).replace('-', '')")));
+    assert!(v.len() > 1, "{v:?}");
+}
+
+#[test]
+fn slice_drops_infix() {
+    let v = recv(&facts(&prog("root.uuid.slice(1)")));
+    assert!(v.len() > 1, "{v:?}");
+}
+
+#[test]
+fn field_joined_with_argv_drops_infix() {
+    let src = prog("root.uuid").replace(
+        "this.uuid = generateUUID();",
+        "this.uuid = generateUUID(); if (process.argv.length > 5) this.uuid = process.argv[2];",
+    );
+    let v = recv(&facts(&src));
     assert!(v.len() > 1, "{v:?}");
 }

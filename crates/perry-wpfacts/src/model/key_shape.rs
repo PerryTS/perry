@@ -244,6 +244,26 @@ impl Model {
         id
     }
 
+    /// Rule K7: the shape of a key that is a String containing `c` (the
+    /// glob `*c*`), interned as `any_string_shape` is: it may spell a
+    /// Number key, and with `c` no IdentifierPart it spells no built-in
+    /// member name.
+    pub fn infix_shape(&mut self, c: char) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape { globs: Vec::new() });
+        }
+        let s = KeyShape {
+            globs: vec![vec![String::new(), c.to_string(), String::new()]],
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
     /// May `key` name the member spelled `name`? The one question every
     /// lookup, builtin member and store asks of a computed key. A shaped key
     /// is a String, or a well-known symbol spelled exactly (`KeyShape::of`):
