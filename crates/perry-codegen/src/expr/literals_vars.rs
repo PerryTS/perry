@@ -643,6 +643,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // carry no heap edge). Exits write the value back.
             if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let v = lower_expr(ctx, value)?;
+                // Check mode: the redirected write of a proven local is
+                // witnessed like its slot's (`accept_let_value`).
+                let v = if crate::verify_facts::enabled() {
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, *id, value, v)
+                } else {
+                    v
+                };
                 ctx.block().store(DOUBLE, &v, &f64_slot);
                 return Ok(v);
             }
@@ -744,7 +751,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ..
                     } if matches!(right.as_ref(), Expr::Integer(0))
                         && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
-                ) && !ctx.stable_packed_loop_facts.is_empty();
+                ) && !ctx.stable_packed_loop_facts.is_empty()
+                    // Check mode witnesses a proven int32 local's interval
+                    // on the double path.
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
                     && (structurally_i32 || explicit_numeric_toint32)
@@ -1066,6 +1076,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Unboxed Number scopes redirect every read and write to this
             // F64 slot. Updating the tagged slot instead leaves the induction
             // value unchanged and makes the guarded loop repeat forever.
+            let increment = matches!(op, UpdateOp::Increment);
             if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let blk = ctx.block();
                 let old = blk.load(DOUBLE, &slot);
@@ -1075,6 +1086,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 // GC_STORE_AUDIT(STACK): this admitted Number slot has no heap edge.
                 blk.store(DOUBLE, &new, &slot);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1097,6 +1109,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.store(I32, &new_i32, &i32_slot);
                 let old = blk.sitofp(I32, &old_i32, DOUBLE);
                 let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1118,6 +1131,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         blk.store(I32, &new_i32, &i32_slot);
                         (old_i32, new_i32)
                     };
+                    if crate::codegen::facts_int32_locals::checked(ctx, *id) {
+                        let old = ctx.block().sitofp(I32, &old_i32, DOUBLE);
+                        crate::codegen::facts_int32_locals::witness_update(
+                            ctx, *id, &old, increment,
+                        );
+                    }
                     super::record_int_facts_for_update(ctx, *id, *op);
                     let ret_i32 = if *prefix { &new_i32 } else { &old_i32 };
                     return Ok(ctx.block().sitofp(I32, ret_i32, DOUBLE));
@@ -1205,6 +1224,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
+            }
+            if !storage_is_root {
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
             }
             super::record_int_facts_for_update(ctx, *id, *op);
             Ok(if *prefix { new } else { old })

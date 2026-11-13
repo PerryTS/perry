@@ -441,9 +441,7 @@ impl Fates {
                         ..ParamFate::KEPT
                     },
                 };
-                fates
-                    .by_fn
-                    .insert(f.id, FnFates::all(f, start));
+                fates.by_fn.insert(f.id, FnFates::all(f, start));
             }
             loop {
                 let mut moved = false;
@@ -639,7 +637,8 @@ impl<'e> Walk<'_, 'e> {
             return;
         }
         let w = why(self);
-        self.fate_mut(slot).raise(Fate::Kept, Proof::Proven, Some(w));
+        self.fate_mut(slot)
+            .raise(Fate::Kept, Proof::Proven, Some(w));
     }
 
     /// A read of the binding under the current parent, which does not read it.
@@ -900,18 +899,16 @@ impl<'e> Walk<'_, 'e> {
                 property,
                 value,
                 ..
-            } if matches!(object.as_ref(), Expr::This) => {
-                match self.store(property) {
-                    Some(p) => match self.slot(value) {
-                        Some(s) => self.raise(s, Fate::KeptByReceiver, p),
-                        None => self.sub(e, value),
-                    },
-                    None => {
-                        self.keep(Slot::This, |_| Why::Store(Name::new(property)));
-                        self.sub(e, value);
-                    }
+            } if matches!(object.as_ref(), Expr::This) => match self.store(property) {
+                Some(p) => match self.slot(value) {
+                    Some(s) => self.raise(s, Fate::KeptByReceiver, p),
+                    None => self.sub(e, value),
+                },
+                None => {
+                    self.keep(Slot::This, |_| Why::Store(Name::new(property)));
+                    self.sub(e, value);
                 }
-            }
+            },
             Expr::PutValueSet {
                 target,
                 key,
@@ -998,7 +995,12 @@ impl<'e> Walk<'_, 'e> {
                             self.keep(s, |_| Why::ReceiverKept);
                         }
                     }
-                    (Expr::PropertyGet { object, property, .. }, _) => match self.slot(object) {
+                    (
+                        Expr::PropertyGet {
+                            object, property, ..
+                        },
+                        _,
+                    ) => match self.slot(object) {
                         Some(s) => self.keep(s, |_| Why::Receiver(Name::new(property))),
                         None => self.sub(callee, object),
                     },
@@ -1129,7 +1131,9 @@ fn aliases(f: &Function) -> Vec<(LocalId, usize)> {
                     }
                     scan(body, f, writes, out);
                 }
-                Stmt::Labeled { body, .. } => scan(std::slice::from_ref(body.as_ref()), f, writes, out),
+                Stmt::Labeled { body, .. } => {
+                    scan(std::slice::from_ref(body.as_ref()), f, writes, out)
+                }
                 Stmt::Try {
                     body,
                     catch,

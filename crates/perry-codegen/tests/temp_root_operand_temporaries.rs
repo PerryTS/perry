@@ -52,8 +52,9 @@
 //! the per-PR `cargo-test` gate rather than the nightly-only integration tier.
 
 use perry_codegen::testing::temp_slots::{
-    assert_no_temp_rooting, assert_rooted_across, assert_temp_rooting_count,
-    derives_from_slot_load, slot_holding, slot_traffic, temp_root_slots, SlotEvent,
+    assert_no_temp_rooting, assert_rooted_across, assert_temp_rooting_count, call_operands,
+    derives_from_slot_load, first_call_result, slot_holding, slot_traffic, temp_root_slots,
+    SlotEvent,
 };
 use perry_codegen::testing::NativeRootsPin;
 use perry_codegen::{compile_module, AppMetadata, CompileOptions};
@@ -1539,48 +1540,55 @@ fn assert_inline_instance_homes_bound(f: &str) {
     }
 }
 
-/// #7200: `Object.assign(t, …sources)` threads its accumulator through a bare
-/// SSA register across every source's lowering AND across every
-/// `js_object_assign_one` call.
-///
-/// The helper reads every own key of the source, so an accessor there runs
-/// arbitrary user code *inside* the helper — the route #7198 accepted, having
-/// declined "a helper's own allocation initiates a moving collection" on
-/// evidence. `Expr::Object` has rooted its accumulator since #6951; this arm
-/// never copied it.
-///
-/// Negative control: drop the `temp_root_push_double`/`temp_root_set_double` pair
-/// in the `Expr::ObjectAssign` arm and the accumulator operand stops being a
-/// `js_gc_temp_root_get` result.
-#[test]
-fn the_object_assign_accumulator_is_rooted_across_each_source() {
+/// `Object.assign(<target>, …sources)` with every source an empty literal.
+fn object_assign_ir(target: Expr, sources: usize) -> String {
     let module = module_with_init(
         "object_assign_acc.ts",
         vec![Stmt::Expr(Expr::ObjectAssign {
-            target: Box::new(Expr::Object(Vec::new())),
-            // Two sources so the accumulator is provably live across a second
-            // lowering as well as across the first helper call.
-            sources: vec![Expr::Object(Vec::new()), Expr::Object(Vec::new())],
+            target: Box::new(target),
+            sources: (0..sources).map(|_| Expr::Object(Vec::new())).collect(),
         })],
     );
-    let ir = String::from_utf8(compile_module(&module, entry_opts()).unwrap())
-        .expect("LLVM IR should be UTF-8");
-    let f = init_ir(&ir);
+    String::from_utf8(compile_module(&module, entry_opts()).unwrap())
+        .expect("LLVM IR should be UTF-8")
+}
 
-    let calls: Vec<&str> = f
-        .lines()
-        .filter(|l| l.contains("@js_object_assign_one("))
-        .collect();
+/// The calls to `callee` in `f`, as trimmed lines.
+fn calls_to<'a>(f: &'a str, callee: &str) -> Vec<&'a str> {
+    let needle = format!("@{callee}(");
+    f.lines()
+        .map(str::trim)
+        .filter(|l| l.contains(&needle))
+        .collect()
+}
+
+/// A call that may collect: any `call`/`invoke` but an `@llvm.` intrinsic, a
+/// `"gc-leaf-function"` call site or inline asm (the predicate RS4GC applies,
+/// and `perry_codegen::testing::temp_slots`' own).
+fn line_may_collect(line: &str) -> bool {
+    let t = line.trim();
+    t.split_whitespace()
+        .take(4)
+        .any(|w| w == "call" || w == "invoke")
+        && !t.contains("\"gc-leaf-function\"")
+        && !t.contains(" asm ")
+        && !t.contains("@llvm.")
+}
+
+/// #7200, for every `js_object_assign_one` link of an `Object.assign`: the
+/// accumulator operand is re-read from its root below the previous link and
+/// the previous source's lowering (never carried in a register), and the
+/// root is republished after each link with the helper's result (the
+/// helper returns the target's POST-collection address).
+fn assert_assign_links_reread_and_republished(f: &str, links: usize) {
+    let calls = calls_to(f, "js_object_assign_one");
     assert_eq!(
         calls.len(),
-        2,
-        "expected one js_object_assign_one per source in:\n{f}"
+        links,
+        "expected one js_object_assign_one per rooted link in:\n{f}"
     );
-
     for call in &calls {
-        // `call double @js_object_assign_one(double %acc, double %src)` — the
-        // first operand must be re-derived from the temp root, not carried in
-        // a register across the previous link.
+        // `call double @js_object_assign_one(double %acc, double %src)`.
         let acc = call
             .split_once("@js_object_assign_one(")
             .expect("argument list")
@@ -1598,23 +1606,174 @@ fn the_object_assign_accumulator_is_rooted_across_each_source() {
             slot_traffic(f)
         );
     }
-
-    // And the result of each link must be republished, because the helper
-    // returns the target's POST-collection address. That is a SECOND store into
-    // the same slot — the pooled spelling of `js_gc_temp_root_set`.
+    // Each link's result goes back into the accumulator's root: one store
+    // for the initial accumulator plus one per link, in one slot.
     let republished = temp_root_slots(f).into_iter().any(|slot| {
         slot_traffic(f)[&slot]
             .iter()
             .filter(|e| matches!(e, SlotEvent::Store { .. }))
             .count()
-            >= 2
+            > links
     });
     assert!(
         republished,
         "each js_object_assign_one result must be written back into the \
-         accumulator's root — the helper returns the moved target (#7200). \
-         Slot traffic: {:#?}\n{f}",
+         accumulator's root (the initial accumulator and {links} link results) — \
+         the helper returns the moved target (#7200). Slot traffic: {:#?}\n{f}",
         slot_traffic(f)
+    );
+}
+
+/// #7200: `Object.assign(t, …sources)` threads its accumulator through a bare
+/// SSA register across every source's lowering AND across every
+/// `js_object_assign_one` call.
+///
+/// The helper reads every own key of the source, so an accessor there runs
+/// arbitrary user code *inside* the helper — the route #7198 accepted, having
+/// declined "a helper's own allocation initiates a moving collection" on
+/// evidence. `Expr::Object` has rooted its accumulator since #6951; this arm
+/// never copied it.
+///
+/// The target here is a non-empty literal, so it takes the general lowering
+/// (`js_object_assign_validate_target`, then one link per source). An EMPTY
+/// literal target takes the fresh-target lowering of #14499, guarded by
+/// `the_fresh_object_assign_target_is_born_after_its_first_source_and_rooted_across_the_rest`.
+///
+/// Negative control: drop the `with_rooted_accumulator` wrapper in the
+/// `Expr::ObjectAssign` arm and the accumulator operand stops being a slot
+/// load.
+#[test]
+fn the_object_assign_accumulator_is_rooted_across_each_source() {
+    let target = Expr::Object(vec![("k".to_string(), Expr::Number(1.0))]);
+    // Two sources so the accumulator is provably live across a second
+    // lowering as well as across the first helper call.
+    let ir = object_assign_ir(target, 2);
+    let f = init_ir(&ir);
+    assert_eq!(
+        calls_to(f, "js_object_assign_fresh").len(),
+        0,
+        "a non-empty target literal is no fresh target:\n{f}"
+    );
+    let target = first_call_result(f, "js_object_assign_validate_target")
+        .unwrap_or_else(|| panic!("the general lowering validates its target:\n{f}"));
+    // The validated target is parked before the first source is lowered and
+    // re-read for the first link.
+    assert_rooted_across(
+        f,
+        &target,
+        "js_object_assign_one",
+        "Object.assign's validated target across the first source",
+    );
+    assert_assign_links_reread_and_republished(f, 2);
+}
+
+/// #14499: `Object.assign({}, s1, s2, s3)` creates its empty target after
+/// `s1` is evaluated (`js_object_assign_fresh(s1)`, born with room for
+/// `s1`'s keys). The rooting contract of #7200 for this lowering:
+///
+/// - nothing is live across `s1`'s lowering (the target does not exist yet),
+///   and `s1`'s value reaches `js_object_assign_fresh` with no call that can
+///   collect in between; the callee roots it (a runtime handle) before it
+///   allocates the target, and roots the target in `js_object_assign_one`
+///   before anything that can run code or allocate;
+/// - the fresh call's result is the accumulator: parked in a root before
+///   `s2` is lowered, re-read for every later link, and republished after
+///   each link, exactly as the general lowering's accumulator.
+///
+/// Negative controls: lower the target before `s1` (the pre-#14499 order)
+/// and the first source is no longer the fresh call's operand; drop the
+/// `with_rooted_accumulator` wrapper and the links' accumulator stops being
+/// a slot load.
+#[test]
+fn the_fresh_object_assign_target_is_born_after_its_first_source_and_rooted_across_the_rest() {
+    let ir = object_assign_ir(Expr::Object(Vec::new()), 3);
+    let f = init_ir(&ir);
+    let fresh = calls_to(f, "js_object_assign_fresh");
+    assert_eq!(
+        fresh.len(),
+        1,
+        "an empty target literal is born by the fresh link:\n{f}"
+    );
+    assert!(
+        calls_to(f, "js_object_assign_validate_target").is_empty(),
+        "the fresh target is not lowered as an expression of its own:\n{f}"
+    );
+    assert_first_source_reaches_the_fresh_link_without_a_safepoint(f);
+    let acc = first_call_result(f, "js_object_assign_fresh").expect("the fresh link's result");
+    assert_rooted_across(
+        f,
+        &acc,
+        "js_object_assign_one",
+        "the fresh Object.assign target across the second source",
+    );
+    assert_assign_links_reread_and_republished(f, 2);
+}
+
+/// #14499 with one source: `Object.assign({}, s)` is the fresh link alone.
+/// No value is live across anything (the source reaches the fresh call
+/// with no safepoint between, and its result is the expression's value).
+#[test]
+fn a_single_source_fresh_object_assign_holds_nothing_across_a_safepoint() {
+    let ir = object_assign_ir(Expr::Object(Vec::new()), 1);
+    let f = init_ir(&ir);
+    assert_eq!(calls_to(f, "js_object_assign_fresh").len(), 1, "{f}");
+    assert!(calls_to(f, "js_object_assign_one").is_empty(), "{f}");
+    assert_first_source_reaches_the_fresh_link_without_a_safepoint(f);
+}
+
+/// The first source's value is produced by a call (its allocation) and
+/// reaches `js_object_assign_fresh` in the same block with no call that can
+/// collect between the producing call and the fresh call: it needs no root
+/// of its own, because the callee roots it before it allocates.
+fn assert_first_source_reaches_the_fresh_link_without_a_safepoint(f: &str) {
+    let lines: Vec<&str> = f.lines().collect();
+    let fresh_at = lines
+        .iter()
+        .position(|l| l.contains("@js_object_assign_fresh("))
+        .expect("the fresh link");
+    let operand = call_operands(f, "js_object_assign_fresh")
+        .and_then(|ops| ops.into_iter().next())
+        .unwrap_or_else(|| panic!("no operand of js_object_assign_fresh:\n{f}"));
+    // Walk the operand's defs back (NaN-boxing `or`/`bitcast`) to the call
+    // that produced it.
+    let def_at = |reg: &str| {
+        lines
+            .iter()
+            .position(|l| l.trim().starts_with(&format!("{reg} = ")))
+    };
+    let mut reg = operand.clone();
+    let mut producer_at = None;
+    for _ in 0..6 {
+        let Some(at) = def_at(&reg) else { break };
+        if line_may_collect(lines[at]) {
+            producer_at = Some(at);
+            break;
+        }
+        let Some(next) = lines[at]
+            .split_once(" = ")
+            .map(|(_, def)| def)
+            .and_then(|def| {
+                def.split(|c: char| !(c.is_alphanumeric() || c == '%' || c == '.' || c == '_'))
+                    .find(|w| w.starts_with('%'))
+            })
+        else {
+            break;
+        };
+        reg = next.to_string();
+    }
+    let producer_at = producer_at.unwrap_or_else(|| {
+        panic!("the fresh link's operand {operand} is not the first source's own value:\n{f}")
+    });
+    assert!(producer_at < fresh_at, "{f}");
+    let between = &lines[producer_at + 1..fresh_at];
+    assert!(
+        between
+            .iter()
+            .all(|l| !line_may_collect(l) && !(l.trim_end().ends_with(':') && !l.starts_with(' '))),
+        "the first source's value ({operand}, made at line {producer_at}) must reach \
+         js_object_assign_fresh (line {fresh_at}) with no call that can collect and no \
+         block boundary in between: it is held in a register only:\n{}\n\n{f}",
+        between.join("\n")
     );
 }
 

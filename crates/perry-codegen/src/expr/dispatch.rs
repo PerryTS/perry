@@ -36,6 +36,8 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let value = lower_expr_inner(ctx, expr);
     ctx.snap_lowering = snap_frame;
     let value = value?;
+    crate::verify_facts::life::birth_lowered(ctx, expr, &value);
+    crate::verify_facts::life_measure::birth(ctx, expr, &value);
     crate::expr::layout_read::run_exit(ctx, &run);
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(

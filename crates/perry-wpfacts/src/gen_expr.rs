@@ -585,116 +585,6 @@ impl<'a> Gen<'a> {
         (tm, t)
     }
 
-    /// `await v` / promise adoption: the value itself (non-thenables), the
-    /// settled value of promise objects, and for thenables whatever their
-    /// `then` passes to the resolve function.
-    pub(crate) fn awaited(&mut self, v: NodeId) -> NodeId {
-        let out = self.tmp("awaited");
-        // One rule with `builtins::adopt`: a value fulfils as itself only
-        // when its `then` read is not callable (`Cons::Fulfil`).
-        self.m.cons(v, Cons::Fulfil { dst: out });
-        let pa = crate::builtins::promise_result_atom(&mut self.m);
-        self.m.cons(
-            v,
-            Cons::Load {
-                key: Key::Named(pa),
-                dst: out,
-            },
-        );
-        // Thenables: `then(resolve, reject)` with runtime resolvers.
-        let rn = self.tmp("resolver");
-        let jn = self.tmp("rejecter");
-        let then = self.m.atom("then");
-        let (call, ret) = self.new_call(ThisArg::Node(v), vec![rn, jn], vec![]);
-        let res = crate::builtins::resolver(&mut self.m, call, out);
-        self.m.add_tok(rn, res);
-        let thrown = self.thrown;
-        let rej = crate::builtins::rejecter(&mut self.m, thrown);
-        self.m.add_tok(jn, rej);
-        self.m.cons(
-            v,
-            Cons::MCall {
-                key: Key::Named(then),
-                call,
-            },
-        );
-        let _ = ret;
-        out
-    }
-
-    /// The body of an async function that runs untransformed: one without
-    /// `await`, which `async_to_generator` leaves `is_async` and codegen
-    /// lowers direct (`lower_async_rejecting_stmts`): a call returns a fresh
-    /// promise (`js_async_fn_result`) settled with what the body returns, a
-    /// returned thenable adopted, and rejected with what the body throws; a
-    /// call never throws. Returns the body's context, whose `ret` is the
-    /// settled value, and its throw region, the realm's rejection cell (as
-    /// for the async-step driver's step closure, `async_callback`).
-    pub(crate) fn async_body(&mut self, fx: &Fx) -> (Fx, NodeId) {
-        let settled = self.tmp("async-settled");
-        let p = self.promise_of(fx.module, settled);
-        self.m.edge(p, fx.ret);
-        (
-            Fx {
-                ret: settled,
-                ..fx.clone()
-            },
-            self.thrown,
-        )
-    }
-
-    /// A fresh promise template whose settled value is `value`.
-    pub(crate) fn promise_of(&mut self, mi: u32, value: NodeId) -> NodeId {
-        let tm = self.new_bobj_template(mi, "Promise");
-        let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-        let a = crate::builtins::promise_result_atom(&mut self.m);
-        let f = self.m.field(t, a);
-        let aw = self.awaited(value);
-        self.m.edge(aw, f);
-        self.tok_node(t)
-    }
-
-    /// The values produced by iterating whatever `v` holds: elements of
-    /// arrays/collections/primitive boxes, and for iterables the protocol:
-    /// `v[Symbol.iterator]()`, then `.next()` on the result and on `v`
-    /// itself, then `.value`.
-    pub(crate) fn iterate(&mut self, v: NodeId) -> NodeId {
-        let out = self.tmp("iterated");
-        let ik = self.m.iter_key();
-        self.m.cons(v, Cons::Load { key: ik, dst: out });
-        let it = self.iterator_of(v);
-        let na = self.m.atom("next");
-        let r1 = self.mcall(it, Key::Named(na), vec![], vec![]);
-        // The step of `v` itself: the runtime's (`js_get_iterator` returns a
-        // value it finds no iterator for unchanged), a protocol call as in
-        // `builtins::iterate`.
-        let (sc, r2) = self.new_call(ThisArg::Node(v), vec![], vec![]);
-        self.m.protocol_calls.insert(sc);
-        self.m.cons(
-            v,
-            Cons::MCall {
-                key: Key::Named(na),
-                call: sc,
-            },
-        );
-        // Only results seen not done: `Model::yield_key`.
-        let va = self.m.yield_key();
-        self.m.cons(r1, Cons::Load { key: va, dst: out });
-        self.m.cons(r2, Cons::Load { key: va, dst: out });
-        out
-    }
-
-    /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):
-    /// a protocol call.
-    pub(crate) fn iterator_of(&mut self, v: NodeId) -> NodeId {
-        let (pc, it) = self.new_call(ThisArg::Node(v), vec![], vec![]);
-        let wk = Key::Named(self.m.atom(crate::builtins::WK_ITERATOR));
-        self.m.protocol_calls.insert(pc);
-        self.m.rel(|| format!("protocolcall {pc}"));
-        self.m.cons(v, Cons::MCall { key: wk, call: pc });
-        it
-    }
-
     /// Every node an expression makes belongs to the function walking it.
     pub(crate) fn expr(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let prev = std::mem::replace(&mut self.m.cur_fn, fx.f);
@@ -1234,11 +1124,15 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
-                if let (Expr::Array(v, _), Expr::String(_), Expr::PutValueSet { element_offset, .. }) =
-                    (value.as_ref(), key.as_ref(), e)
+                if let (
+                    Expr::Array(v, _),
+                    Expr::String(_),
+                    Expr::PutValueSet { element_offset, .. },
+                ) = (value.as_ref(), key.as_ref(), e)
                 {
                     if *element_offset != 0 && v.is_empty() {
-                        self.direct_arr = Some(crate::records::ArrBirth::Store(mi, *element_offset));
+                        self.direct_arr =
+                            Some(crate::records::ArrBirth::Store(mi, *element_offset));
                     }
                 }
                 let v = self.expr_zs(fx, value);
@@ -1681,8 +1575,13 @@ impl<'a> Gen<'a> {
                 obj
             }
             Expr::ObjectAssign { target, sources } => {
-                // E4: a writer of every key the sources can carry.
-                let t = self.expr(fx, target);
+                // E4: a writer of every key the sources can carry. The
+                // result, and what the sources copy into, is ToObject(target)
+                // (ECMA-262 20.1.2.1 step 1): never a primitive.
+                let target = self.expr(fx, target);
+                let (wrapper, w) = self.bobj(mi, "Object(prim)");
+                let t = self.tmp("to-object");
+                crate::builtins::to_object_into(&mut self.m, target, wrapper, w, t);
                 for s in sources {
                     let sv = self.expr(fx, s);
                     let site = self.store_site(mi, fx.f, "Object.assign".into(), None, false);

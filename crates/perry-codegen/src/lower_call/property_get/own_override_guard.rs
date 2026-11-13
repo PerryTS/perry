@@ -93,6 +93,15 @@ fn shadowable_builtin_name(property: &str) -> bool {
         // Number
             | "toFixed" | "toPrecision" | "toExponential"
         )
+        // The remaining names `lower_array_method` lowers to a direct call on
+        // a proven Array: without the diamond an own property, an own
+        // prototype or a subclass override of these six was ignored
+        // (`PERRY_ARRAY_METHOD_TIERS`).
+        || (crate::expr::array_proto_guard::method_tiers_enabled()
+            && matches!(
+                property,
+                "findLast" | "findLastIndex" | "with" | "entries" | "keys" | "values"
+            ))
 }
 
 /// Is the receiver's KIND proven to be one whose builtins are lowered
@@ -215,25 +224,7 @@ pub(crate) fn emit_own_override_branch(
                 ctx.block().cond_br(&patched, &ask_label, &header_label);
                 ctx.current_block = header_idx;
             }
-            let blk = ctx.block();
-            let bits = blk.bitcast_double_to_i64(recv);
-            let handle = blk.and(I64, &bits, HANDLE_MASK_48);
-            let obj_ptr = blk.inttoptr(I64, &handle);
-            // GcHeader precedes the array: obj_type/gc_flags/_reserved @-8.
-            let hdr_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
-            let hdr = blk.load(I32, &hdr_ptr);
-            let odd = blk.and(I32, &hdr, ARRAY_NOT_DEFAULT_MASK_I32);
-            let not_default = blk.icmp_ne(I32, &odd, "0");
-            let named_ptr = blk.gep(I8, &obj_ptr, &[(I64, ARRAY_NAMED_OFFSET)]);
-            let named = blk.load(I64, &named_ptr);
-            let has_named = blk.icmp_ne(I64, &named, "0");
-            let maybe_owns = blk.or(I1, &not_default, &has_named);
-            // The annotation does not prove ArrayHeader layout. In
-            // particular a Proxy's empty prefix proves no method identity.
-            let kind = blk.and(I32, &hdr, "255");
-            let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I32, &kind);
-            let requires_get = blk.or(I1, &maybe_owns, &not_array);
-            blk.cond_br(&requires_get, &ask_label, builtin_label);
+            emit_array_header_test(ctx, recv, &ask_label, builtin_label);
         } else {
             let blk = ctx.block();
             let installed = blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);
@@ -243,6 +234,49 @@ pub(crate) fn emit_own_override_branch(
     }
 
     ctx.current_block = ask_idx;
+    let predicate = if receiver_is_array {
+        crate::expr::array_proto_guard::array_guard_predicate()
+    } else {
+        "js_receiver_may_own_named_method"
+    };
+    emit_ask(ctx, predicate, property, recv, own_label, builtin_label);
+}
+
+/// The Array header test of the guard, on a receiver that is a heap pointer:
+/// to `builtin_label` for a live `GC_TYPE_ARRAY` with no named layout and no
+/// own `[[Prototype]]`, else to `ask_label`.
+fn emit_array_header_test(ctx: &mut FnCtx<'_>, recv: &str, ask_label: &str, builtin_label: &str) {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(recv);
+    let handle = blk.and(I64, &bits, HANDLE_MASK_48);
+    let obj_ptr = blk.inttoptr(I64, &handle);
+    // GcHeader precedes the array: obj_type/gc_flags/_reserved @-8.
+    let hdr_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
+    let hdr = blk.load(I32, &hdr_ptr);
+    let odd = blk.and(I32, &hdr, ARRAY_NOT_DEFAULT_MASK_I32);
+    let not_default = blk.icmp_ne(I32, &odd, "0");
+    let named_ptr = blk.gep(I8, &obj_ptr, &[(I64, ARRAY_NAMED_OFFSET)]);
+    let named = blk.load(I64, &named_ptr);
+    let has_named = blk.icmp_ne(I64, &named, "0");
+    let maybe_owns = blk.or(I1, &not_default, &has_named);
+    // The annotation does not prove ArrayHeader layout. In
+    // particular a Proxy's empty prefix proves no method identity.
+    let kind = blk.and(I32, &hdr, "255");
+    let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I32, &kind);
+    let requires_get = blk.or(I1, &maybe_owns, &not_array);
+    blk.cond_br(&requires_get, ask_label, builtin_label);
+}
+
+/// The guard's out-of-line question: `predicate(recv, key)` non-zero takes
+/// `own_label`, zero `builtin_label`.
+fn emit_ask(
+    ctx: &mut FnCtx<'_>,
+    predicate: &str,
+    property: &str,
+    recv: &str,
+    own_label: &str,
+    builtin_label: &str,
+) {
     // The predicate takes the interned key value (not a dispatch id). The
     // string-pool handle is already a rooted NaN-boxed string; passing it
     // avoids rebuilding the same property key from raw bytes in the runtime.
@@ -250,13 +284,87 @@ pub(crate) fn emit_own_override_branch(
     let key_handle = format!("@{}", ctx.strings.entry(idx).handle_global);
     let blk = ctx.block();
     let key = blk.load(DOUBLE, &key_handle);
-    let maybe = blk.call(
-        I32,
-        "js_receiver_may_own_named_method",
-        &[(DOUBLE, recv), (DOUBLE, &key)],
-    );
+    let maybe = blk.call(I32, predicate, &[(DOUBLE, recv), (DOUBLE, &key)]);
     let may_own = blk.icmp_ne(I32, &maybe, "0");
     blk.cond_br(&may_own, own_label, builtin_label);
+}
+
+/// [`emit_own_override_branch`] for a folded ARRAY method node whose receiver
+/// is annotated an Array but not proven one by the function's own analysis (a
+/// module binding read inside a function: `let G: number[]; function g() {
+/// return G.unshift(7); }`).
+///
+/// Such a site was guarded by the global install flag
+/// (`PERRY_OWN_NAMED_PROP_INSTALLED`), which no Array arms: an Array's own
+/// named properties and own `[[Prototype]]` are recorded on its header, so an
+/// own `unshift`, `splice`, `some`, `sort`, `copyWithin` or `toSpliced` was
+/// never seen. The receiver's value is whatever the binding holds, so the
+/// header is read behind the heap-pointer band test; a receiver that is no
+/// heap pointer keeps the flag's answer.
+pub(crate) fn emit_annotated_array_branch(
+    ctx: &mut FnCtx<'_>,
+    property: &str,
+    recv: &str,
+    pristine: Option<crate::builtin_proto::BuiltinProto>,
+    own_label: &str,
+    builtin_label: &str,
+) {
+    let ask_idx = ctx.new_block("ownoverride.ask");
+    let ask_label = ctx.block_label(ask_idx);
+    let flag_idx = ctx.new_block("ownoverride.flag");
+    let flag_label = ctx.block_label(flag_idx);
+    let header_idx = ctx.new_block("ownoverride.header");
+    let header_label = ctx.block_label(header_idx);
+    if let Some(family) = pristine {
+        let patched = crate::builtin_proto::emit_patched_test(ctx, family);
+        let band_idx = ctx.new_block("ownoverride.band");
+        let band_label = ctx.block_label(band_idx);
+        ctx.block().cond_br(&patched, &ask_label, &band_label);
+        ctx.current_block = band_idx;
+    }
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            crate::expr::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+        );
+        let heap = blk.icmp_ult(
+            I64,
+            &biased,
+            crate::expr::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+        );
+        // A value that is no heap pointer: with the method-site facts the
+        // predicate answers for it (`null` and `undefined` need the real
+        // `Get`, which throws); before, the install flag did.
+        let other = if crate::method_site::array_sites_enabled() {
+            &ask_label
+        } else {
+            &flag_label
+        };
+        blk.cond_br(&heap, &header_label, other);
+    }
+    ctx.current_block = header_idx;
+    emit_array_header_test(ctx, recv, &ask_label, builtin_label);
+
+    ctx.current_block = flag_idx;
+    {
+        let blk = ctx.block();
+        let installed = blk.load_atomic_monotonic(I32, "@PERRY_OWN_NAMED_PROP_INSTALLED", 4);
+        let any_installed = blk.icmp_ne(I32, &installed, "0");
+        blk.cond_br(&any_installed, &ask_label, builtin_label);
+    }
+
+    ctx.current_block = ask_idx;
+    emit_ask(
+        ctx,
+        crate::expr::array_proto_guard::array_guard_predicate(),
+        property,
+        recv,
+        own_label,
+        builtin_label,
+    );
 }
 
 /// The `builtin_proto` family of a receiver whose kind
@@ -284,7 +392,7 @@ pub(crate) fn proven_kind_family(
 
 /// The universal dispatcher, which finds an own or inherited user method. It
 /// is the same call `builtin_kind_guard`'s generic block already makes.
-fn emit_dispatcher(
+pub(super) fn emit_dispatcher(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
@@ -317,7 +425,6 @@ pub(super) fn lower(
     args: &[Expr],
     call_byte_offset: u32,
 ) -> Result<String> {
-    let receiver = lower_expr(ctx, object)?;
     let key = object as *const Expr as usize;
     // Which cheap proof the guard can perform inline. A proven ARRAY answers
     // from its own header bit; every other proven kind answers from the global
@@ -325,7 +432,64 @@ pub(super) fn lower(
     // global one -- so this asks the same predicate `kind_is_proven_exotic`
     // used to admit the receiver in the first place.
     let receiver_is_array = is_array_expr(ctx, object);
+    // An Array method site the facts prove (`method_site`) is the chain's
+    // direct lowering with no test of its receiver; check mode runs the
+    // dropped test on the receiver value first.
+    let proven = receiver_is_array
+        && !crate::method_site::annotated_typed_array(ctx, object)
+        && crate::method_site::array_member_proven(
+            ctx,
+            perry_hir::folded_call::callee_site(callee),
+            property,
+        );
+    if proven && !crate::verify_facts::enabled() {
+        crate::method_site::witness_array_member(ctx, "", property);
+        return match super::lower_method_call_chain(
+            ctx,
+            callee,
+            object,
+            property,
+            args,
+            call_byte_offset,
+        )? {
+            Some(value) => Ok(value),
+            None => emit_dispatcher(ctx, object, property, args, call_byte_offset),
+        };
+    }
+    // A Map / Set call the facts do not prove tests its receiver's brand
+    // first; a miss is the own arm, the ordinary `Get` + `Call`
+    // (`expr::collection_brand`).
+    let brand = if receiver_is_array {
+        None
+    } else {
+        crate::expr::collection_brand::needed_unfolded(
+            ctx,
+            proven_kind_family(ctx, object, receiver_is_array),
+            perry_hir::folded_call::callee_site(callee),
+            object,
+            property,
+        )
+    };
+    let receiver = lower_expr(ctx, object)?;
     let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
+        if proven {
+            let recv = match rooting::materialized_receiver_reread(ctx, key) {
+                Some(value) => value,
+                None => lower_expr(ctx, object)?,
+            };
+            crate::method_site::witness_array_member(ctx, &recv, property);
+            return match super::lower_method_call_chain(
+                ctx,
+                callee,
+                object,
+                property,
+                args,
+                call_byte_offset,
+            )? {
+                Some(value) => Ok(value),
+                None => emit_dispatcher(ctx, object, property, args, call_byte_offset),
+            };
+        }
         let own_idx = ctx.new_block("ownoverride.own");
         let builtin_idx = ctx.new_block("ownoverride.builtin");
         let merge_idx = ctx.new_block("ownoverride.merge");
@@ -341,15 +505,40 @@ pub(super) fn lower(
             Some(value) => value,
             None => lower_expr(ctx, object)?,
         };
-        emit_own_override_branch(
-            ctx,
-            property,
-            &recv,
-            receiver_is_array,
-            Some(proven_kind_family(ctx, object, receiver_is_array)),
-            &own_label,
-            &builtin_label,
-        );
+        if receiver_is_array
+            && crate::method_site::array_sites_enabled()
+            && crate::expr::array_proto_guard::method_tiers_enabled()
+        {
+            // The guarded tier of a site the facts do not prove: the Array
+            // header behind the heap-pointer test (the annotation is no
+            // proof that the value is a pointer at all).
+            emit_annotated_array_branch(
+                ctx,
+                property,
+                &recv,
+                Some(proven_kind_family(ctx, object, receiver_is_array)),
+                &own_label,
+                &builtin_label,
+            );
+        } else {
+            if let Some((brand, check)) = brand {
+                let ok_idx = ctx.new_block("collbrand.ok");
+                let ok_label = ctx.block_label(ok_idx);
+                crate::expr::collection_brand::emit_brand_branch(
+                    ctx, brand, check, property, &recv, &ok_label, &own_label,
+                );
+                ctx.current_block = ok_idx;
+            }
+            emit_own_override_branch(
+                ctx,
+                property,
+                &recv,
+                receiver_is_array,
+                Some(proven_kind_family(ctx, object, receiver_is_array)),
+                &own_label,
+                &builtin_label,
+            );
+        }
 
         // The own arm: the universal dispatcher. Its operands are lowered
         // HERE, inside the arm, so they are evaluated once by whichever arm

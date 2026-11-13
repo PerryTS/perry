@@ -702,7 +702,9 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             && crate::buffer::is_non_indexed_buffer_view(obj_addr as usize)
         {
             if let Some(name) = crate::buffer::canonical_index_key(f64::from_bits(key_val.bits())) {
-                return if crate::buffer::buffer_has_own_prop(obj_addr as usize, &name) {
+                return if crate::buffer::buffer_has_own_prop(obj_addr as usize, &name)
+                    || crate::buffer::buffer_inherited_has(obj_addr as usize, &name)
+                {
                     nanbox_true
                 } else {
                     nanbox_false

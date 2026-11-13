@@ -36,9 +36,8 @@ unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -
         let ptr = jv.as_pointer::<u8>();
         return util_format_json_ptr_has_cycle(ptr, stack);
     }
-    if looks_like_raw_heap_pointer(value) {
-        return util_format_json_ptr_has_cycle(value.to_bits() as *const u8, stack);
-    }
+    // Not a POINTER_TAG value: a primitive. A word whose top 16 bits are
+    // clear is a Number (a denormal, or +0), not a raw pointer.
     false
 }
 
@@ -70,14 +69,14 @@ unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize
         stack.pop();
         return false;
     }
-    let len = (*arr).length as usize;
-    let elements = crate::array::array_elements_ptr(arr) as *const f64;
-    let found = (0..len).any(|i| {
-        let value = *elements.add(i);
+    // Own elements only, and no slot past a sparse Array's store.
+    let mut found = false;
+    crate::array::array_for_each_own_element(arr, |_, value| {
         let bits = value.to_bits();
-        bits != crate::value::TAG_UNDEFINED
+        found = bits != crate::value::TAG_UNDEFINED
             && !crate::json::is_closure_value(bits)
-            && util_format_json_value_has_cycle(value, stack)
+            && util_format_json_value_has_cycle(value, stack);
+        !found
     });
 
     stack.pop();

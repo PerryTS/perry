@@ -78,7 +78,27 @@ impl<'a> Gen<'a> {
             self.list_push(recv, Some(args.len() as u32));
         }
         let a = self.m.atom(call.method);
+        self.folded_site(fx, &call.receiver, a, recv);
         self.mcall(recv, Key::Named(a), args, vec![])
+    }
+
+    /// Record the site of a folded method node (`method_sites`): the call
+    /// `recv.key(..)`, named by its receiver as codegen names it.
+    pub(crate) fn folded_site(
+        &mut self,
+        fx: &Fx,
+        receiver: &perry_hir::folded_call::Receiver<'_>,
+        key: Atom,
+        recv: NodeId,
+    ) {
+        if let Some(site) = perry_hir::folded_call::receiver_site(receiver) {
+            self.folded_sites.push(crate::gen::FoldedSite {
+                module: fx.module,
+                site,
+                key,
+                recv,
+            });
+        }
     }
 
     pub(super) fn prim_kids(

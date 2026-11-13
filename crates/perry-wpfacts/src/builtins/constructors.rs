@@ -2,6 +2,7 @@
 use super::*;
 
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("new {ns:?}"));
     // A spread shifts argument positions, so a summary that reads fixed
     // positions cannot be trusted. Every fixed and spread value may land in
@@ -289,13 +290,14 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
 
 /// `new Name(...)` where `Name` is not a program class: a builtin by name.
 pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
+    crate::family_reach::global(m, name);
     m.diagnostic_builtin(call, |_| format!("new {name}"));
     if let Some(ns) = ns_by_name(name) {
         return new_builtin_ns(m, ns, call);
     }
     match name {
         "URL" => {
-            let c = m.calls[call as usize].clone();
+            let c = m.positional(call, 2);
             for &a in c.args.iter().take(2) {
                 string_methods::to_prim(m, a, "URL constructor USVString");
             }

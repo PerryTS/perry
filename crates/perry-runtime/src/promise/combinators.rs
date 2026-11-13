@@ -581,7 +581,8 @@ pub extern "C" fn js_promise_schedule_resolve(promise: *mut Promise, value: f64)
         #[cfg(not(perry_gc_instruments))]
         q.borrow_mut().push((promise, value));
         #[cfg(perry_gc_instruments)]
-        q.borrow_mut().push((promise, value, crate::snap_census::job_owner()));
+        q.borrow_mut()
+            .push((promise, value, crate::snap_census::job_owner()));
     });
 }
 

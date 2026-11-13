@@ -42,11 +42,13 @@ fn regexp_builtin_shape_rejects_overrides() {
         );
         match std::env::var(CHILD).unwrap().as_str() {
             "own" => {
-                crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
-                    re,
-                    crate::string::js_string_from_str("exec"),
-                    other,
-                ));
+                crate::object::own_override::as_builtin_definition(|| {
+                    super::super::js_object_set_field_by_name(
+                        re,
+                        crate::string::js_string_from_str("exec"),
+                        other,
+                    )
+                });
                 assert!(
                     !builtin_behavior(value(re)),
                     "own exec must retire receiver proof"
@@ -57,7 +59,9 @@ fn regexp_builtin_shape_rejects_overrides() {
                     "own override is receiver-local"
                 );
                 let symbol = crate::symbol::well_known_symbol("replace") as usize;
-                crate::object::own_override::as_builtin_definition(|| super::super::shaped_symbols::define(fresh as usize, symbol, other.to_bits(), 0));
+                crate::object::own_override::as_builtin_definition(|| {
+                    super::super::shaped_symbols::define(fresh as usize, symbol, other.to_bits(), 0)
+                });
                 assert!(
                     !builtin_behavior(value(fresh)),
                     "own symbol must retire receiver proof"
@@ -107,8 +111,9 @@ fn regexp_builtin_shape_rejects_overrides() {
                             "multiline",
                             "dotAll",
                             "unicode",
+                            // node (V8) reads `sticky` before `unicodeSets`.
+                            "sticky",
                             "unicodeSets",
-                            "sticky"
                         ]
                     )
                 });

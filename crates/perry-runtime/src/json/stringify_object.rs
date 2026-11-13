@@ -613,7 +613,11 @@ unsafe fn stringify_object_walk(
         {
             continue;
         }
-        let attr_summary = if filter_non_enum { key_attr_summary() } else { 0 };
+        let attr_summary = if filter_non_enum {
+            key_attr_summary()
+        } else {
+            0
+        };
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
         if attr_summary & crate::object::key_attrs::SUMMARY_NON_ENUMERABLE != 0

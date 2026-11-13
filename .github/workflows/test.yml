@@ -1333,7 +1333,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/check_lean_dependencies.py
-          cargo test --locked -p perry-base64 -p perry-hex -p perry-uuid --all-features
+          cargo test --locked -p perry-base64 -p perry-hex --all-features
+          # The moved perry-uuid inline tests run through perry-stdlib's crypto
+          # feature; fail if the filter matched nothing.
+          uuid_test_output=$(cargo test --locked -p perry-stdlib --features crypto --lib crypto::uuid 2>&1)
+          echo "$uuid_test_output"
+          echo "$uuid_test_output" | grep -E 'test result: ok\. [1-9][0-9]* passed' \
+            || { echo '::error::crypto::uuid inline tests did not run'; exit 1; }
           cargo test --locked -p perry --bin perry --features apple-api cli::
           cargo check --locked -p perry-stdlib --no-default-features
           cargo check --locked -p perry --no-default-features --features dev-cli
@@ -3688,6 +3694,13 @@ jobs:
             cargo test -p perry-gc-effects --test workspace_sidecar -- --ignored
       - name: std without its symbolizer (runtime archives)
         run: scripts/check_std_symbolizer.sh target/release/libperry_runtime.a target/release/libperry_stdlib.a
+      # The runtime's default hot-text order (link/hot_text_order.txt) names
+      # runtime functions; a renamed core-tier function silently drops out of
+      # the hot run and costs peak RSS, not correctness. The names half reads
+      # only these archives (nm, a few seconds); the callgrind coverage half
+      # runs in the full tier's binary-size job.
+      - name: Hot-text order names (runtime archives)
+        run: python3 scripts/hot_text_order.py check --names-only --runtime-dir target/release
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
@@ -5272,6 +5285,17 @@ jobs:
             target/link-absence/**/*.log
             target/link-absence/**/*.stdout
             target/link-absence/**/*.stderr
+
+      # The hot-text order's whole gate (scripts/hot_text_order.py): its
+      # names, and the smoke program under callgrind with no more than 5% of
+      # the executed runtime bytes outside the hot run. ELF only.
+      - name: Hot-text order coverage (callgrind)
+        if: runner.os == 'Linux'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: |
+          sudo apt-get install -y valgrind
+          python3 scripts/hot_text_order.py check --perry target/release/perry --runtime-dir target/release --require-coverage
 
       - name: Runtime size budget (small programs)
         if: runner.os == 'macOS'

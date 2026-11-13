@@ -12,6 +12,7 @@ mod collections;
 mod constructors;
 mod effects;
 pub(crate) use effects::is_internal_key;
+mod gen_members;
 #[cfg(test)]
 pub(crate) mod effects_for_tests {
     pub(crate) use super::effects::interpretable;
@@ -455,8 +456,8 @@ fn ret_tok(m: &mut Model, call: CallId, t: Tok) {
     m.add_tok(ret, t);
 }
 
-fn arg(m: &Model, call: CallId, i: usize) -> Option<NodeId> {
-    m.calls[call as usize].args.get(i).copied()
+fn arg(m: &mut Model, call: CallId, i: usize) -> Option<NodeId> {
+    m.positional(call, i + 1).args.get(i).copied()
 }
 
 /// The elements of every array argument plus every spread array.
@@ -644,10 +645,42 @@ fn site_template(
     tm
 }
 
+/// ToObject(`v`) (ECMA-262 7.1.18) into a new node (`to_object_into`).
+pub(crate) fn to_object(m: &mut Model, v: NodeId, wrapper: Tok) -> NodeId {
+    let w = m.node_l("to-object-wrapper");
+    m.add_tok(w, wrapper);
+    let to = m.node_l("to-object");
+    to_object_into(m, v, wrapper, w, to);
+    to
+}
+
+/// `to` ⊇ ToObject(`v`) (ECMA-262 7.1.18): `v`'s objects as they are
+/// (`Cons::Objects`), and `wrapper` (a token of the `Object()` family,
+/// which node `w` holds) once `v` may hold a primitive but `undefined` /
+/// `null` (those throw). The primitive itself never reaches `to`. A String
+/// wrapper's own indices hold its characters: the wrapper's elements are
+/// strings.
+pub(crate) fn to_object_into(m: &mut Model, v: NodeId, wrapper: Tok, w: NodeId, to: NodeId) {
+    let fa = m.field_any(wrapper);
+    m.add_prim(fa, prim::STR);
+    m.cons(v, Cons::Objects { dst: to });
+    m.cons(
+        v,
+        Cons::Guard {
+            test: guard::BOXED,
+            from: w,
+            dst: to,
+        },
+    );
+}
+
 /// A synthetic resolve function of the promise whose settled value is
 /// `dst` (ECMA-262 27.2.1.3.2): its first parameter is adopted into `dst`
 /// (`adopt`), so a thenable passes on what it resolves, never itself.
 pub fn resolver(m: &mut Model, by: CallId, dst: NodeId) -> Tok {
+    if !m.reach_thenable {
+        return plain_resolver(m, dst);
+    }
     if let Some(&t) = m.resolvers.get(&dst) {
         return t;
     }
@@ -661,11 +694,26 @@ pub fn resolver(m: &mut Model, by: CallId, dst: NodeId) -> Tok {
 /// A synthetic reject function (27.2.1.3.1): its first parameter is the
 /// reason, as it is (a reject function adopts nothing).
 pub fn rejecter(m: &mut Model, dst: NodeId) -> Tok {
+    if !m.reach_thenable {
+        return plain_resolver(m, dst);
+    }
     if let Some(&t) = m.rejecters.get(&dst) {
         return t;
     }
     let (tok, _) = settle_fn(m, "<rejecter>", dst, true);
     m.rejecters.insert(dst, tok);
+    tok
+}
+
+/// `PERRY_FACTS_REACH_THENABLE=0` (`reach::thenable`): the previous model,
+/// one synthetic function for both sides whose first parameter flows into
+/// `dst` as it is.
+pub(crate) fn plain_resolver(m: &mut Model, dst: NodeId) -> Tok {
+    if let Some(&t) = m.resolvers.get(&dst) {
+        return t;
+    }
+    let (tok, _) = settle_fn(m, "<resolver>", dst, true);
+    m.resolvers.insert(dst, tok);
     tok
 }
 
@@ -782,7 +830,11 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
 pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
-    m.cons(v, Cons::Fulfil { dst });
+    if m.reach_thenable {
+        m.cons(v, Cons::Fulfil { dst });
+    } else {
+        m.edge(v, dst);
+    }
     let a = promise_result_atom(m);
     m.cons(
         v,
@@ -1097,6 +1149,7 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
 /// The opaque builtin function value; in explain mode, counted by the
 /// arm that minted it (`perry: wpfacts explain: builtin-fn minted`).
 fn builtin_fn(m: &mut Model, why: &'static str) -> Tok {
+    crate::family_reach::generic(m, why);
     if m.explain {
         *m.bf_mints.entry(why).or_insert(0) += 1;
     }
@@ -2300,6 +2353,7 @@ fn console_args(m: &mut Model, call: CallId) {
 }
 
 fn ns_method(m: &mut Model, ns: BuiltinNs, name: Option<&str>, call: CallId) {
+    crate::family_reach::namespace(m, ns, name);
     ns_method_inner(m, ns, name, call, false)
 }
 
@@ -2528,7 +2582,11 @@ fn ns_method_inner(
         }
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
-            if let Some(&t) = c.args.first() {
+            if let Some(&target) = c.args.first() {
+                // ECMA-262 20.1.2.1 step 1: `to` is ToObject(target), the
+                // result; the sources copy into it.
+                let wrapper = site_tmpl(m, call, "Object()");
+                let t = to_object(m, target, wrapper);
                 let site = m.anon_post_site("Object.assign (value call)");
                 for &s in c.args.iter().skip(1) {
                     m.cons(s, Cons::Spread { into: t, site });
@@ -2644,6 +2702,11 @@ fn ns_method_inner(
                         proto: Protocol::Any,
                     },
                 );
+            }
+            // A replacer function is called back (`json_replacer_calls`).
+            if m.reach_json_replacer && (c.args.len() > 1 || !c.spread.is_empty()) {
+                let holder = site_tmpl(m, call, "json");
+                m.json_replacer_builtin_call(call, holder);
             }
             ret_prim(m, call, prim::STR | prim::UNDEF);
         }
@@ -3011,6 +3074,7 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
 }
 
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
     match ns {
         BuiltinNs::Require => {

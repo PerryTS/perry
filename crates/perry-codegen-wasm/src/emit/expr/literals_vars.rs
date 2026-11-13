@@ -57,25 +57,7 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 func.instruction(&Instruction::LocalSet(self.temp_store_local));
             }
-            Expr::LocalGet(id) => {
-                if self.scoped_temp_ids.contains(id) {
-                    func.instruction(&Instruction::LocalGet(self.local_map[id]));
-                    return true;
-                }
-                // Check module_let_globals FIRST (handles top-level Lets in current module)
-                if let Some(&gidx) = self
-                    .emitter
-                    .module_let_globals
-                    .get(&(self.emitter.current_mod_idx, *id))
-                {
-                    func.instruction(&Instruction::GlobalGet(gidx));
-                } else if let Some(&idx) = self.local_map.get(id) {
-                    func.instruction(&Instruction::LocalGet(idx));
-                } else {
-                    // Unknown local — push undefined
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                }
-            }
+            Expr::LocalGet(id) => self.emit_local_or_global_get(func, id),
             Expr::LocalSet(id, val) => {
                 self.emit_expr(func, val);
                 if self.scoped_temp_ids.contains(id) {
@@ -89,8 +71,12 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::GlobalSet(gidx));
                     func.instruction(&Instruction::GlobalGet(gidx));
                 } else if let Some(&idx) = self.local_map.get(id) {
-                    // Tee: set and leave on stack
-                    func.instruction(&Instruction::LocalTee(idx));
+                    if self.is_boxed(id) {
+                        self.emit_box_set(func, idx);
+                    } else {
+                        // Tee: set and leave on stack
+                        func.instruction(&Instruction::LocalTee(idx));
+                    }
                 }
             }
             Expr::GlobalGet(id) => {
@@ -111,6 +97,25 @@ impl<'a> FuncEmitCtx<'a> {
             }
 
             // --- Update ---
+            Expr::Update { id, op, prefix }
+                if self.is_boxed(id) && self.local_map.contains_key(id) =>
+            {
+                let idx = self.local_map[id];
+                self.emit_local_or_global_get(func, id);
+                func.instruction(&Instruction::LocalTee(self.temp_local));
+                func.instruction(&Instruction::F64ReinterpretI64);
+                func.instruction(&f64_const(1.0));
+                func.instruction(&match op {
+                    UpdateOp::Increment => Instruction::F64Add,
+                    UpdateOp::Decrement => Instruction::F64Sub,
+                });
+                func.instruction(&Instruction::I64ReinterpretF64);
+                self.emit_box_set(func, idx);
+                if !*prefix {
+                    func.instruction(&Instruction::Drop);
+                    func.instruction(&Instruction::LocalGet(self.temp_local));
+                }
+            }
             Expr::Update { id, op, prefix } => {
                 if let Some(&gidx) = self
                     .emitter

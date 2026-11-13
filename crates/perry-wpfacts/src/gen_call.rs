@@ -1178,6 +1178,7 @@ impl<'a> Gen<'a> {
                 // generator's step closure (a generator object is its step).
                 let nk = Key::Named(self.m.atom("next"));
                 let res = self.mcall(it, nk, vec![v], vec![]);
+                self.step_done(res);
                 let va = self.m.atom("value");
                 let raw = self.load(res, Key::Named(va));
                 let out = self.tmp("delegate-step");
@@ -1205,6 +1206,7 @@ impl<'a> Gen<'a> {
                 };
                 let a = self.m.atom(k);
                 let out = self.mcall(it, Key::Named(a), vec![v], vec![]);
+                self.step_done(out);
                 if k == "throw" {
                     let ra = self.m.atom("return");
                     let _ = self.mcall(it, Key::Named(ra), vec![], vec![]);

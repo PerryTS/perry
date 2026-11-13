@@ -223,6 +223,7 @@ impl<'a> Gen<'a> {
         let end = self.tmp("narrow-end");
         self.zs_carrier(end);
         self.m.edge(start, end);
+        self.named_reads(i, &[start, end]);
         self.narrow.push(Narrow {
             mi,
             id,
@@ -249,6 +250,18 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn narrow_end(&mut self) {
         self.narrow.pop();
+    }
+
+    /// `reads` are what narrowed reads of the local with node `local` see
+    /// (`Model::name_of`).
+    fn named_reads(&mut self, local: NodeId, reads: &[NodeId]) {
+        if self.m.named_lengths {
+            for &r in reads {
+                if r != local {
+                    self.m.name_of.insert(r, local);
+                }
+            }
+        }
     }
 
     /// The node a read of local `id` sees under a narrowing, if any.
@@ -1311,6 +1324,10 @@ impl<'a> Gen<'a> {
             let end = self.tmp("guard-end");
             self.zs_carrier(end);
             self.m.edge(start, end);
+            if self.m.named_lengths {
+                let local = self.local(mi, id);
+                self.named_reads(local, &[start, end]);
+            }
             self.narrow.push(Narrow {
                 mi,
                 id,

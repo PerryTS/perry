@@ -252,16 +252,18 @@ pub(crate) fn js_typed_array_map(
 }
 static JS_TYPED_ARRAY_NEW: Hook<extern "C" fn(i32, f64) -> *mut TypedArrayHeader> = Hook::empty();
 pub(crate) extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW
-        .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(kind, val))
+    JS_TYPED_ARRAY_NEW.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, val),
+    )
 }
 static JS_TYPED_ARRAY_NEW_EMPTY: Hook<extern "C" fn(i32, i32) -> *mut TypedArrayHeader> =
     Hook::empty();
 pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW_EMPTY
-        .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(kind, length))
+    JS_TYPED_ARRAY_NEW_EMPTY.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, length),
+    )
 }
 static JS_TYPED_ARRAY_NEW_FROM_ARRAY: Hook<
     extern "C" fn(i32, *const ArrayHeader) -> *mut TypedArrayHeader,
@@ -270,9 +272,10 @@ pub(crate) extern "C" fn js_typed_array_new_from_array(
     kind: i32,
     arr: *const ArrayHeader,
 ) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW_FROM_ARRAY
-        .get()
-        .map_or_else(|| std::ptr::null_mut(), |run| run(kind, arr))
+    JS_TYPED_ARRAY_NEW_FROM_ARRAY.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, arr),
+    )
 }
 static JS_TYPED_ARRAY_REDUCE: Hook<
     extern "C" fn(*const TypedArrayHeader, *const ClosureHeader, i32, f64) -> f64,
@@ -434,7 +437,7 @@ pub(crate) extern "C" fn js_typed_array_view(
     length_value: f64,
 ) -> *mut TypedArrayHeader {
     JS_TYPED_ARRAY_VIEW.get().map_or_else(
-        || std::ptr::null_mut(),
+        || crate::family_never::byte_cells_not_installed(),
         |run| run(kind, source, offset_value, length_value),
     )
 }
@@ -629,5 +632,36 @@ pub(crate) fn install() {
         TYPED_ARRAY_FROM_SOURCE_RAW_VALUES
             .set(crate::typedarray::typed_array_from_source_raw_values);
         TYPED_ARRAY_TO_ARRAY.set(crate::typedarray::typed_array_to_array);
+        TYPED_ARRAY_METHOD_DISPATCH
+            .set(crate::object::native_call_method::typed_array_method_tower);
+        crate::family_never::installed(crate::family_never::BYTE_CELLS);
     });
+}
+/// The name dispatch of a `%TypedArray%.prototype` method on a typed array
+/// (`native_call_method::typed_array::typed_array_method_tower`). The tower
+/// and every operation it names are members of this group, so the
+/// always-linked callers reach it through this slot. They hold a typed array,
+/// and a typed array exists only in a program whose typed-array group is
+/// installed (`family_reach` decides the install, and a byte cell born
+/// without it aborts at its birth: `family_never`), so an empty slot is the
+/// never arm: it aborts, it does not answer.
+///
+/// Declared after `install` (and filled on the last line of its block) so
+/// that no line above moves: see `family_never`.
+static TYPED_ARRAY_METHOD_DISPATCH: Hook<
+    unsafe fn(*mut TypedArrayHeader, &str, *const f64, usize) -> Option<f64>,
+> = Hook::empty();
+/// # Safety
+/// `ta` is a live typed array; `args_ptr` names `args_len` values (or is null).
+#[inline(never)]
+pub(crate) unsafe fn dispatch_typed_array_method(
+    ta: *mut TypedArrayHeader,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    match TYPED_ARRAY_METHOD_DISPATCH.get() {
+        Some(tower) => tower(ta, method_name, args_ptr, args_len),
+        None => crate::family_never::byte_cells_not_installed(),
+    }
 }

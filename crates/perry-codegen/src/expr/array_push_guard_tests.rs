@@ -509,9 +509,30 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
         generic.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
             && generic.contains("call i64 @js_array_numeric_push_f64_unboxed")
             // #11021: the fallback is the own-aware push, never the bare one.
-            && generic.contains("call i64 @js_array_push_f64_spec_or_own(")
+            && generic.contains("call i64 @js_array_push_f64_spec_or_method(")
             && !generic.contains("call i64 @js_array_push_f64_spec("),
         "a declared-number addition must validate the live value and retain the generic push fallback:\n{generic}"
+    );
+    // The runtime guard proves a live numeric Array with room, not that `push`
+    // is the builtin on it: between the guard and the unboxed append sits the
+    // inline tier's own word test (a null named layout, the default prototype
+    // chain), and its miss is the fallback that resolves the method.
+    let guard = generic
+        .find("call i32 @js_typed_feedback_numeric_array_push_guard")
+        .expect("the runtime guard");
+    let append = generic
+        .find("call i64 @js_array_numeric_push_f64_unboxed")
+        .expect("the unboxed append");
+    let between = &generic[guard..append];
+    let plain = between
+        .find("apush.numeric_plain")
+        .expect("the unboxed append sits in the block the word test admits");
+    let test = &between[..plain];
+    assert!(
+        test.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
+            && test.contains("inttoptr")
+            && test.contains("apush.numeric_fallback"),
+        "an own `push` or an own prototype must leave the guarded tier before the append:\n{between}"
     );
     assert!(
         !generic.contains(GUARD_BLOCK),
@@ -782,7 +803,7 @@ fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
         "builtin was resolved before args:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        !ir.contains("call i64 @js_array_push_f64_spec_or_"),
         "must not repeat method lookup after args:\n{ir}"
     );
     assert!(
@@ -838,7 +859,7 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
         "a private init binding calls the resolved builtin:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        !ir.contains("call i64 @js_array_push_f64_spec_or_"),
         "the argument cannot change the resolved method:\n{ir}"
     );
     assert!(

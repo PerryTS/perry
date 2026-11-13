@@ -761,6 +761,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     if crate::verify_facts::dce_enabled() {
         module.declare_function("llvm.trap", crate::types::VOID, &[]);
     }
+    if crate::verify_facts::life_measure_on() {
+        // LIFE I1: the lifetime measurement's hooks.
+        module.declare_function("perry_life_birth", crate::types::VOID, &[I64, I64, I64]);
+        module.declare_function("perry_life_catch", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_depth", I64, &[]);
+        module.declare_function("perry_life_enter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_iter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_loop", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_return", crate::types::VOID, &[]);
+        module.declare_function("perry_life_turn", crate::types::VOID, &[]);
+    }
     if crate::verify_facts::enabled() {
         module.declare_function("perry_verify_facts_tick", crate::types::VOID, &[]);
         module.declare_function("perry_verify_facts_init", crate::types::VOID, &[]);
@@ -776,7 +787,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
         // Value records (DESIGN-p4l4 B7): the birth claim and the identity
         // witness of a compiled comparison.
-        module.declare_function("perry_verify_facts_record_claim", crate::types::VOID, &[DOUBLE]);
+        module.declare_function(
+            "perry_verify_facts_record_claim",
+            crate::types::VOID,
+            &[DOUBLE],
+        );
         module.declare_function(
             "perry_verify_facts_record_identity",
             I32,
@@ -785,6 +800,30 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         // VR-4b: the receiver of a record-array intrinsic.
         module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
+        // family_reach: the families the facts say are never created or
+        // observed, and a compiled read of a global of one of them.
+        module.declare_function(
+            "perry_verify_facts_families",
+            crate::types::VOID,
+            &[I64, I64, I64],
+        );
+        module.declare_function(
+            "perry_verify_facts_family_observed",
+            crate::types::VOID,
+            &[I64, I64],
+        );
+        // LIFE G1: the death points of the census's lifetime claims.
+        module.declare_function(
+            "perry_verify_facts_life_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64, I64],
+        );
+        module.declare_function("perry_verify_facts_life_arg", I64, &[I64]);
+        module.declare_function(
+            "perry_verify_facts_life_arg_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64],
+        );
     }
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,

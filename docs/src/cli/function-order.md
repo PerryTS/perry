@@ -49,6 +49,27 @@ linker keeps ordinary ELF alignment and does not pad the selected prefix.
 After PIE relocation, backing covers only complete aligned pages inside
 selected code; partial boundary pages retain their original file mapping.
 
+## The runtime's default order
+
+Without `--function-order`, a Linux build still orders the runtime: the
+compiler carries a list of the runtime functions that ordinary programs
+execute, the most widely used first, and the link places those at the front
+of the text. Only about a quarter of the linked runtime code ever runs, and
+unordered it is spread over nearly the whole text, so most of the binary ends
+up resident; with the order the pages a program touches are packed together.
+The program's own code and its instructions are unchanged, and nothing is
+added to the binary: only the layout differs.
+
+- `PERRY_HOT_TEXT_ORDER=off` keeps the unordered layout.
+- `--function-order` (a recording of your program) replaces the default order.
+- The list is `crates/perry/src/commands/compile/link/hot_text_order.txt`.
+  `scripts/hot_text_order.py build` makes it from recordings of a corpus of
+  programs, and `scripts/hot_text_order.py check` fails when it no longer
+  matches the runtime (a listed function was renamed, or a smoke program
+  executes too much code outside the ordered run).
+- GNU ld and lld on Linux only. macOS, Windows, WebAssembly, Android and
+  HarmonyOS builds are unchanged.
+
 ## Platforms
 
 | Platform | How the order is applied |

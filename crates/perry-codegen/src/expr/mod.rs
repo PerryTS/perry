@@ -81,10 +81,10 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
 // (`perry_abi::AGENT_PTR_SLOTS`).
 #[allow(dead_code)]
 pub(crate) mod agent_ptr;
-pub(crate) mod record_witness;
 pub(crate) mod borrowed_call;
 pub(crate) mod function_bind;
 pub(crate) mod layout_read;
+pub(crate) mod record_witness;
 
 /// `PERRY_SITE_STATS=1`: one stderr line `PERRY_SITE <kind>` per lowered
 /// named-read site, for the step-5 site census (case 1 / case 2 / probe).
@@ -100,8 +100,8 @@ mod array_literal;
 pub(crate) mod array_proto_guard;
 mod bitset_test;
 pub(crate) mod body_call;
-pub(crate) mod family_slot;
 pub(crate) mod facts_string;
+pub(crate) mod family_slot;
 pub(crate) mod fill_birth;
 #[cfg(test)]
 mod fill_birth_tests;
@@ -110,10 +110,10 @@ pub(crate) mod hot_tls;
 pub(crate) mod inline_birth;
 pub(crate) mod literal_chunks;
 mod literal_descriptor;
-pub(crate) mod snap_argv_site;
-pub(crate) mod snap_compare_site;
 pub(crate) mod rest_elems;
 pub(crate) mod rest_fields;
+pub(crate) mod snap_argv_site;
+pub(crate) mod snap_compare_site;
 pub(crate) mod snap_env_site;
 /// A worker program's literal-descriptor IR, for the dialect reader's round trip.
 #[cfg(test)]
@@ -134,6 +134,7 @@ mod buffer_views;
 mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
+pub(crate) mod collection_brand;
 pub(crate) mod collection_receiver;
 pub(crate) mod facts_canonical;
 pub(crate) mod facts_number;
@@ -164,10 +165,10 @@ pub(crate) use array_literal::{
     emit_array_from_lowered_values, lower_array_literal, INLINE_ARRAY_MAX_ELEMENTS,
 };
 pub(crate) use buffer_access::{
-    access_facts_for_spec, can_lower_buffer_access_without_calls,
-    can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
-    lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
+    access_facts_for_spec, byte_store_tonumber_on, byte_store_value_needs_tonumber,
+    can_lower_buffer_access_without_calls, can_lower_integer_typed_array_store_value,
+    emit_buffer_access_pointer, lower_buffer_access_proof, lower_buffer_load, lower_buffer_store,
+    lower_typed_array_load, lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -262,6 +263,8 @@ mod array_callback_shape_tests;
 mod array_push_guard_tests;
 #[cfg(test)]
 mod array_push_own_tests;
+#[cfg(test)]
+mod array_push_receiver_tests;
 #[cfg(test)]
 mod barrier_stem_census_tests;
 #[cfg(test)]
@@ -1739,6 +1742,9 @@ pub(crate) struct FnCtx<'a> {
     /// is only used in PropertyGet/PropertySet. The Stmt::Let lowering
     /// intercepts these to emit scalar-replaced field allocas.
     pub non_escaping_news: std::collections::HashMap<u32, String>,
+
+    /// LIFE G1: the body's lifetime claims (`collectors::life_claims`).
+    pub life_claims: std::sync::Arc<crate::collectors::life_claims::LifeClaims>,
 
     /// Fields that are actually observed on each scalar-replaced `new` local.
     /// For synthetic anonymous-shape classes, `Stmt::Let` can allocate only
@@ -3377,17 +3383,17 @@ mod fs_await;
 mod hit_path_tests;
 pub(crate) mod index_get;
 pub(crate) use index_get::guarded_array::emit_spread_stack_admission;
+pub(crate) mod held_len;
 #[cfg(test)]
 mod index_get_claim_tests;
 pub(crate) mod index_key;
 pub(crate) mod int32_key;
 pub(crate) mod int32_operand;
 pub(crate) mod int32_shadow;
-pub(crate) mod held_len;
 pub(crate) mod int_product;
-pub(crate) mod literal_strings;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+pub(crate) mod literal_strings;
 #[cfg(test)]
 mod map_entry_fusion_tests;
 pub(crate) mod masked_window;
@@ -3426,8 +3432,8 @@ pub(crate) use masked_window::masked_window_fact_for_index;
 mod computed_store_rooting_tests;
 mod index_set;
 mod index_set_guarded;
-mod index_set_rep;
 mod index_set_packed_loop;
+mod index_set_rep;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
@@ -3457,9 +3463,9 @@ mod number_to_string_inline_tests;
 mod objects_arrays_lit;
 pub(crate) mod os_uri_dates;
 pub(crate) mod private_field_site;
-pub(crate) mod short_string;
 pub(crate) mod property_get;
 pub(crate) mod property_set;
+pub(crate) mod short_string;
 pub(crate) use named_accessor::contained_number_get;
 pub(crate) mod checked_super;
 pub(crate) mod proxy_reflect;

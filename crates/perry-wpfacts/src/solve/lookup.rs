@@ -477,6 +477,7 @@ impl Model {
                 fresh.push(c);
             }
         }
+        self.json_reviver_flush(&fresh);
         // An escape revokes `surely_own_data` on the objects of these
         // classes; `shadows` only once a key may be redefined through ⊤.
         if !fresh.is_empty() {

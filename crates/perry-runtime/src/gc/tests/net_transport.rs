@@ -469,6 +469,12 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
             .unwrap();
     }
     assert_eq!(refs(link), 1, "the old resolver is owed before any turn");
+    // Capture the pending resolve op while the state the assert above pins is
+    // in force; the kernel would otherwise deliver this completion at an
+    // arbitrary moment (#12994).
+    let cell = link.0;
+    let stale_op = unsafe { transport::pending_resolve_for_test(cell) }
+        .expect("the resolving socket still owes one pending resolve op");
     assert!(!destroy(link), "resolving socket has no handle yet");
     np::attach(
         socket.get_nanbox_f64(),
@@ -480,6 +486,16 @@ fn n9_a_stale_resolve_leaves_the_new_plan_and_backlog_alone() {
         0,
     )
     .unwrap();
+    // Deliver the stale resolver's completion deterministically, after the
+    // new resolver is live: the late terminal completion must leave the new
+    // plan and backlog untouched (#12994).
+    unsafe {
+        transport::replay_resolve_for_test(
+            cell,
+            stale_op,
+            vec![std::net::SocketAddr::from(([127, 0, 0, 1], port))],
+        );
+    }
     unsafe {
         let c = core(socket.get_nanbox_f64());
         transport::tcp_connect(c, link, "localhost", port, true).unwrap();

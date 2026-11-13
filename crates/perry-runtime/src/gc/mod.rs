@@ -326,6 +326,8 @@ pub(crate) mod census;
 mod census_field_repr;
 mod heap_snapshot;
 mod heap_stats;
+#[cfg(perry_gc_instruments)]
+pub(crate) mod life_why;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
@@ -518,6 +520,10 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
+            #[cfg(perry_gc_instruments)]
+            if DIAGNOSTICS {
+                diagnostic_hooks::life_before_copied_minor();
+            }
             gc_collect_minor_copying_fast_path::<DIAGNOSTICS>(&mut trace, start, trigger.kind)
         }
         // Run the ordinary eligibility preflight — it carries the one-shot
@@ -547,6 +553,10 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
                 .record_collection(freed_bytes, elapsed_us);
         });
         diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
+        #[cfg(perry_gc_instruments)]
+        if DIAGNOSTICS {
+            diagnostic_hooks::life_after_copied_minor();
+        }
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;
@@ -1905,3 +1915,11 @@ static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use roots::for_each_global_root_slot;
+
+/// LIFE I1: the synchronous full cycle the lifetime measurement runs at the
+/// end of a turn that has old samples (`wpfacts_check/life_measure.rs`).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn life_collect_full() {
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}

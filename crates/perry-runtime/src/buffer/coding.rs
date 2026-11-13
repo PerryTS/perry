@@ -73,22 +73,7 @@ pub fn hex_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
         let dst = super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
             .unwrap()
             .as_mut_ptr();
-        let mut written = 0usize;
-        let mut i = 0usize;
-        let n = input.len() & !1; // pair count (drop trailing odd byte, matches Node)
-        while i < n {
-            let hi = HEX_DECODE_TABLE[input[i] as usize];
-            let lo = HEX_DECODE_TABLE[input[i + 1] as usize];
-            if hi < 16 && lo < 16 {
-                *dst.add(written) = (hi << 4) | lo;
-                written += 1;
-            } else {
-                // Node stops hex decoding at the first non-hex pair instead
-                // of skipping over invalid bytes (e.g. "abxxcd" -> "ab").
-                break;
-            }
-            i += 2;
-        }
+        let written = hex_decode_raw(input, dst);
         super::store::set_length(buf as usize, written as u32);
     });
     buf
@@ -149,64 +134,7 @@ pub fn base64_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
         let dst = super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
             .unwrap()
             .as_mut_ptr();
-        let mut written = 0usize;
-
-        // Fast path: 4-byte chunks while all four bytes decode cleanly.
-        // Bails to the slow-path tail when we hit `=`, an invalid byte,
-        // or whitespace.
-        let mut i = 0usize;
-        let n = input.len();
-        while i + 4 <= n {
-            let b0 = *input.get_unchecked(i);
-            let b1 = *input.get_unchecked(i + 1);
-            let b2 = *input.get_unchecked(i + 2);
-            let b3 = *input.get_unchecked(i + 3);
-            // Bail to slow path if any chunk byte is special (= padding /
-            // invalid / whitespace). We let the slow path read these.
-            if b0 == b'=' || b1 == b'=' || b2 == b'=' || b3 == b'=' {
-                break;
-            }
-            let v0 = *BASE64_DECODE_TABLE.get_unchecked(b0 as usize);
-            let v1 = *BASE64_DECODE_TABLE.get_unchecked(b1 as usize);
-            let v2 = *BASE64_DECODE_TABLE.get_unchecked(b2 as usize);
-            let v3 = *BASE64_DECODE_TABLE.get_unchecked(b3 as usize);
-            // 64 = invalid / skip char. Fall back to the slow path so
-            // the permissive whitespace-skipping behavior fires correctly.
-            if (v0 | v1 | v2 | v3) >= 64 {
-                break;
-            }
-            let chunk =
-                ((v0 as u32) << 18) | ((v1 as u32) << 12) | ((v2 as u32) << 6) | (v3 as u32);
-            *dst.add(written) = (chunk >> 16) as u8;
-            *dst.add(written + 1) = (chunk >> 8) as u8;
-            *dst.add(written + 2) = chunk as u8;
-            written += 3;
-            i += 4;
-        }
-
-        // Slow-path tail: byte-at-a-time, accumulator-based, handles
-        // padding, whitespace, and invalid characters per Node spec.
-        let mut accum: u32 = 0;
-        let mut bits: u32 = 0;
-        while i < n {
-            let byte = *input.get_unchecked(i);
-            i += 1;
-            if byte == b'=' {
-                break;
-            }
-            let v = BASE64_DECODE_TABLE[byte as usize];
-            if v == 64 {
-                continue;
-            }
-            accum = (accum << 6) | v as u32;
-            bits += 6;
-            if bits >= 8 {
-                bits -= 8;
-                *dst.add(written) = (accum >> bits) as u8;
-                written += 1;
-                accum &= (1 << bits) - 1;
-            }
-        }
+        let written = base64_decode_raw(input, dst);
         super::store::set_length(buf as usize, written as u32);
     });
     buf
@@ -312,13 +240,107 @@ pub fn base64url_encode_into_string(input: &[u8]) -> *mut StringHeader {
 // Legacy Vec-returning helpers — kept for the unit tests at the bottom of this
 // file and any out-of-tree callers. Hot transcode paths now go through the
 // `*_into_buffer` / `*_into_string` variants above.
+/// The hex decoder's loop: writes at most `input.len() / 2` bytes at `dst`
+/// and returns how many.
+///
+/// # Safety
+/// `dst` is valid for `input.len() / 2` bytes.
+unsafe fn hex_decode_raw(input: &[u8], dst: *mut u8) -> usize {
+    let mut written = 0usize;
+    let mut i = 0usize;
+    let n = input.len() & !1; // pair count (drop trailing odd byte, matches Node)
+    while i < n {
+        let hi = HEX_DECODE_TABLE[input[i] as usize];
+        let lo = HEX_DECODE_TABLE[input[i + 1] as usize];
+        if hi < 16 && lo < 16 {
+            *dst.add(written) = (hi << 4) | lo;
+            written += 1;
+        } else {
+            // Node stops hex decoding at the first non-hex pair instead
+            // of skipping over invalid bytes (e.g. "abxxcd" -> "ab").
+            break;
+        }
+        i += 2;
+    }
+    written
+}
+
+/// The base64 decoder's loop: writes at most `input.len() * 3 / 4 + 3` bytes
+/// at `dst` and returns how many.
+///
+/// # Safety
+/// `dst` is valid for `input.len() * 3 / 4 + 3` bytes.
+unsafe fn base64_decode_raw(input: &[u8], dst: *mut u8) -> usize {
+    let mut written = 0usize;
+
+    // Fast path: 4-byte chunks while all four bytes decode cleanly.
+    // Bails to the slow-path tail when we hit `=`, an invalid byte,
+    // or whitespace.
+    let mut i = 0usize;
+    let n = input.len();
+    while i + 4 <= n {
+        let b0 = *input.get_unchecked(i);
+        let b1 = *input.get_unchecked(i + 1);
+        let b2 = *input.get_unchecked(i + 2);
+        let b3 = *input.get_unchecked(i + 3);
+        // Bail to slow path if any chunk byte is special (= padding /
+        // invalid / whitespace). We let the slow path read these.
+        if b0 == b'=' || b1 == b'=' || b2 == b'=' || b3 == b'=' {
+            break;
+        }
+        let v0 = *BASE64_DECODE_TABLE.get_unchecked(b0 as usize);
+        let v1 = *BASE64_DECODE_TABLE.get_unchecked(b1 as usize);
+        let v2 = *BASE64_DECODE_TABLE.get_unchecked(b2 as usize);
+        let v3 = *BASE64_DECODE_TABLE.get_unchecked(b3 as usize);
+        // 64 = invalid / skip char. Fall back to the slow path so
+        // the permissive whitespace-skipping behavior fires correctly.
+        if (v0 | v1 | v2 | v3) >= 64 {
+            break;
+        }
+        let chunk = ((v0 as u32) << 18) | ((v1 as u32) << 12) | ((v2 as u32) << 6) | (v3 as u32);
+        *dst.add(written) = (chunk >> 16) as u8;
+        *dst.add(written + 1) = (chunk >> 8) as u8;
+        *dst.add(written + 2) = chunk as u8;
+        written += 3;
+        i += 4;
+    }
+
+    // Slow-path tail: byte-at-a-time, accumulator-based, handles
+    // padding, whitespace, and invalid characters per Node spec.
+    let mut accum: u32 = 0;
+    let mut bits: u32 = 0;
+    while i < n {
+        let byte = *input.get_unchecked(i);
+        i += 1;
+        if byte == b'=' {
+            break;
+        }
+        let v = BASE64_DECODE_TABLE[byte as usize];
+        if v == 64 {
+            continue;
+        }
+        accum = (accum << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            *dst.add(written) = (accum >> bits) as u8;
+            written += 1;
+            accum &= (1 << bits) - 1;
+        }
+    }
+    written
+}
+
+/// Hex-decode to bytes the runtime keeps for itself (a write to a stream, a
+/// comparison, a fill pattern). No Buffer is created: the bytes are no
+/// JavaScript value.
 pub fn decode_hex(input: &[u8]) -> Vec<u8> {
-    let buf = hex_decode_into_buffer(input);
-    super::bytes::no_gc(|scope| {
-        super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
-            .unwrap()
-            .to_vec()
-    })
+    let mut out: Vec<u8> = Vec::with_capacity(input.len() / 2);
+    unsafe {
+        let written = hex_decode_raw(input, out.as_mut_ptr());
+        out.set_len(written);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -332,13 +354,14 @@ pub fn encode_hex(input: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Base64-decode to bytes the runtime keeps for itself; no Buffer is created.
 pub fn decode_base64(input: &[u8]) -> Vec<u8> {
-    let buf = base64_decode_into_buffer(input);
-    super::bytes::no_gc(|scope| {
-        super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
-            .unwrap()
-            .to_vec()
-    })
+    let mut out: Vec<u8> = Vec::with_capacity(input.len().saturating_mul(3) / 4 + 3);
+    unsafe {
+        let written = base64_decode_raw(input, out.as_mut_ptr());
+        out.set_len(written);
+    }
+    out
 }
 
 #[cfg(test)]

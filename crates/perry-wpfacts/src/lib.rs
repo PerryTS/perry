@@ -31,23 +31,29 @@ mod diagnostics;
 mod dump;
 mod element_floors;
 mod element_keys;
-mod fill_births;
+pub mod family_reach;
 pub mod field_read_calls;
+mod fill_births;
 mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_const;
 mod gen_expr;
+mod gen_protocol;
 mod gen_rest;
 mod held_lengths;
 mod ledger;
 pub mod list_caps;
 mod literal_strings;
+mod method_sites;
 pub mod model;
+mod named_lengths;
 pub mod native_effects;
 pub mod pts;
 mod provenance;
 mod push_fills;
+mod quiet_sites;
+mod reach;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
@@ -67,6 +73,7 @@ pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
+pub use family_reach::{FamilyReach, FamilyVerdict};
 pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 use perry_hir::Module;
 pub use signatures::Signature;
@@ -78,7 +85,8 @@ pub(crate) const STAR_KEY: &str = "\u{1}*";
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
     pub verify_facts: bool,
-    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`).
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`,
+    /// on by default; `0` turns it off).
     pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.
@@ -316,6 +324,11 @@ pub struct ProgramFacts {
     /// Completed whole-program reach, or an incomplete conservative view
     /// when activation was unavailable or the solve stopped early.
     pub body_reach: BodyReach,
+    /// Per runtime family, whether the program may ever create or observe a
+    /// value of it (`family_reach`). `None`: not computed
+    /// (`PERRY_FACTS_FAMILY_REACH=0`, a per-unit run): every family is live.
+    /// Nothing reads it yet but the dump.
+    pub family_reach: Option<FamilyReach>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
     /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
@@ -575,9 +588,13 @@ fn generate<'a>(
     g.m.slice_births = builtins::slice_births_enabled();
     g.m.inbounds_store = gen::in_bounds::enabled();
     g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.no_hole_sabotage = cfg.sabotage.as_deref() == Some("nohole");
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
     g.m.held_lengths = held_lengths::enabled() && !cfg.unit;
+    g.m.instance_nodes =
+        bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
+    g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
     g.m.map_values = solve::map_vals::enabled();
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
@@ -597,6 +614,18 @@ fn generate<'a>(
     g.forin_path = !cfg.no_forin_path;
     g.m.optimistic_json_key = cfg.optimistic_json_key;
     g.m.json_positions = cfg.json_positions;
+    g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
+    g.m.reach_new_target =
+        reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
+    g.m.reach_step_done = reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_gen_members =
+        reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
+    g.m.reach_thenable = reach::thenable() && cfg.sabotage.as_deref() != Some("noreachthenable");
+    g.m.reach_iter_close =
+        reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
+    g.m.reach_spread_args =
+        reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
+    reach::configure(&mut g.m, cfg.sabotage.as_deref());
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -614,6 +643,7 @@ fn generate<'a>(
         g.m.budget = Some((t0, std::time::Duration::from_secs(secs)));
     }
     g.m.unit_mode = cfg.unit;
+    g.m.family_reach.on = !cfg.unit && family_reach::enabled();
     g.m.max_pts = cfg.max_pts.unwrap_or(0);
     g.m.max_work = cfg.max_work.unwrap_or(0);
     g.m.widen = !cfg.unit;
@@ -1116,11 +1146,7 @@ fn compute_act<'a>(
             cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
-    list_caps::collect(
-        &g,
-        &mut bindings,
-        cfg.diagnostics.then_some(&mut rep_probe),
-    );
+    list_caps::collect(&g, &mut bindings, cfg.diagnostics.then_some(&mut rep_probe));
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
@@ -1133,6 +1159,28 @@ fn compute_act<'a>(
         &mut bindings,
         interp_guard.is_some(),
         cfg.sabotage.as_deref() == Some("heldlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    named_lengths::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref() == Some("namedlen"),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    quiet_sites::collect(
+        &g,
+        &sites,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref(),
+        cfg.diagnostics.then_some(&mut rep_probe),
+    );
+    method_sites::collect(
+        &g,
+        &mut bindings,
+        interp_guard.is_some(),
+        cfg.sabotage.as_deref(),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2368,8 +2416,11 @@ fn compute_act<'a>(
     } else {
         None
     };
+    let family_reach =
+        (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let mut pf = ProgramFacts {
         verification_bodies,
+        family_reach,
         diag_stream: None,
         diagnostics,
         diagnostic_sites,
@@ -2445,6 +2496,24 @@ pub fn compute_units(modules: &[(String, &Module)], cfg: &FactsConfig) -> Progra
     let mut pf = units::run(&sorted, cfg);
     pf.module_digests = dump::module_digests(&pf);
     pf
+}
+
+/// `PERRY_FACTS_QUIET_SITES=0` turns the quiet-site facts off
+/// (`quiet_sites`).
+pub fn quiet_sites_enabled() -> bool {
+    quiet_sites::enabled()
+}
+
+/// `PERRY_FACTS_TYPED_ARRAY_SITES=0` turns the typed-array receiver fact
+/// off (`method_sites`).
+pub fn typed_array_sites_enabled() -> bool {
+    method_sites::typed_array_enabled()
+}
+
+/// `PERRY_FACTS_ARRAY_METHOD_SITES=0` turns the Array-member fact off
+/// (`method_sites`).
+pub fn array_method_sites_enabled() -> bool {
+    method_sites::array_member_enabled()
 }
 
 /// `PERRY_PROGRAM_FACTS=0` turns the pass off (every fact off; digest 0).

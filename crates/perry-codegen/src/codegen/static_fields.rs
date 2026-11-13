@@ -248,12 +248,15 @@ pub(super) fn init_static_fields_late(
                 if let Some(body) = hir.functions.iter().find(|f| f.id == async_id) {
                     perry_hir::tdz_check::for_each_function_expr(body, &mut |expr| {
                         if matches!(expr, perry_hir::Expr::StaticFieldSet { class_name, field_name, .. }
-                            if *class_name == c.name && *field_name == sf.name) {
+                            if *class_name == c.name && *field_name == sf.name)
+                        {
                             inline = true;
                         }
                     });
                 }
-                if inline { continue; }
+                if inline {
+                    continue;
+                }
             }
             // Computed-key static fields go through the class-static-symbol
             // side table. Refs #420 — drizzle's `static [entityKind] =

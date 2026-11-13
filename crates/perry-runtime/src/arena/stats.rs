@@ -279,6 +279,23 @@ pub(crate) fn arena_free_list_bytes() -> usize {
 
 /// Cumulative successful arena bytes, including synchronized generated bumps
 /// and reused holes. Collector bytes are included here and removed by the pacer.
+/// [`allocation_totals`] per arena: young, old, longlived, survivor 0, 1
+/// (LIFE I2 A reconciliation; instrumented runtime only).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn allocation_totals_by_arena() -> [(usize, usize); 5] {
+    let get = |arena: &super::block::ArenaCell| unsafe {
+        let arena = &*arena.get();
+        (arena.allocated_bytes, arena.large_allocated_bytes)
+    };
+    [
+        ARENA.with(get),
+        OLD_ARENA.with(get),
+        LONGLIVED_ARENA.with(get),
+        SURVIVOR_ARENA_0.with(get),
+        SURVIVOR_ARENA_1.with(get),
+    ]
+}
+
 pub(crate) fn allocation_totals() -> (usize, usize) {
     let mut bytes = 0usize;
     let mut large = 0usize;

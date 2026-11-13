@@ -119,6 +119,37 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
     module_with_classes_and_params(name, Vec::new(), Vec::new(), Type::Number, body)
 }
 
+/// `opts` with the quiet-site facts the whole-program solve gives a
+/// `for (let i = 0; i < arr.length; i++)` loop over a local Array literal
+/// whose body reads and stores `arr[i]` (`perry compile`,
+/// `PERRY_FACTS_DUMP`: `arr.length` a quiet read with a primitive value,
+/// every `arr[…]` a quiet element site with a primitive value). The legacy
+/// length hoist keeps `arr.length` only on that word (#14537,
+/// `perry_codegen` `quiet`) and a unit test runs no solve: a test whose
+/// subject hangs on the hoisted length (the bounded index tiers, the
+/// versioned slow clone) states the facts it relies on. The HIR builders
+/// here put offset 0 at every site, so the facts are keyed by 0: every
+/// `length` read and element site of the module is quiet, as in the real
+/// program, where the Array is a local literal.
+fn with_quiet_sites(opts: CompileOptions) -> CompileOptions {
+    let mut elision = (*opts.program_facts.elision).clone();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    elision.primitive_elements.insert(0);
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..opts.program_facts
+        },
+        ..opts
+    }
+}
+
+fn compile_ir_quiet(name: &str, body: Vec<Stmt>) -> String {
+    compile_ir_with_opts(name, body, with_quiet_sites(empty_opts()))
+}
+
 fn module_with_classes_and_params(
     name: &str,
     classes: Vec<Class>,
@@ -250,6 +281,10 @@ fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
 
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
     compile_artifact_json_for_module(module(name, body))
+}
+
+fn compile_artifact_json_quiet(name: &str, body: Vec<Stmt>) -> serde_json::Value {
+    compile_artifact_json_for_module_with_opts(module(name, body), with_quiet_sites(empty_opts()))
 }
 
 fn compile_artifact_json_for_module(module: Module) -> serde_json::Value {
@@ -1314,23 +1349,135 @@ fn unboxes_bool_arg(ir: impl AsRef<str>) -> bool {
     ir_line_with(ir, &["icmp eq i64 %", ", 9222246136947933188"])
 }
 
-/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`): the INT32 identity test plus
-/// the plain-double range bounds that admit an integral double.
-/// Replaces `call i32 @js_typed_i32_arg_guard`.
-fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
-    let ir = ir.as_ref();
-    ir_line_with(ir, &["icmp eq i64 %", ", 9222809086901354496"])
-        && ir_line_with(ir, &["fcmp oge double %", "-2147483648.0"])
-        && ir_line_with(ir, &["fcmp ole double %", "2147483647.0"])
+/// The SSA definitions of `ir`, register -> right-hand side.
+fn ssa_defs(ir: &str) -> std::collections::HashMap<&str, &str> {
+    ir.lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect()
 }
 
-/// Int32 unbox: the tagged low lane and the converted double, selected into one
-/// raw `i32`. Replaces `call i32 @js_typed_i32_arg_to_raw`.
+/// The block an edge to `label` reaches past a call-site stack check. The
+/// stack guard (`expr::stack_guard`, 36a74ffa6a) retargets every edge into a
+/// calling block to a `stack_guard.call.*` check whose overflow arm calls
+/// `js_stack_overflow` and rejoins, so the check has exactly one successor
+/// outside itself: the original target. A label that is no check is itself.
+fn through_stack_check(fn_ir: &str, label: &str) -> String {
+    if !label.starts_with("stack_guard.call.") {
+        return label.to_string();
+    }
+    let block = |l: &str| -> &str {
+        let marker = format!("\n{l}:\n");
+        let start = fn_ir
+            .find(&marker)
+            .unwrap_or_else(|| panic!("block `{l}` not found:\n{fn_ir}"))
+            + marker.len();
+        let rest = &fn_ir[start..];
+        &rest[..rest.find("\n\n").unwrap_or(rest.len())]
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut work = vec![label.to_string()];
+    let mut out = std::collections::BTreeSet::new();
+    while let Some(l) = work.pop() {
+        if !seen.insert(l.clone()) {
+            continue;
+        }
+        if !l.starts_with("stack_guard.") {
+            out.insert(l);
+            continue;
+        }
+        for succ in block(&l).split("label %").skip(1) {
+            work.push(
+                succ.split([',', ' ', '\n', ']'])
+                    .next()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+    }
+    assert_eq!(
+        out.len(),
+        1,
+        "the stack check `{label}` must rejoin exactly one target: {out:?}\n{fn_ir}"
+    );
+    out.into_iter().next().unwrap()
+}
+
+/// Int32 lane (`emit_typed_i32_plain_guard_and_raw`, P3 since #14353 /
+/// 09454cd509): a Number is a plain double, so the value admits when it
+/// round-trips the SATURATING conversion exactly (`%raw = fptosi.sat(%v)`,
+/// `sitofp %raw == %v`; every NaN-boxed tag converts to 0 and compares
+/// unequal) and its bits are not `-0`'s. Followed through the data flow: the
+/// round trip compares the converted value with the SAME `%v`, and the `-0`
+/// test reads `%v`'s bits, and the two are `and`ed into one predicate.
+/// Replaced the INT32-tag identity test plus range bounds, and before that
+/// `call i32 @js_typed_i32_arg_guard`.
+fn guards_i32_arg(ir: impl AsRef<str>) -> bool {
+    let ir = ir.as_ref();
+    let defs = ssa_defs(ir);
+    let def_of = |rhs: &str| -> Vec<&str> {
+        defs.iter()
+            .filter(|(_, d)| **d == rhs)
+            .map(|(r, _)| *r)
+            .collect()
+    };
+    defs.iter().any(|(raw, def)| {
+        let Some(v) = def
+            .strip_prefix("call i32 @llvm.fptosi.sat.i32.f64(double ")
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            return false;
+        };
+        let round_trips: Vec<&str> = def_of(&format!("sitofp i32 {raw} to double"))
+            .into_iter()
+            .flat_map(|rt| {
+                let mut eq = def_of(&format!("fcmp oeq double {rt}, {v}"));
+                eq.extend(def_of(&format!("fcmp oeq double {v}, {rt}")));
+                eq
+            })
+            .collect();
+        let not_negative_zero: Vec<&str> = def_of(&format!("bitcast double {v} to i64"))
+            .into_iter()
+            .flat_map(|b| def_of(&format!("icmp ne i64 {b}, -9223372036854775808")))
+            .collect();
+        // Both tests decide the one predicate: they are `and`ed together.
+        round_trips.iter().any(|eq| {
+            not_negative_zero.iter().any(|nz| {
+                defs.values().any(|d| {
+                    *d == format!("and i1 {eq}, {nz}").as_str()
+                        || *d == format!("and i1 {nz}, {eq}").as_str()
+                })
+            })
+        })
+    })
+}
+
+/// Int32 unbox: the raw `i32` lane of a guarded value. Behind the guard it is
+/// one conversion, `fptosi double %v to i32`
+/// (`emit_typed_i32_raw_assuming_guarded`), or the guard's own saturating
+/// conversion. Replaces the INT32-tag low lane + converted double selected
+/// into one `i32`, and before that `call i32 @js_typed_i32_arg_to_raw`.
 fn unboxes_i32_arg(ir: impl AsRef<str>) -> bool {
     let ir = ir.as_ref();
     ir_line_with(ir, &["fptosi double %", " to i32"])
-        && ir_line_with(ir, &["trunc i64 %", " to i32"])
-        && ir_line_with(ir, &["select i1 %", ", i32 %"])
+        || ir_line_with(ir, &["call i32 @llvm.fptosi.sat.i32.f64(double %"])
+}
+
+/// The raw `i32` result of a call of `callee` is boxed at the ABI edge as the
+/// canonical double (`sitofp i32 %r to double`): a Number has one encoding
+/// (P3), so this replaces the INT32 tag the result was boxed with before.
+fn boxes_i32_result(ir: impl AsRef<str>, callee: &str) -> bool {
+    let ir = ir.as_ref();
+    let call = format!("call i32 @{callee}(");
+    let defs = ssa_defs(ir);
+    defs.iter().any(|(r, def)| {
+        def.starts_with(&call)
+            && defs
+                .values()
+                .any(|d| *d == format!("sitofp i32 {r} to double").as_str())
+    })
 }
 
 /// String lane (`emit_typed_string_guard`): heap STRING_TAG or inline
@@ -1379,6 +1526,24 @@ fn inline_typed_guard_predicates_reject_unguarded_and_neighbouring_lanes() {
     // so the two must not be interchangeable.
     assert!(!guards_number_arg_banded(number_tier1));
     assert!(!guards_bool_arg(number_tier1));
+
+    // The int32 lane: the round trip and the -0 test on the same value. A
+    // round trip against another value, or no -0 test, is no guard.
+    let i32_guard = "  %r1 = bitcast double %arg1 to i64\n  %r2 = call i32 @llvm.fptosi.sat.i32.f64(double %arg1)\n  %r3 = sitofp i32 %r2 to double\n  %r4 = fcmp oeq double %r3, %arg1\n  %r5 = icmp ne i64 %r1, -9223372036854775808\n  %r6 = and i1 %r4, %r5\n";
+    assert!(guards_i32_arg(i32_guard));
+    assert!(unboxes_i32_arg(i32_guard));
+    assert!(!guards_number_arg(i32_guard));
+    assert!(!guards_i32_arg(
+        i32_guard.replace("double %r3, %arg1", "double %r3, %arg2")
+    ));
+    assert!(!guards_i32_arg(i32_guard.replace(
+        "icmp ne i64 %r1, -9223372036854775808",
+        "add i64 %r1, 0"
+    )));
+    assert!(!guards_i32_arg(
+        i32_guard.replace("and i1 %r4, %r5", "or i1 %r4, %r5")
+    ));
+    assert!(!guards_i32_arg(number_tier1));
 
     // The constant alone must not satisfy a guard: the opcode has to match too.
     let constant_only = "  %r2 = add i64 %r1, 9221401712017801215\n";
@@ -2755,9 +2920,9 @@ fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
     );
 }
 
-#[test]
-fn packed_f64_loop_store_update_versions_with_side_exit() {
-    let module = module_with_classes_and_params(
+/// `probe()`: `const delta = 0.5; let values: number[] = [1, 2, 3]; for (let i = 0; i < values.length; i++) values[i] = values[i] + delta; return delta`.
+fn packed_f64_store_update_module() -> Module {
+    module_with_classes_and_params(
         "packed_f64_store_update_side_exit.ts",
         Vec::new(),
         Vec::new(),
@@ -2776,9 +2941,14 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
             ),
             Stmt::Return(Some(local(2))),
         ],
-    );
+    )
+}
 
-    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+#[test]
+fn packed_f64_loop_store_update_versions_with_side_exit() {
+    let module = packed_f64_store_update_module();
+    let ir =
+        compile_ir_for_module_with_opts(module.clone(), with_quiet_sites(empty_opts())).unwrap();
     assert!(
         ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
         "safe store-update loop should get a packed-f64 loop guard:\n{ir}"
@@ -3655,9 +3825,9 @@ fn packed_u32_loop_store_routes_to_generic_full_value_store() {
     );
 }
 
-#[test]
-fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
-    let module = module_with_classes_and_params(
+/// `probe()`: `let values: number[] = [-1, 2, -3]; for (let i = 0; i < values.length; i++) values[i] = Math.abs(values[i]); return 0`.
+fn packed_f64_unary_math_store_module() -> Module {
+    module_with_classes_and_params(
         "packed_f64_unary_math_store_side_exit.ts",
         Vec::new(),
         Vec::new(),
@@ -3675,9 +3845,14 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
             ),
             Stmt::Return(Some(int(0))),
         ],
-    );
+    )
+}
 
-    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+#[test]
+fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
+    let module = packed_f64_unary_math_store_module();
+    let ir =
+        compile_ir_for_module_with_opts(module.clone(), with_quiet_sites(empty_opts())).unwrap();
     assert!(
         ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
         "unary numeric math store loop should get a packed-f64 loop guard:\n{ir}"
@@ -12729,7 +12904,6 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
         compile_module(&typed_i32_return_module("positive"), empty_opts()).unwrap(),
     )
     .unwrap();
-    const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_fn_typed_i32_return_positive_ts__mix_i32";
     let typed = "perry_fn_typed_i32_return_positive_ts__mix_i32$typed_i32";
     let generic_body = "perry_fn_typed_i32_return_positive_ts__mix_i32$generic";
@@ -12755,7 +12929,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
         guards_i32_arg(&wrapper_ir)
             && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && wrapper_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&wrapper_ir, typed),
         "public wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
     );
     assert!(
@@ -12768,7 +12942,7 @@ fn typed_i32_return_function_uses_i32_params_return_and_public_wrapper() {
             && guards_i32_arg(&caller_ir)
             && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && caller_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&caller_ir, typed),
         "direct FuncRef lowering should use the raw i32 clone after guards and box at the call boundary:\n{caller_ir}"
     );
     assert!(
@@ -12864,7 +13038,6 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         compile_module(&typed_i32_method_clone_module("eligible"), empty_opts()).unwrap(),
     )
     .unwrap();
-    const INT32_TAG_I64: &str = "9222809086901354496";
     let public = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32";
     let typed = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$typed_i32";
     let generic_body = "perry_method_typed_i32_method_eligible_ts__Bits__mix_i32$generic";
@@ -12897,7 +13070,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
         guards_i32_arg(&wrapper_ir)
             && unboxes_i32_arg(&wrapper_ir)
             && wrapper_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && wrapper_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&wrapper_ir, typed),
         "public method wrapper should guard/unbox Int32 args and box raw i32 at the ABI edge:\n{wrapper_ir}"
     );
     assert!(
@@ -12907,7 +13080,7 @@ fn typed_i32_method_clone_emits_internal_clone_and_guarded_direct_call() {
             && guards_i32_arg(&caller_ir)
             && unboxes_i32_arg(&caller_ir)
             && caller_ir.contains(&format!("call i32 @{typed}(i32 "))
-            && caller_ir.contains(INT32_TAG_I64),
+            && boxes_i32_result(&caller_ir, typed),
         "exact direct method call should guard receiver/method identity, then guard/unbox Int32 args and call the clone:\n{caller_ir}"
     );
     assert!(
@@ -13723,8 +13896,12 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
         let rest = &caller_ir[start..];
         &rest[..rest.find("\n\n").unwrap_or(rest.len())]
     };
-    let success_block = basic_block(success_label);
-    let failure_block = basic_block(failure_label);
+    // Either edge may enter a call-site stack check first (36a74ffa6a), which
+    // rejoins the edge's own target.
+    let success_label = through_stack_check(caller_ir, success_label);
+    let failure_label = through_stack_check(caller_ir, failure_label);
+    let success_block = basic_block(&success_label);
+    let failure_block = basic_block(&failure_label);
     assert!(
         success_block.contains(&format!("call double @{typed}(i64 ")),
         "the raw-f64 field-guard success edge must call the raw-f64 receiver clone:\n\
@@ -16908,13 +17085,29 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         .take_while(|line| line.is_empty() || line.starts_with(' '))
         .collect::<Vec<_>>()
         .join("\n");
+    // The guard's two edges may enter a call-site stack check first
+    // (`stack_guard.call.*`, 36a74ffa6a: the entry check moves to the
+    // calling blocks); the check rejoins the edge's own target.
+    let edges: Vec<String> = deref
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 "))
+        .map(|br| {
+            br.split("label %")
+                .skip(1)
+                .map(|l| through_stack_check(caller, l.split([',', ' ']).next().unwrap()))
+                .collect()
+        })
+        .unwrap_or_default();
     assert!(
         deref.contains("load i64")
             && deref.contains("icmp eq i64")
             && deref.contains("icmp ult i32")
-            && deref.contains("label %method_direct.fast.")
-            && deref.contains("label %method_direct.fallback."),
-        "the canonical receiver word and ShapeId domain must guard the fast arm: {deref}"
+            && edges.len() == 2
+            && edges[0].starts_with("method_direct.fast.")
+            && edges[1].starts_with("method_direct.fallback."),
+        "the canonical receiver word and ShapeId domain must guard the fast arm \
+         (edges {edges:?}): {deref}\n{caller}"
     );
     assert!(
         caller.contains("call double @perry_method_static_certificate_ts__Bits__mix_i32$pshape(")
@@ -16922,9 +17115,17 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         "the guarded layout clone and complete miss must both remain live: {caller}"
     );
     let public = function_ir_section(&ir, "perry_fn_static_certificate_ts__probe");
+    // The method-direct guard and both arms stay in the one shared body. The
+    // public entry is only the routing trampoline (argument guard, then the
+    // specialized clone or `$generic`): out of line, or since 36a74ffa6a a
+    // small one is `alwaysinline` (`PERRY_SPEC_INLINE`), which still holds no
+    // copy of the layout guard.
     assert!(
-        public.contains(") noinline"),
-        "the public wrapper stays shared: {public}"
+        !public.contains("method_direct.")
+            && public.contains("call double @perry_fn_static_certificate_ts__probe$generic(")
+            && public.contains("call double @perry_fn_static_certificate_ts__probe$spec_")
+            && (public.contains(") noinline") || public.contains(") alwaysinline")),
+        "the public wrapper stays a shared routing trampoline: {public}"
     );
     assert!(
         caller.contains("call ptr @perry_class_value_dir_cell("),
@@ -17009,4 +17210,50 @@ fn a_literal_compared_through_a_runtime_helper_is_materialized_at_that_boundary(
              helper, so the literal's boxing records its runtime_api boundary:\n{materialized:#?}"
         );
     }
+}
+
+/// The versioned packed-f64 loop without the quiet-site facts. Its fast
+/// clone is entered only when no call survived in its emitted blocks, and
+/// that scan, not the length hoist's walker, is its proof: the clone is not
+/// asked (#14537) and keeps its inline range store with the side exit. The
+/// slow clone is an ordinary loop: without the facts' word on its sites the
+/// hoist is refused and its condition reads `values.length` at every step.
+fn assert_facts_less_packed_loop_keeps_the_fast_clone(ir: &str) {
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "the packed-f64 loop guard does not hang on the quiet-site facts:\n{ir}"
+    );
+    let body = ir
+        .find("\nfor.packed_f64_fast.body.")
+        .map(|at| &ir[at + 1..])
+        .map(|rest| &rest[..rest.find("\n\n").unwrap_or(rest.len())])
+        .unwrap_or_else(|| panic!("expected the packed-f64 fast body:\n{ir}"));
+    assert!(
+        body.contains("label %packed_f64_range_store.fast.")
+            && body.contains("label %packed_f64_range_store.side_exit."),
+        "the fast clone stores through the inline range store with its side exit:\n{body}\n\n{ir}"
+    );
+    let slow_cond = ir
+        .find("\nfor.packed_f64_slow.cond.")
+        .map(|at| &ir[at + 1..])
+        .map(|rest| &rest[..rest.find("\n\n").unwrap_or(rest.len())])
+        .unwrap_or_else(|| panic!("expected the packed-f64 slow condition:\n{ir}"));
+    assert!(
+        slow_cond.contains("label %plen."),
+        "without the facts the slow clone reads its length at every step:\n{slow_cond}\n\n{ir}"
+    );
+}
+
+#[test]
+fn packed_f64_loop_store_update_without_quiet_facts_keeps_the_fast_clone() {
+    let ir =
+        compile_ir_for_module_with_opts(packed_f64_store_update_module(), empty_opts()).unwrap();
+    assert_facts_less_packed_loop_keeps_the_fast_clone(&ir);
+}
+
+#[test]
+fn packed_f64_loop_unary_math_store_without_quiet_facts_keeps_the_fast_clone() {
+    let ir = compile_ir_for_module_with_opts(packed_f64_unary_math_store_module(), empty_opts())
+        .unwrap();
+    assert_facts_less_packed_loop_keeps_the_fast_clone(&ir);
 }

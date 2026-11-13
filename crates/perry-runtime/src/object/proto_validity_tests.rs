@@ -122,7 +122,9 @@ fn the_generator_and_iterator_prototypes_keep_their_born_lineage() {
         &crate::object::iterator_prototypes::STRING_ITERATOR_PROTOTYPE_PTR,
         &crate::object::iterator_prototypes::REGEXP_STRING_ITERATOR_PROTOTYPE_PTR,
     ] {
-        holders.push(slot.load(std::sync::atomic::Ordering::Acquire) as *mut crate::object::ObjectHeader);
+        holders.push(
+            slot.load(std::sync::atomic::Ordering::Acquire) as *mut crate::object::ObjectHeader
+        );
     }
     for holder in holders {
         assert!(!holder.is_null());
@@ -159,11 +161,16 @@ fn the_realm_sealed_constructor_prototypes_keep_their_born_lineage() {
         let bits = crate::object::builtin_prototype_value(name).to_bits();
         (bits & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader
     };
-    for name in ["String", "Number", "Map", "Set", "Promise", "WeakSet", "Error"] {
+    for name in [
+        "String", "Number", "Map", "Set", "Promise", "WeakSet", "Error",
+    ] {
         let holder = proto_of(name);
         assert!(!holder.is_null(), "{name}.prototype");
         unsafe {
-            assert!(object_is_marked_prototype(holder as usize), "{name}.prototype is marked");
+            assert!(
+                object_is_marked_prototype(holder as usize),
+                "{name}.prototype is marked"
+            );
             assert!(
                 object_on_born_prototype_lineage(holder),
                 "{name}.prototype: its seal took no private-lineage transition"
@@ -173,8 +180,14 @@ fn the_realm_sealed_constructor_prototypes_keep_their_born_lineage() {
     let unsealed = proto_of("TextDecoder");
     assert!(!unsealed.is_null());
     unsafe {
-        assert!(!object_is_marked_prototype(unsealed as usize), "TextDecoder.prototype is not sealed");
-        assert!(!object_on_born_prototype_lineage(unsealed), "an unsealed prototype keeps the ordinary lineage");
+        assert!(
+            !object_is_marked_prototype(unsealed as usize),
+            "TextDecoder.prototype is not sealed"
+        );
+        assert!(
+            !object_on_born_prototype_lineage(unsealed),
+            "an unsealed prototype keeps the ordinary lineage"
+        );
     }
     let ordinary = crate::object::js_object_alloc(0, 0);
     set(ordinary, "a", 1.0);

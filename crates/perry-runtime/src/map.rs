@@ -692,13 +692,8 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return false;
     }
-    // Raw pointer (0x0000) with a plausible heap address is also a pointer.
-    if upper == 0x0000 {
-        let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-        if lower > 0x10000 {
-            return false;
-        }
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0):
+    // it keys by its bits like every other Number.
     true
 }
 
@@ -753,10 +748,6 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
     let upper = bits >> 48;
     let addr = if upper == (crate::value::BIGINT_TAG >> 48) || upper == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if upper == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class — see `map_ptr_from_receiver_bits`: `> 0x10000` lets the
-        // whole handle band through; `is_above_handle_band` is the real floor.
-        bits as usize
     } else {
         return std::ptr::null();
     };
@@ -927,7 +918,12 @@ fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
                 crate::object::map_set_subclass::CollectionKind::Map,
             ) as *const MapHeader
         }
-        _ => map,
+        // Any other cell (an Array, a Date, a closure, a Set, ...) or a word
+        // with no readable header (a primitive's payload behind the
+        // annotation): no `MapHeader` lives there, and the operation would read
+        // or WRITE that cell as one. Null is the "not a Map" answer every
+        // entry already gives a plain object.
+        _ => std::ptr::null(),
     }
 }
 
@@ -1084,15 +1080,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG (string stored as generic pointer)
-        0x0000 => {
-            // Raw pointer (no NaN-boxing tag)
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }

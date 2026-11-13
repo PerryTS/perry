@@ -456,6 +456,7 @@ pub(crate) fn proto_own_native(
     dst: NodeId,
 ) -> Option<Native> {
     let (fam, what, global) = proto_family(ns)?;
+    crate::family_reach::prototype(m, global, a);
     let name = m.atoms[a as usize].clone();
     if !matches!(members::member(fam, &name), Some(Mem::Fn))
         && (m.unit_mode || !matches!(members::member(fam, &name), Some(Mem::Ctor)))
@@ -499,6 +500,35 @@ fn module_getter(
     let getter = m.native_property(t, key)?.get?;
     let (proto, k) = getter.strip_suffix(".<get>")?.rsplit_once('.')?;
     super::effects::declared_getter(proto, k)
+}
+
+/// The declared getter (`effects::declared_getter`) a load of named key `a`
+/// on builtin object `t` of kind `what` runs, never the getter function:
+/// - on the prototype of an object a declaration made (`what` is that
+///   prototype: `AbortController.prototype.signal`);
+/// - otherwise on the realm holder of `what` (`realm_holder`: `RegExp` ->
+///   `RegExp.prototype`), when the read of `a` on `t`'s chain is final
+///   (`locked_chain_read`: the runtime refuses to redefine the member, so
+///   the declared getter is the one that runs) and
+///   `PERRY_FACTS_DECLARED_GETTER_RESULTS` is not `0`
+///   (`effects::declared_getter_results`). A holder whose member the
+///   program may redefine reads through `family_load`.
+fn bobj_declared_getter(
+    m: &Model,
+    t: Tok,
+    what: &'static str,
+    a: Atom,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let n = &m.atoms[a as usize];
+    if what.ends_with(".prototype") {
+        return super::effects::declared_getter(what, n);
+    }
+    if !super::effects::declared_getter_results() {
+        return None;
+    }
+    let holder = super::realm_holder(m, members::bobj_family(what), Some(what))?;
+    let e = super::effects::declared_getter(m.declarations.shape(holder).name, n)?;
+    super::locked_chain_read(m, t, a).then_some(e)
 }
 
 pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId) {
@@ -565,6 +595,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
 // -------------------------------------------------------------- loads
 
 pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
+    crate::family_reach::primitive(m, prim, key);
     if prim & (prim::NULL | prim::UNDEF) == prim {
         return; // TypeError
     }
@@ -672,6 +703,7 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
+    crate::family_reach::tok(m, t, key);
     let name = match key {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any(_) => None,
@@ -976,6 +1008,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             Some("name") => m.add_prim(dst, prim::STR),
             Some("length") => m.add_prim(dst, prim::NUM),
+            // A generator object's inherited member (`gen_members`).
+            Some(n) if gen_members::load(m, t, n, dst) => {}
             Some("call" | "apply" | "bind" | "toString") => {
                 let Key::Named(a) = key else { unreachable!() };
                 let bf = match (!m.unit_mode)
@@ -1181,14 +1215,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     // A getter the realm declares on the prototype of an
                     // object a declaration made (`AbortController.prototype
-                    // .signal`): its declared result, never the getter
-                    // function; a write of the key onto the chain (now, or
-                    // later: the replay) reads what was stored.
-                    (Key::Named(a), Some(n))
-                        if what.ends_with(".prototype")
-                            && super::effects::declared_getter(what, n).is_some() =>
-                    {
-                        let e = super::effects::declared_getter(what, n).expect("declared");
+                    // .signal`) or on a locked realm holder (a RegExp's
+                    // `flags`: `bobj_declared_getter`): its declared result,
+                    // never the getter function; a write of the key onto the
+                    // chain (now, or later: the replay) reads what was
+                    // stored.
+                    (Key::Named(a), Some(_)) if bobj_declared_getter(m, t, what, a).is_some() => {
+                        let e = bobj_declared_getter(m, t, what, a).expect("declared");
                         super::effects::getter_load(m, e, t, a, dst);
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);
@@ -1319,6 +1352,7 @@ fn object_proto_method_value(m: &mut Model, a: Atom, dst: NodeId) {
 /// (DECISIONS 213). A site builtin object's chain (a typed array's ...)
 /// under a computed key stays `tok_load`'s.
 pub fn chain_load(m: &mut Model, of: Tok, q: Tok, key: Key, dst: NodeId) {
+    crate::family_reach::chain(m, of, q, key);
     if let (TokKind::Builtin(ns), Key::Named(a)) = (m.toks[q as usize].clone(), key) {
         if namespace_getter_load(m, of, q, ns, a, dst) {
             return;

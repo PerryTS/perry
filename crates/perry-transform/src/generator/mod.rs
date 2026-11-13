@@ -31,10 +31,9 @@ mod rewrite_returns;
 pub(crate) use box_release::build_box_release_stmts;
 pub(crate) use break_continue::{
     body_contains_yield, collect_hoisted_decl_facts, collect_hoisted_vars,
-    fix_break_continue_sentinels,
-    fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,
-    fix_placeholder_state, prefix_loop_continues, rewrite_break_continue_in_stmts,
-    stmts_have_continue_inside_try_finally,
+    fix_break_continue_sentinels, fix_break_continue_sentinels_in_catches,
+    fix_break_continue_sentinels_in_stmts, fix_placeholder_state, prefix_loop_continues,
+    rewrite_break_continue_in_stmts, stmts_have_continue_inside_try_finally,
 };
 pub(crate) use helpers::{
     alloc_local, initialize_tdz_lets_in_stmts, make_iter_result, rewrite_hoisted_lets_in_stmts,
@@ -115,6 +114,18 @@ fn record_async_generator_func(id: FuncId) {
 
 /// Transform all generator functions in a module into state machine form.
 pub fn transform_generators(module: &mut Module) {
+    lower_generators(module);
+    private_frame::run(module);
+}
+
+/// The state-machine lowering alone, for a backend without the native
+/// private-frame intrinsics (`__perry_runtime.privateResumeFrame` and its steps)
+/// that `transform_generators` rewrites local consumers into.
+pub fn transform_generators_without_private_frames(module: &mut Module) {
+    lower_generators(module);
+}
+
+fn lower_generators(module: &mut Module) {
     // #3664: reset the per-thread async-generator accumulator for this module.
     ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
     // Load the param-prologue lengths recorded by lowering so the transform can
@@ -264,7 +275,6 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
-    private_frame::run(module);
 }
 
 fn transform_generator_closures_in_stmts(

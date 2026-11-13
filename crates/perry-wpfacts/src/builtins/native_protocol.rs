@@ -1116,7 +1116,7 @@ pub(super) fn native_method(
     if native_skips(m, np, Key::Named(a), NativeMiss::Call(origin, call)) {
         return;
     }
-    let c = m.calls[call as usize].clone();
+    let c = m.positional(call, 2);
     match (native, name) {
         (
             "EventEmitter",

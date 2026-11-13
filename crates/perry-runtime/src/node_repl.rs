@@ -58,9 +58,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 

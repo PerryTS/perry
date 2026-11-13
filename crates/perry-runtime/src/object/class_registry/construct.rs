@@ -718,6 +718,16 @@ unsafe fn construct_registered_class_ref_entry(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // GetPrototypeFromConstructor(newTarget) (ECMA-262 10.1.13) for a
+    // newTarget that is no class (`Reflect.construct(C, [], function F() {})`):
+    // the instance's [[Prototype]] is `F.prototype`, read before the birth
+    // (the read may allocate) and installed before the constructor body runs.
+    let custom_proto = new_target_class_id(new_target)
+        .is_none()
+        .then(|| constructor_prototype_bits(new_target))
+        .flatten()
+        .map(|bits| scope.root_nanbox_u64(bits));
     let inst = allocate_class_instance(instance_cid, birth_args).0;
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
@@ -757,8 +767,16 @@ unsafe fn construct_registered_class_ref_entry(
     // doc-comment at the top of this file called for. Reading back through the
     // handles is not bookkeeping: an evacuating cycle rewrites the slot in
     // place, so the pre-call value is stale by construction.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_raw_mut_ptr(inst);
+    if let Some(proto) = custom_proto {
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            super::super::prototype_chain::object_set_static_prototype(
+                inst as usize,
+                proto.get_nanbox_u64(),
+            )
+        });
+    }
+    let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
     let prev_new_target = crate::object::js_new_target_get();
     let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(new_target);

@@ -36,7 +36,6 @@ entry = "src/main.ts"
 
 [build]
 out_dir = "dist"
-opt_level = 2
 "#;
 
 // package.json carries the npm-interop layer. Notably it is the *only* home for
@@ -210,4 +209,17 @@ pub fn run(args: InitArgs, format: OutputFormat, _use_color: bool) -> Result<()>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The scaffold must only name settings the compiler actually reads. `opt_level`
+    // was written here while no crate read it, so every new project carried a
+    // knob that did nothing; the level is chosen by PERRY_LL_OPT_LEVEL today.
+    #[test]
+    fn scaffolded_config_carries_no_opt_level() {
+        assert!(!DEFAULT_CONFIG.contains("opt_level"));
+    }
 }

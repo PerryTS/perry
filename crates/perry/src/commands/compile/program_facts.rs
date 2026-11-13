@@ -495,6 +495,7 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         .collect();
     out.super_unrelinked = pf.super_unrelinked.clone();
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
+    out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
@@ -611,9 +612,11 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.list_capacities
             .extend(mb.list_capacities.iter().copied());
         out.rest_pushes.extend(mb.rest_pushes.iter().copied());
-        out.fill_push_recvs.extend(mb.fill_push_recvs.iter().copied());
+        out.fill_push_recvs
+            .extend(mb.fill_push_recvs.iter().copied());
         out.fill_births.extend(mb.fill_births.iter().copied());
-        out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
+        out.rest_lane_reads
+            .extend(mb.rest_lane_reads.iter().copied());
         // DESIGN-p4l4 VR-4b: the record arrays. Their record's layout is
         // this module's (wpfacts rejects a record array held in another
         // module); without it codegen refuses the module.
@@ -724,6 +727,29 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
         }
     }
+    // Method sites (wpfacts `method_sites`): no typed-array receiver fact
+    // with `PERRY_FACTS_TYPED_ARRAY_SITES=0`, no Array-member fact with
+    // `PERRY_FACTS_ARRAY_METHOD_SITES=0`, none when interpreted code can
+    // run. Two records under one key hold a fact only when both do.
+    if !interp {
+        for (site, key, flags) in &mb.method_sites {
+            out.method_sites
+                .entry((*site, key.clone()))
+                .and_modify(|f| *f &= *flags)
+                .or_insert(*flags);
+        }
+    }
+    // Quiet sites (wpfacts `quiet_sites`): empty with
+    // `PERRY_FACTS_QUIET_SITES=0`, and when interpreted code can run.
+    let quiet = !interp && perry_wpfacts::quiet_sites_enabled();
+    if quiet {
+        out.quiet_reads.extend(mb.quiet_reads.iter().cloned());
+        out.quiet_elements.extend(mb.quiet_elements.iter().copied());
+        out.primitive_reads
+            .extend(mb.primitive_reads.iter().cloned());
+        out.primitive_elements
+            .extend(mb.primitive_elements.iter().copied());
+    }
     for (id, b) in &mb.locals {
         if !interp {
             if let Some(o) = &b.indexed_owner {
@@ -795,6 +821,18 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
             }
             if b.stable_length {
                 out.stable_length_locals.insert(*id, b.stable_front);
+            }
+            if b.named_length {
+                out.named_length_locals.insert(*id);
+            }
+            // A primitive and no object at all: an operator converts
+            // nothing of it (`perry_codegen` `quiet`).
+            // The negative control `quiet` claims it for every local.
+            if quiet
+                && (!b.other && b.class_ids.is_empty() && b.prims != 0
+                    || pf.sabotage.as_deref() == Some("quiet"))
+            {
+                out.primitive_locals.insert(*id);
             }
             if let Some(c) = &b.const_elems {
                 out.const_arrays.insert(*id, c.clone());

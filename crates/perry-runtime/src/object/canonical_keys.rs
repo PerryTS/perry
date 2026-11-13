@@ -1112,6 +1112,8 @@ pub(crate) unsafe fn probe_born_layout(
 unsafe fn stamp_shared(arr: *mut ArrayHeader) {
     let gc_header = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)
         .expect("a canonical array must be a tracked GC allocation");
+    #[cfg(perry_gc_instruments)]
+    crate::arena::alloc_life::shape_shared(gc_header.as_ptr());
     (*gc_header.as_ptr()).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
 }
 
@@ -1431,6 +1433,10 @@ pub(crate) unsafe fn extend_key_with_entry(
 /// # Safety
 /// `keys` is a live list with `count` initialized slots; the caller has
 /// rooted what it holds: this allocates.
+// Every instantiation has exactly one call site (each caller passes its own
+// closure type), so inlining duplicates no code. Stated, so the rebuild inside
+// `apply_edits` does not depend on where the inliner's cost margin falls.
+#[inline(always)]
 pub(crate) unsafe fn rebuild_with_entries(
     proof: &SharedLayout,
     keys: crate::object::ObjectKeys,

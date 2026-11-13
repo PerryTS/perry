@@ -26,6 +26,76 @@ pub struct FoldedCall<'a> {
     pub args: Vec<&'a Expr>,
 }
 
+/// The identity of a by-name method site, shared by the whole-program facts
+/// (which judge the site) and codegen (which asks for the verdict).
+///
+/// A call the HIR keeps as `Call { callee: PropertyGet }` is named by its
+/// callee read's offset ([`Site::Callee`]). A folded node carries no source
+/// offset of its own, so it is named by its receiver: the local it reads
+/// ([`Site::Local`]; a local's value set is one node, so every `a.m()` on
+/// the same local has the same verdict) or the receiver expression's offset
+/// ([`Site::Recv`]). The method name completes the key on both sides. The
+/// kinds never share a key (a member chain `x.m().m()` starts its callee
+/// read and its receiver at one offset), and the facts hold a verdict for a
+/// key only when every site recorded under it has that verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Site {
+    /// The byte offset of the callee `PropertyGet` of an unfolded call.
+    Callee(u32),
+    /// The byte offset of a folded node's receiver expression.
+    Recv(u32),
+    /// The local a folded node's receiver reads.
+    Local(u32),
+}
+
+/// A method site's receiver holds only typed arrays the realm bore, at
+/// every copy of the site (wpfacts `method_sites`).
+pub const SITE_TYPED_ARRAY: u8 = 1;
+
+/// A method site's receiver holds only Array exotic objects and the member
+/// it names is the realm's `Array.prototype` built-in on each of them, at
+/// every copy of the site: the solver's `NativeMember` verdict over the
+/// Array family (wpfacts `method_sites`).
+pub const SITE_ARRAY_MEMBER: u8 = 2;
+
+/// Every value reaching the receiver is a `Map` the realm bore (`new Map`),
+/// at every copy of the site (wpfacts `method_sites`). Nothing about the
+/// member: an own or prototype `get` is the own-override guard's question.
+pub const SITE_MAP: u8 = 4;
+
+/// [`SITE_MAP`] for `Set` (`new Set`).
+pub const SITE_SET: u8 = 8;
+
+/// The site of the unfolded call whose callee is `callee`, when it has a
+/// source offset.
+pub fn callee_site(callee: &Expr) -> Option<Site> {
+    match callee {
+        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => {
+            Some(Site::Callee(*byte_offset))
+        }
+        _ => None,
+    }
+}
+
+/// The site of a folded node whose receiver is `receiver`; `None` for a
+/// receiver with no identity (a synthesized expression, a nested fold): such
+/// a site has no verdict.
+pub fn receiver_site(receiver: &Receiver<'_>) -> Option<Site> {
+    match receiver {
+        Receiver::Local(id) => Some(Site::Local(*id)),
+        Receiver::Expr(Expr::LocalGet(id)) => Some(Site::Local(*id)),
+        Receiver::Expr(
+            Expr::PropertyGet { byte_offset, .. }
+            | Expr::IndexGet {
+                element_offset: byte_offset,
+                ..
+            }
+            | Expr::Call { byte_offset, .. },
+        ) if *byte_offset != 0 => Some(Site::Recv(*byte_offset)),
+        Receiver::Expr(_) => None,
+    }
+}
+
 /// The methods codegen lowers to a host fs stream operation when the HIR
 /// folds `recv.m(..)` into `NativeMethodCall { module: "fs", object: Some(recv) }`
 /// (`perry-codegen lower_call/native/native_fs_branch.rs` matches only these
@@ -81,6 +151,36 @@ pub fn native_construct_fold(module: &str, method: &str) -> bool {
         (module, method),
         ("inspector" | "inspector/promises", "Session")
     )
+}
+
+/// `recv.push(..args)` as the HIR folds it for a receiver that is no local:
+/// `NativeMethodCall { module: "array", method: "push_single" | "push" }`
+/// (`this.items.push(v)` in value position or in a constructor, `o.list.push(v)`).
+/// The fold rests on the receiver's declared type, so the node is the call
+/// `recv.push(..args)` like every row of [`folded_call`]: an Array that owns
+/// `push`, an Array with its own prototype, an Array subclass or an object
+/// behind the annotation runs the method the receiver holds. It is a function
+/// of its own (not a row of [`folded_call`]) because both readers keep an arm
+/// the table has no say in: a fill push of a push-filled birth (wpfacts
+/// `push_fills`) is an append to an Array nothing else has seen, and
+/// `PERRY_PUSH_METHOD_TIERS=0` keeps the unguarded append.
+pub fn native_array_push(expr: &Expr) -> Option<FoldedCall<'_>> {
+    match expr {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: Some(object),
+            args,
+            ..
+        } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
+            Some(FoldedCall {
+                receiver: Receiver::Expr(object),
+                method: "push",
+                args: args.iter().collect(),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// The folded builtin-method nodes that are calls, and what each one is a
@@ -597,7 +697,7 @@ pub fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{folded_call, Receiver};
+    use super::{folded_call, native_array_push, Receiver};
     use crate::Expr;
 
     fn lit(n: f64) -> Expr {
@@ -679,6 +779,19 @@ mod tests {
             args: vec![lit(1.0)],
         };
         assert!(folded_call(&single).is_none());
+        // It is the call `recv.push(v)` all the same, for the readers that
+        // guard the native arm (`native_array_push`).
+        let call = native_array_push(&single).expect("a native push is a call of push");
+        assert_eq!((call.method, call.args.len()), ("push", 1));
+        assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
+        let spread = Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(Box::new(Expr::LocalGet(7))),
+            method: "push_spread".to_string(),
+            args: vec![Expr::LocalGet(8)],
+        };
+        assert!(native_array_push(&spread).is_none());
     }
 
     /// An optional argument is part of the call when present and absent when

@@ -152,6 +152,7 @@ impl Model {
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }
+            Cons::Objects { dst } => format!("Objects dst={:?}", dst),
             Cons::Hard { kind, reason } => format!(
                 "Hard kind={:?} reason={:?}",
                 kind,
