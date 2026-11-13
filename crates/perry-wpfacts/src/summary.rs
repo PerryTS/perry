@@ -1035,8 +1035,12 @@ impl Model {
                 }
             } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
-                // (pushes its run's record when it takes one).
-                self.bind_layout_run(call, ft, x, prim, now != NO_VAL);
+                // (pushes its run's record when it takes one): the run of
+                // its one function value, or (Rule M1) the run of each
+                // string constant when it holds two or more and nothing
+                // else (`switch_vals`); else the shared run.
+                let by_val = now != NO_VAL || !self.switch_vals(call, self.tok_fn(ft)).is_empty();
+                self.bind_layout_run(call, ft, x, prim, by_val);
                 more = true;
             } else if now == val {
                 keep.push(r);
