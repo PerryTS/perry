@@ -212,6 +212,10 @@ pub(crate) fn array_get_property_by_key(
                     return indexed;
                 }
             }
+        } else {
+            // No allocation at this word: `null[k]` / `undefined[k]` behind
+            // an Array annotation (masked 0x2 / 0x1) throws node's TypeError.
+            nullish_receiver_key_get(arr, key);
         }
     }
     let value =
