@@ -583,8 +583,12 @@ pub(super) unsafe fn own_slot_holds(dir: *const u8, obj: *const ObjectHeader, ke
     {
         return false;
     }
-    let count = (*r).logical_key_count;
+    // A list of no keys may have no key array at all: its bound is 0.
     let bound = (*r).position_bound_raw();
+    if bound == 0 {
+        return false;
+    }
+    let count = (*r).logical_key_count;
     let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
     let mut pos = 0u32;
     while pos < count {
@@ -601,25 +605,30 @@ pub(super) unsafe fn own_slot_holds(dir: *const u8, obj: *const ObjectHeader, ke
         != TAG_HOLE
 }
 
-/// `key in obj` / own presence answered `true` by [`own_slot_holds`] for a
-/// key [`key_leaf`] resolves. A leaf. `false` decides nothing.
+/// `key in obj` through the probe ([`super::probe_has`]'s answers): the
+/// key resolved once; an own key in a slot of the receiver is answered by
+/// the keyed read's own-slot arm, a leaf; every other case is one tail call
+/// into the presence walk with the resolved key.
 ///
 /// # Safety
 /// Any value bits.
 #[inline(always)]
-pub(crate) unsafe fn has_own_slot(obj_bits: u64, key_bits: u64) -> bool {
+pub(crate) unsafe fn in_keyed(obj_bits: u64, key_bits: u64) -> i32 {
     if obj_bits & TAG_MASK != POINTER_TAG {
-        return false;
+        return -1;
     }
     let payload = (obj_bits & POINTER_MASK) as usize;
     if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return false;
+        return -1;
     }
     let dir = super::super::ordinary_dir_addr();
-    let Some((key, _)) = key_leaf(dir, key_bits) else {
-        return false;
+    let Some((key, hash)) = key_leaf(dir, key_bits) else {
+        return super::probe_has(obj_bits, key_bits, false);
     };
-    own_slot_holds(dir, payload as *const ObjectHeader, key)
+    if own_slot_holds(dir, payload as *const ObjectHeader, key) {
+        return 1;
+    }
+    super::probe_has_walk(dir, payload, key, hash, true, false)
 }
 
 /// What the keyed store probe ([`probe_store_keyed`]) did with
