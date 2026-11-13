@@ -389,14 +389,21 @@ impl Model {
         // on a typed array is a CanonicalNumericIndexString (an element
         // store, below) or a BigInt's digits that are none: an
         // OrdinarySet of a digit-only name, the numeric range (`#num`,
-        // `numeric_field`), never another name. On any other holder it
-        // is an unknown key.
+        // `numeric_field`), never another name. On any other holder
+        // (10.4.2.1 an Array, 10.1.9 an ordinary object) it names an index
+        // or another Number::toString / BigInt::toString form: the
+        // numeric range of that holder (`num_only`, below), never a
+        // non-numeric name. Which index it is stays unknown: the length,
+        // the hole and the chain's setters are the unknown key's.
         let digits = self.is_digits_key(key) && self.typed_array_elements(t);
         if digits {
             self.typed_array_element_store(t, src, site);
         }
+        let digits_other = self.is_digits_key(key) && !digits;
         let key = if self.is_digits_key(key) { Key::any() } else { key };
         let elem = self.is_elem_key(key) || digits;
+        // The key names a number only: the numeric range's field.
+        let num_only = elem || digits_other;
         let key = if elem { Key::any() } else { key };
         // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
         // [[Set]] under a numeric key (an element-key store is one: a Number
@@ -449,7 +456,7 @@ impl Model {
         if let Some(s) = self.shared_of(t).filter(|_| !theirs) {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
-                Key::Any(_) if elem => Some(NUM_KEY.to_string()),
+                Key::Any(_) if num_only => Some(NUM_KEY.to_string()),
                 Key::Any(_) => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
@@ -501,7 +508,7 @@ impl Model {
             }
         }
         // An element store writes an index of a builtin prototype at most.
-        let wkey = match elem {
+        let wkey = match num_only {
             true => Key::Named(self.atom(NUM_KEY)),
             false => key,
         };
@@ -554,7 +561,7 @@ impl Model {
             self.json_key_fired.push((true, src));
         }
         // An element store's key is a number: it never names `__proto__`.
-        if key.is_any() && !elem && !json_key && self.key_may_name_str(key, "__proto__")
+        if key.is_any() && !num_only && !json_key && self.key_may_name_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
@@ -867,9 +874,9 @@ impl Model {
                 // slot, which flows into its elements (`index_slot`).
                 let f = if let Some(i) = slot {
                     self.index_slot(t, i)
-                } else if elem && self.is_elem_array(t) {
+                } else if num_only && self.is_elem_array(t) {
                     self.field_any(t)
-                } else if elem {
+                } else if num_only {
                     self.numeric_field(t)
                 } else {
                     self.key_store_node(t, key)
