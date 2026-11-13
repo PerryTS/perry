@@ -1185,6 +1185,7 @@ pub(super) fn compile_function(
     // `ModuleDispatchFacts`, so it is the only one that can say whether this
     // body's `return new C(...)` sites are already served by #7107's
     // return-shape mechanism. Read by nothing but the report.
+    let _life_scope = crate::collectors::life_census::compiling(Some(f.id));
     let _opt_report_scope = crate::opt_report::enter_function_region(
         &f.name,
         cross_module

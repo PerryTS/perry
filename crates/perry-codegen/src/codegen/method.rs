@@ -561,6 +561,7 @@ pub(super) fn compile_method(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(Some(method.id));
     let _opt_report_scope = crate::opt_report::enter_method_region(
         &format!("{}.{}", class.name, method.name),
         cross_module

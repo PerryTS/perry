@@ -325,6 +325,8 @@ pub(crate) use verify::*;
 pub(crate) mod census;
 mod census_field_repr;
 mod heap_snapshot;
+#[cfg(perry_gc_instruments)]
+pub(crate) mod life_why;
 mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};

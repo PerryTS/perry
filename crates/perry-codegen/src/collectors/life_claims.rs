@@ -46,6 +46,11 @@ pub(crate) struct LifeClaims {
     /// The loop bodies (statement-list addresses) of the body: each
     /// iteration's start and end are hooked (LIFE I2: the dynamic boundary).
     pub loops: std::collections::HashSet<usize>,
+    /// LIFE I3: the loop bodies in first-visit (pre-order) order, and the
+    /// stable id each one carries in the hooks (`loop` rows of the site file:
+    /// module, label, `#<ordinal>`; so a region table names its loop).
+    pub loop_order: Vec<usize>,
+    pub loop_ids: HashMap<usize, u64>,
     /// The body's own statement list (address): its activation.
     pub body: usize,
     /// LIFE I2: the activation's id in the site file (`body` rows: module,
