@@ -234,6 +234,11 @@ def main():
         ("birth-image-negative", "birthimage", "birth image"),
         ("string-call-negative", "stringcall", "call kinds"),
         ("loop-trip-negative", "looptrip", "loop trip bound"),
+        # Activation reach, members on a built-in prototype (class H): each
+        # arm turns one rule off, and the body the program enters through
+        # the member reports "inactive body".
+        ("reach-held-keys-negative", "noreachheldkeys", "inactive body"),
+        ("reach-proto-accessor-negative", "noreachprotoaccessors", "inactive body"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

@@ -66,6 +66,9 @@ console.log("statics", typeof Temporal.Duration.from, typeof Temporal.Duration.c
   Temporal.Duration.compare(new Temporal.Duration(0, 0, 0, 1), new Temporal.Duration(0, 0, 0, 2)));
 const from: any = Temporal.PlainDate.from;
 console.log("static value", from.call(Temporal.PlainDate, "2021-02-03").day);
+// A static calls back into what it is given: a getter of its argument runs.
+const bag: any = { year: 2020, month: 1, get day() { ran.push("bag.day"); return 2; } };
+console.log("static argument", Temporal.PlainDate.from(bag).day, from.call(Temporal.PlainDate, bag).day);
 
 // Negative controls: a member of one kind is not another kind's; an own
 // property shadows the chain; a function no one installs never runs; a
