@@ -58,6 +58,12 @@ impl Model {
         self.shaped_reads.insert((t, s), n);
         let any = self.field_any(t);
         self.edge(any, n);
+        // A shape that may spell a Number key reads what a Number key
+        // stored (`numeric_field`; `key_store_node` writes it the same way).
+        if self.key_shapes[s as usize].may_be_numeric() {
+            let numeric = self.numeric_field(t);
+            self.edge(numeric, n);
+        }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.key_may_name(key, a) {
                 let f = self.field_r(t, a);

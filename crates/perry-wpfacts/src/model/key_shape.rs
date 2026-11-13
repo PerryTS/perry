@@ -191,16 +191,68 @@ fn glob_admits(p: &[String], name: &str) -> bool {
     true
 }
 
-/// May a string of glob `p` be a Number key (`numeric_key`: Rust's f64
-/// syntax, any case of `inf`/`infinity`/`nan`)?
+/// May a string of glob `p` be a Number key? An exact name: `numeric_key`
+/// (Rust's f64 syntax, any case of `inf`/`infinity`/`nan`). A glob: a
+/// String key reads an element or a numeric key only when it is
+/// ToString of a Number (ECMA-262 6.1.6.1.20) or `-0`
+/// (CanonicalNumericIndexString, 7.1.21), so its first piece must begin
+/// such a string (`may_begin_number_string`), and every piece holds only
+/// characters such a string may hold.
 fn glob_may_be_numeric(p: &[String]) -> bool {
     if p.len() == 1 {
         return crate::solve::numeric_key(&p[0]);
     }
-    p.iter().all(|s| {
-        s.chars()
-            .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
-    })
+    may_begin_number_string(&p[0])
+        && p.iter().all(|s| {
+            s.chars()
+                .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+        })
+}
+
+/// Does some ToString of a Number (ECMA-262 6.1.6.1.20), or `-0`, begin
+/// with `p`? Those strings are `NaN`, and after an optional `-`:
+/// `Infinity`, `0`, `0.` digits, `[1-9]` digits, `[1-9]` digits `.`
+/// digits ending in `[1-9]`, or one digit, optionally `.` digits ending in
+/// `[1-9]`, then `e`, a sign and `[1-9]` digits. Digit counts are not
+/// bounded here (a superset in length only).
+fn may_begin_number_string(p: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum S {
+        Start,
+        Zero,
+        ZeroFrac,
+        /// Integer digits; `true`: exactly one.
+        Int(bool),
+        /// Fraction digits after one integer digit, and the last is no `0`.
+        Frac(bool, bool),
+        ExpSign,
+        ExpFirst,
+        ExpDigits,
+    }
+    if "NaN".starts_with(p) {
+        return true;
+    }
+    let r = p.strip_prefix('-').unwrap_or(p);
+    if "Infinity".starts_with(r) {
+        return true;
+    }
+    let mut s = S::Start;
+    for c in r.chars() {
+        s = match (s, c) {
+            (S::Start, '0') => S::Zero,
+            (S::Start, '1'..='9') => S::Int(true),
+            (S::Zero, '.') => S::ZeroFrac,
+            (S::ZeroFrac, '0'..='9') => S::ZeroFrac,
+            (S::Int(_), '0'..='9') => S::Int(false),
+            (S::Int(one), '.') => S::Frac(one, false),
+            (S::Int(true), 'e') | (S::Frac(true, true), 'e') => S::ExpSign,
+            (S::Frac(one, _), '0'..='9') => S::Frac(one, c != '0'),
+            (S::ExpSign, '+' | '-') => S::ExpFirst,
+            (S::ExpFirst, '1'..='9') | (S::ExpDigits, '0'..='9') => S::ExpDigits,
+            _ => return false,
+        };
+    }
+    true
 }
 
 impl Model {
@@ -217,6 +269,23 @@ impl Model {
         if self.key_shapes.is_empty() {
             self.key_shapes.push(KeyShape { globs: Vec::new() });
         }
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// The shape of glob `glob`, interned as `infix_shape` is: also when it
+    /// may spell a Number key (`key_may_name_str` then reads the elements
+    /// and numeric keys beside the names it admits).
+    pub fn glob_shape(&mut self, glob: Vec<String>) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape { globs: Vec::new() });
+        }
+        let s = KeyShape { globs: vec![glob] };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
         }

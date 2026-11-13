@@ -250,6 +250,14 @@ impl Model {
                 out.push((a, self.infix_shape(c)));
                 continue;
             }
+            // A known prefix reads the names of its glob `p*`, and the
+            // elements and numeric keys only when `p` may begin ToString of
+            // a Number (`glob_may_be_numeric`): never any key.
+            if let Some(p) = self.atom_prefix(a) {
+                let glob = vec![p.to_string(), String::new()];
+                out.push((a, self.glob_shape(glob)));
+                continue;
+            }
             match self.atom_key_shape(a) {
                 0 => return None,
                 s => out.push((a, s)),
