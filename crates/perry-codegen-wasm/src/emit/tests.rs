@@ -328,3 +328,24 @@ try { const v = n.bar; console.log("null read: no throw"); } catch (e) { console
         "null call: TypeError\nundefined call: TypeError\nnull read: Cannot read properties of null (reading 'bar')"
     );
 }
+
+// Computed reads (`n[key]`, `u[0]`) on null / undefined throw too, while `?.[...]`
+// still yields undefined.
+#[test]
+fn computed_reads_on_nullish_receivers_throw() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = null;
+const u: any = undefined;
+const k: any = "bar";
+const xs: number[] | null = null as any;
+try { const v = n[k]; console.log("null[key]: no throw"); } catch (e) { console.log("null[key]: " + e.message); }
+try { const v = u[0]; console.log("undefined[0]: no throw"); } catch (e) { console.log("undefined[0]: " + e.name); }
+try { const v = (xs as any)[1]; console.log("null array[1]: no throw"); } catch (e) { console.log("null array[1]: " + e.name); }
+console.log(String(n?.[k]) + " " + String(u?.[0]));
+"#
+        ),
+        "null[key]: Cannot read properties of null (reading 'bar')\nundefined[0]: TypeError\nnull array[1]: TypeError\nundefined undefined"
+    );
+}

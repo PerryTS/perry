@@ -1714,6 +1714,7 @@ const __memDispatch = {
     return obj[String(key)];
   },
   object_get_dynamic: (obj, key) => {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!obj || typeof obj !== 'object') return undefined;
     return obj[key];
   },
