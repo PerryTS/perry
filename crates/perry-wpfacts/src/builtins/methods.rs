@@ -74,7 +74,10 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
                     _ => None,
                 }
                 .and_then(|identity| {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity,
+                        holder: None,
+                    }));
                     match m.toks[value as usize] {
                         TokKind::Builtin(_)
                             if !m
@@ -267,7 +270,13 @@ pub(super) fn realm_born_method(
 ) {
     use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
     let a = m.atom(name);
-    let written = !intrinsic_unwritten(m, Family::Opaque, Some(born.name), a, NativeMiss::Call(t, call));
+    let written = !intrinsic_unwritten(
+        m,
+        Family::Opaque,
+        Some(born.name),
+        a,
+        NativeMiss::Call(t, call),
+    );
     match members::realm_chain_find(born, name) {
         members::RealmFind::Absent => {
             if written {

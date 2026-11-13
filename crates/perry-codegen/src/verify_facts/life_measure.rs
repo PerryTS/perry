@@ -28,7 +28,9 @@ use crate::types::I64;
 /// text. The compile writes `id<TAB>key` lines to the file the compile-time
 /// knob names (a value other than `1`), so the run's TSV joins by id.
 pub(crate) fn site_id(key: &str) -> u64 {
-    key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+    key.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    })
 }
 
 /// Appends the site keys of one body to the compile-time site file.
@@ -36,10 +38,16 @@ pub(crate) fn write_sites<'a>(keys: impl Iterator<Item = &'a str>) {
     use std::io::Write;
     use std::sync::{Mutex, OnceLock};
     static SEEN: OnceLock<Mutex<std::collections::HashSet<u64>>> = OnceLock::new();
-    let Some(path) = std::env::var("PERRY_LIFE_MEASURE").ok().filter(|p| !p.is_empty() && p != "1") else {
+    let Some(path) = std::env::var("PERRY_LIFE_MEASURE")
+        .ok()
+        .filter(|p| !p.is_empty() && p != "1")
+    else {
         return;
     };
-    let mut seen = SEEN.get_or_init(Default::default).lock().expect("life measure sites");
+    let mut seen = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .expect("life measure sites");
     let mut text = String::new();
     for k in keys {
         let id = site_id(k);
@@ -50,7 +58,11 @@ pub(crate) fn write_sites<'a>(keys: impl Iterator<Item = &'a str>) {
     if text.is_empty() {
         return;
     }
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = f.write_all(text.as_bytes());
     }
 }
@@ -61,7 +73,11 @@ fn loop_id(ctx: &FnCtx<'_>, at: usize) -> u64 {
     if at == 0 {
         return 0;
     }
-    ctx.life_claims.loop_ids.get(&at).copied().unwrap_or(at as u64)
+    ctx.life_claims
+        .loop_ids
+        .get(&at)
+        .copied()
+        .unwrap_or(at as u64)
 }
 
 fn on(ctx: &FnCtx<'_>) -> bool {
@@ -73,7 +89,12 @@ pub(crate) fn birth(ctx: &mut FnCtx<'_>, e: &Expr, value: &str) {
     if !on(ctx) {
         return;
     }
-    let Some((key, loop_body)) = ctx.life_claims.births.get(&(e as *const Expr as usize)).cloned() else {
+    let Some((key, loop_body)) = ctx
+        .life_claims
+        .births
+        .get(&(e as *const Expr as usize))
+        .cloned()
+    else {
         return;
     };
     if ctx.block().is_terminated() {
@@ -82,7 +103,10 @@ pub(crate) fn birth(ctx: &mut FnCtx<'_>, e: &Expr, value: &str) {
     let site = (site_id(&key) as i64).to_string();
     let bits = ctx.block().bitcast_double_to_i64(value);
     let loop_id = (loop_id(ctx, loop_body) as i64).to_string();
-    ctx.block().call_void("perry_life_birth", &[(I64, &bits), (I64, &site), (I64, &loop_id)]);
+    ctx.block().call_void(
+        "perry_life_birth",
+        &[(I64, &bits), (I64, &site), (I64, &loop_id)],
+    );
 }
 
 /// The statement list `stmts` begins: the body's own list starts its
@@ -146,7 +170,11 @@ pub(crate) fn ctor_return(ctx: &mut FnCtx<'_>, slot: &str) -> anyhow::Result<()>
 /// An iteration of the loop with body `body` ends (back-edge or loop exit).
 pub(crate) fn iteration(ctx: &mut FnCtx<'_>, body: &[Stmt]) {
     let at = body.as_ptr() as usize;
-    if !on(ctx) || body.is_empty() || !ctx.life_claims.loops.contains(&at) || ctx.block().is_terminated() {
+    if !on(ctx)
+        || body.is_empty()
+        || !ctx.life_claims.loops.contains(&at)
+        || ctx.block().is_terminated()
+    {
         return;
     }
     let loop_id = (loop_id(ctx, at) as i64).to_string();

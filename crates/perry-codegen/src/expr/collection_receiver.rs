@@ -264,7 +264,10 @@ fn brand_guarded(
     ctx.current_block = merge_idx;
     ctx.block().phi(
         DOUBLE,
-        &[(hit.as_str(), ok_end.as_str()), (other.as_str(), miss_end.as_str())],
+        &[
+            (hit.as_str(), ok_end.as_str()),
+            (other.as_str(), miss_end.as_str()),
+        ],
     )
 }
 

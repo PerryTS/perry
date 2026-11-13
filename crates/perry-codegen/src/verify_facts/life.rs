@@ -48,7 +48,12 @@ fn every() -> u64 {
 
 /// The claim record of one death point: the facts claim record plus the
 /// birth, the death and the fate.
-fn site(ctx: &mut FnCtx<'_>, b: &ClaimBirth, death: &str, byte_offset: Option<u32>) -> (String, String) {
+fn site(
+    ctx: &mut FnCtx<'_>,
+    b: &ClaimBirth,
+    death: &str,
+    byte_offset: Option<u32>,
+) -> (String, String) {
     let (name, ordinal) = MODULE.with(|m| {
         let m = m.borrow();
         let m = m.as_ref().expect("verification module initialized");
@@ -72,9 +77,10 @@ fn site(ctx: &mut FnCtx<'_>, b: &ClaimBirth, death: &str, byte_offset: Option<u3
         "copy": {"body": ctx.func.name, "site": null, "emission": ordinal},
         "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
     });
-    super::covered(Fact::Lifetime, || {
-        serde_json::json!({"birth": b.kind, "death": death, "proof": b.proof})
-    });
+    super::covered(
+        Fact::Lifetime,
+        || serde_json::json!({"birth": b.kind, "death": death, "proof": b.proof}),
+    );
     let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
     assert_eq!(bytes.pop(), Some(b'}'));
     super::raw_bytes(ctx.strings.module_prefix(), &bytes)
@@ -103,7 +109,13 @@ fn frame_death(ctx: &mut FnCtx<'_>, id: u32, death: &str) {
     let every = every().to_string();
     ctx.block().call_void(
         "perry_verify_facts_life_dead",
-        &[(I64, &bits), (I64, "0"), (I64, &every), (I64, &pointer), (I64, &len)],
+        &[
+            (I64, &bits),
+            (I64, "0"),
+            (I64, &every),
+            (I64, &pointer),
+            (I64, &len),
+        ],
     );
 }
 
@@ -208,7 +220,10 @@ pub(crate) fn watch_call(
         let slot = ctx.func.alloca_entry(I64);
         ctx.func.entry_allocas_push_store(I64, "0", &slot);
         let (pointer, len) = site(ctx, &b, "call", Some(start.saturating_sub(1)));
-        WATCH.with(|w| w.borrow_mut().push((a as *const Expr as usize, slot.clone())));
+        WATCH.with(|w| {
+            w.borrow_mut()
+                .push((a as *const Expr as usize, slot.clone()))
+        });
         out.push((slot, pointer, len));
     }
     out

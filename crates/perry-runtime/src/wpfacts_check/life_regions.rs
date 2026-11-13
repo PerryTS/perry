@@ -45,7 +45,16 @@ const LOOP: u8 = 0;
 const BODY: u8 = 1;
 const TURN: u8 = 2;
 const KINDS: [&str; 3] = ["loop", "body", "turn"];
-const HOLDERS: [&str; 8] = ["frame", "outer_frame", "shadow", "global", "remembered", "object", "other", "old"];
+const HOLDERS: [&str; 8] = [
+    "frame",
+    "outer_frame",
+    "shadow",
+    "global",
+    "remembered",
+    "object",
+    "other",
+    "old",
+];
 const H_OLD: u8 = 7;
 
 #[derive(Clone, Copy)]
@@ -230,23 +239,41 @@ fn why_path() -> Option<&'static str> {
 
 fn why_n() -> u64 {
     static R: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    *R.get_or_init(|| knob("PERRY_LIFE_REGIONS_WHY_N").and_then(|v| v.parse().ok()).unwrap_or(4))
+    *R.get_or_init(|| {
+        knob("PERRY_LIFE_REGIONS_WHY_N")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4)
+    })
 }
 
 /// The holder chain of each survivor of a dirty instance, back to its root.
 fn why_dump(r: &Reg, inst: &Inst, seq1: u64, n: u64, survivors: &[(usize, Ent)]) {
     let Some(path) = why_path() else { return };
     let inside = |user: usize| {
-        let seq = r.young.get(&user).map(|e| e.seq).or_else(|| r.old_addr.get(&user).copied());
+        let seq = r
+            .young
+            .get(&user)
+            .map(|e| e.seq)
+            .or_else(|| r.old_addr.get(&user).copied());
         match seq {
             Some(q) if q > inst.seq0 && q <= seq1 => "inside",
             Some(_) => "tracked-outside",
             None => "untracked",
         }
     };
-    let mut out = format!("== {}:{} instance {n} survivors {}\n", KINDS[inst.kind as usize], inst.id, survivors.len());
+    let mut out = format!(
+        "== {}:{} instance {n} survivors {}\n",
+        KINDS[inst.kind as usize],
+        inst.id,
+        survivors.len()
+    );
     for (addr, e) in survivors {
-        out.push_str(&format!("  obj seq={} holder={} {}\n", e.seq, HOLDERS[e.holder as usize], crate::gc::life_why::label(addr - crate::gc::GC_HEADER_SIZE)));
+        out.push_str(&format!(
+            "  obj seq={} holder={} {}\n",
+            e.seq,
+            HOLDERS[e.holder as usize],
+            crate::gc::life_why::label(addr - crate::gc::GC_HEADER_SIZE)
+        ));
         let mut h = addr - crate::gc::GC_HEADER_SIZE;
         for _ in 0..64 {
             match crate::gc::life_why::get(h) {
@@ -255,19 +282,32 @@ fn why_dump(r: &Reg, inst: &Inst, seq1: u64, n: u64, survivors: &[(usize, Ent)])
                     break;
                 }
                 Some(w) if w.parent == 0 => {
-                    out.push_str(&format!("    <- ROOT {} fn={} slot={:#x}\n", w.phase, crate::gc::life_why::symbol(w.func), w.slot));
+                    out.push_str(&format!(
+                        "    <- ROOT {} fn={} slot={:#x}\n",
+                        w.phase,
+                        crate::gc::life_why::symbol(w.func),
+                        w.slot
+                    ));
                     break;
                 }
                 Some(w) => {
                     let pu = w.parent + crate::gc::GC_HEADER_SIZE;
-                    out.push_str(&format!("    <- {} {}\n", inside(pu), crate::gc::life_why::label(w.parent)));
+                    out.push_str(&format!(
+                        "    <- {} {}\n",
+                        inside(pu),
+                        crate::gc::life_why::label(w.parent)
+                    ));
                     h = w.parent;
                 }
             }
         }
     }
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = f.write_all(out.as_bytes());
     }
 }
@@ -301,8 +341,16 @@ impl Reg {
             let global = self.global_shift;
             let s = self.stats.entry((kind, id)).or_default();
             s.taken += 1;
-            let own = if s.sampled < 32 { 0 } else { 64 - (s.sampled / 32).leading_zeros() };
-            let shift = if rate_one() { 0 } else { (own + global).min(16) };
+            let own = if s.sampled < 32 {
+                0
+            } else {
+                64 - (s.sampled / 32).leading_zeros()
+            };
+            let shift = if rate_one() {
+                0
+            } else {
+                (own + global).min(16)
+            };
             if rand & ((1u64 << shift) - 1) == 0 {
                 s.sampled += 1;
                 (1u64 << shift) as f64
@@ -370,7 +418,10 @@ fn ensure_started() {
             r.started = true;
             r.synced = count();
             r.start = Some(std::time::Instant::now());
-            r.global_shift = knob("PERRY_LIFE_REGIONS_SHIFT").and_then(|v| v.parse().ok()).unwrap_or(0).min(16);
+            r.global_shift = knob("PERRY_LIFE_REGIONS_SHIFT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+                .min(16);
             r.open(TURN, 0, 0);
         }
     });
@@ -391,12 +442,21 @@ pub(crate) fn born(addr: usize, bytes: u32, n: u32) {
         r.seq += 1;
         r.cnt += 1;
         r.bytes += bytes as u64;
-        let e = Ent { seq: r.seq, bytes, reached: 0, full_alive: 0, holder: 6 };
+        let e = Ent {
+            seq: r.seq,
+            bytes,
+            reached: 0,
+            full_alive: 0,
+            holder: 6,
+        };
         r.track(addr, e);
         let mut sample = None;
         if n > 0 {
             let i = r.bs.len() as u32;
-            r.bs.push(ByteSample { n, chain: Vec::new() });
+            r.bs.push(ByteSample {
+                n,
+                chain: Vec::new(),
+            });
             for inst in &mut r.stack {
                 inst.decide = true;
             }
@@ -462,7 +522,9 @@ pub(super) fn reached(old: usize, new: usize) {
         }
     })
     .flatten();
-    let Some((mut e, in_probe, fp)) = hit else { return };
+    let Some((mut e, in_probe, fp)) = hit else {
+        return;
+    };
     e.holder = if in_probe { holder(fp) } else { 6 };
     let _ = with(|r| {
         e.reached = r.minor_id;
@@ -545,7 +607,10 @@ fn budget(r: &mut Reg) {
     }
     let Some(start) = r.start else { return };
     let total = start.elapsed().as_nanos() as u64;
-    if total > 50_000_000 && r.probe_ns > 4 * total.saturating_sub(r.probe_ns) && r.global_shift < 16 {
+    if total > 50_000_000
+        && r.probe_ns > 4 * total.saturating_sub(r.probe_ns)
+        && r.global_shift < 16
+    {
         r.global_shift += 1;
     }
 }
@@ -559,7 +624,9 @@ fn end_from(k: usize, fp: usize) {
             return None;
         }
         let insts = r.stack.split_off(k);
-        let need = insts.iter().any(|i| i.decide && !i.unresolved && r.cnt > i.cnt0);
+        let need = insts
+            .iter()
+            .any(|i| i.decide && !i.unresolved && r.cnt > i.cnt0);
         Some((insts, need))
     })
     .flatten() else {
@@ -597,27 +664,41 @@ fn end_from(k: usize, fp: usize) {
     let (need_old, confirm_ids) = if need {
         with(|r| {
             let now = std::time::Instant::now();
-            let mutator = r.start.map_or(0, |t| (now.duration_since(t).as_nanos() as u64).saturating_sub(r.probe_ns));
+            let mutator = r.start.map_or(0, |t| {
+                (now.duration_since(t).as_nanos() as u64).saturating_sub(r.probe_ns)
+            });
             let global_ok = r.confirm_ns <= CONFIRM_GLOBAL_NS + CONFIRM_R * mutator;
             let mut need_old = false;
             let mut ids = Vec::new();
             // `insts` is `stack[k..]` (`r.stack` keeps `stack[..k]`): `insts[j]` is outermost when
             // no loop instance encloses it.
             let loop_below = r.stack.iter().any(|o| o.kind == LOOP);
-            for (j, i) in insts.iter().enumerate().filter(|(_, i)| i.decide && !i.unresolved && r.seq > i.seq0) {
+            for (j, i) in insts
+                .iter()
+                .enumerate()
+                .filter(|(_, i)| i.decide && !i.unresolved && r.seq > i.seq0)
+            {
                 let range = i.seq0 + 1..=r.seq;
-                need_old |= r.old.range(range.clone()).any(|(_, (a, e))| e.reached != probe_minor && !super::life::engine_metadata(*a));
+                need_old |= r.old.range(range.clone()).any(|(_, (a, e))| {
+                    e.reached != probe_minor && !super::life::engine_metadata(*a)
+                });
                 let weak = r.old.range(range).any(|(_, (a, e))| {
-                    e.reached == probe_minor && !super::life::minor_decides(e.holder) && !super::life::engine_metadata(*a)
+                    e.reached == probe_minor
+                        && !super::life::minor_decides(e.holder)
+                        && !super::life::engine_metadata(*a)
                 }) || r.young.iter().any(|(a, e)| {
-                    e.seq > i.seq0 && e.seq <= r.seq && !super::life::minor_decides(e.holder) && !super::life::engine_metadata(*a)
+                    e.seq > i.seq0
+                        && e.seq <= r.seq
+                        && !super::life::minor_decides(e.holder)
+                        && !super::life::engine_metadata(*a)
                 });
                 if weak {
                     let inside = now.duration_since(i.t0).as_nanos() as u64;
                     let ok = confirm_all()
                         || (global_ok && !loop_below && !insts[..j].iter().any(|o| o.kind == LOOP))
                         || r.stats.get(&(i.kind, i.id)).map_or(true, |s| {
-                            s.confirm_fulls < CONFIRM_N0 || s.confirm_ns <= CONFIRM_R * (s.inside_ns + inside)
+                            s.confirm_fulls < CONFIRM_N0
+                                || s.confirm_ns <= CONFIRM_R * (s.inside_ns + inside)
                         });
                     if ok {
                         ids.push((i.kind, i.id));
@@ -667,7 +748,11 @@ fn end_from(k: usize, fp: usize) {
         let mut carry: Vec<u32> = Vec::new();
         for mut inst in insts.into_iter().rev() {
             inst.bs.append(&mut carry);
-            let inside = if seq1 > inst.seq0 { cnt1.saturating_sub(inst.cnt0) } else { 0 };
+            let inside = if seq1 > inst.seq0 {
+                cnt1.saturating_sub(inst.cnt0)
+            } else {
+                0
+            };
             let bytes = bytes1.saturating_sub(inst.bytes0);
             let mut verdict = if inside == 0 { EMPTY } else { CLEAN };
             let (mut objs, mut sbytes, mut hold, mut meta) = (0u64, 0u64, [0u64; 8], 0u64);
@@ -675,7 +760,11 @@ fn end_from(k: usize, fp: usize) {
                 if inst.unresolved || probe_minor == 0 {
                     verdict = UNRES;
                 } else {
-                    for (a, e) in r.young.iter().filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1) {
+                    for (a, e) in r
+                        .young
+                        .iter()
+                        .filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1)
+                    {
                         if super::life::engine_metadata(*a) {
                             meta += 1;
                             continue;
@@ -722,12 +811,26 @@ fn end_from(k: usize, fp: usize) {
                     }
                     if verdict != UNRES && objs > 0 {
                         verdict = DIRTY;
-                        let done = r.stats.get(&(inst.kind, inst.id)).map_or(0, |s| s.surv_inst.iter().sum::<u64>());
+                        let done = r
+                            .stats
+                            .get(&(inst.kind, inst.id))
+                            .map_or(0, |s| s.surv_inst.iter().sum::<u64>());
                         if why_path().is_some() && done < why_n() {
-                            let mut sv: Vec<(usize, Ent)> =
-                                r.young.iter().filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1).map(|(a, e)| (*a, *e)).collect();
-                            sv.extend(r.old.range(inst.seq0 + 1..=seq1).map(|(_, (a, e))| (*a, *e)));
-                            let n = r.stats.get(&(inst.kind, inst.id)).map_or(0, |s| s.instances);
+                            let mut sv: Vec<(usize, Ent)> = r
+                                .young
+                                .iter()
+                                .filter(|(_, e)| e.seq > inst.seq0 && e.seq <= seq1)
+                                .map(|(a, e)| (*a, *e))
+                                .collect();
+                            sv.extend(
+                                r.old
+                                    .range(inst.seq0 + 1..=seq1)
+                                    .map(|(_, (a, e))| (*a, *e)),
+                            );
+                            let n = r
+                                .stats
+                                .get(&(inst.kind, inst.id))
+                                .map_or(0, |s| s.instances);
                             why_dump(r, &inst, seq1, n, &sv);
                         }
                     }
@@ -736,7 +839,9 @@ fn end_from(k: usize, fp: usize) {
             if inst.decide {
                 r.decisions += 1;
                 for &b in &inst.bs {
-                    r.bs[b as usize].chain.push((inst.kind, inst.id, verdict as u8));
+                    r.bs[b as usize]
+                        .chain
+                        .push((inst.kind, inst.id, verdict as u8));
                 }
             }
             let s = r.stats.entry((inst.kind, inst.id)).or_default();
@@ -883,7 +988,9 @@ pub(crate) fn exit() {
 }
 
 fn write(r: &mut Reg, exit: bool) {
-    let Some(path) = knob("PERRY_LIFE_REGIONS").filter(|p| p != "1") else { return };
+    let Some(path) = knob("PERRY_LIFE_REGIONS").filter(|p| p != "1") else {
+        return;
+    };
     let mut out = String::from(
         "kind\tid\tinstances\tbytes\ttaken\tsampled\tempty\tclean\tdirty\tunresolved\tw_empty\tw_clean\tw_dirty\tw_unresolved\tbytes_w_empty\tbytes_w_clean\tbytes_w_dirty\tbytes_w_unresolved\tsurv1\tsurv2_4\tsurv5_16\tsurv17\tsurv_bytes1\tsurv_bytes2_4\tsurv_bytes5_16\tsurv_bytes17\tsurv_objs\trestarted\tmeta_objs",
     );
@@ -895,7 +1002,10 @@ fn write(r: &mut Reg, exit: bool) {
     ids.sort_unstable();
     for key in ids {
         let s = &r.stats[&key];
-        out.push_str(&format!("{}\t{}\t{}\t{}\t{}\t{}", KINDS[key.0 as usize], key.1, s.instances, s.bytes, s.taken, s.sampled));
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            KINDS[key.0 as usize], key.1, s.instances, s.bytes, s.taken, s.sampled
+        ));
         for v in s.n {
             out.push_str(&format!("\t{v}"));
         }
@@ -905,7 +1015,10 @@ fn write(r: &mut Reg, exit: bool) {
         for v in s.surv_inst.iter().chain(&s.surv_bytes) {
             out.push_str(&format!("\t{v}"));
         }
-        out.push_str(&format!("\t{}\t{}\t{}", s.surv_objs, s.restarted, s.meta_objs));
+        out.push_str(&format!(
+            "\t{}\t{}\t{}",
+            s.surv_objs, s.restarted, s.meta_objs
+        ));
         for v in s.holders {
             out.push_str(&format!("\t{v}"));
         }
@@ -920,7 +1033,10 @@ fn write(r: &mut Reg, exit: bool) {
             if j > 0 {
                 out.push(',');
             }
-            out.push_str(&format!("{}:{id}:{}", KINDS[*k as usize], VERDICT[*v as usize]));
+            out.push_str(&format!(
+                "{}:{id}:{}",
+                KINDS[*k as usize], VERDICT[*v as usize]
+            ));
         }
         out.push('\n');
     }
