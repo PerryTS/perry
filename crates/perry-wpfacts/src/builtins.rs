@@ -854,6 +854,13 @@ pub(crate) enum NativeFamily {
     /// `equals`): the runtime's Buffer name dispatch runs them while that
     /// prototype's own shadow bit is clear, which a write onto it sets.
     Buffer,
+    /// Primitive Numbers: a member is `%Number.prototype%`'s (ECMA-262
+    /// 7.3.2 GetV: ToObject, then [[Get]] on the wrapper, which owns no
+    /// string key).
+    Num,
+    /// Native Promise objects (`TmplKind::BObj { what: "Promise" }`, made
+    /// by the realm: their [[Prototype]] is `%Promise.prototype%`).
+    Promise,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -868,12 +875,32 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
-        NativeFamily::RegExp => string_methods::regexp_described(name).then_some(Mem::Fn),
+        NativeFamily::RegExp if string_methods::regexp_described(name) => Some(Mem::Fn),
+        NativeFamily::RegExp => regexp_slot_getter(name).map(Mem::Prim),
+        NativeFamily::Num => members::intrinsic_member(Family::Num, name),
+        NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
     };
     match mem {
         Some(Mem::Fn) => true,
         Some(Mem::Prim(_)) => !call,
         _ => false,
+    }
+}
+
+/// A read-only accessor of `%RegExp.prototype%` whose getter reads only
+/// internal slots of its receiver (ECMA-262 22.2.6: `source` reads
+/// [[OriginalSource]], each flag getter [[OriginalFlags]] through
+/// RegExpHasFlag): no [[Get]] on the receiver, so no program value decides
+/// it. Not `flags` (22.2.6.4 reads the flag keys through [[Get]], which an
+/// own definition on the receiver changes), not `lastIndex` (an own
+/// writable data property of each RegExp object).
+fn regexp_slot_getter(name: &str) -> Option<u16> {
+    use crate::model::prim;
+    match name {
+        "source" => Some(prim::STR),
+        "global" | "ignoreCase" | "multiline" | "dotAll" | "unicode" | "unicodeSets" | "sticky"
+        | "hasIndices" => Some(prim::BOOL),
+        _ => None,
     }
 }
 
@@ -1103,6 +1130,8 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         // `Buffer.prototype` is a host prototype the program may write: its
         // writes are obligation 4's (`derive::builtin_protos_unwritten`).
         NativeFamily::Buffer => false,
+        NativeFamily::Num => members::locked_read(Family::Num, None, name),
+        NativeFamily::Promise => members::locked_read(Family::Promise, None, name),
     }
 }
 
@@ -1214,6 +1243,23 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             });
         }
     }
+    // A typed array's chain starts at its kind's prototype
+    // (`loads::view_chain`): a method only `Uint8Array.prototype` holds
+    // (`toHex`, `toBase64`, `setFromHex`, `setFromBase64`; 23.3.2) is that
+    // native (on another kind `undefined`: `loads::family_load`).
+    if matches!(what, Some("TypedArray" | "Buffer")) {
+        if let Some(identity) = m
+            .declarations
+            .named("Uint8Array.prototype", m)
+            .and_then(|h| m.declarations.property(h, name, m))
+            .and_then(|p| p.native)
+        {
+            return Some(Native::Member {
+                identity,
+                holder: None,
+            });
+        }
+    }
     // The prototype of an object a declaration made
     // (`AbortController.prototype`): a method whose effects it declares
     // (`effects::declared_at`); any other member stays opaque.
@@ -1236,11 +1282,13 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
         .and_then(|p| p.native)
         .or_else(|| {
             // Past the holder, `Object.prototype`'s member, where no own
-            // prototype of the family holds the key. A typed array's or a
-            // Buffer's chain is the realm's exactly (`view_chain`): the key
-            // is `Object.prototype`'s when that is where the chain finds it
+            // prototype of the family holds the key. A chain the realm
+            // declares link by link (`loads::realm_chain_start`: a typed
+            // array's, a Buffer's, an ArrayBuffer's, a DataView's, a
+            // realm-born object's) is the realm's exactly: the key is
+            // `Object.prototype`'s when that is where the chain finds it
             // (10.1.8.1: `valueOf`, `hasOwnProperty`).
-            let past = match loads::view_chain(what) {
+            let past = match loads::realm_chain_start(what) {
                 Some(p) => matches!(
                     members::realm_chain_find(p, name),
                     members::RealmFind::Own(_, at) if at.name == "Object.prototype"
@@ -2158,6 +2206,49 @@ pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> 
         .flatten()
 }
 
+/// REALM-PRESENT: is key `a` of builtin object `t` a property the realm
+/// creates (ECMA-262 9.1.1.4, 19.1-19.4: the global object's own
+/// properties, its constructors and namespaces; 21.3.2 and the like: a
+/// namespace's or constructor's own function properties), whose read
+/// `tok_load` answers with the realm's value, and with every primitive and
+/// ⊤ once a write or delete may reach the key? Then the read is never
+/// `undefined` by absence. The unknown-code half is the model's write
+/// record: for a global, `global_value_written` (`native_protocol::
+/// written_by`: an unmodeled writer, an accessor, a write under any key,
+/// the global object in ⊤) with its replay `NativeMiss::Global`
+/// (`loads::declared_global_load`), and a program store is in the
+/// global's field, which the read takes; for a namespace member,
+/// `opaque_written` (`native_written`) with its replay `NativeMiss::Load`
+/// (`loads::ns_load`). A unit sees no other unit's writes
+/// (`declared_global_load` tracks none in unit mode): never there.
+pub(crate) fn declared_present(m: &Model, t: Tok, a: Atom) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let n = m.atoms[a as usize].as_str();
+    match m.toks[t as usize] {
+        TokKind::Builtin(BuiltinNs::Other) => ns_by_name(n).is_some(),
+        TokKind::Builtin(BuiltinNs::GlobalThis) => {
+            !global_user_key(m, n) && ns_by_name(n).is_some()
+        }
+        TokKind::Builtin(
+            BuiltinNs::Require
+            | BuiltinNs::Process
+            | BuiltinNs::Module(_)
+            | BuiltinNs::ObjectProtoMethod
+            | BuiltinNs::ObjectProtoOwn(_),
+        ) => false,
+        TokKind::Builtin(ns) => {
+            !n.starts_with("@@")
+                && n != "prototype"
+                && n != "constructor"
+                && namespace_native(m, t, ns, n).is_some()
+                && !namespace_receiver_getter(m, t, n)
+        }
+        _ => false,
+    }
+}
+
 /// The function value carries its canonical namespace call coordinates.
 /// It runs on the receiver token `this_tok` the call is made for (a method
 /// call binds one per receiver value), else on the call's own `this`: what
@@ -3022,8 +3113,42 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
     }
 }
 
+/// CTOR-CALL-THROWS: a builtin constructor whose [[Call]] with an undefined
+/// NewTarget throws a TypeError as its first step, before it reads its
+/// receiver or any argument: %TypedArray% and each concrete typed-array
+/// constructor (ECMA-262 23.2.1.1, 23.2.5.1 step 1), ArrayBuffer (25.1.4.1),
+/// SharedArrayBuffer (25.2.3.1), DataView (25.3.2.1), Map (24.1.1.1), Set
+/// (24.2.1.1), WeakMap (24.3.1.1), WeakSet (24.4.1.1), Promise (27.2.3.1).
+/// The runtime's call path of each is a throwing thunk
+/// (`object/global_this/ctor_thunks.rs`: `typed_array_constructor_call_thunk`,
+/// `construct_only_builtin_call_thunk`, `map_`/`set_`/`weak_map_`/`weak_set_`/
+/// `promise_constructor_call_thunk`). Not here: constructors with a call
+/// behaviour (`Array`, `Object`, `String`, `Number`, `Boolean`, `BigInt`,
+/// `Symbol`, `Date`, `RegExp`, `Error`s, `Function`).
+pub(crate) fn call_throws(ns: BuiltinNs) -> bool {
+    matches!(
+        ns,
+        BuiltinNs::TypedArray
+            | BuiltinNs::TypedArrayKind(_)
+            | BuiltinNs::ArrayBuffer
+            | BuiltinNs::SharedArrayBuffer
+            | BuiltinNs::DataView
+            | BuiltinNs::Map
+            | BuiltinNs::Set
+            | BuiltinNs::WeakMap
+            | BuiltinNs::WeakSet
+            | BuiltinNs::Promise
+    )
+}
+
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
+    if call_throws(ns) {
+        // As a class called without `new` (`solve/call_and_construct.rs`
+        // `ClassObj`): the call throws before it uses anything; nothing
+        // flows into its result, no receiver or argument reaches code.
+        return;
+    }
     match ns {
         BuiltinNs::Require => {
             // The path registry may run a lazy module body inside the call.

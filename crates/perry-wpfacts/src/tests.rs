@@ -1,5 +1,6 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod any_key_builtin_read;
 mod absent_key;
 mod accessor_after_data_store;
 mod accessor_keys;
@@ -266,6 +267,8 @@ mod realm_chain_computed_key;
 mod typed_array_numeric_key;
 mod typed_array_this_throws;
 mod class_call_throws;
+mod builtin_ctor_call;
+mod realm_present;
 mod null_proto_box_key;
 mod error_proto_data_keys;
 mod namespace_own_members;
@@ -273,6 +276,7 @@ mod numeric_key_names;
 mod index_key_read;
 mod proto_key_read;
 mod spread_root;
+mod typed_array_key_read;
 mod unheld_key;
 mod unit_alias;
 mod root4162;
@@ -2137,3 +2141,4 @@ mod fn_number_key;
 mod builtin_ctor_number_key;
 mod given_proto_members;
 mod sound1;
+mod scope_a;

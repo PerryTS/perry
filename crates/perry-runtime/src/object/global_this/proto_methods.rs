@@ -675,15 +675,15 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // resizable resize transfer transferToFixedLength detached
             // @@toStringTag. `valueOf` / `toLocaleString` are Object.prototype's
             // (the chain), not own copies.
-            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(ArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
-            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_declared(0)));
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
@@ -710,7 +710,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                     super::super::native_module::set_builtin_closure_length(closure, realm_arraybuffer_transfer_public!(length));
                 }
             }
-            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_declared(0)));
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
         }
         "SharedArrayBuffer" => {
@@ -718,15 +718,15 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             // growable grow @@toStringTag. The brand-checking `slice` / `grow`
             // and getters serve `.call(notSab)`; instances dispatch through
             // buffer_dispatch.
-            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
                 crate::fn_info!(#[realm(SharedArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
-            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "grow",
