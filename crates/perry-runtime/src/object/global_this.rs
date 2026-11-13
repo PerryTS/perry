@@ -201,3 +201,11 @@ pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeade
     }
     crate::string::js_string_pool_atom(name.as_ptr(), name.len() as u32, hash, 0)
 }
+
+/// The code address of the realm's `Object.prototype.hasOwnProperty` body: a
+/// function value whose info names it is that builtin, whatever binding or
+/// property the program read it from.
+#[inline(always)]
+pub(crate) fn has_own_property_body() -> usize {
+    array_error::object_prototype_has_own_property_thunk as usize
+}
