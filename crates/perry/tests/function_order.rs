@@ -31,6 +31,10 @@ fn compile(dir: &Path, out: &str, extra: &[&str]) -> PathBuf {
     let compile = Command::new(perry_bin())
         .current_dir(dir)
         .env("PERRY_KEEP_SYMBOLS", "1")
+        // A `--function-order` link always takes GNU ld (`link/elf_linker.rs`);
+        // the plain build it is compared with must use the same linker, as
+        // the two keep different sets of duplicate local symbols.
+        .env_remove("PERRY_LINK_LLD")
         .arg("compile")
         .arg(dir.join("main.ts"))
         .arg("-o")

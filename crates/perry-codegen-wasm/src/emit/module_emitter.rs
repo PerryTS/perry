@@ -33,6 +33,10 @@ pub(super) struct WasmModuleEmitter {
     /// stored in WASM globals so cross-function references work, and so module-init
     /// LocalIds don't collide with other modules' identical LocalIds.
     pub(super) module_let_globals: BTreeMap<(usize, LocalId), u32>,
+    /// Locals a closure captures and someone mutates, as (mod_idx, LocalId). Each
+    /// holds a runtime cell, so the closures and the enclosing function share one
+    /// value; a plain local would give every closure its own snapshot.
+    pub(super) boxed_locals: std::collections::BTreeSet<(usize, LocalId)>,
     /// Current module index when compiling functions/methods, so LocalGet can resolve
     /// module-level Lets to the correct WASM global.
     pub(super) current_mod_idx: usize,
@@ -111,6 +115,7 @@ impl WasmModuleEmitter {
             global_map: BTreeMap::new(),
             num_globals: 0,
             module_let_globals: BTreeMap::new(),
+            boxed_locals: Default::default(),
             current_mod_idx: 0,
             class_ctor_map: BTreeMap::new(),
             class_method_map: BTreeMap::new(),

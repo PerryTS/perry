@@ -923,6 +923,14 @@ impl WasmModuleEmitter {
                 &mut self.num_globals,
             );
         }
+        // Module-level lets are wasm globals, already shared by every closure.
+        for (_, _, _, _, mutable_captures, mod_idx) in &closure_funcs {
+            for id in mutable_captures {
+                if !self.module_let_globals.contains_key(&(*mod_idx, *id)) {
+                    self.boxed_locals.insert((*mod_idx, *id));
+                }
+            }
+        }
 
         // Issue #1071: build cross-module imported-variable → WASM global map.
         // The HIR lowers `import { FOO } from './m'` value reads (where FOO is

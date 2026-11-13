@@ -27,6 +27,10 @@
 //!   symbol names), COFF, wasm, Android and HarmonyOS keep today's layout.
 //! * `--function-order` (a per-program recording) replaces the default order.
 //! * `PERRY_HOT_TEXT_ORDER=off` keeps today's layout.
+//! * lld refuses an output section inserted before itself ("unable to insert
+//!   .text before .text"), so its script names the hot run's output section
+//!   `.text.perry_hot` and leaves the rest of `.text` to the linker's own
+//!   placement right behind it (`elf_linker`).
 
 use object::read::archive::ArchiveFile;
 use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
@@ -239,19 +243,28 @@ fn place<'a>(
 /// output section); then the JS text rule every ELF link passes. The two
 /// symbols bound the run for `scripts/hot_text_order.py` (symbol-table entries
 /// only: a stripped binary carries nothing of them).
-fn script(placement: &Placement) -> String {
+/// The output section of the hot run under lld (see the module notes).
+pub(super) const LLD_HOT_SECTION: &str = ".text.perry_hot";
+
+fn script(placement: &Placement, lld: bool) -> String {
     let mut out = format!(
-        "/* perry default hot-text order: listed={} resolved={} core={}/{} sections={} */\nSECTIONS {{\n .text : {{\n  __perry_rt_hot_text_start = .;\n",
+        "/* perry default hot-text order: listed={} resolved={} core={}/{} sections={} */\nSECTIONS {{\n {} : {{\n  __perry_rt_hot_text_start = .;\n",
         placement.listed,
         placement.resolved,
         placement.core_resolved,
         placement.core_listed,
-        placement.sections.len()
+        placement.sections.len(),
+        if lld { LLD_HOT_SECTION } else { ".text" }
     );
     for section in &placement.sections {
         out.push_str("  *(");
         out.push_str(section);
         out.push_str(")\n");
+    }
+    if lld {
+        out.push_str("  __perry_rt_hot_text_end = .;\n }\n} INSERT BEFORE .text;\n");
+        out.push_str(perry_codegen::function_order::JS_TEXT_LINK_RULE);
+        return out;
     }
     out.push_str(
         "  __perry_rt_hot_text_end = .;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
@@ -324,7 +337,12 @@ fn fingerprint(archives: &[&Path]) -> Option<u64> {
 /// the JS text rule. `None` keeps today's script: the switch is off, the
 /// program has its own order, or an archive cannot be read. Never an error:
 /// the order is layout only.
-pub(super) fn link_script(cache: &Path, archives: &[&Path], verbose: u8) -> Option<PathBuf> {
+pub(super) fn link_script(
+    cache: &Path,
+    archives: &[&Path],
+    lld: bool,
+    verbose: u8,
+) -> Option<PathBuf> {
     if !enabled() || archives.is_empty() {
         return None;
     }
@@ -338,7 +356,8 @@ pub(super) fn link_script(cache: &Path, archives: &[&Path], verbose: u8) -> Opti
     }
     let fingerprint = fingerprint(archives)?;
     let dir = cache.join("function-order");
-    let path = dir.join(format!("hot-text-{fingerprint:016x}.v1.ld"));
+    let flavor = if lld { ".lld" } else { "" };
+    let path = dir.join(format!("hot-text-{fingerprint:016x}.v1{flavor}.ld"));
     if !path.is_file() {
         let (ranks, tiers) = parse_order(DEFAULT_ORDER);
         let mut functions = Vec::new();
@@ -358,7 +377,7 @@ pub(super) fn link_script(cache: &Path, archives: &[&Path], verbose: u8) -> Opti
         // Concurrent links share the cache: write a sibling, then rename.
         let tmp = path.with_extension(format!("tmp{}", std::process::id()));
         if std::fs::create_dir_all(&dir).is_err()
-            || std::fs::write(&tmp, script(&placement)).is_err()
+            || std::fs::write(&tmp, script(&placement, lld)).is_err()
             || std::fs::rename(&tmp, &path).is_err()
         {
             let _ = std::fs::remove_file(&tmp);
@@ -458,7 +477,20 @@ mod tests {
         );
         assert_eq!((placement.listed, placement.resolved), (3, 2));
         assert_eq!((placement.core_listed, placement.core_resolved), (1, 1));
-        let script = script(&placement);
+        // lld: the same run in its own output section, inserted before the
+        // linker's `.text`, which keeps the default patterns itself.
+        let lld = script(&placement, true);
+        assert!(
+            lld.contains("SECTIONS {\n .text.perry_hot : {\n  __perry_rt_hot_text_start = .;\n")
+        );
+        assert!(!lld.contains(" .text : {"));
+        assert!(!lld.contains("*(.text .stub .text.* .gnu.linkonce.t.*)"));
+        assert!(
+            lld.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap()
+                < lld.find("*(.text.js_one)").unwrap()
+        );
+        assert!(lld.ends_with(perry_codegen::function_order::JS_TEXT_LINK_RULE));
+        let script = script(&placement, false);
         assert!(script.contains("listed=3 resolved=2 core=1/1 sections=3"));
         assert!(script.ends_with(perry_codegen::function_order::JS_TEXT_LINK_RULE));
         // The rule takes the rest of `.text` after the run, so the default

@@ -1634,6 +1634,10 @@ function __classInstance(className) {
 }
 
 const __memDispatch = {
+  // A cell holds a local that closures capture and mutate, so all of them share it.
+  box_new: (value) => ({ value }),
+  box_get: (cell) => cell.value,
+  box_set: (cell, value) => { cell.value = value; return value; },
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
   console_warn: (...args) => { console.warn(...args); },
