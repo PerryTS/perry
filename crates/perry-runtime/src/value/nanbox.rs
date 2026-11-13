@@ -261,7 +261,9 @@ pub extern "C" fn js_nanbox_is_pointer(value: f64) -> i32 {
 /// clear is a Number (a denormal double or +0), never an address: no test can
 /// tell the Number whose bits equal a live object's start from that object, so
 /// this decoder does not look. A word the runtime stored itself as a raw
-/// address is not a value; its reader names that with [`ptr_from_raw_word`].
+/// address (a `js_closure_set_capture_ptr` slot, a shape's keys word) is not a
+/// value: its reader takes the word as the address it is and does not come
+/// here.
 #[no_mangle]
 pub extern "C" fn js_nanbox_get_pointer(value: f64) -> i64 {
     let bits = value.to_bits();

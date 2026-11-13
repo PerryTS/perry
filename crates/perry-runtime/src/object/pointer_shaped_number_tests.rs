@@ -143,3 +143,57 @@ fn the_object_decodes_name_no_address() {
     );
     assert_eq!(unsafe { super::object_ops::extract_obj_ptr(tagged) }, obj);
 }
+
+/// The shared value decoder (`js_nanbox_get_pointer`) classifies by the tag
+/// alone: the forged Number, the smallest denormal and a word in the handle
+/// band name no address; every tagged payload still decodes.
+#[test]
+fn the_shared_value_decoder_names_no_address() {
+    use crate::value::js_nanbox_get_pointer as decode;
+    let (obj, forged) = object_and_forgery();
+    assert_eq!(decode(forged), 0, "a Number decoded as the object");
+    assert_eq!(decode(f64::from_bits(1)), 0, "Number.MIN_VALUE");
+    assert_eq!(decode(f64::from_bits(0x1234)), 0, "a handle-band word");
+    assert_eq!(decode(f64::from_bits(0x000F_FFFF_FFFF_FFF8)), 0);
+    assert_eq!(decode(0.0), 0);
+    assert_eq!(decode(1.5), 0);
+    assert_eq!(decode(f64::from_bits(TAG_UNDEFINED)), 0);
+
+    let tagged = crate::value::js_nanbox_pointer(obj as i64);
+    assert_eq!(decode(tagged), obj as i64, "the object itself decodes");
+    let name = key("x");
+    assert_eq!(
+        decode(crate::value::js_nanbox_string(name as i64)),
+        name as i64
+    );
+    assert_eq!(decode(crate::value::js_nanbox_handle(7)), 7);
+    let big = crate::value::BIGINT_TAG | 0x1000;
+    assert_eq!(decode(f64::from_bits(big)), 0x1000);
+}
+
+/// Entries that decode their operand through the shared decoder: the forged
+/// Number is not the array (no length, no element), and is no iterable.
+#[test]
+fn entries_behind_the_shared_decoder_answer_as_a_number() {
+    let arr = crate::array::js_array_alloc(4);
+    let arr = crate::array::js_array_push_f64(arr, 9.0);
+    let forged = f64::from_bits(arr as u64);
+    let tagged = crate::value::js_nanbox_pointer(arr as i64);
+    assert_eq!(crate::value::js_dynamic_array_length(tagged), 1);
+    assert_eq!(
+        crate::value::js_dynamic_array_length(forged),
+        0,
+        "the Number has the array's length"
+    );
+    assert_eq!(
+        crate::value::js_dynamic_array_get(forged, 0).to_bits(),
+        TAG_UNDEFINED,
+        "the Number has the array's element"
+    );
+    let copy = crate::array::js_array_from_value(forged);
+    assert_eq!(
+        crate::array::js_array_length(copy),
+        0,
+        "Array.from(number) copied the array"
+    );
+}
