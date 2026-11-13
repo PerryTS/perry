@@ -300,7 +300,7 @@ pub(crate) fn set_integer_indexed_exotic(target: f64, key: f64, value: f64) -> b
         return true;
     }
     if crate::buffer::is_registered_buffer(raw) {
-        crate::buffer::js_buffer_set(raw as *mut crate::buffer::BufferHeader, index, value as i32);
+        crate::buffer::js_buffer_set_value(raw as *mut crate::buffer::BufferHeader, index, value);
         return true;
     }
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {

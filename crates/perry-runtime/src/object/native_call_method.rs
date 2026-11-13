@@ -2058,50 +2058,19 @@ pub(crate) unsafe fn native_call_method_tower(
                     args.len(),
                 );
             }
-            // A live Error whose chain has no such callable: the member call
-            // has no callee, a TypeError as in node.
-            if gc_type == crate::gc::GC_TYPE_ERROR {
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-            // Closes #645: when a method falls through every dispatcher
-            // and returns NULL_OBJECT_BYTES (e.g. drizzle's
-            // `this.client.prepare(...)` where `this.client` resolved to
-            // a heap-object that doesn't dispatch any method named
-            // "prepare"), the result gets stored as `this.stmt` and the
-            // chained `this.stmt.raw().all(...)` re-enters this function
-            // with `obj` pointing at NULL_OBJECT_BYTES — a static stub in
-            // the binary's data segment, NOT the macOS userspace heap
-            // range that `is_valid_obj_ptr` requires (HEAP_MIN ==
-            // 0x200_0000_0000). Pre-fix this returned a literal `0.0`,
-            // which the codegen interprets as the IEEE-754 number zero,
-            // so the next chained method saw a number receiver and
-            // threw `(number).<method> is not a function`. Returning the
-            // null-object stub matches every other catch-all in this
-            // function and keeps `typeof === "object"` so chained
-            // operations propagate consistently instead of mid-chain
-            // numeric arithmetic on bit patterns. Truly garbage pointers
-            // benefit too — chained calls hit a stable null stub instead
-            // of mysterious numeric values.
-            //
-            // #340/#341 row 4 collapsed an `is_valid_obj_ptr(obj)` branch that
-            // used to sit here: BOTH of its arms already returned the stub, so
-            // it could not change the answer -- a test that cannot fail. Its
-            // premise is gone too. It was written when the stub was a `.data`
-            // static, deliberately OUTSIDE the macOS heap window
-            // (`HEAP_MIN == 0x200_0000_0000`) that `is_valid_obj_ptr` requires,
-            // so a re-entrant `stub.raw().all(...)` reached this arm with
-            // `gc_type` read out of whatever bytes preceded the static. The
-            // stub is a real `GC_TYPE_OBJECT` now, so that re-entry takes the
-            // ordinary-object path below, finds a zero-key shape, matches no
-            // method and reaches the same catch-all at the end of this
-            // function. Same answer, decided by the object model rather than by
-            // the linker's layout.
-            return crate::object::null_stub_value();
+            // A live exotic receiver whose chain has no such callable (an
+            // Error; an Array, a Date or a typed array behind a class
+            // annotation, `p.m()` with `p: P` given `[7, 8]`): the member call
+            // has no callee, node's TypeError `p.m is not a function`. The
+            // null-object stub this arm returned before (#645: a chained call
+            // on a heap object that dispatches no such method) is an ordinary
+            // object (`GC_TYPE_OBJECT`) and never reaches this arm.
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
         }
 
         // Overflow owns the current key list after a delete or descriptor

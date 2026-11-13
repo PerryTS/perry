@@ -360,6 +360,8 @@ fn alloc_key_list(
         (*ptr).ek_kind = 0;
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(header);
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
         if with_attrs {

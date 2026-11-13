@@ -64,6 +64,27 @@ pub extern "C" fn js_array_splice(
             }
             return js_array_alloc(0);
         }
+        // A frozen, sealed or non-extensible Array, or one whose `length` is
+        // read-only: the spec steps, each throwing where it fails
+        // (`generic_object::restricted_array_value`).
+        if let Some(recv) = super::generic_object::restricted_array_value(arr) {
+            let mut args: Vec<f64> = vec![
+                start as f64,
+                if delete_count == i32::MAX {
+                    f64::INFINITY
+                } else {
+                    delete_count as f64
+                },
+            ];
+            if !items.is_null() {
+                args.extend_from_slice(std::slice::from_raw_parts(items, items_count as usize));
+            }
+            let removed = crate::array::object_splice(recv, args.as_ptr(), args.len());
+            if !out_arr.is_null() {
+                *out_arr = arr;
+            }
+            return crate::value::js_nanbox_get_pointer(removed) as *mut ArrayHeader;
+        }
         if (*arr).length > (*arr).capacity {
             // A sparse Array keeps a short store under its length: the reads
             // and the tail move below work on `length` raw slots.

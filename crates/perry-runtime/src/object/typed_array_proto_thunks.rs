@@ -318,12 +318,10 @@ fn uint8_relative_index_arg(args: &[f64], index: usize, len: usize, default: usi
 
 #[inline]
 fn to_uint8(value: f64) -> u8 {
-    let number = crate::value::JSValue::from_bits(value.to_bits()).to_number();
-    if !number.is_finite() || number == 0.0 {
-        0
-    } else {
-        (number.trunc() as i64).rem_euclid(256) as u8
-    }
+    // The shared element conversion: ToNumber (an object's `valueOf` runs, a
+    // BigInt or a Symbol throws), then ToUint8. It can run program code, so
+    // every caller converts before it reads the receiver's address.
+    crate::typedarray_hook_slots::jsvalue_to_uint8(value)
 }
 
 #[inline]
@@ -544,24 +542,6 @@ unsafe fn uint8_join(addr: usize, separator_value: f64) -> f64 {
     let out = crate::string::js_string_from_bytes(result.as_ptr(), result.len() as u32);
     std::hint::black_box(&result);
     string_value(out)
-}
-
-unsafe fn uint8_with(addr: usize, args: &[f64]) -> f64 {
-    let len = uint8_len(addr);
-    let Some(index) = uint8_at_index(args, len) else {
-        crate::typedarray_hook_slots::throw_range_error(b"Invalid typed array index");
-    };
-    let value = to_uint8(arg_or_undefined(args, 1));
-    let out = crate::buffer::js_uint8array_alloc(len as i32);
-    for i in 0..len {
-        let stored = if i == index {
-            value
-        } else {
-            uint8_get(addr, i)
-        };
-        uint8_set(out as usize, i, stored);
-    }
-    pointer_value(out as usize)
 }
 
 unsafe fn rest_values(rest_value: f64) -> Vec<f64> {
@@ -1064,7 +1044,30 @@ pub(crate) unsafe fn dispatch_uint8_buffer_method(
             }
             pointer_value(out as usize)
         }
-        "with" => uint8_with(recv.live().0, args),
+        "with" => {
+            // ToIntegerOrInfinity(index), then ToNumber(value) (program code),
+            // then IsValidIntegerIndex on the live view, then the copy of the
+            // original length; the address is read after the allocation.
+            let index = uint8_at_index(args, len);
+            let value = to_uint8(arg_or_undefined(args, 1));
+            let Some(index) = index.filter(|&i| i < uint8_len(recv.live().0)) else {
+                crate::typedarray_hook_slots::throw_range_error(b"Invalid typed array index");
+            };
+            let out = uint8_alloc_like(recv.live().0, len);
+            let (addr, _) = recv.live();
+            let live_len = uint8_len(addr);
+            for i in 0..len {
+                let stored = if i == index {
+                    value
+                } else if i < live_len {
+                    uint8_get(addr, i)
+                } else {
+                    0
+                };
+                uint8_set(out as usize, i, stored);
+            }
+            pointer_value(out as usize)
+        }
         _ => return None,
     };
     Some(result)

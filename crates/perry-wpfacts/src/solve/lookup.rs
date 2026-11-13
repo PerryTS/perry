@@ -352,6 +352,7 @@ impl Model {
                 fresh.push(c);
             }
         }
+        self.json_reviver_flush(&fresh);
         if !fresh.is_empty()
             && (lose || self.top_reshaped_any || !self.top_reshaped_keys.is_empty())
         {

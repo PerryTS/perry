@@ -134,6 +134,7 @@ mod buffer_views;
 mod channel;
 #[cfg(test)]
 mod class_method_arguments_object_tests;
+pub(crate) mod collection_brand;
 pub(crate) mod collection_receiver;
 pub(crate) mod facts_canonical;
 pub(crate) mod facts_number;
@@ -164,10 +165,10 @@ pub(crate) use array_literal::{
     emit_array_from_lowered_values, lower_array_literal, INLINE_ARRAY_MAX_ELEMENTS,
 };
 pub(crate) use buffer_access::{
-    access_facts_for_spec, can_lower_buffer_access_without_calls,
-    can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
-    lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
+    access_facts_for_spec, byte_store_tonumber_on, byte_store_value_needs_tonumber,
+    can_lower_buffer_access_without_calls, can_lower_integer_typed_array_store_value,
+    emit_buffer_access_pointer, lower_buffer_access_proof, lower_buffer_load, lower_buffer_store,
+    lower_typed_array_load, lower_typed_array_store, BufferAccessSpec, OutOfBoundsArm,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,

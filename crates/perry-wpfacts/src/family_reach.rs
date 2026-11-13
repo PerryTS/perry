@@ -791,10 +791,15 @@ fn closed_requested(m: &Model) -> bool {
     m.explain || std::env::var("PERRY_FACTS_FAMILY_REACH").as_deref() == Ok("closed")
 }
 
-/// The fact, after the fixpoint. `unit`: the modules are one unit of a
-/// larger program (L0). `dynamic_code`: the driver linked the interpreter
-/// (an input of the solve, reported as such).
-pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>) -> FamilyReach {
+/// The fact, after the fixpoint. `cfg.unit`: the modules are one unit of a
+/// larger program (L0). `cfg.dynamic_code`: the driver linked the
+/// interpreter (an input of the solve, reported as such).
+pub(crate) fn derive(g: &crate::gen::Gen, cfg: &crate::FactsConfig) -> FamilyReach {
+    let (unit, dynamic_code, sabotage) = (
+        cfg.unit,
+        cfg.dynamic_code.as_deref(),
+        cfg.sabotage.as_deref(),
+    );
     let m = &g.m;
     let mut v = Verdicts::new();
     // L0.
@@ -827,6 +832,13 @@ pub(crate) fn derive(g: &crate::gen::Gen, unit: bool, dynamic_code: Option<&str>
             if let Some(why) = why {
                 v.mark(1 << i, || why.clone());
             }
+        }
+    }
+    // Test-only negative control (`PERRY_FACTS_SABOTAGE=famreach:<family>`):
+    // the fact says `never` for a family whatever the rules found.
+    if let Some(family) = sabotage.and_then(|s| s.strip_prefix("famreach:")) {
+        if let Some(i) = families::family_index(family) {
+            v.why[i] = None;
         }
     }
     FamilyReach {

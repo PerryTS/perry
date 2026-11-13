@@ -107,8 +107,9 @@ fn regexp_builtin_shape_rejects_overrides() {
                             "multiline",
                             "dotAll",
                             "unicode",
+                            // node (V8) reads `sticky` before `unicodeSets`.
+                            "sticky",
                             "unicodeSets",
-                            "sticky"
                         ]
                     )
                 });

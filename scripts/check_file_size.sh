@@ -28,7 +28,7 @@ crates/perry-codegen/src/codegen/mod.rs	3677
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2775
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2878
+crates/perry-codegen/src/expr/mod.rs	2879
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8456
 # Representation-aware map core; further decomposition is tracked in #1435.
@@ -40,7 +40,7 @@ crates/perry-runtime/src/typed_feedback.rs	2444
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	4749
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15688
+crates/perry-codegen/tests/native_proof_regressions.rs	15809
 # Representation feedback regression cases; test organization is a separate follow-up.
 crates/perry-runtime/src/typed_feedback/tests.rs	2304
 # Lowering report schema and its emitters; split emitters in a follow-up.

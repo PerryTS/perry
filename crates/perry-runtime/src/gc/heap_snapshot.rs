@@ -239,6 +239,42 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
     }
 }
 
+/// LIFE I3d (`gc::life_why`): the label of one object for a holder chain.
+#[cfg(perry_gc_instruments)]
+pub(super) unsafe fn life_label(header: *mut GcHeader) -> String {
+    let rec = NodeRec {
+        header,
+        user: (header as usize) + GC_HEADER_SIZE,
+        obj_type: (*header).obj_type,
+        self_size: (*header).size,
+    };
+    let (kind, name) = node_label(&rec);
+    let mut name: String = name.chars().take(48).collect();
+    if kind == NODE_TYPE_ARRAY && rec.obj_type != GC_TYPE_LAZY_ARRAY {
+        let arr = rec.user as *const crate::array::ArrayHeader;
+        let len = (*arr).length.min(8);
+        let els = crate::array::array_elements_ptr(arr);
+        name.push_str(&format!(" len={} [", (*arr).length));
+        for i in 0..len as usize {
+            let bits = *els.add(i);
+            let v = crate::value::JSValue::from_bits(bits);
+            // An element of key/attribute storage is not always a value (attribute words): read a
+            // string only behind a tracked string header.
+            let target = decode_slot_target(bits);
+            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(target, GC_TYPE_STRING).is_some();
+            let text = tracked
+                .then(|| read_heap_string(bits, 24))
+                .flatten()
+                .or_else(|| v.is_short_string().then(|| crate::value::boxed_text::short_string_content(v)))
+                .unwrap_or_else(|| format!("{bits:#x}"));
+            name.push_str(&text);
+            name.push(',');
+        }
+        name.push(']');
+    }
+    format!("type={} size={} flags={:#x} {:?}", rec.obj_type, rec.self_size, (*header).gc_flags, name)
+}
+
 /// Best-effort property name for inline object field `field_index`,
 /// resolved through the object's keys array. `None` for class
 /// instances (keys array is NULL) and non-string keys.

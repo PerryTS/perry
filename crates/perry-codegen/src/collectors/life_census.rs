@@ -178,6 +178,33 @@ fn registry() -> &'static Mutex<Vec<Arc<ModuleCensus>>> {
 
 thread_local! {
     static CURRENT: std::cell::RefCell<Option<Arc<ModuleCensus>>> = const { std::cell::RefCell::new(None) };
+    /// The body codegen is collecting facts for (`compiling`): `Some(None)`
+    /// the module's init, `Some(Some(f))` function / method / closure `f`.
+    static COMPILING: std::cell::Cell<Option<Option<FuncId>>> = const { std::cell::Cell::new(None) };
+}
+
+/// Names the body whose facts the codegen opener collects next, until the
+/// guard drops. A body is found by its statement list's address; a body that
+/// codegen compiles from a copy (`F$sig`: `record_sig::sig_body`) has another
+/// address, and is named by its function here (LIFE I3: without this its
+/// loops and activation were labeled `<init>`). A no-op unless a census or
+/// measurement is on.
+pub(crate) fn compiling(func: Option<FuncId>) -> Compiling {
+    if path().is_none() && !super::life_claims::wanted() && !super::life_claims::measured() {
+        return Compiling(None);
+    }
+    Compiling(Some(COMPILING.with(|c| c.replace(Some(func)))))
+}
+
+/// Restores the enclosing `compiling` scope.
+pub(crate) struct Compiling(Option<Option<Option<FuncId>>>);
+
+impl Drop for Compiling {
+    fn drop(&mut self) {
+        if let Some(prev) = self.0 {
+            COMPILING.with(|c| c.set(prev));
+        }
+    }
 }
 
 /// Ends one module's census registration.
@@ -354,10 +381,32 @@ pub(crate) fn observe(
         .expect("census registry")
         .iter()
         .find_map(|m| m.bodies.get(&key).map(|b| (m.clone(), b.clone())));
+    let scope = COMPILING.with(|c| c.get());
     let (module, body) = match found {
         Some((m, b)) => (m, Some(b)),
         None => match CURRENT.with(|c| c.borrow().clone()) {
-            Some(m) => (m, None),
+            // A copy of a body (another address): the opener names it.
+            Some(m) => {
+                let body = match scope {
+                    Some(None) => None,
+                    Some(Some(f)) => Some(m.bodies.values().find(|b| b.func == f).cloned().unwrap_or_else(|| {
+                        Body {
+                            label: format!("<unregistered:{f}>"),
+                            suspends: false,
+                            func: f,
+                            direct: false,
+                        }
+                    })),
+                    // No opener named it: visible as such, never `<init>`.
+                    None => Some(Body {
+                        label: "<unregistered>".to_string(),
+                        suspends: false,
+                        func: FuncId::MAX,
+                        direct: false,
+                    }),
+                };
+                (m, body)
+            }
             None => return LifeClaims::default(),
         },
     };
@@ -384,11 +433,18 @@ pub(crate) fn observe(
         let suspends = body.as_ref().is_some_and(|b| b.suspends);
         let body_key = format!("body\t{}\t{label}\t{}", module.name, if suspends { "suspends" } else { "plain" });
         claims.body_id = crate::verify_facts::life_measure::site_id(&body_key);
+        let loop_keys: Vec<String> =
+            (0..claims.loop_order.len()).map(|ord| format!("loop\t{}\t{label}\t#{ord}", module.name)).collect();
+        for (at, key) in claims.loop_order.iter().zip(&loop_keys) {
+            claims.loop_ids.insert(*at, crate::verify_facts::life_measure::site_id(key));
+        }
         let keys = claims.births.values().map(|(k, _)| k.as_str());
+        let keys = keys.chain(loop_keys.iter().map(String::as_str));
         crate::verify_facts::life_measure::write_sites(keys.chain(std::iter::once(body_key.as_str())));
     } else {
         claims.births.clear();
         claims.loops.clear();
+        claims.loop_order.clear();
     }
     claims
 }
@@ -841,6 +897,13 @@ impl Census<'_> {
         }
     }
 
+    /// A loop body (statement-list address): hooked, numbered in first-visit order.
+    fn note_loop(&mut self, at: usize) {
+        if self.claims.loops.insert(at) {
+            self.claims.loop_order.push(at);
+        }
+    }
+
     fn stmts(&mut self, b: &[Stmt]) {
         for s in b {
             self.stmt(s);
@@ -946,7 +1009,7 @@ impl Census<'_> {
             }
             Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
-                self.claims.loops.insert(body.as_ptr() as usize);
+                self.note_loop(body.as_ptr() as usize);
                 self.expr(condition, None);
                 self.stmts(body);
                 self.loop_body = saved;
@@ -961,7 +1024,7 @@ impl Census<'_> {
                     self.stmt(s);
                 }
                 let saved = std::mem::replace(&mut self.loop_body, body.as_ptr() as usize);
-                self.claims.loops.insert(body.as_ptr() as usize);
+                self.note_loop(body.as_ptr() as usize);
                 if let Some(e) = condition {
                     self.expr(e, None);
                 }
@@ -1030,7 +1093,7 @@ impl Census<'_> {
         let key = format!("{}\t{label}\t{}\t{class}\t{offset}", self.m.name, kind.word());
         self.claims.births.insert(e as *const Expr as usize, (key, self.loop_body));
         if self.loop_body != 0 {
-            self.claims.loops.insert(self.loop_body);
+            self.note_loop(self.loop_body);
         }
     }
 

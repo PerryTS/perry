@@ -1776,6 +1776,22 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call3(
     js_builtin_proto_generic_call(GENERIC_RECEIVER, recv, method_id, args.as_ptr(), 3)
 }
 
+/// `Get(recv, "size")`: the miss of a Map / Set `size` read whose receiver
+/// failed the brand test (codegen `collection_receiver::lower_collection_size`):
+/// an own or inherited `size` (a getter runs with `recv` as `this`),
+/// `undefined`, or node's TypeError for null / undefined.
+#[no_mangle]
+pub extern "C-unwind" fn js_collection_size_get(recv: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    // The interned key may allocate on first use; the receiver is rooted.
+    let key = crate::string::canonical_key(b"size");
+    crate::value::js_dyn_index_get(
+        recv.get_nanbox_f64(),
+        crate::value::js_nanbox_string(key as i64),
+    )
+}
+
 /// Contract builds: a site that took the direct builtin path must
 /// have held `Pristine(family)`. Codegen emits a call to this only under
 /// `PERRY_CHECK_CONTRACTS`; release code never references it. Defined in

@@ -28,6 +28,14 @@
 //!   relinked, and no builtin prototype is written under the key. The call
 //!   then runs the realm's `Array.prototype` built-in and no other code.
 //!
+//! - **a collection receiver** ([`MAP`], [`SET`]): at every copy of the
+//!   site, and every summary instance's copy of it, the receiver node holds
+//!   Maps (resp. Sets) the realm bore (`new Map(..)`, `new Set(..)`) and
+//!   nothing else: no primitive, no ⊤, no marker, no object of another birth
+//!   (a subclass instance is a program class instance). Like the typed-array
+//!   fact it says nothing about the member; codegen's own-override guard
+//!   still answers for a shadowed method.
+//!
 //! A site is keyed as codegen keys it (`perry_hir::folded_call::Site`): an
 //! unfolded call by its callee read's offset, a folded node by its
 //! receiver, each with the method name. Two sites under one key (a chain
@@ -40,7 +48,10 @@
 //! `PERRY_FACTS_TYPED_ARRAY_SITES=0` exports no typed-array fact (codegen
 //! then trusts the annotation, as before); `PERRY_FACTS_ARRAY_METHOD_SITES=0`
 //! exports no Array-member fact (codegen then guards every site at run
-//! time, as before). The negative controls `PERRY_FACTS_SABOTAGE=tasite` and
+//! time, as before); `PERRY_FACTS_COLLECTION_SITES=0` exports no collection
+//! fact (codegen then tests the receiver's brand at every Map / Set site).
+//! `PERRY_FACTS_SABOTAGE=collsite` claims every site a Map and a Set
+//! receiver. The negative controls `PERRY_FACTS_SABOTAGE=tasite` and
 //! `=arraysite` claim every site a typed-array receiver / an Array member.
 //! The dump (`PERRY_FACTS_DUMP`) prints one `# method_site` line per site:
 //! `module= site=callee:N|recv:N|local:N key= typed_array=1|0(<why>)
@@ -58,6 +69,20 @@ pub const TYPED_ARRAY: u8 = perry_hir::folded_call::SITE_TYPED_ARRAY;
 /// The site's member is the realm's `Array.prototype` built-in on every
 /// receiver value (the `NativeMember` verdict over the Array family).
 pub const ARRAY_MEMBER: u8 = perry_hir::folded_call::SITE_ARRAY_MEMBER;
+
+/// The site's receiver holds only Maps the realm bore.
+pub const MAP: u8 = perry_hir::folded_call::SITE_MAP;
+
+/// The site's receiver holds only Sets the realm bore.
+pub const SET: u8 = perry_hir::folded_call::SITE_SET;
+
+/// `PERRY_FACTS_COLLECTION_SITES=0` turns the Map / Set receiver facts off.
+pub fn collection_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_COLLECTION_SITES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
 
 /// `PERRY_FACTS_ARRAY_METHOD_SITES=0` turns the Array-member fact off.
 pub fn array_member_enabled() -> bool {
@@ -79,6 +104,13 @@ pub fn typed_array_enabled() -> bool {
 /// Why node `n` may hold something that is no realm-born typed array
 /// (`None`: it holds such typed arrays and nothing else).
 fn not_typed_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
+    not_bobjs(m, n, "TypedArray")
+}
+
+/// Why node `n` may hold something that is no realm-born built-in object of
+/// kind `what` (`"TypedArray"`, `"Map"`, `"Set"`; `None`: it holds such
+/// objects and nothing else).
+fn not_bobjs(m: &Model, n: NodeId, what: &str) -> Option<&'static str> {
     let node = &m.nodes[n as usize];
     if node.dropped {
         return Some("receiver:dropped");
@@ -99,14 +131,12 @@ fn not_typed_arrays(m: &Model, n: NodeId) -> Option<&'static str> {
         let TokKind::Obj(tm, _) = m.toks[t as usize] else {
             return Some("receiver:not-typed-array");
         };
-        if !matches!(
-            m.tmpls[tm as usize].kind,
-            TmplKind::BObj {
-                what: "TypedArray",
-                ..
-            }
-        ) {
-            return Some("receiver:not-typed-array");
+        if !matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: w, .. } if w == what) {
+            return Some(if what == "TypedArray" {
+                "receiver:not-typed-array"
+            } else {
+                "receiver:other-kind"
+            });
         }
     }
     None
@@ -167,13 +197,16 @@ pub(crate) fn collect(
     g: &Gen<'_>,
     bindings: &mut [ModuleBindings],
     interpreted: bool,
-    sabotage_typed_array: bool,
-    sabotage_array_member: bool,
+    sabotage: Option<&str>,
     mut probe: Option<&mut Vec<String>>,
 ) {
     let m = &g.m;
     let (typed, array) = (typed_array_enabled(), array_member_enabled());
-    if !(typed || array) || m.aborted || m.unit_mode || interpreted {
+    let collection = collection_enabled();
+    let sabotage_typed_array = sabotage == Some("tasite");
+    let sabotage_array_member = sabotage == Some("arraysite");
+    let sabotage_collection = sabotage == Some("collsite");
+    if !(typed || array || collection) || m.aborted || m.unit_mode || interpreted {
         return;
     }
     // A summarized body's node has one copy per instance (`Inst::fresh`):
@@ -213,6 +246,18 @@ pub(crate) fn collect(
                 (true, Some(why)) => format!(" {name}=0({why})"),
             });
         };
+        for (name, bit, what) in [("map", MAP, "Map"), ("set", SET, "Set")] {
+            fact(
+                name,
+                collection,
+                bit,
+                nodes
+                    .iter()
+                    .find_map(|&n| not_bobjs(m, n, what))
+                    .filter(|_| !sabotage_collection)
+                    .map(str::to_string),
+            );
+        }
         fact(
             "typed_array",
             typed,

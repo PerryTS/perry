@@ -34,10 +34,41 @@ use std::ptr;
 // array / buffer / primitive), so the hot real-array paths are untouched.
 // ---------------------------------------------------------------------------
 
-/// `Set(O, ToString(k), v, true)` for an array-like object receiver.
+/// An Array some step of whose `pop` / `shift` / `unshift` / `splice` /
+/// `reverse` can fail: frozen, sealed or non-extensible, or with a
+/// non-writable `length`. The dense bodies assume every element is writable
+/// and deletable and the store may grow, so they either refused the whole
+/// call up front (a sparse `splice`) or performed it where node throws (a
+/// sealed `pop`). The spec algorithm over `Get` / `Set(…, true)` /
+/// `DeletePropertyOrThrow` (the engines below) performs each step and throws
+/// at the first that fails, leaving what node leaves. `None` for every other
+/// receiver (the dense bodies keep it).
+pub(crate) fn restricted_array_value(arr: *mut ArrayHeader) -> Option<f64> {
+    // `arr` is a resolved head (the callers ran `clean_arr_ptr_mut`): one
+    // header read for the integrity flags; a non-writable `length` is a key
+    // of the named layout, whose presence is a header bit.
+    let integrity =
+        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
+    // SAFETY: a resolved head of a live array, or null (no header).
+    let flags = unsafe { super::header::array_gc_header(arr) }
+        .map_or(0, |header| unsafe { (*header)._reserved });
+    let restricted = flags & integrity != 0
+        || (unsafe { array_has_element_descriptors_resolved(arr) }
+            && crate::object::get_property_attrs(arr as usize, "length")
+                .is_some_and(|a| !a.writable()));
+    restricted.then(|| nanbox_arr(arr))
+}
+
+/// `Set(O, ToString(k), v, true)` for an array-like object receiver (and a
+/// restricted Array, [`restricted_array_value`]: the strict store throws
+/// where the write fails).
 fn al_set(recv: f64, k: i64, v: f64) {
     if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         unsafe { super::push_pop::proxy_set_str_key(recv, k.to_string().as_bytes(), v) };
+        return;
+    }
+    if !as_real_array(recv).is_null() {
+        crate::value::js_dyn_index_set_strict(recv, k as f64, v, 1);
         return;
     }
     crate::object::js_object_set_index_polymorphic(recv.to_bits() as i64, k as f64, v);
@@ -47,6 +78,15 @@ fn al_set(recv: f64, k: i64, v: f64) {
 fn al_delete(recv: f64, k: i64) {
     if crate::proxy_hooks::proxy_is_proxy(recv) != 0 {
         unsafe { super::push_pop::proxy_delete_str_key_or_throw(recv, k.to_string().as_bytes()) };
+        return;
+    }
+    if !as_real_array(recv).is_null() {
+        // A sealed or frozen Array's elements are non-configurable.
+        if crate::object::js_object_delete_dynamic_value(recv, k as f64) == 0 {
+            crate::collection_iter::throw_type_error(&format!(
+                "Cannot delete property '{k}' of [object Array]"
+            ));
+        }
         return;
     }
     let raw = (recv.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut crate::object::ObjectHeader;
@@ -264,7 +304,7 @@ pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -
 
 /// `Array.prototype.reverse` over an array-like object receiver. Returns the
 /// receiver.
-pub(super) fn object_reverse(recv: f64) -> f64 {
+pub(crate) fn object_reverse(recv: f64) -> f64 {
     let len = al_length(recv);
     let middle = len / 2;
     let mut lower = 0;

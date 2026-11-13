@@ -302,6 +302,13 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     };
     let annotated_array = annotated_array_receiver(receiver_is_array, family);
     let method = call.method;
+    let brand = super::collection_brand::needed(
+        ctx,
+        family,
+        perry_hir::folded_call::receiver_site(&call.receiver),
+        receiver_expr,
+        method,
+    );
 
     let receiver_value = lower_expr(ctx, receiver_expr)?;
     let key = receiver_expr as *const Expr as usize;
@@ -334,6 +341,22 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
                 &builtin_label,
             );
         } else {
+            // A Map / Set node the facts do not prove: the receiver's brand
+            // first, a miss is the generic arm (`collection_brand`).
+            if let Some((brand, check)) = brand {
+                let ok_idx = ctx.new_block("collbrand.ok");
+                let ok_label = ctx.block_label(ok_idx);
+                super::collection_brand::emit_brand_branch(
+                    ctx,
+                    brand,
+                    check,
+                    method,
+                    &recv,
+                    &ok_label,
+                    &generic_label,
+                );
+                ctx.current_block = ok_idx;
+            }
             emit_own_override_branch(
                 ctx,
                 method,

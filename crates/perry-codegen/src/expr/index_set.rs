@@ -844,7 +844,11 @@ pub(crate) fn lower(
                         MaterializationReason::FunctionAbi,
                     ));
                 }
-                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                // A value that needs ToNumber takes the runtime element store
+                // too: it converts before its bounds test (`Uint8ArraySet`).
+                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+                    || super::byte_store_value_needs_tonumber(ctx, value)
+                {
                     return rooting::with_operands_rooted(
                         ctx,
                         &[object, index, value],

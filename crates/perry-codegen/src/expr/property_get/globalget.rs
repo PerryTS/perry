@@ -62,6 +62,7 @@ pub(crate) fn lower_optional_global_read(ctx: &mut FnCtx<'_>, name: &str) -> Res
 }
 
 pub(crate) fn lower_globalget_property(ctx: &mut FnCtx<'_>, property: &str) -> Result<String> {
+    crate::verify_facts::family_global_read(ctx, property);
     emit_global_value_installs(ctx, property);
     // GlobalGet is the global object. A builtin member value has a nested
     // receiver read (globalThis.Object, globalThis.Buffer, etc.) and uses the

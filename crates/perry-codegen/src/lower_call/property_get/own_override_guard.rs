@@ -456,6 +456,20 @@ pub(super) fn lower(
             None => emit_dispatcher(ctx, object, property, args, call_byte_offset),
         };
     }
+    // A Map / Set call the facts do not prove tests its receiver's brand
+    // first; a miss is the own arm, the ordinary `Get` + `Call`
+    // (`expr::collection_brand`).
+    let brand = if receiver_is_array {
+        None
+    } else {
+        crate::expr::collection_brand::needed_unfolded(
+            ctx,
+            proven_kind_family(ctx, object, receiver_is_array),
+            perry_hir::folded_call::callee_site(callee),
+            object,
+            property,
+        )
+    };
     let receiver = lower_expr(ctx, object)?;
     let emit = |ctx: &mut FnCtx<'_>| -> Result<String> {
         if proven {
@@ -507,6 +521,14 @@ pub(super) fn lower(
                 &builtin_label,
             );
         } else {
+            if let Some((brand, check)) = brand {
+                let ok_idx = ctx.new_block("collbrand.ok");
+                let ok_label = ctx.block_label(ok_idx);
+                crate::expr::collection_brand::emit_brand_branch(
+                    ctx, brand, check, property, &recv, &ok_label, &own_label,
+                );
+                ctx.current_block = ok_idx;
+            }
             emit_own_override_branch(
                 ctx,
                 property,

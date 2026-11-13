@@ -865,7 +865,10 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
         return Some(true);
     }
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
+    // An exotic read receiver (`process.env`) answers for keys its table does
+    // not hold, as `layout_probe::owned_get` declines it for reads.
     let conclusive = (*meta).elements == 0
+        && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         && super::object_is_regular(obj)
         && super::native_this_alias::object_alias(obj).is_none();
     conclusive.then_some(false)
