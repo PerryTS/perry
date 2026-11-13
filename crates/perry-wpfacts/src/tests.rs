@@ -254,6 +254,7 @@ mod typed_array_key_bigint;
 mod typed_array_length;
 mod typed_array_names;
 mod typed_array_symbol_absent;
+mod wrapper_realm_chain;
 mod typed_array_numeric_key;
 mod numeric_key_names;
 mod unheld_key;
