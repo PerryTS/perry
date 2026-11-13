@@ -128,7 +128,8 @@ def main():
             observed = observe(exe, e)
             assert observed.returncode == 0 and observed.stdout == expected, observed
             save(name, status=86)
-        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live")]:
+        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live"),
+                              ("family-bytes-write-encoding", "never")]:
             source = fixtures / (name + ".ts")
             dump = args.out / (name + ".facts")
             exe, e = compile_(source, name, PERRY_FACTS_DUMP=str(dump), **instr)
