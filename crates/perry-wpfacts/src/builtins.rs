@@ -1361,14 +1361,35 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 /// builtin namespace: `Number.prototype` is itself a Number object, 21.1.3;
 /// only `Family::Wrapper` objects carry such a slot, 21.1.1.1, 20.3.1.1,
 /// 20.4.1, 21.2.1, 7.1.18). A marker or an unknown value may be one.
-pub(crate) fn no_this_value(m: &Model, fam: Family, r: Tok) -> bool {
-    if !matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt) || m.is_marker(r) {
+///
+/// A `%TypedArray%.prototype` method (`what` `TypedArray`; a concrete
+/// typed array prototype's own methods too) starts with ValidateTypedArray
+/// or ValidateUint8Array (ECMA-262 23.2.4.4, 23.2.3): [[TypedArrayName]]
+/// is missing from every object no typed array constructor made (a program
+/// object or array, a function, a builtin function or namespace, a
+/// prototype, a builtin object of a described kind that is no typed
+/// array); a `TypedArray`/`Buffer` object, an undescribed (`Box`/`Opaque`
+/// family) builtin object, a marker or an unknown value may have it. The
+/// runtime's check: `typed_array_proto_thunks.rs` `ta_receiver_or_throw`.
+pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) -> bool {
+    let typed = fam == Family::Opaque && what == Some("TypedArray");
+    if !(typed || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
+        || m.is_marker(r)
+    {
         return false;
     }
     match &m.toks[r as usize] {
         // A builtin object of an undescribed kind (`primbox`) may be one.
-        TokKind::Obj(tm, _) => !matches!(&m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }),
+        TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
+            TmplKind::BObj { what: w, .. } => {
+                typed
+                    && !matches!(*w, "TypedArray" | "Buffer")
+                    && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
+            }
+            _ => true,
+        },
         TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => typed,
         _ => false,
     }
 }

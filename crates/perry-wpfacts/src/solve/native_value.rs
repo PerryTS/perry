@@ -107,7 +107,7 @@ impl Model {
             if fam == Family::Function && builtins::never_callable(self, r) {
                 return self.function_this_not_callable(call, t, r, key);
             }
-            if builtins::no_this_value(self, fam, r) {
+            if builtins::no_this_value(self, fam, what, r) {
                 return self.this_value_throws(call, t, r);
             }
             return self.declared_proto_call(call, t, identity);
@@ -168,7 +168,8 @@ impl Model {
     /// / `thisBooleanValue` / `thisSymbolValue` / `thisBigIntValue` (ECMA-262
     /// 21.1.3, 20.3.3, 20.4.3, 21.2.3), which reads an internal slot `r`
     /// lacks and throws a TypeError before any argument is used: `r` reaches
-    /// no code.
+    /// no code. So does a `%TypedArray%.prototype` method called with a
+    /// receiver that is no typed array (ValidateTypedArray, 23.2.4.4).
     fn this_value_throws(&mut self, call: CallId, t: Tok, r: Tok) -> bool {
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
