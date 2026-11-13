@@ -1141,7 +1141,14 @@ impl Model {
             }
         };
         match act {
-            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => self.edge(n, dst),
+            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                if dst == self.esc_accessors {
+                    if let Some(d) = &mut self.diagnostic {
+                        d.acc_src.entry(n).or_insert(origin);
+                    }
+                }
+                self.edge(n, dst)
+            }
             ChainAct::Store(src) => match self.walk_store_pending.get_mut(&n) {
                 Some(v) => v.push(src),
                 None => self.edge(src, n),
@@ -1446,7 +1453,7 @@ impl Model {
 
     /// One step of a per-receiver accessor walk: prototype `p` of `origin`.
     /// (Values and methods come from the shared chain nodes `cv`/`cp`.)
-    pub fn chain_step(&mut self, _pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
+    pub fn chain_step(&mut self, pn: NodeId, origin: Tok, p: Tok, key: Key, act: ChainAct) {
         if let ChainAct::Lookup { dst, setter } = act {
             self.lookup_holder(origin, p, key, dst, setter);
             return;
@@ -1457,6 +1464,9 @@ impl Model {
                 ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
                 ChainAct::Store(src) => {
                     self.store_live(src);
+                    if let Some(d) = &mut self.diagnostic {
+                        d.store_top.entry(src).or_insert(pn);
+                    }
                     let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                 }

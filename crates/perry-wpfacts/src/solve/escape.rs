@@ -367,6 +367,11 @@ impl Model {
 
     /// Unknown code calls `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
+        self.diagnostic_entry_begin(ft, reason);
+        self.escape_fn_params_run(ft, reason);
+        self.diagnostic_entry_end();
+    }
+    fn escape_fn_params_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -382,6 +387,9 @@ impl Model {
         if self.unknown_caller(f, reason) {
             let raise = self.raise_of(f);
             let esc = self.esc_raise;
+            if let Some(d) = &mut self.diagnostic {
+                d.raise_by.entry(raise).or_insert(ft);
+            }
             self.edge(raise, esc);
         }
         if self.summarized(f) {

@@ -745,6 +745,9 @@ impl Model {
             if !self.nodes[n as usize].pts.contains_tok(TOP) {
                 if let Some(d) = &mut self.diagnostic {
                     d.seeds.entry(n).or_insert(w.clone());
+                    if let Some(&b) = d.seed_by.last().or(d.escaping.last()) {
+                        d.top_by.entry(n).or_insert(b);
+                    }
                 }
             }
             if self.explain {
@@ -1610,6 +1613,11 @@ impl Model {
 
     /// Everything that reaches `n` escapes (once per node: no sink nodes).
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
+        if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = d.cause_node.filter(|&c| c != n) {
+                d.store_top.entry(n).or_insert(c);
+            }
+        }
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             self.raise_top(

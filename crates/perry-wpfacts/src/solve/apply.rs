@@ -982,6 +982,11 @@ impl Model {
             }
             Cons::StoreTopProto { origin, src } => {
                 if toks.contains(&TOP) {
+                    if let Some(d) = &mut self.diagnostic {
+                        if let Some(pn) = d.cause_node {
+                            d.store_top.entry(src).or_insert(pn);
+                        }
+                    }
                     let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                     self.escape(origin, r);

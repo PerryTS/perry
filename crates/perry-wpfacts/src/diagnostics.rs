@@ -47,6 +47,23 @@ pub(crate) struct Trace {
     pub stand_in_params: Vec<(NodeId, String, u32, Option<String>)>,
     /// `Model::top_predecessors`, built when a chain needs it.
     pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
+    /// ROOTS1: the escaped function whose entry run (unknown code calls
+    /// it: `this`/parameters ⊤) is seeding, innermost last.
+    pub seed_by: Vec<Tok>,
+    /// ROOTS1: a ⊤ seed made while the escape of a token ran (an entry run
+    /// of an escaped function, a field of an escaped object): that token.
+    pub top_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: each entry run from unknown code: function -> (its token,
+    /// reason, the escaping token that held it, if any).
+    pub entry_runs: BTreeMap<FnIdx, (Tok, u32, Option<Tok>)>,
+    /// ROOTS1: a throw region joined to ESCRAISE -> the escaped function.
+    pub raise_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a walk node joined to ESCACCESSORS -> the escaped holder.
+    pub acc_src: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a sunk node (`Model::sink_node`: what reaches it goes to
+    /// unknown code) -> the node whose rule sank it (an unknown callee or
+    /// receiver, a prototype chain holding ⊤).
+    pub store_top: BTreeMap<NodeId, NodeId>,
 }
 
 /// Diagnostic data only; never consulted by ordinary facts.
@@ -295,8 +312,90 @@ struct Site {
 }
 
 impl Model {
-    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+    /// ROOTS1: unknown code calls escaped `ft` (an entry run): what its
+    /// run seeds is that escape's.
+    pub(crate) fn diagnostic_entry_begin(&mut self, ft: Tok, reason: u32) {
+        if self.diagnostic.is_none() {
+            return;
+        }
+        let f = self.tok_fn(ft);
+        let d = self.diagnostic.as_mut().unwrap();
+        let holder = d.escaping.iter().rev().find(|&&x| x != ft).copied();
+        d.entry_runs.entry(f).or_insert((ft, reason, holder));
+        d.seed_by.push(ft);
+    }
+    pub(crate) fn diagnostic_entry_end(&mut self) {
         if let Some(d) = &mut self.diagnostic {
+            d.seed_by.pop();
+        }
+    }
+    /// ROOTS1: the escape an escape-first record's unknown value came out
+    /// of: the token whose escape seeded the ⊤ at its deciding node (first
+    /// arrivals walked back to the seed), the holder an escaped accessor was
+    /// read from, the function whose throw region reached ESCRAISE. Dump only.
+    fn diagnostic_esc_via(&self, t: Tok, e: &EscFirst) -> (Option<Tok>, String) {
+        let Some(d) = self.diagnostic.as_ref() else {
+            return (None, "null".into());
+        };
+        let reason = self.reasons.get(e.reason as usize).map_or("", |s| s);
+        let tops = |n: NodeId| {
+            n != NO_NODE && (n as usize) < self.nodes.len() && self.nodes[n as usize].pts.contains_tok(TOP)
+        };
+        // The deciding node: the rule that sank the escape's node, the node
+        // itself, the unknown callee of its call; the first holding ⊤.
+        let dn = [
+            e.node.and_then(|n| d.store_top.get(&n).copied()),
+            e.node,
+            e.call.and_then(|c| d.unknown_calls.get(&c)).and_then(|(n, _)| *n),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|&n| tops(n));
+        if let Some(n) = dn {
+            let (seed, why) = self.diagnostic_root(n);
+            let by = d.top_by.get(&seed).copied();
+            let entry = by.and_then(|b| self.tok_fn_opt(b));
+            return (
+                by,
+                format!(
+                    "{{\"at\":{n},\"seed\":{seed},\"why\":{},\"by\":{},\"entryOf\":{}}}",
+                    quote(&why),
+                    by.map_or("null".into(), |b| b.to_string()),
+                    entry.map_or("null".into(), |f| f.to_string())
+                ),
+            );
+        }
+        if reason == "accessor function of a value unknown code holds" {
+            for (&n, &o) in &d.acc_src {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(o), format!("{{\"accessorOf\":{o}}}"));
+                }
+            }
+        }
+        if reason == "thrown into unknown code" {
+            for (&n, &f) in &d.raise_by {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(f), format!("{{\"raisedBy\":{f}}}"));
+                }
+            }
+        }
+        (None, "null".into())
+    }
+    fn tok_fn_opt(&self, t: Tok) -> Option<FnIdx> {
+        Some(self.tok_fn(t)).filter(|&f| f != NO_FN)
+    }
+    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+        let ruled = src == NO_NODE
+            || self
+                .reasons
+                .get(reason as usize)
+                .is_some_and(|s| !s.is_empty());
+        if let Some(d) = &mut self.diagnostic {
+            if ruled && !d.pred.contains_key(&dst) {
+                if let Some(&b) = d.seed_by.last().or(d.escaping.last()) {
+                    d.top_by.entry(dst).or_insert(b);
+                }
+            }
             if let Some(c) = &mut d.census {
                 if !c.arrivals.contains_key(&dst) {
                     let inj = c.inject_at.take().filter(|(n, _)| *n == dst);
@@ -1176,8 +1275,17 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt(src_call(Some(*c))), m.protocol_calls.contains(c), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
         }
         for (t, e) in &d.esc_first {
-            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{}}}",
-                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node), opt(e.seq)));
+            // ROOTS1: an escape whose unknown value came out of an earlier
+            // escape names it (`via`); a cause-less one takes it as cause.
+            let (via, top) = m.diagnostic_esc_via(*t, e);
+            // `op`: the operation the attempt ran in (the former cause).
+            let c = via.map_or(e.cause, Cause::Tok);
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{},\"via\":{},\"op\":{},\"top\":{top}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&c), opt(src_call(e.call)), opt(e.node), opt(e.seq), opt(via), cause(&e.cause)));
+        }
+        for (f, (ft, r, holder)) in &d.entry_runs {
+            out.push(format!("{{\"record\":\"entry-run\",\"function\":{f},\"token\":{ft},\"reason\":{},\"holder\":{}}}",
+                quote(m.reasons.get(*r as usize).map_or("", |s| s)), opt(*holder)));
         }
         for (t, (w, n)) in &d.esc_why {
             if let Some(&(f, i)) = m.param_marker.get(t) {
@@ -1387,8 +1495,8 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             };
         }
         let (root, origin) = m.diagnostic_root(n);
-        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topOrigin\":{}}}",
-            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
+        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topBy\":{},\"topOrigin\":{}}}",
+            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),opt(top.then(|| m.diagnostic.as_ref().and_then(|d| d.top_by.get(&root).copied())).flatten()),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
     }
     out
 }

@@ -163,6 +163,7 @@ mod locked_store;
 mod locked_top_store;
 mod written_prim_method_receiver;
 mod escaped_active;
+mod escape_roots;
 mod arguments_instances;
 mod escaped_fn_own_return;
 mod locked_top_define;
