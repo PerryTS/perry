@@ -21,6 +21,7 @@ use crate::native_value::NativeRepRecord;
 use crate::types::LlvmType;
 
 mod linkage;
+mod unit_graph;
 mod unit_locality;
 pub(crate) use linkage::*;
 mod metadata;
@@ -1445,7 +1446,7 @@ impl LlModule {
             .collect();
         let buckets = {
             let refs: Vec<&LlFunction> = funcs.iter().map(|f| f.borrow()).collect();
-            unit_locality::assign_units(&self.symbol_prefix, &refs, &sizes, n)
+            unit_graph::assign_units(&self.symbol_prefix, &refs, &sizes, n)
         };
         let bucket_names: Vec<Vec<String>> = buckets
             .iter()
