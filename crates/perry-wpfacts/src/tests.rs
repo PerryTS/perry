@@ -273,6 +273,7 @@ mod numeric_key_names;
 mod index_key_read;
 mod proto_key_read;
 mod spread_root;
+mod typed_array_key_read;
 mod unheld_key;
 mod unit_alias;
 mod root4162;
