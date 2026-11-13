@@ -300,6 +300,89 @@ fn assert_stale_length_store_is_checked_or_runtime_versioned(ir: &str) {
     );
 }
 
+/// What the local length bound cannot prove, the entry guard of a
+/// counter-versioned loop must test: for `i <= n` the guard's end is the
+/// bound PLUS ONE (`counter_entry_check`: `last = bound` for `<=`, the end is
+/// `last + 1`), and for a counter that may start below zero the guard tests
+/// the counter's entry value `>= 0`. Either the store stays the checked
+/// `js_buffer_set` alone, or [`assert_stale_length_store_is_checked_or_runtime_versioned`]
+/// holds AND the guard carries these conjuncts.
+fn assert_out_of_range_counter_store_is_entry_guarded(ir: &str, inclusive: bool) {
+    assert_stale_length_store_is_checked_or_runtime_versioned(ir);
+    let body = probe_body(ir);
+    if native_proof_support::native_buffer_element_geps(body).is_empty() {
+        return;
+    }
+    let defs: std::collections::HashMap<&str, &str> = body
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with('%'))
+        .filter_map(|line| line.split_once(" = "))
+        .map(|(reg, def)| (reg.trim(), def.trim()))
+        .collect();
+    let guard = body
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("br i1 ") && line.contains("label %for.counter.fast."))
+        .expect("checked above: a counter-versioned loop");
+    let mut conjuncts = Vec::new();
+    let mut work = vec![guard["br i1 ".len()..].split(',').next().unwrap()];
+    while let Some(reg) = work.pop() {
+        let Some(def) = defs.get(reg) else { continue };
+        if let Some(ops) = def.strip_prefix("and i1 ") {
+            work.extend(ops.split(", ").filter(|op| op.starts_with('%')));
+        } else {
+            conjuncts.push(*def);
+        }
+    }
+    // The counter slot: the one the fast copy's condition compares.
+    let fast_entry = guard
+        .split("label %")
+        .nth(1)
+        .and_then(|l| l.split([',', ' ']).next())
+        .expect("fast label");
+    let entry_block = block_between(body, &format!("\n{fast_entry}:"), "\n\n");
+    let cond_label = entry_block
+        .rsplit("label %")
+        .next()
+        .and_then(|l| l.split([',', ' ', '\n']).next())
+        .expect("fast copy branches to its condition");
+    let cond_block = block_between(body, &format!("\n{cond_label}:"), "\n\n");
+    let counter_slot = cond_block
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.split_once(" = load i32, ptr ").map(|(_, slot)| slot))
+        .unwrap_or_else(|| panic!("the fast condition loads its counter:\n{cond_block}"));
+    let counter_floor = conjuncts.iter().any(|def| {
+        def.strip_prefix("icmp sge i32 ")
+            .and_then(|ops| ops.strip_suffix(", 0"))
+            .and_then(|x| defs.get(x))
+            .is_some_and(|load| *load == format!("load i32, ptr {counter_slot}"))
+    });
+    assert!(
+        counter_floor,
+        "the fast copy's guard must test the counter's entry value >= 0 \
+         (counter slot {counter_slot}); conjuncts {conjuncts:?}:\n{body}"
+    );
+    if inclusive {
+        // `end = last + 1` with `last` the sign-extended bound itself, not `bound - 1`.
+        let end_is_bound_plus_one = conjuncts.iter().any(|def| {
+            def.strip_prefix("icmp sle i64 ")
+                .and_then(|ops| ops.split(", ").next())
+                .and_then(|end| defs.get(end))
+                .and_then(|end| end.strip_prefix("add i64 "))
+                .and_then(|ops| ops.strip_suffix(", 1"))
+                .and_then(|last| defs.get(last))
+                .is_some_and(|last| last.starts_with("sext i32 "))
+        });
+        assert!(
+            end_is_bound_plus_one,
+            "for `i <= n` the guard must admit only `n + 1 <= length`; \
+             conjuncts {conjuncts:?}:\n{body}"
+        );
+    }
+}
+
 #[test]
 fn localset_invalidates_buffer_view_local_length_sources() {
     let body = vec![
@@ -1299,7 +1382,9 @@ fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
     ];
 
     let ir = compile_ir("inclusive_local_length_bound.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    // The loop is counter-versioned (fa6faf8bfa / 97ce0b74eb): its fast copy
+    // takes native stores only behind an entry guard on the runtime length.
+    assert_out_of_range_counter_store_is_entry_guarded(&ir, true);
 }
 
 #[test]
@@ -1318,7 +1403,7 @@ fn negative_loop_counter_does_not_use_local_length_bound_fact() {
     ];
 
     let ir = compile_ir("negative_counter_local_length_bound.ts", body);
-    assert_buffer_store_uses_dynamic_fallback(&ir);
+    assert_out_of_range_counter_store_is_entry_guarded(&ir, false);
 }
 
 #[test]
