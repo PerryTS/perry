@@ -384,10 +384,11 @@ mod tests {
 
     #[test]
     fn the_manifest_births_are_read_by_name() {
-        let manifest = r#"{"declarations":[{"name":"structuredClone","births":["ArrayBuffer","Uint8Array"]},{"name":"atob"}]}"#;
+        let manifest = r#"{"declarations":[{"name":"Array.from","births":["ArrayBuffer","Uint8Array"]},{"name":"atob"}]}"#;
         let b = declared_births(manifest).unwrap();
-        assert_eq!(b["structuredClone"], ["ArrayBuffer", "Uint8Array"]);
+        assert_eq!(b["Array.from"], ["ArrayBuffer", "Uint8Array"]);
         assert!(b["atob"].is_empty());
-        assert_eq!(covered("structuredClone", &b), Some("declared"));
+        assert_eq!(covered("Array.from", &b), Some("declared"));
+        assert_eq!(covered("atob", &b), None);
     }
 }
