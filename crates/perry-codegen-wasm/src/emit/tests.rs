@@ -171,3 +171,23 @@ console.log(q.v + " " + q.w + " " + new F().t);
         "a 2\n7 2 9 2\n1 2 f"
     );
 }
+
+// A derived class with its own constructor initializes its fields when `super()`
+// returns (so the parent's constructor cannot overwrite them, and they can read what
+// it set); a base class initializes them before the constructor body.
+#[test]
+fn derived_fields_initialize_after_super_and_base_fields_before_the_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { x = 1; }
+class B extends A { x = 2; constructor() { super(); } }
+class P { v: number; constructor() { this.v = 1; } }
+class Q extends P { w = this.v + 1; constructor() { super(); this.w = this.w * 10; } }
+class K { a = 1; b: number; constructor() { this.b = this.a + 1; } }
+console.log(new B().x + " " + new Q().w + " " + new K().b);
+"#
+        ),
+        "2 20 2"
+    );
+}

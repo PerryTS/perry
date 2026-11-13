@@ -162,7 +162,26 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        self.emit_field_initializers(&mut func, class, &local_map, temp_local_idx, temp_i32_idx);
+        // A derived class initializes its fields when `super(...)` returns, as in JS:
+        // emitted before the body, they would be overwritten by the parent constructor.
+        // A base class, or a `super` call that is not a top-level statement of the
+        // body, keeps them before the body.
+        let super_at = if class.extends_name.is_some() {
+            ctor.body
+                .iter()
+                .position(|stmt| matches!(stmt, Stmt::Expr(Expr::SuperCall(_))))
+        } else {
+            None
+        };
+        if super_at.is_none() {
+            self.emit_field_initializers(
+                &mut func,
+                class,
+                &local_map,
+                temp_local_idx,
+                temp_i32_idx,
+            );
+        }
 
         // Emit constructor body.
         //
@@ -175,8 +194,17 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
-        for stmt in &ctor.body {
+        for (i, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
+            if super_at == Some(i) {
+                self.emit_field_initializers(
+                    &mut func,
+                    class,
+                    &local_map,
+                    temp_local_idx,
+                    temp_i32_idx,
+                );
+            }
         }
 
         // Fallthrough: return `this` as the constructor's result.
