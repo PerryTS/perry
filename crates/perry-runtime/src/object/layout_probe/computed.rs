@@ -433,6 +433,32 @@ pub unsafe extern "C" fn perry_probe_get_keyed(
     v
 }
 
+/// `obj[key] = value` for a computed `key` when the store probe finds `key`
+/// as the receiver's own plain writable data property (an inline slot or an
+/// overflow entry): one barriered store, `Ok`. Everything else is `Err` with
+/// the key the complete store continues with: the key's atom once resolved
+/// (the same property), else `key_bits`. A key add stays with the complete
+/// store, which appends a computed key to the receiver's overflow (§3.3).
+///
+/// GC leaf: no allocation on the heap, no collection, no user code.
+///
+/// # Safety
+/// Any value bits.
+#[inline]
+pub(crate) unsafe fn probe_overwrite_keyed(
+    obj_bits: u64,
+    key_bits: u64,
+    value: f64,
+) -> Result<(), u64> {
+    let Some((key, hash)) = computed_key(key_bits) else {
+        return Err(key_bits);
+    };
+    match super::set_plan(super::super::ordinary_dir_addr(), obj_bits, key, hash, value) {
+        super::SetPlan::Stored(stored) if stored != 0 => Ok(()),
+        _ => Err(key),
+    }
+}
+
 /// The store twin of [`perry_probe_get_keyed`]: `obj[key] = value` for a
 /// computed `key` (a string or symbol value), by the store probe
 /// ([`perry_probe_set`]) with the key's atom. `true` when it stored; `false`

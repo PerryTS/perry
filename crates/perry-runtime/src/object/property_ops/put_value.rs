@@ -436,6 +436,14 @@ pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, st
     {
         return value;
     }
+    // The keyed store probe: the key's atom, then the store a static
+    // `target.key = value` site makes when the receiver owns the key.
+    let key = match unsafe {
+        crate::object::layout_probe::probe_overwrite_keyed(target.to_bits(), key.to_bits(), value)
+    } {
+        Ok(()) => return value,
+        Err(key) => f64::from_bits(key),
+    };
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
         Err(key) => key,

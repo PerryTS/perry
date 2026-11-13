@@ -215,17 +215,18 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
-    if let Some(result) =
-        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
-    {
-        return result;
-    }
-    // The probe's presence mode (`layout_probe::probe_has`), else the
-    // complete operation.
+    // The probe's presence mode (`layout_probe::probe_has`) first: it
+    // declines a deferred namespace at every hop, so the namespace arm and
+    // the complete operation only see what it cannot answer.
     match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
         _ => {}
+    }
+    if let Some(result) =
+        super::super::deferred_namespace::with_key_target(obj, key, object_has_property_generic)
+    {
+        return result;
     }
     in_operator_generic(obj, key)
 }

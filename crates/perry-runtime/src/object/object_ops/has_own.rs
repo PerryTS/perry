@@ -72,6 +72,18 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
+    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // The probe's presence mode (`layout_probe::probe_has`) first: it
+    // declines a deferred namespace, so the namespace arm and the complete
+    // operation only see what it cannot answer.
+    match unsafe {
+        crate::object::layout_probe::probe_has(obj_value.to_bits(), key_value.to_bits(), true)
+    } {
+        1 => return f64::from_bits(TAG_TRUE),
+        0 => return f64::from_bits(TAG_FALSE),
+        _ => {}
+    }
     if let Some(result) = super::super::deferred_namespace::with_key_target(
         obj_value,
         key_value,
@@ -79,17 +91,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     ) {
         return result;
     }
-    const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    // The probe's presence mode (`layout_probe::probe_has`), else the
-    // complete operation.
-    match unsafe {
-        crate::object::layout_probe::probe_has(obj_value.to_bits(), key_value.to_bits(), true)
-    } {
-        1 => f64::from_bits(TAG_TRUE),
-        0 => f64::from_bits(TAG_FALSE),
-        _ => object_has_own_generic(obj_value, key_value),
-    }
+    object_has_own_generic(obj_value, key_value)
 }
 
 /// [`js_object_has_own`] for every receiver and key the shape does not answer

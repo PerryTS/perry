@@ -387,7 +387,8 @@ unsafe fn short_key_atom_miss(len: u32, data: u64, hash: u64) -> Option<*const S
 pub(crate) fn atom_of_key_word(word: u32) -> *const StringHeader {
     ATOMS
         .try_with(|t| unsafe {
-            (*t.get())
+            let table = &*t.get();
+            table
                 .by_id
                 .get((word - KEY_WORD_ATOM_BASE) as usize)
                 .copied()

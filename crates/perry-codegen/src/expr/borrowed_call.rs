@@ -10,11 +10,21 @@ pub(crate) fn lower_proof(
     family: Option<&str>,
     source: Option<&perry_hir::Expr>,
 ) -> anyhow::Result<String> {
+    let object_method = family == Some("Object.prototype");
     anyhow::ensure!(
-        family == Some("Function.prototype") && source.is_some(),
+        (object_method || family == Some("Function.prototype")) && source.is_some(),
         "invalid IIFE proof"
     );
-    let patched = if ctx.wpfacts.fnproto_borrow_unwritten && !ctx.wpfacts.interp_guard {
+    let families: &[BuiltinProto] = if object_method {
+        &[BuiltinProto::Object, BuiltinProto::Function]
+    } else {
+        &[BuiltinProto::Function]
+    };
+    let patched = if object_method {
+        // An `Object.prototype` method called through `.call`: both the
+        // method's holder and `Function.prototype` are unmodified.
+        builtin_proto::emit_patched_any(ctx, families)
+    } else if ctx.wpfacts.fnproto_borrow_unwritten && !ctx.wpfacts.interp_guard {
         crate::verify_facts::consumed(crate::verify_facts::Fact::FunctionBorrow, || {
             serde_json::json!({})
         });
@@ -30,7 +40,7 @@ pub(crate) fn lower_proof(
         let done_l = ctx.block_label(done);
         ctx.block().cond_br(&ok, &check_l, &done_l);
         ctx.current_block = check;
-        builtin_proto::emit_contract_check(ctx.block(), &[BuiltinProto::Function]);
+        builtin_proto::emit_contract_check(ctx.block(), families);
         ctx.block().br(&done_l);
         ctx.current_block = done;
     }
