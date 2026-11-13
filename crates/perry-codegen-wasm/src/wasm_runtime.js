@@ -2246,6 +2246,19 @@ const __memDispatch = {
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
   class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
+  // `super.m(args)` in a method of `cls`: the lookup starts at cls's parent, and the
+  // receiver stays `this`.
+  class_call_super: (obj, cls, mname, args) => {
+    for (let c = classParentTable[String(cls)] || null; c; c = classParentTable[c] || null) {
+      const methods = classMethodTable[c];
+      if (methods && Object.prototype.hasOwnProperty.call(methods, String(mname))) {
+        const fn = wasmInstance.exports.__indirect_function_table.get(methods[String(mname)]);
+        const padded = __padBigintArgs(fn, 1, args.map(__jsValueToBits));
+        return __bitsToJsValue(fn(__jsValueToBits(obj), ...padded));
+      }
+    }
+    return undefined;
+  },
 
   // JSON — args are plain JS values
   json_parse: (str) => { try { return JSON.parse(String(str)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },

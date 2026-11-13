@@ -725,3 +725,24 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// `super.m()` runs the parent's `m` on the same receiver, even when the receiver's
+// class overrides `m`, and skips a parent that does not define it.
+#[test]
+fn a_super_method_call_runs_the_parent_implementation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { k = "a"; who(n: number): string { return "A" + n + this.k; } }
+class B extends A { who(n: number): string { return "B>" + super.who(n + 1); } }
+class C extends B { k = "c"; }
+class D extends C { who(n: number): string { return "D>" + super.who(n * 10); } }
+console.log(new B().who(1));
+console.log(new D().who(2));
+class E extends A { r: string; constructor() { super(); this.r = super.who(5); } who(n: number): string { return "E"; } }
+console.log(new E().r);
+"#
+        ),
+        "B>A2a\nD>B>A21c\nA5a"
+    );
+}
