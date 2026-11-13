@@ -59,6 +59,20 @@ fn a_runtime_read_of_the_value_answers_as_a_number() {
     );
 }
 
+/// The Set / Map brand checks decode the receiver by its tag: the Number whose
+/// bits are a live Set's / Map's address is no Set / Map receiver.
+#[test]
+fn collection_brand_checks_reject_the_number() {
+    let set = crate::set::js_set_alloc(4);
+    let map = crate::map::js_map_alloc(4);
+    assert!(crate::set::set_ptr_from_receiver_bits(set as u64).is_none());
+    assert!(crate::map::map_ptr_from_receiver_bits(map as u64).is_none());
+    let set_value = crate::value::js_nanbox_pointer(set as i64).to_bits();
+    let map_value = crate::value::js_nanbox_pointer(map as i64).to_bits();
+    assert_eq!(crate::set::set_ptr_from_receiver_bits(set_value), Some(set));
+    assert_eq!(crate::map::map_ptr_from_receiver_bits(map_value), Some(map));
+}
+
 #[test]
 fn a_named_store_does_not_write_the_object() {
     let (obj, forged) = object_and_forgery();
