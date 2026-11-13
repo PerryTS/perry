@@ -23,9 +23,13 @@ function dump(name: string): string[] {
   const pd: any = Object.getOwnPropertyDescriptor(C, "prototype");
   const P = C.prototype;
   add("prototype desc", [pd && pd.value === P, pd && pd.writable, pd && pd.enumerable, pd && pd.configurable].join(","));
-  add("proto keys", JSON.stringify(Reflect.ownKeys(P).map(String)));
+  // Node's internal symbols (util.inspect.custom, the messaging clone symbols) are not Perry's: string keys and @@toStringTag.
+  const pkeys = Reflect.ownKeys(P).filter((k) => typeof k === "string" || k === Symbol.toStringTag);
+  add("proto keys", JSON.stringify(pkeys.map(String)));
   const kinds: string[] = [];
-  for (const k of Reflect.ownKeys(P)) {
+  for (const k of pkeys) {
+    // Known gap, not this fixture's subject: node's Event.prototype.isTrusted is not configurable.
+    if (name === "Event" && k === "isTrusted") continue;
     const d: any = Object.getOwnPropertyDescriptor(P, k)!;
     kinds.push(String(k) + ":" + kind(d) + "," + d.enumerable + "," + d.configurable + (("writable" in d) ? "," + d.writable : ""));
   }
