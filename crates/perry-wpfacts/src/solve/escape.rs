@@ -318,6 +318,7 @@ impl Model {
             }
         }
         self.escaped.insert(t, reason);
+        self.ta_len_open(t);
         self.index_slots_merge(t);
         self.arr_len_top(t);
         self.map_open(t);
@@ -1372,6 +1373,7 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        self.ta_len_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }

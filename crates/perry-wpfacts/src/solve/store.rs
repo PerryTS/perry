@@ -395,12 +395,30 @@ impl Model {
         // numeric range of that holder (`num_only`, below), never a
         // non-numeric name. Which index it is stays unknown: the length,
         // the hole and the chain's setters are the unknown key's.
-        let digits = self.is_digits_key(key) && self.typed_array_elements(t);
+        let digits_key = self.is_digits_key(key);
+        let digits = digits_key && self.typed_array_elements(t);
         if digits {
             self.typed_array_element_store(t, src, site);
         }
-        let digits_other = self.is_digits_key(key) && !digits;
-        let key = if self.is_digits_key(key) { Key::any() } else { key };
+        let digits_other = digits_key && !digits;
+        // Rule C1 (`ta_length_getter`) under the runtime lock: a BufferHeader
+        // view (a Node Buffer, a plain Uint8Array) takes a [[Set]] of a
+        // non-index name as an own data property (`buffer_set_own_prop`, from
+        // `js_object_set_field_by_name` and the computed-key path, without
+        // the inherited accessor that ECMA-262 10.1.9.2 finds), and a typed
+        // array's template does not keep its kind: a [[Set]] that may name
+        // `length` may make an own `length`. A Number-or-BigInt key never
+        // names `length` (its ToString is digits, NaN or Infinity).
+        if !self.is_elem_key(key)
+            && !digits_key
+            && match key {
+                Key::Named(a) => self.atoms[a as usize] == "length",
+                Key::Any(_) => true,
+            }
+        {
+            self.ta_len_open(t);
+        }
+        let key = if digits_key { Key::any() } else { key };
         let elem = self.is_elem_key(key) || digits;
         // The key names a number only: the numeric range's field.
         let num_only = elem || digits_other;

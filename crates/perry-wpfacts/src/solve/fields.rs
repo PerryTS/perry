@@ -21,6 +21,66 @@ impl Model {
             && !self.is_marker(t)
     }
 
+    /// Rule C1: a [[Get]] of `length` on typed array `t` is the
+    /// %TypedArray%.prototype accessor's getter, a Number (ECMA-262
+    /// 23.2.3.21). A typed array has no own `length`, and no [[Set]] makes
+    /// one: "length" is no CanonicalNumericIndexString (10.4.5.5), so the
+    /// store is OrdinarySet, which finds the inherited accessor without a
+    /// setter and fails (10.1.9.2), whatever the key or value. Only
+    /// [[DefineOwnProperty]] makes an own `length` (E5 HARD, a named
+    /// definition on a typed array included), and only a changed chain (E6
+    /// HARD) or a redefined prototype accessor (`reshaped_keys`, DECISIONS
+    /// 234) finds another `length`. Unknown code may do either to an
+    /// escaped typed array. Every condition only turns false during a
+    /// solve; `ta_len_open` then gives the reads the own field.
+    pub(crate) fn ta_length_getter(&self, t: Tok) -> bool {
+        self.typed_array_elements(t)
+            && !self.is_escaped(t)
+            && !self.hard.contains_key(&t)
+            && !self.reshaped_any
+            && !self.atom_index.get("length").is_some_and(|a| self.reshaped_keys.contains(a))
+            && !self.ta_len_gates.get(&t).is_some_and(|g| g.1)
+    }
+
+    /// The node the `length` loads of `t` read under rule C1
+    /// (`ta_length_getter`): empty until `ta_len_open`.
+    pub(crate) fn ta_len_gate(&mut self, t: Tok) -> NodeId {
+        if let Some(&(n, _)) = self.ta_len_gates.get(&t) {
+            return n;
+        }
+        let n = self.node_named("talen", || format!("talen({t})"));
+        self.ta_len_gates.insert(t, (n, false));
+        n
+    }
+
+    /// `ta_length_getter(t)` no longer holds: an own `length` may exist, so
+    /// the `length` loads rule C1 answered read the own field too.
+    /// Also the event itself under the runtime lock: a [[Set]] that may name
+    /// `length` (`store_into`).
+    pub(crate) fn ta_len_open(&mut self, t: Tok) {
+        if !self.typed_array_elements(t) {
+            return;
+        }
+        let n = self.ta_len_gate(t);
+        if self.ta_len_gates[&t].1 {
+            return;
+        }
+        self.ta_len_gates.insert(t, (n, true));
+        let a = self.atom("length");
+        let f = self.field(t, a);
+        self.edge(f, n);
+    }
+
+    /// A `length` accessor of a runtime prototype was redefined: every
+    /// gate opens.
+    pub(crate) fn ta_len_open_all(&mut self) {
+        let mut ts: Vec<Tok> = self.ta_len_gates.keys().copied().collect();
+        ts.sort_unstable();
+        for t in ts {
+            self.ta_len_open(t);
+        }
+    }
+
     /// `a` names the buffer the view `t` views (`VIEWED_BUFFER`).
     pub(crate) fn viewed_buffer_field(&self, t: Tok, a: Atom) -> bool {
         self.atoms[a as usize] == VIEWED_BUFFER && self.array_buffer_view(t)

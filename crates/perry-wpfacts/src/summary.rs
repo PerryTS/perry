@@ -200,6 +200,17 @@ pub struct Inst {
 /// No value keys the run (`Inst::val`, the fourth key component).
 pub const NO_VAL: u32 = u32::MAX;
 
+/// Rule M1: the run of every primitive value of the switched argument
+/// that is no String (`VAL_PRIM | kinds`, the `prim` bits): strictly equal
+/// to no string-literal case (ECMA-262 7.2.16: another type), it enters
+/// the default clause and runs on from there (14.12.4), else no clause.
+pub const VAL_PRIM: u32 = 0xFFFF_0000;
+
+/// Is `v` the run key of the other primitives (`VAL_PRIM`)?
+pub fn is_prim_val(v: u32) -> bool {
+    v != NO_VAL && v & VAL_PRIM == VAL_PRIM
+}
+
 #[derive(Default)]
 pub struct SumState {
     /// Summaries exist: bindings run directly instead of being queued.
@@ -949,9 +960,10 @@ impl Model {
 
     /// Rule M1: the string constants `call` passes to `f`'s switched
     /// parameter (a switch with case labels) when the argument holds two or
-    /// more of them and nothing else (no other primitive, no object, no
-    /// string of unknown or prefix-only value); else none. A switch compares
-    /// with ===: each constant selects its own clauses.
+    /// more of them, or one and other primitives, and no object and no
+    /// string of unknown or prefix-only value; else none. A switch compares
+    /// with ===: each constant selects its own clauses, every other
+    /// primitive none of them (`VAL_PRIM`: one run for those).
     pub(crate) fn switch_vals(&self, call: CallId, f: FnIdx) -> Vec<u32> {
         if call == NO_NODE {
             return Vec::new();
@@ -968,14 +980,26 @@ impl Model {
             return Vec::new();
         };
         let n = &self.nodes[a as usize];
-        if n.prim != crate::model::prim::STR || n.pts.len() != 0 || n.strs < crate::model::STRS_SET0 {
+        let str = crate::model::prim::STR;
+        if n.pts.len() != 0 || (n.prim & str != 0 && n.strs < crate::model::STRS_SET0) {
             return Vec::new();
         }
-        let xs = self.str_atoms(n.strs);
-        if xs.len() < 2 || xs.iter().any(|&x| self.atom_is_mark(x)) {
+        let xs: &[u32] = match n.prim & str {
+            0 => &[],
+            _ => self.str_atoms(n.strs),
+        };
+        if xs.iter().any(|&x| self.atom_is_mark(x)) {
             return Vec::new();
         }
-        xs.to_vec()
+        let mut v = xs.to_vec();
+        // The other primitive kinds the argument holds share one run.
+        if n.prim & !str != 0 {
+            v.push(VAL_PRIM | (n.prim & !str) as u32);
+        }
+        if v.len() < 2 {
+            return Vec::new();
+        }
+        v
     }
 
     /// `f` has a called parameter and the argument `call` passes there
@@ -1022,7 +1046,7 @@ impl Model {
                 true => self.switch_vals(call, self.tok_fn(ft)),
                 false => Vec::new(),
             };
-            if vals.contains(&val) {
+            if vals.contains(&val) || (is_prim_val(val) && vals.iter().any(|&v| is_prim_val(v))) {
                 if vals.iter().all(|v| bound[&k].contains(v)) {
                     keep.push(r);
                 } else {
@@ -1035,8 +1059,12 @@ impl Model {
                 }
             } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
-                // (pushes its run's record when it takes one).
-                self.bind_layout_run(call, ft, x, prim, now != NO_VAL);
+                // (pushes its run's record when it takes one): the run of
+                // its one function value, or (Rule M1) the run of each
+                // string constant when it holds two or more and nothing
+                // else (`switch_vals`); else the shared run.
+                let by_val = now != NO_VAL || !self.switch_vals(call, self.tok_fn(ft)).is_empty();
+                self.bind_layout_run(call, ft, x, prim, by_val);
                 more = true;
             } else if now == val {
                 keep.push(r);
@@ -1080,7 +1108,8 @@ impl Model {
         let lay = self.sum.insts[inst as usize].lay;
         // Rule M1: a run of one string constant runs the clauses that
         // constant reaches: the bit of the clause it enters (the first case
-        // equal to it, else the default; bit 63: none, no clause runs).
+        // equal to it, else the default; bit 63: none, no clause runs). The
+        // run of the other primitives (`VAL_PRIM`) equals no label.
         let val = self.sum.insts[inst as usize].val;
         let bit = match &s.switch {
             Some((_, labels)) if val != NO_VAL && !labels.is_empty() => {
@@ -1288,7 +1317,10 @@ impl Model {
         let by_str = self.sum.of[&f].called.is_none();
         for i in 0..terms.len() {
             if i == vj && terms[i] != NO_NODE {
-                if by_str {
+                if by_str && is_prim_val(val) {
+                    // Rule M1: the parameter is one of those primitives.
+                    self.add_s(terms[i], &Vec::new(), (val & !VAL_PRIM) as u16, crate::model::STRS_NONE);
+                } else if by_str {
                     // Rule M1: the parameter is that string constant.
                     let ss = self.str_set(&[val]);
                     self.add_s(terms[i], &Vec::new(), crate::model::prim::STR, ss);

@@ -407,11 +407,15 @@ impl Model {
         match key {
             Some(a) if Some(a) != star => {
                 if self.reshaped_keys.insert(a) {
+                    if self.atoms[a as usize] == "length" {
+                        self.ta_len_open_all();
+                    }
                     self.flush_shadowed_key(a);
                 }
             }
             _ => {
                 if !std::mem::replace(&mut self.reshaped_any, true) {
+                    self.ta_len_open_all();
                     self.flush_shadowed(None);
                 }
             }
@@ -685,6 +689,16 @@ impl Model {
         self.builtin_field_use(t, key, ChainAct::Load(dst));
         if self.is_array_length(t, key) {
             self.arr_len_into(t, dst);
+            return;
+        }
+        // Rule C1 (`ta_length_getter`): the getter's Number, and no own field
+        // until one may exist (`ta_len_open`).
+        if matches!(key, Key::Named(a) if self.atoms[a as usize] == "length")
+            && self.ta_length_getter(t)
+        {
+            self.add_prim(dst, prim::NUM);
+            let g = self.ta_len_gate(t);
+            self.edge(g, dst);
             return;
         }
         // An absent key reads `undefined`: only a definite birth key of a
