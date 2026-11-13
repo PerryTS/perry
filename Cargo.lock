@@ -5136,6 +5136,7 @@ dependencies = [
  "perry-dispatch",
  "perry-hir",
  "perry-parser",
+ "perry-transform",
  "wasm-encoder 0.258.3",
 ]
 

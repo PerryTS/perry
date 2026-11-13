@@ -141,6 +141,10 @@ impl WasmModuleEmitter {
             "class_call_method",
             "class_get_field",
             "class_set_field",
+            "generator_new",
+            "box_new",
+            "box_get",
+            "box_set",
             "class_set_static",
             "class_get_static",
             "class_instanceof",
@@ -289,7 +293,10 @@ impl WasmModuleEmitter {
             "promise_then",
             "await_promise",
         ];
-        for name in &bridge_names {
+        for name in bridge_names
+            .iter()
+            .chain(super::expr::ITERATOR_RECORD_BRIDGES)
+        {
             self.intern_string(name);
         }
 
@@ -1097,7 +1104,11 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(auth_header);
                 self.collect_strings_in_expr(body);
             }
-            _ => {}
+            // Every other variant interns the strings under its children, so a
+            // literal under a node without its own arm still has an id.
+            _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                self.collect_strings_in_expr(child)
+            }),
         }
     }
 }
