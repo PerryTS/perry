@@ -376,8 +376,10 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
         id: "typedarray",
         requires: &[],
         holders: BYTE_HOLDERS,
-        // `process.stdin` hands its chunks to listeners as Buffers.
-        members: &["process.stdin"],
+        // `BigInt.asIntN` / `asUintN` convert their argument with the
+        // group's ToBigInt (an empty hook answers 0n). `process.stdin` hands
+        // its chunks to listeners as Buffers.
+        members: &["BigInt.asIntN", "BigInt.asUintN", "process.stdin"],
         modules: &[
             "better-sqlite3",
             "buffer",
