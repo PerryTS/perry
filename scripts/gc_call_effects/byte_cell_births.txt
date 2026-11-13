@@ -9,12 +9,17 @@
 #          it dispatches on a value the program holds, so a member of the
 #          typed-array family is reached only with the family live and a
 #          member of core is a row of the check itself.
-# origin   a function that can reach the birth and that the runtime reaches
-#          only through a pointer (no caller in the graph, or its address is
-#          taken in code): a completion the event loop runs, a callback handed
-#          to the host, a scheduled task. The reason says which observation of
-#          the program schedules it, hence why the family is live whenever it
-#          runs. Such a function without an origin rule fails the check.
+# origin   a function that can reach the birth and that the walk cannot
+#          attribute to a caller. The walk follows calls and, like calls,
+#          whoever takes a function's address (in code, or by naming data
+#          that holds it: a vtable, a table of thunks), so a native that
+#          schedules a completion or registers a callback is checked itself.
+#          What is left: an operation an install stores in a hook slot no GC
+#          rule delegates to its wrapper, a function only data outside the
+#          runtime's code names, a function with no caller at all. The reason
+#          says what calls it, hence why the family is live whenever it runs.
+#          The takers of a function with an origin rule are not followed (the
+#          rule answers for them). Such a function without a rule fails.
 # before-claim  a function that runs before an image's family claim is set
 #          (the claim is the first call of the generated installer, which
 #          js_gc_init runs last). It must not reach the birth: the claim
@@ -38,4 +43,23 @@ in-hand exact perry_runtime::array::buffer_receiver::buffer_receiver_dispatch --
 in-hand exact perry_runtime::array::header::buffer_receiver_as_uint8_typed_array -- views a Buffer receiver as a Uint8Array: the Buffer exists
 in-hand exact perry_runtime::object::typed_array_proto_thunks::dispatch_uint8_buffer_method -- a method called on a Uint8Array or Buffer receiver: it exists
 in-hand exact perry_runtime::object::class_registry::construct::builtin::construct -- `new` of a built-in constructor value: a typed-array or Buffer arm runs only when the callee is that constructor, an observed entry of the family
-fills regex ^js_(runtime|nm)_install_ -- an install: it stores its group's operations in the hook slots and its module's dispatch function in the registry and runs none of them
+in-hand exact perry_runtime::object::buffer_dispatch::dispatch_buffer_method -- a method called on a live Buffer or buffer view (its first argument): the Buffer exists
+in-hand exact perry_runtime::object::http_handle_prototype::field -- a property read on a live HTTP handle (kind_of(handle) answers first): the handle was made by an http native, a family row
+fills regex (^js_(runtime|nm|node_submod)_install_|feature_hooks::(js_runtime_)?install_|_hook_slots::install) -- an install: it stores its group operations in the hook slots and its module dispatch function in the registry and runs none of them
+in-hand exact perry_runtime::child_process::exec::make_promisified_child_process -- util.promisify of child_process.exec or execFile: the arm runs only when the argument is one of those two function values, entries of child_process (a family row)
+origin regex ::nm_dispatch_[a-z0-9_]+$ -- the dispatch function of a native module: it runs for a call of a bound-method member of the module, and each member is a realm native checked above on its export body (the same call with the module and the key constant)
+origin regex ^(js_typed_array_(new|new_empty|new_from_array|slice|subarray|to_reversed|to_sorted_default|to_sorted_with_comparator|with)|perry_runtime::typedarray::iterate::typed_array_(map|filter)_this|perry_runtime::object::buffer_dispatch::dispatch_written_buffer_lookup)$ -- an operation of the typed-array install group: only js_runtime_install_typedarray stores it, and an image that claims the family does not link that install; the empty arm of its slot aborts (the constructors, the method dispatch) or needs a byte cell in hand
+origin prefix perry_ffi:: -- the API of perry-ffi, called only by a native library linked into the program (perry-ext-*): the module such a library implements is a row of the family or an open module, and every family is live for an open module
+origin exact js_bigint_to_buffer -- the bigint install stores it; its slot is called only by the v8 serializer (child_process::v8_serde), which runs for v8.serialize and for process IPC: v8 and child_process are rows of the family
+origin exact js_url_file_url_to_path_buffer -- the url install stores it; its slot is called only by the dispatch arm of url.fileURLToPathBuffer: url is a row of the family
+origin regex ^(js_perf_mark|js_perf_measure|perry_runtime::perf_hooks::construct_perf_hooks_class)$ -- the perf_hooks install stores it; its slot is called only by performance.mark, performance.measure and the construction of a perf_hooks class: entries of perf_hooks, which requires thread, which requires the family
+origin regex ^(js_thread_process_pending|perry_runtime::node_submodules::diagnostics::diagnostics_channel_process_pending)$ -- the thread install stores it; the turn loop calls its slot to deliver what another thread posted, so it allocates only after a thread was started: an entry of thread, which requires the family
+origin exact perry_runtime::builtins::globals::clone_with_transfers -- the thread install stores it; its slot is the structured clone of a value (structuredClone, performance entries): it allocates a byte cell only for a byte cell the value already holds
+origin exact js_message_channel_new -- the messaging install stores it; its slot is called only by the construction of MessageChannel, an entry of messaging, which requires thread, which requires the family
+origin exact js_bun_stdin -- the bun install stores it; its slot is called only by the read of Bun.stdin: bun is a row of the family
+origin exact perry_runtime::os::process_streams::pump_process_stdin -- the os install stores it; the turn loop calls its slot, and it hands a chunk only to a listener registered through process.stdin, a member of the family
+origin regex ^perry_runtime::fs::stream::utf8_stream::utf8_stream_(end|write)_value$ -- the fs install stores it; its slot is called by stream write and end only for a fs.Utf8Stream receiver, made by a native of fs (a family row)
+origin regex ^perry_runtime::(dgram_reactor::pump|module_hooks::dgram_create_socket_impl)$ -- the dgram install stores it; its slot is called by dgram.createSocket and by the turn loop for a socket that exists: dgram is a row of the family
+origin regex ^(js_webassembly_(instance_new|instantiate|memory_grow|memory_new|module_custom_sections)|perry_runtime::webassembly::table::js_webassembly_table_(get|grow|set))$ -- the wasm_host install stores it; its slot is called only by the WebAssembly constructors and methods: entries of wasm_host, which requires the family
+origin regex ^perry_runtime::node_stream::(\w+::)*ns_\w+$ -- a thunk of the stream implementation (ns_*): a method on a stream prototype, or a callback or microtask a stream registers for itself (the resume after a data listener is added). It is called as a function value with its stream, and a stream is made by a native of stream, fs, net, http, child_process or by process.stdin, all rows of the family
+origin regex ::nm_ctors::nm_ctor_(fs|readline|stream|vm)$ -- the constructor arm of a native module, stored by js_nm_install_<module> and called through the registry only for new of a class the module exports: fs, readline, stream and vm are rows of the family
