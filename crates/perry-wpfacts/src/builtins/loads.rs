@@ -503,6 +503,18 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         return opaque_member(m, dst);
     }
     match mem {
+        // A static the realm declares the object of and that object does not
+        // own (`namespace_native` found no native; `Array.fromAsync`: the
+        // runtime installs `isArray`, `from`, `of` only): [[Get]] goes on to
+        // its [[Prototype]] chain, else `undefined` (ECMA-262 10.1.8.1
+        // OrdinaryGet), never a builtin function the realm does not name.
+        Some(Mem::Fn) if !m.unit_mode && m.native_shape(t).is_some() => {
+            family_member(m, members::ns_chain(ns), None, a, dst);
+            m.add_prim(dst, prim::UNDEF);
+            if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+        }
         Some(Mem::Fn) => {
             let bf = builtin_fn(m, "builtin namespace static");
             m.add_tok(dst, bf);
