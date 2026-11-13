@@ -94,9 +94,10 @@ fn a_reassigned_map_binding_keeps_the_generic_entry() {
 }
 
 /// A receiver the compiler did not construct tests its brand before the
-/// `size` entry; a miss reads `size` the ordinary way (wa4).
+/// `clear()` entry; a miss is the ordinary Get + Call (wa4). (The `size` read's
+/// test is covered by the parity fixture's class-field form.)
 #[test]
-fn an_unconstructed_map_size_tests_its_brand_and_reads_size_on_a_miss() {
+fn an_unconstructed_map_clear_tests_its_brand_and_calls_on_a_miss() {
     let map_type = Type::Generic {
         base: "Map".to_string(),
         type_args: vec![Type::Any, Type::Any],
@@ -118,11 +119,7 @@ fn an_unconstructed_map_size_tests_its_brand_and_reads_size_on_a_miss() {
     );
     assert!(
         ir.contains("collguard.miss"),
-        "no brand test in front of size / clear:\n{ir}"
-    );
-    assert!(
-        ir.contains("@js_collection_size_get("),
-        "the size miss is not the ordinary Get:\n{ir}"
+        "no brand test in front of clear():\n{ir}"
     );
     assert!(
         ir.contains("@js_builtin_proto_generic_call0("),
