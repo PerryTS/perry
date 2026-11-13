@@ -307,6 +307,12 @@ pub(crate) fn build_and_run_link(
             is_watchos || is_visionos,
             &runtime_archives,
             lld.is_some(),
+            // The default hot-data order: native glibc Linux executables,
+            // where it was recorded and measured (`hot_data_order`).
+            cfg!(target_os = "linux")
+                && is_linux
+                && !is_musl
+                && matches!(target, None | Some("linux")),
             verbose,
         )?;
         super::runtime_layouts::add_link_args(
