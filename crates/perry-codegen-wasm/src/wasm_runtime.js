@@ -114,6 +114,15 @@ function fromJsValue(v) {
   return nanboxPointer(id);
 }
 
+// globalThis as a NaN-boxed value, boxed once: each fromJsValue of an object takes a
+// handle that is never released, so boxing it per read grows handleStore without bound
+// in an async loop that reads builtins.
+let __globalThisBoxed;
+function globalThisValue() {
+  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(globalThis);
+  return __globalThisBoxed;
+}
+
 // Get string from NaN-boxed value (supports both string tag and pointer to string)
 function getString(val) {
   if (isString(val)) return stringTable[getStringId(val)];

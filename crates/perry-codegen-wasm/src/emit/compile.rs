@@ -887,25 +887,9 @@ impl WasmModuleEmitter {
             }
         }
 
-        // Async function JS generation (Phase 2): now that per-module func_maps are complete,
-        // generate the JS code for async functions with correct FuncRef resolution.
-        for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            self.func_map = self.module_func_maps[mod_idx].clone();
-            for func in &module.functions {
-                if func.is_async {
-                    let js_code = self.emit_js_async_function(func);
-                    self.async_js_code.push(js_code);
-                }
-            }
-        }
-
-        // _start function (entry point). #854: the trailing
-        // `user_func_idx += 1` was dead — nothing later in this function
-        // reads the counter.
-        let start_idx = user_func_idx;
-        let start_type = t_void;
-
-        // Register globals from all modules
+        // Register globals from all modules. This precedes the async JS generation below,
+        // which reads `global_map` to tell a declared global from the unresolved-global
+        // sentinel.
         for (_, module) in modules {
             for global in &module.globals {
                 self.global_map.insert(global.id, self.num_globals);
@@ -915,6 +899,8 @@ impl WasmModuleEmitter {
 
         // Promote module-level Let bindings to WASM globals so cross-function
         // references work and so different modules' identical LocalIds don't collide.
+        // This also precedes the async JS generation, whose bodies reach a module-level
+        // `let` through the exported global this map names.
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
             collect_module_let_ids(
                 &module.init,
@@ -931,6 +917,25 @@ impl WasmModuleEmitter {
                 }
             }
         }
+
+        // Async function JS generation (Phase 2): now that per-module func_maps are complete,
+        // generate the JS code for async functions with correct FuncRef resolution.
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            self.func_map = self.module_func_maps[mod_idx].clone();
+            self.current_mod_idx = mod_idx;
+            for func in &module.functions {
+                if func.is_async {
+                    let js_code = self.emit_js_async_function(func);
+                    self.async_js_code.push(js_code);
+                }
+            }
+        }
+
+        // _start function (entry point). #854: the trailing
+        // `user_func_idx += 1` was dead — nothing later in this function
+        // reads the counter.
+        let start_idx = user_func_idx;
+        let start_type = t_void;
 
         // Issue #1071: build cross-module imported-variable → WASM global map.
         // The HIR lowers `import { FOO } from './m'` value reads (where FOO is

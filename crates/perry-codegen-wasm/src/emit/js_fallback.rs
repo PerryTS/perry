@@ -241,23 +241,54 @@ impl WasmModuleEmitter {
                 let body = self.emit_js_expr(body, &inner);
                 format!("({value_name} = {init}, {result_name} = {body}, {value_name} = undefined, {result_name})")
             }
-            Expr::LocalGet(id) => locals
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| format!("__l{}", id)),
+            // A local the body does not bind is a module-level `let`, promoted to an
+            // exported WASM global (`module_let_globals`); no JS binding exists for it.
+            Expr::LocalGet(id) => match locals.get(id) {
+                Some(name) => name.clone(),
+                None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
+                    Some(&gidx) => {
+                        format!(
+                            "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                            gidx
+                        )
+                    }
+                    None => format!("__l{}", id),
+                },
+            },
             Expr::LocalSet(id, val) => {
-                let name = locals
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("__l{}", id));
                 let v = self.emit_js_expr(val, locals);
-                format!("({} = {})", name, v)
+                match locals.get(id) {
+                    Some(name) => format!("({} = {})", name, v),
+                    None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
+                        Some(&gidx) => format!(
+                            "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                            gidx, v
+                        ),
+                        None => format!("(__l{} = {})", id, v),
+                    },
+                }
             }
-            Expr::GlobalGet(id) => format!("__g{}", id),
-            Expr::GlobalSet(id, val) => {
+            // An id with no WASM global is the HIR's unresolved-global sentinel (the receiver
+            // of `Promise.resolve`, `fetch`, `JSON.parse`); in JS that receiver is globalThis.
+            // The WASM arm reads the same id as undefined, but here a bare `__g{id}` would be
+            // an undeclared name and throw ReferenceError on entry to the async body.
+            Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
+                "globalThisValue()".to_string()
+            }
+            // A declared global lives in its WASM global, which the module exports by
+            // index; no JS binding `__g{id}` exists.
+            Expr::GlobalGet(id) => format!(
+                "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                self.global_map[id]
+            ),
+            Expr::GlobalSet(id, val) if self.global_map.contains_key(id) => {
                 let v = self.emit_js_expr(val, locals);
-                format!("(__g{} = {})", id, v)
+                format!(
+                    "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                    self.global_map[id], v
+                )
             }
+            Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
@@ -353,6 +384,25 @@ impl WasmModuleEmitter {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
                     }
+                    // `console.log(x)` lowers to `GlobalGet(0).log(x)`: a known global
+                    // in member position is the bare sentinel and codegen routes by the
+                    // method name, as the WASM arm does. Without this the call reads
+                    // `globalThis.log`, which is not a function.
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(property.as_str(), "log" | "warn" | "error") =>
+                    {
+                        let args_js: Vec<String> = args_js
+                            .iter()
+                            .map(|a| format!("toJsValue({})", a))
+                            .collect();
+                        format!(
+                            "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
+                            property,
+                            args_js.join(", ")
+                        )
+                    }
                     Expr::PropertyGet {
                         object, property, ..
                     } => {
@@ -432,11 +482,12 @@ impl WasmModuleEmitter {
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Object, then value, each evaluated once: the value is both stored and
+                // the expression's result, and may have side effects.
                 format!(
-                    "(toJsValue({})[{}] = toJsValue({}), {})",
-                    obj,
+                    "((__o, __v) => (toJsValue(__o)[{}] = toJsValue(__v), __v))({}, {})",
                     js_string_literal(property),
-                    val,
+                    obj,
                     val
                 )
             }
@@ -651,9 +702,10 @@ impl WasmModuleEmitter {
                 let obj = self.emit_js_expr(target, locals);
                 let k = self.emit_js_expr(key, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
-                    obj, k, val, val
+                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    obj, k, val
                 )
             }
             Expr::ArrayPush {
