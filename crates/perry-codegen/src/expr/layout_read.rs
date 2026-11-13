@@ -907,6 +907,15 @@ pub(crate) fn begin_store(
             &flags,
             &crate::runtime_abi::OBJECT_META_STATE_FLAGS.to_string(),
         );
+        // No state flag, then a table: two tests, each its own branch, so
+        // the site holds no materialized flags (8 bytes less per site).
+        let no_state = blk.icmp_eq(I64, &state, "0");
+        let held_idx = ctx.new_block("l2s.held");
+        let held_label = ctx.block_label(held_idx);
+        ctx.block().cond_br(&no_state, &held_label, &miss_label);
+
+        ctx.current_block = held_idx;
+        let blk = ctx.block();
         let table_ptr = blk.gep(
             I8,
             &meta_base,
@@ -916,11 +925,8 @@ pub(crate) fn begin_store(
             )],
         );
         let table = blk.load(I64, &table_ptr);
-        // No state flag and a table: `state == 0 && table != 0`.
-        let no_state = blk.icmp_eq(I64, &state, "0");
         let has_table = blk.icmp_ne(I64, &table, "0");
-        let holder = blk.and(crate::types::I1, &no_state, &has_table);
-        blk.cond_br(&holder, &summary_label, &miss_label);
+        blk.cond_br(&has_table, &summary_label, &miss_label);
 
         ctx.current_block = summary_idx;
         let blk = ctx.block();

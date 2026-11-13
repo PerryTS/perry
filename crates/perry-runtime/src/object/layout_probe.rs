@@ -984,7 +984,9 @@ unsafe fn owned_found<const ABSENT: bool>(
 /// The table front's miss: the actual table has proved own absence. Continue
 /// through the existing current-shape prototype walk, without deriving a
 /// redundant receiver-key index or learning an overflow memo. Out of line, a
-/// tail of the front.
+/// tail of the front, and itself only the hash and a tail call: the chain's
+/// answer is returned as the front of a receiver with no table returns it
+/// (`probe_get_absent`), so the miss keeps no frame for the verify hook.
 #[inline(never)]
 unsafe fn owned_miss<const ABSENT: bool, const LAZY_HASH: bool>(
     dir: *const u8,
@@ -994,12 +996,7 @@ unsafe fn owned_miss<const ABSENT: bool, const LAZY_HASH: bool>(
     hash: u64,
 ) -> f64 {
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
-    let value = inherited_get::<ABSENT>(dir, obj, r, key_bits, hash);
-    if ABSENT {
-        verify::answer(obj as usize, key_bits, value)
-    } else {
-        value
-    }
+    inherited_get::<ABSENT>(dir, obj, r, key_bits, hash)
 }
 
 /// The own-data front. With `SITE` (a compile-time choice) every own miss
