@@ -14,7 +14,7 @@ anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 wit-parser = "0.254.0"
-wit-bindgen-c = "=0.60.0"
+wit-bindgen-c = "=0.63.0"
 wit-bindgen-core = "=0.60.0"
 heck = "0.5"
 
