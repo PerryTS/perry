@@ -113,6 +113,28 @@ console.log(a.join(','));
     );
 }
 
+// UTC getters only, so the expected output does not depend on the host time zone.
+#[test]
+fn date_constructor_keeps_its_argument_and_getters_read_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const iso = "2026-11-12T21:42:35.405Z";
+const fromString = new Date(iso);
+const fromNumber = new Date(1794519755405);
+console.log(fromString.getTime());
+console.log(fromNumber.toISOString());
+console.log(fromString.getUTCFullYear() + "-" + fromString.getUTCMonth() + "-" + fromString.getUTCDate() + " " + fromString.getUTCHours() + ":" + fromString.getUTCMinutes());
+console.log(Date.parse(iso));
+console.log(new Date().getTime() > 0);
+const invalid = new Date(undefined as any).getTime();
+console.log(invalid !== invalid);
+"#
+        ),
+        "1794519755405\n2026-11-12T21:42:35.405Z\n2026-10-12 21:42\n1794519755405\ntrue\ntrue"
+    );
+}
+
 #[test]
 fn global_is_nan_and_is_finite_coerce_like_node() {
     assert_eq!(
@@ -244,5 +266,141 @@ console.log(inner());
 "#
         ),
         "2 2 true\n3 true\n1"
+    );
+}
+
+// `==` / `!=` (and the `?.` guard, which is `base == null`) follow JS loose equality.
+#[test]
+fn loose_equality_follows_js() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = null;
+const u: any = undefined;
+const z: any = 0;
+const e: any = "";
+const s1: any = "1";
+const o: any = { value: 7 };
+const p: any = { value: 7 };
+console.log((n == null) + " " + (u == null) + " " + (z == null) + " " + (e == z) + " " + (s1 == 1));
+console.log((NaN == NaN) + " " + (o == o) + " " + (o == p) + " " + (z != 0) + " " + (s1 != "2"));
+function take(): any { return null; }
+console.log(String(take()?.value) + " " + String(o?.value));
+"#
+        ),
+        "true true false true true\nfalse true false false true\nundefined 7"
+    );
+}
+
+// A compiled method read as a value is a function, the same one each time (also
+// through a subclass), so the `o.m?.()` guard lets the call through.
+#[test]
+fn method_read_as_a_value_is_one_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class R { x = 3; constructor() {} read(n: number): number { return this.x + n; } }
+class S extends R { constructor() { super(); } }
+const r: any = new R();
+const s: any = new S();
+console.log(typeof r.read + " " + (r.read === r.read) + " " + (r.read === s.read) + " " + (r.read == null));
+console.log(r.read?.(1) + " " + s.read?.(2) + " " + String(r.missing?.(1)));
+"#
+        ),
+        "function true true false\n4 5 undefined"
+    );
+}
+
+// A method value runs the implementation of the class it was read from, with the
+// receiver it is called on, and works as an array callback.
+#[test]
+fn method_value_keeps_its_implementation_and_serves_as_a_callback() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { k = 40; constructor() {} answer(): number { return 42; } plus(n: number): number { return n + 1; } }
+const c: any = new C();
+console.log([1, 2].map(c.plus).join(",") + " " + [1, 2].filter(c.answer).length);
+class R { x = 3; constructor() {} read(n: number): number { return this.x + n; } }
+class S extends R { constructor() { super(); } read(n: number): number { return 100 + n; } }
+const r: any = new R();
+const s: any = new S();
+const plain: any = { x: 10 };
+const f = r.read;
+console.log(f.call(s, 1) + " " + f.call(plain, 1) + " " + s.read(1));
+"#
+        ),
+        "2,3 2\n4 11 101"
+    );
+}
+
+// A method call or a property read on null / undefined throws TypeError.
+#[test]
+fn null_and_undefined_receivers_throw_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = null;
+const u: any = undefined;
+try { n.foo(); console.log("null call: no throw"); } catch (e) { console.log("null call: " + e.name); }
+try { u.foo(); console.log("undefined call: no throw"); } catch (e) { console.log("undefined call: " + e.name); }
+try { const v = n.bar; console.log("null read: no throw"); } catch (e) { console.log("null read: " + e.message); }
+"#
+        ),
+        "null call: TypeError\nundefined call: TypeError\nnull read: Cannot read properties of null (reading 'bar')"
+    );
+}
+
+// Computed reads (`n[key]`, `u[0]`) on null / undefined throw too, while `?.[...]`
+// still yields undefined.
+#[test]
+fn computed_reads_on_nullish_receivers_throw() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = null;
+const u: any = undefined;
+const k: any = "bar";
+const xs: number[] | null = null as any;
+try { const v = n[k]; console.log("null[key]: no throw"); } catch (e) { console.log("null[key]: " + e.message); }
+try { const v = u[0]; console.log("undefined[0]: no throw"); } catch (e) { console.log("undefined[0]: " + e.name); }
+try { const v = (xs as any)[1]; console.log("null array[1]: no throw"); } catch (e) { console.log("null array[1]: " + e.name); }
+console.log(String(n?.[k]) + " " + String(u?.[0]));
+"#
+        ),
+        "null[key]: Cannot read properties of null (reading 'bar')\nundefined[0]: TypeError\nnull array[1]: TypeError\nundefined undefined"
+    );
+}
+
+// The Number predicates do not coerce: a string is never NaN, finite or an integer.
+#[test]
+fn number_predicates_answer_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s: any = "1";
+console.log(Number.isNaN(NaN) + " " + Number.isNaN(s) + " " + Number.isNaN(1));
+console.log(Number.isFinite(1) + " " + Number.isFinite(s) + " " + Number.isFinite(Infinity));
+console.log(Number.isInteger(5) + " " + Number.isInteger(5.5) + " " + Number.isInteger(s));
+console.log(Number.isSafeInteger(9007199254740991) + " " + Number.isSafeInteger(9007199254740992) + " " + Number.isSafeInteger(s));
+"#
+        ),
+        "true false false\ntrue false false\ntrue false false\ntrue false false"
+    );
+}
+
+#[test]
+fn uri_globals_encode_decode_and_throw_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+console.log(encodeURIComponent("補 網&x=1"));
+console.log(decodeURIComponent("%E8%A3%9C%20%E7%B6%B2"));
+console.log(encodeURI("/a b?q=補"));
+console.log(decodeURI("/a%20b"));
+try { decodeURIComponent("%E0%A4%A"); console.log("no throw"); } catch (e) { console.log("threw"); }
+"#
+        ),
+        "%E8%A3%9C%20%E7%B6%B2%26x%3D1\n補 網\n/a%20b?q=%E8%A3%9C\n/a b\nthrew"
     );
 }

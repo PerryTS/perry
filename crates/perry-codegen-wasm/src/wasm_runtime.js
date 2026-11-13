@@ -1657,6 +1657,8 @@ const __memDispatch = {
     return 1;
   },
   js_strict_eq: (a, b) => a === b ? 1 : 0,
+  // `==` / `!=`: the emitter calls this for CompareOp::LooseEq / LooseNe.
+  js_loose_eq: (a, b) => a == b ? 1 : 0,
 
   // Math
   math_floor: (x) => Math.floor(x),
@@ -1712,6 +1714,7 @@ const __memDispatch = {
     return obj[String(key)];
   },
   object_get_dynamic: (obj, key) => {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!obj || typeof obj !== 'object') return undefined;
     return obj[key];
   },
@@ -2025,6 +2028,7 @@ const __memDispatch = {
     return undefined;
   },
   class_get_field: (obj, name) => {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (!obj || typeof obj !== 'object') return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
@@ -2037,6 +2041,16 @@ const __memDispatch = {
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));
         }
         cls = classParentTable[cls] || null;
+      }
+      // A compiled method read as a value (`o.m`, and the `o.m?.()` guard, which is
+      // `o.m == null`): it lives in the WASM table, not on the object.
+      if (!Object.prototype.hasOwnProperty.call(obj, fname)) {
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          const methods = classMethodTable[c];
+          if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
+            return __classMethodValue(c, fname);
+          }
+        }
       }
     }
     return obj[fname];
@@ -2107,7 +2121,7 @@ const __memDispatch = {
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),
-  date_new_val: (arg) => (arg === undefined) ? new Date() : new Date(arg),
+  date_new_val: (...args) => (args.length === 0) ? new Date() : new Date(args[0]),
   date_now: () => Date.now(),
   date_parse: (s) => Date.parse(String(s)),
   date_utc: (...args) => Date.UTC(...args.map(Number)),
@@ -2160,8 +2174,15 @@ const __memDispatch = {
   number_coerce: (val) => Number(val),
   is_nan: (val) => Number.isNaN(val) ? 1 : 0,
   is_finite: (val) => Number.isFinite(val) ? 1 : 0,
+  number_is_integer: (val) => Number.isInteger(val) ? 1 : 0,
+  number_is_safe_integer: (val) => Number.isSafeInteger(val) ? 1 : 0,
   global_is_nan: (val) => isNaN(val) ? 1 : 0,
   global_is_finite: (val) => isFinite(val) ? 1 : 0,
+  // A malformed sequence throws URIError, which mem_call routes to an enclosing try.
+  encode_uri: (val) => encodeURI(val),
+  decode_uri: (val) => decodeURI(val),
+  encode_uri_component: (val) => encodeURIComponent(val),
+  decode_uri_component: (val) => decodeURIComponent(val),
 
   // Try/Catch — args are plain JS values
   try_start: () => { tryDepth++; },
@@ -4998,7 +5019,39 @@ function __hostCallback(value) {
   return hostCallbacks.get(value);
 }
 
+// One function per (class, method name), so a method read twice is the same value
+// (`o.m === o.m`). It runs the implementation `cls` defines, with the `this` it is
+// called with, as a JS method does (`f.call(other)` still runs this class's `m`).
+// `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
+// which call it with an undefined `this`, as JS does for a detached method.
+const __classMethodValues = new Map();
+function __classMethodValue(cls, mname) {
+  const key = cls + '\u0000' + mname;
+  let fn = __classMethodValues.get(key);
+  if (!fn) {
+    const funcIdx = classMethodTable[cls][mname];
+    fn = function (...args) {
+      const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+    };
+    fn.funcIdx = funcIdx;
+    fn.captures = [TAG_UNDEFINED];
+    __classMethodValues.set(key, fn);
+  }
+  return fn;
+}
+
+// `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into
+// the pending exception under a WASM `try` and rethrows it outside one.
+function __throwNullReceiver(obj, name) {
+  throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
+  // Only a null/undefined receiver throws: this function is also mem_call's fallback
+  // for bridge names it does not know, where an absent method still yields undefined.
+  if (objVal === null || objVal === undefined) __throwNullReceiver(objVal, mname);
   if (typeof objVal === 'string') {
     const fn = String.prototype[mname];
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);

@@ -27,6 +27,7 @@ impl WasmModuleEmitter {
             "jsvalue_to_template_string",
             "is_truthy",
             "js_strict_eq",
+            "js_loose_eq",
             "math_floor",
             "math_ceil",
             "math_round",
@@ -174,6 +175,31 @@ impl WasmModuleEmitter {
             "date_get_minutes",
             "date_get_seconds",
             "date_get_milliseconds",
+            "date_parse",
+            "date_utc",
+            "date_value_of",
+            "date_get_timezone_offset",
+            "date_get_utc_full_year",
+            "date_get_utc_month",
+            "date_get_utc_date",
+            "date_get_utc_day",
+            "date_get_utc_hours",
+            "date_get_utc_minutes",
+            "date_get_utc_seconds",
+            "date_get_utc_milliseconds",
+            "date_set_utc_full_year",
+            "date_set_utc_month",
+            "date_set_utc_date",
+            "date_set_utc_hours",
+            "date_set_utc_minutes",
+            "date_set_utc_seconds",
+            "date_set_utc_milliseconds",
+            "date_to_date_string",
+            "date_to_time_string",
+            "date_to_locale_string",
+            "date_to_locale_date_string",
+            "date_to_locale_time_string",
+            "date_to_json",
             "error_new",
             "error_message",
             "global_property",
@@ -184,8 +210,14 @@ impl WasmModuleEmitter {
             "number_coerce",
             "is_nan",
             "is_finite",
+            "number_is_integer",
+            "number_is_safe_integer",
             "global_is_nan",
             "global_is_finite",
+            "encode_uri",
+            "decode_uri",
+            "encode_uri_component",
+            "decode_uri_component",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -979,7 +1011,15 @@ impl WasmModuleEmitter {
             | Expr::IsNaN(e)
             | Expr::IsUndefinedOrBareNan(e)
             | Expr::IsFinite(e)
-            | Expr::BigIntCoerce(e) => {
+            | Expr::NumberIsNaN(e)
+            | Expr::NumberIsFinite(e)
+            | Expr::NumberIsInteger(e)
+            | Expr::NumberIsSafeInteger(e)
+            | Expr::BigIntCoerce(e)
+            | Expr::EncodeURI(e)
+            | Expr::DecodeURI(e)
+            | Expr::EncodeURIComponent(e)
+            | Expr::DecodeURIComponent(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::ParseInt { string, radix } => {
