@@ -1305,17 +1305,6 @@ pub(crate) fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {
     crate::object::get_parent_class_id(class_id)
 }
 
-pub(crate) fn normalize_accessor_receiver(receiver: f64) -> f64 {
-    let bits = receiver.to_bits();
-    if bits != 0 && (bits >> 48) == 0 {
-        crate::value::js_nanbox_pointer(bits as i64)
-    } else if receiver.is_finite() && receiver > 65_536.0 && receiver.fract() == 0.0 {
-        crate::value::js_nanbox_pointer(receiver as i64)
-    } else {
-        receiver
-    }
-}
-
 /// `super[key] = value` for class methods. The property lookup starts at the
 /// parent prototype, but writes use the current `this` as Receiver.
 #[no_mangle]
@@ -1326,7 +1315,6 @@ pub extern "C" fn js_super_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    let receiver = normalize_accessor_receiver(receiver);
     // Static-context super uses the parent CONSTRUCTOR as the lookup target,
     // while retaining the child constructor as Receiver. A statically-known
     // class parent is represented by a ClassRef; a function-valued parent is
