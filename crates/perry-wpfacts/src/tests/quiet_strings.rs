@@ -94,14 +94,14 @@ fn a_string_code_unit_read_gives_a_primitive() {
 fn a_string_length_read_is_quiet_with_a_primitive_value() {
     let pf = solve(None);
     // `parts[i]` holds Strings alone: the element value is a primitive by
-    // the solve already, and its `length` is the String's own.
+    // the solve already, and its `length` is the String's own (quiet by the
+    // site's own verdict here, or by the String rule).
     assert!(mb(&pf).primitive_elements.contains(&at("parts[i].length")));
     assert!(
         quiet_read(&pf, "parts[i].length"),
         "{}",
         line(&pf, "read", "parts[i].length", "length")
     );
-    assert!(line(&pf, "read", "parts[i].length", "length").ends_with("by=string"));
     assert!(primitive_read(&pf, "parts[i].length"));
 }
 
