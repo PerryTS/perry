@@ -1432,6 +1432,20 @@ fn expr_is_safe(
         {
             return false;
         }
+        // The in-place array mutators name their receiver by id, not through a
+        // `LocalGet` child, so the arm above never sees them (#12742).
+        Expr::ArrayPush { array_id: id, .. }
+        | Expr::ArrayPushSpread { array_id: id, .. }
+        | Expr::ArrayUnshift { array_id: id, .. }
+        | Expr::ArraySplice { array_id: id, .. }
+        | Expr::ArrayCopyWithin { array_id: id, .. }
+        | Expr::ArrayPop(id)
+        | Expr::ArrayShift(id)
+        | Expr::SetAdd { set_id: id, .. }
+            if *id == array_id || aliases.contains_key(id) =>
+        {
+            return false;
+        }
         Expr::Closure {
             body,
             captures,
@@ -1841,6 +1855,38 @@ mod tests {
         for hazard in hazards {
             let mut module = aggregate_fixture(false);
             *module.init.last_mut().expect("observer statement") = Stmt::Expr(hazard);
+            run(&mut module);
+
+            assert!(module.init.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    Stmt::Let {
+                        id: 1,
+                        init: Some(Expr::Array(_, _)),
+                        ..
+                    }
+                )
+            }));
+        }
+    }
+
+    /// #12742: `const s = [{ v: 1 }]; s.push({ v: 2 })` names `s` only through
+    /// the mutator's `array_id`; scalarizing it left the push without a local.
+    #[test]
+    fn in_place_array_mutators_keep_materialized_aggregate() {
+        let mutators = vec![
+            Expr::ArrayPush {
+                array_id: 1,
+                value: Box::new(object(30)),
+                field_writeback: None,
+            },
+            Expr::ArrayPop(1),
+            Expr::ArrayShift(1),
+        ];
+
+        for mutator in mutators {
+            let mut module = aggregate_fixture(false);
+            module.init.push(Stmt::Expr(mutator));
             run(&mut module);
 
             assert!(module.init.iter().any(|stmt| {
