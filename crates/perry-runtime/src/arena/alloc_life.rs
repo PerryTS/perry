@@ -600,6 +600,7 @@ fn arena_lines(s: &State) -> String {
     )
 }
 
+#[cfg(unix)]
 fn image_base() -> usize {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
     let f = write as fn() as *const libc::c_void;
@@ -607,4 +608,10 @@ fn image_base() -> usize {
         return 0;
     }
     info.dli_fbase as usize
+}
+
+/// `dladdr` is POSIX; elsewhere the dump records the unknown base, 0.
+#[cfg(not(unix))]
+fn image_base() -> usize {
+    0
 }
