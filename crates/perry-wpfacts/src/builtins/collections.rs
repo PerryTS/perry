@@ -1709,9 +1709,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         // A view of the receiver's bytes: a Buffer, as the receiver is (not
         // a container of primitives).
-        ("Buffer", Some("subarray" | "slice")) if c.spread.is_empty() => {
-            typed_array_methods::buffer_view(m, t, call)
-        }
+        ("Buffer", Some("subarray" | "slice")) => typed_array_methods::buffer_view(m, t, call),
         // The receiver, filled or byte-swapped in place.
         ("Buffer", Some("fill" | "swap16" | "swap32" | "swap64")) => {
             implicit_args(m, call, "buffer method argument", Protocol::Any);

@@ -75,11 +75,17 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
 /// then a new Buffer over the receiver's bytes (%TypedArray%.prototype.
 /// subarray, 23.2.3.28, makes one of the receiver's kind; Node's Buffer
 /// `slice` is the same view). The runtime constructs no species. Its
-/// elements are Numbers, and the receiver's buffer is shared with it.
+/// elements are Numbers, and the receiver's buffer is shared with it. With
+/// a spread argument the positions are not known: every argument and the
+/// spread value are used implicitly, the result is the same view.
 pub(super) fn buffer_view(m: &mut Model, t: Tok, call: CallId) {
     let c = m.calls[call as usize].clone();
-    for &a in c.args.iter().take(2) {
-        to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
+    if c.spread.is_empty() {
+        for &a in c.args.iter().take(2) {
+            to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
+        }
+    } else {
+        implicit_args(m, call, "buffer view argument", Protocol::Any);
     }
     let out = site_tmpl(m, call, "Buffer");
     let fa = m.field_any(out);
