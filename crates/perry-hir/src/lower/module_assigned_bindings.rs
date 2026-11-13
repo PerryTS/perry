@@ -23,7 +23,10 @@ use crate::lower_decl::{collect_var_binding_names_from_pat, collect_var_binding_
 /// Names whose module-scope binding is a store target somewhere in `module`.
 /// A plain `f = f` stores the value the binding already holds and is skipped.
 pub(super) fn collect_module_assigned_names(module: &ast::Module) -> HashSet<String> {
-    let mut scan = Scan { scopes: Vec::new(), out: HashSet::new() };
+    let mut scan = Scan {
+        scopes: Vec::new(),
+        out: HashSet::new(),
+    };
     module.visit_with(&mut scan);
     scan.out
 }
@@ -374,12 +377,27 @@ mod tests {
         assert_eq!(assigned("function f(){} function r(){ f += 'x' }"), ["f"]);
         assert_eq!(assigned("function f(){} function r(){ f++ }"), ["f"]);
         assert_eq!(assigned("function f(){} function r(){ [f] = [g] }"), ["f"]);
-        assert_eq!(assigned("function f(){} function r(){ ({ f } = o) }"), ["f"]);
-        assert_eq!(assigned("function f(){} function r(){ ({ a: [f = 1] } = o) }"), ["f"]);
-        assert_eq!(assigned("function f(){} function r(){ for (f of xs); }"), ["f"]);
+        assert_eq!(
+            assigned("function f(){} function r(){ ({ f } = o) }"),
+            ["f"]
+        );
+        assert_eq!(
+            assigned("function f(){} function r(){ ({ a: [f = 1] } = o) }"),
+            ["f"]
+        );
+        assert_eq!(
+            assigned("function f(){} function r(){ for (f of xs); }"),
+            ["f"]
+        );
         assert_eq!(assigned("f = g; function f(){}"), ["f"]);
-        assert_eq!(assigned("function f(){} function r(){ (f as any) = g }"), ["f"]);
-        assert_eq!(assigned("function f(){} function r(){ { let x; } f = g }"), ["f"]);
+        assert_eq!(
+            assigned("function f(){} function r(){ (f as any) = g }"),
+            ["f"]
+        );
+        assert_eq!(
+            assigned("function f(){} function r(){ { let x; } f = g }"),
+            ["f"]
+        );
     }
 
     #[test]

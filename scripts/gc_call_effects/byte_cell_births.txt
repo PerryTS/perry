@@ -25,3 +25,11 @@
 birth exact perry_runtime::buffer::store::store_alloc -- the one allocation of every byte cell that is a JavaScript value (typed arrays, Buffer, ArrayBuffer, SharedArrayBuffer); the two private index cells of a comparator sort come from store_alloc_scratch and are no values
 
 before-claim regex ^js_gc_init(_with_layouts)?$ -- the runtime's initialization, the first runtime call of a compiled main: everything it does (collector setup, stack maps, the installs themselves) runs before or while the generated installer sets the image's claim; module initialization and user code come after it
+in-hand exact perry_runtime::buffer::store::store_alloc_scratch -- the comparator sort's two private index cells: zeroed Uint32 cells that never take the pool or shared placement (which allocate an owner through store_alloc) and are never handed to JavaScript
+in-hand exact js_native_call_value -- calls a function value: program code, or a built-in function value the solve holds as an observed entry
+in-hand prefix js_closure_call -- calls a closure's body: program code, or a built-in function value the solve holds as an observed entry
+in-hand exact js_promise_run_microtasks -- drains the microtask queue: a reaction is program code or a built-in function value
+in-hand exact perry_runtime::array::buffer_receiver::buffer_receiver_dispatch -- an Array method called on a Buffer receiver: the Buffer exists
+in-hand exact perry_runtime::array::header::buffer_receiver_as_uint8_typed_array -- views a Buffer receiver as a Uint8Array: the Buffer exists
+in-hand exact perry_runtime::object::typed_array_proto_thunks::dispatch_uint8_buffer_method -- a method called on a Uint8Array or Buffer receiver: it exists
+in-hand exact perry_runtime::object::class_registry::construct::builtin::construct -- `new` of a built-in constructor value: a typed-array or Buffer arm runs only when the callee is that constructor, an observed entry of the family

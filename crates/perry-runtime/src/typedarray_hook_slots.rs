@@ -252,16 +252,18 @@ pub(crate) fn js_typed_array_map(
 }
 static JS_TYPED_ARRAY_NEW: Hook<extern "C" fn(i32, f64) -> *mut TypedArrayHeader> = Hook::empty();
 pub(crate) extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW
-        .get()
-        .map_or_else(|| crate::family_never::byte_cells_not_installed(), |run| run(kind, val))
+    JS_TYPED_ARRAY_NEW.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, val),
+    )
 }
 static JS_TYPED_ARRAY_NEW_EMPTY: Hook<extern "C" fn(i32, i32) -> *mut TypedArrayHeader> =
     Hook::empty();
 pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW_EMPTY
-        .get()
-        .map_or_else(|| crate::family_never::byte_cells_not_installed(), |run| run(kind, length))
+    JS_TYPED_ARRAY_NEW_EMPTY.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, length),
+    )
 }
 static JS_TYPED_ARRAY_NEW_FROM_ARRAY: Hook<
     extern "C" fn(i32, *const ArrayHeader) -> *mut TypedArrayHeader,
@@ -270,9 +272,10 @@ pub(crate) extern "C" fn js_typed_array_new_from_array(
     kind: i32,
     arr: *const ArrayHeader,
 ) -> *mut TypedArrayHeader {
-    JS_TYPED_ARRAY_NEW_FROM_ARRAY
-        .get()
-        .map_or_else(|| crate::family_never::byte_cells_not_installed(), |run| run(kind, arr))
+    JS_TYPED_ARRAY_NEW_FROM_ARRAY.get().map_or_else(
+        || crate::family_never::byte_cells_not_installed(),
+        |run| run(kind, arr),
+    )
 }
 static JS_TYPED_ARRAY_REDUCE: Hook<
     extern "C" fn(*const TypedArrayHeader, *const ClosureHeader, i32, f64) -> f64,
@@ -628,7 +631,10 @@ pub(crate) fn install() {
         TYPED_ARRAY_FAST_INDEX_SET.set(crate::typedarray::typed_array_fast_index_set);
         TYPED_ARRAY_FROM_SOURCE_RAW_VALUES
             .set(crate::typedarray::typed_array_from_source_raw_values);
-        TYPED_ARRAY_TO_ARRAY.set(crate::typedarray::typed_array_to_array); TYPED_ARRAY_METHOD_DISPATCH.set(crate::object::native_call_method::typed_array_method_tower); crate::family_never::installed(crate::family_never::BYTE_CELLS);
+        TYPED_ARRAY_TO_ARRAY.set(crate::typedarray::typed_array_to_array);
+        TYPED_ARRAY_METHOD_DISPATCH
+            .set(crate::object::native_call_method::typed_array_method_tower);
+        crate::family_never::installed(crate::family_never::BYTE_CELLS);
     });
 }
 /// The name dispatch of a `%TypedArray%.prototype` method on a typed array

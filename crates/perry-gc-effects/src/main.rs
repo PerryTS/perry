@@ -64,6 +64,11 @@ enum Command {
         /// graph, one per line with their kind.
         #[arg(long)]
         roots: Option<PathBuf>,
+        /// Fail when a native or a pointer-reached function is not covered
+        /// (the gate of the link decision). Without it the check is a
+        /// census: it prints the list and fails only for a vacuous rule.
+        #[arg(long)]
+        strict: bool,
         /// `Realm.path`: read this native as declaring nothing and being of
         /// no family (sabotage runs: the check must then fail for it).
         #[arg(long = "undeclare")]
@@ -224,6 +229,7 @@ fn run() -> Result<()> {
             birth_rules,
             census,
             roots,
+            strict,
             undeclared,
             archives,
         } => {
@@ -259,7 +265,7 @@ fn run() -> Result<()> {
             for line in &report.lines {
                 println!("{line}");
             }
-            if report.failures != 0 {
+            if strict && report.failures != 0 {
                 bail!(
                     "{} realm native(s) can bear a byte cell the facts do not know of",
                     report.failures

@@ -336,7 +336,9 @@ fn store_alloc_cell(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHeader {
     } else {
         placement
     };
-    let capacity = byte_len as u32; #[cfg(perry_gc_instruments)] crate::wpfacts_check::family::byte_cell_born(brand, len);
+    let capacity = byte_len as u32;
+    #[cfg(perry_gc_instruments)]
+    crate::wpfacts_check::family::byte_cell_born(brand, len);
     let ptr = match init {
         Init::Shared => {
             assert_eq!(brand, crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER);
@@ -476,7 +478,9 @@ pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHea
 /// is never handed to JavaScript: the two index cells of a comparator sort of
 /// more than 64 elements (`array::sort`, its only caller; the test below
 /// keeps it so). It is no birth of a value, so it is the one entry that does
-/// not test the family claim: any program sorts.
+/// not test the family claim: any program sorts. `#[inline(never)]`: the
+/// births check cuts its walk at this symbol.
+#[inline(never)]
 pub(crate) fn store_alloc_scratch(kind: u8, len: u32) -> *mut BufferHeader {
     store_alloc_cell(
         crate::typedarray_hook_slots::type_for_kind(kind),

@@ -116,17 +116,12 @@ fn a_program_without_a_byte_cell_can_have_the_family_never() {
 
 /// The conditions under which the typed-array family's install follows the
 /// fact (DESIGN-family-reach section 11): the text part runs over every
-/// body, walked or not (names, module specifiers, constant and unknown keys
-/// of the global object), and a holder that is not the receiver of a plain
+/// body, walked or not (names, constant and unknown keys of the global
+/// object; module specifiers need the driver's import resolution and are
+/// probed with the compiler, not here), and a holder that is not the receiver of a plain
 /// static member chain observes everything below it and what those entries
 /// declare born.
 const TEXT_AND_HOLDERS: &[(&str, &str)] = &[
-    ("import-named-unused", "import { readFileSync } from 'node:fs';\nconsole.log(2);\n"),
-    ("require", "const fs = require('fs');\nconsole.log(typeof fs.readFileSync);\n"),
-    ("require-dead", "function dead() { return require('fs').readFileSync('/etc/hostname'); }\nconsole.log(3);\n"),
-    ("require-dynamic", "const m = require(process.argv[2] ?? 'path');\nconsole.log(typeof m);\n"),
-    ("import-dynamic", "import(process.argv[2] ?? 'path').then((m) => console.log(typeof m));\n"),
-    ("import-dynamic-const", "import('fs').then((m) => console.log(typeof m.readFileSync));\n"),
     ("name-in-dead-closure", "const t = { f: () => new Float32Array(2) };\nconsole.log(typeof t);\n"),
     ("name-in-class-field", "class C { static make = (n: number) => new Int16Array(n); x = 1; }\nconsole.log(new C().x);\n"),
     ("name-in-getter", "const o = { get b() { return Buffer.alloc(2); } };\nconsole.log(typeof o);\n"),
@@ -158,12 +153,22 @@ const TEXT_NEVER: &[(&str, &str)] = &[
 
 #[test]
 fn the_text_part_covers_every_body_and_holders_close_over_their_entries() {
+    let mut wrong = Vec::new();
     for (name, src) in TEXT_AND_HOLDERS {
         let r = reach(src);
-        assert!(r.live("typedarray"), "{name}: {:#?}", r.dump_lines());
+        if !r.live("typedarray") {
+            wrong.push(format!("{name}: never"));
+        }
     }
     for (name, src) in TEXT_NEVER {
         let r = reach(src);
-        assert!(!r.live("typedarray"), "{name}: {:#?}", r.dump_lines());
+        if r.live("typedarray") {
+            let line = r
+                .dump_lines()
+                .into_iter()
+                .find(|l| l.contains(" typedarray "));
+            wrong.push(format!("{name}: {line:?}"));
+        }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

@@ -1063,9 +1063,7 @@ fn lower_numeric_logical_for_number_context(
         }
         // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
         // is on the read's miss arm only (`index_get::rep_default`).
-        if let Some(v) =
-            crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)?
-        {
+        if let Some(v) = crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)? {
             return Ok(v);
         }
         let l_boxed = lower_expr(ctx, left)?;

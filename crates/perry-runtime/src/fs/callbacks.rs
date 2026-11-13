@@ -218,7 +218,10 @@ pub extern "C" fn js_fs_mkdir_callback(path_value: f64, arg1: f64, arg2: f64) ->
             Ok(None) => call_cb0(cb),
             Ok(first) => defer_fs_callback(
                 cb,
-                &[f64::from_bits(0x7FFC_0000_0000_0002), super::mkdir_result_value(first)],
+                &[
+                    f64::from_bits(0x7FFC_0000_0000_0002),
+                    super::mkdir_result_value(first),
+                ],
             ),
             Err(err_val) => {
                 call_cb_err1(cb, err_val.value());

@@ -107,8 +107,15 @@ fn never(family: &'static str, what: &'static str) -> ! {
 mod tests {
     use super::*;
 
-    extern "C" fn image() {}
-    extern "C" fn other_image() {}
+    // Distinct bodies: identical ones can share one address, and an image's
+    // identity is its installer's address.
+    static RUNS: AtomicU64 = AtomicU64::new(0);
+    extern "C" fn image() {
+        RUNS.fetch_add(1, Relaxed);
+    }
+    extern "C" fn other_image() {
+        RUNS.fetch_add(2, Relaxed);
+    }
 
     /// One sequence, in one test: the words are process state.
     #[test]
@@ -138,7 +145,9 @@ mod tests {
             js_runtime_families_never((a | b) as i64, image);
             assert!(!claimed(a) && !claimed(b));
             // An installer nothing registered claims nothing.
-            extern "C" fn stranger() {}
+            extern "C" fn stranger() {
+                RUNS.fetch_add(4, Relaxed);
+            }
             js_runtime_families_never(b as i64, stranger);
             assert!(!claimed(b));
             js_runtime_families_never(b as i64, other_image);

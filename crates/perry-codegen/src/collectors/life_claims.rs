@@ -58,8 +58,7 @@ pub(crate) struct LifeClaims {
     pub body_id: u64,
 }
 
-impl LifeClaims {
-}
+impl LifeClaims {}
 
 /// The census runs for its claims in this compilation.
 pub(crate) fn wanted() -> bool {

@@ -19,7 +19,10 @@
 //! - it declares the birth: an entry of the family (or of one that
 //!   requires it) is in its own `births`. Its holder's `births` do not
 //!   count: the fact observes members one by one;
-//! - otherwise the check FAILS and prints the call path.
+//! - otherwise the check FAILS and prints the call path. A native whose
+//!   body symbol is not in the analyzed archives (a member that shares the
+//!   bound-method sentinel, a body in another archive) is counted as
+//!   unchecked unless one of the two holds for it by name.
 //!
 //! The walk stops at an `in-hand` function: one that runs only when a byte
 //! cell already exists (its receiver or an argument is one), or that
@@ -274,16 +277,21 @@ pub fn check(
         .census
         .push_str("name\tsymbol\tfound\treaches\tverdict\n");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unchecked = 0usize;
     for n in natives {
         let nodes = by_name.get(n.symbol.as_str());
         let reach = nodes.and_then(|ns| ns.iter().copied().find(|&i| next[i].is_some()));
+        let known = Some(&n.name)
+            .filter(|name| !undeclared.contains(name))
+            .and_then(|name| covered(name, births));
         let verdict = match (nodes, reach) {
-            (None, _) => "not in the graph".to_owned(),
+            (None, _) if known.is_some() => format!("not in the graph ({})", known.unwrap()),
+            (None, _) => {
+                unchecked += 1;
+                "not in the graph, UNCHECKED".to_owned()
+            }
             (Some(_), None) => "no birth".to_owned(),
-            (Some(_), Some(i)) => match Some(&n.name)
-                .filter(|name| !undeclared.contains(name))
-                .and_then(|name| covered(name, births))
-            {
+            (Some(_), Some(i)) => match known {
                 Some(why) => why.to_owned(),
                 None => {
                     report.failures += 1;
@@ -317,7 +325,7 @@ pub fn check(
             .join(" ")
     ));
     report.lines.push(format!(
-        "births-check: family={FAMILY} rules={} seeds={} cuts={} reaching={} origins={} stated={} unstated={} failures={}",
+        "births-check: family={FAMILY} rules={} seeds={} cuts={} reaching={} origins={} stated={} unstated={} unchecked_natives={unchecked} failures={}",
         rules.len(),
         seed.iter().filter(|&&s| s).count(),
         cut.iter().filter(|&&c| c).count(),
@@ -376,10 +384,11 @@ mod tests {
 
     #[test]
     fn the_manifest_births_are_read_by_name() {
-        let manifest = r#"{"declarations":[{"name":"structuredClone","births":["ArrayBuffer","Uint8Array"]},{"name":"atob"}]}"#;
+        let manifest = r#"{"declarations":[{"name":"Array.from","births":["ArrayBuffer","Uint8Array"]},{"name":"atob"}]}"#;
         let b = declared_births(manifest).unwrap();
-        assert_eq!(b["structuredClone"], ["ArrayBuffer", "Uint8Array"]);
+        assert_eq!(b["Array.from"], ["ArrayBuffer", "Uint8Array"]);
         assert!(b["atob"].is_empty());
-        assert_eq!(covered("structuredClone", &b), Some("declared"));
+        assert_eq!(covered("Array.from", &b), Some("declared"));
+        assert_eq!(covered("atob", &b), None);
     }
 }

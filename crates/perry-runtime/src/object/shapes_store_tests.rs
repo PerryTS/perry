@@ -1191,7 +1191,17 @@ fn constfn_lane_past_word_zero_is_identity_and_deprecates() {
     assert!(!matches(&[]), "no body is another shape");
     let key_of = |bodies: &[ConstFnSlotInfo]| {
         facts_key_proto_with_special(
-            0x40, 64, 64, 0, ShapeObjectKind::Ordinary, 0, 0, 0, 0, bodies, &[],
+            0x40,
+            64,
+            64,
+            0,
+            ShapeObjectKind::Ordinary,
+            0,
+            0,
+            0,
+            0,
+            bodies,
+            &[],
         )
     };
     assert_ne!(key_of(&a), key_of(&[]));
@@ -1203,8 +1213,11 @@ fn constfn_lane_past_word_zero_is_identity_and_deprecates() {
     assert!(!record.deprecate_special_to_any(40), "learned once");
     unsafe { record.release_extras() };
     // Slot 300 needs tail word 8.
-    let far = ShapeRecord::new(0x40, 301, 301, 0, ShapeObjectKind::Ordinary, 0)
-        .with_special_facts(0, &[at(300, 0)], &[]);
+    let far = ShapeRecord::new(0x40, 301, 301, 0, ShapeObjectKind::Ordinary, 0).with_special_facts(
+        0,
+        &[at(300, 0)],
+        &[],
+    );
     assert!(far.deprecate_special_to_any(300));
     assert_eq!(far.tail_deprecation(8), 1 << (300 % 32));
     unsafe { far.release_extras() };

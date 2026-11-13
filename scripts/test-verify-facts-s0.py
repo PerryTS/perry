@@ -145,7 +145,8 @@ def main():
             observed = observe(exe, e)
             assert observed.returncode == 0 and observed.stdout == expected, observed
             save(name, status=86, default="aborts" if aborts else "runs")
-        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live")]:
+        for name, verdict in [("family-bytes-scratch", "never"), ("family-bytes-unwalked", "live"),
+                              ("family-bytes-write-encoding", "never")]:
             source = fixtures / (name + ".ts")
             dump = args.out / (name + ".facts")
             exe, e = compile_(source, name, PERRY_FACTS_DUMP=str(dump), **instr)
@@ -220,6 +221,7 @@ def main():
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
         ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("quiet-strings-negative", "quiet-strings", "quiet sites"),
         ("typed-array-site-negative", "tasite", "method site"),
         ("array-site-negative", "arraysite", "method site"),
         ("collection-site-negative", "collsite", "method site"),
@@ -260,6 +262,11 @@ def main():
         ("birth-image-negative", "birthimage", "birth image"),
         ("string-call-negative", "stringcall", "call kinds"),
         ("loop-trip-negative", "looptrip", "loop trip bound"),
+        # Activation reach, members on a built-in prototype (class H): each
+        # arm turns one rule off, and the body the program enters through
+        # the member reports "inactive body".
+        ("reach-held-keys-negative", "noreachheldkeys", "inactive body"),
+        ("reach-proto-accessor-negative", "noreachprotoaccessors", "inactive body"),
     ]:
         source = fixtures / (name + ".ts")
         # The array arms written before PR-B (DESIGN-p4l1) test the

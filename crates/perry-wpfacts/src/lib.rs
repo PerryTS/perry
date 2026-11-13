@@ -31,13 +31,13 @@ mod diagnostics;
 mod dump;
 mod element_floors;
 mod element_keys;
-mod fill_births;
+pub mod family_reach;
 pub mod field_read_calls;
+mod fill_births;
 mod gen;
 mod gen_call;
 mod gen_cjs;
 mod gen_const;
-pub mod family_reach;
 mod gen_expr;
 mod gen_protocol;
 mod gen_rest;
@@ -45,19 +45,19 @@ mod held_lengths;
 mod ledger;
 pub mod list_caps;
 mod literal_strings;
+mod method_sites;
 pub mod model;
 mod named_lengths;
 pub mod native_effects;
 pub mod pts;
 mod push_fills;
-mod method_sites;
 mod quiet_sites;
 mod reach;
 pub mod records;
 mod rest_elems;
 mod rest_fields;
-pub mod signatures;
 mod rooted;
+pub mod signatures;
 mod solve;
 mod summary;
 #[cfg(test)]
@@ -68,14 +68,14 @@ mod zero_sign;
 pub use bindings::{
     ArrRep, BindingFacts, BodyRef, ElemRep, ElementRead, Enc, ModuleBindings, RecRep, Rep,
 };
-pub use family_reach::{FamilyReach, FamilyVerdict};
-pub use field_read_calls::{FieldReadCall, FieldReadDefault};
-pub use signatures::Signature;
 pub use derive::{
     ElementFacts, ElementKey, ElementOp, FieldFacts, KindFact, ReceiverValue, SiteFacts,
     TemplateFacts, Verdict,
 };
+pub use family_reach::{FamilyReach, FamilyVerdict};
+pub use field_read_calls::{FieldReadCall, FieldReadDefault};
 use perry_hir::Module;
+pub use signatures::Signature;
 
 /// Reserved atom for computed-key accessors ("any key").
 pub(crate) const STAR_KEY: &str = "\u{1}*";
@@ -588,8 +588,7 @@ fn generate<'a>(
     g.name_folds = reach::name_folds() && cfg.sabotage.as_deref() != Some("noreachfolds");
     g.m.reach_new_target =
         reach::new_target() && cfg.sabotage.as_deref() != Some("noreachnewtarget");
-    g.m.reach_step_done =
-        reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
+    g.m.reach_step_done = reach::step_done() && cfg.sabotage.as_deref() != Some("noreachstepdone");
     g.m.reach_gen_members =
         reach::gen_members() && cfg.sabotage.as_deref() != Some("noreachgenmembers");
     g.m.reach_thenable = reach::thenable() && cfg.sabotage.as_deref() != Some("noreachthenable");
@@ -597,7 +596,7 @@ fn generate<'a>(
         reach::iter_close() && cfg.sabotage.as_deref() != Some("noreachiterclose");
     g.m.reach_spread_args =
         reach::spread_args() && cfg.sabotage.as_deref() != Some("noreachspreadargs");
-    g.m.reach_json_replacer = reach::json_replacer(cfg.sabotage.as_deref());
+    reach::configure(&mut g.m, cfg.sabotage.as_deref());
     g.unit_in = published;
     g.view = view;
     let interp = cfg.dynamic_code.clone().unwrap_or_else(|| "-".into());
@@ -1109,11 +1108,7 @@ fn compute_act<'a>(
             cfg.diagnostics.then_some(&mut rep_probe),
         );
     }
-    list_caps::collect(
-        &g,
-        &mut bindings,
-        cfg.diagnostics.then_some(&mut rep_probe),
-    );
+    list_caps::collect(&g, &mut bindings, cfg.diagnostics.then_some(&mut rep_probe));
     if cfg.verify_facts {
         element_floors::collect(&g, &mut bindings);
     }
@@ -1140,7 +1135,7 @@ fn compute_act<'a>(
         &sites,
         &mut bindings,
         interp_guard.is_some(),
-        cfg.sabotage.as_deref() == Some("quiet"),
+        cfg.sabotage.as_deref(),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     method_sites::collect(

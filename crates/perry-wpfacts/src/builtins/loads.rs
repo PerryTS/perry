@@ -177,9 +177,11 @@ pub(super) fn proto_family(ns: BuiltinNs) -> Option<(Family, Option<&'static str
         BuiltinNs::TypedArrayKind(n) => (Family::Opaque, Some("TypedArray"), n),
         BuiltinNs::DataView => (Family::Opaque, Some("DataView"), "DataView"),
         BuiltinNs::ArrayBuffer => (Family::Opaque, Some("ArrayBuffer"), "ArrayBuffer"),
-        BuiltinNs::SharedArrayBuffer => {
-            (Family::Opaque, Some("SharedArrayBuffer"), "SharedArrayBuffer")
-        }
+        BuiltinNs::SharedArrayBuffer => (
+            Family::Opaque,
+            Some("SharedArrayBuffer"),
+            "SharedArrayBuffer",
+        ),
         _ => return None,
     })
 }
@@ -230,7 +232,11 @@ fn module_object(m: &Model, t: Tok, key: &str) -> Option<BuiltinNs> {
 /// The declared getter (`declared_getter`) of the accessor host object token
 /// `t` holds or inherits under `key` (the realm's `accessor` rows: ordinary
 /// lookup on the object's chain).
-fn module_getter(m: &Model, t: Tok, key: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+fn module_getter(
+    m: &Model,
+    t: Tok,
+    key: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     let getter = m.native_property(t, key)?.get?;
     let (proto, k) = getter.strip_suffix(".<get>")?.rsplit_once('.')?;
     super::effects::declared_getter(proto, k)
