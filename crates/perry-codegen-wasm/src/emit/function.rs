@@ -293,7 +293,11 @@ impl WasmModuleEmitter {
         func
     }
 
-    pub(super) fn compile_class_method(&self, method: &perry_hir::ir::Function) -> Function {
+    pub(super) fn compile_class_method(
+        &self,
+        class_name: &str,
+        method: &perry_hir::ir::Function,
+    ) -> Function {
         // Local 0 = this, params start at 1
         let mut local_map = BTreeMap::new();
         for (i, param) in method.params.iter().enumerate() {
@@ -321,6 +325,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = Some(class_name.to_string());
         ctx.emit_box_params(&mut func, &method.params);
 
         for stmt in &method.body {

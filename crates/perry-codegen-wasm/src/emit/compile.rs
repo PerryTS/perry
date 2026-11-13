@@ -1415,7 +1415,7 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for method in &class.methods {
-                    let func = self.compile_class_method(method);
+                    let func = self.compile_class_method(&class.name, method);
                     code_section.function(&func);
                 }
                 for method in &class.static_methods {
@@ -1431,11 +1431,11 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for (_name, getter) in &class.getters {
-                    let func = self.compile_class_method(getter);
+                    let func = self.compile_class_method(&class.name, getter);
                     code_section.function(&func);
                 }
                 for (_name, setter) in &class.setters {
-                    let func = self.compile_class_method(setter);
+                    let func = self.compile_class_method(&class.name, setter);
                     code_section.function(&func);
                 }
             }
