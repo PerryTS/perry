@@ -9,7 +9,10 @@ fn run_web_source(source: &str) -> String {
 /// assertion about a runtime helper that TypeScript cannot reach.
 fn run_web_source_then(source: &str, after_boot: &str) -> String {
     let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
-    let module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
+    let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
+    // The HIR transforms `perry --target web` runs before wasm emission.
+    perry_transform::inline_finally_into_returns(&mut module);
+    perry_transform::transform_generators_without_private_frames(&mut module);
     let html =
         crate::compile_modules_to_wasm_html(&[("splice".into(), module)], "splice", false).unwrap();
     let runtime = html
@@ -652,5 +655,30 @@ console.log(bump(5) + " " + total);
 "#
         ),
         "1 3 3\nab-\n7 2"
+    );
+}
+
+#[test]
+fn a_generator_resumes_returns_and_throws_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* g() { yield 1; try { yield 2; } finally { console.log("fin"); } }
+const a = g();
+console.log(JSON.stringify(a.next()) + JSON.stringify(a.next()) + JSON.stringify(a.next()));
+const b = g();
+b.next();
+b.next();
+console.log(JSON.stringify(b.return(7)));
+const c = g();
+try { c.throw("boom"); } catch (e) { console.log("threw " + e); }
+console.log(JSON.stringify(c.next()));
+function* echo() { const x = yield "first"; yield "got " + x; }
+const d = echo();
+d.next();
+console.log(d.next("hi").value);
+"#
+        ),
+        "fin\n{\"value\":1,\"done\":false}{\"value\":2,\"done\":false}{\"done\":true}\nfin\n{\"value\":7,\"done\":true}\nthrew boom\n{\"done\":true}\ngot hi"
     );
 }

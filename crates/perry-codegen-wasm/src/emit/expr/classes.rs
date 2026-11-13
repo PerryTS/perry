@@ -75,6 +75,23 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 let _ = (params, body);
             }
+            // A lowered sync generator: the runtime wraps its resume record in a generator.
+            Expr::LinkGeneratorPrototype {
+                obj,
+                is_async: false,
+                fixed_state: true,
+                ..
+            } => {
+                let params = match obj.as_ref() {
+                    Expr::Closure { params, .. } => params.len(),
+                    _ => 2,
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_const(func, 1, params as f64);
+                self.emit_memcall(func, "generator_new", 2);
+            }
+            Expr::LinkGeneratorPrototype { obj, .. } => self.emit_expr(func, obj),
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
                     // Create a closure wrapper with 0 captures for function reference
