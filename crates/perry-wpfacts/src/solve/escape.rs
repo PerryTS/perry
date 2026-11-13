@@ -1304,7 +1304,20 @@ impl Model {
             // `setPrototypeOf` writes no own key: the runtime object's new
             // chain is noted by the prototype it is given (`ProtoFrom`,
             // `settle_native_given`). Another unit's gives one unknown here.
-            if kind != Hard::E6SetPrototypeOf || self.shared_replay {
+            // A delete stores no value (ECMA-262 13.5.1.2, OrdinaryDelete
+            // 10.1.10): under an unknown key it may make any own key of
+            // `t` absent, never present, as the named delete records
+            // (`Cons::DeleteKey`). A lookup the write may reach finds the
+            // key missing there: `undefined` beside what the chain holds.
+            if kind == Hard::E7Delete {
+                crate::builtins::note_native_data_write(
+                    self,
+                    t,
+                    None,
+                    &what,
+                    crate::builtins::WriteValue::Absent,
+                );
+            } else if kind != Hard::E6SetPrototypeOf || self.shared_replay {
                 crate::builtins::note_native_write(self, t, None, &what);
             }
         }
