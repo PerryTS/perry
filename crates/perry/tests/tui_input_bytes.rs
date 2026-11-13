@@ -131,7 +131,18 @@ console.log("RESULT", valid && JSON.stringify(received) === JSON.stringify(expec
     }
     let mut after: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(slave_fd, &mut after) }, 0);
-    assert_eq!(after.c_lflag, before.c_lflag);
+    assert_eq!(after.c_iflag, before.c_iflag);
+    assert_eq!(after.c_oflag, before.c_oflag);
+    assert_eq!(after.c_cflag, before.c_cflag);
+    assert_eq!(
+        after.c_lflag & !libc::PENDIN,
+        before.c_lflag & !libc::PENDIN
+    );
+    assert_eq!(after.c_cc, before.c_cc);
+    unsafe {
+        assert_eq!(libc::cfgetispeed(&after), libc::cfgetispeed(&before));
+        assert_eq!(libc::cfgetospeed(&after), libc::cfgetospeed(&before));
+    }
     assert!(status.success());
     let output = String::from_utf8_lossy(&output);
     assert!(output.contains("RESULT true"), "{output}");
