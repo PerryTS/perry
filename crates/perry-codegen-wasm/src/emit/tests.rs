@@ -132,6 +132,9 @@ console.log(invalid !== invalid);
 "#
         ),
         "1794519755405\n2026-11-12T21:42:35.405Z\n2026-10-12 21:42\n1794519755405\ntrue\ntrue"
+    );
+}
+
 #[test]
 fn global_is_nan_and_is_finite_coerce_like_node() {
     assert_eq!(
@@ -383,5 +386,21 @@ console.log(Number.isSafeInteger(9007199254740991) + " " + Number.isSafeInteger(
 "#
         ),
         "true false false\ntrue false false\ntrue false false\ntrue false false"
+    );
+}
+
+#[test]
+fn uri_globals_encode_decode_and_throw_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+console.log(encodeURIComponent("補 網&x=1"));
+console.log(decodeURIComponent("%E8%A3%9C%20%E7%B6%B2"));
+console.log(encodeURI("/a b?q=補"));
+console.log(decodeURI("/a%20b"));
+try { decodeURIComponent("%E0%A4%A"); console.log("no throw"); } catch (e) { console.log("threw"); }
+"#
+        ),
+        "%E8%A3%9C%20%E7%B6%B2%26x%3D1\n補 網\n/a%20b?q=%E8%A3%9C\n/a b\nthrew"
     );
 }

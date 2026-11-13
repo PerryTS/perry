@@ -214,6 +214,10 @@ impl WasmModuleEmitter {
             "number_is_safe_integer",
             "global_is_nan",
             "global_is_finite",
+            "encode_uri",
+            "decode_uri",
+            "encode_uri_component",
+            "decode_uri_component",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -1011,7 +1015,11 @@ impl WasmModuleEmitter {
             | Expr::NumberIsFinite(e)
             | Expr::NumberIsInteger(e)
             | Expr::NumberIsSafeInteger(e)
-            | Expr::BigIntCoerce(e) => {
+            | Expr::BigIntCoerce(e)
+            | Expr::EncodeURI(e)
+            | Expr::DecodeURI(e)
+            | Expr::EncodeURIComponent(e)
+            | Expr::DecodeURIComponent(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::ParseInt { string, radix } => {

@@ -48,6 +48,20 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "parse_float", 1);
             }
+            Expr::EncodeURI(val)
+            | Expr::DecodeURI(val)
+            | Expr::EncodeURIComponent(val)
+            | Expr::DecodeURIComponent(val) => {
+                let bridge = match expr {
+                    Expr::EncodeURI(_) => "encode_uri",
+                    Expr::DecodeURI(_) => "decode_uri",
+                    Expr::EncodeURIComponent(_) => "encode_uri_component",
+                    _ => "decode_uri_component",
+                };
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall(func, bridge, 1);
+            }
             Expr::NumberCoerce(val) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
