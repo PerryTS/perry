@@ -267,3 +267,46 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
         "proto arg"
     );
 }
+
+// A compiled method that throws inside an async body rejects the async function, even
+// when a synchronous `try` encloses the call that starts it.
+#[test]
+fn async_body_user_method_exception_rejects_the_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Bad { boom(): string { throw new Error("boom"); } }
+async function run(): Promise<string> {
+  const b = new Bad();
+  b.boom();
+  return "continued";
+}
+try {
+  run().then((v) => console.log("run: " + v)).catch((e) => console.log("run rejected " + e.message));
+} catch (e) {
+  console.log("sync caught");
+}
+"#
+        ),
+        "run rejected boom"
+    );
+}
+
+// `__proto__` is inherited by the bridge-name map, not an entry of it: calling it on a
+// user instance throws TypeError instead of reaching the bridge fallback.
+#[test]
+fn async_body_call_of_an_inherited_map_key_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { a(): number { return 1; } }
+async function proto(): Promise<string> {
+  const k: any = new K();
+  return k.__proto__();
+}
+proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto threw " + e.name));
+"#
+        ),
+        "proto threw TypeError"
+    );
+}

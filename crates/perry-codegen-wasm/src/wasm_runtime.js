@@ -4981,14 +4981,20 @@ function __jsMethodGet(obj, mname) {
     return { r: obj, m: mname, user: true };
   }
   const f = obj[mname];
-  if (tagged && typeof f !== 'function' && __uiMethodMap[mname]) {
+  if (tagged && typeof f !== 'function' && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
     return { r: obj, m: mname, user: true };
   }
   return { r: obj, m: mname, f };
 }
 
 function __jsMethodInvoke(ref, args) {
-  if (ref.user) return __classDispatch(ref.r, ref.m, args);
+  if (ref.user) {
+    // As __invokeWasmCallback: a compiled method that threw under an enclosing WASM
+    // `try` leaves the exception pending; rethrow it here so the async body rejects.
+    const result = __classDispatch(ref.r, ref.m, args);
+    __memDispatch.propagate_exception(true);
+    return result;
+  }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   return ref.f.apply(ref.r, args);
 }
