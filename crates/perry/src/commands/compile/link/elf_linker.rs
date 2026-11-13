@@ -1,10 +1,19 @@
-//! The linker of a native glibc Linux executable: lld when it is installed,
-//! GNU ld (the `cc` default) otherwise.
+//! lld as the linker of a native glibc Linux executable, opt-in
+//! (`PERRY_LINK_LLD=1`); GNU ld (the `cc` default) stays the default.
 //!
-//! lld lays the same inputs out smaller (chess: about 100 KB, 1.1%, mostly
-//! `.rodata` merging and section padding) with the same code: no input
-//! section is changed, dropped or folded. Identical code folding (`--icf`) is
-//! deliberately NOT used:
+//! lld lays the same inputs out smaller (chess -94 744 B, -1.0%: `.rodata`
+//! string merging, section padding) with the same code: no input section is
+//! changed, dropped or folded, and start-up runs fewer ld.so instructions
+//! (hello2 -2.4%). It is not the default because it costs instructions:
+//! the gcc-built C parts (mimalloc) call libc functions (mmap, memcpy,
+//! clock_gettime, ...) through the PLT, and Rust code takes the same
+//! functions' addresses through the GOT. GNU ld routes those PLT calls
+//! through `.plt.got` (the GOT entry bound at start); lld gives each its own
+//! lazily bound PLT slot, about 400 ld.so instructions on its first call
+//! (chess +6K per run). `-z now` is worse; `-fno-plt` for the C parts removes
+//! the cost but moves enough text to raise peak RSS by 256 KiB.
+//!
+//! Identical code folding (`--icf`) is never used by default:
 //! * `--icf=all` folds generated JS bodies with equal code, and lld drops the
 //!   folded body's `perry_fnrec` record, so a stack frame of one names the
 //!   other (`error.stack`). Runtime code compares function addresses as
@@ -14,11 +23,13 @@
 //! * `--keep-unique` resolves global symbols only; most runtime functions
 //!   are local after LTO.
 //!
-//! Kept as GNU ld had it: the fixed base 0x400000 (lld's own default is
+//! Kept as GNU ld has it: the fixed base 0x400000 (lld's own default is
 //! 0x200000; the base must stay above the NaN-box handle band) and the
-//! separate code segment.
+//! separate code segment. The default hot-text order works under lld with
+//! its run in its own output section (`hot_text_order`).
 //!
-//! `PERRY_LINK_LLD=off` (or `0`) keeps GNU ld. `PERRY_LINK_LLD=icf-all` adds
+//! `PERRY_LINK_LLD=1` (or `on`, `lld`) links with lld when `ld.lld` 13 or
+//! newer is on PATH, GNU ld otherwise. `PERRY_LINK_LLD=icf-all` adds
 //! `--icf=all` for measurement only (unsound, see above).
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,9 +45,9 @@ pub(super) enum Mode {
 
 pub(super) fn mode_from(value: Option<&str>) -> Mode {
     match value.map(str::trim) {
-        Some("off" | "0" | "false" | "no" | "gnu") => Mode::Gnu,
+        Some("1" | "on" | "true" | "yes" | "lld") => Mode::Lld,
         Some("icf-all") => Mode::LldIcfAll,
-        _ => Mode::Lld,
+        _ => Mode::Gnu,
     }
 }
 
@@ -109,10 +120,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_switch_reads_off_lld_and_icf_all() {
-        assert_eq!(mode_from(None), Mode::Lld);
-        assert_eq!(mode_from(Some("1")), Mode::Lld);
-        for off in ["off", "0", "false", "no", "gnu", " off "] {
+    fn the_switch_is_opt_in() {
+        assert_eq!(mode_from(None), Mode::Gnu);
+        for on in ["1", "on", "true", "yes", "lld", " 1 "] {
+            assert_eq!(mode_from(Some(on)), Mode::Lld, "{on}");
+        }
+        for off in ["off", "0", "false", "no", "gnu", ""] {
             assert_eq!(mode_from(Some(off)), Mode::Gnu, "{off}");
         }
         assert_eq!(mode_from(Some("icf-all")), Mode::LldIcfAll);
