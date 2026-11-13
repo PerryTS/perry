@@ -297,14 +297,6 @@ pub fn drain_input() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
-
-    /// Cargo runs tests in parallel by default. PENDING_BYTES +
-    /// INPUT_HANDLER + EXIT_FLAG are process-wide globals, so two tests
-    /// racing see each other's writes. This mutex serialises tests
-    /// within this module — same shape as `tui::hooks::tests::TEST_LOCK`
-    /// (#862).
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     /// Acquire the test lock and reset all shared state. Returns the
     /// guard — drop at end of test. Binding the guard to `_g` keeps it
@@ -312,11 +304,11 @@ mod tests {
     /// of `reset()` ensures no test can clear globals without first
     /// taking the lock.
     fn reset() -> std::sync::MutexGuard<'static, ()> {
-        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = crate::event_pump::tests::serial();
         PENDING_BYTES.lock().unwrap().clear();
         INPUT_HANDLER.store(0, Ordering::Release);
         EXIT_FLAG.store(false, Ordering::Release);
-        g
+        guard
     }
 
     #[test]
