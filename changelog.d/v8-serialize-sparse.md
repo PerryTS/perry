@@ -1,0 +1,1 @@
+`v8.serialize` writes a holey or sparse Array as V8's sparse record, and `v8.deserialize` rebuilds it with its holes and its length: `[1, , 3]` keeps `1 in clone` false, `a[3000000] = 1` round-trips as one element instead of three million `undefined`s, and trailing holes keep the length.

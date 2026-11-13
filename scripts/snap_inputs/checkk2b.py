@@ -190,6 +190,21 @@ elif name == "f15u":
     # again under that lock. Red: the run deadlocks, no boundary, no report.
     need(os.path.exists(report), "no report (the run never finished)")
     info = f"rows={len(ops)} boundary={sum(1 for _, _, o, _ in ops if o == 'boundary')}"
+
+elif name in ("envheld", "envheld-enum"):
+    # process.env holds no host data until enumerated: iso.ts only holds the
+    # reference during init (and the entry reads one key after the cut), so no
+    # env_block row; envheld-enum has enum.ts call Object.keys(process.env) in
+    # its own init, so the block is read there and only there.
+    eb = [(i, s) for s, i, o, _ in ops if o == "env_block"]
+    ie = [i for _, i, o, _ in sorted(ops) if o == "init_enter"]
+    info = f"env_block={eb} init_enters={ie}"
+    if name == "envheld":
+        need(len(eb) == 0, f"want 0 env_block rows, got {len(eb)}")
+    else:
+        need(len(ie) >= 3, "want the three module inits")
+        need(len(eb) >= 1 and (len(ie) < 3 or {i for i, _ in eb} == {ie[1]}),
+             "env_block rows must come only from the enumerating init (enum.ts, the second)")
 else:
     fails.append("unknown fixture")
 print(f"{name} {'PASS' if not fails else 'FAIL ' + '; '.join(fails)} | {info}"[:600])

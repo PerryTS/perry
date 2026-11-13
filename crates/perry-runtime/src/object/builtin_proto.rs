@@ -1417,6 +1417,18 @@ pub(crate) unsafe fn redirect_call(
     select_and_call(recv, recv, name, args, argc, false, None)
 }
 
+/// `Call(Get(recv, name), recv, args)` whatever the method is: the ordinary
+/// call for a primitive receiver an Array site refused. Its `Get` may select
+/// ANOTHER kind's builtin (`String.prototype.at` for a String), which must run
+/// as itself, never as the Array body the site was folded to.
+///
+/// # Safety
+/// `recv` and `args` are NaN-boxed values live at the call.
+pub(crate) unsafe fn complete_call(recv: f64, name: &[u8], args: &[f64]) -> f64 {
+    select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
+        .expect("a complete call always calls")
+}
+
 /// `Call(Get(holder, name), this, args)` — the one body behind every generic
 /// entry. With `call_builtin == false` a selected runtime builtin answers
 /// `None` (the caller runs it natively) — and, given `refresh`, re-reads the

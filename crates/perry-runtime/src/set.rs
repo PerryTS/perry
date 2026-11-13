@@ -1040,7 +1040,12 @@ fn clean_set_ptr(set: *const SetHeader) -> *const SetHeader {
                 crate::object::map_set_subclass::CollectionKind::Set,
             ) as *const SetHeader
         }
-        _ => set,
+        // Any other cell (an Array, a Date, a closure, a Map, ...) or a word
+        // with no readable header (a primitive's payload behind the
+        // annotation): no `SetHeader` lives there, and the operation would read
+        // or WRITE that cell as one. Null is the "not a Set" answer every
+        // entry already gives a plain object.
+        _ => std::ptr::null(),
     }
 }
 

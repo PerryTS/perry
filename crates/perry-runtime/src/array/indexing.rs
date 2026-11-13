@@ -922,10 +922,10 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
     if super::header::receiver_may_be_registered_exotic(arr) {
         // Check if this is actually a buffer (Uint8Array) — write individual bytes
         if crate::buffer::is_registered_buffer(arr as usize) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 arr as *mut crate::buffer::BufferHeader,
                 index as i32,
-                value as i32,
+                value,
             );
             return;
         }

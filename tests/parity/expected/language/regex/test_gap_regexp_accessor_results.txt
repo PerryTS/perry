@@ -1,0 +1,164 @@
+re.flags string:dgimsy:T:false:false:6 re.source string:a+:T:false:false:2
+re.global boolean:true:T:true:false:-1 re.ignoreCase boolean:true:T:true:false:-1 re.multiline boolean:true:T:true:false:-1
+re.dotAll boolean:true:T:true:false:-1 re.unicode boolean:false:F:false:false:-1 re.unicodeSets boolean:false:F:false:false:-1
+re.sticky boolean:true:T:true:false:-1 re.hasIndices boolean:true:T:true:false:-1 re.lastIndex number:0:F:false:false:-1
+rv string:v:T:false:false:1 boolean:true:T:true:false:-1 boolean:false:F:false:false:-1 boolean:false:F:false:false:-1
+typed false true c! 1
+P.flags string::F:false:false:0 P.source string:(?:):T:false:false:4
+P.global undefined:undefined:F:false:true:-1 P.sticky undefined:undefined:F:false:true:-1 P.hasIndices undefined:undefined:F:false:true:-1
+P.global + 1 NaN P.source + 1 (?:)1
+regexp flags call string:gi:T:false:false:2 load string:gi:T:false:false:2
+regexp source call string:x:T:false:false:1 load string:x:T:false:false:1
+regexp hasIndices call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+regexp global call boolean:true:T:true:false:-1 load boolean:true:T:true:false:-1
+regexp ignoreCase call boolean:true:T:true:false:-1 load boolean:true:T:true:false:-1
+regexp multiline call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+regexp dotAll call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+regexp unicode call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+regexp unicodeSets call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+regexp sticky call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass flags call string:msy:T:false:false:3 load string:msy:T:false:false:3
+subclass source call string:y:T:false:false:1 load string:y:T:false:false:1
+subclass hasIndices call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass global call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass ignoreCase call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass multiline call boolean:true:T:true:false:-1 load boolean:true:T:true:false:-1
+subclass dotAll call boolean:true:T:true:false:-1 load boolean:true:T:true:false:-1
+subclass unicode call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass unicodeSets call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass sticky call boolean:true:T:true:false:-1 load boolean:true:T:true:false:-1
+subclass-own flags call string:g:T:false:false:1 load string:g:T:false:false:1
+subclass-own source call string:z:T:false:false:1 load number:42:T:false:false:-1
+subclass-own hasIndices call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own global call boolean:true:T:true:false:-1 load number:7:T:false:false:-1
+subclass-own ignoreCase call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own multiline call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own dotAll call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own unicode call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own unicodeSets call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+subclass-own sticky call boolean:false:F:false:false:-1 load boolean:false:F:false:false:-1
+prototype flags call string::F:false:false:0 load string::F:false:false:0
+prototype source call string:(?:):T:false:false:4 load string:(?:):T:false:false:4
+prototype hasIndices call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype global call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype ignoreCase call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype multiline call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype dotAll call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype unicode call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype unicodeSets call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+prototype sticky call undefined:undefined:F:false:true:-1 load undefined:undefined:F:false:true:-1
+sub-prototype flags call throws TypeError load throws TypeError
+sub-prototype source call throws TypeError load throws TypeError
+sub-prototype hasIndices call throws TypeError load throws TypeError
+sub-prototype global call throws TypeError load throws TypeError
+sub-prototype ignoreCase call throws TypeError load throws TypeError
+sub-prototype multiline call throws TypeError load throws TypeError
+sub-prototype dotAll call throws TypeError load throws TypeError
+sub-prototype unicode call throws TypeError load throws TypeError
+sub-prototype unicodeSets call throws TypeError load throws TypeError
+sub-prototype sticky call throws TypeError load throws TypeError
+proxy flags call throws TypeError load throws TypeError
+proxy source call throws TypeError load throws TypeError
+proxy hasIndices call throws TypeError load throws TypeError
+proxy global call throws TypeError load throws TypeError
+proxy ignoreCase call throws TypeError load throws TypeError
+proxy multiline call throws TypeError load throws TypeError
+proxy dotAll call throws TypeError load throws TypeError
+proxy unicode call throws TypeError load throws TypeError
+proxy unicodeSets call throws TypeError load throws TypeError
+proxy sticky call throws TypeError load throws TypeError
+plain flags call string:g:T:false:false:1 load undefined:undefined:F:false:true:-1
+plain source call throws TypeError load string:s:T:false:false:1
+plain hasIndices call throws TypeError load undefined:undefined:F:false:true:-1
+plain global call throws TypeError load number:1:T:false:false:-1
+plain ignoreCase call throws TypeError load undefined:undefined:F:false:true:-1
+plain multiline call throws TypeError load undefined:undefined:F:false:true:-1
+plain dotAll call throws TypeError load undefined:undefined:F:false:true:-1
+plain unicode call throws TypeError load undefined:undefined:F:false:true:-1
+plain unicodeSets call throws TypeError load undefined:undefined:F:false:true:-1
+plain sticky call throws TypeError load string::F:false:false:0
+array flags call string::F:false:false:0 load undefined:undefined:F:false:true:-1
+array source call throws TypeError load undefined:undefined:F:false:true:-1
+array hasIndices call throws TypeError load undefined:undefined:F:false:true:-1
+array global call throws TypeError load undefined:undefined:F:false:true:-1
+array ignoreCase call throws TypeError load undefined:undefined:F:false:true:-1
+array multiline call throws TypeError load undefined:undefined:F:false:true:-1
+array dotAll call throws TypeError load undefined:undefined:F:false:true:-1
+array unicode call throws TypeError load undefined:undefined:F:false:true:-1
+array unicodeSets call throws TypeError load undefined:undefined:F:false:true:-1
+array sticky call throws TypeError load undefined:undefined:F:false:true:-1
+function flags call string::F:false:false:0 load undefined:undefined:F:false:true:-1
+function source call throws TypeError load undefined:undefined:F:false:true:-1
+function hasIndices call throws TypeError load undefined:undefined:F:false:true:-1
+function global call throws TypeError load undefined:undefined:F:false:true:-1
+function ignoreCase call throws TypeError load undefined:undefined:F:false:true:-1
+function multiline call throws TypeError load undefined:undefined:F:false:true:-1
+function dotAll call throws TypeError load undefined:undefined:F:false:true:-1
+function unicode call throws TypeError load undefined:undefined:F:false:true:-1
+function unicodeSets call throws TypeError load undefined:undefined:F:false:true:-1
+function sticky call throws TypeError load undefined:undefined:F:false:true:-1
+undefined flags call throws TypeError load throws TypeError
+undefined source call throws TypeError load throws TypeError
+undefined hasIndices call throws TypeError load throws TypeError
+undefined global call throws TypeError load throws TypeError
+undefined ignoreCase call throws TypeError load throws TypeError
+undefined multiline call throws TypeError load throws TypeError
+undefined dotAll call throws TypeError load throws TypeError
+undefined unicode call throws TypeError load throws TypeError
+undefined unicodeSets call throws TypeError load throws TypeError
+undefined sticky call throws TypeError load throws TypeError
+null flags call throws TypeError load throws TypeError
+null source call throws TypeError load throws TypeError
+null hasIndices call throws TypeError load throws TypeError
+null global call throws TypeError load throws TypeError
+null ignoreCase call throws TypeError load throws TypeError
+null multiline call throws TypeError load throws TypeError
+null dotAll call throws TypeError load throws TypeError
+null unicode call throws TypeError load throws TypeError
+null unicodeSets call throws TypeError load throws TypeError
+null sticky call throws TypeError load throws TypeError
+string flags call throws TypeError load undefined:undefined:F:false:true:-1
+string source call throws TypeError load undefined:undefined:F:false:true:-1
+string hasIndices call throws TypeError load undefined:undefined:F:false:true:-1
+string global call throws TypeError load undefined:undefined:F:false:true:-1
+string ignoreCase call throws TypeError load undefined:undefined:F:false:true:-1
+string multiline call throws TypeError load undefined:undefined:F:false:true:-1
+string dotAll call throws TypeError load undefined:undefined:F:false:true:-1
+string unicode call throws TypeError load undefined:undefined:F:false:true:-1
+string unicodeSets call throws TypeError load undefined:undefined:F:false:true:-1
+string sticky call throws TypeError load undefined:undefined:F:false:true:-1
+number flags call throws TypeError load undefined:undefined:F:false:true:-1
+number source call throws TypeError load undefined:undefined:F:false:true:-1
+number hasIndices call throws TypeError load undefined:undefined:F:false:true:-1
+number global call throws TypeError load undefined:undefined:F:false:true:-1
+number ignoreCase call throws TypeError load undefined:undefined:F:false:true:-1
+number multiline call throws TypeError load undefined:undefined:F:false:true:-1
+number dotAll call throws TypeError load undefined:undefined:F:false:true:-1
+number unicode call throws TypeError load undefined:undefined:F:false:true:-1
+number unicodeSets call throws TypeError load undefined:undefined:F:false:true:-1
+number sticky call throws TypeError load undefined:undefined:F:false:true:-1
+spy flags string:gy:T:false:false:2 8 dotAll,global,hasIndices,ignoreCase,multiline,sticky,unicode,unicodeSets
+own.global number:1:T:false:false:-1 own.global + 1 2
+own.source object {"s":1}
+own.sticky string:yes:T:false:false:3 own.flags string:gy:T:false:false:2
+own via getter boolean:true:T:true:false:-1 string:o:T:false:false:1
+DEC 250: Cannot redefine built-in member RegExp.prototype.global: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member RegExp.prototype.source: built-in objects are read-only in a compiled program (adding a new member is allowed)
+redefined global boolean:false:F:false:false:-1 0
+redefined source string:later:T:false:false:5
+flags after redefinition string:i:T:false:false:1 string::F:false:false:0
+split after redefinition ["a","b","c"]
+replace after redefinition a-b-c
+DEC 250: Cannot redefine built-in member RegExp.prototype.flags: built-in objects are read-only in a compiled program (adding a new member is allowed)
+redefined flags string:i:T:false:false:1
+DEC 250: Cannot redefine built-in member RegExp.prototype.global: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member RegExp.prototype.source: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member RegExp.prototype.flags: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored boolean:false:F:false:false:-1 string:later:T:false:false:5 string:i:T:false:false:1
+match ["1","2"]
+replace a#b#
+split ["a","b",""]
+replaceAll a_b_
+matchAll ["1","2"]
+flags reads true true
+whitespace split ["r","n","b"]

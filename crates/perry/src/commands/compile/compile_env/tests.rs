@@ -806,3 +806,14 @@ fn push_method_tiers_switch_is_a_cache_input() {
         "PERRY_PUSH_METHOD_TIERS must key the compile caches"
     );
 }
+
+/// Declared getter results on locked realm holders: the switch changes what
+/// a load of such an accessor (a RegExp's `flags`) holds (unknown when off),
+/// so `=0` must never reuse an `=1` object.
+#[test]
+fn declared_getter_results_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_DECLARED_GETTER_RESULTS"),
+        "PERRY_FACTS_DECLARED_GETTER_RESULTS must key the compile caches"
+    );
+}

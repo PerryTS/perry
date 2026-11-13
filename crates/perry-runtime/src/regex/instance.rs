@@ -19,7 +19,7 @@ crate::perry_thread_local! {
 /// site's registered word); it is read after the allocation, the only
 /// collecting action here, so no handle is needed for it.
 pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
-    let shape = BIRTH_SHAPE.with(Cell::get);
+    let shape = BIRTH_SHAPE.with(Cell::get); #[cfg(perry_gc_instruments)] crate::wpfacts_check::family::born("regex_engine", || "a RegExp is born".into());
     if shape != 0 {
         let size = std::mem::size_of::<RegExpHeader>() + crate::object::INLINE_SLOT_FLOOR * 8;
         let receiver = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)

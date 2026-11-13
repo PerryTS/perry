@@ -1147,8 +1147,7 @@ fn compute_act<'a>(
         &g,
         &mut bindings,
         interp_guard.is_some(),
-        cfg.sabotage.as_deref() == Some("tasite"),
-        cfg.sabotage.as_deref() == Some("arraysite"),
+        cfg.sabotage.as_deref(),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     element_keys::collect(&g, &mut bindings);
@@ -2362,8 +2361,8 @@ fn compute_act<'a>(
     } else {
         None
     };
-    let family_reach = (!cfg.unit && family_reach::enabled())
-        .then(|| family_reach::derive(&g, cfg.unit, cfg.dynamic_code.as_deref()));
+    let family_reach =
+        (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let mut pf = ProgramFacts {
         verification_bodies,
         family_reach,
