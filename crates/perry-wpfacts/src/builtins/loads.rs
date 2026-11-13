@@ -258,7 +258,9 @@ fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
 /// chain that owns the key gives its value); `None` otherwise.
 fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
     use perry_hir::realm_manifest::RealmOwnValue as V;
-    let born = members::realm_born(what?)?;
+    // A typed array's or a Buffer's chain (`view_chain`) too:
+    // `BYTES_PER_ELEMENT` (23.2.7.2), a Number.
+    let born = members::realm_born(what?).or_else(|| view_chain(what))?;
     let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
         return None;
     };
@@ -326,6 +328,13 @@ fn realm_chain_any(
             }
             if wrapper {
                 wrapper_member(m, &[s.name], &n, dst);
+            } else if view_chain(Some(what)).is_some() {
+                // A typed array's or a Buffer's member: as its named read
+                // finds it (`tok_load`): an accessor's declared result
+                // (`length`, `byteLength`, `byteOffset`, `buffer`,
+                // `@@toStringTag`), the constructor, the native.
+                let a = m.atom(&n);
+                tok_load(m, t, Key::Named(a), dst);
             } else {
                 let a = m.atom(&n);
                 family_load(m, t, fam, Some(what), a, dst);
@@ -1061,6 +1070,33 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         let f = super::viewed_buffer(m, t);
                         m.edge(f, dst);
                     }
+                    // Node's `Buffer.prototype.parent` / `.offset` getters
+                    // (lib/buffer.js; the runtime's `get_field_by_name_tail.rs`):
+                    // on a Buffer, its `buffer` and its `byteOffset`.
+                    (Key::Named(a), Some(n @ ("parent" | "offset"))) if what == "Buffer" => {
+                        let r = m.reason("B1 .buffer read");
+                        m.mark_hard(t, Hard::B1Exposed, r);
+                        if n == "parent" {
+                            let f = super::viewed_buffer(m, t);
+                            m.edge(f, dst);
+                        } else {
+                            m.add_prim(dst, prim::NUM);
+                        }
+                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                            opaque_member(m, dst);
+                        }
+                    }
+                    // 23.2.3.38 get %TypedArray%.prototype[@@toStringTag]:
+                    // a typed array's [[TypedArrayName]], a String.
+                    (Key::Named(a), Some(n))
+                        if matches!(what, "TypedArray" | "Buffer")
+                            && n.strip_prefix(super::WK_PREFIX) == Some("toStringTag") =>
+                    {
+                        m.add_prim(dst, prim::STR);
+                        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                            opaque_member(m, dst);
+                        }
+                    }
                     (_, Some("byteOffset"))
                         if matches!(what, "TypedArray" | "Buffer" | "DataView") =>
                     {
@@ -1121,6 +1157,14 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     (_, None) => {
                         if members::bobj_family(what) == Family::Iterator || what == "IterResult" {
                             m.add_prim(dst, prim::UNDEF);
+                        } else if view_chain(Some(what)).is_some() {
+                            // 10.4.5.4 [[Get]]: a numeric key reads
+                            // TypedArrayGetElement (10.4.5.15: the element
+                            // kind or `undefined`); any other key the own
+                            // properties the program stored (`load_from`'s
+                            // edge) and the chain (`realm_chain_any`).
+                            let p = m.typed_array_elem_prim(t);
+                            m.add_prim(dst, p | prim::UNDEF);
                         } else {
                             m.add_prim(dst, prim::ALL);
                         }
