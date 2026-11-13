@@ -542,7 +542,8 @@ fn a_link_line_that_picks_lld_takes_the_lld_hot_text_script() {
         cmd.current_dir(dir.path())
             .env("PERRY_KEEP_SYMBOLS", "1")
             .env_remove("PERRY_HOT_TEXT_ORDER")
-            .env_remove("PERRY_LINK_LLD")
+            // GNU ld by the switch: only the link line picks lld.
+            .env("PERRY_LINK_LLD", "0")
             .env_remove("PERRY_EXTRA_LINK_ARGS")
             .arg("compile")
             .arg(dir.path().join("main.ts"))
