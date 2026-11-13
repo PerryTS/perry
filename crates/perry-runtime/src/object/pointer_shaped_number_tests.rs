@@ -41,6 +41,24 @@ fn a_named_read_answers_as_a_number() {
     assert_eq!(own(obj, "x"), 42.0f64.to_bits());
 }
 
+/// The reads runtime code performs on a receiver VALUE (a method call's
+/// [[Get]], `value.length`): the forged Number's `x` is not the object's.
+#[test]
+fn a_runtime_read_of_the_value_answers_as_a_number() {
+    let (obj, forged) = object_and_forgery();
+    let read = unsafe { super::method_call::spec_get_value(forged, b"x") };
+    assert_eq!(read.to_bits(), TAG_UNDEFINED, "the [[Get]] read the object");
+    let read = super::field_get_set::get_field_by_name_of_value(forged, key("x"));
+    assert_eq!(read.to_bits(), TAG_UNDEFINED, "(number).x is undefined");
+    let tagged = crate::value::js_nanbox_pointer(obj as i64);
+    let read = super::field_get_set::get_field_by_name_of_value(tagged, key("x"));
+    assert_eq!(
+        read.to_bits(),
+        42.0f64.to_bits(),
+        "the object itself reads x"
+    );
+}
+
 #[test]
 fn a_named_store_does_not_write_the_object() {
     let (obj, forged) = object_and_forgery();

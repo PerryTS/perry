@@ -183,6 +183,21 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
     super::js_object_get_field_by_name_f64(obj_unmasked, key)
 }
 
+/// The by-name read of `key` on a receiver VALUE held by runtime code.
+///
+/// [`js_object_get_field_by_name_f64`](super::js_object_get_field_by_name_f64)
+/// takes a receiver HANDLE: a word with clear top 16 bits is a raw object
+/// pointer there. A value with that shape is a Number (a denormal, or +0), so
+/// it is answered as the Number it is; every other value keeps the handle
+/// entry, which decodes its tag.
+pub(crate) fn get_field_by_name_of_value(receiver: f64, key: *const crate::StringHeader) -> f64 {
+    let bits = receiver.to_bits();
+    if bits >> 48 == 0 {
+        return f64::from_bits(super::primitive_number_get(receiver, key).bits());
+    }
+    super::js_object_get_field_by_name_f64(bits as usize as *const ObjectHeader, key)
+}
+
 /// The complete keyed read `obj[key]` (a string or symbol key the site does
 /// not name) after the probe declined it. `dynamic` is a site whose key may
 /// be any value (the by-value operation); otherwise a symbol key reads the

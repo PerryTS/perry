@@ -116,3 +116,18 @@ for (const e of VALUES) {
   console.log(r["constructor"] === Number, r["constructor"].name, r[Symbol.toPrimitive], r[Symbol.iterator]);
   console.log(Object.is(r["valueOf"](), e), r.toExponential(3) === e.toExponential(3));
 }
+
+// --- a getter and a `length` the program installs on Number.prototype: the
+// method call's [[Get]] and `e.length` read the Number, never an address.
+Object.defineProperty(Number.prototype, "den", {
+  get(this: any) { "use strict"; return "den:" + String(this); },
+  configurable: true,
+});
+Object.defineProperty(Number.prototype, "length", { value: 7, configurable: true });
+for (const e of VALUES) {
+  const r: any = e;
+  console.log(r.den, r["den"], r.length, r["length"]);
+  console.log(r.toFixed(2), r["toString"]() === String(e), r.valueOf() === e || e !== e);
+}
+delete (Number.prototype as any).den;
+delete (Number.prototype as any).length;
