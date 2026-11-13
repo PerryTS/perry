@@ -175,24 +175,29 @@ pub(super) extern "C" fn regex_proto_flags_getter(
         }
         let recv_bits = receiver.bits();
         let recv_f64 = f64::from_bits(recv_bits);
-        let mut out = String::with_capacity(8);
-        for (name, ch) in [
-            ("hasIndices", 'd'),
-            ("global", 'g'),
-            ("ignoreCase", 'i'),
-            ("multiline", 'm'),
-            ("dotAll", 's'),
-            ("unicode", 'u'),
-            ("unicodeSets", 'v'),
-            ("sticky", 'y'),
+        // Node's Get order (`sticky` before `unicodeSets`); the text keeps
+        // the canonical `d g i m s u v y` order.
+        let mut present = [false; 8];
+        for (name, slot) in [
+            ("hasIndices", 0),
+            ("global", 1),
+            ("ignoreCase", 2),
+            ("multiline", 3),
+            ("dotAll", 4),
+            ("unicode", 5),
+            ("sticky", 7),
+            ("unicodeSets", 6),
         ] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             let key_val = crate::js_nanbox_string(key as i64);
             let v = crate::value::js_dyn_index_get(recv_f64, key_val);
-            if crate::value::js_is_truthy(v) != 0 {
-                out.push(ch);
-            }
+            present[slot] = crate::value::js_is_truthy(v) != 0;
         }
+        let out: String = "dgimsuvy"
+            .chars()
+            .zip(present)
+            .filter_map(|(ch, on)| on.then_some(ch))
+            .collect();
         let s = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
         f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
     }
