@@ -1547,3 +1547,28 @@ toggle._inp.dispatch("change");
         "toggle true boolean"
     );
 }
+
+#[test]
+fn a_class_declared_in_a_function_keeps_its_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(): any {
+  class Local extends Error {
+    who() { return "local"; }
+  }
+  return new Local("m");
+}
+const b = make();
+console.log(typeof b.who);
+console.log(b.who());
+function plain(n: number): any {
+  class P { v: number; constructor(v: number) { this.v = v; } twice() { return this.v * 2; } }
+  return new P(n);
+}
+console.log(plain(4).twice());
+"#
+        ),
+        "function\nlocal\n8"
+    );
+}
