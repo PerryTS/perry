@@ -244,3 +244,87 @@ console.log(JSON.stringify({ p }, (k: string, v: any) => { c++; return v; }), p.
         "`n` stays a Number"
     );
 }
+
+/// The receivers the facts dump names for the reads of `.name`.
+fn name_receivers(src: &str) -> Vec<String> {
+    dump(src, true)
+        .lines()
+        .filter(|l| l.starts_with("S ") && l.contains(" .name "))
+        .filter_map(|l| l.split(" recv=").nth(1))
+        .map(|r| r.split(' ').next().unwrap_or("").to_string())
+        .collect()
+}
+
+fn hit_runs(src: &str) -> bool {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let cfg = FactsConfig {
+        max_work: Some(50_000_000),
+        ..FactsConfig::default()
+    };
+    let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "hit")
+        .expect("hit")
+        .id;
+    pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
+}
+
+/// InternalizeJSONProperty fixes the key list, then makes an ordinary
+/// [[Get]] of each key with the reviver running in between (CWN's
+/// counterexample): a reviver that deletes a later key makes that [[Get]]
+/// read the chain, so the reviver receives `Object.prototype.toString`.
+/// Without a delete, defineProperty or escape the reviver gets the parse
+/// objects' own values only and nothing of the chain.
+#[test]
+fn a_reviver_that_deletes_a_later_key_gets_what_the_chain_holds() {
+    let deleted = r#"
+let seen = "";
+JSON.parse('{"a":1,"toString":2}', function (this: any, k: string, v: any) {
+  if (k === "a") delete this.toString;
+  if (k === "toString") seen = v.name;
+  return v;
+});
+console.log(seen);
+"#;
+    let recv = name_receivers(deleted);
+    assert!(
+        recv.iter()
+            .any(|r| r.contains("ObjectProtoMethod") || r.contains("builtin-fn")),
+        "the deleted key's [[Get]] reads the chain: {recv:?}"
+    );
+    let kept = r#"
+let seen = "";
+JSON.parse('{"a":1,"toString":2}', function (this: any, k: string, v: any) {
+  if (k === "toString") seen = v.name;
+  return v;
+});
+console.log(seen);
+"#;
+    let recv = name_receivers(kept);
+    assert!(
+        !recv
+            .iter()
+            .any(|r| r.contains("ObjectProtoMethod") || r.contains("builtin-fn")),
+        "no delete: own values only: {recv:?}"
+    );
+}
+
+/// A reviver that defines an accessor on a later key: the walk's [[Get]]
+/// runs the getter.
+#[test]
+fn a_reviver_that_defines_a_later_accessor_runs_its_getter() {
+    let src = r#"
+function hit() { return "got"; }
+let seen: any = null;
+JSON.parse('{"a":1,"b":2}', function (this: any, k: string, v: any) {
+  if (k === "a") Object.defineProperty(this, "b", { get() { return hit(); }, configurable: true, enumerable: true });
+  if (k === "b") seen = v;
+  return v;
+});
+console.log(seen);
+"#;
+    assert!(hit_runs(src), "the getter's body is active");
+}

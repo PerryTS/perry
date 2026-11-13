@@ -5,7 +5,7 @@
 
 use crate::gen::{Fx, Gen};
 use crate::model::{
-    prim, CallId, CallSite, Cons, IdentityRoute, Key, Model, NodeId, Protocol, ThisArg, Tok,
+    prim, CallId, CallSite, Cons, IdentityRoute, Key, Model, NodeId, Protocol, ThisArg, TmplId, Tok,
 };
 use perry_hir::Expr;
 
@@ -240,6 +240,26 @@ impl Model {
         c
     }
 
+    /// `json_reviver_values`: the templates in `fresh` now met a delete,
+    /// defineProperty or `with`, or escaped (`note_inst`); a reviver whose
+    /// parse made one of them is also given the any-key read of the parse
+    /// objects, once.
+    pub(crate) fn json_reviver_flush(&mut self, fresh: &[TmplId]) {
+        if fresh.is_empty() || self.json_reviver_own.is_empty() {
+            return;
+        }
+        let mut i = 0;
+        while i < self.json_reviver_own.len() {
+            if self.json_reviver_own[i].0.iter().any(|t| fresh.contains(t)) {
+                let (_, parsed, own) = self.json_reviver_own.swap_remove(i);
+                let key = Key::any();
+                self.cons(parsed, Cons::Load { key, dst: own });
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     /// IteratorComplete (ECMA-262 7.4.5) on the step results `result`
     /// holds: every consumer of the iteration protocol (a for-of step,
     /// array destructuring, spread, `yield*`, `Array.from` and the other
@@ -322,19 +342,37 @@ impl Gen<'_> {
         Some(out)
     }
 
-    /// The values the reviver is called with, the rule on:
-    /// InternalizeJSONProperty walks own properties (EnumerableOwnProperties)
-    /// of the holders, the parse objects and what the reviver stored into
-    /// them, never their chain. An any-key read of a parse object also reads
-    /// its chain (`Object.prototype`, its methods), and with the result
-    /// stored back (`json_reviver_calls`) those would come round as content
-    /// of the parse objects. `None`: the rule is off.
-    pub(crate) fn json_reviver_values(&mut self, parsed: NodeId) -> Option<NodeId> {
+    /// The values the reviver is called with, the rule on.
+    /// InternalizeJSONProperty fixes each holder's key list first
+    /// (EnumerableOwnProperties) and then makes an ordinary [[Get]] of each
+    /// key, with the reviver running between them with `this` = the holder:
+    /// while nothing can delete or redefine a key of the parse objects
+    /// (`born..`: the templates `parsed` was made with), each [[Get]] reads
+    /// an own data value, so the values are the parse objects' own values
+    /// (`Cons::OwnValues`); an any-key read would also read their chain
+    /// (`Object.prototype`, its methods), and with the result stored back
+    /// (`json_reviver_calls`) those would come round as content. Once a
+    /// delete, defineProperty or `with` reaches one of those templates, or
+    /// it escapes to unknown code (`note_inst`), a [[Get]] may read the
+    /// chain (`delete this.toString` before the walk reaches `toString`)
+    /// or run a getter: the any-key read is added
+    /// (`Model::json_reviver_flush`, monotone). `None`: the rule is off.
+    pub(crate) fn json_reviver_values(&mut self, parsed: NodeId, born: usize) -> Option<NodeId> {
         if !self.m.reach_json_replacer {
             return None;
         }
         let own = self.tmp("json-reviver-values");
         self.m.cons(parsed, Cons::OwnValues { dst: own });
+        let tmpls: Vec<TmplId> = (born..self.m.tmpls.len()).map(|t| t as TmplId).collect();
+        let lost = tmpls
+            .iter()
+            .any(|t| self.m.inst_lose.contains(t) || self.m.inst_escaped.contains(t));
+        if lost {
+            let key = Key::any();
+            self.m.cons(parsed, Cons::Load { key, dst: own });
+        } else {
+            self.m.json_reviver_own.push((tmpls, parsed, own));
+        }
         Some(own)
     }
 
