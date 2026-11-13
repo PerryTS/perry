@@ -407,6 +407,28 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "class_call_method", 3);
             }
+            // A class declared in a function body. Without per-evaluation state
+            // (captured locals, static initializers, computed member names)
+            // every evaluation builds what the shared class builds; a class
+            // with such state is not represented here and stays `undefined`.
+            Expr::ClassExprFresh {
+                template,
+                named_statics,
+                computed_keys,
+                computed_statics,
+                static_init_order,
+                captured_args,
+                definition_steps,
+                ..
+            } if named_statics.is_empty()
+                && computed_keys.is_empty()
+                && computed_statics.is_empty()
+                && static_init_order.is_empty()
+                && captured_args.is_empty()
+                && definition_steps.is_empty() =>
+            {
+                self.emit_expr(func, &Expr::ClassRef(template.clone()));
+            }
             Expr::ClassRef(class_name) => {
                 let class_id = self
                     .emitter
