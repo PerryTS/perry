@@ -719,12 +719,6 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     let this_jsv = JSValue::from_bits(this_bits);
     let arr_ptr = if this_jsv.is_pointer() {
         this_jsv.as_pointer::<crate::array::ArrayHeader>()
-    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
-        // Tolerate raw-i64-encoded array receivers (some module-init
-        // call sites pass array pointers as `this` without
-        // NaN-boxing). The clean_arr_ptr check inside js_array_slice
-        // re-validates.
-        this_bits as *const crate::array::ArrayHeader
     } else {
         // A primitive or nullish `this`: ToObject, then the generic body
         // reads `length` and the indexed elements off the wrapper.

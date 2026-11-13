@@ -222,8 +222,6 @@ pub(crate) fn flattenable_array_ptr(value: f64) -> *const ArrayHeader {
     let top16 = bits >> 48;
     let addr = if top16 == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits >= 0x10000 && (bits & 0x7) == 0 {
-        bits as usize
     } else {
         return ptr::null();
     };
