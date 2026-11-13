@@ -1989,6 +1989,11 @@ pub struct Model {
     /// `note_shadowed`, so every event that revokes the key re-checks them
     /// (`flush_own_stopped`): the lookup then runs again, chain included.
     pub own_stopped: FxHashMap<Tok, Vec<(Tok, Atom, ChainAct)>>,
+    /// Rule C1: by typed array, the node its `length` loads read beside the
+    /// %TypedArray%.prototype getter's Number while `Model::ta_length_getter`
+    /// holds, and whether it has taken the own `length` field
+    /// (`Model::ta_len_open`, once an own `length` may exist).
+    pub ta_len_gates: FxHashMap<Tok, (NodeId, bool)>,
     /// DECISIONS 234: keys a delete or defineProperty through ⊤ may have
     /// removed or redefined (`top_reshaped_any`: every key), in any unit
     /// (`SharedWrite::Hard(Shared::Top, ..)`). ⊤ denotes escaped objects

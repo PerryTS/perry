@@ -386,6 +386,21 @@ impl Model {
         // named non-index key reads (`is_elem_array`); on another holder
         // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
+        // Rule C1 (`ta_length_getter`) under the runtime lock: a BufferHeader
+        // view (a Node Buffer, a plain Uint8Array) takes a [[Set]] of a
+        // non-index name as an own data property (`buffer_set_own_prop`, from
+        // `js_object_set_field_by_name` and the computed-key path, without
+        // the inherited accessor that ECMA-262 10.1.9.2 finds), and a typed
+        // array's template does not keep its kind: a [[Set]] that may name
+        // `length` may make an own `length`.
+        if !elem
+            && match key {
+                Key::Named(a) => self.atoms[a as usize] == "length",
+                Key::Any(_) => true,
+            }
+        {
+            self.ta_len_open(t);
+        }
         let key = if elem { Key::any() } else { key };
         // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
         // [[Set]] under a numeric key (an element-key store is one: a Number
