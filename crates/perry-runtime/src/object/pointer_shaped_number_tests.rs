@@ -68,6 +68,26 @@ fn a_named_store_does_not_write_the_object() {
     assert_eq!(own(obj, "y"), TAG_UNDEFINED, "y was created");
 }
 
+/// A string parameter that is a Number is that Number's string form: the
+/// Number whose bits are a live string's address is not that string.
+#[test]
+fn a_string_argument_that_is_the_number_is_its_string_form() {
+    let s = key("perry");
+    let forged = f64::from_bits(s as u64);
+    assert_eq!(forged.to_bits() >> 48, 0, "an address is a denormal");
+    let got = crate::value::js_get_string_pointer_unified(forged);
+    assert_ne!(got, s as i64);
+    let expected = crate::string::js_number_to_string(forged);
+    assert_eq!(
+        crate::string::js_string_equals(got as *const _, expected as *const _),
+        1
+    );
+    assert_eq!(
+        crate::value::js_get_string_pointer_unified(crate::value::js_nanbox_string(s as i64)),
+        s as i64
+    );
+}
+
 #[test]
 fn an_indexed_read_and_store_do_not_reach_the_array() {
     let arr = crate::array::js_array_alloc(4);
