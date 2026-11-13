@@ -610,8 +610,8 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
     // was no object) calls `return` on it.
     if m.reach_iter_close {
         let ra = Key::Named(m.atom("return"));
-        let _ = sub(m, it, ra);
-        let _ = sub(m, v, ra);
+        let _ = sub(m, it, ra, 3);
+        let _ = sub(m, v, ra, 4);
     }
     out
 }

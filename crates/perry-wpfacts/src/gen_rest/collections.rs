@@ -241,7 +241,8 @@ impl<'a> Gen<'a> {
                 self.m.edge(group, fa);
                 self.m.edge(k, fa);
                 if kind == "Map" {
-                    self.m.map_born(t, false);
+                    self.m.map_seen.insert(t);
+                    self.m.map_open(t);
                 }
                 n
             }
