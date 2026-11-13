@@ -682,3 +682,46 @@ console.log(d.next("hi").value);
         "fin\n{\"value\":1,\"done\":false}{\"value\":2,\"done\":false}{\"done\":true}\nfin\n{\"value\":7,\"done\":true}\nthrew boom\n{\"done\":true}\ngot hi"
     );
 }
+
+#[test]
+fn for_of_and_destructuring_drive_the_iterator_protocol() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* g() { yield 1; try { yield 2; yield 3; } finally { console.log("closed"); } }
+let seen = "";
+for (const x of g()) { seen += x; if (x === 2) break; }
+console.log(seen);
+const m: any = new Map([["a", 1], ["b", 2]]);
+for (const [k, v] of m) console.log(k + "=" + v);
+let chars = "";
+const s: any = "hé";
+for (const ch of s) chars += "[" + ch + "]";
+console.log(chars);
+const src: any = new Set([7, 8, 9]);
+const [first, ...rest] = src;
+console.log(first);
+console.log(rest.join(","));
+function pair(): any { return [4, 5]; }
+const [p, q] = pair();
+console.log(p + q);
+"#
+        ),
+        "closed\n12\na=1\nb=2\n[h][é]\n7\n8,9\n9"
+    );
+}
+
+#[test]
+fn a_generator_keeps_its_locals_across_resumes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function* naturals() { let n = 0; while (true) { yield n++; } }
+const first: number[] = [];
+for (const n of naturals()) { if (n >= 4) break; first.push(n); }
+console.log(first.join(","));
+"#
+        ),
+        "0,1,2,3"
+    );
+}
