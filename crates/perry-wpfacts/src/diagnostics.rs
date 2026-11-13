@@ -593,6 +593,19 @@ impl Model {
         d.escaping.pop();
         if let Some(c) = cand.filter(|_| now) {
             d.esc_first.entry(t).or_insert(c);
+            // Diagnostic (`PERRY_WPF_STOP_AFTER_ESCAPES=N`): the compile's
+            // pass ends after its Nth first escape; the dump holds what
+            // was collected so far (`aborted` true, nothing claimed).
+            static STOP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            let stop = *STOP.get_or_init(|| {
+                std::env::var("PERRY_WPF_STOP_AFTER_ESCAPES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            });
+            if stop != 0 && d.esc_first.len() >= stop && self.act.as_ref().is_some_and(|a| a.fixed) {
+                self.aborted = true;
+            }
         }
     }
     /// Marks `t` escaped (`mark_use`) by operation `why`; the dump names
