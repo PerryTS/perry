@@ -60,9 +60,20 @@ pub(super) unsafe fn overflow(
     hash: u64,
     bits: u64,
 ) -> i32 {
-    let Some(i) = crate::object::overflow::find_hashed(t, key_bits, hash) else {
+    let Some(i) = crate::object::overflow::find_hashed_with(t, key_bits, || hash) else {
         return 0;
     };
+    // A value no barrier looks at (`runtime_write_barrier_slot` returns on
+    // it at once) into an entry that holds its own plain writable value is
+    // one store, made here. A fixed-slot reference and a value the barrier
+    // must see follow.
+    if crate::gc::barrier_scalar_child_skips(bits) {
+        if let Some(slot) = crate::object::overflow::own_writable_value(t, i) {
+            // GC_STORE_AUDIT(POINTER_FREE): a scalar word the barrier skips; the table owns this value word.
+            *slot = bits;
+            return 1;
+        }
+    }
     if let Some(slot) = crate::object::overflow::fixed_slot_of(t, i) {
         let attrs = crate::object::overflow::entry_attrs(t.cast(), i);
         if !crate::object::key_attrs::entry_is_plain_writable_data(attrs) {

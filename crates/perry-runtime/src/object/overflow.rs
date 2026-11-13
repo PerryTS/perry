@@ -28,6 +28,29 @@ pub(crate) struct Table {
 
 const SLOT_REF: u64 = 1 << 8;
 
+const _: () = assert!(
+    std::mem::offset_of!(Table, summary) == crate::codegen_abi::OVERFLOW_TABLE_SUMMARY_OFFSET
+);
+const _: () = assert!(
+    std::mem::offset_of!(super::ObjectMeta, overflow)
+        == crate::codegen_abi::OBJECT_META_OVERFLOW_OFFSET
+);
+const _: () = assert!(
+    std::mem::offset_of!(super::ObjectMeta, flags) == crate::codegen_abi::OBJECT_META_FLAGS_OFFSET
+);
+const _: () = assert!(
+    (super::key_attrs::SUMMARY_BLOCKS_STORE | super::key_attrs::SUMMARY_PRIVATE) as u32
+        == crate::codegen_abi::OVERFLOW_SUMMARY_BLOCKS_PLAIN_STORE
+);
+const _: () = assert!(
+    (super::OBJECT_META_FLAG_IS_PROTOTYPE
+        | super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
+        | super::OBJECT_META_FLAG_NATIVE_ALIAS
+        | super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC)
+        & !crate::codegen_abi::OBJECT_META_STATE_FLAGS
+        == 0
+);
+
 /// Keys a receiver may add one at a time, its list unique to it, before its
 /// overflow takes over (`canonical_keys::take_unique_run`).
 pub(crate) const UNIQUE_RUN_TO_OVERFLOW: u32 = 1024;
@@ -187,7 +210,21 @@ unsafe fn place(t: *mut Table, slot: u32) {
 /// compile-time atom hash, `layout_probe.rs`), so no key header is read.
 #[inline]
 pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option<u32> {
-    if (*t).length < 8 {
+    find_hashed_with(t, key, || hash)
+}
+
+/// [`find_hashed`] in its caller's body, the hash asked for only when the
+/// table has an index (a probe front that answers a table hit itself).
+#[inline(always)]
+pub(crate) unsafe fn find_hashed_with(
+    t: *const Table,
+    key: u64,
+    hash: impl FnOnce() -> u64,
+) -> Option<u32> {
+    // A table too small to carry an index is scanned, newest entry first.
+    // Every other table answers from its index, which every insert places
+    // (`place`: the newest entry of a key, never a private name).
+    if (*t).index_capacity == 0 {
         let keys = keys_ptr(t);
         let mut i = (*t).length;
         while i > 0 {
@@ -199,7 +236,7 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         return None;
     }
     let mask = (*t).index_capacity as usize - 1;
-    let mut p = hash as usize & mask;
+    let mut p = hash() as usize & mask;
     loop {
         let i = *index(t).add(p);
         if i == EMPTY {
@@ -210,6 +247,30 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         }
         p = (p + 1) & mask;
     }
+}
+
+/// The value word of found entry `i` when the entry holds its own data value
+/// (no fixed-slot reference, no accessor pair): the whole read of a key the
+/// table owns.
+///
+/// # Safety
+/// `i` is a successful lookup in this live, unmodified `t`.
+#[inline(always)]
+pub(crate) unsafe fn own_data_value(t: *const Table, i: u32) -> Option<*mut u64> {
+    (*attrs_at(t, i) & (SLOT_REF | super::key_attrs::ENTRY_ACCESSOR_MASK as u64) == 0)
+        .then(|| value_at(t, i))
+}
+
+/// [`own_data_value`] for a store: the entry is also writable
+/// ([`plain_writable_value`] of a found entry).
+///
+/// # Safety
+/// As [`own_data_value`].
+#[inline(always)]
+pub(crate) unsafe fn own_writable_value(t: *const Table, i: u32) -> Option<*mut u64> {
+    let attrs = *attrs_at(t, i);
+    (attrs & SLOT_REF == 0 && super::key_attrs::entry_is_plain_writable_data(attrs as u8))
+        .then(|| value_at(t, i))
 }
 
 pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
@@ -866,7 +927,7 @@ pub(crate) unsafe fn own_has_key(obj: *const ObjectHeader, key_bits: u64) -> Opt
     }
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, t));
     // An exotic read receiver (`process.env`) answers for keys its table does
-    // not hold, as `layout_probe::owned_get` declines it for reads.
+    // not hold, as the read probe's table front declines it for reads.
     let conclusive = (*meta).elements == 0
         && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER == 0
         && super::object_is_regular(obj)
