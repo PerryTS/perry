@@ -494,6 +494,7 @@ pub(super) fn solve_counters(m: &model::Model) -> Vec<String> {
                     o,
                 ),
                 Some((site, Maker::Site(sr))) => (format!("site-fn={} site-run={}", call_fn(site), call_fn(sr)), sr),
+                Some((site, Maker::Val)) => (format!("site-fn={} maker=value-run", call_fn(site)), u32::MAX),
                 None => (format!("site-fn={} maker=-", call_fn(c)), u32::MAX),
             };
             let e = makers.entry((mkey, String::new())).or_default();

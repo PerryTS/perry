@@ -52,7 +52,12 @@ const LAY_MASK: u32 = (1 << 28) - 1;
 pub enum Maker {
     Obj(Tok, bool),
     Site(CallId),
+    /// No maker object: a run keyed by a value (`Inst::vc`), the run's
+    /// own lexical context.
+    Val,
 }
+/// No value chain: the lexical context is the layout's alone (`Inst::vc`).
+pub const NO_VC: u32 = u32::MAX;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -191,6 +196,11 @@ pub struct Inst {
     /// are the nodes from here on: the copy of slot `i` is a run of the
     /// shared node `Summary::orig[i]` (`Inst::copies`).
     pub fresh: NodeId,
+    /// The chain of values that keys this run and the runs its closure
+    /// was made in (`SumState::vctx`; `NO_VC`: none): a run keyed by a
+    /// string value is its own lexical context (ECMA-262 10.2.1.1), so
+    /// what it makes is per (`lay`, `vc`).
+    pub vc: u32,
     /// The function value its called parameter is bound to, or the string
     /// constant (atom) its switch parameter is (`Summary::switch`); `NO_VAL`:
     /// whatever the calls pass.
@@ -256,7 +266,15 @@ pub struct SumState {
     pub this_inst: FxHashSet<(CallId, Tok)>,
     /// A call an instance made -> the instance's lexical context
     /// (`Inst::lay`): what the call births is per (site, context).
-    pub call_lay: FxHashMap<CallId, u32>,
+    pub call_lay: FxHashMap<CallId, (u32, u32)>,
+    /// Value chains (`Inst::vc`): id -> (parent chain, function, value),
+    /// interned (`vctx_of`). A closure's runs extend the chain of the run
+    /// that made it; a callee's run starts its own. The length is bounded
+    /// by the source's closure nesting depth.
+    pub vctx: Vec<(u32, FnIdx, u32)>,
+    pub vctx_of: FxHashMap<(u32, FnIdx, u32), u32>,
+    /// Closure context id -> the value chain it was made under.
+    pub ctx_vc: Vec<u32>,
     /// Plain calls (`Cons::Call` on the callee value) at program sites
     /// outside every summary: kind-0 keys.
     pub site_calls: FxHashSet<CallId>,
@@ -284,7 +302,7 @@ pub struct SumState {
     /// NO_CTX` for one capturing neither. A context is fixed by the
     /// program (closures x (sites + layouts + contexts)), never by an
     /// instance, so closure tokens never multiply through instances.
-    pub ctx_of: FxHashMap<(FnIdx, u32), CallId>,
+    pub ctx_of: FxHashMap<(FnIdx, u32, u32), CallId>,
     /// Maker birth contexts: (birth site, maker key) -> context id,
     /// counting down from `BORN`. An object a method or constructor of
     /// object `o` births is `o`'s (`made_ctx`), so a container's backing
@@ -296,7 +314,9 @@ pub struct SumState {
     /// born there.
     /// A per-site run's births are per (birth site, site) the same way
     /// (`Maker::Site`): each run of a closure maker has its own `new Map()`.
-    pub made_of: FxHashMap<(CallId, Maker), CallId>,
+    /// The value chain (`Inst::vc`) is the third component: a run keyed
+    /// by a value births per (birth site, maker, chain).
+    pub made_of: FxHashMap<(CallId, Maker, u32), CallId>,
     /// Maker context `BORN - 1 - i` -> (its birth site, its maker).
     pub made: Vec<(CallId, Maker)>,
 }
@@ -456,7 +476,7 @@ impl Model {
             return BORN;
         };
         match self.sum.call_lay.get(&call).copied() {
-            Some(l) => self.made_ctx(site, l),
+            Some((l, vc)) => self.made_ctx(site, l, vc),
             None => site,
         }
     }
@@ -480,11 +500,16 @@ impl Model {
     /// folds onto its ancestor).
     /// A per-site run (`LAY_SITE`) births per (birth site, site): sites are
     /// the program's call sites, so there are at most births x sites.
-    pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32) -> CallId {
+    /// A run keyed by a value (`vc`) births per (birth site, maker, chain):
+    /// its own context, also where no object makes it (`Maker::Val`).
+    pub(crate) fn made_ctx(&mut self, site: CallId, lay: u32, vc: u32) -> CallId {
         if lay & !LAY_MASK == LAY_SITE {
-            return self.made_at(site, Maker::Site(lay & LAY_MASK));
+            return self.made_at(site, Maker::Site(lay & LAY_MASK), vc);
         }
         let Some((o, by_method)) = self.lay_object(lay) else {
+            if vc != NO_VC {
+                return self.made_at(site, Maker::Val, vc);
+            }
             return site;
         };
         let mut x = o;
@@ -495,23 +520,24 @@ impl Model {
                 Some((s, _)) if s == site => return c,
                 Some((_, Maker::Obj(m, _))) => x = m,
                 // A per-site run made `x`: no maker object behind it.
-                Some((_, Maker::Site(_))) => break,
+                Some((_, Maker::Site(_) | Maker::Val)) => break,
                 None if c == site => return c,
                 None => break,
             }
         }
         let k = self.maker_key(o, by_method);
-        self.made_at(site, Maker::Obj(k, by_method))
+        self.made_at(site, Maker::Obj(k, by_method), vc)
     }
 
-    /// The maker context of (birth site, maker), made on first use.
-    fn made_at(&mut self, site: CallId, maker: Maker) -> CallId {
-        let key = (site, maker);
+    /// The maker context of (birth site, maker, value chain), made on
+    /// first use.
+    fn made_at(&mut self, site: CallId, maker: Maker, vc: u32) -> CallId {
+        let key = (site, maker, vc);
         if let Some(&c) = self.sum.made_of.get(&key) {
             return c;
         }
         let c = BORN - 1 - self.sum.made.len() as CallId;
-        self.sum.made.push(key);
+        self.sum.made.push((site, maker));
         self.sum.made_of.insert(key, c);
         c
     }
@@ -748,6 +774,18 @@ impl Model {
             _ if ctx == NO_CTX => LAY_NONE,
             _ => self.sum.ctx_lay[ctx as usize],
         };
+        // A run keyed by a string value (rules M1 and M3: `Summary::switch`)
+        // is its own lexical context: the chain of the closure context it
+        // runs in, plus its value. A run of a called parameter's function
+        // value keeps the context it runs in.
+        let pvc = match ctx {
+            NO_CTX => NO_VC,
+            c => self.sum.ctx_vc[c as usize],
+        };
+        let vc = match val {
+            v if v != NO_VAL && s.switch.is_some() && s.called.is_none() => self.vc_of(pvc, f, v),
+            _ => pvc,
+        };
         self.sum.insts.push(Inst {
             f,
             tok: key.2,
@@ -761,11 +799,24 @@ impl Model {
             } else {
                 NO_NODE
             },
+            vc,
             val,
         });
         self.sum.inst_key.insert(vkey, inst);
         self.sum.pending.push((inst, base));
         inst
+    }
+
+    /// The value chain `parent` extended by the run of `f` keyed `val`.
+    fn vc_of(&mut self, parent: u32, f: FnIdx, val: u32) -> u32 {
+        let k = (parent, f, val);
+        if let Some(&v) = self.sum.vctx_of.get(&k) {
+            return v;
+        }
+        let v = self.sum.vctx.len() as u32;
+        self.sum.vctx.push(k);
+        self.sum.vctx_of.insert(k, v);
+        v
     }
 
     /// A call an instance made at a call its summary expanded `f` into:
@@ -1106,6 +1157,7 @@ impl Model {
         let f = self.sum.insts[inst as usize].f;
         let s = self.sum.of[&f].clone();
         let lay = self.sum.insts[inst as usize].lay;
+        let vc = self.sum.insts[inst as usize].vc;
         // Rule M1: a run of one string constant runs the clauses that
         // constant reaches: the bit of the clause it enters (the first case
         // equal to it, else the default; bit 63: none, no clause runs). The
@@ -1140,8 +1192,8 @@ impl Model {
             if self.protocol_calls.contains(t) {
                 self.protocol_calls.insert(id);
             }
-            if lay != LAY_NONE {
-                self.sum.call_lay.insert(id, lay);
+            if lay != LAY_NONE || vc != NO_VC {
+                self.sum.call_lay.insert(id, (lay, vc));
             }
             if let Some(&a) = self.call_lit.get(t) {
                 self.call_lit.insert(id, a);
@@ -1199,13 +1251,13 @@ impl Model {
                 CAP_OUTER if ctx != NO_CTX => (CTX_KEY | ctx, self.sum.ctx_lay[ctx as usize]),
                 _ => (CTX_KEY | NO_CTX, LAY_NONE),
             };
-            let t = self.closure_tok(*g, key, clay, &nodes);
+            let t = self.closure_tok(*g, key, clay, vc, &nodes);
             self.add_tok(base[*slot as usize], t);
         }
         // Literals born here: one token per (literal, maker object), or one
         // per literal in an instance no object is the context of.
         for &(slot, tm) in &s.births {
-            let ctx = self.made_ctx(BORN, lay);
+            let ctx = self.made_ctx(BORN, lay, vc);
             let t = self.site_tok(tm, ctx);
             self.add_tok(base[slot as usize], t);
         }
@@ -1239,22 +1291,24 @@ impl Model {
     }
 
     /// The token of closure `g` made by an instance whose captured cells
-    /// are keyed `key` (`SumState::ctx_of`), under lexical context `lay`,
+    /// are keyed `key` (`SumState::ctx_of`), under lexical context `lay`
+    /// and value chain `vc` (a run keyed by a value makes its own),
     /// whose nodes for `g`'s outer terms are `nodes`. The context's own
     /// nodes are those terms for every instance of that key, both ways:
     /// what the closure writes into a captured local reaches the instance
     /// that made it.
-    pub(crate) fn closure_tok(&mut self, g: FnIdx, key: u32, lay: u32, nodes: &[NodeId]) -> Tok {
-        let ctx = match self.sum.ctx_of.get(&(g, key)) {
+    pub(crate) fn closure_tok(&mut self, g: FnIdx, key: u32, lay: u32, vc: u32, nodes: &[NodeId]) -> Tok {
+        let ctx = match self.sum.ctx_of.get(&(g, key, vc)) {
             Some(&c) => c,
             None => {
                 let c = self.sum.ctx_nodes.len() as CallId;
                 let cn: Vec<NodeId> = (0..nodes.len())
                     .map(|j| self.node_named("ctx", || format!("ctx{c}.{j}")))
                     .collect();
-                self.sum.ctx_of.insert((g, key), c);
+                self.sum.ctx_of.insert((g, key, vc), c);
                 self.sum.ctx_nodes.push(cn);
                 self.sum.ctx_lay.push(lay);
+                self.sum.ctx_vc.push(vc);
                 c
             }
         };
