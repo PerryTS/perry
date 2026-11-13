@@ -32,9 +32,9 @@ crates/perry-codegen/src/expr/mod.rs	2879
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8456
 # Representation-aware map core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/map.rs	3041
+crates/perry-runtime/src/map.rs	3025
 # Representation-aware set core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/set.rs	2347
+crates/perry-runtime/src/set.rs	2339
 # Representation feedback core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/typed_feedback.rs	2444
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).

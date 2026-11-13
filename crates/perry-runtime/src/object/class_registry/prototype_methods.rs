@@ -179,10 +179,8 @@ pub unsafe extern "C" fn js_get_function_prototype_method(
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(js_function_prototype_value_for_read(func_value));
     let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
-    super::super::field_get_set::js_object_get_field_by_name_f64(
-        proto.get_nanbox_f64().to_bits() as *const ObjectHeader,
-        key,
-    )
+    // `F.prototype` is any value the program stored there.
+    super::super::field_get_set::get_field_by_name_of_value(proto.get_nanbox_f64(), key)
 }
 
 #[no_mangle]

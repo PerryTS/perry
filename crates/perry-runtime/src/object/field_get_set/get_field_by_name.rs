@@ -1706,7 +1706,9 @@ fn get_field_by_name_past_data_probe(
                             raw,
                             super::super::exotic_expando::ExoticKind::Promise,
                             prop,
-                            f64::from_bits(obj as u64),
+                            // The getter's `this` is a VALUE: the promise,
+                            // POINTER_TAG'd (never the raw handle word).
+                            f64::from_bits(JSValue::pointer(raw as *const u8).bits()),
                         ) {
                             return JSValue::from_bits(v.to_bits());
                         }

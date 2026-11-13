@@ -43,6 +43,11 @@ pub extern "C" fn js_put_value_set(
 ) -> f64 {
     #[cfg(perry_contract_checks)]
     crate::contracts::put_value(target, key, value, receiver);
+    // A Number target with clear top 16 bits (a denormal, or +0) is not a
+    // raw object pointer: see `number_receiver_for_dispatch`.
+    let same_receiver = target.to_bits() == receiver.to_bits();
+    let target = crate::value::addr_class::number_receiver_for_dispatch(target);
+    let receiver = if same_receiver { target } else { receiver };
     // Short strings and heap strings name the same property. Reuse the
     // existing allocation-free atom resolver before asking the shape, as
     // the transition-only entry did, so a warm short key keeps that answer.
