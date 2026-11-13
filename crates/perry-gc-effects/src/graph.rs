@@ -100,9 +100,12 @@ pub struct Graph {
     pub dem: HashMap<String, String>,
     pub edge_count: usize,
     /// Per node: some function's code takes its address without calling it
-    /// (a callback handed on, a task scheduled, a slot filled). Addresses
-    /// held only in data (a vtable, a static table) are not seen.
+    /// (a callback handed on, a task scheduled, a slot filled). An address
+    /// that only data holds is `in_data`.
     pub taken: Vec<bool>,
+    /// Per node: a data section holds its address (a vtable, a static
+    /// table, a function-info record, an initializer array).
+    pub in_data: Vec<bool>,
 }
 fn plain_llvm(s: &str) -> &str {
     rx!(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")
@@ -114,6 +117,7 @@ impl Graph {
     pub(crate) fn new(
         mut nodes: Vec<Node>,
         globals: HashSet<(std::sync::Arc<str>, String)>,
+        held: Vec<(std::sync::Arc<str>, String)>,
     ) -> Result<Self> {
         let mut local: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
         let mut sections: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -175,6 +179,17 @@ impl Graph {
                 }
             }
         }
+        let mut in_data = vec![false; nodes.len()];
+        for (obj, t) in &held {
+            if let Some(ts) = local
+                .get(&(obj.as_ref(), t.as_str()))
+                .or_else(|| by_global.get(t))
+            {
+                for &t in ts {
+                    in_data[t] = true;
+                }
+            }
+        }
         drop(local);
         drop(sections);
         for (n, ex) in nodes.iter_mut().zip(externs) {
@@ -206,6 +221,7 @@ impl Graph {
             dem,
             edge_count,
             taken,
+            in_data,
         })
     }
     pub fn label(&self, i: usize) -> String {
@@ -931,7 +947,7 @@ mod tests {
         let rules: Vec<_> = rules.iter().collect();
         let mut node = Node::new("fixture.o".into(), ".text".into(), 0, Format::Elf);
         node.names = vec!["audited_initializer".into()];
-        let mut graph = Graph::new(vec![node], HashSet::new()).unwrap();
+        let mut graph = Graph::new(vec![node], HashSet::new(), Vec::new()).unwrap();
         let admitted = |g: &Graph| match_indirect(&rules, g, 0, &g.spellings(0)).is_some();
         assert!(admitted(&graph));
         graph.nodes[0].names.push("unrelated_initializer".into());

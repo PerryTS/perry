@@ -53,7 +53,6 @@
 //! Values handed to callbacks and events, or stored in result fields, need
 //! no rule of their own: whatever the native does with the cell, its body
 //! allocated it.
-use crate::effects::Native;
 use crate::graph::Graph;
 use crate::rules::Rule;
 use anyhow::{bail, Context, Result};
@@ -87,6 +86,154 @@ pub fn declared_births(manifest: &str) -> Result<HashMap<String, Vec<String>>> {
             })
             .unwrap_or_default();
         out.insert(name.to_owned(), births);
+    }
+    Ok(out)
+}
+
+/// The router every call of a bound-method member enters
+/// (`closure::BOUND_METHOD_FUNC_PTR` is a sentinel, no code): it normalizes
+/// the namespace's module name and calls the module's dispatch function
+/// through the registry `js_nm_install_<module>` fills.
+pub const ROUTER: &str =
+    "perry_runtime::object::native_module_dispatch::dispatch_native_module_method";
+
+/// One callable realm declaration and the functions a call of it runs.
+/// A symbol that starts with `::` is the end of a path.
+pub struct Body {
+    pub name: String,
+    pub symbols: Vec<String>,
+    /// How the symbols were found (a census column).
+    pub how: &'static str,
+}
+
+/// The export bodies the runtime's build script emits
+/// (`object/native_module/static_exports_build.rs`), by the (module, key)
+/// they dispatch: `js_native_export_<hex module>_<hex key>::body` calls
+/// `nm_dispatch_<bucket>(ctx, module, key)` with the two names constant, so
+/// its code holds what the module's dispatch function can run for that key
+/// and no other arm's.
+fn export_bodies() -> HashMap<(&'static str, &'static str), String> {
+    use perry_dispatch::native_callable_exports::{
+        canonical_native_callable_module, canonical_native_callable_property, export_bucket,
+        export_value_symbol, CALLABLE_EXPORT_TABLE,
+    };
+    let mut out = HashMap::new();
+    for &(module, properties) in CALLABLE_EXPORT_TABLE {
+        if export_bucket(module).is_none() {
+            continue;
+        }
+        for &property in properties {
+            let Some(symbol) = export_value_symbol(module, property) else {
+                continue;
+            };
+            let key = canonical_native_callable_property(module, property);
+            let module = match canonical_native_callable_module(module, key) {
+                "util/types" => "util.types",
+                m => m,
+            };
+            out.entry((module, key)).or_insert(symbol);
+        }
+    }
+    out
+}
+
+/// The module and key an export body dispatches, from its symbol.
+fn export_of(spelling: &str) -> Option<(String, String)> {
+    let rest = &spelling[spelling.find("js_native_export_")? + "js_native_export_".len()..];
+    let rest = rest.split("::").next()?;
+    let (module, key) = rest.split_once('_')?;
+    let text = |hex: &str| {
+        let bytes: Option<Vec<u8>> = (0..hex.len())
+            .step_by(2)
+            .map(|i| hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .collect();
+        bytes.and_then(|b| String::from_utf8(b).ok())
+    };
+    Some((text(module)?, text(key)?))
+}
+
+/// Every callable realm declaration with the functions its call runs.
+///
+/// A declaration with a body of its own runs that body. A bound-method
+/// member (a function of a native module namespace, of `process`, `console`,
+/// `Buffer`) shares the sentinel body: its call enters [`ROUTER`] with the
+/// namespace it captured and its key, and runs
+/// - the function its effects-only declaration names (`effects_body`), and
+/// - the export body of (module, key) when the build script emits one;
+/// - with neither, the whole dispatch function of the module's bucket
+///   (every arm: an upper bound);
+/// - for a module without a bucket, the router alone (it answers from the
+///   submodule registry through a function-value call, or throws).
+///
+/// The module is the `native_namespace` of the member's first capture, the
+/// name the namespace object holds in its field 0 at run time.
+pub fn bodies(manifest: &str) -> Result<Vec<Body>> {
+    let v: serde_json::Value = serde_json::from_str(manifest).context("realm manifest JSON")?;
+    let decls = v["declarations"]
+        .as_array()
+        .context("manifest has no declarations")?;
+    let namespaces: HashMap<&str, &str> = decls
+        .iter()
+        .filter_map(|d| Some((d["name"].as_str()?, d["native_namespace"].as_str()?)))
+        .collect();
+    let exports = export_bodies();
+    let mut out = Vec::new();
+    for d in decls {
+        let Some(body) = d.get("body").and_then(|b| b.as_str()) else {
+            continue;
+        };
+        let name = d["name"]
+            .as_str()
+            .context("declaration without name")?
+            .to_owned();
+        let source = |v: &serde_json::Value| {
+            v.as_str()
+                .and_then(|s| s.strip_prefix("source:"))
+                .map(str::to_owned)
+        };
+        if !body.ends_with("::BOUND_METHOD_FUNC_PTR") {
+            let Some(symbol) = source(&d["function_info"]["source_symbol"]) else {
+                continue;
+            };
+            out.push(Body {
+                name,
+                symbols: vec![symbol],
+                how: "own body",
+            });
+            continue;
+        }
+        let capture = |i: usize, kind: &str| {
+            d["captures"]
+                .get(i)
+                .filter(|c| c["kind"] == kind)
+                .and_then(|c| c["value"].as_str())
+        };
+        let module = capture(0, "reference").and_then(|r| namespaces.get(r).copied());
+        let (Some(module), Some(key)) = (module, capture(1, "bytes")) else {
+            out.push(Body {
+                name,
+                symbols: Vec::new(),
+                how: "a bound method of no module namespace",
+            });
+            continue;
+        };
+        let mut symbols = vec![ROUTER.to_owned()];
+        let mut how = "router alone (no dispatch bucket)";
+        if let Some(symbol) = d.get("effects_body").and_then(source) {
+            symbols.push(symbol);
+            how = "declared body";
+        }
+        if let Some(symbol) = exports.get(&(module, key)) {
+            symbols.push(format!("::static_exports::{symbol}::body"));
+            how = "export body";
+        }
+        if symbols.len() == 1 {
+            if let Some(bucket) = perry_dispatch::native_callable_exports::export_bucket(module) {
+                symbols.push(format!("::nm_dispatch_{bucket}"));
+                how = "module dispatch";
+            }
+        }
+        out.push(Body { name, symbols, how });
     }
     Ok(out)
 }
@@ -150,7 +297,7 @@ pub fn check(
     g: &Graph,
     indirect_pred: &[Vec<usize>],
     rules: &[Rule],
-    natives: &[Native],
+    natives: &[Body],
     births: &HashMap<String, Vec<String>>,
     undeclared: &[String],
 ) -> Result<Report> {
@@ -226,8 +373,35 @@ pub fn check(
             by_name.entry(s).or_default().push(i);
         }
     }
-    let native_symbols: std::collections::HashSet<&str> =
-        natives.iter().map(|n| n.symbol.as_str()).collect();
+    // A symbol given as the end of a path (`::nm_dispatch_fs`).
+    let tails: Vec<(&str, usize)> = (0..nn)
+        .flat_map(|i| g.spellings(i).into_iter().map(move |s| (s, i)))
+        .filter(|(s, _)| s.contains("nm_dispatch_") || s.contains("js_native_export_"))
+        .collect();
+    let find = |symbol: &str| -> Vec<usize> {
+        if symbol.starts_with("::") {
+            tails
+                .iter()
+                .filter(|(s, _)| s.ends_with(symbol))
+                .map(|&(_, i)| i)
+                .collect()
+        } else {
+            by_name.get(symbol).cloned().unwrap_or_default()
+        }
+    };
+    // Per native: the nodes of its symbols; `None`: one is in no archive.
+    let found: Vec<Option<Vec<usize>>> = natives
+        .iter()
+        .map(|n| {
+            let per: Vec<Vec<usize>> = n.symbols.iter().map(|s| find(s)).collect();
+            (!per.is_empty() && per.iter().all(|p| !p.is_empty()))
+                .then(|| per.into_iter().flatten().collect())
+        })
+        .collect();
+    let mut native_node = vec![false; nn];
+    for &i in found.iter().flatten().flatten() {
+        native_node[i] = true;
+    }
     let mut roots = Vec::new();
     let mut origins = (0usize, 0usize);
     for i in 0..nn {
@@ -240,14 +414,27 @@ pub fn check(
             .any(|&c| c != i && next[c].is_some());
         // A delegated callee (a hook's operation) is reached through its
         // wrapper, which the walk already follows.
-        let by_pointer = g.taken[i] && indirect_pred[i].is_empty();
+        let by_pointer = (g.taken[i] || g.in_data[i]) && indirect_pred[i].is_empty();
         if called && !by_pointer {
             continue;
         }
         let spellings = g.spellings(i);
+        // An export body the realm declares no member for: the value of
+        // export `key` of `module`, which a program gets only by naming the
+        // module. Covered when the module is of the family (or is one the
+        // table does not classify: every family is live then).
+        let export_of_family = spellings.iter().any(|s| {
+            s.ends_with("::body")
+                && export_of(s).is_some_and(|(module, _)| {
+                    families::module_families(&module)
+                        .is_none_or(|f| families::close_requires(f) & families::family_bit(FAMILY) != 0)
+                })
+        });
         let kind =
-            if spellings.iter().any(|s| native_symbols.contains(s)) {
+            if native_node[i] {
                 "native"
+            } else if export_of_family {
+                "export body of a family module"
             } else if !by_pointer
                 && spellings
                     .iter()
@@ -264,7 +451,11 @@ pub fn check(
                 "{}: FAIL: it can reach a byte-cell birth and is reached only through a pointer \
                  ({}), and no origin rule says what schedules it\n      {}",
                 g.label(i),
-                if called { "its address is taken" } else { "no caller" },
+                match (called, g.taken[i]) {
+                    (false, _) => "no caller",
+                    (true, true) => "its address is taken",
+                    (true, false) => "data holds its address",
+                },
                 path(g, &next, i)
             ));
                 "by pointer, NO ORIGIN"
@@ -275,11 +466,11 @@ pub fn check(
     report.roots = roots.join("\n") + "\n";
     report
         .census
-        .push_str("name\tsymbol\tfound\treaches\tverdict\n");
+        .push_str("name\tsymbols\thow\tfound\treaches\tverdict\n");
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut unchecked = 0usize;
-    for n in natives {
-        let nodes = by_name.get(n.symbol.as_str());
+    for (n, nodes) in natives.iter().zip(&found) {
+        let nodes = nodes.as_ref();
         let reach = nodes.and_then(|ns| ns.iter().copied().find(|&i| next[i].is_some()));
         let known = Some(&n.name)
             .filter(|name| !undeclared.contains(name))
@@ -307,9 +498,10 @@ pub fn check(
         };
         *counts.entry(verdict.clone()).or_default() += 1;
         report.census.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
             n.name,
-            n.symbol,
+            n.symbols.join(" "),
+            n.how,
             nodes.is_some() as u8,
             reach.is_some() as u8,
             verdict

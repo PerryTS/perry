@@ -38,6 +38,7 @@ analyzer = [
     "dep:serde",
     "dep:serde_json",
     "dep:perry-runtime-manifest",
+    "dep:perry-dispatch",
 ]
 
 [dependencies]
@@ -54,6 +55,9 @@ walkdir = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 perry-runtime-manifest = { workspace = true, optional = true }
+# The export table and the module buckets (the `births` check resolves a
+# bound-method member to its export body or its module's dispatch function).
+perry-dispatch = { workspace = true, optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 llvm-sys = { version = "221", optional = true }

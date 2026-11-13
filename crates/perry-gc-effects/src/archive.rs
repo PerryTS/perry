@@ -307,6 +307,7 @@ fn decode_sections<'data>(
 pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
     let mut nodes = Vec::new();
     let mut globals = HashSet::new();
+    let mut held = Vec::new();
     for archive in archives {
         let bytes =
             std::fs::read(archive).with_context(|| format!("read {}", archive.display()))?;
@@ -371,6 +372,19 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                         .push(sym.to_owned());
                 }
                 for section in file.sections() {
+                    if data_holds_addresses(section.kind(), section.name().unwrap_or("")) {
+                        // A function address a data section holds (a vtable,
+                        // a static table, a function-info record).
+                        for (_, reloc) in section.relocations() {
+                            if let RelocationTarget::Symbol(i) = reloc.target() {
+                                let s = file.symbol_by_index(i)?;
+                                if s.kind() != object::SymbolKind::Section {
+                                    held.push((name.clone(), fmt.norm(s.name()?)));
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     if section.kind() != SectionKind::Text {
                         continue;
                     }
@@ -444,7 +458,25 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
         })?;
         nodes.extend(decoded);
     }
-    Graph::new(nodes, globals)
+    Graph::new(nodes, globals, held)
+}
+
+/// Whether a relocation in this section is an address the program's data
+/// holds. Unwind tables, exception tables and debug sections name every
+/// function without holding a callable address.
+fn data_holds_addresses(kind: SectionKind, name: &str) -> bool {
+    let data = match kind {
+        SectionKind::Data
+        | SectionKind::ReadOnlyData
+        | SectionKind::ReadOnlyDataWithRel
+        | SectionKind::Tls => true,
+        // `.init_array` and its kin.
+        SectionKind::Elf(_) => name.contains("_array"),
+        _ => false,
+    };
+    data && !["eh_frame", "except_tab", "unwind", "debug", "llvm", "note"]
+        .iter()
+        .any(|part| name.contains(part))
 }
 
 #[cfg(test)]
