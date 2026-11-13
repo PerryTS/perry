@@ -1583,7 +1583,7 @@ pub struct Model {
     pub empty_operands: bool,
     /// Each binary numeric rule: (operand, other operand, result).
     pub range_rules: Vec<(NodeId, NodeId, NodeId)>,
-    /// The rule results the fallback made ⊤.
+    /// The empty operands the fallback filled.
     pub range_gaps: crate::pts::FxHashSet<NodeId>,
     /// The value node of each Map `get` or `set` ran on (`Model::map_vals`).
     pub map_vals: FxHashMap<Tok, NodeId>,

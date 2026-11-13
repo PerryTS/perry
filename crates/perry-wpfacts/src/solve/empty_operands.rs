@@ -1,16 +1,18 @@
 //! An operand that holds nothing is a model gap, not "no value".
 //!
-//! A numeric rule (`Cons::Range`) evaluates its operands' intervals; an
-//! operand with no value has the empty interval, and so has the result
-//! (`range::eval`: an operation that never runs). When the other operand
-//! holds values, the result node still gets the Numbers its `Arith` /
-//! `Plus` rule gives, with no interval from this rule: the binding it
-//! flows into keeps only its other intervals (`let sum = 0; sum +=
-//! v.readInt32BE(i)` stays `[0,0]` while the read holds nothing). The
-//! model has no read that holds nothing while the operation is reached
-//! except a gap (a builtin result it does not describe), so once the
-//! worklist is empty such a rule's result is ⊤ (`settle_empty_operands`).
-//! Sound: ⊤ covers every Number.
+//! A numeric rule (`Cons::Range`, with its `Arith` / `Plus` kinds)
+//! evaluates its operands; an operand with no value gives the result no
+//! interval (`range::eval`: an operation that never runs), and for `+` no
+//! kinds either (its Number part waits on a `Guard` of the other operand).
+//! The binding the result flows into keeps only its other values: `let sum
+//! = 0; sum += v.readInt32BE(i)` stays `[0,0]` while the read holds
+//! nothing. The model has no read that holds nothing while its operation
+//! is reached except a gap (a builtin result it does not describe), so once
+//! the worklist is empty an empty operand of a rule whose other operand
+//! holds values takes every primitive kind with the interval ⊤
+//! (`settle_empty_operands`): the rule's result is then every value such an
+//! operation can make, and no interval is claimed. No object token: nothing
+//! runs or escapes that did not before.
 //!
 //! `PERRY_FACTS_EMPTY_OPERANDS=0` (`off`, `false`; `FactsConfig::
 //! no_empty_operands`) turns the fallback off.
@@ -30,9 +32,9 @@ impl Model {
         }
     }
 
-    /// Once the worklist is empty: the result of each binary numeric rule
-    /// one of whose operands holds values and the other none, and which
-    /// holds Numbers, is ⊤. True when one grew.
+    /// Once the worklist is empty: each operand of a binary numeric rule
+    /// that holds nothing while the other operand holds values takes every
+    /// primitive kind, interval ⊤. True when one did.
     pub(crate) fn settle_empty_operands(&mut self) -> bool {
         if self.range_rules.is_empty() {
             return false;
@@ -43,19 +45,13 @@ impl Model {
         };
         let mut more = false;
         for i in 0..self.range_rules.len() {
-            let (n, other, dst) = self.range_rules[i];
-            if self.range_gaps.contains(&dst) || empty(self, n) || !empty(self, other) {
+            let (n, other, _) = self.range_rules[i];
+            if empty(self, n) || !empty(self, other) || !self.range_gaps.insert(other) {
                 continue;
             }
-            if self.nodes[dst as usize].prim & prim::NUM == 0 {
-                continue;
-            }
-            self.range_gaps.insert(dst);
-            let d = &mut self.nodes[dst as usize];
-            if crate::solve::grow_range(d, Iv::TOP) && !d.in_wl {
-                d.in_wl = true;
-                self.wl.push_back(dst);
-            }
+            let saved = self.cur_range.take();
+            self.add_prim(other, prim::ALL);
+            self.cur_range = saved;
             more = true;
         }
         more
