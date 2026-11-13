@@ -355,7 +355,8 @@ impl Model {
                 let p = self.funcs[f].params[i];
                 self.edge(caps[i].unwrap_or(a), p);
             } else if let Some(rest) = rest {
-                let fa = self.field_any_node_of_node(rest);
+                let exact = self.calls[c].spread.is_empty();
+                let fa = self.rest_elem_node(rest, exact.then_some((i - nparams) as u32));
                 self.edge(a, fa);
             }
             if let Some(args_all) = args_all {
@@ -511,6 +512,19 @@ impl Model {
     }
 
     pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
+        self.rest_elem_node(arr_node, None)
+    }
+
+    /// The store relay of the rest array `arr_node` holds at index `at`
+    /// (ECMA-262 10.2.11, 8.6.3 BindingRestElement: CreateArrayFromList of
+    /// the remaining arguments in order): its index slot `at`
+    /// (`Model::index_slot`), when the call has no spread argument before
+    /// it; `None`: any element.
+    pub(crate) fn rest_elem_node(&mut self, arr_node: NodeId, at: Option<u32>) -> NodeId {
+        let ek = match at {
+            Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
+            None => self.elem_key(),
+        };
         // Elements of whatever array the node holds: a store relay. A rest
         // array is made from the arguments at indices 0..n: the store is an
         // element store (`elem_key`), which no named non-index key of the
@@ -518,7 +532,6 @@ impl Model {
         // `indexOf` or `@@iterator`.
         let relay = self.node_named("elems-into", || format!("elems-into({arr_node})"));
         let site = self.anon_store_site();
-        let ek = self.elem_key();
         self.cons(
             arr_node,
             Cons::Store {

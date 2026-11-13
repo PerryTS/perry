@@ -145,6 +145,13 @@ impl Model {
         if t != TOP {
             self.index_slots_merge(t);
         }
+        self.arr_written_at(t);
+    }
+
+    /// `arr_written` by a store that keeps every element's index: one
+    /// under a fixed index, or a call binding its rest array's argument
+    /// at a known position. Its index slots stay exact.
+    pub(crate) fn arr_written_at(&mut self, t: Tok) {
         if t == TOP || !self.const_arrays || self.arr_const_sabotage {
             return;
         }

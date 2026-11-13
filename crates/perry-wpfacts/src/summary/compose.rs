@@ -136,10 +136,20 @@ pub(super) fn compose(
                         .collect();
                     // `arguments` takes every argument, a rest array those
                     // after the parameters.
-                    let first = if m.funcs[g as usize].has_arguments { 0 } else { sg.params.len() };
+                    let has_arguments = m.funcs[g as usize].has_arguments;
+                    let first = if has_arguments { 0 } else { sg.params.len() };
                     let rest_store =
                         (sg.rest != NO_NODE).then(|| (m.elem_key(), m.anon_store_site(), first));
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store);
+                    // With no spread argument, argument `i` is the rest
+                    // array's index `i - n` (`Model::rest_elem_node`).
+                    let call = &s.calls[*ci].1;
+                    let slot_keys: Vec<Key> = match call.spread.is_empty() && !has_arguments {
+                        true => (first..call.args.len().max(first))
+                            .map(|i| Key::Named(m.atom(&format!("[[Index{}]]", i - first))))
+                            .collect(),
+                        false => Vec::new(),
+                    };
+                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps, rest_store, &slot_keys);
                     any = true;
                     n += 1;
                 }
@@ -167,6 +177,7 @@ pub(super) fn expand(
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
     rest_store: Option<(Key, SiteId, usize)>,
+    slot_keys: &[Key],
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
@@ -251,6 +262,7 @@ pub(super) fn expand(
     if let Some((r, key, site, first)) = rest {
         for i in first..call.args.len() {
             if call.args[i] != NO_NODE {
+                let key = slot_keys.get(i - first).copied().unwrap_or(key);
                 s.cons.push((r, Cons::Store { key, src: call.args[i], site }));
             }
         }
