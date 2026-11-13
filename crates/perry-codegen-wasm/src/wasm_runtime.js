@@ -1657,6 +1657,8 @@ const __memDispatch = {
     return 1;
   },
   js_strict_eq: (a, b) => a === b ? 1 : 0,
+  // `==` / `!=`: the emitter calls this for CompareOp::LooseEq / LooseNe.
+  js_loose_eq: (a, b) => a == b ? 1 : 0,
 
   // Math
   math_floor: (x) => Math.floor(x),
@@ -2037,6 +2039,16 @@ const __memDispatch = {
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));
         }
         cls = classParentTable[cls] || null;
+      }
+      // A compiled method read as a value (`o.m`, and the `o.m?.()` guard, which is
+      // `o.m == null`): it lives in the WASM table, not on the object.
+      if (!Object.prototype.hasOwnProperty.call(obj, fname)) {
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          const methods = classMethodTable[c];
+          if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
+            return __classMethodValue(c, fname);
+          }
+        }
       }
     }
     return obj[fname];
@@ -4996,6 +5008,29 @@ function __hostCallback(value) {
     });
   }
   return hostCallbacks.get(value);
+}
+
+// One function per (class, method name), so a method read twice is the same value
+// (`o.m === o.m`). It runs the implementation `cls` defines, with the `this` it is
+// called with, as a JS method does (`f.call(other)` still runs this class's `m`).
+// `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
+// which call it with an undefined `this`, as JS does for a detached method.
+const __classMethodValues = new Map();
+function __classMethodValue(cls, mname) {
+  const key = cls + '\u0000' + mname;
+  let fn = __classMethodValues.get(key);
+  if (!fn) {
+    const funcIdx = classMethodTable[cls][mname];
+    fn = function (...args) {
+      const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+    };
+    fn.funcIdx = funcIdx;
+    fn.captures = [TAG_UNDEFINED];
+    __classMethodValues.set(key, fn);
+  }
+  return fn;
 }
 
 function __classDispatch(objVal, mname, rawArgs) {
