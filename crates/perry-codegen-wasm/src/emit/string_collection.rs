@@ -183,6 +183,8 @@ impl WasmModuleEmitter {
             "number_coerce",
             "is_nan",
             "is_finite",
+            "number_is_integer",
+            "number_is_safe_integer",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -971,6 +973,10 @@ impl WasmModuleEmitter {
             | Expr::IsNaN(e)
             | Expr::IsUndefinedOrBareNan(e)
             | Expr::IsFinite(e)
+            | Expr::NumberIsNaN(e)
+            | Expr::NumberIsFinite(e)
+            | Expr::NumberIsInteger(e)
+            | Expr::NumberIsSafeInteger(e)
             | Expr::BigIntCoerce(e) => {
                 self.collect_strings_in_expr(e);
             }
