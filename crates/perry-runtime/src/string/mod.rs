@@ -1389,7 +1389,10 @@ pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
 };
-pub(crate) use intern::{key_first_atom, key_word_atom, short_key_atom, KEY_WORD_MIN};
+pub(crate) use intern::{
+    key_first_atom, key_word_atom, key_word_atom_indexed, short_key_atom, short_key_atom_indexed,
+    KEY_WORD_MIN,
+};
 
 pub(crate) mod byte_scan;
 pub(crate) mod quote;

@@ -1320,6 +1320,11 @@ pub(crate) struct BandDir {
 
 const _: () = assert!(std::mem::size_of::<BandDir>() == 64);
 
+/// `BandDir.atoms`' offset: the keyed probe reads the atom index out of the
+/// directory it was handed (`shapes::dir_atoms`).
+pub(crate) const DIR_ATOMS_OFFSET: usize = std::mem::offset_of!(BandDir, atoms);
+const _: () = assert!(DIR_ATOMS_OFFSET == 56);
+
 /// `BandDir.flat_base`'s offset; `flat_ids` follows at +8.
 pub(crate) const FLAT_BASE_OFFSET: usize = crate::codegen_abi::SHAPE_DIR_FLAT_BASE;
 const _: () = assert!(std::mem::offset_of!(BandDir, flat_base) == FLAT_BASE_OFFSET);

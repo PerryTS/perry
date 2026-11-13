@@ -306,8 +306,8 @@ pub(crate) fn key_word_of_hash(hash: u64) -> u32 {
 /// its mask, from the agent's directory (one thread-pointer-relative load,
 /// no lazy thread-local). Null before the agent's first atom.
 #[inline(always)]
-unsafe fn agent_index() -> (*const InternEntry, usize) {
-    let t = crate::object::shapes::agent_atoms() as *const AtomTable;
+unsafe fn agent_index(atoms: *const u8) -> (*const InternEntry, usize) {
+    let t = atoms as *const AtomTable;
     if t.is_null() {
         return (std::ptr::null(), 0);
     }
@@ -346,8 +346,32 @@ unsafe fn text_eq(a: *const u8, b: *const u8, len: usize) -> bool {
 /// # Safety
 /// `data` holds exactly `len` text bytes from its low byte up, zero above.
 #[inline(always)]
-pub(crate) unsafe fn short_key_atom(len: u32, data: u64, hash: u64) -> *const StringHeader {
-    let (slots, mask) = agent_index();
+pub(crate) unsafe fn short_key_atom(
+    atoms: *const u8,
+    len: u32,
+    data: u64,
+    hash: u64,
+) -> *const StringHeader {
+    let a = short_key_atom_indexed(atoms, len, data, hash);
+    if !a.is_null() {
+        return a;
+    }
+    short_key_atom_miss(len, data, hash)
+}
+
+/// [`short_key_atom`] from the agent's atom index alone: null when the index
+/// has no property atom of the text. A leaf: no call.
+///
+/// # Safety
+/// As [`short_key_atom`].
+#[inline(always)]
+pub(crate) unsafe fn short_key_atom_indexed(
+    atoms: *const u8,
+    len: u32,
+    data: u64,
+    hash: u64,
+) -> *const StringHeader {
+    let (slots, mask) = agent_index(atoms);
     if !slots.is_null() {
         let text_mask = (1u64 << (8 * len)) - 1;
         let mut i = AtomTable::home(hash, mask);
@@ -368,7 +392,7 @@ pub(crate) unsafe fn short_key_atom(len: u32, data: u64, hash: u64) -> *const St
             i = (i + 1) & mask;
         }
     }
-    short_key_atom_miss(len, data, hash)
+    std::ptr::null()
 }
 
 /// The never-seeded builtin global names (image atoms in the global
@@ -393,8 +417,32 @@ unsafe fn short_key_atom_miss(len: u32, data: u64, hash: u64) -> *const StringHe
 /// # Safety
 /// `key` is a live heap `StringHeader` whose `refcount` is `word`.
 #[inline(always)]
-pub(crate) unsafe fn key_word_atom(key: *const StringHeader, word: u32) -> (*const StringHeader, u64) {
-    let (slots, mask) = agent_index();
+pub(crate) unsafe fn key_word_atom(
+    atoms: *const u8,
+    key: *const StringHeader,
+    word: u32,
+) -> (*const StringHeader, u64) {
+    let found = key_word_atom_indexed(atoms, key, word);
+    if !found.0.is_null() {
+        return found;
+    }
+    key_first_atom(key)
+}
+
+/// [`key_word_atom`] from the agent's atom index alone: `(null, 0)` when the
+/// probe from the word's home reaches an empty slot. A leaf: no call. The
+/// candidate is decided by its text (flag, length, bytes); the entry's hash
+/// is only handed out, it is not compared (equal texts have equal hashes).
+///
+/// # Safety
+/// As [`key_word_atom`].
+#[inline(always)]
+pub(crate) unsafe fn key_word_atom_indexed(
+    atoms: *const u8,
+    key: *const StringHeader,
+    word: u32,
+) -> (*const StringHeader, u64) {
+    let (slots, mask) = agent_index(atoms);
     if !slots.is_null() {
         let len = (*key).byte_len;
         let mut i = word as usize & mask;
@@ -403,19 +451,17 @@ pub(crate) unsafe fn key_word_atom(key: *const StringHeader, word: u32) -> (*con
             if entry.string_ptr == 0 {
                 break;
             }
-            if key_word_of_hash(entry.hash) == word {
-                let a = entry.string_ptr as *const StringHeader;
-                if (*a).flags & PROPERTY_ATOM != 0
-                    && (*a).byte_len == len
-                    && text_eq(string_data(a), string_data(key), len as usize)
-                {
-                    return (a, entry.hash);
-                }
+            let a = entry.string_ptr as *const StringHeader;
+            if (*a).flags & PROPERTY_ATOM != 0
+                && (*a).byte_len == len
+                && text_eq(string_data(a), string_data(key), len as usize)
+            {
+                return (a, entry.hash);
             }
             i = (i + 1) & mask;
         }
     }
-    key_first_atom(key)
+    (std::ptr::null(), 0)
 }
 
 /// The property atom of plain heap string `key`'s text and the text's hash,

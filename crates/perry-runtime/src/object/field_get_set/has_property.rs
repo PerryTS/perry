@@ -215,10 +215,23 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    // An own key in a slot of the receiver: the keyed read's own-slot arm, a
+    // leaf. Everything else is one tail call.
+    if unsafe { crate::object::layout_probe::has_own_slot(obj.to_bits(), key.to_bits()) } {
+        return f64::from_bits(JSValue::bool(true).bits());
+    }
+    in_operator_walking(obj, key)
+}
+
+/// [`js_in_operator`] past its own-slot arm.
+#[inline(never)]
+fn in_operator_walking(obj: f64, key: f64) -> f64 {
     // The probe's presence mode (`layout_probe::probe_has`) first: it
     // declines a deferred namespace at every hop, so the namespace arm and
     // the complete operation only see what it cannot answer.
-    match unsafe { crate::object::layout_probe::probe_has(obj.to_bits(), key.to_bits(), false) } {
+    match unsafe {
+        crate::object::layout_probe::probe_has_from(obj.to_bits(), key.to_bits(), false, false)
+    } {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
         _ => {}

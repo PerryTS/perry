@@ -1838,6 +1838,17 @@ unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
 /// # Safety
 /// `obj_bits` and `key_bits` any NaN-boxed values.
 pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> i32 {
+    probe_has_from(obj_bits, key_bits, own_only, true)
+}
+
+/// [`probe_has`]; with `own_arm` false the caller has asked
+/// [`computed::has_own_slot`] already and the walk starts at once.
+pub(crate) unsafe fn probe_has_from(
+    obj_bits: u64,
+    key_bits: u64,
+    own_only: bool,
+    own_arm: bool,
+) -> i32 {
     if obj_bits & TAG_MASK != POINTER_TAG {
         return -1;
     }
@@ -1868,6 +1879,10 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
     let absent = if exact { 0 } else { -1 };
     let dir = super::ordinary_dir_addr();
     let mut cur = payload as *const ObjectHeader;
+    // The keyed read's own-slot arm, asked for presence.
+    if own_arm && exact && computed::own_slot_holds(dir, cur, key) {
+        return 1;
+    }
     for _ in 0..MAX_HOPS {
         if (*cur).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
             return -1;
@@ -2155,6 +2170,7 @@ mod computed;
 use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
+pub(crate) use computed::has_own_slot;
 pub(crate) use computed::probe_set_keyed;
 pub(crate) use computed::{probe_store_keyed, store_key_mintable, KeyedStore};
 

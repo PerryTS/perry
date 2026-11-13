@@ -892,11 +892,16 @@ pub(crate) fn ordinary_dir_addr() -> *const u8 {
     ShapeSlab::ordinary_dir_addr()
 }
 
-/// This agent's property-atom index (`string::intern`), read from the agent's
-/// directory: null until the agent's first atom.
+/// The property-atom index (`string::intern`) the directory at `dir` names:
+/// null until the agent's first atom, and for `PERRY_EMPTY_SHAPE_DIR`. One
+/// load from the directory in hand; no thread-local is named, so the
+/// directory's static stays private to its module.
+///
+/// # Safety
+/// `dir` is an agent's ordinary directory or `PERRY_EMPTY_SHAPE_DIR`.
 #[inline(always)]
-pub(crate) fn agent_atoms() -> *const u8 {
-    ShapeSlab::agent_atoms()
+pub(crate) unsafe fn dir_atoms(dir: *const u8) -> *const u8 {
+    *(dir.add(shapes_store::DIR_ATOMS_OFFSET) as *const *const u8)
 }
 
 /// `string::intern` publishes the agent's atom index when its slots move.
