@@ -125,14 +125,15 @@ impl Model {
             let r = self.keyed_reach_of(t, a);
             self.add_tok(n, r);
         } else if !slot {
-            // An array's named non-index key is its own key: its elements
-            // (`field_any`) are read under an index only (`named_any`). A
-            // module namespace's named key is resolved by name (DECISIONS
-            // 215): it never reads the namespace's other keys.
+            // An array's (a typed array's) named non-index key is its own
+            // key: its elements (`field_any`) are read under an index only
+            // (`named_any`, `elems_apart`). A module namespace's named key
+            // is resolved by name (DECISIONS 215): it never reads the
+            // namespace's other keys.
             let json = self.is_json_obj_pos(t);
             let named = matches!(self.toks[t as usize], TokKind::ModNs(_))
                 || json
-                || self.is_elem_array(t) && !numeric_key(&self.atoms[a as usize]);
+                || self.elems_apart(t) && !numeric_key(&self.atoms[a as usize]);
             let any = match named {
                 true => self.named_any(t),
                 false => self.field_any(t),
@@ -413,13 +414,26 @@ impl Model {
         }) && !self.is_marker(t)
     }
 
-    /// The values of `t` under a key no store named: for an Array the ones
-    /// its named non-index keys read (`named_any`, flowing on into its
-    /// elements: the key may be an index too), else `field_any`. Every
-    /// write under an unknown key goes here: a computed-key store, unknown
-    /// code's writes (escape, hard), a spread, a computed-key accessor.
+    /// `t` keeps its elements apart from its names: an Array, an arguments
+    /// object or a collection (`is_elem_array`), or a typed array
+    /// (`typed_array_elements`): ECMA-262 10.4.5.4 / 10.4.5.5, only a
+    /// CanonicalNumericIndexString key names an element of an
+    /// integer-indexed exotic object; any other key is an ordinary
+    /// property (OrdinaryGet / OrdinarySet), and `length` is the
+    /// %TypedArray%.prototype getter's Number (23.2.3.21). Its elements are
+    /// `field_any`; a named non-index key reads `named_any`.
+    pub fn elems_apart(&self, t: Tok) -> bool {
+        self.is_elem_array(t) || self.typed_array_elements(t)
+    }
+
+    /// The values of `t` under a key no store named: for an Array or a
+    /// typed array (`elems_apart`) the ones its named non-index keys read
+    /// (`named_any`, flowing on into its elements: the key may be an index
+    /// too), else `field_any`. Every write under an unknown key goes here:
+    /// a computed-key store, unknown code's writes (escape, hard), a
+    /// spread, a computed-key accessor.
     pub fn any_key_node(&mut self, t: Tok) -> NodeId {
-        match self.is_elem_array(t) || self.is_json_obj_pos(t) {
+        match self.elems_apart(t) || self.is_json_obj_pos(t) {
             true => self.named_any(t),
             false => self.field_any(t),
         }

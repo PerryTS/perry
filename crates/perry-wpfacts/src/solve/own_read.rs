@@ -307,9 +307,9 @@ impl Model {
         self.enum_key_fields.insert(t, n);
         let w = self.enum_key_watch(t);
         self.edge(w, n);
-        // An element array's elements are its any-key field (its
-        // non-index keys, `named_any`, are in `w`).
-        if self.is_elem_array(t) {
+        // An element array's (a typed array's) elements are its any-key
+        // field (its non-index keys, `named_any`, are in `w`).
+        if self.elems_apart(t) {
             let fa = self.field_any(t);
             self.edge(fa, n);
         }
