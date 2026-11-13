@@ -225,14 +225,7 @@ impl WasmModuleEmitter {
             Expr::Bool(false) => "u64ToF64(TAG_FALSE)".to_string(),
             Expr::Undefined => "u64ToF64(TAG_UNDEFINED)".to_string(),
             Expr::Null => "u64ToF64(TAG_NULL)".to_string(),
-            Expr::String(s) => {
-                let escaped = s
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r");
-                format!("fromJsValue(\"{}\")", escaped)
-            }
+            Expr::String(s) => format!("fromJsValue({})", js_string_literal(s)),
             Expr::ScopedTemp { id, value, body } => {
                 let prefix = format!("__scoped_v_{id}_");
                 let depth = locals
@@ -365,9 +358,9 @@ impl WasmModuleEmitter {
                     } => {
                         let obj = self.emit_js_expr(object, locals);
                         format!(
-                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), '{}'), [{}]))",
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
                             obj,
-                            property,
+                            js_string_literal(property),
                             args_js
                                 .iter()
                                 .map(|a| format!("toJsValue({})", a))
@@ -751,8 +744,8 @@ impl WasmModuleEmitter {
                         .map(|a| format!("toJsValue({})", a))
                         .collect();
                     return format!(
-                        "fromJsValue(new globalThis['{}']({}))",
-                        class_name,
+                        "fromJsValue(new globalThis[{}]({}))",
+                        js_string_literal(class_name),
                         host_args.join(", ")
                     );
                 }
@@ -760,7 +753,10 @@ impl WasmModuleEmitter {
                 // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
                 // `{__class__}` object) and run the compiled constructor, which returns
                 // `this`.
-                let instance = format!("fromJsValue({{__class__: '{}'}})", class_name);
+                let instance = format!(
+                    "fromJsValue({{__class__: {}}})",
+                    js_string_literal(class_name)
+                );
                 let Some(&ctor_idx) = self.class_ctor_map.get(class_name.as_str()) else {
                     return instance;
                 };
@@ -809,4 +805,14 @@ impl WasmModuleEmitter {
             }
         }
     }
+}
+
+/// A double-quoted JS string literal holding exactly `s`.
+fn js_string_literal(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{}\"", escaped)
 }

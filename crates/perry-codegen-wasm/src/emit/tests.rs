@@ -571,3 +571,18 @@ proto().then((v) => console.log("proto: " + v)).catch((e) => console.log("proto 
         "proto threw TypeError"
     );
 }
+
+// A method name is any string (`q["it's"]()`); the async JS emitter quotes it as a literal.
+#[test]
+fn an_async_body_calls_a_method_whose_name_needs_escaping() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Q { "it's"(): string { return "quoted"; } }
+async function f(): Promise<string> { const q: any = new Q(); return q["it's"](); }
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "quoted"
+    );
+}
