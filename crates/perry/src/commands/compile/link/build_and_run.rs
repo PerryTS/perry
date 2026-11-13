@@ -196,9 +196,9 @@ pub(crate) fn build_and_run_link(
         is_cross_macos,
     )?;
 
-    // `PERRY_LINK_LLD=1`: lld instead of GNU ld for a native glibc Linux
-    // executable built on Linux with the default function layout
-    // (`elf_linker`).
+    // lld instead of GNU ld for a native glibc Linux executable built on
+    // Linux with the default function layout: the default on x86_64,
+    // `PERRY_LINK_LLD=0` keeps GNU ld (`elf_linker`).
     let lld = super::elf_linker::use_lld(
         cfg!(target_os = "linux")
             && is_linux

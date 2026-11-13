@@ -34,7 +34,7 @@ fn compile(dir: &Path, out: &str, extra: &[&str]) -> PathBuf {
         // A `--function-order` link always takes GNU ld (`link/elf_linker.rs`);
         // the plain build it is compared with must use the same linker, as
         // the two keep different sets of duplicate local symbols.
-        .env_remove("PERRY_LINK_LLD")
+        .env("PERRY_LINK_LLD", "0")
         .arg("compile")
         .arg(dir.join("main.ts"))
         .arg("-o")

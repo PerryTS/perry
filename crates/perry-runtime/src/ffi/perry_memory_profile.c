@@ -7,6 +7,12 @@
 #ifndef PR_THP_DISABLE_EXCEPT_ADVISED
 #define PR_THP_DISABLE_EXCEPT_ADVISED (1UL << 1)
 #endif
+/* prctl through the GOT, not the PLT: Rust code binds its GOT entry at
+ * start, and under lld a PLT call gets a second, lazily bound slot
+ * (mimalloc's calls: perry_noplt_libc.h). */
+#if defined(__GLIBC__) && defined(__x86_64__) && defined(__GNUC__) && !defined(__clang__)
+extern __typeof__(prctl) prctl __attribute__((noplt));
+#endif
 
 /* GC backing belongs to Perry regions. Ordinary native allocations use
  * mimalloc with process-wide THP disabled before its startup constructor.

@@ -1,17 +1,23 @@
-//! lld as the linker of a native glibc Linux executable, opt-in
-//! (`PERRY_LINK_LLD=1`); GNU ld (the `cc` default) stays the default.
+//! lld as the linker of a native glibc Linux executable: the default on
+//! x86_64 (`PERRY_LINK_LLD=0` keeps GNU ld), opt-in elsewhere
+//! (`PERRY_LINK_LLD=1`).
 //!
-//! lld lays the same inputs out smaller (chess -94 744 B, -1.0%: `.rodata`
-//! string merging, section padding) with the same code: no input section is
+//! lld lays the same inputs out smaller (chess -1.0%: `.rodata` string
+//! merging, section padding) with the same code: no input section is
 //! changed, dropped or folded, and start-up runs fewer ld.so instructions
-//! (hello2 -2.4%). It is not the default because it costs instructions:
-//! the gcc-built C parts (mimalloc) call libc functions (mmap, memcpy,
-//! clock_gettime, ...) through the PLT, and Rust code takes the same
-//! functions' addresses through the GOT. GNU ld routes those PLT calls
-//! through `.plt.got` (the GOT entry bound at start); lld gives each its own
-//! lazily bound PLT slot, about 400 ld.so instructions on its first call
-//! (chess +6K per run). `-z now` is worse; `-fno-plt` for the C parts removes
-//! the cost but moves enough text to raise peak RSS by 256 KiB.
+//! (hello2 -2.4%).
+//!
+//! Lazy PLT slots: Rust code takes libc functions' addresses from the GOT
+//! (bound at start). A C caller of the same function through the PLT gets,
+//! under lld, a second JUMP_SLOT that ld.so binds lazily, about 400
+//! instructions on its first call (GNU ld routes such a call through
+//! `.plt.got`, the bound GOT entry). mimalloc made 16 such calls (mmap,
+//! memcpy, clock_gettime, ...: chess +6K per run). On x86_64 glibc the
+//! runtime build force-includes `perry_noplt_libc.h` into mimalloc, which
+//! sends exactly those calls through the GOT (`.cargo/config.toml`); with it
+//! lld runs no more instructions than GNU ld, so lld is the default there.
+//! A global `-fno-plt` would do the same but rewrites every call of the C
+//! parts and cost 256 KiB of peak RSS. aarch64 was not measured: opt-in.
 //!
 //! Identical code folding (`--icf`) is never used by default:
 //! * `--icf=all` folds generated JS bodies with equal code, and lld drops the
@@ -28,9 +34,11 @@
 //! separate code segment. The default hot-text order works under lld with
 //! its run in its own output section (`hot_text_order`).
 //!
-//! `PERRY_LINK_LLD=1` (or `on`, `lld`) links with lld when `ld.lld` 13 or
-//! newer is on PATH, GNU ld otherwise. `PERRY_LINK_LLD=icf-all` adds
-//! `--icf=all` for measurement only (unsound, see above).
+//! `PERRY_LINK_LLD`: `0` (or `off`, `false`, `no`, `gnu`) links with GNU ld;
+//! `1` (or `on`, `true`, `yes`, `lld`) with lld; unset or anything else, the
+//! platform default. lld is used only when `ld.lld` 13 or newer is on PATH,
+//! GNU ld otherwise. `icf-all` adds `--icf=all` for measurement only
+//! (unsound, see above).
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -43,16 +51,28 @@ pub(super) enum Mode {
     LldIcfAll,
 }
 
-pub(super) fn mode_from(value: Option<&str>) -> Mode {
+/// The linker without a switch: lld where the runtime archives make it
+/// cost no instructions (x86_64, `perry_noplt_libc.h`), GNU ld elsewhere.
+const DEFAULT_MODE: Mode = if cfg!(target_arch = "x86_64") {
+    Mode::Lld
+} else {
+    Mode::Gnu
+};
+
+pub(super) fn mode_from(value: Option<&str>, default: Mode) -> Mode {
     match value.map(str::trim) {
+        Some("0" | "off" | "false" | "no" | "gnu") => Mode::Gnu,
         Some("1" | "on" | "true" | "yes" | "lld") => Mode::Lld,
         Some("icf-all") => Mode::LldIcfAll,
-        _ => Mode::Gnu,
+        _ => default,
     }
 }
 
 fn mode() -> Mode {
-    mode_from(std::env::var("PERRY_LINK_LLD").ok().as_deref())
+    mode_from(
+        std::env::var("PERRY_LINK_LLD").ok().as_deref(),
+        DEFAULT_MODE,
+    )
 }
 
 /// Oldest lld that accepts every flag of this link (`-z start-stop-gc`).
@@ -120,15 +140,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_switch_is_opt_in() {
-        assert_eq!(mode_from(None), Mode::Gnu);
-        for on in ["1", "on", "true", "yes", "lld", " 1 "] {
-            assert_eq!(mode_from(Some(on)), Mode::Lld, "{on}");
+    fn the_switch_picks_either_linker_and_unset_is_the_default() {
+        for default in [Mode::Gnu, Mode::Lld] {
+            assert_eq!(mode_from(None, default), default);
+            assert_eq!(mode_from(Some(""), default), default);
+            for on in ["1", "on", "true", "yes", "lld", " 1 "] {
+                assert_eq!(mode_from(Some(on), default), Mode::Lld, "{on}");
+            }
+            for off in ["off", "0", "false", "no", "gnu", " 0 "] {
+                assert_eq!(mode_from(Some(off), default), Mode::Gnu, "{off}");
+            }
+            assert_eq!(mode_from(Some("icf-all"), default), Mode::LldIcfAll);
         }
-        for off in ["off", "0", "false", "no", "gnu", ""] {
-            assert_eq!(mode_from(Some(off)), Mode::Gnu, "{off}");
-        }
-        assert_eq!(mode_from(Some("icf-all")), Mode::LldIcfAll);
+        // lld by default on x86_64 only (the measured, shimmed archives).
+        assert_eq!(DEFAULT_MODE == Mode::Lld, cfg!(target_arch = "x86_64"));
     }
 
     #[test]
