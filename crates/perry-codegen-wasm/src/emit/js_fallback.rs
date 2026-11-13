@@ -848,7 +848,7 @@ impl WasmModuleEmitter {
             }
             Expr::TypeOf(operand) => {
                 let o = self.emit_js_expr(operand, locals);
-                format!("fromJsValue(typeof toJsValue({}))", o)
+                format!("fromJsValue(__typeOf(toJsValue({})))", o)
             }
             Expr::Void(e) => {
                 let v = self.emit_js_expr(e, locals);

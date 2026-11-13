@@ -725,3 +725,38 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// A closure is a `{funcIdx, captures}` record on the host side: `typeof` still answers
+// "function", and a call through an object property runs it. A plain object with the
+// same keys stays an object.
+#[test]
+fn a_closure_used_as_a_value_is_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = () => 1;
+function named(): number { return 2; }
+console.log(typeof f + " " + typeof (() => 1) + " " + typeof named);
+const o: any = {}; o.h = f;
+console.log(typeof o.h + " " + o.h() + " " + ({ g(n: number) { return n + 1; } }).g(41));
+const fake: any = { funcIdx: 0, captures: [] };
+console.log(typeof fake);
+"#
+        ),
+        "function function function\nfunction 1 42\nobject"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_by_an_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() { console.log(typeof o.h + " " + o.h(21)); }
+main();
+"#
+        ),
+        "function 42"
+    );
+}
