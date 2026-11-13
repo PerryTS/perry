@@ -19,10 +19,16 @@
 //! - it declares the birth: an entry of the family (or of one that
 //!   requires it) is in its own `births`. Its holder's `births` do not
 //!   count: the fact observes members one by one;
-//! - otherwise the check FAILS and prints the call path. A native whose
-//!   body symbol is not in the analyzed archives (a member that shares the
-//!   bound-method sentinel, a body in another archive) is counted as
-//!   unchecked unless one of the two holds for it by name.
+//! - otherwise the check FAILS and prints the call path.
+//!
+//! A native's body is the function its declaration names. A bound-method
+//! member of a native module namespace (and of `process`, `console`,
+//! `Buffer`) shares one sentinel body: [`bodies`] resolves it to the router
+//! plus the export body the runtime's build script emits for (module, key),
+//! or to the module's whole dispatch function. A body the compiler merged
+//! with an identical one is found through the declaration's function-info
+//! record, an export body through its getter, so no native is left
+//! unchecked for want of a symbol.
 //!
 //! The walk stops at an `in-hand` function: one that runs only when a byte
 //! cell already exists (its receiver or an argument is one), or that
@@ -32,16 +38,23 @@
 //! a rule that matches no function fails the check (a renamed function
 //! would otherwise empty a cut, or the seed).
 //!
-//! A birth can also start outside every native's body: in a function the
-//! runtime reaches only through a pointer (a completion the event loop
-//! runs, a callback handed to the host, a scheduled task). Such a function
-//! has no caller in the graph, or its address is taken in code. Each one
-//! that can reach the birth must match an `origin` rule, whose reason says
-//! which observation of the program schedules it; one that matches none
-//! FAILS. (An entry point compiled code calls is listed in the census
-//! only: what compiled code may call is the fact's node classification,
-//! `family_reach/nodes.rs`. An address held only in data, a vtable or a
-//! static table, is not seen.)
+//! A birth can also start outside every native's body: in a completion the
+//! event loop runs, a callback handed on, a scheduled task. The walk
+//! therefore follows, like a call, whoever TAKES a function's address: in
+//! code, or by naming data that holds it at any depth (a vtable, a table of
+//! thunks; `Graph::taken_by`). The native that schedules the completion or
+//! registers the callback then reaches the birth itself and must be
+//! covered: this is the "values handed to callbacks and events" part of
+//! the condition. Not followed are the takers of a realm native's body
+//! (its address is held to make its function value; a call of the value is
+//! a cut, and the native is checked by name) and of an `fills` function's
+//! targets (an install only stores). What the walk cannot attribute needs
+//! an `origin` rule whose reason says what calls it: an operation an
+//! install stores in a slot no GC rule delegates to its wrapper, a function
+//! whose address sits in data no runtime code names, a function without a
+//! caller. One that matches none FAILS. (An entry point compiled code
+//! calls by name is listed in the census only: what compiled code may call
+//! is the fact's node classification, `family_reach/nodes.rs`.)
 //!
 //! A claim is set by the image's installer at the end of `js_gc_init`
 //! (perry-runtime `family_never`). A `before-claim` rule names what runs
@@ -665,6 +678,47 @@ mod tests {
             r.kind.as_str(),
             "birth" | "in-hand" | "origin" | "before-claim" | "fills"
         )));
+    }
+
+    /// A bound-method member resolves through its namespace capture: to
+    /// the router and its export's getter, or to the module's dispatch
+    /// function; a declaration with its own body keeps it and its record.
+    #[test]
+    fn a_bound_method_resolves_to_its_export_body() {
+        let manifest = r#"{"declarations":[
+            {"name":"%NativeNamespace:path%","native_namespace":"path"},
+            {"name":"%NativeNamespace:string_decoder%","native_namespace":"string_decoder"},
+            {"name":"node:path.join","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:path%"},{"kind":"bytes","value":"join"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"node:path.noSuchExport","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:path%"},{"kind":"bytes","value":"noSuchExport"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"node:string_decoder.x","body":"crate::closure::BOUND_METHOD_FUNC_PTR",
+             "captures":[{"kind":"reference","value":"%NativeNamespace:string_decoder%"},{"kind":"bytes","value":"x"}],
+             "function_info":{"source_symbol":"source:No symbol matches 0xbadddead."}},
+            {"name":"atob","body":"crate::x::atob_thunk","info_symbol":"perry_fn_info_atob",
+             "function_info":{"source_symbol":"source:perry_runtime::x::atob_thunk"}}]}"#;
+        let b = bodies(manifest).unwrap();
+        let of = |name: &str| b.iter().find(|b| b.name == name).unwrap();
+        let join = of("node:path.join");
+        assert_eq!(join.how, "export body");
+        assert_eq!(
+            join.symbols,
+            [ROUTER, "&js_native_export_70617468_6a6f696e"]
+        );
+        assert_eq!(join.bucket.as_deref(), Some("::nm_dispatch_path"));
+        let other = of("node:path.noSuchExport");
+        assert_eq!(other.symbols, [ROUTER, "::nm_dispatch_path"]);
+        assert_eq!(of("node:string_decoder.x").symbols, [ROUTER]);
+        let atob = of("atob");
+        assert_eq!(atob.symbols, ["perry_runtime::x::atob_thunk"]);
+        assert_eq!(atob.info.as_deref(), Some("perry_fn_info_atob"));
+        assert_eq!(
+            export_of("a::static_exports::js_native_export_70617468_6a6f696e::body"),
+            Some(("path".to_owned(), "join".to_owned()))
+        );
+        assert_eq!(export_of("a::static_exports::js_native_export_zz_6a::body"), None);
     }
 
     #[test]
