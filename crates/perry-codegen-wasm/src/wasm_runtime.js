@@ -4967,6 +4967,16 @@ function __hostCallback(value) {
   return hostCallbacks.get(value);
 }
 
+// A method call emitted in an async (JS) body. A user-class instance is a `{__class__}`
+// object whose methods live in the WASM function table, not on the object, so it goes
+// through the class method table; anything else is called as a JS method.
+function __jsMethodCall(obj, mname, args) {
+  if (obj && typeof obj === 'object' && obj.__class__ && typeof obj[mname] !== 'function') {
+    return __classDispatch(obj, mname, args);
+  }
+  return obj[mname](...args);
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
   if (typeof objVal === 'string') {
     const fn = String.prototype[mname];

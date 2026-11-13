@@ -364,13 +364,13 @@ impl WasmModuleEmitter {
                         object, property, ..
                     } => {
                         let obj = self.emit_js_expr(object, locals);
-                        let _args_str = args_js.join(", ");
                         format!(
-                            "fromJsValue(toJsValue({}).{}({}))",
+                            "fromJsValue(__jsMethodCall(toJsValue({}), '{}', [{}]))",
                             obj,
                             property,
-                            args.iter()
-                                .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
+                            args_js
+                                .iter()
+                                .map(|a| format!("toJsValue({})", a))
                                 .collect::<Vec<_>>()
                                 .join(", ")
                         )
@@ -742,14 +742,40 @@ impl WasmModuleEmitter {
             Expr::New {
                 class_name, args, ..
             } => {
-                let args_js: Vec<String> = args
-                    .iter()
-                    .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
-                    .collect();
+                let args_js: Vec<String> =
+                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                if !self.user_classes.contains(class_name.as_str()) {
+                    // A host constructor (`Map`, `Error`, ...): the class name is a global.
+                    let host_args: Vec<String> =
+                        args_js.iter().map(|a| format!("toJsValue({})", a)).collect();
+                    return format!(
+                        "fromJsValue(new globalThis['{}']({}))",
+                        class_name,
+                        host_args.join(", ")
+                    );
+                }
+                // A user class, including the `__AnonShape_*` class of an object literal,
+                // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
+                // `{__class__}` object) and run the compiled constructor, which returns
+                // `this`.
+                let instance = format!("fromJsValue({{__class__: '{}'}})", class_name);
+                let Some(&ctor_idx) = self.class_ctor_map.get(class_name.as_str()) else {
+                    return instance;
+                };
+                let mut call_args = vec![format!("f64ToU64({})", instance)];
+                call_args.extend(args_js.iter().map(|a| format!("f64ToU64({})", a)));
+                // A WASM i64 parameter rejects a missing (undefined) argument, so pad
+                // to the constructor's arity. Excess arguments are still evaluated and
+                // the export ignores them.
+                if let Some(&expected) = self.func_param_counts.get(&ctor_idx) {
+                    while call_args.len() < expected {
+                        call_args.push("TAG_UNDEFINED".to_string());
+                    }
+                }
                 format!(
-                    "fromJsValue(new (toJsValue(fromJsValue('{}')))({}))",
-                    class_name,
-                    args_js.join(", ")
+                    "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
+                    ctor_idx,
+                    call_args.join(", ")
                 )
             }
             Expr::InstanceOf { expr, ty, .. } => {

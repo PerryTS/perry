@@ -143,3 +143,29 @@ console.log("b");
         "a 1 true\n\nb"
     );
 }
+
+// An async body is emitted as JS, where a class name is not a constructor (#14589).
+#[test]
+fn new_inside_an_async_body_builds_literals_and_user_classes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Point {
+  x: number;
+  y: number;
+  constructor(x: number, y: number) { this.x = x; this.y = y; }
+  sum(): number { return this.x + this.y; }
+}
+class Bare { tag(): string { return "bare"; } }
+async function f(): Promise<string> {
+  const o = { a: 1, b: 2 };
+  const p = new Point(3, 4);
+  const b = new Bare();
+  return (o.a + o.b) + " " + p.sum() + " " + b.tag();
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "3 7 bare"
+    );
+}
