@@ -205,6 +205,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_builtin_namespace_member", DOUBLE, &[DOUBLE, PTR, I64]);
     crate::builtin_proto::declare_entries(module);
     module.declare_function("js_builtin_proto_generic_call0", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_collection_size_get", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_builtin_proto_generic_call1",
         DOUBLE,
