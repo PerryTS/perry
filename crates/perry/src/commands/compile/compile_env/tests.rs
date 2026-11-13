@@ -364,6 +364,16 @@ fn range_tightening_switches_are_cache_inputs() {
     }
 }
 
+/// The empty-operand fallback changes which numeric rules claim an interval,
+/// so `=0` must never reuse a default object.
+#[test]
+fn empty_operands_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_EMPTY_OPERANDS"),
+        "PERRY_FACTS_EMPTY_OPERANDS must key the compile caches"
+    );
+}
+
 /// N10: the unsigned-bound switch changes the element reads' and stores'
 /// key admission (the sign test in front of the bound), so `=0` must never
 /// reuse an `=1` object.
