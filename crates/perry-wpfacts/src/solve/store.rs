@@ -385,14 +385,25 @@ impl Model {
         // an index store: on an Array it writes its elements only, which no
         // named non-index key reads (`is_elem_array`); on another holder
         // it writes the numeric range, never an arbitrary string key.
-        let elem = self.is_elem_key(key);
+        // ECMA-262 10.4.5.5 with 7.1.19: a Number-or-BigInt key (`DIGITS`)
+        // on a typed array is a CanonicalNumericIndexString (an element
+        // store, below) or a BigInt's digits that are none: an
+        // OrdinarySet of a digit-only name, the numeric range (`#num`,
+        // `numeric_field`), never another name. On any other holder it
+        // is an unknown key.
+        let digits = self.is_digits_key(key) && self.typed_array_elements(t);
+        if digits {
+            self.typed_array_element_store(t, src, site);
+        }
+        let key = if self.is_digits_key(key) { Key::any() } else { key };
+        let elem = self.is_elem_key(key) || digits;
         let key = if elem { Key::any() } else { key };
         // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
         // [[Set]] under a numeric key (an element-key store is one: a Number
         // key, an index string, an append) runs TypedArraySetElement, which
         // stores ToNumber(v), or ToBigInt(v) on a BigInt64/BigUint64 array,
         // never `v`; no prototype setter is met.
-        if elem && self.typed_array_elements(t) {
+        if elem && !digits && self.typed_array_elements(t) {
             self.typed_array_element_store(t, src, site);
             return;
         }

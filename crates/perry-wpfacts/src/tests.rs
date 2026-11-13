@@ -249,6 +249,7 @@ mod typed_array_exact;
 mod typed_array_element_store;
 mod typed_array_key_bigint;
 mod typed_array_names;
+mod typed_array_numeric_key;
 mod unheld_key;
 mod unit_alias;
 mod unit_cjs;
