@@ -57,52 +57,80 @@ fn call_kinds(ctx: &FnCtx<'_>, e: &Expr) -> Option<u16> {
         .copied()
 }
 
-/// `e` is a string by the facts: a call that returns only strings, such a
-/// call (or one that may also return `null` / `undefined`) defaulted with
-/// `??` to a string, a `+` with a string operand, a conditional of two
-/// strings. Operands the declarations already call a string count too.
-fn is_string(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> bool {
+/// What makes an operand a string for [`both_strings`]: nothing, only the
+/// declarations (`type_analysis::is_declared_string_expr`, evidence, not
+/// proof: `t[i]` on a `t: string` is declared a string and is `undefined`
+/// past the end), or the facts (a call's kinds) that check mode witnesses.
+/// Ordered by strength: a `+` is a string when one side is, so it takes the
+/// stronger side; `?:` and `??` need every part, so they take the weaker.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+enum Basis {
+    No,
+    Declared,
+    Facts,
+}
+
+/// Why `e` is a string: a call that returns only strings, such a call (or
+/// one that may also return `null` / `undefined`) defaulted with `??` to a
+/// string, a `+` with a string operand, a conditional of two strings (all by
+/// the facts), or an operand the declarations call a string.
+///
+/// Only an operand whose string-ness rests on a fact is [`Basis::Facts`]: a
+/// `+` whose one string side is declared, not proven, is
+/// [`Basis::Declared`] although its other side is a call, and check mode
+/// does not witness it as the facts' claim (the lowering stays correct
+/// either way: `js_string_concat_box` dispatches on the tags).
+fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
     if crate::type_analysis::is_declared_string_expr(ctx, e) {
-        return true;
+        return Basis::Declared;
     }
     if depth == 0 {
-        return false;
+        return Basis::No;
     }
     match e {
-        Expr::Call { .. } => call_kinds(ctx, e) == Some(K_STR),
+        Expr::Call { .. } if call_kinds(ctx, e) == Some(K_STR) => Basis::Facts,
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
             right,
         } => {
-            is_string(ctx, right, depth - 1)
-                && (is_string(ctx, left, depth - 1)
-                    || call_kinds(ctx, left)
-                        .is_some_and(|k| k & K_STR != 0 && k & !(K_STR | K_NULL | K_UNDEF) == 0))
+            let left = match basis(ctx, left, depth - 1) {
+                Basis::No
+                    if call_kinds(ctx, left).is_some_and(|k| {
+                        k & K_STR != 0 && k & !(K_STR | K_NULL | K_UNDEF) == 0
+                    }) =>
+                {
+                    Basis::Facts
+                }
+                b => b,
+            };
+            left.min(basis(ctx, right, depth - 1))
         }
         Expr::Binary {
             op: BinaryOp::Add,
             left,
             right,
-        } => is_string(ctx, left, depth - 1) || is_string(ctx, right, depth - 1),
+        } => basis(ctx, left, depth - 1).max(basis(ctx, right, depth - 1)),
         Expr::Conditional {
             then_expr,
             else_expr,
             ..
-        } => is_string(ctx, then_expr, depth - 1) && is_string(ctx, else_expr, depth - 1),
-        _ => false,
+        } => basis(ctx, then_expr, depth - 1).min(basis(ctx, else_expr, depth - 1)),
+        _ => Basis::No,
     }
 }
 
-/// How deep [`is_string`] follows `??`, `+` and `?:`.
+/// How deep [`basis`] follows `??`, `+` and `?:`.
 const DEPTH: u8 = 6;
 
-/// `left + right` is a concatenation of two strings, and the facts are what
-/// says so for at least one of them.
+/// `left + right` is a concatenation of two strings, each by the facts or by
+/// the declarations (the program has call kinds at all). Check mode tests
+/// only the [`Basis::Facts`] operands; a pair of declared-only operands
+/// takes this lowering too, which is right because it dispatches on tags.
 pub(crate) fn both_strings(ctx: &FnCtx<'_>, left: &Expr, right: &Expr) -> bool {
     !ctx.wpfacts.call_kinds.is_empty()
-        && is_string(ctx, left, DEPTH)
-        && is_string(ctx, right, DEPTH)
+        && basis(ctx, left, DEPTH) != Basis::No
+        && basis(ctx, right, DEPTH) != Basis::No
 }
 
 /// The empty literal that defaults a `??` operand of the `+`.
@@ -118,11 +146,12 @@ fn defaulted_empty(e: &Expr) -> Option<&Expr> {
 }
 
 /// `left + right` for [`both_strings`]: the pairwise concatenation, with
-/// check mode's test on each operand only the facts call a string.
+/// check mode's test on each operand a fact calls a string
+/// ([`Basis::Facts`]).
 pub(crate) fn lower_concat(ctx: &mut FnCtx<'_>, left: &Expr, right: &Expr) -> Result<String> {
     super::note_site("facts-string concat");
     crate::facts_consumed::used();
-    let by_facts = [left, right].map(|e| !crate::type_analysis::is_declared_string_expr(ctx, e));
+    let by_facts = [left, right].map(|e| basis(ctx, e, DEPTH) == Basis::Facts);
     for (e, facts) in [left, right].into_iter().zip(by_facts) {
         if facts {
             crate::verify_facts::consumed(
