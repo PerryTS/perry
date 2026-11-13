@@ -971,6 +971,20 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                         m.add_prim(dst, prim::ALL);
                         family_any(m, Some(t), Family::Object, None, key, dst);
                     }
+                    // A computed key on a null-prototype object a builtin makes
+                    // (`members::box_chain` Null: a match's `groups`,
+                    // RegExpBuiltinExec step 34 OrdinaryObjectCreate(null);
+                    // the runtime's `perex_results.rs` `null_groups`): its own
+                    // values (`load_from`'s edge), and for a key it does not
+                    // own `undefined` (ECMA-262 10.1.8.1 OrdinaryGet step 3.b),
+                    // never a builtin member. A prototype the program gave it
+                    // is read on the chain (`Model::load_from`).
+                    (_, None)
+                        if fam == Family::Box
+                            && members::box_chain(what) == members::BoxChain::Null =>
+                    {
+                        m.add_prim(dst, prim::ALL);
+                    }
                     // A computed key: the container's own values (primitives,
                     // or an iterator result's `value`/`done`: all it has), and
                     // a member of its chain under a name the key may spell: an
