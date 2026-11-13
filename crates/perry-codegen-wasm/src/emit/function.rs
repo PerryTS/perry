@@ -128,7 +128,7 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
-        captures_this: bool,
+        this: ClosureThis,
         home_class: Option<&str>,
     ) -> Function {
         // Closure parameters: captures, the captured `this`, then declared params
@@ -142,8 +142,8 @@ impl WasmModuleEmitter {
             local_map.insert(*cap, param_idx);
             param_idx += 1;
         }
-        let this_local = captures_this.then_some(param_idx);
-        param_idx += u32::from(captures_this);
+        let captured_this = (this == ClosureThis::Captured).then_some(param_idx);
+        param_idx += u32::from(captured_this.is_some());
         for param in params {
             local_map.insert(param.id, param_idx);
             param_idx += 1;
@@ -153,6 +153,10 @@ impl WasmModuleEmitter {
         let mut extra_locals = 0u32;
         collect_param_locals(params, &mut local_map, &mut extra_locals, param_idx);
         collect_locals(body, &mut local_map, &mut extra_locals, param_idx);
+        let receiver = param_idx + extra_locals;
+        if this == ClosureThis::Receiver {
+            extra_locals += 1;
+        }
 
         let temp_local_idx = param_idx + extra_locals;
         let temp_i32_idx = temp_local_idx + 3;
@@ -161,7 +165,14 @@ impl WasmModuleEmitter {
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = home_class.map(str::to_string);
-        ctx.this_local = this_local;
+        ctx.this_local = captured_this;
+        if this == ClosureThis::Receiver {
+            // First, before any other call can take the pending receiver.
+            ctx.emit_frame_begin(&mut func, 0);
+            ctx.emit_memcall(&mut func, "closure_this", 0);
+            func.instruction(&Instruction::LocalSet(receiver));
+            ctx.this_local = Some(receiver);
+        }
         ctx.emit_box_params(&mut func, params);
         // A captured cell already exists; a `let` of it in the body (a lowered
         // generator re-declares its locals per state) fills that cell.

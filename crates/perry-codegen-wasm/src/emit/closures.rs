@@ -2,10 +2,47 @@
 
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId};
-use perry_hir::walker::walk_expr_children;
+use perry_hir::walker::{stmt_any_expr, walk_expr_children};
 
-/// A collected closure: its id, params, body, captures, mutable captures, whether
-/// it captures `this`, and whether it is an arrow (which shares its enclosing
+/// Where a closure's `this` comes from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClosureThis {
+    /// The body does not read `this` (or reads it where local 0 is still meant).
+    None,
+    /// An arrow function's lexical `this`: one more capture, after the others.
+    Captured,
+    /// A function expression's own `this`, the receiver of a method call
+    /// (`o.m()`): the runtime hands it over through the `closure_this` bridge,
+    /// which the body calls on entry.
+    Receiver,
+}
+
+pub(super) fn closure_this(captures_this: bool, is_arrow: bool, body: &[Stmt]) -> ClosureThis {
+    if captures_this {
+        ClosureThis::Captured
+    } else if !is_arrow && body.iter().any(|s| stmt_any_expr(s, &mut reads_this)) {
+        ClosureThis::Receiver
+    } else {
+        ClosureThis::None
+    }
+}
+
+/// `this` read by this function body; a nested closure reads its own `this`
+/// unless it is an arrow that captures this one.
+fn reads_this(expr: &Expr) -> bool {
+    match expr {
+        Expr::This => true,
+        Expr::Closure { captures_this, .. } => *captures_this,
+        _ => {
+            let mut found = false;
+            walk_expr_children(expr, &mut |child| found = found || reads_this(child));
+            found
+        }
+    }
+}
+
+/// A collected closure: its id, params, body, captures, mutable captures, where its
+/// `this` comes from, and whether it is an arrow (which shares its enclosing
 /// method's `this` and `super`).
 pub(super) type CollectedClosure = (
     FuncId,
@@ -13,7 +50,7 @@ pub(super) type CollectedClosure = (
     Vec<Stmt>,
     Vec<LocalId>,
     Vec<LocalId>,
-    bool,
+    ClosureThis,
     bool,
 );
 
@@ -118,7 +155,7 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
             body.clone(),
             captures.clone(),
             mutable_captures.clone(),
-            *captures_this,
+            closure_this(*captures_this, *is_arrow, body),
             *is_arrow,
         ));
     }
