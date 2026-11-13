@@ -112,16 +112,6 @@ LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"
 # literal into it, every later string moved by 2 bytes, and startup Ir A/Bs
 # saw a +12 Ir from_utf8 delta between two equal programs.
 SOURCE_DATE_EPOCH = "0"
-# No PLT in the C parts on glibc Linux (mimalloc through libmimalloc-sys,
-# the runtime's own build.rs units: the cc crate reads CFLAGS_<target>). Their
-# libc calls (mmap, memcpy, clock_gettime, ...) go through the GOT entry that
-# the executable binds at start anyway (the same functions are address-taken
-# by Rust code, GLOB_DAT). With a PLT, lld gives each such function a second,
-# lazily bound slot: ~400 ld.so instructions per function on its first call
-# (chess +6K per run); GNU ld hid it behind `.plt.got`, one extra jmp per call.
-# A CFLAGS_<target> already set in the environment wins over this one.
-CFLAGS_x86_64_unknown_linux_gnu = "-fno-plt"
-CFLAGS_aarch64_unknown_linux_gnu = "-fno-plt"
 
 # The compiler and every archive it links, in one Cargo graph (the workspace
 # `default-members` minus perry-container-compose): `cargo build-perry
