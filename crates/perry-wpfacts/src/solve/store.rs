@@ -283,12 +283,12 @@ impl Model {
     /// the Number (BigInt) TypedArraySetElement converts `src` to; the
     /// conversion's ToPrimitive runs `src`'s `@@toPrimitive` / `valueOf` /
     /// `toString` (once per value and site).
-    fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
-        let f = match self.is_elem_array(t) {
-            true => self.field_any(t),
-            false => self.numeric_field(t),
-        };
-        let p = match self.toks[t as usize] {
+    /// What an element of typed array (Buffer) `t` is: a Number, or a
+    /// BigInt for a BigInt64Array / BigUint64Array (ECMA-262 10.4.5.15
+    /// TypedArrayGetElement, 23.2.7 element types); a Buffer's is a Number.
+    /// A template whose kind the model does not keep may be either.
+    pub(crate) fn typed_array_elem_prim(&self, t: Tok) -> u16 {
+        match self.toks[t as usize] {
             TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
                 TmplKind::BObj { what: "Buffer", .. } => prim::NUM,
                 _ => match self.ta_elem.get(&tm).copied() {
@@ -300,7 +300,15 @@ impl Model {
                 },
             },
             _ => prim::NUM | prim::BIGINT,
+        }
+    }
+
+    fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
+        let f = match self.is_elem_array(t) {
+            true => self.field_any(t),
+            false => self.numeric_field(t),
         };
+        let p = self.typed_array_elem_prim(t);
         self.add_prim(f, p);
         if self.ta_store_done.insert((src, site)) {
             builtins::string_methods::to_prim(self, src, "typed array element store's ToNumber / ToBigInt");

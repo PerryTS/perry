@@ -267,6 +267,7 @@ mod class_call_throws;
 mod numeric_key_names;
 mod index_key_read;
 mod proto_key_read;
+mod spread_root;
 mod unheld_key;
 mod unit_alias;
 mod unit_cjs;

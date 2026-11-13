@@ -342,6 +342,13 @@ impl Model {
         self.map_open(d);
         let fa_d = self.any_key_node(d);
         self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
+        // A typed array's integer indices are own enumerable keys whose
+        // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
+        // stores them under index keys of the target (7.3.25).
+        if !opaque && self.typed_array_elements(s) {
+            let p = self.typed_array_elem_prim(s);
+            self.add_prim(fa_d, p);
+        }
         if opaque && self.explain {
             let from_why = match (s == TOP, from != NO_NODE) {
                 (true, true) => format!(
@@ -632,8 +639,14 @@ impl Model {
     /// runtime gives it no own accessor. A builtin namespace or constructor
     /// the realm gives no enumerable own property
     /// (`builtins::realm_own_props_unenumerable`) holds, for a copy, only
-    /// what the program stored on it: its fields. Every other builtin object
-    /// (Date, RegExp, typed arrays, collections, markers …), a host
+    /// what the program stored on it: its fields. A typed array or a Buffer
+    /// born at a site of this unit (`typed_array_elements`) owns its integer
+    /// indices, then the keys the program gave it (ECMA-262 10.4.5.7
+    /// [[OwnPropertyKeys]]): its elements, each a Number or a BigInt
+    /// (10.4.5.15, `typed_array_elem_prim`), and its fields; its `length`,
+    /// `buffer` and the rest are prototype accessors (23.2.3), not own.
+    /// Every other builtin object
+    /// (Date, collections, markers …), a host
     /// namespace, a builtin function, a native prototype and ⊤ hold own
     /// properties the model does not list. A stand-in (`site: u32::MAX`, another unit's array as this
     /// unit sees it, DECISIONS 94) holds what other units wrote in a cell,
@@ -649,6 +662,7 @@ impl Model {
                 TmplKind::BObj { what, site, .. } => {
                     (site != u32::MAX && builtins::own_values_filled(what))
                         || builtins::realm_object_own_props_unenumerable(what)
+                        || (site != u32::MAX && self.typed_array_elements(t))
                 }
                 _ => true,
             },
@@ -666,6 +680,11 @@ impl Model {
         }
         if t == TOP {
             return;
+        }
+        // A typed array's index values (`own_props_modelled`).
+        if !opaque && self.typed_array_elements(t) {
+            let p = self.typed_array_elem_prim(t);
+            self.add_prim(dst, p);
         }
         self.builtin_field_use(t, Key::any(), ChainAct::Load(dst));
         let fields = self.all_fields(t);
