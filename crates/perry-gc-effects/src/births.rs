@@ -98,10 +98,21 @@ pub const ROUTER: &str =
     "perry_runtime::object::native_module_dispatch::dispatch_native_module_method";
 
 /// One callable realm declaration and the functions a call of it runs.
-/// A symbol that starts with `::` is the end of a path.
+/// A symbol that starts with `::` is the end of a path; one that starts
+/// with `&` names a function and stands for every function whose address
+/// that function takes (an export's getter holds its body in a local
+/// static, and identical bodies are merged, so the body has no name of its
+/// own to rely on).
 pub struct Body {
     pub name: String,
     pub symbols: Vec<String>,
+    /// The function-info record of the declaration (a global data symbol
+    /// that holds the body's address): the body when its own symbol is in
+    /// no archive, because the compiler merged it with an identical one.
+    pub info: Option<String>,
+    /// The module's dispatch function, for an export whose getter is in
+    /// no archive.
+    pub bucket: Option<String>,
     /// How the symbols were found (a census column).
     pub how: &'static str,
 }
@@ -198,6 +209,8 @@ pub fn bodies(manifest: &str) -> Result<Vec<Body>> {
             out.push(Body {
                 name,
                 symbols: vec![symbol],
+                info: d["info_symbol"].as_str().map(str::to_owned),
+                bucket: None,
                 how: "own body",
             });
             continue;
@@ -213,6 +226,8 @@ pub fn bodies(manifest: &str) -> Result<Vec<Body>> {
             out.push(Body {
                 name,
                 symbols: Vec::new(),
+                info: None,
+                bucket: None,
                 how: "a bound method of no module namespace",
             });
             continue;
@@ -223,17 +238,24 @@ pub fn bodies(manifest: &str) -> Result<Vec<Body>> {
             symbols.push(symbol);
             how = "declared body";
         }
+        let bucket = perry_dispatch::native_callable_exports::export_bucket(module)
+            .map(|bucket| format!("::nm_dispatch_{bucket}"));
         if let Some(symbol) = exports.get(&(module, key)) {
-            symbols.push(format!("::static_exports::{symbol}::body"));
+            symbols.push(format!("&{symbol}"));
             how = "export body";
-        }
-        if symbols.len() == 1 {
-            if let Some(bucket) = perry_dispatch::native_callable_exports::export_bucket(module) {
-                symbols.push(format!("::nm_dispatch_{bucket}"));
+        } else if symbols.len() == 1 {
+            if let Some(bucket) = &bucket {
+                symbols.push(bucket.clone());
                 how = "module dispatch";
             }
         }
-        out.push(Body { name, symbols, how });
+        out.push(Body {
+            name,
+            symbols,
+            info: None,
+            bucket,
+            how,
+        });
     }
     Ok(out)
 }
@@ -353,10 +375,27 @@ pub fn check(
     // A symbol given as the end of a path (`::nm_dispatch_fs`).
     let tails: Vec<(&str, usize)> = (0..nn)
         .flat_map(|i| g.spellings(i).into_iter().map(move |s| (s, i)))
-        .filter(|(s, _)| s.contains("nm_dispatch_") || s.contains("js_native_export_"))
+        .filter(|(s, _)| s.contains("nm_dispatch_"))
         .collect();
+    // The functions whose address an export's getter takes.
+    let getters: HashMap<usize, &str> = natives
+        .iter()
+        .flat_map(|n| &n.symbols)
+        .filter_map(|s| s.strip_prefix('&'))
+        .flat_map(|s| by_name.get(s).into_iter().flatten().map(move |&i| (i, s)))
+        .collect();
+    let mut taken_from: HashMap<&str, Vec<usize>> = HashMap::new();
+    for t in 0..nn {
+        for c in &g.taken_by[t] {
+            if let Some(getter) = getters.get(c) {
+                taken_from.entry(getter).or_default().push(t);
+            }
+        }
+    }
     let find = |symbol: &str| -> Vec<usize> {
-        if symbol.starts_with("::") {
+        if let Some(getter) = symbol.strip_prefix('&') {
+            taken_from.get(getter).cloned().unwrap_or_default()
+        } else if symbol.starts_with("::") {
             tails
                 .iter()
                 .filter(|(s, _)| s.ends_with(symbol))
@@ -370,7 +409,21 @@ pub fn check(
     let found: Vec<Option<Vec<usize>>> = natives
         .iter()
         .map(|n| {
-            let per: Vec<Vec<usize>> = n.symbols.iter().map(|s| find(s)).collect();
+            let per: Vec<Vec<usize>> = n
+                .symbols
+                .iter()
+                .map(|s| {
+                    let mut nodes = find(s);
+                    if nodes.is_empty() && s.starts_with('&') {
+                        nodes = n.bucket.as_deref().map(&find).unwrap_or_default();
+                    }
+                    if nodes.is_empty() {
+                        let info = n.info.as_ref().and_then(|i| g.held_by_symbol.get(i));
+                        nodes = info.cloned().unwrap_or_default();
+                    }
+                    nodes
+                })
+                .collect();
             (!per.is_empty() && per.iter().all(|p| !p.is_empty()))
                 .then(|| per.into_iter().flatten().collect())
         })
@@ -382,7 +435,7 @@ pub fn check(
     let export_body = |i: usize| {
         g.spellings(i)
             .iter()
-            .any(|s| s.ends_with("::body") && export_of(s).is_some())
+            .any(|s| s.contains("::static_exports::") && export_of(s).is_some())
     };
     // Backward from the birth; a cut function is not entered (a seed that
     // is also cut stays a seed for its own callers' cuts to decide).
@@ -460,7 +513,7 @@ pub fn check(
         // module. Covered when the module is of the family (or is one the
         // table does not classify: every family is live then).
         let export_of_family = spellings.iter().any(|s| {
-            s.ends_with("::body")
+            s.contains("::static_exports::")
                 && export_of(s).is_some_and(|(module, _)| {
                     families::module_families(&module)
                         .is_none_or(|f| families::close_requires(f) & families::family_bit(FAMILY) != 0)

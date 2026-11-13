@@ -114,6 +114,8 @@ pub struct Graph {
     /// Per node: its address sits in data no code of the archives names
     /// (compiled code or the linker reads that data).
     pub loose: Vec<bool>,
+    /// Per global data symbol: the functions its own section names.
+    pub held_by_symbol: HashMap<String, Vec<usize>>,
 }
 
 /// A data section that holds addresses: the names it is reached under (its
@@ -272,6 +274,15 @@ impl Graph {
                 loose[t] = true;
             }
         }
+        // What a global data symbol holds directly (a function-info record
+        // names its body).
+        let held_by_symbol: HashMap<String, Vec<usize>> = data_global
+            .iter()
+            .filter_map(|(name, ds)| {
+                let fns: Vec<usize> = ds.iter().flat_map(|&d| data_fns[d].iter().copied()).collect();
+                (!fns.is_empty()).then(|| ((*name).to_owned(), fns))
+            })
+            .collect();
         drop((data_local, data_global));
         drop(local);
         drop(sections);
@@ -307,6 +318,7 @@ impl Graph {
             in_data,
             taken_by,
             loose,
+            held_by_symbol,
         })
     }
     pub fn label(&self, i: usize) -> String {
