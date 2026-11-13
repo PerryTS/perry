@@ -33,14 +33,27 @@
 //!   (ToPrimitive of a primitive is the identity). A local's own kinds are
 //!   in its `BindingFacts` (`prims`, `other`, `class_ids`).
 //!
+//! - **a String's code unit** (`PERRY_FACTS_QUIET_STRINGS`): the value of
+//!   an element read is primitive when the site is a quiet element site
+//!   whose receivers (and every summary instance's copy) hold Strings and
+//!   nothing else, and the value node holds no object: in range the read is
+//!   the String's own code unit, out of range it goes up `String.prototype`
+//!   and `Object.prototype`, on which no unit solved a write (the quiet
+//!   element site's own condition), so it is `undefined`. The solve leaves
+//!   the value of such a read without a kind (no object, and no primitive
+//!   either), which is all this rule adds; nothing it relies on is derived
+//!   from syntax or a declared type. Dump line `verdict=quiet by=string`;
+//!
 //! No fact for a site means the site may run code: an unknown receiver, a
 //! computed key that may be an object, a value that may be anything. There
 //! is no fact at all in an aborted or per-unit solve or when interpreted
 //! code can run.
 //!
 //! `PERRY_FACTS_QUIET_SITES=0` exports nothing (and codegen asks nothing:
-//! the walker of before). The negative control `PERRY_FACTS_SABOTAGE=quiet`
-//! claims every site quiet and every value primitive. The dump
+//! the walker of before); `PERRY_FACTS_QUIET_STRINGS=0` drops the String
+//! rule alone. The negative control `PERRY_FACTS_SABOTAGE=quiet` claims
+//! every site quiet and every value primitive; `quiet-strings` claims the
+//! String rule for every quiet element read. The dump
 //! (`PERRY_FACTS_DUMP`) prints one `# quiet` line per site:
 //! `kind=read|element|value|elemvalue module= offset= verdict=quiet`, or
 //! `refused=<why>`.
@@ -57,6 +70,20 @@ pub fn enabled() -> bool {
         std::env::var("PERRY_FACTS_QUIET_SITES").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// `PERRY_FACTS_QUIET_STRINGS=0` turns the String rule off (module docs).
+pub fn strings_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_QUIET_STRINGS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// Node `n` holds Strings and nothing else.
+fn strings_only(m: &Model, n: NodeId) -> bool {
+    let node = &m.nodes[n as usize];
+    node.pts.is_empty() && node.prim == prim::STR
 }
 
 /// Why node `n` may hold something that is no plain program Array
@@ -116,9 +143,12 @@ pub(crate) fn collect(
     sites: &[SiteFacts],
     bindings: &mut [ModuleBindings],
     interpreted: bool,
-    sabotage: bool,
+    sabotage: Option<&str>,
     mut probe: Option<&mut Vec<String>>,
 ) {
+    let string_sabotage = sabotage == Some("quiet-strings");
+    let sabotage = sabotage == Some("quiet");
+    let strings = strings_enabled() || string_sabotage;
     let m = &g.m;
     if !enabled() || m.aborted || m.unit_mode || interpreted {
         return;
@@ -165,10 +195,18 @@ pub(crate) fn collect(
         );
     }
     let mut elements: Sites<()> = BTreeMap::new();
+    // Element sites whose every receiver copy holds Strings alone.
+    let mut string_elements: BTreeMap<(u32, u32), bool> = BTreeMap::new();
     for e in g.element_sites.iter().filter(|e| e.byte_offset != 0) {
         let mut why = chain;
         for n in with_copies(e.recv) {
             join(&mut why, not_plain_arrays(m, n));
+        }
+        if strings {
+            let all = string_sabotage || with_copies(e.recv).all(|n| strings_only(m, n));
+            *string_elements
+                .entry((e.module, e.byte_offset))
+                .or_insert(true) &= all;
         }
         for n in with_copies(e.idx) {
             join(&mut why, (!number(m, n)).then_some("key:not-number"));
@@ -191,23 +229,44 @@ pub(crate) fn collect(
         );
     }
     let mut elem_values: Sites<()> = BTreeMap::new();
+    let mut string_elem_values: std::collections::BTreeSet<(u32, u32)> = Default::default();
     for &(mi, offset, n) in &g.element_values {
         let all = with_copies(n).all(|n| primitive(m, n));
+        // A code unit or `undefined`: a quiet element site over Strings
+        // alone, whose value node holds no object.
+        let by_string = !all
+            && string_elements.get(&(mi, offset)) == Some(&true)
+            && (string_sabotage
+                || elements
+                    .get(&(mi, offset, ()))
+                    .is_some_and(|why| why.is_none())
+                    && with_copies(n).all(|n| m.nodes[n as usize].pts.is_empty()));
+        if by_string {
+            string_elem_values.insert((mi, offset));
+        }
         join(
             elem_values.entry((mi, offset, ())).or_insert(None),
-            (!all).then_some("value:may-be-object"),
+            (!all && !by_string).then_some("value:may-be-object"),
         );
     }
-    let mut line = |kind: &str, mi: u32, offset: u32, key: &str, why: Option<&'static str>| {
+    let mut line = |kind: &str,
+                    mi: u32,
+                    offset: u32,
+                    key: &str,
+                    why: Option<&'static str>,
+                    by_string: bool| {
         if let Some(p) = probe.as_deref_mut() {
             let key = if key.is_empty() {
                 String::new()
             } else {
                 format!(" key={key}")
             };
+            let by = if by_string { " by=string" } else { "" };
             p.push(match why {
                 None => {
-                    format!("# quiet kind={kind} module={mi} offset={offset}{key} verdict=quiet")
+                    format!(
+                        "# quiet kind={kind} module={mi} offset={offset}{key} verdict=quiet{by}"
+                    )
                 }
                 Some(why) => {
                     format!("# quiet kind={kind} module={mi} offset={offset}{key} refused={why}")
@@ -220,7 +279,7 @@ pub(crate) fn collect(
     for (kind, map) in [("read", reads), ("value", values)] {
         for ((mi, offset, key), why) in map {
             let why = why.filter(|_| !sabotage);
-            line(kind, mi, offset, &key, why);
+            line(kind, mi, offset, &key, why, false);
             if let (None, Some(mb)) = (why, bindings.get_mut(mi as usize)) {
                 match kind {
                     "read" => mb.quiet_reads.push((offset, key)),
@@ -231,8 +290,9 @@ pub(crate) fn collect(
     }
     for (kind, map) in [("element", elements), ("elemvalue", elem_values)] {
         for ((mi, offset, ()), why) in map {
+            let by_string = kind == "elemvalue" && string_elem_values.contains(&(mi, offset));
             let why = why.filter(|_| !sabotage);
-            line(kind, mi, offset, "", why);
+            line(kind, mi, offset, "", why, by_string);
             if let (None, Some(mb)) = (why, bindings.get_mut(mi as usize)) {
                 match kind {
                     "element" => mb.quiet_elements.push(offset),
@@ -240,5 +300,12 @@ pub(crate) fn collect(
                 }
             }
         }
+    }
+    if let Some(p) = probe.as_deref_mut() {
+        p.push(format!(
+            "# quiet strings elements={} elemvalues={}",
+            string_elements.values().filter(|all| **all).count(),
+            string_elem_values.len()
+        ));
     }
 }
