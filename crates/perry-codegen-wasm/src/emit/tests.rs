@@ -112,3 +112,34 @@ console.log(a.join(','));
         "1,9,2,3"
     );
 }
+
+#[test]
+fn global_is_nan_and_is_finite_coerce_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s: any = "abc";
+const n: any = "1";
+const u: any = undefined;
+console.log(isNaN(s) + " " + isNaN(n) + " " + isNaN(u) + " " + isNaN(NaN) + " " + isNaN(1));
+console.log(isFinite(n) + " " + isFinite(s) + " " + isFinite(Infinity) + " " + isFinite(1));
+"#
+        ),
+        "true false true true false\ntrue false false true"
+    );
+}
+
+#[test]
+fn console_log_prints_every_argument_on_one_line() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = 1;
+console.log("a", n, true);
+console.log();
+console.log("b");
+"#
+        ),
+        "a 1 true\n\nb"
+    );
+}
