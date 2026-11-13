@@ -92,3 +92,47 @@ fn a_reassigned_map_binding_keeps_the_generic_entry() {
         "a reassigned binding is no construction proof:\n{ir}"
     );
 }
+
+/// A receiver the compiler did not construct tests its brand before the
+/// `size` entry; a miss reads `size` the ordinary way (wa4).
+#[test]
+fn an_unconstructed_map_size_tests_its_brand_and_reads_size_on_a_miss() {
+    let ir = ir_for(
+        "kind_entry_unconstructed_size",
+        vec![
+            local(M, true, Expr::MapNew),
+            Stmt::Expr(Expr::LocalSet(M, Box::new(Expr::MapNew))),
+            local(R, false, size_of(M)),
+            Stmt::Expr(Expr::MapClear(Box::new(Expr::LocalGet(M)))),
+        ],
+    );
+    assert!(
+        ir.contains("collguard.miss"),
+        "no brand test in front of size / clear:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_collection_size_get("),
+        "the size miss is not the ordinary Get:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_builtin_proto_generic_call0("),
+        "the clear() miss is not the ordinary Get + Call:\n{ir}"
+    );
+}
+
+/// A constructed receiver keeps its exact code: no brand test.
+#[test]
+fn a_constructed_map_size_and_clear_keep_their_exact_code() {
+    let ir = ir_for(
+        "kind_entry_constructed_size_clear",
+        vec![
+            local(M, false, Expr::MapNew),
+            local(R, false, size_of(M)),
+            Stmt::Expr(Expr::MapClear(Box::new(Expr::LocalGet(M)))),
+        ],
+    );
+    assert!(
+        !ir.contains("collguard"),
+        "a constructed receiver was brand-tested:\n{ir}"
+    );
+}
