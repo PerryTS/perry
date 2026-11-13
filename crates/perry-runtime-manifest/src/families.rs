@@ -419,6 +419,8 @@ pub const RUNTIME_FAMILIES: &[RuntimeFamily] = &[
             "tls",
             "tty",
             "tursodb",
+            // `url.fileURLToPathBuffer` answers a Buffer.
+            "url",
             "util.types",
             "util/types",
             "v8",
