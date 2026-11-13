@@ -206,11 +206,12 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        // Emit field initializers: class_set_field(this, field_name, value) via mem_call
-        for field in &class.fields {
-            if let Some(init) = &field.init {
+        // Field initializers: class_set_field(this, field_name, value) via mem_call
+        let emit_field_inits = |func: &mut Function| {
+            for field in &class.fields {
+                let Some(init) = &field.init else { continue };
                 let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-                ctx.emit_frame_begin(&mut func, 3);
+                ctx.emit_frame_begin(func, 3);
                 // Compute base address (sp - 24) and save to temp_i32 local
                 let sp = self.nan_temp_global;
                 func.instruction(&Instruction::GlobalGet(sp));
@@ -242,10 +243,20 @@ impl WasmModuleEmitter {
                     memory_index: 0,
                 }));
                 // Store value to slot 2
-                ctx.emit_store_arg(&mut func, 2, init);
+                ctx.emit_store_arg(func, 2, init);
                 // Call via mem_call
-                ctx.emit_memcall_void(&mut func, "class_set_field", 3);
+                ctx.emit_memcall_void(func, "class_set_field", 3);
             }
+        };
+        // A derived class initializes its fields when `super()` returns, so the parent
+        // constructor sees none of them; a base class initializes them on entry. A
+        // `super()` nested below the top level falls back to entry.
+        let super_at = ctor
+            .body
+            .iter()
+            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::SuperCall(_))));
+        if super_at.is_none() {
+            emit_field_inits(&mut func);
         }
 
         // Emit constructor body.
@@ -259,8 +270,11 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
-        for stmt in &ctor.body {
+        for (index, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
+            if super_at == Some(index) {
+                emit_field_inits(&mut func);
+            }
         }
 
         // Fallthrough: return `this` as the constructor's result.

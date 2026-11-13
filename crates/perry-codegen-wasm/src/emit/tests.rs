@@ -208,3 +208,20 @@ console.log(new B(3).x + " " + c.x + " " + c.y + " " + new D().z + " " + new E()
         "3 4 2 1 1"
     );
 }
+
+#[test]
+fn a_derived_class_initializes_its_fields_after_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { seen: any; constructor() { this.seen = (this as any).y; } }
+class B extends A { y = 2; }
+class C extends A { y = 3; constructor() { super(); } }
+const b = new B();
+const c = new C();
+console.log(b.seen + " " + (b as any).y + " " + c.seen + " " + (c as any).y);
+"#
+        ),
+        "undefined 2 undefined 3"
+    );
+}
