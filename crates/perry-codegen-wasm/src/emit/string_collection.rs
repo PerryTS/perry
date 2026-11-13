@@ -124,6 +124,7 @@ impl WasmModuleEmitter {
             "closure_call_1",
             "closure_call_2",
             "closure_call_3",
+            "new_dynamic",
             "closure_call_spread",
             "array_map",
             "array_filter",
@@ -183,6 +184,8 @@ impl WasmModuleEmitter {
             "number_coerce",
             "is_nan",
             "is_finite",
+            "global_is_nan",
+            "global_is_finite",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -966,6 +969,11 @@ impl WasmModuleEmitter {
             }
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);
+            }
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                self.collect_strings_in_expr(val);
+                self.collect_strings_in_expr(replacer);
+                self.collect_strings_in_expr(space);
             }
             Expr::NumberCoerce(e)
             | Expr::IsNaN(e)

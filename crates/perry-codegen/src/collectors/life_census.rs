@@ -134,7 +134,10 @@ impl FateProof for CodegenProof<'_> {
     /// predicate codegen's Number lowering takes unguarded (the driver
     /// fills it only for bindings no interpreted code reaches).
     fn primitive(&self, _: FuncId, local: perry_hir::types::LocalId) -> Option<Proof> {
-        self.facts.number_inputs.contains(&local).then_some(Proof::Proven)
+        self.facts
+            .number_inputs
+            .contains(&local)
+            .then_some(Proof::Proven)
     }
 }
 
@@ -240,7 +243,11 @@ impl ModuleCensus {
         let classes_ref: Vec<&perry_hir::Class> = hir.classes.iter().collect();
         let fates = Fates::compute(&functions, &classes_ref, &CodegenProof { facts });
         write_params(&hir.name, &functions, &classes_ref, &fates, &callers);
-        let names = hir.functions.iter().map(|f| (f.id, f.name.clone())).collect();
+        let names = hir
+            .functions
+            .iter()
+            .map(|f| (f.id, f.name.clone()))
+            .collect();
         let mut bodies = HashMap::new();
         let mut note = |f: &perry_hir::Function, label: String, direct: bool| {
             bodies.insert(
@@ -267,7 +274,10 @@ impl ModuleCensus {
                 note(m, format!("{}.{}", c.name, m.name), false);
             }
             for m in &c.static_methods {
-                statics.entry(c.id).or_default().insert(m.name.clone(), m.id);
+                statics
+                    .entry(c.id)
+                    .or_default()
+                    .insert(m.name.clone(), m.id);
                 static_by_name.insert((c.name.clone(), m.name.clone()), m.id);
             }
             let plain = c.extends.is_none()
@@ -389,14 +399,18 @@ pub(crate) fn observe(
             Some(m) => {
                 let body = match scope {
                     Some(None) => None,
-                    Some(Some(f)) => Some(m.bodies.values().find(|b| b.func == f).cloned().unwrap_or_else(|| {
-                        Body {
-                            label: format!("<unregistered:{f}>"),
-                            suspends: false,
-                            func: f,
-                            direct: false,
-                        }
-                    })),
+                    Some(Some(f)) => Some(
+                        m.bodies
+                            .values()
+                            .find(|b| b.func == f)
+                            .cloned()
+                            .unwrap_or_else(|| Body {
+                                label: format!("<unregistered:{f}>"),
+                                suspends: false,
+                                func: f,
+                                direct: false,
+                            }),
+                    ),
                     // No opener named it: visible as such, never `<init>`.
                     None => Some(Body {
                         label: "<unregistered>".to_string(),
@@ -410,8 +424,17 @@ pub(crate) fn observe(
             None => return LifeClaims::default(),
         },
     };
-    let label = body.as_ref().map_or("<init>".to_string(), |b| b.label.clone());
-    let (rows, claims) = classify(&module, stmts, boxed_vars, module_globals, scalar, body.as_ref());
+    let label = body
+        .as_ref()
+        .map_or("<init>".to_string(), |b| b.label.clone());
+    let (rows, claims) = classify(
+        &module,
+        stmts,
+        boxed_vars,
+        module_globals,
+        scalar,
+        body.as_ref(),
+    );
     let mut seen = module.seen.lock().expect("census seen");
     let mut pending = module.pending.lock().expect("census rows");
     for row in rows {
@@ -431,16 +454,25 @@ pub(crate) fn observe(
     if super::life_claims::measured() {
         claims.body = key;
         let suspends = body.as_ref().is_some_and(|b| b.suspends);
-        let body_key = format!("body\t{}\t{label}\t{}", module.name, if suspends { "suspends" } else { "plain" });
+        let body_key = format!(
+            "body\t{}\t{label}\t{}",
+            module.name,
+            if suspends { "suspends" } else { "plain" }
+        );
         claims.body_id = crate::verify_facts::life_measure::site_id(&body_key);
-        let loop_keys: Vec<String> =
-            (0..claims.loop_order.len()).map(|ord| format!("loop\t{}\t{label}\t#{ord}", module.name)).collect();
+        let loop_keys: Vec<String> = (0..claims.loop_order.len())
+            .map(|ord| format!("loop\t{}\t{label}\t#{ord}", module.name))
+            .collect();
         for (at, key) in claims.loop_order.iter().zip(&loop_keys) {
-            claims.loop_ids.insert(*at, crate::verify_facts::life_measure::site_id(key));
+            claims
+                .loop_ids
+                .insert(*at, crate::verify_facts::life_measure::site_id(key));
         }
         let keys = claims.births.values().map(|(k, _)| k.as_str());
         let keys = keys.chain(loop_keys.iter().map(String::as_str));
-        crate::verify_facts::life_measure::write_sites(keys.chain(std::iter::once(body_key.as_str())));
+        crate::verify_facts::life_measure::write_sites(
+            keys.chain(std::iter::once(body_key.as_str())),
+        );
     } else {
         claims.births.clear();
         claims.loops.clear();
@@ -513,7 +545,16 @@ fn position(parent: Option<&Expr>) -> String {
 
 /// kind, class, offset (a `new`'s byte offset, else its ordinal in the
 /// body walk), slots, verdict, detail, receiving side, outer verdict.
-type Row = (Kind, String, u32, Option<usize>, String, String, String, String);
+type Row = (
+    Kind,
+    String,
+    u32,
+    Option<usize>,
+    String,
+    String,
+    String,
+    String,
+);
 
 /// A birth bound to a plain local.
 struct Cand {
@@ -663,7 +704,10 @@ fn classify(
     }
     let row_verdicts: Vec<String> = rows.iter().map(|r| r.4.clone()).collect();
     for r in &mut rows {
-        if let Some(i) = r.7.strip_prefix("@row:").and_then(|i| i.parse::<usize>().ok()) {
+        if let Some(i) =
+            r.7.strip_prefix("@row:")
+                .and_then(|i| i.parse::<usize>().ok())
+        {
             r.7 = row_verdicts[i].clone();
         } else if let Some(v) = cand_verdicts.get(&r.7) {
             r.7 = v.clone();
@@ -756,8 +800,10 @@ fn params_text(
     fates: &Fates,
     callers: &sides::Callers,
 ) -> String {
-    let mut bodies: Vec<(String, &perry_hir::Function, bool)> =
-        functions.iter().map(|f| (f.name.clone(), *f, false)).collect();
+    let mut bodies: Vec<(String, &perry_hir::Function, bool)> = functions
+        .iter()
+        .map(|f| (f.name.clone(), *f, false))
+        .collect();
     for c in classes {
         if let Some(k) = &c.constructor {
             bodies.push((format!("{}.constructor", c.name), k, true));
@@ -771,8 +817,13 @@ fn params_text(
     }
     let mut text = String::new();
     for (label, f, this) in bodies {
-        let Some(ff) = fates.of_fn(f.id) else { continue };
-        let use_ = match (callers.sites.contains_key(&f.id), callers.escapes.contains(&f.id)) {
+        let Some(ff) = fates.of_fn(f.id) else {
+            continue;
+        };
+        let use_ = match (
+            callers.sites.contains_key(&f.id),
+            callers.escapes.contains(&f.id),
+        ) {
             (true, true) => "direct+escapes",
             (true, false) => "direct",
             (false, true) => "escapes",
@@ -992,9 +1043,13 @@ impl Census<'_> {
                 }
                 None => self.expr(e, None),
             },
-            Stmt::Expr(e) if birth(e).is_some() => {
-                self.birth_site(e, "expression-statement", String::new(), "-".to_string(), None)
-            }
+            Stmt::Expr(e) if birth(e).is_some() => self.birth_site(
+                e,
+                "expression-statement",
+                String::new(),
+                "-".to_string(),
+                None,
+            ),
             Stmt::Expr(e) => self.statement_call(e, "drop"),
             Stmt::If {
                 condition,
@@ -1090,8 +1145,14 @@ impl Census<'_> {
             Kind::New => offset.to_string(),
             _ => format!("#{offset}"),
         };
-        let key = format!("{}\t{label}\t{}\t{class}\t{offset}", self.m.name, kind.word());
-        self.claims.births.insert(e as *const Expr as usize, (key, self.loop_body));
+        let key = format!(
+            "{}\t{label}\t{}\t{class}\t{offset}",
+            self.m.name,
+            kind.word()
+        );
+        self.claims
+            .births
+            .insert(e as *const Expr as usize, (key, self.loop_body));
         if self.loop_body != 0 {
             self.note_loop(self.loop_body);
         }
@@ -1358,11 +1419,14 @@ impl Census<'_> {
                             Some(_) => format!("kept:{}", position(parent)),
                         }),
                     };
-                    if let (Some(u), Expr::Call {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    }) = (used, e)
+                    if let (
+                        Some(u),
+                        Expr::Call {
+                            byte_offset,
+                            byte_end,
+                            ..
+                        },
+                    ) = (used, e)
                     {
                         self.m.record_use(*f, (*byte_offset, *byte_end), u);
                     }

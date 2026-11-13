@@ -26,9 +26,6 @@ fn heap_object_addr(value: f64) -> Option<usize> {
     let top16 = bits >> 48;
     let addr = if top16 == POINTER_TAG_TOP16 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0x0000 {
-        // Module-level object literals are stored as raw I64 pointers.
-        bits as usize
     } else {
         return None;
     };

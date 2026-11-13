@@ -94,8 +94,8 @@ pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 pub use own_props::{
     buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
-    buffer_inherited_get, buffer_inherited_has,
-    buffer_own_prop_names, buffer_read_own_prop, buffer_set_own_prop,
+    buffer_inherited_get, buffer_inherited_has, buffer_own_prop_names, buffer_read_own_prop,
+    buffer_set_own_prop,
 };
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;

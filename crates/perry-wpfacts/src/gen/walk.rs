@@ -1239,9 +1239,14 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let n = self.local(fx.module, *id);
-                if ["__forof_lit_src_", "__forof_lit_arr_", "__iterator_record_", "__arr_"]
-                    .iter()
-                    .any(|p| name.starts_with(p))
+                if [
+                    "__forof_lit_src_",
+                    "__forof_lit_arr_",
+                    "__iterator_record_",
+                    "__arr_",
+                ]
+                .iter()
+                .any(|p| name.starts_with(p))
                 {
                     self.m.for_of_relays.insert(n);
                 }

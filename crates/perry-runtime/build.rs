@@ -605,6 +605,15 @@ fn write_family_table(out: &Path) {
     std::fs::write(out.join("family_table.rs"), text).expect("emit family table");
 }
 
+/// The bit of the byte-cell family (typed arrays, Buffer, ArrayBuffer) in a
+/// family set (`family_never.rs`): its position in the one family table.
+fn write_family_bits(out: &Path) {
+    let bit = perry_runtime_manifest::families::family_bit("typedarray");
+    assert!(bit != 0, "the family table names typedarray");
+    let text = format!("pub(crate) const BYTE_CELLS: u64 = {bit:#x};\n");
+    std::fs::write(out.join("family_bits.rs"), text).expect("emit family bits");
+}
+
 fn main() {
     static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -612,6 +621,7 @@ fn main() {
         .expect("emit runtime realm manifest");
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
     write_family_table(&out);
+    write_family_bits(&out);
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");

@@ -344,11 +344,29 @@ pub(crate) fn tracked_header_of_bits(bits: u64) -> Option<std::ptr::NonNull<GcHe
     unsafe { try_read_tracked_gc_header(bits as usize) }
 }
 
+/// The receiver of a primitive dispatch, for a value entry whose answer does
+/// not depend on WHICH Number the receiver is (a primitive `[[Set]]` target,
+/// a symbol-keyed read on a Number: both start at `Number.prototype`, and
+/// the `this` of an accessor travels separately).
+///
+/// A value whose top 16 bits are clear is a Number (a denormal, or +0); in
+/// value context an object carries `POINTER_TAG`. The legacy decodes below
+/// such an entry still read that shape as a raw object pointer, so the entry
+/// hands them the Number 1.0 instead, which every one of them classifies as
+/// a Number.
+#[inline(always)]
+pub(crate) fn number_receiver_for_dispatch(value: f64) -> f64 {
+    if value.to_bits() >> 48 == 0 {
+        1.0
+    } else {
+        value
+    }
+}
+
 /// Candidate object address carried by a NaN-boxed JS value, decided by the
 /// value's TAG before any magnitude test (#10479).
 ///
-/// Only two representations name an address: a `POINTER_TAG` payload and a
-/// legacy raw bitcast pointer (top 16 bits clear, above the null page). Every
+/// Only one representation names an address: a `POINTER_TAG` payload. Every
 /// other tag is a primitive whose low 48 bits are not an address, and several
 /// of them land inside the heap window, so the old "tag band `>= 0x7FF8` ⇒
 /// payload" decode turned them into plausible-looking pointers:
@@ -360,10 +378,11 @@ pub(crate) fn tracked_header_of_bits(bits: u64) -> Option<std::ptr::NonNull<GcHe
 ///   synthetic class id decodes to `0x8000_0000` (#10478's `C instanceof C`);
 /// * heap strings, bigints, JS handles and the undefined/null/boolean markers.
 ///
-/// All of those answer 0. So does an ordinary number: a bare top-16-clear
-/// word is only the legacy raw-pointer shape when the allocator owns it
-/// ([`try_read_tracked_gc_header`], or a registered buffer) — a denormal
-/// double such as `1e-310` decodes into the heap window too.
+/// All of those answer 0. So does every number, a bare top-16-clear word
+/// included: in value context an object carries `POINTER_TAG`, so that word
+/// is a denormal double (`1e-310` decodes into the heap window) or +0, never
+/// a reference. No allocator lookup decides it: a Number whose bits equal a
+/// live object's address is still a Number.
 ///
 /// A non-zero `POINTER_TAG` answer is a CANDIDATE, not a validity proof — it
 /// can still be a handle-band id — so pair it with a registry lookup or
@@ -373,22 +392,6 @@ pub(crate) fn object_ref_addr(value: f64) -> usize {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if (bits >> 48) == 0 && bits != 0 {
-        raw_object_ref_addr(bits as usize)
-    } else {
-        0
-    }
-}
-
-#[cold]
-fn raw_object_ref_addr(addr: usize) -> usize {
-    // Arbitrary bits: only the allocator may vouch for them. Every buffer and
-    // typed array is a tracked allocation except a process-global
-    // SharedArrayBuffer block (#10694: no registry is consulted any more).
-    let owned = unsafe { try_read_tracked_gc_header(addr) }.is_some()
-        || crate::shared_sab::is_shared_sab(addr);
-    if owned {
-        addr
     } else {
         0
     }
@@ -689,9 +692,10 @@ mod tests {
             object_ref_addr(f64::from_bits(POINTER_TAG | 0x40001)),
             0x40001
         );
-        // The legacy raw-bitcast shape is kept for an allocator-owned object.
+        // A Number whose bits equal an allocator-owned object's address is
+        // still a Number: no ownership lookup turns it into a reference.
         let obj = crate::object::js_object_alloc(0, 0) as usize;
-        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), obj);
+        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), 0);
     }
 
     #[test]

@@ -90,12 +90,6 @@
       "why": "turnloop P5. `HttpPendingUpgrade` carries only handle ids (i64) and an owned `Vec<u8>` of the bytes that followed the request head — no NaN-boxed value and no heap pointer. Carrying ids rather than closure addresses is deliberate: #8082 showed that a snapshot parked in a queue goes stale across a moving collection, so the dispatcher re-reads the listeners from the server handle, whose side tables scan_http_server_roots does rewrite."
     },
     {
-      "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
-      "name": "IN_FLIGHT",
-      "verdict": "not_a_gc_pointer",
-      "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
-    },
-    {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
       "name": "PENDING",
       "verdict": "not_a_gc_pointer",
@@ -166,18 +160,6 @@
       "name": "POOL_OFFSET",
       "verdict": "not_a_gc_pointer",
       "why": "Byte offset of the next free slot inside the current pool owner, a plain u32. The pool owner pointer itself (POOL_OWNER) is the rooted holder; this cell never stores a heap address. B3 routed pool placement through store_alloc, which made the file an allocating context for rule T."
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/reactor.rs",
-      "name": "CP_LIVE_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Atomic count of spawned children that have not reached close. It is only a lock-free emptiness gate for the reactor and root scanner; the ChildProcess values themselves live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/reactor.rs",
-      "name": "CP_REFED_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Atomic count of live child-process handles that currently keep the event loop active. It stores only a scalar count; ChildProcess JS values live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/closure/alloc.rs",
@@ -610,15 +592,6 @@
       "why": "Per-thread traversal-evidence score for the lazy-vs-eager JSON.parse route (json/traversal_feedback.rs). A `Cell<u8>` saturating counter: incremented when a lazy array's cold read flips or completes an in-order scan, decremented when a lazy array is created, compared against a constant in `prefer_eager`. It never stores an address, handle, NaN-boxed value or anything derived from one."
     },
     {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
-    },
-    {
       "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
       "name": "SITE",
       "verdict": "not_a_gc_pointer",
@@ -789,12 +762,6 @@
       "why": "Inside #[cfg(test)] pub(crate) mod sabotage: a thread-local Cell<u32> liveness counter for the static plan test (gc::tests::static_scan). A counter only; absent from production builds."
     },
     {
-      "file": "crates/perry-runtime/src/object/native_call_method/namespace_override.rs",
-      "name": "RUNNING",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10848 reentrancy guard: a CatchStack of owned (module, method) name `String` pairs marking which native-namespace user overrides are executing on this thread (truncated by the catch savepoint on a throw). Rust-owned strings only — the override closure and the namespace it runs on are rooted in the caller's RuntimeHandleScope."
-    },
-    {
       "file": "crates/perry-runtime/src/object/native_get.rs",
       "name": "FORCE_SLOW",
       "verdict": "test_only",
@@ -948,15 +915,6 @@
       "name": "LAST_FORWARD_WORK",
       "verdict": "test_only",
       "why": "#10164: #[cfg(test)] Cell<usize> holding the Perex work units the last forward split charged, so tests can assert its cost scales linearly. A quantity, never an address, and absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/set.rs",
-      "name": "SET_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
       "file": "crates/perry-runtime/src/stack_guard.rs",
@@ -1223,12 +1181,6 @@
       "name": "OWN_WORKER_COUNTS",
       "verdict": "not_a_gc_pointer",
       "why": "#12448: this thread's cached handle to its agent's Rust-owned Worker counters (an AgentId plus an Arc of two AtomicUsize counts). It holds counts, never a JS heap address."
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "NEXT_PORT_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic MessagePort id counter."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
@@ -2756,12 +2708,6 @@
       "why": "Boolean reporting termination of this agent after a loop interrupt. It stores no exception payload, callback or GC address."
     },
     {
-      "file": "crates/perry-runtime/src/object/builtin_proto.rs",
-      "name": "ACTIVE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean recursion guard local to call_unknown_collection_method. Reset restores it on scope exit; receiver and callable values are not stored here."
-    },
-    {
       "file": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "name": "BIRTH_SHAPE",
       "verdict": "not_a_gc_pointer",
@@ -2889,33 +2835,15 @@
     },
     {
       "file": "crates/perry-runtime/src/component/asynchronous.rs",
-      "name": "PENDING",
-      "verdict": "not_a_gc_pointer",
-      "why": "Stable native-payload OwnerLink tokens retained with link_ref. Pinned payload cells trace and rewrite the owner back-edge and all ordinary managed state (component, Promise and primary error). Completion unrefs each link; agent retirement clears tokens before arena teardown. No JS address is retained in this queue. Moving-GC acceptance tests assert the queued operation evacuates while suspended."
-    },
-    {
-      "file": "crates/perry-runtime/src/component/asynchronous.rs",
       "name": "PUMPING",
       "verdict": "not_a_gc_pointer",
       "why": "Boolean reentrancy guard for the component Promise pump; contains no managed value or address."
     },
     {
       "file": "crates/perry-runtime/src/component/http/pump.rs",
-      "name": "PENDING",
-      "verdict": "not_a_gc_pointer",
-      "why": "Queue of stable native-payload OwnerLink tokens, each held by link_ref until completion. Native cells are pinned; their ordinary descriptor traces and rewrites the owner back-edge, including Promise, component, server and error JS state. No JS heap addresses are stored in this queue. Normal completion unrefs; agent retirement clears plain tokens before the arena finalizes pinned cells, and TLS destruction never dereferences tokens."
-    },
-    {
-      "file": "crates/perry-runtime/src/component/http/pump.rs",
       "name": "PUMPING",
       "verdict": "not_a_gc_pointer",
       "why": "Boolean reentrancy guard only. Prevents callbacks from recursively entering an active component Store through the auxiliary event pump."
-    },
-    {
-      "file": "crates/perry-runtime/src/component/persistent/poll.rs",
-      "name": "DRIVERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Stable native-payload OwnerLink tokens, each retained with link_ref before queue publication. Native payload cells are pinned and trace/rewrite the ordinary owner back-edge, component, invocation rows and import Promise records. Poll completion unrefs each cell; idle drivers are unpinned, and agent retirement clears tokens before arena teardown. The queue stores no movable JS value or callback frame. Public runtime acceptance tests exercise moving GC and callbacks after the public Promise is collected."
     },
     {
       "file": "crates/perry-runtime/src/component/persistent/poll.rs",

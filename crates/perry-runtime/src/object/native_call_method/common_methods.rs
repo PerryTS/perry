@@ -547,8 +547,6 @@ unsafe fn apply_argument_list(
         } else {
             (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
         }
-    } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
-        args_arr_bits as usize
     } else {
         0
     };

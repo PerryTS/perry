@@ -86,7 +86,11 @@ fn timerify_and_event_loop_utilization_work_when_detached() {
     let _scope = TestScope::new();
     let performance = crate::perf_hooks::performance_namespace();
 
-    let event_loop_utilization = performance_member(performance, "eventLoopUtilization", "Performance.prototype.eventLoopUtilization");
+    let event_loop_utilization = performance_member(
+        performance,
+        "eventLoopUtilization",
+        "Performance.prototype.eventLoopUtilization",
+    );
     let elu_result = unsafe { call_detached(event_loop_utilization, &[]) };
     assert!(
         crate::value::JSValue::from_bits(elu_result.to_bits()).is_pointer(),
@@ -127,7 +131,11 @@ fn resource_entry_count() -> usize {
 fn mark_resource_timing_ignores_its_receiver() {
     let _scope = TestScope::new();
     let performance = crate::perf_hooks::performance_namespace();
-    let mark_resource_timing = performance_member(performance, "markResourceTiming", "Performance.prototype.markResourceTiming");
+    let mark_resource_timing = performance_member(
+        performance,
+        "markResourceTiming",
+        "Performance.prototype.markResourceTiming",
+    );
 
     crate::perf_hooks::js_perf_clear_resource_timings();
     let timing = crate::object::js_object_alloc(0, 2);

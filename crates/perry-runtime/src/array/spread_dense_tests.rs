@@ -297,9 +297,6 @@ fn a_sparse_array_whose_length_outruns_its_storage_is_not_eligible() {
     assert!(dense_spread_source(boxed(src)).is_none());
 }
 
-
-
-
 #[test]
 fn destructure_guard_is_the_negation_of_the_dense_proof() {
     // #10524: `const [a, b] = <untyped>` reads by index exactly when the value

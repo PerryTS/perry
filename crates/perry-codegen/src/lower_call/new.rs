@@ -900,7 +900,8 @@ fn lower_new_impl_inner<'a>(
                     // An object-literal class's lane argument is its word
                     // already (above); any other class's value is encoded.
                     let word = if class.is_literal_shape() {
-                        ctx.block().bitcast_double_to_i64(&prologue_values[store_index])
+                        ctx.block()
+                            .bitcast_double_to_i64(&prologue_values[store_index])
                     } else {
                         crate::expr::rest_fields::encode(ctx, &prologue_values[store_index])
                     };

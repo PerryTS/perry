@@ -304,10 +304,7 @@ fn value_length_property(value: f64) -> f64 {
         // prototype Get. Declined proofs must use the named getter, which
         // preserves accessors and their original primitive `this` value.
         let key = crate::string::intern_ascii_literal(b"length");
-        return crate::object::js_object_get_field_by_name_f64(
-            value.to_bits() as usize as *const crate::object::ObjectHeader,
-            key,
-        );
+        return crate::object::field_get_set::get_field_by_name_of_value(value, key);
     }
 
     if let Some((_, payload)) = crate::builtins::boxed_primitive_payload(value) {
@@ -336,10 +333,7 @@ fn value_length_property(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(value);
     let key = crate::string::intern_ascii_literal(b"length");
-    crate::object::js_object_get_field_by_name_f64(
-        receiver.get_nanbox_u64() as usize as *const crate::object::ObjectHeader,
-        key,
-    )
+    crate::object::field_get_set::get_field_by_name_of_value(receiver.get_nanbox_f64(), key)
 }
 
 /// Unified object property access that handles both JS handle objects and native objects.
@@ -1060,7 +1054,10 @@ mod length_handle_band_tests {
         assert!(!unsafe {
             crate::typedarray_props::typed_array_set_property_by_name(typed as usize, "length", 1.0)
         });
-        assert_eq!(js_value_length_property_f64(crate::value::js_nanbox_pointer(typed as i64)), 3.0);
+        assert_eq!(
+            js_value_length_property_f64(crate::value::js_nanbox_pointer(typed as i64)),
+            3.0
+        );
         crate::typedarray_props::test_define_own_data(typed as usize, "length", 1.0);
 
         let boxed = crate::value::js_nanbox_pointer(typed as i64);

@@ -112,3 +112,137 @@ console.log(a.join(','));
         "1,9,2,3"
     );
 }
+
+#[test]
+fn global_is_nan_and_is_finite_coerce_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s: any = "abc";
+const n: any = "1";
+const u: any = undefined;
+console.log(isNaN(s) + " " + isNaN(n) + " " + isNaN(u) + " " + isNaN(NaN) + " " + isNaN(1));
+console.log(isFinite(n) + " " + isFinite(s) + " " + isFinite(Infinity) + " " + isFinite(1));
+"#
+        ),
+        "true false true true false\ntrue false false true"
+    );
+}
+
+#[test]
+fn console_log_prints_every_argument_on_one_line() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const n: any = 1;
+console.log("a", n, true);
+console.log();
+console.log("b");
+"#
+        ),
+        "a 1 true\n\nb"
+    );
+}
+
+#[test]
+fn json_stringify_honors_value_replacer_and_space() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = { a: 1, b: "x", c: [true, null] };
+console.log(JSON.stringify(o));
+console.log(JSON.stringify(o, ["a", "b"]));
+console.log(JSON.stringify(o, (k: string, v: any) => (k === "a" ? 2 : v)));
+console.log(JSON.stringify({ d: 1 }, null, "--"));
+console.log(JSON.stringify(undefined) === undefined);
+"#
+        ),
+        "{\"a\":1,\"b\":\"x\",\"c\":[true,null]}\n{\"a\":1,\"b\":\"x\"}\n{\"a\":2,\"b\":\"x\",\"c\":[true,null]}\n{\n--\"d\": 1\n}\ntrue"
+    );
+}
+
+#[test]
+fn a_closure_under_any_expression_is_emitted() {
+    assert_eq!(
+        run_web_source(
+            r#"
+console.log([1, 2].map((x: number) => x * 2).join(","));
+class Static { static value = (() => 5)(); }
+console.log(Static.value);
+"#
+        ),
+        "2,4\n5"
+    );
+}
+
+#[test]
+fn an_instance_serializes_only_its_own_fields() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Point { x: number; constructor() { this.x = 1; } }
+const p = new Point();
+console.log(JSON.stringify(p) + " " + Object.keys(p).join(","));
+const q: any = { y: 2 };
+console.log(JSON.stringify({ ...q }) + " " + Object.keys(q).join(","));
+"#
+        ),
+        "{\"x\":1} x\n{\"y\":2} y"
+    );
+}
+
+#[test]
+fn a_class_without_a_constructor_runs_its_implicit_one() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { x: number; constructor(v: number) { this.x = v; } }
+class B extends A {}
+class C extends A { y = 2; }
+class D { z = 1; }
+class E extends D {}
+const c = new C(4);
+console.log(new B(3).x + " " + c.x + " " + c.y + " " + new D().z + " " + new E().z);
+"#
+        ),
+        "3 4 2 1 1"
+    );
+}
+
+#[test]
+fn a_derived_class_initializes_its_fields_after_super() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { seen: any; constructor() { this.seen = (this as any).y; } }
+class B extends A { y = 2; }
+class C extends A { y = 3; constructor() { super(); } }
+const b = new B();
+const c = new C();
+console.log(b.seen + " " + (b as any).y + " " + c.seen + " " + (c as any).y);
+"#
+        ),
+        "undefined 2 undefined 3"
+    );
+}
+
+// `new Map()` without type arguments is a `NewDynamic` of the global constructor;
+// a host constructor has to be constructed, not called.
+#[test]
+fn new_of_a_host_constructor_constructs_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const m = new Map();
+m.set("a", 1);
+m.set("b", 2);
+console.log(m.size + " " + m.get("b") + " " + m.has("a"));
+const s = new Set([1, 2, 2, 3]);
+console.log(s.size + " " + s.has(2));
+function inner(): number { const w = new Map(); w.set(1, 1); return w.size; }
+console.log(inner());
+"#
+        ),
+        "2 2 true\n3 true\n1"
+    );
+}

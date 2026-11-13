@@ -540,7 +540,10 @@ fn linked_shape_matches_layout(
         && b.hole_count == 0
         && a.summary == b.summary
         && a.special_constfn_mask == b.special_constfn_mask
-        && a.constfn_infos().iter().map(|i| i.slot).eq(b.constfn_infos().iter().map(|i| i.slot))
+        && a.constfn_infos()
+            .iter()
+            .map(|i| i.slot)
+            .eq(b.constfn_infos().iter().map(|i| i.slot))
         && field_rep::identity_with_special(a.rep) == field_rep::identity_with_special(b.rep)
 }
 
@@ -768,10 +771,7 @@ unsafe fn publish_key_add_rep(
     if rep == d.rep {
         return id;
     }
-    let infos = constfn_info.map(|info| super::shapes::ConstFnSlotInfo {
-        slot,
-        info,
-    });
+    let infos = constfn_info.map(|info| super::shapes::ConstFnSlotInfo { slot, info });
     let target = normalized_shape(publish_shape_result(
         super::shapes::shape_descriptor_intern_with_special(
             d.keys_view(),
@@ -1067,7 +1067,8 @@ pub(crate) fn normalized_shape(mut id: LayoutWord) -> LayoutWord {
                     & (1u32 << (slot % field_rep::REP_SLOTS))
                     != 0
         };
-        let tail_changes = d.has_tail_constfn() && d.constfn_infos().iter().any(|e| tail_gone(e.slot));
+        let tail_changes =
+            d.has_tail_constfn() && d.constfn_infos().iter().any(|e| tail_gone(e.slot));
         if rep == d.rep && !tail_changes {
             return id;
         }

@@ -632,7 +632,9 @@ mod fs_stream_list_tests {
     #[test]
     fn fs_receiver_arms_are_the_listed_methods() {
         let src = include_str!("native_fs_branch.rs");
-        let end = src.find("// fs module functions").expect("receiver block end");
+        let end = src
+            .find("// fs module functions")
+            .expect("receiver block end");
         let mut arms: Vec<&str> = Vec::new();
         for (i, part) in src[..end].split('"').enumerate() {
             let ident = !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric());

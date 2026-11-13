@@ -95,6 +95,45 @@ pub(crate) fn json_replacer(sabotage: Option<&str>) -> bool {
         )
 }
 
+/// `PERRY_FACTS_REACH_HELD_KEYS=0`: a function a host object that is no
+/// node module holds (`Temporal.Duration`, `Intl.NumberFormat`,
+/// `WebAssembly.Module`) declares no own key: its `prototype` and its
+/// statics read as absent, so what the program stores or defines through
+/// `F.prototype` has no receiver and goes nowhere (the realm table's `held`
+/// rows, `Declarations::build`). The sabotage `noreachheldkeys` is the
+/// same.
+pub(crate) fn held_keys(sabotage: Option<&str>) -> bool {
+    sabotage != Some("noreachheldkeys")
+        && !matches!(
+            std::env::var("PERRY_FACTS_REACH_HELD_KEYS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+}
+
+/// `PERRY_FACTS_REACH_PROTO_ACCESSORS=0`: an accessor the program installs
+/// on a built-in prototype runs only for the receivers whose lookup the
+/// solve walks; a read or a write on a primitive or on an unknown value
+/// calls none (`Cons::Accessor` on `ObjectProto`). The sabotage
+/// `noreachprotoaccessors` is the same.
+pub(crate) fn proto_accessors(sabotage: Option<&str>) -> bool {
+    sabotage != Some("noreachprotoaccessors")
+        && !matches!(
+            std::env::var("PERRY_FACTS_REACH_PROTO_ACCESSORS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+}
+
+/// The switches a model reads during the solve, set before generation.
+/// Without the `held` rows the realm table is rebuilt as it was before
+/// them.
+pub(crate) fn configure(m: &mut Model, sabotage: Option<&str>) {
+    m.reach_json_replacer = json_replacer(sabotage);
+    m.reach_proto_accessors = proto_accessors(sabotage);
+    if !held_keys(sabotage) {
+        m.declarations = crate::builtins::realm_shapes::Declarations::build(false);
+    }
+}
+
 /// The nodes of one `JSON.stringify` call with a replacer
 /// (`Model::json_replacer_calls`).
 pub(crate) struct JsonReplacerNodes {
