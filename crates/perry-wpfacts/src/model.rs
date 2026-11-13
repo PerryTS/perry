@@ -1735,6 +1735,11 @@ pub struct Model {
     /// The elements of an array literal template whose elements may all be
     /// constant Numbers (`const_arrays::literal_elems`).
     pub arr_const: FxHashMap<TmplId, Vec<crate::const_arrays::Elem>>,
+    /// The element value nodes of an array literal `[e0, …, en-1]` by the
+    /// node that holds its token: what a builtin that iterates that literal
+    /// as its argument sees at each index (`Promise.all`, 27.2.4.1.2: the
+    /// result's index `i` is item `i`).
+    pub arr_lit_elems: FxHashMap<NodeId, Vec<NodeId>>,
     /// `new Array(...)` by its call's source site: what gen knows of the
     /// Array its builtin births there (`builtins::site_new_array`).
     pub arr_len_at_site: FxHashMap<SiteId, SiteBirth>,
@@ -2201,6 +2206,14 @@ pub struct Model {
     /// through its node (the last field), refilled as the writes grow, and
     /// runs today's opaque member once an opaque write reaches the key.
     pub native_answered: FxHashMap<(Tok, Atom, NativeMiss), NodeId>,
+    /// The node of each key (native prototype, key) of the answered
+    /// lookups (`native_answered`): it holds what the writes that may have
+    /// written the key stored, each value once, and every answered lookup
+    /// of the key reads that one node.
+    pub native_answer_nodes: FxHashMap<(Tok, Atom), NodeId>,
+    /// Profile counters of the answered lookups: replays run, values fed.
+    pub native_replays: u64,
+    pub native_fed: u64,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
     /// fields under keys they do not declare.
     pub r1_holders: crate::pts::FxHashSet<Tok>,
@@ -2377,6 +2390,8 @@ pub struct Model {
     /// Calls/`new` of a ⊤ callee: with the interpreter linked, one could be
     /// the Function constructor or `vm` (E14).
     pub top_calls: u64,
+    /// Dump only: `index_slots_merge` runs that found a slot to merge.
+    pub index_slot_merges: u64,
     /// The receiver token a builtin method summary runs for.
     pub cur_this: Option<Tok>,
     /// Lookups that stopped at a declared prototype member: resumed if that

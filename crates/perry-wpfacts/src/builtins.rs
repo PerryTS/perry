@@ -1344,22 +1344,26 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 
 /// The primitive kinds whose ToObject wrapper an `Array.prototype` method
 /// called with that primitive as `this` runs on (`array_method_on_prim`).
-pub(crate) const ARRAY_BOXED_PRIMS: u16 = prim::STR | prim::NUM | prim::BOOL;
+pub(crate) const ARRAY_BOXED_PRIMS: u16 =
+    prim::STR | prim::NUM | prim::BOOL | prim::SYMBOL | prim::BIGINT;
 
 /// `Array.prototype.<key>` called with `this` a primitive of kind `k`
 /// (one of `ARRAY_BOXED_PRIMS`): the method's ToObject(this) (ECMA-262
 /// 23.1.3, 7.1.18) is a new wrapper object of `k` (22.1.1.1 String
-/// exotic objects, 21.1.1.1, 20.3.1.1), born at the call, and the method
-/// runs on it as on any array-like (`array_method_on`). A String wrapper's
-/// index properties are the characters of its string (10.4.3.5
-/// StringGetOwnProperty): its elements hold the string kind. A Number or
-/// Boolean wrapper has no index property and no own `length` (ToLength
-/// of what its chain gives), so `slice`/`map`/`filter` make a new array of
+/// exotic objects, 21.1.1.1, 20.3.1.1, 20.4.1, 21.2.1), born at the call,
+/// and the method runs on it as on any array-like (`array_method_on`). A
+/// String wrapper's index properties are the characters of its string
+/// (10.4.3.5 StringGetOwnProperty): its elements hold the string kind. A
+/// Number, Boolean, Symbol or BigInt wrapper has no index property and no
+/// own `length` (ToLength of what its chain gives: its realm prototype,
+/// then Object.prototype), so `slice`/`map`/`filter` make a new array of
 /// no elements and callbacks receive none.
 pub(crate) fn array_method_on_prim(m: &mut Model, k: u16, key: Atom, call: CallId) {
     let what = match k {
         prim::STR => "BoxedString",
         prim::NUM => "BoxedNumber",
+        prim::SYMBOL => "BoxedSymbol",
+        prim::BIGINT => "BoxedBigInt",
         _ => "BoxedBoolean",
     };
     let w = site_tmpl(m, call, what);
@@ -2663,11 +2667,29 @@ fn ns_method_inner(
             let fa = m.field_any(arr);
             // ECMA-262 27.2.4.1 ff.: the iterable is iterated
             // (GetIterator); its values are the items.
-            let vals = all_arg_values(m, call);
-            let items = iterate(m, call, vals);
+            // `Promise.all([e0, …, en-1])` over a literal: the literal is
+            // fresh, only the iteration holds it and %ArrayIteratorPrototype%
+            // is locked, so item `i` is `ei`; its resolve element function
+            // writes index `i` of the result only (27.2.4.1.2 step 8, 27.2.4.1.3).
+            let lit = match (name, m.calls[call as usize].spread.is_empty(), arg(m, call, 0)) {
+                ("all", true, Some(a)) if promise_all_index() => m.lit_elems_at(call, a),
+                _ => None,
+            };
             let settled = m.node_l("settled");
-            adopt(m, call, items, settled);
-            m.edge(settled, fa);
+            if let Some(els) = lit {
+                for (i, e) in els.into_iter().enumerate() {
+                    let s = m.node_l("settled");
+                    adopt(m, call, e, s);
+                    m.edge(s, settled);
+                    let slot = m.index_slot(arr, i as u32);
+                    m.edge(s, slot);
+                }
+            } else {
+                let vals = all_arg_values(m, call);
+                let items = iterate(m, call, vals);
+                adopt(m, call, items, settled);
+                m.edge(settled, fa);
+            }
             if name == "allSettled" {
                 // {status, value|reason} records
                 let rec = site_tmpl(m, call, "settledRecord");
@@ -3013,4 +3035,14 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
         m.add_prim(f, prim::STR);
     }
     e
+}
+
+/// The per-index rule for `Promise.all` over an array literal, OFF by
+/// default (`PERRY_FACTS_PROMISE_ALL_INDEX=1`: on). Off, the result is one
+/// merged element set as for any iterable. On, the three.js skin solve
+/// keeps its proven sites but its maker trees deepen (one GLTFLoader
+/// per-primitive Mesh holds 10,942 objects instead of 278, work 103M ->
+/// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
+fn promise_all_index() -> bool {
+    std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
 }

@@ -247,6 +247,8 @@ pub struct Stats {
     pub field_truthy: (u64, u64),
     /// Dump only: `# ftr` rows (`field_truthy_rows`).
     pub field_truthy_rows: Vec<String>,
+    /// Dump only: solve counters (`solve_counters`).
+    pub solve_counters: Vec<String>,
     /// (constraint kind, applications, ms), most expensive first.
     pub profile: Vec<(String, u64, f64)>,
     pub pts_entries: u64,
@@ -493,7 +495,7 @@ use contracts::open_templates;
 use contracts::unnamed_methods;
 use contracts::value_contract_of;
 use contracts::value_contract_of_toks;
-use program_facts::{big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows};
+use program_facts::{big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows, solve_counters};
 
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
@@ -1194,6 +1196,7 @@ fn compute_act<'a>(
         top_calls: g.m.top_calls,
         field_truthy: field_truthy_filters(&g.m),
         field_truthy_rows: field_truthy_rows(&g.m),
+        solve_counters: solve_counters(&g.m),
         profile: {
             let mut v: Vec<(String, u64, f64)> =
                 g.m.profile

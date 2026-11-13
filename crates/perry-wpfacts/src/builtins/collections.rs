@@ -1706,7 +1706,10 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         // A primitive wrapper object runs the method of the primitive kind
         // it wraps, or its realm chain's (`wrapper_method`).
-        ("BoxedNumber" | "BoxedString" | "BoxedBoolean", Some(n)) => {
+        (
+            "BoxedNumber" | "BoxedString" | "BoxedBoolean" | "BoxedSymbol" | "BoxedBigInt",
+            Some(n),
+        ) => {
             wrapper_method(m, t, &what, n, call)
         }
         ("RegExp", Some(n)) if string_methods::regexp_described(n) => {

@@ -613,6 +613,41 @@ impl Model {
         }
     }
 
+    /// The element nodes of the array literal `a` that `call` takes
+    /// (`Model::arr_lit_elems`), in the frame of `call`: a copy a summary
+    /// instance made reads its literal's elements in that instance. `None`:
+    /// `a` is no literal, or an element is an outer slot (read through the
+    /// context).
+    pub(crate) fn lit_elems_at(&self, call: CallId, a: NodeId) -> Option<Vec<NodeId>> {
+        if let Some(v) = self.arr_lit_elems.get(&a) {
+            return Some(v.clone());
+        }
+        let fr = self.nodes[a as usize].frame;
+        if fr == 0 {
+            return None;
+        }
+        let t = *self.sum.tmpl_of.get(&call)?;
+        let ta = *self.calls[t as usize].args.first()?;
+        let els = self.arr_lit_elems.get(&ta)?.clone();
+        let inst = fr - 1;
+        let f = self.sum.insts.get(inst as usize)?.f;
+        let s = self.sum.of.get(&f)?;
+        let mut copy = std::collections::HashMap::new();
+        self.inst_copies(inst, |o, c| {
+            copy.insert(o, c);
+        });
+        if copy.get(&ta) != Some(&a) {
+            return None;
+        }
+        els.iter()
+            .map(|e| match copy.get(e) {
+                Some(&c) => Some(c),
+                None if s.orig.contains(e) => None,
+                None => Some(*e),
+            })
+            .collect()
+    }
+
     pub(crate) fn summarized(&self, f: FnIdx) -> bool {
         self.sum.of.contains_key(&f)
     }

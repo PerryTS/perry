@@ -393,13 +393,16 @@ pub(super) fn realm_born_method(
 }
 
 /// The wrapper kind a `new Number(x)` / `new String(x)` / `new Boolean(x)`
-/// token names: its realm prototype and the primitive kind in its
-/// [[NumberData]] / [[StringData]] / [[BooleanData]] slot.
+/// token, or the ToObject wrapper of a symbol / bigint (7.1.18), names:
+/// its realm prototype and the primitive kind in its [[NumberData]] /
+/// [[StringData]] / [[BooleanData]] / [[SymbolData]] / [[BigIntData]] slot.
 pub(super) fn wrapper_kind(what: &str) -> Option<(&'static str, u16)> {
     match what {
         "BoxedNumber" => Some(("Number.prototype", prim::NUM)),
         "BoxedString" => Some(("String.prototype", prim::STR)),
         "BoxedBoolean" => Some(("Boolean.prototype", prim::BOOL)),
+        "BoxedSymbol" => Some(("Symbol.prototype", prim::SYMBOL)),
+        "BoxedBigInt" => Some(("BigInt.prototype", prim::BIGINT)),
         _ => None,
     }
 }

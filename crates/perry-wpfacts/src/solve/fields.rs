@@ -735,6 +735,7 @@ impl Model {
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.index_slot_atom(a).is_some() {
+                self.index_slot_merges += 1;
                 let s = self.field_r(t, a);
                 let fa = self.field_any(t);
                 self.edge(fa, s);
