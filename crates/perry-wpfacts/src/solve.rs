@@ -2024,6 +2024,7 @@ impl Model {
                 reason,
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
+            Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
             Cons::ViewedBuffer { view, fresh, share } => {
                 format!("viewedbuffer {n} {view} {fresh:?} {share}")
             }

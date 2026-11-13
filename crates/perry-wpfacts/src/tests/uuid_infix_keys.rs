@@ -74,8 +74,9 @@ fn to_prefix_argv_key_reads_builtin_members() {
 
 #[test]
 fn argv_then_const_suffix_key_reads_builtin_members() {
-    // `x + 'a'`: no character outside IdentifierPart is sure.
-    let v = recv(&facts(&prog("process.argv[2] + 'a'")));
+    // `x + 'Of'`: no character outside IdentifierPart is sure, and the
+    // suffix `Of` (rule M4) ends `valueOf` and `isPrototypeOf`.
+    let v = recv(&facts(&prog("process.argv[2] + 'Of'")));
     assert!(v.len() > 1, "{v:?}");
 }
 

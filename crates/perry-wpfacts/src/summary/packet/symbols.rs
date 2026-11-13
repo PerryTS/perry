@@ -481,6 +481,9 @@ impl Model {
             Cons::ShareBuffer { ta } => {
                 format!("ShareBuffer ta={:?}", self.packet_token(ta, packet))
             }
+            Cons::Captures { rec, pat } => {
+                format!("Captures rec={:?} pat={pat}", self.packet_token(rec, packet))
+            }
             Cons::ViewedBuffer { view, fresh, share } => format!(
                 "ViewedBuffer view={:?} fresh={fresh:?} share={share}",
                 self.packet_token(view, packet)

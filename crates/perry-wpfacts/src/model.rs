@@ -1779,6 +1779,14 @@ pub struct Model {
     /// Rest parameter arrays (`Model::is_rest_arr`): index-exact
     /// (`Model::index_slot`) from their birth.
     pub rest_param_tmpls: crate::pts::FxHashSet<TmplId>,
+    /// Rule RT (`builtins::regex_tail`): the tails of the analysable regex
+    /// literals, the tail of each literal's template (its
+    /// [[OriginalSource]] and [[OriginalFlags]], 22.2.3.1; no program
+    /// operation changes them), and the one tail each `exec` record
+    /// derived captures for (a second one merges its index slots).
+    pub(crate) regexp_tails: Vec<crate::builtins::regex_tail::Tail>,
+    pub(crate) regexp_tail_of: crate::pts::FxHashMap<TmplId, u32>,
+    pub(crate) regexp_exec_tail: crate::pts::FxHashMap<Tok, u32>,
     /// `Model::arr_len`: the node of an Array token's `length`.
     pub arr_len: FxHashMap<Tok, NodeId>,
     /// The birth length of an array literal template (`solve::arr_len`).

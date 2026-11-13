@@ -661,6 +661,10 @@ pub enum Cons {
     /// (ECMA-262 22.1.3.28 / .29, `upper`: `toUpperCase`): `dst` holds a
     /// String, the receiver's entries case-mapped (`Model::case_map_strs`).
     CaseMap { dst: NodeId, upper: bool },
+    /// Rule RT: the node is the input of an `exec` of the regex literal of
+    /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
+    /// derived groups hold the captures (`Model::capture_strs`).
+    Captures { rec: Tok, pat: u32 },
     Plus {
         str: NodeId,
         num: NodeId,
@@ -756,6 +760,7 @@ impl Cons {
                 | Cons::Plus { .. }
                 | Cons::IdxKey { .. }
                 | Cons::CaseMap { .. }
+                | Cons::Captures { .. }
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
@@ -891,6 +896,7 @@ impl Cons {
             Cons::StoreIndexed { .. } => "storeindexed",
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
+            Cons::Captures { .. } => "captures",
             Cons::ViewedBuffer { .. } => "viewedbuffer",
             Cons::ThisTo { .. } => "thisto",
             Cons::CallArgs { .. } => "callargs",

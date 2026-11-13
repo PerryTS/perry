@@ -303,6 +303,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Miss { .. }
         | Cons::BoundCall { .. }
         | Cons::ShareBuffer { .. }
+        | Cons::Captures { .. }
         | Cons::ViewedBuffer { .. } => Reject(R5Escape(c.kind_name().into())),
         // Prototype and construction.
         Cons::ProtoKey { .. }

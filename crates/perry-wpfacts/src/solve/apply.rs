@@ -2076,6 +2076,15 @@ impl Model {
                     self.add_tok(f, fresh);
                 }
             }
+            // Rule RT: an `exec` record's derived captures.
+            Cons::Captures { rec, pat } => {
+                for (g, p, s) in self.capture_strs(n, pat) {
+                    if p != 0 {
+                        let slot = self.index_slot(rec, g);
+                        self.add_s(slot, &[], p, s);
+                    }
+                }
+            }
             Cons::ShareBuffer { ta } => {
                 for &t in toks {
                     let shared = t == TOP

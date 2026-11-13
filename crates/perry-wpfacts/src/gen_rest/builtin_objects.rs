@@ -735,7 +735,17 @@ impl<'a> Gen<'a> {
                 let _ = self.prim_kids(fx, e, prim::ALL, "Date operand", Protocol::ToPrimitive);
                 self.bobj(mi, "Date").1
             }
-            Expr::RegExp { .. } => self.bobj(mi, "RegExp").1,
+            Expr::RegExp { pattern, flags } => {
+                let (t, n) = self.bobj(mi, "RegExp");
+                if let (&TokKind::Obj(tm, _), Some(tail)) =
+                    (&self.m.toks[t as usize], crate::builtins::regex_tail::analyse(pattern, flags))
+                {
+                    let i = self.m.regexp_tails.len() as u32;
+                    self.m.regexp_tails.push(tail);
+                    self.m.regexp_tail_of.insert(tm, i);
+                }
+                n
+            }
             // ECMA-262 22.2.4.1: IsRegExp(pattern) reads `@@match`; for a
             // regexp-like pattern `source` and `flags` are read (and in the
             // call form `constructor`, returning the pattern itself); then
