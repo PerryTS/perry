@@ -225,3 +225,24 @@ console.log(b.seen + " " + (b as any).y + " " + c.seen + " " + (c as any).y);
         "undefined 2 undefined 3"
     );
 }
+
+// `new Map()` without type arguments is a `NewDynamic` of the global constructor;
+// a host constructor has to be constructed, not called.
+#[test]
+fn new_of_a_host_constructor_constructs_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const m = new Map();
+m.set("a", 1);
+m.set("b", 2);
+console.log(m.size + " " + m.get("b") + " " + m.has("a"));
+const s = new Set([1, 2, 2, 3]);
+console.log(s.size + " " + s.has(2));
+function inner(): number { const w = new Map(); w.set(1, 1); return w.size; }
+console.log(inner());
+"#
+        ),
+        "2 2 true\n3 true\n1"
+    );
+}

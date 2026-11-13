@@ -124,6 +124,7 @@ impl WasmModuleEmitter {
             "closure_call_1",
             "closure_call_2",
             "closure_call_3",
+            "new_dynamic",
             "closure_call_spread",
             "array_map",
             "array_filter",
