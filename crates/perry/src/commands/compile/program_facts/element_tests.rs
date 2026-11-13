@@ -44,9 +44,15 @@ fn product_element_identity_preserves_codegen_facts() {
     assert_eq!(old.stats.work, new.stats.work);
     assert_eq!(old.stats.pops, new.stats.pops);
     assert_eq!(old.stats.constraints, new.stats.constraints);
-    assert_eq!(
-        elision_for(&old, "product.ts"),
-        elision_for(&new, "product.ts")
-    );
+    // `number_element_reads` and `primitive_elements` are keyed by
+    // `element_offset`, and offset 0 means "no identity", so without identity
+    // they cannot be stated at all. Identity may add those two; every other
+    // elision must be unchanged.
+    let old_elision = elision_for(&old, "product.ts");
+    let mut new_elision = elision_for(&new, "product.ts");
+    assert!(old_elision.number_element_reads.is_empty());
+    assert!(old_elision.primitive_elements.is_empty());
+    new_elision.number_element_reads.clear();
+    new_elision.primitive_elements.clear();    assert_eq!(old_elision, new_elision);
     assert_eq!(old.digest_for("product.ts"), new.digest_for("product.ts"));
 }
