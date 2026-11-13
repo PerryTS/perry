@@ -232,6 +232,11 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
+        // Unknown code runs, handed values or not: it holds the realm.
+        if !self.realm_held {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            self.hold_realm(r);
+        }
         // −0 tolerance: unknown code receives the arguments.
         self.zs_call_args(call);
         if t == TOP {
@@ -721,6 +726,10 @@ impl Model {
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
+                }
+                if !self.realm_held {
+                    let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+                    self.hold_realm(r);
                 }
                 let r = self.reason("passed to `new` of an unknown constructor");
                 self.zs_call_args(call);

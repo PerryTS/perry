@@ -46,6 +46,12 @@ impl Model {
         if t == TOP {
             return;
         }
+        // A value reaches unknown code: unknown code exists and holds the
+        // realm (`hold_realm`).
+        if !self.realm_held {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            self.hold_realm(r);
+        }
         // Unknown code given the Function constructor may call it, and ⊤
         // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
         // the program is closed, and no native returns the constructor; the

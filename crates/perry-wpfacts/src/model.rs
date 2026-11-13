@@ -2208,6 +2208,11 @@ pub struct Model {
     /// Interpreted code may run: its global writes and its catch of thrown
     /// values are in the solve (`builtins::interpreted_code_runs`).
     pub interp_runs: bool,
+    /// Unknown code exists (a value escapes, an unknown function value is
+    /// called, interpreted code may run): it holds the whole realm, every
+    /// intrinsic object and every intrinsic function, whether or not the
+    /// program hands it one (`Model::hold_realm`).
+    pub realm_held: bool,
     /// No interpreted code can run in the program (no dynamic code, no
     /// dynamic code reach, no direct eval scope): what this unit publishes
     /// reaches compiled units only, which use another unit's stand-in
