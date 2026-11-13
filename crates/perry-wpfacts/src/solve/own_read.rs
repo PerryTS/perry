@@ -338,7 +338,7 @@ impl Model {
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.fields[&(t, a)];
-            if self.nodes[f as usize].enum_key || self.is_num_atom(a) {
+            if self.enum_own(t, f, a) {
                 self.edge(f, n);
             }
         }

@@ -237,6 +237,7 @@ mod specialized_prototype;
 mod spread_arguments;
 mod spread_compose_elems;
 mod spread_elements;
+mod spread_enumerable;
 mod spread_iterable_args;
 mod summary;
 mod super_heritage;

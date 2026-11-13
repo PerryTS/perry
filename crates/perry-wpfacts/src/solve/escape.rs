@@ -329,7 +329,11 @@ impl Model {
         if self.esc_bits.len() <= w {
             self.esc_bits.resize(w + 1, 0);
         }
+        let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
+        if fresh {
+            self.enum_escaped(t);
+        }
     }
 
     /// Unknown code holding `t` runs every accessor on its chain: a setter
