@@ -159,13 +159,12 @@ pub(crate) fn target_set(target: f64, key: f64, value: f64) {
 pub(crate) fn raw_ptr_from_value(value: f64) -> Option<usize> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
-    let raw = if top16 == (POINTER_TAG >> 48) {
-        bits & POINTER_MASK
-    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        bits
-    } else {
+    // A value names an object by its tag alone: a word with clear top 16 bits
+    // is a Number (a denormal), never an address.
+    if top16 != (POINTER_TAG >> 48) {
         return None;
-    } as usize;
+    }
+    let raw = (bits & POINTER_MASK) as usize;
     // #7531: `value` is a Proxy `target`/`key` candidate -- caller-supplied,
     // so it can be a fetch/zlib/proxy/common-registry handle id. The old
     // floor (`GC_HEADER_SIZE + 0x1000`) sits below every handle band; the
