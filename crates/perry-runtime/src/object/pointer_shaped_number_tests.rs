@@ -32,6 +32,22 @@ fn own(obj: *mut crate::ObjectHeader, name: &str) -> u64 {
     super::js_object_get_field_by_name_f64(obj, key(name)).to_bits()
 }
 
+/// Truthiness of a Number never reads a string: the Number whose bits are the
+/// empty string's address is a nonzero Number (truthy), not `""` (falsy).
+#[test]
+fn truthiness_of_the_number_reads_no_string() {
+    let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    let forged = f64::from_bits(empty as u64);
+    assert_eq!(forged.to_bits() >> 48, 0, "an address is a denormal");
+    assert_eq!(crate::value::js_is_truthy(forged), 1);
+    assert_eq!(crate::value::js_is_truthy(f64::from_bits(0x1000_0000)), 1);
+    assert_eq!(
+        crate::value::js_is_truthy(crate::value::js_nanbox_string(empty as i64)),
+        0
+    );
+    assert_eq!(crate::value::js_is_truthy(0.0), 0);
+}
+
 #[test]
 fn a_named_read_answers_as_a_number() {
     let (obj, forged) = object_and_forgery();
