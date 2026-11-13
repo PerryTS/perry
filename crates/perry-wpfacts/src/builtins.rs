@@ -977,7 +977,7 @@ fn intrinsic_unwritten(
 /// collapsed token may stand for an add-open prototype (`%TypedArray%`,
 /// `Error.prototype`), not `Object.prototype`.
 pub(crate) fn locked_chain_read(m: &Model, t: Tok, a: Atom) -> bool {
-    if matches!(m.toks[t as usize], TokKind::NativeProto(_)) {
+    if matches!(m.toks[t as usize], TokKind::NativeProto(..)) {
         return false;
     }
     if let TokKind::Builtin(ns) = m.toks[t as usize] {
@@ -1715,7 +1715,7 @@ fn seed_family(m: &Model, t: Tok) -> Option<Family> {
             (tm.parent.is_none() && tm.native_parent.is_none() && tm.parent_value.is_none())
                 .then_some(Family::Object)
         }
-        TokKind::NativeProto(_) => Some(Family::Object),
+        TokKind::NativeProto(..) => Some(Family::Object),
         TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::BuiltinFn(_) => Some(Family::Function),
         TokKind::ClassObj(tm) => {
             let tm = &m.tmpls[*tm as usize];
@@ -1765,9 +1765,9 @@ pub(crate) fn chain_ns(m: &Model, t: Tok) -> Option<BuiltinNs> {
         TokKind::Builtin(ns) if members::ns_chain(*ns) == Family::Function => {
             Some(BuiltinNs::Function)
         }
-        TokKind::NativeProto(n)
+        TokKind::NativeProto(_, ns)
             if matches!(
-                ns_by_name(n),
+                ns,
                 Some(BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_))
             ) =>
         {
@@ -1845,7 +1845,7 @@ pub(crate) fn enum_free_ns(ns: BuiltinNs) -> bool {
 /// that may be `ObjectProto` puts ⊤ on the chain (`Cons::ProtoGiven`).
 pub(crate) fn enum_free_seed(m: &Model, from: Tok) -> bool {
     match &m.toks[from as usize] {
-        TokKind::Builtin(_) | TokKind::NativeProto(_) => m.enum_free(from),
+        TokKind::Builtin(_) | TokKind::NativeProto(..) => m.enum_free(from),
         TokKind::Obj(tm, _) if matches!(m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }) => {
             ordinary_box(m, from) || enum_free_instance(m, from)
         }

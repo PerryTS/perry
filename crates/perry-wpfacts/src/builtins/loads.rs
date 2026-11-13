@@ -1268,11 +1268,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         }
         TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
         // A key the native prototype does not define: the chain goes on.
-        TokKind::NativeProto(_) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
+        TokKind::NativeProto(..) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
         // A builtin's prototype object taken as a value (`builtin_proto_tok`):
         // its described members, as a receiver of its family reads them.
-        TokKind::NativeProto(ref n) if ns_by_name(n).and_then(proto_family).is_some() => {
-            let (fam, what, _) = ns_by_name(n).and_then(proto_family).unwrap();
+        TokKind::NativeProto(_, ns) if ns.and_then(proto_family).is_some() => {
+            let (fam, what, _) = ns.and_then(proto_family).unwrap();
             match key {
                 Key::Named(a) => family_load(m, t, fam, what, a, dst),
                 Key::Any(_) => family_any(m, Some(t), fam, what, key, dst),
@@ -1295,7 +1295,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             m.add_prim(dst, prim::ALL);
             family_any(m, Some(t), Family::Function, None, key, dst);
         }
-        TokKind::NativeProto(_) => {
+        TokKind::NativeProto(..) => {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
             m.add_tok(dst, bf);
             m.add_prim(dst, prim::ALL);
@@ -1303,7 +1303,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             // a native prototype's is its native class (the builtin
             // function above).
             if m.key_may_name_str(key, "constructor")
-                && !matches!(m.toks[t as usize], TokKind::NativeProto(_))
+                && !matches!(m.toks[t as usize], TokKind::NativeProto(..))
             {
                 let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
                 m.add_tok(dst, fc);

@@ -192,7 +192,7 @@ impl Model {
         }
         if matches!(
             self.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..)
         ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -251,7 +251,7 @@ impl Model {
         if !builtins::builtin_function(self, t)
             && matches!(
                 self.toks[t as usize],
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_)
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(..)
             )
         {
             // Handed to unknown code (not reached along a chain): the

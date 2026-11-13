@@ -344,8 +344,18 @@ pub enum TokKind {
     /// A module's namespace / `module.exports` object.
     ModNs(u32),
     /// The prototype of a native parent class (`extends EventEmitter`),
-    /// whose methods have summaries in `builtins.rs`.
-    NativeProto(String),
+    /// whose methods have summaries in `builtins.rs`. The second field is
+    /// the namespace the name declares (`builtins::ns_by_name`), a function
+    /// of the name taken once when the token is minted
+    /// ([`TokKind::native_proto`]).
+    NativeProto(String, Option<BuiltinNs>),
+}
+
+impl TokKind {
+    /// The [`TokKind::NativeProto`] of native `name`.
+    pub(crate) fn native_proto(name: &str) -> TokKind {
+        TokKind::NativeProto(name.to_string(), crate::builtins::ns_by_name(name))
+    }
 }
 
 pub use crate::builtins::Family;
@@ -2295,7 +2305,8 @@ pub struct Model {
     /// per (target, key): the target is the prototype's own token,
     /// `ObjectProto` (a global native's prototype collapses into it) or ⊤ (a
     /// native module's values, interpreted code); key `None`: every key.
-    pub native_writes: FxHashMap<(Tok, Option<Atom>), NativeWrite>,
+    /// Ordered by target, so the writes on one token are one range.
+    pub native_writes: std::collections::BTreeMap<(Tok, Option<Atom>), NativeWrite>,
     /// Lookups of a key their native prototype does not define: they run
     /// today's opaque member once that key may be written there.
     pub native_missing: Vec<(Tok, Atom, NativeMiss)>,

@@ -1217,7 +1217,7 @@ impl Model {
                     None => self.add_tok(n, objproto),
                 },
             },
-            TokKind::NativeProto(_) => self.add_tok(n, objproto),
+            TokKind::NativeProto(..) => self.add_tok(n, objproto),
             // A builtin namespace's prototype is `Function.prototype` (a
             // constructor's) or `Object.prototype` (`Math`, `JSON`, the
             // global object's chain): `ObjectProto` stands for both.

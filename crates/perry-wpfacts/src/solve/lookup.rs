@@ -614,7 +614,7 @@ impl Model {
                 TokKind::Top
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn(_)
-                | TokKind::NativeProto(_) => {}
+                | TokKind::NativeProto(..) => {}
                 TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
                 // protocol, which `Gen::iterate` follows separately.
@@ -1299,7 +1299,7 @@ impl Model {
     pub(crate) fn is_chain_proto(&self, q: Tok) -> bool {
         matches!(
             self.toks[q as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..)
         )
     }
 
@@ -1312,7 +1312,7 @@ impl Model {
     pub(crate) fn enum_free(&self, t: Tok) -> bool {
         match &self.toks[t as usize] {
             TokKind::Builtin(ns) => builtins::enum_free_ns(*ns),
-            TokKind::NativeProto(n) => builtins::ns_by_name(n).is_some_and(builtins::enum_free_ns),
+            TokKind::NativeProto(_, ns) => ns.is_some_and(builtins::enum_free_ns),
             _ => false,
         }
     }
@@ -1364,7 +1364,7 @@ impl Model {
         matches!(
             self.toks[q as usize],
             TokKind::ObjectProto
-                | TokKind::NativeProto(_)
+                | TokKind::NativeProto(..)
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn(_)
         )

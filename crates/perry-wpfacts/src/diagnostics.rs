@@ -1295,7 +1295,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             TokKind::Proto(l) => ("prototype", Some(*l), None, None),
             TokKind::Builtin(_) | TokKind::BuiltinFn(_) => ("builtin", None, None, None),
             TokKind::ModNs(_) => ("namespace", None, None, None),
-            TokKind::ObjectProto | TokKind::NativeProto(_) => {
+            TokKind::ObjectProto | TokKind::NativeProto(..) => {
                 ("native-prototype", None, None, None)
             }
         };
