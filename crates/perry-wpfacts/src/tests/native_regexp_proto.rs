@@ -36,7 +36,11 @@ fn src(top: bool, setup: &str, read: &str) -> String {
     let s = format!(
         "class Payload {{ n = 1; }}\nconst payload = new Payload();\n{opener}{setup}\nconsole.log({read}.n); // SITE_N\n"
     );
-    if top { unseen(&s) } else { s }
+    if top {
+        unseen(&s)
+    } else {
+        s
+    }
 }
 
 const SUBJECT: &str = "const o: any = { p: payload, toString() { return \"a\"; } };";
@@ -73,13 +77,19 @@ fn regexp_and_date_image_methods_are_final_under_a_top_store() {
             Err(e) => failures.push(format!("{setup}: {}", e.lines().next().unwrap())),
         }
     }
-    assert!(failures.is_empty(), "RegExp/Date image methods: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "RegExp/Date image methods: {failures:?}"
+    );
 }
 
 #[test]
 fn regexp_and_date_image_methods_without_a_top_store() {
     let mut failures = Vec::new();
-    let split = (format!("const r: any = /a/; {SUBJECT} r[Symbol.split](o);"), "o.p");
+    let split = (
+        format!("const r: any = /a/; {SUBJECT} r[Symbol.split](o);"),
+        "o.p",
+    );
     for (setup, read) in image_calls().into_iter().chain([split]) {
         match site_n(&src(false, &setup, read)) {
             Ok(true) => {}
@@ -87,7 +97,10 @@ fn regexp_and_date_image_methods_without_a_top_store() {
             Err(e) => failures.push(format!("{setup}: {}", e.lines().next().unwrap())),
         }
     }
-    assert!(failures.is_empty(), "RegExp/Date image methods: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "RegExp/Date image methods: {failures:?}"
+    );
 }
 
 /// Control (the named one): a key `RegExp.prototype` does not declare may
@@ -131,7 +144,6 @@ fn program_add_to_regexp_prototype_runs() {
     );
     assert_eq!(site_n(&s), Ok(false));
 }
-
 
 /// Control: `@@split` (and `String.prototype.split` through it) constructs
 /// the splitter with SpeciesConstructor(rx, %RegExp%), and `constructor`

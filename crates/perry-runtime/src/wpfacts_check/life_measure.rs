@@ -39,7 +39,15 @@ const CALLER: usize = 2;
 const TURN: usize = 3;
 const DONE: u8 = 4;
 const BOUNDARIES: [&str; 6] = ["iteration", "return", "caller", "turn", "dyn", "dyn2"];
-const HOLDERS: [&str; 7] = ["frame", "outer_frame", "shadow", "global", "remembered", "object", "other"];
+const HOLDERS: [&str; 7] = [
+    "frame",
+    "outer_frame",
+    "shadow",
+    "global",
+    "remembered",
+    "object",
+    "other",
+];
 
 #[derive(Default, Clone, Copy)]
 struct Bnd {
@@ -199,7 +207,9 @@ impl Measure {
     }
 
     fn live(&self, (i, g): (u32, u32)) -> bool {
-        self.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE)
+        self.samples
+            .get(i as usize)
+            .is_some_and(|s| s.gen == g && s.next != DONE)
     }
 
     fn bnd(&mut self, i: u32, b: usize) -> (&mut Bnd, Sample) {
@@ -478,7 +488,9 @@ fn take_loops(k: usize) -> (Vec<(u32, u32, u8)>, usize, usize) {
 }
 
 fn dyn_live(m: &Measure, &(i, g, bit): &(u32, u32, u8)) -> bool {
-    m.samples.get(i as usize).is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
+    m.samples
+        .get(i as usize)
+        .is_some_and(|s| s.gen == g && s.next != DONE && s.dyn_ & bit != 0)
 }
 
 /// After the collection (`ran`: `Some(true)` when it ran): a dynamic sample
@@ -515,7 +527,13 @@ fn settle_loops(keys: &[(u32, u32, u8)], ran: Option<bool>) {
 /// object is not decided by that reach (`life::minor_decides`): one
 /// synchronous full at the same point, shared by all of them, decides it
 /// (marked: alive; unmarked: dead; full not observed: unresolved).
-fn probe(keys: &[(u32, u32)], dyn_keys: &[(u32, u32, u8)], fp: usize, late: bool, extra: usize) -> Option<bool> {
+fn probe(
+    keys: &[(u32, u32)],
+    dyn_keys: &[(u32, u32, u8)],
+    fp: usize,
+    late: bool,
+    extra: usize,
+) -> Option<bool> {
     let young = table(|t| {
         let m = &mut t.measure;
         let mut young = 0;
@@ -634,7 +652,9 @@ fn budget(m: &mut Measure) {
 pub(super) fn reached(t: &mut Table, i: u32, new: usize) {
     let in_probe = t.measure.in_probe;
     let fp = t.measure.probe_fp;
-    let Some(s) = t.measure.samples.get_mut(i as usize) else { return };
+    let Some(s) = t.measure.samples.get_mut(i as usize) else {
+        return;
+    };
     s.addr = new;
     if !crate::arena::pointer_in_nursery(new) {
         s.old = true;
@@ -746,7 +766,10 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
         let m = &mut t.measure;
         if m.births == 0 {
             // `PERRY_LIFE_MEASURE_SHIFT=k`: start every site at rate 2^-k more.
-            m.global_shift = knob("PERRY_LIFE_MEASURE_SHIFT").and_then(|v| v.parse().ok()).unwrap_or(0).min(16);
+            m.global_shift = knob("PERRY_LIFE_MEASURE_SHIFT")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0)
+                .min(16);
         }
         m.births += 1;
         let rand = m.next_rand();
@@ -758,10 +781,20 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
             return None;
         }
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-        let bytes = unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size } as u64;
+        let bytes =
+            unsafe { (*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).size }
+                as u64;
         s.bytes += bytes;
-        let own = if s.sampled < 32 { 0 } else { 64 - (s.sampled / 32).leading_zeros() };
-        let shift = if rate_one() { 0 } else { (own + global).min(16) };
+        let own = if s.sampled < 32 {
+            0
+        } else {
+            64 - (s.sampled / 32).leading_zeros()
+        };
+        let shift = if rate_one() {
+            0
+        } else {
+            (own + global).min(16)
+        };
         if rand & ((1u64 << shift) - 1) != 0 {
             return None;
         }
@@ -769,7 +802,9 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
         Some((addr, bytes, (1u64 << shift) as f64))
     })
     .flatten();
-    let Some((addr, bytes, w)) = sampled else { return };
+    let Some((addr, bytes, w)) = sampled else {
+        return;
+    };
     // No probe here: the birth's value is not rooted across this call, so
     // the hook must not collect. Activations a throw left on top (frames
     // deeper than this one) are skipped; the next hook that may collect
@@ -827,7 +862,14 @@ pub extern "C" fn perry_life_birth(bits: i64, site: i64, loop_id: i64) {
                 m.unresolved_from(i, true);
             }
         } else {
-            t.claims.insert(addr, Claim { site: 0, len: 0, state: State::Probe(i) });
+            t.claims.insert(
+                addr,
+                Claim {
+                    site: 0,
+                    len: 0,
+                    state: State::Probe(i),
+                },
+            );
         }
         if keep() {
             let slot = Box::new(bits);
@@ -850,7 +892,11 @@ pub extern "C" fn perry_life_enter(body: i64) {
     // body enters in its caller's frame (same fp), nested in its activation.
     let _ = table(|t| {
         t.measure.exits.entry(body as u64).or_default()[0] += 1;
-        t.measure.acts.push(Act { fp, body: body as u64, pend: Vec::new() })
+        t.measure.acts.push(Act {
+            fp,
+            body: body as u64,
+            pend: Vec::new(),
+        })
     });
 }
 
@@ -888,7 +934,12 @@ pub extern "C" fn perry_life_loop(id: i64) {
     let _ = table(|t| {
         let m = &mut t.measure;
         let act = m.acts.iter().rposition(|a| a.fp >= fp).map_or(0, |i| i + 1);
-        m.loops.push(LoopIt { act, fp, id: id as u64, pend: Vec::new() });
+        m.loops.push(LoopIt {
+            act,
+            fp,
+            id: id as u64,
+            pend: Vec::new(),
+        });
     });
 }
 
@@ -950,7 +1001,9 @@ pub extern "C" fn perry_life_iter(loop_id: i64) {
         };
         let mut hit = Vec::new();
         list.retain(|&(i, g)| {
-            let Some(s) = m.samples.get(i as usize) else { return false };
+            let Some(s) = m.samples.get(i as usize) else {
+                return false;
+            };
             if s.gen != g || s.next == DONE {
                 return false;
             }
@@ -1056,7 +1109,9 @@ fn write(t: &mut Table) {
         return;
     }
     m.births_at_write = m.births;
-    let Some(path) = knob("PERRY_LIFE_MEASURE").filter(|p| p != "1") else { return };
+    let Some(path) = knob("PERRY_LIFE_MEASURE").filter(|p| p != "1") else {
+        return;
+    };
     let mut out = String::from("site\tbirths\tbytes\tunborn\tsampled\tboundary\tsamples\talive\talive_w\tdead_w\talive_bytes_w\tdead_bytes_w\tlate\tunresolved");
     for h in HOLDERS {
         out.push_str(&format!("\t{h}"));
@@ -1073,8 +1128,18 @@ fn write(t: &mut Table) {
             let d = if b < 4 { &s.b[b] } else { &s.d[b - 4] };
             out.push_str(&format!(
                 "{id}\t{}\t{}\t{}\t{}\t{name}\t{}\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}\t{}\t{}",
-                s.births, s.bytes, s.unborn, s.sampled, d.samples, d.alive, d.alive_w, d.dead_w,
-                d.alive_bytes_w, d.dead_bytes_w, d.late, d.unresolved
+                s.births,
+                s.bytes,
+                s.unborn,
+                s.sampled,
+                d.samples,
+                d.alive,
+                d.alive_w,
+                d.dead_w,
+                d.alive_bytes_w,
+                d.dead_bytes_w,
+                d.late,
+                d.unresolved
             ));
             for h in d.holders {
                 out.push_str(&format!("\t{h}"));
@@ -1093,7 +1158,10 @@ fn write(t: &mut Table) {
     let mut bodies: Vec<_> = m.exits.iter().collect();
     bodies.sort_unstable_by_key(|(id, _)| **id);
     for (id, e) in bodies {
-        out.push_str(&format!("#body\t{id}\t{}\t{}\t{}\t{}\t{}\n", e[0], e[1], e[2], e[3], e[4]));
+        out.push_str(&format!(
+            "#body\t{id}\t{}\t{}\t{}\t{}\t{}\n",
+            e[0], e[1], e[2], e[3], e[4]
+        ));
     }
     let _ = std::fs::write(path, out);
 }

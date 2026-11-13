@@ -188,9 +188,6 @@ pub use globals::{
     scan_queued_microtask_roots_mut,
 };
 
-pub(crate) use globals::{
-    discard_cancelled_microtasks, drain_queued_microtasks_count, queued_microtasks_pending,
-};
 #[cfg(perry_gc_instruments)]
 #[cfg_attr(
     not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
@@ -199,6 +196,9 @@ pub(crate) use globals::{
 pub(crate) use globals::snap_pending_ticks;
 #[cfg(all(test, perry_gc_instruments))]
 pub(crate) use globals::test_push_tick;
+pub(crate) use globals::{
+    discard_cancelled_microtasks, drain_queued_microtasks_count, queued_microtasks_pending,
+};
 
 /// #6943: inertness predicate for the `js_string_coerce`-as-property-key
 /// rooting family. Crate-internal — callers use it to skip a

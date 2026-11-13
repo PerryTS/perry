@@ -336,7 +336,9 @@ fn store_alloc_cell(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHeader {
     } else {
         placement
     };
-    let capacity = byte_len as u32; #[cfg(perry_gc_instruments)] crate::wpfacts_check::family::byte_cell_born(brand, len);
+    let capacity = byte_len as u32;
+    #[cfg(perry_gc_instruments)]
+    crate::wpfacts_check::family::byte_cell_born(brand, len);
     let ptr = match init {
         Init::Shared => {
             assert_eq!(brand, crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER);

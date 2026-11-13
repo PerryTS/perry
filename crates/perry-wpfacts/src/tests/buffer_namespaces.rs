@@ -47,12 +47,24 @@ fn each_typed_array_constructor_is_its_own_with_typed_array_as_its_prototype() {
     let u8 = "builtin:TypedArrayKind(\"Uint8Array\")";
     let cases = [
         ("", "Uint8Array".to_string(), u8),
-        ("", "Object.getPrototypeOf(Uint8Array)".to_string(), "builtin:TypedArray"),
-        ("", "Object.getPrototypeOf(Float16Array)".to_string(), "builtin:TypedArray"),
+        (
+            "",
+            "Object.getPrototypeOf(Uint8Array)".to_string(),
+            "builtin:TypedArray",
+        ),
+        (
+            "",
+            "Object.getPrototypeOf(Float16Array)".to_string(),
+            "builtin:TypedArray",
+        ),
         ("", "(new Uint8Array(2) as any).constructor".to_string(), u8),
         ("", format!("{DV}.constructor"), "builtin:DataView"),
         ("", format!("{AB}.constructor"), "builtin:ArrayBuffer"),
-        ("", format!("{SAB}.constructor"), "builtin:SharedArrayBuffer"),
+        (
+            "",
+            format!("{SAB}.constructor"),
+            "builtin:SharedArrayBuffer",
+        ),
     ];
     let mut wrong = Vec::new();
     for (prelude, v, want) in cases {
@@ -71,7 +83,9 @@ fn each_typed_array_constructor_is_its_own_with_typed_array_as_its_prototype() {
     let v = "(new Int8Array(2) as any).make()";
     let (r, top) = size_site(&format!("{made} {prelude}"), v);
     if !top && !r.iter().any(|t| t == "t.ts:Made") {
-        wrong.push(format!("{v} after the store: want t.ts:Made or TOP, got {r:?}"));
+        wrong.push(format!(
+            "{v} after the store: want t.ts:Made or TOP, got {r:?}"
+        ));
     }
     let (r, top) = size_site(made, v);
     if top {
@@ -79,7 +93,9 @@ fn each_typed_array_constructor_is_its_own_with_typed_array_as_its_prototype() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
     // `Uint8Array` is not `%TypedArray%`, `SharedArrayBuffer` not `ArrayBuffer`.
-    assert!(!receivers_of("", "Uint8Array").iter().any(|t| t == "builtin:TypedArray"));
+    assert!(!receivers_of("", "Uint8Array")
+        .iter()
+        .any(|t| t == "builtin:TypedArray"));
     let sab = receivers_of("", &format!("{SAB}.constructor"));
     assert!(!sab.iter().any(|t| t == "builtin:ArrayBuffer"), "{sab:?}");
 }

@@ -59,14 +59,23 @@ fn plain_add_uses_the_existing_chain_answer_without_recording_another_fact() {
         // prototype (the add is a TypeError), so the existing chain answer
         // stays true and a fresh object's store still lands.
         let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
-        crate::exception::catch_js_throw(|| super::super::js_object_set_field_by_name(proto, key, 29.0))
-            .expect_err("a program add on Object.prototype is refused");
+        crate::exception::catch_js_throw(|| {
+            super::super::js_object_set_field_by_name(proto, key, 29.0)
+        })
+        .expect_err("a program add on Object.prototype is refused");
         let fresh = super::super::js_object_alloc(0, 0);
         super::super::alloc_plain::mark_object_plain_ordinary(fresh);
         let owner = crate::value::js_nanbox_pointer(fresh as i64);
-        assert_eq!(try_store(owner, boxed_key, 23.0), Some(23.0), "the chain answer is unchanged");
+        assert_eq!(
+            try_store(owner, boxed_key, 23.0),
+            Some(23.0),
+            "the chain answer is unchanged"
+        );
         assert!(super::super::obj_value_has_own_key(owner, boxed_key));
-        assert!(!super::super::obj_value_has_own_key(crate::value::js_nanbox_pointer(proto as i64), boxed_key));
+        assert!(!super::super::obj_value_has_own_key(
+            crate::value::js_nanbox_pointer(proto as i64),
+            boxed_key
+        ));
     }
 }
 
@@ -942,9 +951,16 @@ fn array_named_chain_includes_object_prototype_after_warmup() {
         .expect_err("a program add on Object.prototype is refused");
     let fresh = crate::array::js_array_alloc(4);
     let fresh_value = crate::value::js_nanbox_pointer(fresh as i64);
-    assert_eq!(unsafe { try_store(fresh_value, key_value, 2.0) }, Some(2.0), "the chain answer is unchanged");
+    assert_eq!(
+        unsafe { try_store(fresh_value, key_value, 2.0) },
+        Some(2.0),
+        "the chain answer is unchanged"
+    );
     assert!(super::super::obj_value_has_own_key(fresh_value, key_value));
-    assert!(!super::super::obj_value_has_own_key(crate::value::js_nanbox_pointer(proto as i64), key_value));
+    assert!(!super::super::obj_value_has_own_key(
+        crate::value::js_nanbox_pointer(proto as i64),
+        key_value
+    ));
 }
 
 #[test]
@@ -960,20 +976,28 @@ fn array_chain_projection_declines_a_changed_prototype_after_warmup() {
     let prototype = super::super::js_object_get_prototype_of(receiver);
     let original = super::super::js_object_get_prototype_of(prototype);
     let readonly = super::super::js_object_alloc(0, 0);
-    crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(readonly, key, 9.0));
-    crate::object::own_override::as_builtin_definition(|| super::super::set_property_attrs(
-        readonly as usize,
-        "rangeEnd".into(),
-        super::super::PropertyAttrs::new(false, true, true),
-    ));
-    crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_prototype_of(
-        prototype,
-        crate::value::js_nanbox_pointer(readonly as i64),
-    ));
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_field_by_name(readonly, key, 9.0)
+    });
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::set_property_attrs(
+            readonly as usize,
+            "rangeEnd".into(),
+            super::super::PropertyAttrs::new(false, true, true),
+        )
+    });
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_prototype_of(
+            prototype,
+            crate::value::js_nanbox_pointer(readonly as i64),
+        )
+    });
     let fresh = crate::array::js_array_alloc(4);
     let fresh_value = crate::value::js_nanbox_pointer(fresh as i64);
     let answer = unsafe { try_store(fresh_value, key_value, 2.0) };
-    crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_prototype_of(prototype, original));
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_prototype_of(prototype, original)
+    });
     assert_eq!(answer, None, "a custom array chain needs the complete Set");
 }
 

@@ -116,7 +116,8 @@ fn census_reports_every_verdict() {
         &HashMap::new(),
         &sc,
         None,
-    ).0;
+    )
+    .0;
     let verdicts: HashMap<&str, Vec<&str>> = rows.iter().fold(HashMap::new(), |mut acc, r| {
         acc.entry(r.4.as_str()).or_default().push(r.5.as_str());
         acc
@@ -152,7 +153,8 @@ fn census_reports_every_verdict() {
             func: 0,
             direct: false,
         }),
-    ).0;
+    )
+    .0;
     assert_eq!(
         rows.iter()
             .filter(|r| r.4 == "heap:async-or-generator")
@@ -461,9 +463,18 @@ fn census_reports_receiving_sides() {
             .unwrap_or_else(|| panic!("no row {body} {param}: {params}"))
             .to_string()
     };
-    assert!(row("drop1", "0:o").ends_with("\tdirect\tDropped"), "{params}");
-    assert!(row("keep1", "0:o").ends_with("\tdirect\tKept:use(PutValueSet.value)"), "{params}");
-    assert!(row("Box.constructor", "0:v").ends_with("\tKeptByReceiver"), "{params}");
+    assert!(
+        row("drop1", "0:o").ends_with("\tdirect\tDropped"),
+        "{params}"
+    );
+    assert!(
+        row("keep1", "0:o").ends_with("\tdirect\tKept:use(PutValueSet.value)"),
+        "{params}"
+    );
+    assert!(
+        row("Box.constructor", "0:v").ends_with("\tKeptByReceiver"),
+        "{params}"
+    );
     assert!(row("M.run", "this").contains("\tthis\t"), "{params}");
     assert!(
         sides.iter().any(|s| s.starts_with("compiled:static")),
@@ -560,12 +571,21 @@ fn census_tells_unreached_and_escaped_from_no_facts() {
     };
     let count = |facts: ElisionFacts, verdict: &str| {
         let census = ModuleCensus::new(&m, &Arc::new(facts));
-        let rows = classify(&census, &m.init, &HashSet::new(), &HashMap::new(), &sc, None).0;
+        let rows = classify(
+            &census,
+            &m.init,
+            &HashSet::new(),
+            &HashMap::new(),
+            &sc,
+            None,
+        )
+        .0;
         rows.iter().filter(|r| r.4 == verdict).count()
     };
     assert_eq!(count(ElisionFacts::default(), "heap:no-facts:module"), 4);
     let mut reps = ElisionFacts::default();
-    reps.local_reps.insert(id_of(&m, "Let", "a"), FactsRep::Boxed);
+    reps.local_reps
+        .insert(id_of(&m, "Let", "a"), FactsRep::Boxed);
     assert_eq!(count(reps.clone(), "heap:escaped"), 4);
     let recv = FactsRecv {
         class_ids: vec![1],

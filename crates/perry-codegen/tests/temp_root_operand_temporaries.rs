@@ -1549,13 +1549,17 @@ fn object_assign_ir(target: Expr, sources: usize) -> String {
             sources: (0..sources).map(|_| Expr::Object(Vec::new())).collect(),
         })],
     );
-    String::from_utf8(compile_module(&module, entry_opts()).unwrap()).expect("LLVM IR should be UTF-8")
+    String::from_utf8(compile_module(&module, entry_opts()).unwrap())
+        .expect("LLVM IR should be UTF-8")
 }
 
 /// The calls to `callee` in `f`, as trimmed lines.
 fn calls_to<'a>(f: &'a str, callee: &str) -> Vec<&'a str> {
     let needle = format!("@{callee}(");
-    f.lines().map(str::trim).filter(|l| l.contains(&needle)).collect()
+    f.lines()
+        .map(str::trim)
+        .filter(|l| l.contains(&needle))
+        .collect()
 }
 
 /// A call that may collect: any `call`/`invoke` but an `@llvm.` intrinsic, a
@@ -1563,7 +1567,9 @@ fn calls_to<'a>(f: &'a str, callee: &str) -> Vec<&'a str> {
 /// and `perry_codegen::testing::temp_slots`' own).
 fn line_may_collect(line: &str) -> bool {
     let t = line.trim();
-    t.split_whitespace().take(4).any(|w| w == "call" || w == "invoke")
+    t.split_whitespace()
+        .take(4)
+        .any(|w| w == "call" || w == "invoke")
         && !t.contains("\"gc-leaf-function\"")
         && !t.contains(" asm ")
         && !t.contains("@llvm.")
@@ -1576,7 +1582,11 @@ fn line_may_collect(line: &str) -> bool {
 /// helper returns the target's POST-collection address).
 fn assert_assign_links_reread_and_republished(f: &str, links: usize) {
     let calls = calls_to(f, "js_object_assign_one");
-    assert_eq!(calls.len(), links, "expected one js_object_assign_one per rooted link in:\n{f}");
+    assert_eq!(
+        calls.len(),
+        links,
+        "expected one js_object_assign_one per rooted link in:\n{f}"
+    );
     for call in &calls {
         // `call double @js_object_assign_one(double %acc, double %src)`.
         let acc = call
@@ -1679,7 +1689,11 @@ fn the_fresh_object_assign_target_is_born_after_its_first_source_and_rooted_acro
     let ir = object_assign_ir(Expr::Object(Vec::new()), 3);
     let f = init_ir(&ir);
     let fresh = calls_to(f, "js_object_assign_fresh");
-    assert_eq!(fresh.len(), 1, "an empty target literal is born by the fresh link:\n{f}");
+    assert_eq!(
+        fresh.len(),
+        1,
+        "an empty target literal is born by the fresh link:\n{f}"
+    );
     assert!(
         calls_to(f, "js_object_assign_validate_target").is_empty(),
         "the fresh target is not lowered as an expression of its own:\n{f}"

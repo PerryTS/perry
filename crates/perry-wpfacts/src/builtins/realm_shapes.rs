@@ -236,7 +236,8 @@ impl Default for Declarations {
         }
         // The node module objects last: the linear namespace and family
         // searches (charged per step) of every other object never walk them.
-        shapes[named..].sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
+        shapes[named..]
+            .sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
         Self { shapes, named }
     }
 }

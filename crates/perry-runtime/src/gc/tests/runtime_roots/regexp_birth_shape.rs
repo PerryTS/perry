@@ -169,13 +169,20 @@ fn regexp_birth_observes_prototype_edits_and_replaced_parent_after_gc() {
     let key = scope.root_string_ptr(heap_string(b"lit12312_probe"));
     let parent = scope.root_raw_mut_ptr(crate::object::object_alloc_plain(0));
     parent.with_mut_ptr::<ObjectHeader, _>(|p| {
-        key.with_const_ptr(|k| crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(p, k, 17.0)));
+        key.with_const_ptr(|k| {
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::js_object_set_field_by_name(p, k, 17.0)
+            })
+        });
     });
     assert_eq!(
-        crate::object::own_override::as_builtin_definition(|| crate::proxy::js_reflect_set_prototype_of(
-            prototype_value(),
-            parent.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
-        ))
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::proxy::js_reflect_set_prototype_of(
+                prototype_value(),
+                parent
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
+            )
+        })
         .to_bits(),
         crate::value::TAG_TRUE,
     );
@@ -184,7 +191,11 @@ fn regexp_birth_observes_prototype_edits_and_replaced_parent_after_gc() {
         if value == 29.0 {
             // A mutation of the intrinsic's own layout now shadows its parent.
             prototype.with_mut_ptr::<ObjectHeader, _>(|p| {
-                key.with_const_ptr(|k| crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(p, k, value)));
+                key.with_const_ptr(|k| {
+                    crate::object::own_override::as_builtin_definition(|| {
+                        crate::object::js_object_set_field_by_name(p, k, value)
+                    })
+                });
             });
         }
         collect_synchronous_full_trace();
@@ -222,15 +233,21 @@ fn regexp_birth_observes_prototype_edits_and_replaced_parent_after_gc() {
         "the never-move intrinsic prototype must not move"
     );
     assert_eq!(
-        crate::object::own_override::as_builtin_definition(|| crate::proxy::js_reflect_set_prototype_of(
-            prototype_value(),
-            original_parent.get_nanbox_f64(),
-        ))
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::proxy::js_reflect_set_prototype_of(
+                prototype_value(),
+                original_parent.get_nanbox_f64(),
+            )
+        })
         .to_bits(),
         crate::value::TAG_TRUE
     );
     prototype.with_mut_ptr::<ObjectHeader, _>(|p| {
-        key.with_const_ptr(|k| crate::object::own_override::as_builtin_definition(|| crate::object::js_object_delete_field(p, k)));
+        key.with_const_ptr(|k| {
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::js_object_delete_field(p, k)
+            })
+        });
     });
 }
 

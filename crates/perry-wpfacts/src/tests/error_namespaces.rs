@@ -27,11 +27,19 @@ fn each_error_constructor_is_its_own_with_error_as_its_prototype() {
     let cases = [
         ("", "TypeError", te),
         ("", "(TypeError as any).prototype.constructor", te),
-        ("", "(AggregateError as any).prototype.constructor", "builtin:AggregateError"),
+        (
+            "",
+            "(AggregateError as any).prototype.constructor",
+            "builtin:AggregateError",
+        ),
         ("", "Error.prototype.constructor", "builtin:Error"),
         ("", "Object.getPrototypeOf(TypeError)", "builtin:Error"),
         ("", "Object.getPrototypeOf(AggregateError)", "builtin:Error"),
-        ("", "(new RangeError(\"r\")).constructor", "builtin:NativeError(\"RangeError\")"),
+        (
+            "",
+            "(new RangeError(\"r\")).constructor",
+            "builtin:NativeError(\"RangeError\")",
+        ),
         (
             "class Made { size = 1; } (Error as any).make = () => new Made();",
             "(TypeError as any).make()",
@@ -52,5 +60,7 @@ fn each_error_constructor_is_its_own_with_error_as_its_prototype() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
     // `TypeError` is not `Error`.
-    assert!(!receivers_of("", "TypeError").iter().any(|t| t == "builtin:Error"));
+    assert!(!receivers_of("", "TypeError")
+        .iter()
+        .any(|t| t == "builtin:Error"));
 }
