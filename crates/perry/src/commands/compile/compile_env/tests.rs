@@ -620,6 +620,16 @@ fn number_store_arm_switch_is_a_cache_input() {
     );
 }
 
+/// Proven Numbers are born raw (P3 B4b): the switch decides which births
+/// test a raw-`f64` lane's value, so `=0` must never reuse an `=1` object.
+#[test]
+fn number_births_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_NUMBER_BIRTHS"),
+        "PERRY_FACTS_NUMBER_BIRTHS must key the compile caches"
+    );
+}
+
 /// The rep-keyed element store: the switch changes every runtime-key store
 /// into an Array the facts give Number elements, so `=0` must never reuse an
 /// `=1` object.

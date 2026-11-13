@@ -551,30 +551,34 @@ fn lower_new_impl_inner<'a>(
     } else {
         lowered_args.clone()
     };
-    let constructor_birth = birth_plan.as_ref().map(|plan| {
-        let fields = birth_unchecked.then(|| {
-            plan.iter()
-                .map(|store| {
-                    let value = store.numeric_addend.map_or_else(
-                        || birth_args[store.arg_index].clone(),
-                        |addend| {
-                            ctx.block()
-                                .fadd(&birth_args[store.arg_index], &double_literal(addend))
-                        },
-                    );
-                    (store.slot, ctx.block().bitcast_double_to_i64(&value))
-                })
-                .collect()
-        });
-        super::new_alloc::ConstructorBirth {
+    let mut constructor_birth = None;
+    if let Some(plan) = birth_plan.as_ref() {
+        let mut fields = None;
+        if birth_unchecked {
+            let mut words = Vec::with_capacity(plan.len());
+            for store in plan {
+                let value = store.numeric_addend.map_or_else(
+                    || birth_args[store.arg_index].clone(),
+                    |addend| {
+                        ctx.block()
+                            .fadd(&birth_args[store.arg_index], &double_literal(addend))
+                    },
+                );
+                if store.proven_number(ctx, args) {
+                    super::ctor_prologue_stores::witness_proven_number(ctx, &value, store.slot)?;
+                }
+                words.push((store.slot, ctx.block().bitcast_double_to_i64(&value)));
+            }
+            fields = Some(words);
+        }
+        constructor_birth = Some(super::new_alloc::ConstructorBirth {
             fields,
             image: None,
-        }
-    });
+        });
+    }
     // Birth cost: a complete plan the compact birth does not write is born
     // as its image (`new/birth_image.rs`), decided with the one plan the
     // post-birth diamond then consumes.
-    let mut constructor_birth = constructor_birth;
     let mut image_plan = if constructor_birth
         .as_ref()
         .is_some_and(|birth| birth.fields.is_some())
@@ -844,6 +848,15 @@ fn lower_new_impl_inner<'a>(
                 .iter()
                 .map(|store| store.requires_number_check(ctx, args))
                 .collect();
+            for (store_index, store) in plan.iter().enumerate() {
+                if store.proven_number(ctx, args) {
+                    super::ctor_prologue_stores::witness_proven_number(
+                        ctx,
+                        &prologue_values[store_index],
+                        store.slot,
+                    )?;
+                }
+            }
             {
                 let blk = ctx.block();
                 let mut acc = "true".to_string();
