@@ -45,11 +45,6 @@ pub(super) fn borrowed_call_folds(
     if let Some(expr) = reflective_object_borrow(ctx, call, outer, method)? {
         return Ok(Some(expr));
     }
-    if !has_spread && method == "call" {
-        if let Some(expr) = object_prototype_has_own(ctx, call, outer)? {
-            return Ok(Some(expr));
-        }
-    }
     if has_spread || method != "call" {
         return Ok(None);
     }
@@ -127,80 +122,6 @@ pub(super) fn borrowed_call_folds(
             then_expr: Box::new(fast),
             else_expr: Box::new(generic),
         }),
-    }))
-}
-
-// `Object.prototype.hasOwnProperty.call(o, k)`: the keyed own-probe
-// (`Expr::ObjectHasOwn`, as `Object.hasOwn(o, k)`) while %Object.prototype%
-// and %Function.prototype% are unmodified (the builtin-prototype proof, so
-// the method read is the builtin and `.call` is the builtin call); the
-// complete original call otherwise.
-fn object_prototype_has_own(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-    outer: &ast::MemberExpr,
-) -> Result<Option<Expr>> {
-    if call.args.len() != 2 {
-        return Ok(None);
-    }
-    let ast::Expr::Member(function) = outer.obj.as_ref() else {
-        return Ok(None);
-    };
-    let ast::MemberProp::Ident(name) = &function.prop else {
-        return Ok(None);
-    };
-    let ast::Expr::Member(proto) = function.obj.as_ref() else {
-        return Ok(None);
-    };
-    let ast::MemberProp::Ident(proto_name) = &proto.prop else {
-        return Ok(None);
-    };
-    let ast::Expr::Ident(base) = proto.obj.as_ref() else {
-        return Ok(None);
-    };
-    if base.sym != "Object"
-        || proto_name.sym != "prototype"
-        || name.sym != "hasOwnProperty"
-        || ctx.lookup_local("Object").is_some()
-        || ctx.lookup_func("Object").is_some()
-        || ctx.lookup_class("Object").is_some()
-        || ctx.lookup_imported_func("Object").is_some()
-        || ctx.lookup_builtin_module_alias("Object").is_some()
-        || ctx.lookup_native_module("Object").is_some()
-        || !ctx.active_with_envs_for_ident("Object").is_empty()
-    {
-        return Ok(None);
-    }
-    // A definition or suspension must not be duplicated across the two arms.
-    let mut defs = Definitions::default();
-    for arg in &call.args {
-        arg.visit_with(&mut defs);
-    }
-    if defs.0 {
-        return Ok(None);
-    }
-    let source = lower_expr(ctx, outer.obj.as_ref())?;
-    let args = call
-        .args
-        .iter()
-        .map(|a| lower_expr(ctx, &a.expr))
-        .collect::<Result<Vec<_>>>()?;
-    let duplicable = patched_builtin_call::duplicable(&args);
-    let fast = Expr::ObjectHasOwn(Box::new(args[0].clone()), Box::new(args[1].clone()));
-    let generic = patched_builtin_call::dynamic_member_call(call, source, "call".to_string(), args);
-    if !duplicable {
-        return Ok(Some(generic));
-    }
-    Ok(Some(Expr::Conditional {
-        condition: Box::new(Expr::NativeMethodCall {
-            module: "__perry_borrowed_proof".to_string(),
-            class_name: Some("Object.prototype".to_string()),
-            object: Some(Box::new(Expr::Undefined)),
-            method: "hasOwnProperty".to_string(),
-            args: Vec::new(),
-        }),
-        then_expr: Box::new(fast),
-        else_expr: Box::new(generic),
     }))
 }
 
