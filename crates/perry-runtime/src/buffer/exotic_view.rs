@@ -146,22 +146,16 @@ pub fn is_node_buffer(addr: usize) -> bool {
 }
 
 /// The own-property key a NUMERIC computed key names on a non-indexed buffer
-/// view, or `None` when the key is not a number at all.
+/// view (`ArrayBuffer`, `SharedArrayBuffer`, `DataView`), or `None` when the
+/// key is not a number at all.
 ///
-/// `dv[0] = 7` stores under `"0"` and `Object.keys(dv)` must report `"0"` —
-/// the ordinary `ToPropertyKey` string, not the raw double. The argument is the
-/// NaN-BOXED key as the index paths carry it, so both the `INT32_TAG` form
-/// (`dv[0]` with a loop counter) and the plain-double form reach the same
-/// answer; a string / symbol / pointer key answers `None` so the caller keeps
-/// its existing by-name route.
-///
-/// Scope: CANONICAL array indices only. A numeric key that is not one (`-1`,
-/// `1.5`, `NaN`) is also a legitimate ordinary property key in node
-/// (`dv[-1] = 1` then `Object.keys(dv)` is `["-1"]`), but perry drops that
-/// store today for a Buffer as well as a DataView, so it is left alone here
-/// rather than fixed only for one of the four buffer-backed types. The caller
-/// falls through to its existing route, whose answer for those keys is
-/// unchanged.
+/// Such a view has no integer-indexed elements: every numeric key is an
+/// ordinary property key, its `ToPropertyKey` string. `dv[0] = 7` stores
+/// under `"0"`, `dv[-1] = 1` under `"-1"`, `dv[1.5]` under `"1.5"` (node:
+/// `Object.keys(dv)` lists each). The argument is the NaN-BOXED key as the
+/// index paths carry it, so the `INT32_TAG` form (`dv[0]` with a loop
+/// counter) and the plain-double form reach the same answer; a string /
+/// symbol / pointer key answers `None` so the caller keeps its by-name route.
 pub fn canonical_index_key(index: f64) -> Option<String> {
     let jv = crate::value::JSValue::from_bits(index.to_bits());
     let n = if jv.is_int32() {
@@ -171,5 +165,9 @@ pub fn canonical_index_key(index: f64) -> Option<String> {
     } else {
         return None;
     };
-    (n >= 0.0 && n.fract() == 0.0 && n <= u32::MAX as f64).then(|| (n as u32).to_string())
+    if n >= 0.0 && n.fract() == 0.0 && n <= u32::MAX as f64 {
+        return Some((n as u32).to_string());
+    }
+    let text = crate::string::js_number_to_string(n);
+    Some(crate::validators::received::string_header_to_string(text))
 }

@@ -233,7 +233,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     {
         if let Some(key) = crate::buffer::canonical_index_key(idx) {
             return crate::buffer::buffer_read_own_prop(raw as usize, &key)
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw as usize, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
