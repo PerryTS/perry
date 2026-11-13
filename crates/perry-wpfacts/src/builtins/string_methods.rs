@@ -281,6 +281,14 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         // B.2.2.15 / .16: `trimLeft` / `trimRight` are `trimStart` /
         // `trimEnd`. B.2.2.3-.14 CreateHTML without an attribute (`big`,
         // `blink`, ... `sup`) reads no operand either.
+        // Rule K7: the case maps keep the infix entries of a String-only
+        // receiver (`Cons::CaseMap`).
+        "toLowerCase" | "toUpperCase" if matches!(c.this, ThisArg::Node(_)) => {
+            if let ThisArg::Node(r) = c.this {
+                m.cons(r, Cons::CaseMap { dst: c.ret });
+            }
+            return true;
+        }
         "toLowerCase" | "toUpperCase" | "toWellFormed" | "trim" | "trimStart" | "trimEnd"
         | "trimLeft" | "trimRight" | "big" | "blink" | "bold" | "fixed" | "italics" | "small"
         | "strike" | "sub" | "sup" => {

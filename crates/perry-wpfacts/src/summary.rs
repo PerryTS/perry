@@ -931,8 +931,9 @@ impl Model {
             return match self.str_atoms(n.strs) {
                 // A switch compares constants; a keyed run (no labels)
                 // reads and writes by a constant or a known prefix.
-                &[x] if self.atom_prefix(x).is_none()
-                    || s.switch.as_ref().is_some_and(|w| w.1.is_empty()) => x,
+                &[x] if self.atom_infix(x).is_none()
+                    && (self.atom_prefix(x).is_none()
+                    || s.switch.as_ref().is_some_and(|w| w.1.is_empty())) => x,
                 _ => NO_VAL,
             };
         }
@@ -971,7 +972,7 @@ impl Model {
             return Vec::new();
         }
         let xs = self.str_atoms(n.strs);
-        if xs.len() < 2 || xs.iter().any(|&x| self.atom_prefix(x).is_some()) {
+        if xs.len() < 2 || xs.iter().any(|&x| self.atom_is_mark(x)) {
             return Vec::new();
         }
         xs.to_vec()

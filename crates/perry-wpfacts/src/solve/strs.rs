@@ -9,6 +9,10 @@ use crate::model::*;
 /// constant (`str_const_atom`).
 pub(crate) const PREFIX_MARK: &str = "\u{1}prefix\u{1}";
 /// Past this many `c + d` prefixes one `+` keeps the left constants only.
+/// The spelling of a rule-K7 infix entry, `INFIX_MARK` + `c`: "a String
+/// that contains the ASCII character `c`", `c` no IdentifierPart (ECMA-262
+/// 12.7: not `[A-Za-z0-9_$]`), so no built-in member name contains it.
+pub(crate) const INFIX_MARK: &str = "\u{1}infix\u{1}";
 const PLUS_PREFIXES_K: usize = 256;
 
 impl Model {
@@ -108,15 +112,71 @@ impl Model {
         self.atoms[a as usize].strip_prefix(PREFIX_MARK)
     }
 
+    /// Rule K7: the entry for "a String that contains `c`".
+    pub(crate) fn infix_atom(&mut self, c: char) -> Atom {
+        self.atom(&format!("{INFIX_MARK}{c}"))
+    }
+
+    /// The character an infix entry stands for (`None`: no infix entry).
+    pub(crate) fn atom_infix(&self, a: Atom) -> Option<char> {
+        self.atoms[a as usize].strip_prefix(INFIX_MARK).and_then(|r| r.chars().next())
+    }
+
+    /// Is the entry a solver spelling (a prefix or an infix), not a
+    /// program constant (`str_const_atom`)?
+    pub(crate) fn atom_is_mark(&self, a: Atom) -> bool {
+        self.atoms[a as usize].starts_with('\u{1}')
+    }
+
+    /// Rule K7: a character no IdentifierPart that the entry surely holds
+    /// (a constant or a known prefix holding one, or an infix entry).
+    fn atom_sure_char(&self, a: Atom) -> Option<char> {
+        if let Some(c) = self.atom_infix(a) {
+            return Some(c);
+        }
+        let t = self.atom_prefix(a).unwrap_or(&self.atoms[a as usize]);
+        t.chars().find(|&c| c.is_ascii() && !c.is_ascii_alphanumeric() && c != '_' && c != '$')
+    }
+
+    /// Rule K7: when node `n` holds only Strings, each surely holding a
+    /// character no IdentifierPart, the infix entries of its strings.
+    pub(crate) fn infix_strs(&mut self, n: NodeId) -> Option<StrSet> {
+        let node = &self.nodes[n as usize];
+        if node.prim != prim::STR || !node.pts.is_empty() || node.strs < STRS_SET0 {
+            return None;
+        }
+        let mut cs: Vec<char> = Vec::new();
+        for &a in self.str_atoms(node.strs) {
+            cs.push(self.atom_sure_char(a)?);
+        }
+        cs.sort_unstable();
+        cs.dedup();
+        let mut out: Vec<Atom> = cs.into_iter().map(|c| self.infix_atom(c)).collect();
+        out.sort_unstable();
+        Some(self.str_set(&out))
+    }
+
+    /// Rule K7, ECMA-262 22.1.3.28 / .29: `toLowerCase` / `toUpperCase` of
+    /// receiver `n` map an ASCII character no letter to itself, so a
+    /// String-only receiver of infix strings gives those infix entries;
+    /// any other receiver gives any string.
+    pub(crate) fn case_map_strs(&mut self, n: NodeId) -> StrSet {
+        self.infix_strs(n).unwrap_or(STRS_TOP)
+    }
+
     /// May the set hold a string that is no constant of it (⊤, or a known
     /// prefix)? Every reader of constants asks this, not `== STRS_TOP`.
     pub(crate) fn strs_any(&self, s: StrSet) -> bool {
-        s == STRS_TOP || self.str_atoms(s).iter().any(|&a| self.atom_prefix(a).is_some())
+        s == STRS_TOP || self.str_atoms(s).iter().any(|&a| self.atom_is_mark(a))
     }
 
     /// The key shape of one entry: its exact name, or the glob `p*` of a
     /// known prefix; 0 (any key) when it may spell a Number key.
     pub(crate) fn atom_key_shape(&mut self, a: Atom) -> KeyShapeId {
+        if self.atom_infix(a).is_some() {
+            // Rule K7: as a store key an infix entry is any key.
+            return 0;
+        }
         let glob = match self.atom_prefix(a) {
             Some(p) => vec![p.to_string(), String::new()],
             None => vec![self.atoms[a as usize].clone()],
@@ -133,11 +193,16 @@ impl Model {
             return None;
         }
         let atoms = self.str_atoms(node.strs).to_vec();
-        if !atoms.iter().any(|&a| self.atom_prefix(a).is_some()) {
+        if !atoms.iter().any(|&a| self.atom_is_mark(a)) {
             return None;
         }
         let mut out = Vec::with_capacity(atoms.len());
         for a in atoms {
+            // Rule K7: an infix entry reads the names of glob `*c*`.
+            if let Some(c) = self.atom_infix(a) {
+                out.push((a, self.infix_shape(c)));
+                continue;
+            }
             match self.atom_key_shape(a) {
                 0 => return None,
                 s => out.push((a, s)),
@@ -154,6 +219,20 @@ impl Model {
     /// while the result may be a String gives any string. Prefixes are
     /// only made from constants, never extended, so loops end.
     pub(crate) fn plus_strs(&mut self, l: NodeId, r: NodeId) -> StrSet {
+        let m3 = self.plus_strs_m3(l, r);
+        if m3 != STRS_TOP {
+            return m3;
+        }
+        // Rule K7, 13.15.3: when one operand is String-only, the result is
+        // the concatenation of both ToStrings, so it holds every character
+        // that operand surely holds.
+        match self.infix_strs(l).or_else(|| self.infix_strs(r)) {
+            Some(s) => s,
+            None => STRS_TOP,
+        }
+    }
+
+    fn plus_strs_m3(&mut self, l: NodeId, r: NodeId) -> StrSet {
         let (ln, rn) = (&self.nodes[l as usize], &self.nodes[r as usize]);
         let (lp, lt, ls) = (ln.prim, !ln.pts.is_empty(), ln.strs);
         let (rp, rt, rs) = (rn.prim, !rn.pts.is_empty(), rn.strs);
@@ -179,6 +258,7 @@ impl Model {
         for &a in self.str_atoms(rs) {
             let t = match self.atom_prefix(a) {
                 Some(p) => p.to_string(),
+                None if self.atom_infix(a).is_some() => String::new(),
                 None => self.atoms[a as usize].clone(),
             };
             tails.push(t);
@@ -189,7 +269,7 @@ impl Model {
         }
         let mut out: Vec<Atom> = Vec::new();
         for a in left {
-            if self.atom_prefix(a).is_some() {
+            if self.atom_is_mark(a) {
                 out.push(a);
                 continue;
             }

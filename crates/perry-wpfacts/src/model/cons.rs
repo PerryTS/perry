@@ -654,6 +654,11 @@ pub enum Cons {
     /// Rule M3: `other` is the other operand and `right` says this node is
     /// the right one; `str`'s string constants and known prefixes are the
     /// pair's (`Model::plus_strs`).
+    /// Rule K7: the node is the receiver of `toLowerCase` / `toUpperCase`
+    /// (ECMA-262 22.1.3.28 / .29): `dst` holds a String, the infix entries
+    /// of the receiver when it holds only infix Strings
+    /// (`Model::case_map_strs`).
+    CaseMap { dst: NodeId },
     Plus {
         str: NodeId,
         num: NodeId,
@@ -746,6 +751,9 @@ impl Cons {
         matches!(
             self,
             Cons::StoreIndexed { .. }
+                | Cons::Plus { .. }
+                | Cons::IdxKey { .. }
+                | Cons::CaseMap { .. }
                 | Cons::RequireSpec { .. }
                 | Cons::Defined { .. }
                 | Cons::NotNullish { .. }
@@ -862,6 +870,7 @@ impl Cons {
             Cons::LenPermuted { .. } => "lenpermuted",
             Cons::Plus { .. } => "plus",
             Cons::ArrayLenArg { .. } => "arraylenarg",
+            Cons::CaseMap { .. } => "casemap",
             Cons::IdxLoad { .. } => "idxload",
             Cons::IdxKey { .. } => "idxkey",
             Cons::ElemUndef { .. } => "elemundef",

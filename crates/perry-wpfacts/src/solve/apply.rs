@@ -1737,7 +1737,7 @@ impl Model {
                 if prim & prim::STR != 0 {
                     for i in 0..self.str_atoms(strs).len() {
                         let a = self.str_atoms(strs)[i];
-                        if self.atom_prefix(a).is_some() {
+                        if self.atom_is_mark(a) {
                             match self.atom_key_shape(a) {
                                 0 => any_prefix = true,
                                 s => prefixed.push((a, s)),
@@ -1963,6 +1963,11 @@ impl Model {
                 if out != 0 {
                     self.add_prim(dst, out);
                 }
+            }
+            // Rule K7: the case map of the receiver keeps its infix entries.
+            Cons::CaseMap { dst } => {
+                let strs = self.case_map_strs(n);
+                self.add_s(dst, &[], prim::STR, strs);
             }
             Cons::Plus {
                 str,
