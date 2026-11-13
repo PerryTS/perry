@@ -69,6 +69,24 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `Object.prototype.hasOwnProperty(V)` with `this` (ECMA-262 20.1.3.2):
+/// ToPropertyKey(V) runs before ToObject(this), the reverse of
+/// `Object.hasOwn`. Only a nullish receiver can tell the two orders apart
+/// (ToObject of anything else runs no code and cannot fail), so that is the
+/// one case answered here; every other receiver is [`js_object_has_own`].
+#[inline]
+pub(crate) fn object_prototype_has_own_property(this: f64, key: f64) -> f64 {
+    let bits = this.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        if !super::super::property_key_coercion_is_inert(key) {
+            // May run user code and throw: that completion comes first.
+            unsafe { super::super::js_to_property_key(key) };
+        }
+        super::super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+    js_object_has_own(this, key)
+}
+
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
