@@ -255,6 +255,14 @@ fn name_receivers(src: &str) -> Vec<String> {
         .collect()
 }
 
+/// A receiver set naming what the chain of a parse object holds: the
+/// runtime's collapsed prototype or a method found there.
+fn chain(r: &str) -> bool {
+    ["Object.prototype", "ObjectProtoMethod", "builtin-fn"]
+        .iter()
+        .any(|k| r.contains(k))
+}
+
 fn hit_runs(src: &str) -> bool {
     let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
     let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
@@ -291,8 +299,7 @@ console.log(seen);
 "#;
     let recv = name_receivers(deleted);
     assert!(
-        recv.iter()
-            .any(|r| r.contains("ObjectProtoMethod") || r.contains("builtin-fn")),
+        recv.iter().any(|r| chain(r)),
         "the deleted key's [[Get]] reads the chain: {recv:?}"
     );
     let kept = r#"
@@ -305,9 +312,7 @@ console.log(seen);
 "#;
     let recv = name_receivers(kept);
     assert!(
-        !recv
-            .iter()
-            .any(|r| r.contains("ObjectProtoMethod") || r.contains("builtin-fn")),
+        !recv.iter().any(|r| chain(r)),
         "no delete: own values only: {recv:?}"
     );
 }
