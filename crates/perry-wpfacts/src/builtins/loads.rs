@@ -179,23 +179,33 @@ fn regexp_member_absent(what: Option<&str>, name: &str) -> bool {
             .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
 }
 
-/// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a String key no
-/// object of its chain holds reads `undefined`. The realm lists every own
-/// property of `Buffer.prototype`, of each typed-array kind's prototype and
-/// of `%TypedArray%.prototype` and `Object.prototype`; a typed array's
+/// 10.1.8.1 OrdinaryGet on a typed array or a Buffer: a key no object of
+/// its chain holds reads `undefined`. The realm lists every own property
+/// of `Buffer.prototype`, of each typed-array kind's prototype and of
+/// `%TypedArray%.prototype` and `Object.prototype`, the well-known symbol
+/// keys included: `%TypedArray%.prototype` holds `@@iterator` and
+/// `@@toStringTag` (23.2.3.37, 23.2.3.38), no object of the chain holds
+/// `@@toPrimitive` (7.1.1 ToPrimitive then calls `valueOf`/`toString`);
+/// a typed array's
 /// template does not keep its kind, and `Uint8Array.prototype` holds a
 /// superset of the other kinds' own keys (`constructor`,
 /// `BYTES_PER_ELEMENT`), so its chain stands for every kind's. A key a
 /// store wrote onto the chain is `intrinsic_miss`'s.
 pub(super) fn view_member_absent(what: Option<&str>, name: &str) -> bool {
-    let proto = match what {
+    view_chain(what)
+        .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+}
+
+/// The realm prototype a typed array's or a Buffer's chain starts at
+/// (`view_member_absent`): `None` for any other kind.
+pub(super) fn view_chain(
+    what: Option<&str>,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    members::realm_entry(match what {
         Some("TypedArray") => "Uint8Array.prototype",
         Some("Buffer") => "Buffer.prototype",
-        _ => return false,
-    };
-    !name.starts_with("@@")
-        && members::realm_entry(proto)
-            .is_some_and(|p| matches!(members::realm_chain_find(p, name), members::RealmFind::Absent))
+        _ => return None,
+    })
 }
 
 pub(super) fn buffer_member_absent(m: &Model, what: Option<&str>, name: &str) -> bool {
