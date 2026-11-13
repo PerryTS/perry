@@ -2152,6 +2152,9 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 
 #[path = "layout_probe/computed.rs"]
 mod computed;
+#[path = "layout_probe/keyed_delete.rs"]
+mod keyed_delete;
+pub(crate) use keyed_delete::probe_delete_keyed;
 use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;

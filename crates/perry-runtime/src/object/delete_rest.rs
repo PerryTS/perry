@@ -1214,6 +1214,16 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
         }
     }
 
+    // An ordinary bag with an overflow table: the key's atom names the
+    // entry, as for a keyed read (`layout_probe::probe_delete_keyed`).
+    if key_val.is_any_string() {
+        if let Some(deleted) =
+            unsafe { super::shapes::layout_probe::probe_delete_keyed(obj, key.to_bits()) }
+        {
+            return i32::from(deleted);
+        }
+    }
+
     // If the key is a string, use js_object_delete_field. #1781: accept
     // inline SSO short keys — `delete obj["abc"]` for a <=5-char key arrives
     // as a SHORT_STRING_TAG value that is_string() rejects, so the delete
