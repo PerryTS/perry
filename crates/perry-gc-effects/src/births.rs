@@ -550,6 +550,18 @@ pub fn check(
                 // classification, not this check. (One an install stores in
                 // a slot is called through the slot: it needs its origin.)
                 "exported"
+            } else if !called
+                && !by_pointer
+                && g.taken_by[i].is_empty()
+                && !g.taken[i]
+                && !g.in_data[i]
+            {
+                // An out-of-line copy nothing in the archives refers to:
+                // no call, no address in code or data (its callers hold
+                // inlined copies, which the walk sees in them). Only an
+                // object outside the analyzed archives could call it, and
+                // that is a native library: see the `perry_ffi` rule.
+                "unreferenced"
             } else {
                 origins.1 += 1;
                 report.failures += 1;
