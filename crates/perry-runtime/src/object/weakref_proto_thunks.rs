@@ -144,6 +144,10 @@ pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
 /// `Set`/`Map` pointer (different `obj_type`) or a primitive
 /// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
 pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
+    if receiver.to_bits() >> 48 == 0 {
+        // A Number (a denormal, or +0), not a raw object pointer.
+        return None;
+    }
     let addr = crate::value::js_nanbox_get_pointer(receiver) as usize;
     // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
     // are NaN-boxed POINTER_TAG values, not heap addresses) before

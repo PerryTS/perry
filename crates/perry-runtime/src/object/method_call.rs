@@ -657,10 +657,8 @@ unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
     // The canonical interned key: no allocation per read.
     let key = crate::string::canonical_key(name);
     let recv_value = recv_h.get_nanbox_f64();
-    let value = crate::object::js_object_get_field_by_name_f64(
-        recv_value.to_bits() as usize as *const ObjectHeader,
-        key,
-    );
+    // `recv` is a value: a Number with clear top 16 bits is no handle.
+    let value = crate::object::field_get_set::get_field_by_name_of_value(recv_value, key);
     if value.to_bits() == METHOD_SITE_BY_NAME || value.to_bits() == METHOD_SITE_BY_NAME_DIRECT {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
