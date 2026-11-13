@@ -1,20 +1,17 @@
 //! A Buffer's `subarray` / `slice` is a Buffer over the receiver's bytes,
 //! `fill` / `swap16` return the receiver: a read through the result is a
 //! Buffer read (once a container of primitives whose `readInt32BE` held
-//! nothing, and `sum += v.readInt32BE(..)` stayed `[0,0]`). A numeric rule
-//! one of whose operands holds nothing gives its result no interval
-//! (`solve/empty_operands.rs`): the spread call still takes the undescribed
-//! path, and the fallback covers it.
+//! nothing, and `sum += v.readInt32BE(..)` stayed `[0,0]`). A spread call
+//! (`subarray(...args)`) makes the same view.
 
 use super::*;
 use crate::FactsConfig;
 
-fn rep_lines(src: &str, fallback: bool) -> Vec<String> {
+fn rep_lines(src: &str) -> Vec<String> {
     let pf = facts_with(
         src,
         FactsConfig {
             diagnostics: true,
-            no_empty_operands: !fallback,
             ..Default::default()
         },
     );
@@ -47,19 +44,23 @@ fn zero(ls: &[String]) -> bool {
 
 #[test]
 fn a_read_through_a_buffer_view_is_no_constant() {
-    for view in [".subarray(16)", ".slice(16)", ".fill(1)", ".swap16()", ""] {
-        let ls = rep_lines(&program(view), false);
+    for view in [
+        ".subarray(16)",
+        ".slice(16)",
+        ".subarray(...args)",
+        ".slice(...args)",
+        ".fill(1)",
+        ".swap16()",
+        "",
+    ] {
+        let ls = rep_lines(&program(view));
         assert!(!zero(&ls), "{view}: {ls:#?}");
     }
 }
 
-/// The spread call is undescribed: without the fallback its read holds
-/// nothing and the sum is `[0,0]` (the negative control); with it, no
-/// interval.
+/// The probe prints rep lines for this program, so the test above does not
+/// pass on an empty probe.
 #[test]
-fn an_operand_that_holds_nothing_gives_no_interval() {
-    let src = program(".subarray(...args)");
-    assert!(zero(&rep_lines(&src, false)), "control");
-    let ls = rep_lines(&src, true);
-    assert!(!zero(&ls), "{ls:#?}");
+fn the_probe_has_rep_lines() {
+    assert!(!rep_lines(&program(".subarray(16)")).is_empty());
 }

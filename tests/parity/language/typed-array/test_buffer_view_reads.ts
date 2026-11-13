@@ -2,8 +2,8 @@
 // bytes (%TypedArray%.prototype.subarray makes one of the receiver's kind),
 // `fill` / `swap16` return the receiver. The facts once modelled the view as
 // a container of primitives: a read through it held nothing, and
-// `sum += v.readInt32BE(..)` was proved to stay 0. An operand that holds
-// nothing (`...args` still reaches the undescribed path) gives no interval.
+// `sum += v.readInt32BE(..)` was proved to stay 0. A spread call makes the
+// same view.
 function scan(v: Buffer): number {
   let sum = 0;
   for (let i = 0; i < 4; i++) sum += v.readInt32BE(i * 4);
@@ -29,3 +29,12 @@ const args: [number, number] = [4, 20];
 const viaSpread = Buffer.alloc(32).subarray(...args);
 viaSpread.writeInt32BE(9, 12);
 console.log(scan(viaSpread));
+
+function scanSpread(v: Buffer): number {
+  let sum = 0;
+  for (let i = 0; i < 4; i++) sum += v.readInt32BE(i * 4);
+  return sum;
+}
+const onlySpread = Buffer.alloc(32).slice(...args);
+onlySpread.writeInt32BE(11, 8);
+console.log(scanSpread(onlySpread));
