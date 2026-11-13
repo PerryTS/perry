@@ -84,6 +84,15 @@ pub(super) const TUI_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "perry/tui",
         has_receiver: false,
+        method: "useInputBytes",
+        class_filter: None,
+        runtime: "js_perry_tui_use_input_bytes",
+        args: &[NA_PTR],
+        ret: NR_VOID,
+    },
+    NativeModSig {
+        module: "perry/tui",
+        has_receiver: false,
         method: "run",
         class_filter: None,
         runtime: "js_perry_tui_run",
