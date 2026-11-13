@@ -11,6 +11,7 @@
 mod accessor_lookup;
 mod copy;
 mod define;
+pub(crate) mod empty_operands;
 mod lookup;
 pub(crate) mod map_vals;
 mod own_read;
@@ -696,6 +697,7 @@ impl Model {
             let line = self.cons_line(n, &c);
             self.rel(|| line);
         }
+        self.note_range_rule(n, &c);
         if let Cons::Range { dst, op, .. } = c {
             // The rule's result is every Number (String, for a code rule)
             // the node can hold: what reached it before (an instance's
@@ -784,6 +786,7 @@ impl Model {
                     && !self.settle_for_in()
                     && !self.settle_define()
                     && !crate::builtins::settle_native_given(self)
+                    && !self.settle_empty_operands()
                 {
                     break;
                 }

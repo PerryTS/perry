@@ -571,6 +571,7 @@ fn generate<'a>(
         bindings::instance_nodes_enabled() && cfg.sabotage.as_deref() != Some("instlit");
     g.m.named_lengths = named_lengths::enabled() && !cfg.unit;
     g.m.map_values = solve::map_vals::enabled();
+    g.m.empty_operands = solve::empty_operands::enabled();
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
     g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");
