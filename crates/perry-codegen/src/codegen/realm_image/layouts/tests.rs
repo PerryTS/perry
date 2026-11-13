@@ -25,6 +25,7 @@ fn descriptor_values_and_direct_aliases_verify_on_each_target() {
                 symbol: "perry_runtime_layout_test".into(),
                 word: LayoutWord::new(LayoutRow(125), 0, 2).unwrap().0,
                 family: 0,
+                realm_family: perry_abi::REALM_FAMILY_TYPED_ARRAY,
                 variant: 0,
                 kind: ShapeObjectKind::Ordinary,
                 integrity: 0,
@@ -48,6 +49,7 @@ fn descriptor_values_and_direct_aliases_verify_on_each_target() {
                 symbol: "perry_realm_layout_test_function".into(),
                 word: LayoutWord::new(LayoutRow(126), 2, 1).unwrap().0,
                 family: 0,
+                realm_family: perry_abi::REALM_FAMILY_FUNCTION_TOWERS,
                 variant: 0,
                 kind: ShapeObjectKind::Function,
                 integrity: 0,
@@ -65,6 +67,12 @@ fn descriptor_values_and_direct_aliases_verify_on_each_target() {
         let tags = emit_layouts(&mut module, 125, &layouts).unwrap();
         let ir = module.to_ir();
         assert!(ir.contains("@perry_lazy_layouts = global [2 x"));
+        for family in [
+            perry_abi::REALM_FAMILY_TYPED_ARRAY,
+            perry_abi::REALM_FAMILY_FUNCTION_TOWERS,
+        ] {
+            assert!(ir.contains(&format!("i8 {family}, [31 x i8] zeroinitializer")));
+        }
         assert!(ir.contains(
             "{ i64, ptr } { i64 1, ptr getelementptr (i8, ptr @prototype_cell, i64 8) }"
         ));
@@ -186,7 +194,7 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
                 let symbol = &layout.symbol;
                 assert_eq!(symbol, &format!("perry_runtime_layout_{short}"));
                 let cells = fields(initializer(&ir, symbol, "global"));
-                assert_eq!(cells.len(), 20, "{symbol}: {cells:?}");
+                assert_eq!(cells.len(), 21, "{symbol}: {cells:?}");
                 let slots = facts.keys.len() as u32;
                 let proto_code = match facts.prototype {
                     RuntimeLayoutPrototype::Object => 0,
@@ -249,6 +257,11 @@ fn program_runtime_layouts_are_exactly_r_and_equal_the_declared_facts() {
                     },
                 ];
                 assert_eq!(&cells[..18], &expected[..], "{source} {target}: {symbol}");
+                assert_eq!(cells[18], format!("i64 {}", crate::nanbox::i64_literal(
+                    crate::target_layout::layout_gc_header_word(
+                        target, crate::target_layout::HeaderForm::Meta, slots))));
+                assert_eq!(cells[19], "i8 0", "runtime birth descriptors have no image family");
+                assert_eq!(cells[20], "[31 x i8] zeroinitializer");
                 // Every keyed layout carries its link-time list, symbol-keyed
                 // ones too: their symbol slots hold `undefined` until the first
                 // install stores the runtime's symbol (`image_keys::prepare`).

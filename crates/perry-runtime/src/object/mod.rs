@@ -157,7 +157,7 @@ pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
 pub(crate) use global_this::{
-    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of,
+    birth_unborn_family_of, materialize_family, unborn_declared_statics_of, MaterializeFamily,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{

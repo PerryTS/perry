@@ -333,8 +333,11 @@ pub struct PerryLayoutDesc {
     /// A1 precompute, emitted by codegen under the asserts below. It has a reader in
     /// the birth: the idle `GcHeader` image ([`layout_gc_header_word`]).
     pub gc_header_word: u64,
+    /// Intrinsic family of a non-constructor realm image cell. Constructors
+    /// carry their immutable identity in their own header.
+    pub realm_family: u8,
     /// Keeps the size at 128 bytes (112 on ILP32), see `LAYOUT_DESC_FULL_SIZE_LP64`.
-    pub _tail_pad: [u8; 32],
+    pub _tail_pad: [u8; 31],
 }
 
 const _: () = assert!(
@@ -344,6 +347,10 @@ const _: () = assert!(
         } else {
             crate::codegen_abi::LAYOUT_DESC_GC_HEADER_WORD_OFFSET_ILP32
         }
+);
+const _: () = assert!(
+    std::mem::offset_of!(PerryLayoutDesc, realm_family)
+        == std::mem::offset_of!(PerryLayoutDesc, gc_header_word) + 8
 );
 const _: () = assert!(
     std::mem::offset_of!(PerryLayoutKey, off)
@@ -505,7 +512,8 @@ section_sentinel!(
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        realm_family: 0,
+        _tail_pad: [0; 31],
     },
     "perry_layouts",
     "__DATA,__perry_layouts",
@@ -708,6 +716,13 @@ pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_nam
 
 #[path = "layout_desc/lazy_image.rs"]
 mod lazy_image;
+#[cfg(any(debug_assertions, test))]
+pub(crate) use lazy_image::holds_image_family;
+#[cfg(test)]
+pub(crate) use lazy_image::js_realm_touch_pending;
+pub(crate) use lazy_image::{
+    pending_cell, pending_closure_cell, pending_intrinsic_word, seed_image_family,
+};
 #[path = "layout_desc/registration.rs"]
 mod registration;
 use registration::binding_symbol_keys;

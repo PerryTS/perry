@@ -170,22 +170,47 @@ pub(crate) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> 
 /// stops there rather than guess.
 #[inline(never)]
 pub(crate) fn for_each_cell(visit: &mut dyn FnMut(*mut GcHeader)) {
+    for header in cells() {
+        visit(header);
+    }
+}
+
+/// A direct cursor over the emitted cells. Materialization uses the same
+/// section decoder without an erased visitor callback or any allocation.
+pub(crate) struct Cells {
+    at: usize,
+    end: usize,
+}
+
+pub(crate) fn cells() -> Cells {
     let (start, end) = bounds();
-    let mut at = (start + 7) & !7;
-    while at + GC_HEADER_SIZE <= end {
-        // SAFETY: `at` is 8-aligned and inside the mapped section.
-        let word = unsafe { std::ptr::read(at as *const u64) };
-        if word == 0 {
-            at += 8;
-            continue;
+    Cells {
+        at: (start + 7) & !7,
+        end,
+    }
+}
+
+impl Iterator for Cells {
+    type Item = *mut GcHeader;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.at + GC_HEADER_SIZE <= self.end {
+            let at = self.at;
+            let word = unsafe { std::ptr::read(at as *const u64) };
+            if word == 0 {
+                self.at += 8;
+                continue;
+            }
+            if !unsafe { cell_header_is_well_formed(at, self.end) } {
+                debug_assert!(false, "malformed realm image cell at {at:#x}: {word:#x}");
+                self.at = self.end;
+                return None;
+            }
+            let size = unsafe { (*(at as *const GcHeader)).size as usize };
+            self.at += size;
+            return Some(at as *mut GcHeader);
         }
-        if !unsafe { cell_header_is_well_formed(at, end) } {
-            debug_assert!(false, "malformed realm image cell at {at:#x}: {word:#x}");
-            return;
-        }
-        let size = unsafe { (*(at as *const GcHeader)).size as usize };
-        visit(at as *mut GcHeader);
-        at += size;
+        None
     }
 }
 

@@ -34,6 +34,24 @@ crate::perry_thread_local! {
 /// Returns null pointers only while this thread is inside the build itself
 /// (see [`OBJECT_INTRINSICS_BUILDING`]) or if an allocation failed.
 pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
+    let ctor = crate::object::OBJECT_INTRINSIC_PTR.load(Ordering::Acquire) as usize;
+    let proto = crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize;
+    if proto != 0
+        && (ctor != 0 || crate::value::addr_class::realm::is_image_object(proto))
+        && unsafe { crate::object::layout_desc::pending_intrinsic_word(proto).is_none() }
+    {
+        return (ctor as *mut _, proto as *mut _);
+    }
+    materialize_family(MaterializeFamily::Builtin(
+        crate::object::BuiltinConstructorIdentity::Object,
+    ));
+    (
+        crate::object::OBJECT_INTRINSIC_PTR.load(Ordering::Acquire) as *mut _,
+        crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut _,
+    )
+}
+
+pub(super) fn birth_object_intrinsics() -> ObjectPair {
     let loaded = || {
         (
             crate::object::OBJECT_INTRINSIC_PTR.load(Ordering::Acquire),
@@ -65,14 +83,18 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     let _realm = crate::snap_census::realm_build();
     let built = build_object_intrinsics();
     if let Some((ctor, proto)) = built {
-        crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
-        crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
-        crate::array::note_object_prototype_intrinsic(proto as usize);
-        // Complete: every later write to it is the program's.
-        crate::object::builtin_proto::seal_built_intrinsic(
+        crate::object::builtin_proto::prepare_built_intrinsic(
             crate::object::builtin_proto::BuiltinProto::Object,
             proto,
         );
+        unsafe {
+            super::family_link::builtin(
+                crate::object::BuiltinConstructorIdentity::Object.declaration(),
+                ctor as usize,
+                proto as usize,
+                std::ptr::null_mut(),
+            );
+        }
     }
     OBJECT_INTRINSICS_BUILDING.with(|b| b.store(false, Ordering::Release));
     built.unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()))

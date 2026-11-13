@@ -58,3 +58,16 @@ pub const INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE: u64 = 32;
 /// direct `dv.get*` / `dv.set*` call skip the member read (`buffer::dataview`).
 pub const INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE: u64 = 33;
 const _: () = assert!(INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE < FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+
+/// The existing iterator tower's eight root identities, in its birth order.
+/// Reserved serials are facts on those cells, not a cell-to-family registry.
+pub const INTRINSIC_SERIAL_ITERATOR_PROTOTYPE: u64 = 34;
+pub const INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE: u64 = 35;
+pub const INTRINSIC_SERIAL_MAP_ITERATOR_PROTOTYPE: u64 = 36;
+pub const INTRINSIC_SERIAL_SET_ITERATOR_PROTOTYPE: u64 = 37;
+pub const INTRINSIC_SERIAL_STRING_ITERATOR_PROTOTYPE: u64 = 38;
+pub const INTRINSIC_SERIAL_REGEXP_STRING_ITERATOR_PROTOTYPE: u64 = 39;
+pub const INTRINSIC_SERIAL_ITERATOR_HELPER_PROTOTYPE: u64 = 40;
+pub const INTRINSIC_SERIAL_WRAP_FOR_VALID_ITERATOR_PROTOTYPE: u64 = 41;
+const _: () =
+    assert!(INTRINSIC_SERIAL_WRAP_FOR_VALID_ITERATOR_PROTOTYPE < FIRST_DYNAMIC_PROTOTYPE_SERIAL);

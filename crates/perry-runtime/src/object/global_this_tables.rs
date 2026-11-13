@@ -77,6 +77,12 @@ macro_rules! builtin_constructors {
                 assert!(id <= GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len() as u32);
                 Some(unsafe { std::mem::transmute::<u8, Self>(id as u8) })
             }
+            pub(crate) fn is_typed_array(self) -> bool {
+                matches!(self, Self::Int8Array | Self::Uint8Array | Self::Uint8ClampedArray
+                    | Self::Int16Array | Self::Uint16Array | Self::Int32Array | Self::Uint32Array
+                    | Self::Float16Array | Self::Float32Array | Self::Float64Array
+                    | Self::BigInt64Array | Self::BigUint64Array)
+            }
             pub(crate) fn declaration(self) -> &'static BuiltinConstructorDeclaration {
                 &GLOBAL_THIS_BUILTIN_CONSTRUCTORS[self as usize - 1]
             }

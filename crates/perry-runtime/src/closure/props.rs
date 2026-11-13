@@ -309,7 +309,7 @@ unsafe fn born_alloc<const ROOM: u32>(entries: &[(&str, f64)], attrs: &[u8]) -> 
 }
 
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.
-unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
+pub(crate) unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     // One shape lookup for an ordinary bag: keys, count and inline bound all
     // come from the same descriptor. The layout answers alone unless the
     // shadow bit says the bag's own keys extend past it (§3.6).
@@ -817,6 +817,20 @@ pub(crate) unsafe fn state_clear_deleted_bytes(ptr: usize, key: &[u8]) {
 ///
 /// # Safety
 /// `ptr` is a proven, live closure cell.
+/// A fresh typed-array constructor's dictionary state has its existing
+/// [[Prototype]] in slot zero. This reader never ensures a bag or state.
+pub(crate) unsafe fn born_state_prototype(ptr: usize) -> Option<u64> {
+    let state = state_of(ptr);
+    if state.is_null() {
+        return None;
+    }
+    let slot = state
+        .cast::<u8>()
+        .add(std::mem::size_of::<ObjectHeader>())
+        .cast::<u64>();
+    Some(slot.read())
+}
+
 pub(crate) unsafe fn state_prototype(ptr: usize) -> Option<u64> {
     let state = state_of(ptr);
     if state.is_null() {

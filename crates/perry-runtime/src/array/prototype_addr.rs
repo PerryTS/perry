@@ -162,9 +162,10 @@ static PROTOTYPE_ADDR_BUILTINS: [crate::object::BuiltinConstructorIdentity;
     crate::object::BuiltinConstructorIdentity::Boolean,
 ];
 
-/// How many intrinsic entries a realm has: one per builtin declaration
-/// (`BuiltinConstructorIdentity`, 1-based).
-const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len();
+/// Intrinsics entries for builtin declarations and the three existing
+/// non-constructor materialize groups (TypedArray, iterators, function towers).
+const INTRINSIC_ENTRY_COUNT: usize = crate::codegen_abi::REALM_FAMILY_FUNCTION_TOWERS as usize;
+const _: () = assert!(crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len() < 128);
 
 /// The realm's [[Intrinsics]] for builtin prototypes: `%Date.prototype%`,
 /// `%TypeError.prototype%`, `%Set.prototype%`, … — the object each family's
@@ -178,9 +179,8 @@ const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUC
 /// (`C === %Promise%`, `Array.prototype`'s own `constructor`) and every
 /// inherited `<instance>.constructor` answer reads it, never the binding.
 ///
-/// One entry per [`crate::object::BuiltinConstructorIdentity`], all-zero
-/// (unrecorded) at birth, so it lives in the zero-filled
-/// [`crate::state::RuntimeState`] and costs nothing before the realm exists.
+/// Unrecorded entries are zero in [`crate::state::RuntimeState`]. The same
+/// plain-address pairs hold builtin families and the three ensure groups.
 /// The cells hold raw addresses of movable objects and follow the same
 /// algebra as the hot rows above: healed through the forwarding chain on
 /// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
@@ -195,7 +195,58 @@ struct IntrinsicEntry {
 }
 
 fn intrinsic_entry(identity: crate::object::BuiltinConstructorIdentity) -> &'static IntrinsicEntry {
-    &crate::state::state().realm_intrinsics.entries[identity as usize - 1]
+    family_entry(identity as u8)
+}
+
+fn family_entry(family: u8) -> &'static IntrinsicEntry {
+    &crate::state::state().realm_intrinsics.entries[family as usize - 1]
+}
+
+/// The one Intrinsics storage also holds the three pre-existing ensure groups.
+pub(crate) fn family_intrinsic_cells(family: u8) -> (usize, usize) {
+    let entry = family_entry(family);
+    (entry.prototype.get(), entry.constructor.get())
+}
+
+pub(crate) fn note_family_intrinsic(family: u8, prototype: usize, constructor: usize) {
+    let entry = family_entry(family);
+    if prototype != 0 && entry.prototype.get() == 0 {
+        entry.prototype.set(prototype);
+    }
+    if constructor != 0 && entry.constructor.get() == 0 {
+        entry.constructor.set(constructor);
+    }
+}
+
+/// Plain halves of this realm's intrinsic entry. Materialization alone reads
+/// pending addresses; the public bound readers intentionally hide them.
+pub(crate) fn realm_intrinsic_cells(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> (usize, usize) {
+    let entry = intrinsic_entry(identity);
+    (entry.prototype.get(), entry.constructor.get())
+}
+
+/// The pending fact of an entry's own cell. Array.prototype carries it in
+/// its named-property holder; ordinary prototypes and constructors carry +4.
+#[inline]
+unsafe fn intrinsic_cell_pending(
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
+    addr: usize,
+) -> bool {
+    if addr == 0 {
+        return false;
+    }
+    if !prototype {
+        return crate::object::layout_desc::pending_closure_cell(addr).is_some();
+    }
+    let holder = if identity == crate::object::BuiltinConstructorIdentity::Array {
+        crate::array::array_property_bag_resolved(addr as *const crate::array::ArrayHeader) as usize
+    } else {
+        addr
+    };
+    crate::object::layout_desc::pending_intrinsic_word(holder).is_some()
 }
 
 /// Record this realm's intrinsic prototype and constructor of `identity`
@@ -207,13 +258,7 @@ pub(crate) fn note_realm_intrinsic(
     prototype: usize,
     constructor: usize,
 ) {
-    let entry = intrinsic_entry(identity);
-    if prototype != 0 && entry.prototype.get() == 0 {
-        entry.prototype.set(prototype);
-    }
-    if constructor != 0 && entry.constructor.get() == 0 {
-        entry.constructor.set(constructor);
-    }
+    note_family_intrinsic(identity as u8, prototype, constructor);
 }
 
 /// This realm's intrinsic prototype of `identity`, or 0 when the realm has
@@ -223,7 +268,7 @@ pub(crate) fn note_realm_intrinsic(
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity));
+    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).prototype, identity, true);
     #[cfg(any(test, debug_assertions, perry_diagnostics))]
     crate::realm_reads::check_image_intrinsic_read(addr, identity.name(), true);
     addr
@@ -239,6 +284,7 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
     let cell = &intrinsic_entry(identity).prototype;
     match cell.get() {
         0 => 0,
+        addr if unsafe { intrinsic_cell_pending(identity, true, addr) } => 0,
         addr => heal_prototype_addr(cell, addr),
     }
 }
@@ -249,7 +295,7 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None);
+    let addr = realm_intrinsic_addr(&intrinsic_entry(identity).constructor, identity, false);
     #[cfg(any(test, debug_assertions, perry_diagnostics))]
     crate::realm_reads::check_image_intrinsic_read(addr, identity.name(), false);
     addr
@@ -264,6 +310,7 @@ pub(crate) fn intrinsic_constructor_addr_if_bound(
     let cell = &intrinsic_entry(identity).constructor;
     match cell.get() {
         0 => 0,
+        addr if unsafe { intrinsic_cell_pending(identity, false, addr) } => 0,
         addr => heal_prototype_addr(cell, addr),
     }
 }
@@ -276,23 +323,39 @@ pub(crate) fn intrinsic_constructor_addr_if_bound(
 /// written either).
 fn realm_intrinsic_addr(
     cell: &Cell<usize>,
-    family: Option<crate::object::BuiltinConstructorIdentity>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
 ) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::global_this_is_materialized() {
-        crate::object::js_get_global_this();
-        addr = cell.get();
-    }
-    if addr == 0 {
-        match family {
-            Some(identity) if identity.declaration().lazy => {
-                crate::object::birth_lazy_family(identity);
-                addr = cell.get();
-                if addr == 0 {
-                    return 0;
-                }
+        if crate::gc::image_cells::agent_uses_image()
+            && unsafe {
+                (*crate::object::class_image::agent_layout_image().program).lazy_count != 0
             }
-            _ => return 0,
+        {
+            crate::object::materialize_family(crate::object::MaterializeFamily::Builtin(identity));
+            addr = cell.get();
+            if addr == 0
+                && [
+                    realm_intrinsic_cells(identity).0,
+                    realm_intrinsic_cells(identity).1,
+                ]
+                .into_iter()
+                .any(crate::value::addr_class::realm::is_image_object)
+            {
+                return 0;
+            }
+        }
+        if addr == 0 {
+            crate::object::js_get_global_this();
+            addr = cell.get();
+        }
+    }
+    if addr == 0 || unsafe { intrinsic_cell_pending(identity, prototype, addr) } {
+        crate::object::materialize_family(crate::object::MaterializeFamily::Builtin(identity));
+        addr = cell.get();
+        if addr == 0 {
+            return 0;
         }
     }
     heal_prototype_addr(cell, addr)

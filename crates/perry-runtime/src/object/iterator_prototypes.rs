@@ -361,6 +361,12 @@ fn build_iterator_prototypes() {
     if shared.is_null() {
         return;
     }
+    unsafe {
+        super::proto_validity::prepare_intrinsic_prototype_serial(
+            shared as usize,
+            perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_PROTOTYPE,
+        );
+    }
     install_symbol_iterator(shared);
     // `Iterator.prototype[Symbol.toStringTag]` is "Iterator": an iterator
     // whose own prototype carries no tag (node:sqlite's
@@ -371,54 +377,54 @@ fn build_iterator_prototypes() {
         crate::fn_info!(#[realm("%ArrayIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Array Iterator",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE,
     );
     let map_proto = build_family_proto(
         crate::fn_info!(#[realm("%MapIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::map_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Map Iterator",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_MAP_ITERATOR_PROTOTYPE,
     );
     let set_proto = build_family_proto(
         crate::fn_info!(#[realm("%SetIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::set_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "Set Iterator",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_SET_ITERATOR_PROTOTYPE,
     );
     let string_proto = build_family_proto(
         crate::fn_info!(#[realm("%StringIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "String Iterator",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_STRING_ITERATOR_PROTOTYPE,
     );
     let regexp_string_proto = build_family_proto(
         crate::fn_info!(regexp_string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "RegExp String Iterator",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_REGEXP_STRING_ITERATOR_PROTOTYPE,
     );
     let iterator_helper_proto = build_family_proto(
         crate::fn_info!(iterator_helper_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         "Iterator Helper",
         shared,
+        perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_HELPER_PROTOTYPE,
     );
     crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
     crate::iterator_helpers::install_dispose(shared);
     let wrap_proto = js_object_alloc(0, 0);
+    unsafe {
+        super::proto_validity::prepare_intrinsic_prototype_serial(
+            wrap_proto as usize,
+            perry_abi::intrinsic_serials::INTRINSIC_SERIAL_WRAP_FOR_VALID_ITERATOR_PROTOTYPE,
+        );
+    }
     crate::iterator_helpers::install_wrap_prototype_methods(wrap_proto);
     chain_to(wrap_proto, shared);
 
-    ITERATOR_PROTOTYPE_PTR.store(shared as i64, Ordering::Release);
-    ARRAY_ITERATOR_PROTOTYPE_PTR.store(array_proto as i64, Ordering::Release);
-    MAP_ITERATOR_PROTOTYPE_PTR.store(map_proto as i64, Ordering::Release);
-    SET_ITERATOR_PROTOTYPE_PTR.store(set_proto as i64, Ordering::Release);
-    STRING_ITERATOR_PROTOTYPE_PTR.store(string_proto as i64, Ordering::Release);
-    REGEXP_STRING_ITERATOR_PROTOTYPE_PTR.store(regexp_string_proto as i64, Ordering::Release);
-    ITERATOR_HELPER_PROTOTYPE_PTR.store(iterator_helper_proto as i64, Ordering::Release);
-    WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR.store(wrap_proto as i64, Ordering::Release);
-    super::iterator_ctor::note_birth_keys(shared);
     // `%IteratorHelperPrototype%` was born on the born-prototype lineage
     // (`build_family_proto`) and is no sealed family: mark it here, before
     // it is exposed, as every holder of that lineage is.
     // SAFETY: the live, fully built prototype, in this no-move window.
-    unsafe {
-        let _ = super::proto_validity::mark_object_as_prototype(iterator_helper_proto as usize);
-    }
     // SAFETY: all are live, fully built ordinary objects (collection is
     // suppressed above).
     unsafe {
@@ -433,6 +439,16 @@ fn build_iterator_prototypes() {
             ],
         )
     };
+    super::global_this::family_link::iterators([
+        shared as usize,
+        array_proto as usize,
+        map_proto as usize,
+        set_proto as usize,
+        string_proto as usize,
+        regexp_string_proto as usize,
+        iterator_helper_proto as usize,
+        wrap_proto as usize,
+    ]);
 }
 
 /// Install `[Symbol.iterator]` on the shared parent as a real method whose
@@ -481,12 +497,16 @@ fn build_family_proto(
     next_info: *const crate::closure::JsFunctionInfo,
     tag: &str,
     shared: *mut ObjectHeader,
+    serial: u64,
 ) -> *mut ObjectHeader {
     let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     if proto.is_null() {
         return std::ptr::null_mut();
+    }
+    unsafe {
+        super::proto_validity::prepare_intrinsic_prototype_serial(proto as usize, serial);
     }
     // `install_proto_method` records `next` as `{ writable:true, enumerable:false,
     // configurable:true }` and the closure's `name`/`length` as
@@ -544,6 +564,13 @@ mod override_probe_premise_tests {
 /// Lazily build the prototypes (idempotent). Cheap after the first call.
 
 pub(crate) fn ensure_iterator_prototypes() {
+    let root = ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as usize;
+    if root == 0 || unsafe { super::layout_desc::pending_intrinsic_word(root).is_some() } {
+        super::materialize_family(super::MaterializeFamily::Iterators);
+    }
+}
+
+pub(crate) fn birth_iterator_prototypes() {
     if ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) == 0 {
         // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
         let _realm = crate::snap_census::realm_build();

@@ -2,6 +2,11 @@
 //! existing descriptor publication mechanism with an image-selected row;
 //! there is no descriptor registry, row-to-pointer table or section scan.
 use super::*;
+#[path = "lazy_image/family_bind.rs"]
+mod family_bind;
+#[cfg(any(debug_assertions, test))]
+pub(crate) use family_bind::holds as holds_image_family;
+pub(crate) use family_bind::seed as seed_image_family;
 
 /// This agent's program table, when its image carries a lazy span.
 #[inline(always)]
@@ -73,30 +78,6 @@ pub(super) unsafe fn receiver_kind(
     .find(|kind| kind.code() == u64::from((*desc).kind))
 }
 
-/// An image family carries its serial and its image prototype. The row that
-/// names it binds the prototype through the agent's identity word at first
-/// touch; a worker's already-bound prototype is never replaced.
-#[cold]
-unsafe fn bind_family_image_prototype(desc: *const PerryLayoutDesc) {
-    let proto = (*desc).proto;
-    if (proto as usize) < LAYOUT_PROTO_TAG_END {
-        return;
-    }
-    let family = proto.cast::<PerryProtoFamily>();
-    let prototype = (*family).image_prototype;
-    if prototype.is_null() {
-        return;
-    }
-    let serial = (*family).serial;
-    assert!(serial != 0, "image prototype lacks its serial");
-    if super::super::shapes::identity_prototype_word(serial) == 0 {
-        super::super::shapes::write_identity_word(
-            serial,
-            crate::value::JSValue::pointer(prototype).bits(),
-        );
-    }
-}
-
 /// A live image receiver can be encountered before any runtime birth of its
 /// kind. Publish its row at that first read using the normal registrar. Held
 /// words and identity probes do not call this path, avoiding publication while
@@ -106,7 +87,7 @@ unsafe fn bind_family_image_prototype(desc: *const PerryLayoutDesc) {
 #[inline(never)]
 pub(crate) fn publish_receiver(word: u32) {
     let Some(desc) = descriptor(word) else { return };
-    unsafe { bind_family_image_prototype(desc) };
+
     let published = unsafe { super::registration::register_lazy_row(desc) };
     assert_eq!(
         published,
@@ -120,22 +101,71 @@ pub(crate) fn publish_receiver(word: u32) {
     );
 }
 
+/// The pending word of a proven ordinary prototype or closure header.
+#[inline(always)]
+pub(crate) unsafe fn pending_intrinsic_word(addr: usize) -> Option<u32> {
+    if addr == 0 {
+        return None;
+    }
+    let word = *(addr as *const u32).add(1);
+    (word & crate::codegen_abi::LAYOUT_ROW_PENDING != 0).then_some(word)
+}
+
+/// The pending logical row of a proven closure, including a dictionary bag.
+///
+/// # Safety
+/// A nonzero address names a live closure whose props pointer is valid.
+#[inline]
+pub(crate) unsafe fn pending_closure_cell(addr: usize) -> Option<(*mut u8, u32)> {
+    if addr == 0 {
+        return None;
+    }
+    if let Some(word) = pending_intrinsic_word(addr) {
+        return Some((addr as *mut u8, word));
+    }
+    let owner = (*(addr as *const crate::closure::ClosureHeader)).props as usize;
+    pending_intrinsic_word(owner).map(|word| (owner as *mut u8, word))
+}
+
+/// The logical layout owner of an image intrinsic. Native dictionary
+/// functions carry their own-key row in props; arrays use their named holder.
+#[inline]
+pub(crate) unsafe fn pending_cell(addr: usize) -> Option<(*mut u8, u32)> {
+    if addr == 0 || !crate::value::addr_class::realm::is_image_object(addr) {
+        return None;
+    }
+    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let owner = match header.obj_type {
+        crate::gc::GC_TYPE_OBJECT => addr,
+        crate::gc::GC_TYPE_CLOSURE => return pending_closure_cell(addr),
+        crate::gc_array_type_pat!() if header.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0 => {
+            crate::array::array_property_bag_resolved(addr as *const crate::array::ArrayHeader)
+                as usize
+        }
+        _ => return None,
+    };
+    pending_intrinsic_word(owner).map(|word| (owner as *mut u8, word))
+}
+
 /// First observation of an image receiver publishes its emitted row.
 ///
 /// # Safety
 /// `obj` is a live image receiver carrying the supplied pending `word`.
 #[no_mangle]
 pub unsafe extern "C" fn js_realm_touch_pending(obj: *mut u8, word: u32) {
-    assert!(crate::gc::image_cells::agent_uses_image(), "pending cell on an agent without an image");
+    assert!(
+        crate::gc::image_cells::agent_uses_image(),
+        "pending cell on an agent without an image"
+    );
     assert!(!obj.is_null());
-    assert!(crate::value::addr_class::realm::is_image_object(obj as usize));
+    assert!(crate::value::addr_class::realm::is_image_object(
+        obj as usize
+    ));
     #[cfg(any(test, debug_assertions))]
     let _no_gc = super::NoGcAlloc::enter();
     let obj = obj.cast::<crate::object::ObjectHeader>();
     debug_assert_eq!((*obj).parent_class_id, word);
-    let bound = word & !crate::codegen_abi::LAYOUT_ROW_PENDING;
-    publish_receiver(bound);
-    (*obj).parent_class_id = bound;
+    family_bind::bind(obj, word);
 }
 
 #[cfg(test)]

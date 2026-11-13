@@ -2,7 +2,7 @@
 //! (declared `external true` in `global_this_tables.rs`, always `lazy`).
 //!
 //! The realm declares the family and binds its constructor; its prototype is
-//! born on first observation (`birth_lazy_family`). At that birth the runtime
+//! born on first observation (`materialize_family`'s birth arm). At that birth the runtime
 //! calls the one registered provider hook with the family identity and the
 //! prototype; the provider installs the members with the generic define
 //! primitives below. A program that links no provider gets the declared
@@ -34,7 +34,7 @@ pub extern "C" fn js_runtime_provide_external_families(birth: BirthFn, construct
 }
 
 /// The family birth step for an `external` family: the provider's members.
-/// External families are `lazy`, so this runs inside `birth_lazy_family`,
+/// External families are `lazy`, so this runs inside `materialize_family`'s birth arm,
 /// which already holds the no-move scope the provider's allocations need.
 pub(crate) fn birth(identity: crate::object::BuiltinConstructorIdentity, proto: *mut ObjectHeader) {
     if let Some(birth) = BIRTH.peek() {

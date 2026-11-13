@@ -73,7 +73,8 @@ mod tests {
         parent_class_id: PARENT,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        realm_family: 0,
+        _tail_pad: [0; 31],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
@@ -149,7 +150,8 @@ mod evaluation_layout_tests {
         parent_class_id: 0,
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
-        _tail_pad: [0; 32],
+        realm_family: 0,
+        _tail_pad: [0; 31],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {

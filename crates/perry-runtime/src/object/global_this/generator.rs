@@ -142,8 +142,10 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
             crate::closure::shape::INTRINSIC_SERIAL_ASYNC_FUNCTION,
         );
     }
-    crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
-    crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    super::family_link::function_tower(
+        crate::closure::shape::INTRINSIC_SERIAL_ASYNC_FUNCTION,
+        ctor as usize, proto as usize, 0,
+    );
 }
 
 /// Complete the async/generator intrinsic constructor and prototype parents
@@ -200,7 +202,8 @@ pub(crate) fn wire_function_intrinsic_parents() {
             });
             // SAFETY: the live, fully built intrinsic, never moved (born old).
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
-                crate::object::builtin_proto::seal_runtime_prototype(proto, serial)
+                let _ =
+                    crate::object::builtin_proto::prepare_runtime_prototype(proto, serial, true);
             });
         }
     }
@@ -1013,14 +1016,33 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // patchable; adds stay open).
     // SAFETY: the live, fully built prototype, unexposed until the stores below.
     unsafe { crate::object::builtin_proto::seal_generator_prototype(gen_proto, is_async) };
-    ctor_slot.store(ctor as i64, Ordering::Release);
-    proto_slot.store(proto as i64, Ordering::Release);
-    gen_proto_slot.store(gen_proto as i64, Ordering::Release);
+    super::family_link::function_tower(
+        if is_async {
+            crate::closure::shape::INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION
+        } else {
+            crate::closure::shape::INTRINSIC_SERIAL_GENERATOR_FUNCTION
+        },
+        ctor as usize, proto as usize, gen_proto as usize,
+    );
+    let _ = (ctor_slot, proto_slot, gen_proto_slot);
 }
 
 /// Build both generator intrinsic towers. Idempotent within the current
 /// agent; called during its global bootstrap or by the lazy accessors. (#3664)
 pub(crate) fn ensure_generator_intrinsics() {
+    let roots = [
+        crate::object::ASYNC_FUNCTION_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize,
+        crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize,
+        crate::object::ASYNC_GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize,
+    ];
+    if roots.into_iter().any(|root| {
+        root == 0 || unsafe { crate::object::layout_desc::pending_intrinsic_word(root).is_some() }
+    }) {
+        materialize_family(MaterializeFamily::FunctionTowers);
+    }
+}
+
+pub(super) fn birth_generator_intrinsics() {
     if crate::object::ASYNC_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire) == 0 {
         // A realm intrinsic is the runtime's, whichever init first asks (SNAP census).
         let _realm = crate::snap_census::realm_build();

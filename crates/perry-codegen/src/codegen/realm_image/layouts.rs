@@ -3,7 +3,7 @@
 //! layouts in R are standalone descriptors under their own direct symbols,
 //! carrying their fixed native words (DESIGN §3.2 item 9).
 use super::*;
-use crate::layout_desc::{desc_tail, key_off, ATOM_TY, DESC_TY, KEY_TY};
+use crate::layout_desc::{desc_tail_for_family, key_off, ATOM_TY, DESC_TY, KEY_TY};
 
 pub(crate) struct LayoutKey {
     pub(crate) atom: String,
@@ -22,6 +22,7 @@ pub(crate) struct LayoutFacts {
     pub(crate) symbol: String,
     pub(crate) word: u32,
     pub(crate) family: u32,
+    pub(crate) realm_family: u8,
     pub(crate) variant: u16,
     pub(crate) kind: perry_abi::ShapeObjectKind,
     pub(crate) integrity: u8,
@@ -86,6 +87,7 @@ pub(crate) fn runtime_layouts(
             symbol: layout.symbol.clone(),
             word: word(name, source)?,
             family: source.family,
+            realm_family: 0,
             variant: source.variant,
             kind,
             integrity: source.integrity,
@@ -259,7 +261,7 @@ fn descriptor(
             layout.family, layout.variant, layout.kind.code(), layout.integrity,
             layout.slot_count, layout.word as i32, crate::nanbox::i64_literal(layout.rep),
             capacity - 1, layout.class_id, layout.parent_class_id, gc_plan as i32,
-            desc_tail(&module.target_triple, crate::target_layout::HeaderForm::Meta, layout.slot_count),
+            desc_tail_for_family(&module.target_triple, crate::target_layout::HeaderForm::Meta, layout.slot_count, layout.realm_family),
         ),
         fixups,
     ))

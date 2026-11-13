@@ -144,10 +144,11 @@ pub(crate) unsafe fn ensure_object_identity_serial(obj: *mut crate::object::Obje
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader` with no serial assigned yet.
-pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) {
+/// Prepare the bytes of a fresh intrinsic cell. Publication of the
+/// per-agent mark belongs to the shared family link.
+pub(crate) unsafe fn prepare_intrinsic_prototype_serial(obj: usize, serial: u64) -> bool {
     debug_assert!(serial != 0 && serial < FIRST_DYNAMIC_PROTOTYPE_SERIAL);
     if let Some(meta) = ensure_meta_for_mark(obj, crate::object::OBJECT_META_FLAG_IS_PROTOTYPE) {
-        ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
         // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
         (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
         debug_assert!(
@@ -157,6 +158,20 @@ pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) 
         );
         // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
         (*meta).proto_serial = serial;
+        true
+    } else {
+        false
+    }
+}
+
+#[inline]
+pub(crate) fn link_intrinsic_prototype_mark() {
+    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
+}
+
+pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) {
+    if prepare_intrinsic_prototype_serial(obj, serial) {
+        link_intrinsic_prototype_mark();
     }
 }
 

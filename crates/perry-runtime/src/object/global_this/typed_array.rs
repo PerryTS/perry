@@ -716,7 +716,26 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 ///
 /// Idempotent within the current agent: subsequent calls return its cached
 /// pointer. The owning agent is the only thread that accesses these roots.
-#[rustfmt::skip] pub(crate) fn ensure_typed_array_intrinsic(
+pub(crate) fn ensure_typed_array_intrinsic(
+) -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
+    let ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire) as usize;
+    let proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize;
+    if ctor == 0
+        || proto == 0
+        || unsafe {
+            crate::object::layout_desc::pending_intrinsic_word(ctor).is_some()
+                || crate::object::layout_desc::pending_intrinsic_word(proto).is_some()
+        }
+    {
+        materialize_family(MaterializeFamily::TypedArray);
+    }
+    (
+        crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire) as *mut _,
+        crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut _,
+    )
+}
+
+#[rustfmt::skip] pub(super) fn birth_typed_array_intrinsic(
 ) -> (*mut crate::closure::ClosureHeader, *mut ObjectHeader) {
     let existing_ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(Ordering::Acquire);
     let existing_proto = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
@@ -831,8 +850,7 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
         crate::fn_info!(#[realm("%TypedArray%.of")] export crate::object::global_this::bigint_promise::typed_array_of_thunk, 1; with_rest(0)),
         0,
     );
-    crate::object::TYPED_ARRAY_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
-    crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+    super::family_link::typed_array(ctor as usize, proto as usize);
     (ctor, proto)
 }
 
@@ -841,6 +859,10 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
 /// initialised), else null. Used by `js_object_get_prototype_of` to resolve
 /// `Object.getPrototypeOf(Int8Array.prototype)` to the shared prototype.
 pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
+    let root = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize;
+    if unsafe { crate::object::layout_desc::pending_cell(root).is_some() } {
+        materialize_family(MaterializeFamily::TypedArray);
+    }
     crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as *mut ObjectHeader
 }
 

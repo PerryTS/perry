@@ -14,6 +14,12 @@ pub const LAYOUT_ROW_LIMIT: u32 = 1 << 25;
 /// number, so a pending word fails the receiver's row-bound compare and
 /// `ordinary_row`; band and kind stay those of the bound word.
 pub const LAYOUT_ROW_PENDING: u32 = 1 << 25;
+/// The existing non-constructor main birth groups. Builtin constructor
+/// families use their immutable 1..127 constructor identity.
+pub const REALM_FAMILY_TYPED_ARRAY: u8 = 128;
+pub const REALM_FAMILY_ITERATORS: u8 = 129;
+pub const REALM_FAMILY_FUNCTION_TOWERS: u8 = 130;
+
 pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;

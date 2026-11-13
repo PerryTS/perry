@@ -293,7 +293,8 @@ macro_rules! runtime_layout {
             index: $name::INDEX.as_ptr(),
             class_id: 0, parent_class_id: 0, methods: std::ptr::null(),
             gc_header_word: crate::object::layout_desc::layout_gc_header_word($name::SLOT_COUNT as u32),
-            _tail_pad: [0; 32],
+            realm_family: 0,
+            _tail_pad: [0; 31],
         };
     };
 }

@@ -277,12 +277,13 @@ pub use self::numeric_range::{
 };
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
-    array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
-    intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
+    array_prototype_addr, array_prototype_addr_if_resolved, family_intrinsic_cells,
+    forget_object_prototype_intrinsic, function_prototype_addr, intrinsic_constructor_addr,
+    intrinsic_constructor_addr_if_bound, intrinsic_prototype_addr,
+    intrinsic_prototype_addr_if_bound, note_family_intrinsic, note_object_prototype_intrinsic,
     note_realm_intrinsic, object_prototype_addr, object_prototype_addr_if_resolved,
     object_prototype_addr_matches, object_prototype_cell, prime_prototype_addr_cache,
-    primitive_wrapper_prototype_addr, RealmIntrinsics,
+    primitive_wrapper_prototype_addr, realm_intrinsic_cells, RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{

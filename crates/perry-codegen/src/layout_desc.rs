@@ -28,9 +28,9 @@ use crate::strings::StringPool;
 /// `%PerryLayoutDesc`: family, variant, kind, integrity, slot_count,
 /// template word, rep, proto, keys, key_count, index_mask, index, class, parent,
 /// methods, identity, pad, image keys, then the A1 precompute gc_header_word,
-/// 32 bytes of padding (128 bytes LP64; 112 bytes ILP32).
+/// the intrinsic family byte and 31 bytes of padding (128 bytes LP64; 112 bytes ILP32).
 pub const DESC_TY: &str =
-    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, [32 x i8] }";
+    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, i8, [31 x i8] }";
 pub(crate) mod methods;
 /// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes on LP64, 12 on ILP32).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
@@ -41,9 +41,18 @@ pub(crate) fn desc_tail(
     form: crate::target_layout::HeaderForm,
     slot_count: u32,
 ) -> String {
+    desc_tail_for_family(triple, form, slot_count, 0)
+}
+
+pub(crate) fn desc_tail_for_family(
+    triple: &str,
+    form: crate::target_layout::HeaderForm,
+    slot_count: u32,
+    realm_family: u8,
+) -> String {
     use crate::target_layout::layout_gc_header_word;
     format!(
-        "i64 {}, [32 x i8] zeroinitializer",
+        "i64 {}, i8 {realm_family}, [31 x i8] zeroinitializer",
         layout_gc_header_word(triple, form, slot_count)
     )
 }

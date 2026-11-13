@@ -31,11 +31,11 @@
 //!
 //! # Who writes it
 //!
-//! [`seal_realm`] gives each sealed prototype's meta record its family
-//! (`OBJECT_META_FLAG_SEALED_INTRINSIC` and the family bits of
-//! `ObjectMeta::flags`) and publishes it into its agent slot once the realm
-//! is populated. Every mutation funnel then calls [`note_write`] (one meta load,
-//! null-checked) or [`note_array_prototype_write`]: the slot and spill stores,
+//! Each family's cell preparation records its seal in `ObjectMeta::flags`;
+//! the shared family link publishes its agent slot at materialization.
+//! [`seal_realm`] seals the completed namespace holders. Every mutation funnel
+//! then calls [`note_write`] (one meta load, null-checked) or
+//! [`note_array_prototype_write`]: the slot and spill stores,
 //! the shape publication funnel (key add, delete, descriptor and attribute
 //! changes, `[[Prototype]]` relinks), the descriptor, delete and
 //! `[[Prototype]]` funnels, and the Array-prototype named-property set and
@@ -231,14 +231,9 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
             << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
 }
 
-/// Seal one family's intrinsic the moment its builder completes it, before
-/// any program code can reach it. `%Object.prototype%` is built on first use
-/// (`ensure_object_intrinsics`), often long before the realm global is
-/// populated or in a program that never populates it; until it is sealed, its
-/// intrinsic slot names the stand-in, which proves nothing, so every default
-/// store would walk its keys. [`seal_realm`] later seals the same object again
-/// (idempotent).
-pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
+/// Cell flags of a completed builtin prototype. Root publication belongs to
+/// the shared link after this allocating cell preparation.
+pub(crate) fn prepare_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
     if proto.is_null() {
         return;
     }
@@ -246,8 +241,39 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
     super::own_override::as_builtin_definition(|| unsafe {
         trace_seal(family, (*proto).parent_class_id);
         seal_object(proto, family);
-        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
     });
+}
+
+pub(crate) fn constructor_family(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> Option<BuiltinProto> {
+    BuiltinProto::ALL
+        .iter()
+        .find(|(_, name)| *name == declaration.name)
+        .map(|(family, _)| *family)
+}
+
+/// The same cell preparation formerly made by the final realm seal. The
+/// constructor builder now has its exact prototype directly.
+pub(crate) unsafe fn prepare_constructor_prototype(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+    proto: *mut ObjectHeader,
+) {
+    let Some(family) = constructor_family(declaration) else {
+        return;
+    };
+    if proto.is_null() {
+        return;
+    }
+    let holder = if declaration.identity == crate::object::BuiltinConstructorIdentity::Array {
+        let arr = proto as *mut crate::array::ArrayHeader;
+        debug_assert_eq!((*arr).length, 0);
+        (*arr).capacity = 0;
+        crate::array::array_property_bag_resolved(arr)
+    } else {
+        proto
+    };
+    prepare_built_intrinsic(family, holder);
 }
 
 /// The meta family field of a sealed RUNTIME prototype (one the runtime
@@ -291,9 +317,7 @@ const _: () = assert!(
 pub(crate) fn realm_seals_constructor_prototype(
     declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
 ) -> bool {
-    BuiltinProto::ALL
-        .iter()
-        .any(|(_, ctor)| *ctor == declaration.name)
+    constructor_family(declaration).is_some()
 }
 
 /// Seal the built-in iterator prototypes the moment `iterator_prototypes`
@@ -419,14 +443,10 @@ const _: () = assert!(
 #[inline(never)]
 #[optimize(size)]
 pub(crate) unsafe fn seal_runtime_prototype(proto: *mut ObjectHeader, serial: u64) {
-    let _no_move = crate::gc::GcSuppressScope::new();
-    super::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
-    let Some(meta) = name_runtime_prototype(proto, serial) else {
-        return;
-    };
-    // GC_STORE_AUDIT(POINTER_FREE): scalar flag bits, never a reference.
-    (*meta).flags |= super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
-        | ((RUNTIME_FAMILY as u64) << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
+    if prepare_runtime_prototype(proto, serial, true).is_some() {
+        super::proto_validity::link_intrinsic_prototype_mark();
+        link_runtime_prototype(proto, serial);
+    }
 }
 
 /// Give a runtime prototype its reserved intrinsic `serial` as its identity
@@ -443,7 +463,22 @@ pub(crate) unsafe fn name_runtime_prototype(
     proto: *mut ObjectHeader,
     serial: u64,
 ) -> Option<*mut super::ObjectMeta> {
+    let meta = prepare_runtime_prototype(proto, serial, false)?;
+    link_runtime_prototype(proto, serial);
+    Some(meta)
+}
+
+/// Writes into a fresh runtime prototype, including its metadata. The BIND
+/// arm has these bytes already and never calls this allocating preparation.
+pub(crate) unsafe fn prepare_runtime_prototype(
+    proto: *mut ObjectHeader,
+    serial: u64,
+    sealed: bool,
+) -> Option<*mut super::ObjectMeta> {
     let _no_move = crate::gc::GcSuppressScope::new();
+    if sealed {
+        super::proto_validity::prepare_intrinsic_prototype_serial(proto as usize, serial);
+    }
     let meta = super::object_meta_ensure(
         crate::meta_obj_runtime_born!(proto),
         super::MetaReason::RuntimePrototypeName,
@@ -452,108 +487,35 @@ pub(crate) unsafe fn name_runtime_prototype(
         return None;
     }
     debug_assert!((*meta).proto_serial == 0 || (*meta).proto_serial == serial);
-    // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
+    // GC_STORE_AUDIT(POINTER_FREE): the cell's scalar prototype identity.
     (*meta).proto_serial = serial;
+    if sealed {
+        // GC_STORE_AUDIT(POINTER_FREE): the cell's immutable birth flags.
+        (*meta).flags |= super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
+            | ((RUNTIME_FAMILY as u64) << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
+    }
+    Some(meta)
+}
+
+/// The shared external words of a named runtime prototype.
+pub(crate) unsafe fn link_runtime_prototype(proto: *mut ObjectHeader, serial: u64) {
     super::shapes::write_identity_word(
         serial,
         crate::value::js_nanbox_pointer(proto as i64).to_bits(),
     );
-    Some(meta)
 }
 
-/// Seal every family's intrinsic prototype of THIS thread's realm. Called once
-/// at the end of `populate_global_this_builtins`, after every runtime-owned
-/// install, link and the prototype-address priming.
+/// Seal this realm's completed namespace holders. Builtin prototype seals
+/// belong to each family's cell preparation before its shared root link.
 #[optimize(size)]
 pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     if global.is_null() {
         return;
     }
     let _no_move = crate::gc::GcSuppressScope::new();
-    super::own_override::as_builtin_definition(|| unsafe {
-        for (family, name) in BuiltinProto::ALL {
-            let proto = crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; intrinsic_prototype_addr(family, global, name) };
-            if proto == 0 {
-                continue;
-            }
-            let Some(header) = crate::value::addr_class::try_read_gc_header(proto) else {
-                continue;
-            };
-            match header.obj_type {
-                crate::gc_object_type_pat!() => {
-                    trace_seal(family, (*(proto as *const ObjectHeader)).parent_class_id);
-                    seal_object(proto as *mut ObjectHeader, family);
-                    crate::agent_ptrs::publish_intrinsic_proto(
-                        family as usize,
-                        proto as *const ObjectHeader,
-                    );
-                }
-                // `Array.prototype` is an Array exotic: its named members live
-                // in its property bag, an ordinary object. Materialise the bag
-                // now so every later named write reaches a sealed object, and
-                // recognise the array itself by its memoized address
-                // ([`note_array_prototype_write`]).
-                crate::gc_array_type_pat!() => {
-                    // DEC 250 (i): it never holds an element, so it keeps no
-                    // element room: every element it could gain must then
-                    // grow it, and `js_array_grow` refuses that. Its length is
-                    // 0 (nothing wrote it before the seal); the allocation's
-                    // size lives in its GC header, not in `capacity`.
-                    let arr = proto as *mut crate::array::ArrayHeader;
-                    debug_assert_eq!((*arr).length, 0);
-                    (*arr).capacity = 0;
-                    let bag = crate::array::array_property_bag_ensure(arr);
-                    seal_object(bag, family);
-                    if !bag.is_null() {
-                        trace_seal(family, (*bag).parent_class_id);
-                        crate::agent_ptrs::publish_intrinsic_proto(family as usize, bag);
-                    }
-                }
-                _ => {}
-            }
-        }
+    super::own_override::as_builtin_definition(|| {
         super::builtin_namespace::seal_namespaces(global);
     });
-}
-
-/// The realm's intrinsic prototype of `family`: the memoized intrinsic cells
-/// for Object (the complete intrinsic, never the shape-only sentinel), Array
-/// and Function; `globalThis[name].prototype` for the rest.
-#[inline(never)]
-#[optimize(size)]
-unsafe fn intrinsic_prototype_addr(
-    family: BuiltinProto,
-    global: *mut ObjectHeader,
-    name: &str,
-) -> usize {
-    match family {
-        BuiltinProto::Object => crate::array::object_prototype_addr(),
-        BuiltinProto::Array => crate::array::array_prototype_addr(),
-        BuiltinProto::Function => crate::array::function_prototype_addr(),
-        _ => constructor_prototype_addr(global, name),
-    }
-}
-
-/// `globalThis[name].prototype` while the realm still names its intrinsics.
-#[inline(never)]
-#[optimize(size)]
-unsafe fn constructor_prototype_addr(global: *mut ObjectHeader, name: &str) -> usize {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let ctor = super::js_object_get_field_by_name_f64(global, key);
-    let ctor_bits = ctor.to_bits();
-    if ctor_bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    let pkey = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    let proto = super::js_object_get_field_by_name_f64(
-        (ctor_bits & crate::value::POINTER_MASK) as usize as *const ObjectHeader,
-        pkey,
-    );
-    let bits = proto.to_bits();
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return 0;
-    }
-    (bits & crate::value::POINTER_MASK) as usize
 }
 
 /// The invalidation hook for an ordinary object about to be mutated. One

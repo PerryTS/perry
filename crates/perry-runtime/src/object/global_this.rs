@@ -42,6 +42,9 @@ mod builtin_namespace;
 mod json_reflect_namespaces;
 mod math_namespace;
 
+pub(crate) mod family_link;
+#[cfg(test)]
+mod materialize_tests;
 mod object_intrinsic;
 mod populate;
 mod proto_methods;
@@ -115,9 +118,9 @@ pub(crate) use fetch_globals::temporal_subclass_super;
 #[cfg(perry_gc_instruments)]
 pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
-    global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
-    global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
-    global_this_response_thunk, is_thread_realm_global,
+    bound_thread_global, global_this_blob_thunk, global_this_builtin_noop_thunk,
+    global_this_file_thunk, global_this_headers_thunk, global_this_is_materialized,
+    global_this_request_thunk, global_this_response_thunk, is_thread_realm_global,
 };
 pub use fetch_globals::{
     js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
@@ -163,9 +166,9 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    birth_unborn_family_of, default_prepare_stack_trace_func_ptr, materialize_family,
     populate_global_this_builtins, scan_error_constructor_root_mut, unborn_declared_statics_of,
-    ERROR_CONSTRUCTOR_PTR,
+    MaterializeFamily, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_builtin_well_known_symbol_method, install_error_prototype_data_properties,

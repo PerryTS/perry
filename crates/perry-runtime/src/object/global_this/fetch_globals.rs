@@ -82,6 +82,10 @@ static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 /// population finishes — deliberately, so a caller that runs *during*
 /// population (the descriptor bookkeeping does) behaves exactly as it did
 /// before this predicate existed.
+pub(crate) fn bound_thread_global() -> *mut ObjectHeader {
+    (THREAD_GLOBAL_THIS.with(|cell| cell.get()) & crate::value::POINTER_MASK) as *mut ObjectHeader
+}
+
 pub(crate) fn global_this_is_materialized() -> bool {
     THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
 }

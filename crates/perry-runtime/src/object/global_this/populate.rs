@@ -1,20 +1,21 @@
 use super::*;
 
-/// Apply the builtin's declared identity and its members' declared permanent
-/// images to the finished holder. No public name participates in either fact.
-fn finish_builtin_prototype(
+/// Publish the class identity declared by this builtin, independent of its name.
+/// Both materialize arms reach this operation through the shared link body.
+pub(super) fn finish_builtin_prototype(
     declaration: &BuiltinConstructorDeclaration,
     proto_obj: *mut ObjectHeader,
 ) {
-    // These ordinary native receivers carry CLASS identities, just
-    // like declared-class instances. Publish the intrinsic holder in
-    // the identity's GC-traced word when it becomes available.
     if let Some(class) = declaration.prototype_class {
         crate::object::shapes::write_identity_word(
             crate::object::shapes::PROTO_ID_CLASS | u64::from(class),
             crate::value::js_nanbox_pointer(proto_obj as i64).to_bits(),
         );
     }
+}
+
+/// Prepare the members' permanent images before the family is linked.
+fn prepare_builtin_prototype(proto_obj: *mut ObjectHeader) {
     // Every builtin prototype, after the fit (its live-bound
     // transition keeps no ConstFn lane): the shape names the body of
     // each member whose function info declares a permanent image
@@ -271,11 +272,11 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         }
         // A lazy family keeps only its constructor at setup: the realm's
         // [[Intrinsics]] entry holds it (prototype half 0) and the global
-        // binds it below; `birth_lazy_family` births the rest on first ask.
+        // binds it below; `birth_lazy_family_cells` births the rest on first ask.
         // Only the realm that owns the thread's entries defers: a later realm
         // on the same thread (a `vm` context) births its families here.
         let ctor_value = if declaration.lazy
-            && crate::array::intrinsic_constructor_addr_if_bound(declaration.identity) == 0
+            && crate::array::realm_intrinsic_cells(declaration.identity).1 == 0
         {
             crate::array::note_realm_intrinsic(declaration.identity, 0, closure_ptr as usize);
             // Its declared statics are own keys its base Function shape does
@@ -775,7 +776,7 @@ fn link_interface_parent(
 /// the constructor's own properties, the prototype's members and hooks, and
 /// the realm's [[Intrinsics]] entry. Returns the constructor value.
 // Once per family, compacted like the population that calls it. One instance
-// for both callers (the population and `birth_lazy_family`): the realm global
+// for both callers (the population and `birth_lazy_family_cells`): the realm global
 // comes as `&dyn Fn`, so the body is not monomorphized per caller.
 #[optimize(size)]
 fn birth_family(
@@ -784,6 +785,35 @@ fn birth_family(
     singleton: &dyn Fn() -> *mut ObjectHeader,
     state: &mut FamilyBirthState,
 ) -> f64 {
+    let proto = family_cells(declaration, closure_ptr, state);
+    let global = if declaration.identity == crate::object::BuiltinConstructorIdentity::RegExp {
+        let global = singleton();
+        // BIRTH owns key/storage preparation. The shared link only overwrites
+        // the declared slot, just as it does for an emitted global row.
+        #[cfg(feature = "regex-engine")]
+        crate::object::intrinsic_private_add(
+            crate::value::js_nanbox_pointer(global as i64),
+            "[[RegExpPrototype]]",
+            crate::value::js_nanbox_pointer(proto as i64),
+        );
+        global
+    } else {
+        std::ptr::null_mut()
+    };
+    unsafe {
+        super::family_link::builtin(declaration, closure_ptr as usize, proto as usize, global);
+    }
+    crate::value::js_nanbox_pointer(closure_ptr as i64)
+}
+
+/// Allocate and write the family's cells. The image emitter owns these same
+/// bytes; the held arm skips this body and reaches the shared link directly.
+#[optimize(size)]
+fn family_cells(
+    declaration: &BuiltinConstructorDeclaration,
+    closure_ptr: *mut crate::closure::ClosureHeader,
+    state: &mut FamilyBirthState,
+) -> *mut ObjectHeader {
     let name = declaration.name;
     let typed_array_intrinsic_ctor = state.typed_array_intrinsic_ctor;
     // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
@@ -856,7 +886,6 @@ fn birth_family(
     // #4533: `Object.getPrototypeOf(TypeError) === Error`. The constructor's
     // `[[Prototype]]` is `Error` itself (not `Function.prototype`).
     if name == "Error" {
-        ERROR_CONSTRUCTOR_PTR.with(|cell| cell.set(closure_ptr as usize));
         state.error_ctor_bits = Some(ctor_value.to_bits());
     } else if is_native_error_subclass_constructor(name) {
         if let Some(proto_bits) = state.error_ctor_bits {
@@ -922,17 +951,6 @@ fn birth_family(
             crate::external_family::birth(declaration.identity, proto_obj);
         }
         populate_builtin_prototype_methods(name, proto_obj);
-        #[cfg(feature = "regex-engine")]
-        if name == "RegExp" {
-            // An intrinsic is a realm-private value, independent of the
-            // writable public constructor. Ordinary private storage keeps
-            // it alive and relocates it through the global object's trace.
-            crate::object::intrinsic_private_add(
-                crate::value::js_nanbox_pointer(singleton() as i64),
-                "[[RegExpPrototype]]",
-                crate::value::js_nanbox_pointer(proto_obj as i64),
-            );
-        }
         crate::event_target_hook_slots::prototype_install_constructor_constants(
             name,
             closure_ptr.cast(),
@@ -940,11 +958,11 @@ fn birth_family(
         if let Some(serial) = declaration.prototype_serial {
             // SAFETY: `proto_obj` is the live, just-populated prototype.
             unsafe {
-                crate::object::proto_validity::assign_intrinsic_prototype_serial(
+                crate::object::proto_validity::prepare_intrinsic_prototype_serial(
                     proto_obj as usize,
                     serial,
                 );
-                name_first_realm_prototype(proto_obj, serial);
+                prepare_first_realm_prototype(proto_obj, serial);
             }
         }
         if let Some(serial) = declaration.named_serial {
@@ -954,17 +972,17 @@ fn birth_family(
                 let holder =
                     crate::array::array_property_bag(proto_obj as *const crate::array::ArrayHeader);
                 if !holder.is_null() {
-                    name_first_realm_prototype(holder, serial);
+                    prepare_first_realm_prototype(holder, serial);
                 }
             }
         }
         if let Some(serial) = declaration.sealed_serial {
             // SAFETY: as above; runtime layouts name it by this serial.
-            unsafe { crate::object::builtin_proto::seal_runtime_prototype(proto_obj, serial) };
-        }
-        if name == "Function" {
-            crate::closure::shape::FUNCTION_PROTOTYPE_PTR
-                .store(proto_obj as i64, std::sync::atomic::Ordering::Release);
+            unsafe {
+                let _ = crate::object::builtin_proto::prepare_runtime_prototype(
+                    proto_obj, serial, true,
+                );
+            };
         }
         install_error_prototype_data_properties(name, proto_obj);
         // ECMA-262 20.5.6.3: the [[Prototype]] of each NativeError prototype
@@ -1009,23 +1027,7 @@ fn birth_family(
         // wiring (closure static-prototype side-table for the ctor;
         // `OBJ_FLAG_TYPED_ARRAY_PROTO` + the cached
         // `TYPED_ARRAY_INTRINSIC_PROTO_PTR` for the per-kind proto).
-        if !typed_array_intrinsic_ctor.is_null()
-            && matches!(
-                name,
-                "Int8Array"
-                    | "Uint8Array"
-                    | "Uint8ClampedArray"
-                    | "Int16Array"
-                    | "Uint16Array"
-                    | "Int32Array"
-                    | "Uint32Array"
-                    | "Float16Array"
-                    | "Float32Array"
-                    | "Float64Array"
-                    | "BigInt64Array"
-                    | "BigUint64Array"
-            )
-        {
+        if !typed_array_intrinsic_ctor.is_null() && declaration.identity.is_typed_array() {
             if name == "Uint8Array" {
                 crate::closure::js_closure_set_capture_f64(
                     typed_array_intrinsic_ctor,
@@ -1112,22 +1114,12 @@ fn birth_family(
             // SAFETY: fresh, unexposed, under this bootstrap's no-move scope.
             unsafe { super::proto_room::fit_builtin_prototype(proto_obj) };
         }
-        finish_builtin_prototype(declaration, proto_obj);
+        prepare_builtin_prototype(proto_obj);
     }
-    // The realm's [[Intrinsics]] entry for this family: the constructor
-    // and what its instances inherit from, whatever `globalThis.<name>`
-    // later holds.
-    let ctor = JSValue::from_bits(ctor_value.to_bits());
-    crate::array::note_realm_intrinsic(
-        declaration.identity,
-        proto_obj as usize,
-        if ctor.is_pointer() {
-            ctor.as_pointer::<u8>() as usize
-        } else {
-            0
-        },
-    );
-    ctor_value
+    unsafe {
+        super::super::builtin_proto::prepare_constructor_prototype(declaration, proto_obj);
+    }
+    proto_obj
 }
 
 crate::perry_thread_local! {
@@ -1136,16 +1128,95 @@ crate::perry_thread_local! {
     static BIRTHING: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
 }
 
-/// Birth the `lazy` family `identity` (`BuiltinConstructorDeclaration::lazy`)
-/// in this thread's realm: everything realm setup did not do, by the same
-/// `birth_family` as an eager family, so the members are in declaration
-/// order whatever observation came first. Entered only from
-/// `array::realm_intrinsic_addr`, when the family's intrinsic prototype is
-/// still 0 after the realm exists. No-op while the realm has not bound the
-/// constructor yet (realm setup itself).
+/// The existing main birth groups. This is a source identity, not a runtime
+/// registry; non-constructor image rows carry its byte in their descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MaterializeFamily {
+    Builtin(crate::object::BuiltinConstructorIdentity),
+    TypedArray,
+    Iterators,
+    FunctionTowers,
+}
+
+impl MaterializeFamily {
+    pub(crate) fn encoding(self) -> u8 {
+        match self {
+            Self::Builtin(identity) => identity as u8,
+            Self::TypedArray => crate::codegen_abi::REALM_FAMILY_TYPED_ARRAY,
+            Self::Iterators => crate::codegen_abi::REALM_FAMILY_ITERATORS,
+            Self::FunctionTowers => crate::codegen_abi::REALM_FAMILY_FUNCTION_TOWERS,
+        }
+    }
+}
+
+/// ONE materialize point: an entry naming a pending image cell takes the
+/// existing program-table BIND delegate; every other realm takes main's birth.
 #[cold]
 #[inline(never)]
-pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdentity) {
+pub(crate) fn materialize_family(family: MaterializeFamily) {
+    let encoding = family.encoding();
+    let mut roots = crate::array::family_intrinsic_cells(encoding);
+    if roots == (0, 0) && crate::gc::image_cells::agent_uses_image() {
+        // Object and generator observations can precede globalThis entirely.
+        // Seed only plain Intrinsics halves at this same materialize point.
+        crate::object::layout_desc::seed_image_family(encoding);
+        roots = crate::array::family_intrinsic_cells(encoding);
+    }
+    let mut bound = false;
+    for addr in [roots.0, roots.1] {
+        if let Some((cell, word)) = unsafe { crate::object::layout_desc::pending_cell(addr) } {
+            let table = unsafe { &*crate::object::class_image::agent_layout_image().program };
+            let bind = table
+                .touch_pending
+                .expect("pending family without its materialize entry");
+            unsafe { bind(cell, word) };
+            bound = true;
+        }
+    }
+    // Iterator's constructor and shared tower prototype can have different
+    // family facts. Each pending half uses that fact at this same point.
+    if bound {
+        return;
+    }
+    // A reached image family cannot birth a missing half beside its image.
+    // A checked intrinsic read names that missing cell at its existing check.
+    if [roots.0, roots.1]
+        .into_iter()
+        .any(|addr| addr != 0 && crate::value::addr_class::realm::is_image_object(addr))
+    {
+        return;
+    }
+    #[cfg(any(debug_assertions, test))]
+    assert!(
+        !crate::gc::image_cells::agent_uses_image()
+            || !crate::object::layout_desc::holds_image_family(encoding),
+        "held family entered its birth arm"
+    );
+    match family {
+        MaterializeFamily::Builtin(crate::object::BuiltinConstructorIdentity::Object) => {
+            super::object_intrinsic::birth_object_intrinsics();
+        }
+        MaterializeFamily::Builtin(identity) if identity.declaration().lazy => {
+            birth_lazy_family_cells(identity);
+        }
+        MaterializeFamily::Builtin(_) => {}
+        MaterializeFamily::TypedArray => {
+            super::typed_array::birth_typed_array_intrinsic();
+        }
+        MaterializeFamily::Iterators => {
+            crate::object::iterator_prototypes::birth_iterator_prototypes();
+        }
+        MaterializeFamily::FunctionTowers => {
+            super::generator::birth_generator_intrinsics();
+        }
+    }
+}
+
+/// Main's existing lazy birth arm. Its allocation and no-move scope live only
+/// here; an image observation never enters this body.
+#[cold]
+#[inline(never)]
+fn birth_lazy_family_cells(identity: crate::object::BuiltinConstructorIdentity) {
     let declaration = identity.declaration();
     debug_assert!(declaration.lazy);
     let ctor = crate::array::intrinsic_constructor_addr_if_bound(identity);
@@ -1194,7 +1265,17 @@ pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdent
 #[inline(always)]
 pub(crate) unsafe fn birth_unborn_family_of(ptr: usize) -> bool {
     let word = (*(ptr as *const crate::closure::ClosureHeader)).capture_count;
-    word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK != 0 && birth_unborn_family_slow(ptr, word)
+    if word & crate::codegen_abi::CLOSURE_CONSTRUCT_MASK == 0 {
+        return false;
+    }
+    if let Some((cell, pending)) = crate::object::layout_desc::pending_cell(ptr) {
+        let table = &*crate::object::class_image::agent_layout_image().program;
+        table
+            .touch_pending
+            .expect("pending constructor without materialization")(cell, pending);
+        return true;
+    }
+    birth_unborn_family_slow(ptr, word)
 }
 
 #[cold]
@@ -1389,10 +1470,10 @@ pub(crate) fn default_prepare_stack_trace_func_ptr() -> usize {
 ///
 /// # Safety
 /// `proto` is a live ordinary object whose serial is 0 or `serial`.
-unsafe fn name_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
+unsafe fn prepare_first_realm_prototype(proto: *mut ObjectHeader, serial: u64) {
     if crate::object::shapes::identity_word_slot(serial).is_some_and(|slot| *slot != 0) {
         return;
     }
-    crate::object::proto_validity::assign_intrinsic_prototype_serial(proto as usize, serial);
-    let _ = crate::object::builtin_proto::name_runtime_prototype(proto, serial);
+    crate::object::proto_validity::prepare_intrinsic_prototype_serial(proto as usize, serial);
+    let _ = crate::object::builtin_proto::prepare_runtime_prototype(proto, serial, false);
 }

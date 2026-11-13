@@ -81,3 +81,16 @@ in the graph. A drop-glue call is omitted only when all control-flow
 successors unconditionally reach `std::process::abort`; a returning,
 unknown, or looping successor retains the edge. These are analysis rules,
 not TLS- or dropped-type exemptions.
+
+Builtin family observation enters one materialize point. A plain Intrinsics
+entry naming a cell with LAYOUT_ROW_PENDING chooses BIND: publish only that
+family's rows, clear its pending words, then run family_link. Other realms
+use the same point's existing birth arm. Bound-only readers hide pending
+cells. Constructor headers carry family identity; other image descriptors
+carry one family byte in their padding, without changing descriptor size.
+Object, TypedArray, iterator, and function-tower ensures enter the same
+point. An observation before globalThis seeds only the existing Intrinsics
+entry's plain addresses from image facts; it publishes no row and creates
+no global. Checked births reject held families. The two arms share every
+external root and prototype-identity write, while member creation and seal
+bytes belong to family_cells.

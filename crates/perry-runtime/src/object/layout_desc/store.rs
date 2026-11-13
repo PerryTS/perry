@@ -137,7 +137,9 @@ pub(crate) unsafe fn family_create(receiver: f64, key: f64, value: f64) -> bool 
 /// The position of the key spelled `bytes` in descriptor `d`'s key sequence:
 /// one probe of the descriptor's immutable hash index (§3.3), no key-list
 /// scan.
-#[inline]
+// Keep the immutable-index probe in its caller: the caller's descriptor
+// proof removes duplicate null checks and a per-store call boundary.
+#[inline(always)]
 pub(super) unsafe fn desc_position_by_bytes(d: &PerryLayoutDesc, bytes: &[u8]) -> Option<u32> {
     if d.index.is_null() || d.keys.is_null() {
         return None;
