@@ -847,6 +847,13 @@ pub(crate) enum NativeFamily {
     /// `equals`): the runtime's Buffer name dispatch runs them while that
     /// prototype's own shadow bit is clear, which a write onto it sets.
     Buffer,
+    /// Primitive Numbers: a member is `%Number.prototype%`'s (ECMA-262
+    /// 7.3.2 GetV: ToObject, then [[Get]] on the wrapper, which owns no
+    /// string key).
+    Num,
+    /// Native Promise objects (`TmplKind::BObj { what: "Promise" }`, made
+    /// by the realm: their [[Prototype]] is `%Promise.prototype%`).
+    Promise,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -861,12 +868,32 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::Str => members::intrinsic_member(Family::Str, name),
         NativeFamily::Array => members::intrinsic_member(Family::Array, name),
         NativeFamily::Collection(what) => members::collection_member(what, name),
-        NativeFamily::RegExp => string_methods::regexp_described(name).then_some(Mem::Fn),
+        NativeFamily::RegExp if string_methods::regexp_described(name) => Some(Mem::Fn),
+        NativeFamily::RegExp => regexp_slot_getter(name).map(Mem::Prim),
+        NativeFamily::Num => members::intrinsic_member(Family::Num, name),
+        NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
     };
     match mem {
         Some(Mem::Fn) => true,
         Some(Mem::Prim(_)) => !call,
         _ => false,
+    }
+}
+
+/// A read-only accessor of `%RegExp.prototype%` whose getter reads only
+/// internal slots of its receiver (ECMA-262 22.2.6: `source` reads
+/// [[OriginalSource]], each flag getter [[OriginalFlags]] through
+/// RegExpHasFlag): no [[Get]] on the receiver, so no program value decides
+/// it. Not `flags` (22.2.6.4 reads the flag keys through [[Get]], which an
+/// own definition on the receiver changes), not `lastIndex` (an own
+/// writable data property of each RegExp object).
+fn regexp_slot_getter(name: &str) -> Option<u16> {
+    use crate::model::prim;
+    match name {
+        "source" => Some(prim::STR),
+        "global" | "ignoreCase" | "multiline" | "dotAll" | "unicode" | "unicodeSets" | "sticky"
+        | "hasIndices" => Some(prim::BOOL),
+        _ => None,
     }
 }
 
@@ -1096,6 +1123,8 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         // `Buffer.prototype` is a host prototype the program may write: its
         // writes are obligation 4's (`derive::builtin_protos_unwritten`).
         NativeFamily::Buffer => false,
+        NativeFamily::Num => members::locked_read(Family::Num, None, name),
+        NativeFamily::Promise => members::locked_read(Family::Promise, None, name),
     }
 }
 

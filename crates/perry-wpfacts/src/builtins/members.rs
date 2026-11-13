@@ -629,10 +629,11 @@ pub(crate) fn store_admitted(holder: LockHolder, name: &str, image: bool) -> boo
 }
 
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
-/// value of family `fam` (an exact Array or a primitive String).
+/// value of family `fam` (an exact Array, a primitive String or Number, a
+/// native Promise).
 pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     match fam {
-        Family::Array | Family::Str => member(fam, name),
+        Family::Array | Family::Str | Family::Num | Family::Promise => member(fam, name),
         _ => None,
     }
 }

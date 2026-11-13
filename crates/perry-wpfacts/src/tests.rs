@@ -2141,3 +2141,4 @@ mod fn_number_key;
 mod builtin_ctor_number_key;
 mod given_proto_members;
 mod sound1;
+mod scope_a;
