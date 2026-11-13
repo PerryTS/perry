@@ -45,6 +45,7 @@ mod typed_array;
 mod vtable_guard_scan_tests;
 
 use crate::object::native_module::is_namespace_inherited_method;
+pub(super) use crate::typedarray_hook_slots::dispatch_typed_array_method;
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
 };
@@ -67,7 +68,7 @@ pub(crate) use proto_dispatch::{
     is_self_redispatching_proto_method, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
-pub(super) use typed_array::dispatch_typed_array_method;
+pub(crate) use typed_array::typed_array_method_tower;
 
 /// The receiver predicate of a class instance's fast method call
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled

@@ -7782,6 +7782,7 @@ pub fn run_with_parse_cache(
             &runtime_symbols,
             stdlib_symbols.as_deref(),
             &registrations,
+            0, // No family claim yet: the detector still decides every install.
             target.as_deref(),
         )?;
         let installer_path = object_output_dir.join("_perry_feature_installs.o");

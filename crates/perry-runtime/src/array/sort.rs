@@ -149,11 +149,11 @@ unsafe fn with_sorted_indices<R>(
     let scope = crate::gc::RuntimeHandleScope::new();
     #[cfg(perry_gc_instruments)]
     let scratch_cells = crate::wpfacts_check::family::Scratch::enter();
-    let order_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+    let order_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
-    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+    let scratch_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
