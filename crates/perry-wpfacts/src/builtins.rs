@@ -3029,8 +3029,42 @@ pub(crate) fn require_by_spec(m: &mut Model, call: CallId, spec: Option<Atom>) {
     }
 }
 
+/// CTOR-CALL-THROWS: a builtin constructor whose [[Call]] with an undefined
+/// NewTarget throws a TypeError as its first step, before it reads its
+/// receiver or any argument: %TypedArray% and each concrete typed-array
+/// constructor (ECMA-262 23.2.1.1, 23.2.5.1 step 1), ArrayBuffer (25.1.4.1),
+/// SharedArrayBuffer (25.2.3.1), DataView (25.3.2.1), Map (24.1.1.1), Set
+/// (24.2.1.1), WeakMap (24.3.1.1), WeakSet (24.4.1.1), Promise (27.2.3.1).
+/// The runtime's call path of each is a throwing thunk
+/// (`object/global_this/ctor_thunks.rs`: `typed_array_constructor_call_thunk`,
+/// `construct_only_builtin_call_thunk`, `map_`/`set_`/`weak_map_`/`weak_set_`/
+/// `promise_constructor_call_thunk`). Not here: constructors with a call
+/// behaviour (`Array`, `Object`, `String`, `Number`, `Boolean`, `BigInt`,
+/// `Symbol`, `Date`, `RegExp`, `Error`s, `Function`).
+pub(crate) fn call_throws(ns: BuiltinNs) -> bool {
+    matches!(
+        ns,
+        BuiltinNs::TypedArray
+            | BuiltinNs::TypedArrayKind(_)
+            | BuiltinNs::ArrayBuffer
+            | BuiltinNs::SharedArrayBuffer
+            | BuiltinNs::DataView
+            | BuiltinNs::Map
+            | BuiltinNs::Set
+            | BuiltinNs::WeakMap
+            | BuiltinNs::WeakSet
+            | BuiltinNs::Promise
+    )
+}
+
 pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     m.diagnostic_builtin(call, |_| format!("{ns:?}"));
+    if call_throws(ns) {
+        // As a class called without `new` (`solve/call_and_construct.rs`
+        // `ClassObj`): the call throws before it uses anything; nothing
+        // flows into its result, no receiver or argument reaches code.
+        return;
+    }
     match ns {
         BuiltinNs::Require => {
             // The path registry may run a lazy module body inside the call.
