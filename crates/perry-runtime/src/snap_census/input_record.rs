@@ -250,7 +250,7 @@ pub(super) fn changed_word(st: &mut State, word: usize, pc: usize) {
         || (st.realm.0 <= word && word < st.realm.1)
         || super::object_start(st, word)
             .and_then(|h| st.born_by.get(h as u64))
-            .is_some_and(|owner| owner as usize != id);
+            .is_some_and(|(owner, _)| owner as usize != id);
     if external {
         remember_write(st, word, pc);
     }

@@ -270,25 +270,26 @@ impl WordSet {
     }
 }
 
-/// Open-addressing map from a birth's start to its size.
-struct SizeMap {
+/// Open-addressing map from a birth's start to its size (or to another
+/// per-start value).
+struct SizeMap<V: Copy = u32> {
     keys: *mut u64,
-    vals: *mut u32,
+    vals: *mut V,
     mask: usize,
     len: usize,
 }
 
-impl SizeMap {
+impl<V: Copy> SizeMap<V> {
     unsafe fn new(log2: u32) -> Self {
         let n = 1usize << log2;
         SizeMap {
             keys: map_zeroed::<u64>(n),
-            vals: map_zeroed::<u32>(n),
+            vals: map_zeroed::<V>(n),
             mask: n - 1,
             len: 0,
         }
     }
-    fn insert(&mut self, k: u64, v: u32) {
+    fn insert(&mut self, k: u64, v: V) {
         assert!(self.len * 2 < self.mask, "snap census: size map full");
         let mut i = WordSet::hash(k) & self.mask;
         unsafe {
@@ -306,7 +307,7 @@ impl SizeMap {
             }
         }
     }
-    fn get(&self, k: u64) -> Option<u32> {
+    fn get(&self, k: u64) -> Option<V> {
         let mut i = WordSet::hash(k) & self.mask;
         unsafe {
             loop {
@@ -602,8 +603,9 @@ struct State {
     repw_reads: u64,
     /// Depth of the representation scopes inside `bookkeeping`.
     repr_depth: i32,
-    /// The init whose frame was on top at each birth (by start).
-    born_by: SizeMap,
+    /// The init whose frame was on top at each birth (by start), and the
+    /// birth's seq: names the birth that lives at the start now.
+    born_by: SizeMap<(u32, u64)>,
     /// R2: a shared immutable cell (string, regex program, canonical key
     /// list) is named by its content and takes no rank. `PERRY_SNAP_R2=0`.
     r2: bool,
@@ -1989,6 +1991,16 @@ pub(super) fn host(class: Effect, what: &'static str) {
     }
 }
 
+/// The birth `(addr, size, seq)` is the object living at `addr` now: its
+/// start bit is set, the size there is its size and `born_by` names its seq
+/// (a later birth on reused memory replaces all three). The runtime's
+/// objects found at the census start carry seq 0 and no `born_by` entry.
+fn current(st: &State, addr: usize, size: usize, seq: u64) -> bool {
+    start_bit(st, addr).is_some_and(|i| unsafe { *st.starts.add(i / 64) } & (1 << (i % 64)) != 0)
+        && st.sizes.get(addr as u64) == Some(size as u32)
+        && st.born_by.get(addr as u64).map_or(0, |(_, s)| s) == seq
+}
+
 fn set_start(st: &mut State, addr: usize) {
     if let Some(i) = start_bit(st, addr) {
         unsafe { *st.starts.add(i / 64) |= 1 << (i % 64) };
@@ -2042,6 +2054,15 @@ pub(super) fn birth(addr: usize, size: usize) {
                 unsafe { *st.starts.add(i / 64) &= !(1 << (i % 64)) };
             }
         }
+        // An earlier object that starts below `addr` and runs into the new
+        // range is gone too: no two live starts overlap.
+        if let Some(h) = object_start(st, addr) {
+            if st.sizes.get(h as u64).is_some_and(|s| addr < h + s as usize) {
+                if let Some(i) = start_bit(st, h) {
+                    unsafe { *st.starts.add(i / 64) &= !(1 << (i % 64)) };
+                }
+            }
+        }
     }
     set_start(st, addr);
     st.sizes.insert(addr as u64, size as u32);
@@ -2050,7 +2071,7 @@ pub(super) fn birth(addr: usize, size: usize) {
         st.transp.insert(addr as u64);
         st.transp_objs.push((addr, addr + size));
     }
-    st.born_by.insert(addr as u64, top);
+    st.born_by.insert(addr as u64, (top, st.inputs.seq));
     st.births.push(Birth {
         addr,
         size: size as u32,
@@ -2889,7 +2910,7 @@ fn note_repw(st: &mut State, word: usize) {
 fn born_in_d(st: &State, h: usize) -> bool {
     st.born_by
         .get(h as u64)
-        .is_some_and(|i| i != 0 && st.inits[i as usize].in_d)
+        .is_some_and(|(i, _)| i != 0 && st.inits[i as usize].in_d)
 }
 
 /// R1 (design §2.10.16): an access inside a representation scope or a meta
@@ -3174,9 +3195,10 @@ pub(super) fn boundary(at: &'static str) {
     if st.boundary_seq != 0 {
         return;
     }
-    tls_image_row(st);
     input_record::event(st, "boundary", at.to_owned());
     charge(st);
+    // The TLS scan is census work, charged to no init.
+    tls_image_row(st);
     st.seq += 1;
     st.boundary_seq = st.seq;
     st.boundary_at = at;
@@ -4393,13 +4415,22 @@ pub(super) fn host_value_exit() {
 /// both births, so the row is dated at the later one (`at_seq`). Then the
 /// P-entry (a)/(b) hits logged during the run.
 fn k2a_rows(st: &mut State) {
+    // Holders and targets are the births living now; a birth whose memory
+    // was handed out again is history only.
+    let live = |b: &Birth| current(st, b.addr, b.size as usize, b.seq);
+    let stale_births = st.births.as_slice().iter().filter(|b| !live(b)).count();
     let mut t: Vec<(usize, usize, u8, u64, u32)> = Vec::new();
     if st.host_rule {
-        t.extend(st.host_targets.iter().map(|&(a, e, w, s)| (a, e, w, s, 0)));
+        t.extend(
+            st.host_targets
+                .iter()
+                .filter(|&&(a, e, _, s)| current(st, a, e - a, s))
+                .map(|&(a, e, w, s)| (a, e, w, s, 0)),
+        );
     }
     if st.p_entry_rule {
         for b in st.births.as_slice() {
-            if is_entry(st, b.init) {
+            if is_entry(st, b.init) && live(b) {
                 t.push((b.addr, b.addr + b.size as usize, 255, b.seq, b.init));
             }
         }
@@ -4434,7 +4465,7 @@ fn k2a_rows(st: &mut State) {
             .births
             .as_slice()
             .iter()
-            .filter(|b| !is_entry(st, b.init))
+            .filter(|b| !is_entry(st, b.init) && live(b))
             .map(|b| (b.addr, b.init))
             .collect();
         while let Some((h, init)) = work.pop() {
@@ -4504,7 +4535,7 @@ fn k2a_rows(st: &mut State) {
             .births
             .as_slice()
             .iter()
-            .filter(|b| !is_entry(st, b.init))
+            .filter(|b| !is_entry(st, b.init) && live(b))
             .map(|b| (b.addr, b.size as usize, b.init, b.seq))
             .chain(owned.iter().map(|&(a, e, init)| (a, e - a, init, 0)));
         for (addr, size, init, seq) in holders {
@@ -4567,7 +4598,7 @@ fn k2a_rows(st: &mut State) {
         ));
     }
     let summary = format!(
-        "host_targets={};entry_births={};held_words={held};p_entry_ab={}",
+        "host_targets={};entry_births={};held_words={held};p_entry_ab={};stale_births={stale_births}",
         st.host_targets.len(),
         t.iter().filter(|x| x.2 == 255).count(),
         st.p_entry_log.len()
