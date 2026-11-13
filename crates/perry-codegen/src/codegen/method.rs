@@ -345,7 +345,10 @@ pub(super) fn compile_method(
         .and_then(|tm| tm.plan.record.as_ref())
         .and_then(|r| r.ret);
     if sig_record_return.is_some() {
-        params.push((crate::types::PTR, super::record_sig::RESULT_PARAM.to_string()));
+        params.push((
+            crate::types::PTR,
+            super::record_sig::RESULT_PARAM.to_string(),
+        ));
     }
     let lf = llmod.define_function(
         &llvm_name,

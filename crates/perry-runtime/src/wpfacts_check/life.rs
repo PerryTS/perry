@@ -116,7 +116,9 @@ pub(super) fn full_alive(addr: usize) -> bool {
 /// `PERRY_FACTS_SABOTAGE=lifeminor` (negative control) keeps every minor verdict.
 pub(super) fn minor_decides(holder: u8) -> bool {
     static SABOTAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    holder <= 3 || *SABOTAGE.get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifeminor"))
+    holder <= 3
+        || *SABOTAGE
+            .get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifeminor"))
 }
 
 /// Is the object at user address `addr` private key/attribute storage of a
@@ -128,7 +130,8 @@ pub(super) fn minor_decides(holder: u8) -> bool {
 /// `PERRY_FACTS_SABOTAGE=lifemeta` (negative control) counts it as a JS value.
 pub(super) fn engine_metadata(addr: usize) -> bool {
     static SABOTAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *SABOTAGE.get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifemeta")) {
+    if *SABOTAGE.get_or_init(|| std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("lifemeta"))
+    {
         return false;
     }
     let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
@@ -287,7 +290,9 @@ fn report(
         Some(p) => line.push_str(&format!("\"{p}\"")),
         None => line.push_str("null"),
     }
-    if let Some((function, ip, slot)) = frame.filter(|_| phase.is_some_and(|p| p.contains("native"))) {
+    if let Some((function, ip, slot)) =
+        frame.filter(|_| phase.is_some_and(|p| p.contains("native")))
+    {
         line.push_str(&format!(
             ",\"frame\":{{\"function\":\"{}\",\"function_address\":{function},\"ip\":{ip},\"slot\":{slot}}}",
             symbol(function)
@@ -345,11 +350,16 @@ fn symbol(_addr: usize) -> String {
 
 fn write_stderr(mut rest: &[u8]) {
     while !rest.is_empty() {
-        let n = unsafe { libc::write(2, rest.as_ptr().cast(), rest.len().min(i32::MAX as usize) as _) };
+        let n = unsafe {
+            libc::write(
+                2,
+                rest.as_ptr().cast(),
+                rest.len().min(i32::MAX as usize) as _,
+            )
+        };
         if n > 0 {
             rest = &rest[n as usize..];
-        } else if n < 0
-            && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
         {
             continue;
         } else {
@@ -396,7 +406,13 @@ fn die(addr: Option<usize>, site: i64, len: i64, every: i64) {
 /// A `frame` local's object dies (`kind` 0: an unset slot is a binding
 /// that was never born on this path).
 #[no_mangle]
-pub extern "C" fn perry_verify_facts_life_dead(bits: i64, kind: i64, every: i64, site: i64, len: i64) {
+pub extern "C" fn perry_verify_facts_life_dead(
+    bits: i64,
+    kind: i64,
+    every: i64,
+    site: i64,
+    len: i64,
+) {
     ensure();
     let bits = bits as u64;
     let addr = young_addr(bits);
@@ -450,7 +466,11 @@ pub extern "C" fn perry_verify_facts_life_arg_dead(token: i64, every: i64, site:
         sync(t);
         let addr = t.tokens.remove(&(token as u64));
         match addr {
-            Some(a) if t.claims.get(&a).is_some_and(|c| c.state == State::Pending(token as u64)) => {
+            Some(a)
+                if t.claims
+                    .get(&a)
+                    .is_some_and(|c| c.state == State::Pending(token as u64)) =>
+            {
                 t.claims.remove(&a);
                 Some(a)
             }

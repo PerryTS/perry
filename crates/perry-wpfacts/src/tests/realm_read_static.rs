@@ -69,7 +69,10 @@ fn store_on_a_constructor_is_its_own_field() {
     ] {
         let (p, dump) = v_proven(&program(store), false);
         if !p {
-            bad.push(format!("{store}: n.v unproven (E20 sink)\n{}", &dump[..dump.len().min(4000)]));
+            bad.push(format!(
+                "{store}: n.v unproven (E20 sink)\n{}",
+                &dump[..dump.len().min(4000)]
+            ));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -85,7 +88,11 @@ fn a_read_of_a_declared_static_sees_the_store() {
         console.log(/*A*/ back.v);";
     let pf = facts(src, false);
     let at = src.find("/*A*/").unwrap() as u32;
-    let s = pf.sites.iter().find(|s| s.key == "v" && s.byte_offset >= at).expect("back.v");
+    let s = pf
+        .sites
+        .iter()
+        .find(|s| s.key == "v" && s.byte_offset >= at)
+        .expect("back.v");
     assert!(
         !matches!(s.verdict, Verdict::No(ref w) if w.contains("no receiver")),
         "back.v reads the stored N\n{}",
@@ -128,7 +135,11 @@ fn realm_read_statics_still_sink() {
 #[test]
 fn date_store_under_a_c_key_is_its_own_field() {
     let (p, dump) = v_proven(&program("(Date as any)[`c${k}`] = n;"), false);
-    assert!(p, "n.v unproven (E20 sink)\n{}", &dump[..dump.len().min(4000)]);
+    assert!(
+        p,
+        "n.v unproven (E20 sink)\n{}",
+        &dump[..dump.len().min(4000)]
+    );
 }
 
 /// Control for the test above: the same store, but `Date` is handed to code
@@ -138,12 +149,20 @@ fn date_store_under_a_c_key_is_its_own_field() {
 fn date_store_under_a_c_key_sinks_once_date_escapes() {
     let mut bad = Vec::new();
     for (store, interp) in [
-        ("(Date as any)[`c${k}`] = n; (globalThis as any).u(Date);", false),
-        ("(globalThis as any).u(Date); (Date as any)[`c${k}`] = n;", false),
+        (
+            "(Date as any)[`c${k}`] = n; (globalThis as any).u(Date);",
+            false,
+        ),
+        (
+            "(globalThis as any).u(Date); (Date as any)[`c${k}`] = n;",
+            false,
+        ),
     ] {
         let (p, _) = v_proven(&program(store), interp);
         if p {
-            bad.push(format!("{store} (interp {interp}): n.v proven, Date escaped"));
+            bad.push(format!(
+                "{store} (interp {interp}): n.v proven, Date escaped"
+            ));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -166,14 +185,26 @@ fn interpreted_code_still_reads_it() {
 fn protocols_call_the_stored_function() {
     let mut bad = Vec::new();
     for (store, use_) in [
-        ("(Object as any)[k] = function () { delete (n as any).v; return \"o\"; };", "String(Object);"),
-        ("(Object as any).toString = function () { delete (n as any).v; return \"o\"; };", "console.log(`${Object}`);"),
+        (
+            "(Object as any)[k] = function () { delete (n as any).v; return \"o\"; };",
+            "String(Object);",
+        ),
+        (
+            "(Object as any).toString = function () { delete (n as any).v; return \"o\"; };",
+            "console.log(`${Object}`);",
+        ),
         (
             "(Object as any)[k] = function (r: any) { delete (n as any).v; r(1); };",
             "(async () => { await (Object as any); })();",
         ),
-        ("(Object as any)[k] = function (a: any) { delete a.v; return []; };", "Object.keys(n);"),
-        ("(Object as any).keys = function (a: any) { delete a.v; return []; };", "Object.keys(n);"),
+        (
+            "(Object as any)[k] = function (a: any) { delete a.v; return []; };",
+            "Object.keys(n);",
+        ),
+        (
+            "(Object as any).keys = function (a: any) { delete a.v; return []; };",
+            "Object.keys(n);",
+        ),
         (
             "(Object as any)[k] = { foo() { delete (n as any).v; } };",
             "(Object as any).foo();",
@@ -185,7 +216,9 @@ fn protocols_call_the_stored_function() {
     ] {
         let (p, _) = v_proven(&program(&format!("{store}\n{use_}")), false);
         if p {
-            bad.push(format!("{store} {use_}: n.v proven, the protocol call was missed"));
+            bad.push(format!(
+                "{store} {use_}: n.v proven, the protocol call was missed"
+            ));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -206,20 +239,52 @@ fn species_reads_see_the_store() {
             "(Array as any)[k] = function () { delete (n as any).v; return []; };".to_string(),
             "[1].map((x) => x);",
         ),
-        (f.replace("[Symbol.species]", "[k]"), "const a: any = [1]; a.constructor = Object; a.map((x: any) => x);"),
-        (f.replace("[Symbol.species]", "[k]"), "const p: any = Promise.resolve(1); p.constructor = Object; p.then((x: any) => x);"),
-        (f.to_string(), "const a: any = [1]; a.constructor = Object; a.map((x: any) => x);"),
-        (f.to_string(), "const p: any = Promise.resolve(1); p.constructor = Object; p.then((x: any) => x);"),
-        (f.to_string(), "const r: any = /a/; r.constructor = Object; \"abc\".split(r);"),
-        (f.to_string(), "const u: any = new Uint8Array(2); u.constructor = Object; u.slice(0);"),
-        (f.to_string(), "const p: any = Promise.resolve(1); p.constructor = Object; p.catch((x: any) => x);"),
-        (f.to_string(), "const p: any = Promise.resolve(1); p.constructor = Object; p.finally(() => {});"),
-        (f.to_string(), "const r: any = /a/g; r.constructor = Object; [...\"abc\".matchAll(r)];"),
-        (f.to_string(), "const b: any = new ArrayBuffer(8); b.constructor = Object; b.slice(0);"),
+        (
+            f.replace("[Symbol.species]", "[k]"),
+            "const a: any = [1]; a.constructor = Object; a.map((x: any) => x);",
+        ),
+        (
+            f.replace("[Symbol.species]", "[k]"),
+            "const p: any = Promise.resolve(1); p.constructor = Object; p.then((x: any) => x);",
+        ),
+        (
+            f.to_string(),
+            "const a: any = [1]; a.constructor = Object; a.map((x: any) => x);",
+        ),
+        (
+            f.to_string(),
+            "const p: any = Promise.resolve(1); p.constructor = Object; p.then((x: any) => x);",
+        ),
+        (
+            f.to_string(),
+            "const r: any = /a/; r.constructor = Object; \"abc\".split(r);",
+        ),
+        (
+            f.to_string(),
+            "const u: any = new Uint8Array(2); u.constructor = Object; u.slice(0);",
+        ),
+        (
+            f.to_string(),
+            "const p: any = Promise.resolve(1); p.constructor = Object; p.catch((x: any) => x);",
+        ),
+        (
+            f.to_string(),
+            "const p: any = Promise.resolve(1); p.constructor = Object; p.finally(() => {});",
+        ),
+        (
+            f.to_string(),
+            "const r: any = /a/g; r.constructor = Object; [...\"abc\".matchAll(r)];",
+        ),
+        (
+            f.to_string(),
+            "const b: any = new ArrayBuffer(8); b.constructor = Object; b.slice(0);",
+        ),
     ] {
         let (p, _) = v_proven(&program(&format!("{store}\n{use_}")), false);
         if p {
-            bad.push(format!("{store} {use_}: n.v proven, the species construct was missed"));
+            bad.push(format!(
+                "{store} {use_}: n.v proven, the species construct was missed"
+            ));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

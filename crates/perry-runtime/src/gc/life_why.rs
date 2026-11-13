@@ -70,11 +70,18 @@ pub(super) fn marked(header: usize) {
     }
     let parent = PARENT.with(|p| p.get());
     let (func, slot) = if parent == 0 {
-        super::pin::native_root_slot_context().map(|c| (c.function_address, c.slot_addr)).unwrap_or((ROOT_FN.with(|p| p.get()), 0))
+        super::pin::native_root_slot_context()
+            .map(|c| (c.function_address, c.slot_addr))
+            .unwrap_or((ROOT_FN.with(|p| p.get()), 0))
     } else {
         (0, 0)
     };
-    let why = Why { parent, phase: PHASE.with(|p| p.get()), func, slot };
+    let why = Why {
+        parent,
+        phase: PHASE.with(|p| p.get()),
+        func,
+        slot,
+    };
     MAP.with(|m| {
         m.borrow_mut().entry(header).or_insert(why);
     });
@@ -93,9 +100,16 @@ pub(crate) fn label(header: usize) -> String {
 /// Symbol of a code address (`dladdr`), or the address.
 pub(crate) fn symbol(addr: usize) -> String {
     let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
-    if addr != 0 && unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } != 0 && !info.dli_sname.is_null() {
+    if addr != 0
+        && unsafe { libc::dladdr(addr as *const libc::c_void, &mut info) } != 0
+        && !info.dli_sname.is_null()
+    {
         let name = unsafe { std::ffi::CStr::from_ptr(info.dli_sname) };
-        return format!("{}+{:#x}", name.to_string_lossy(), addr - info.dli_saddr as usize);
+        return format!(
+            "{}+{:#x}",
+            name.to_string_lossy(),
+            addr - info.dli_saddr as usize
+        );
     }
     format!("{addr:#x}")
 }

@@ -312,10 +312,7 @@ mod tests {
     #[test]
     fn the_show_hidden_tail_is_nodes_length_entry() {
         let parts = vec![entry("1", true), entry("2", true), hidden_length_entry(2)];
-        assert_eq!(
-            array_body(parts, 0, true),
-            "[ 1, 2, [length]: 2 ]"
-        );
+        assert_eq!(array_body(parts, 0, true), "[ 1, 2, [length]: 2 ]");
         // An empty array still carries it: node's `%o` on `[]` is
         // `[ [length]: 0 ]` where `%O` is a bare `[]`.
         assert_eq!(

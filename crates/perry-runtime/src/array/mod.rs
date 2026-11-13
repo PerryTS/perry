@@ -85,11 +85,11 @@ mod small_capacity_tests;
 mod sort;
 mod sort_numeric;
 pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
+#[cfg(test)]
+mod sparse_reader_tests;
 mod species;
 #[cfg(test)]
 mod species_tests;
-#[cfg(test)]
-mod sparse_reader_tests;
 mod splice_slice;
 mod storage;
 #[cfg(test)]

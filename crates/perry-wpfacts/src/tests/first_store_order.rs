@@ -20,7 +20,12 @@ fn birth_keys_follow_the_first_store_in_the_text() {
     "#,
     );
     let keys = |n: &str| tmpl(&pf, n).birth_keys.clone();
-    assert_eq!(keys("IfElse"), ["raw", "pre", "build"], "{}", pf.dump_text());
+    assert_eq!(
+        keys("IfElse"),
+        ["raw", "pre", "build"],
+        "{}",
+        pf.dump_text()
+    );
     assert_eq!(keys("Tried"), ["a", "ok", "err", "z"], "{}", pf.dump_text());
     assert_eq!(keys("OneArm"), ["p", "opt", "q"], "{}", pf.dump_text());
     assert_eq!(keys("Sub"), ["bk", "bt", "sk", "st"], "{}", pf.dump_text());
@@ -41,7 +46,11 @@ fn birth_keys_follow_the_first_store_in_the_text() {
     assert!(q.definite && q.slot == Some(2), "{}", pf.dump_text());
     assert!(!one.fixed_layout, "{}", pf.dump_text());
     // `pre`, stored on both arms, is definite.
-    assert!(field(tmpl(&pf, "IfElse"), "pre").definite, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "IfElse"), "pre").definite,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A reservation an early `return` skips is no definite key (the field-init
@@ -55,8 +64,16 @@ fn a_reservation_an_early_return_skips_is_not_definite() {
         console.log(e.a, e.b);
     "#,
     );
-    assert!(field(tmpl(&pf, "Early"), "a").definite, "{}", pf.dump_text());
-    assert!(!field(tmpl(&pf, "Early"), "b").definite, "{}", pf.dump_text());
+    assert!(
+        field(tmpl(&pf, "Early"), "a").definite,
+        "{}",
+        pf.dump_text()
+    );
+    assert!(
+        !field(tmpl(&pf, "Early"), "b").definite,
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A run may add keys out of the layout's order (`c` before `b` in one arm,

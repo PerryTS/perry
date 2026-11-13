@@ -25,10 +25,12 @@ fn active_bodies(src: &str) -> Vec<String> {
     pf.body_reach
         .bodies
         .iter()
-        .map(|(_, i, n)| match hir.functions.iter().find(|f| f.id == *i) {
-            Some(f) if n.is_empty() => f.name.clone(),
-            _ => n.clone(),
-        })
+        .map(
+            |(_, i, n)| match hir.functions.iter().find(|f| f.id == *i) {
+                Some(f) if n.is_empty() => f.name.clone(),
+                _ => n.clone(),
+            },
+        )
         .collect()
 }
 
@@ -79,7 +81,10 @@ const FB = b("B"); console.log(new FB("m").name);
 /// run; the decoy's do not.
 const FORMS: &[(&str, &str)] = &[
     ("member", "const P = O.Base;\nclass X extends O.Base {"),
-    ("computed-member", "const P = O.Base;\nclass X extends O[\"Base\"] {"),
+    (
+        "computed-member",
+        "const P = O.Base;\nclass X extends O[\"Base\"] {",
+    ),
     (
         "computed-member-key",
         "const k = [\"Base\"][0];\nclass X extends O[k] {",
@@ -137,7 +142,10 @@ const M = mk(Inner);
 console.log(new M(1).inner);
 "#;
     let on = active_bodies(src);
-    assert!(runs(&on, "Inner::<fields>"), "Inner fields inactive: {on:?}");
+    assert!(
+        runs(&on, "Inner::<fields>"),
+        "Inner fields inactive: {on:?}"
+    );
     assert!(!runs(&on, "Base::<fields>"), "decoy active: {on:?}");
 }
 
