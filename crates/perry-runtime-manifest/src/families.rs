@@ -904,6 +904,23 @@ mod tests {
             0
         );
         assert_eq!(of("node:path.posix.join"), 0);
+        // A module only the typed-array row names is of that family alone.
+        assert_eq!(of("node:sea.getAsset"), family_bit("typedarray"));
+        assert_eq!(
+            of("node:url.fileURLToPathBuffer"),
+            family_bit("typedarray") | family_bit("url_engine")
+        );
+        assert_eq!(
+            of("BigInt.asIntN"),
+            family_bit("typedarray") | family_bit("bigint")
+        );
+        assert_eq!(
+            of("BigInt.asUintN.length") & family_bit("typedarray"),
+            family_bit("typedarray")
+        );
+        assert_eq!(of("BigInt.prototype.toString"), family_bit("bigint"));
+        assert_ne!(of("process.stdin.on") & family_bit("typedarray"), 0);
+        assert_eq!(of("process.stdout.write") & family_bit("typedarray"), 0);
         assert_eq!(entry_families("NoSuchHolder.x"), None);
         assert_eq!(entry_families("node:no-such-module.x"), None);
         assert_eq!(entry_root("Buffer[\"@@species\"].<get>"), "Buffer");
