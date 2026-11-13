@@ -2174,6 +2174,8 @@ const __memDispatch = {
   number_coerce: (val) => Number(val),
   is_nan: (val) => Number.isNaN(val) ? 1 : 0,
   is_finite: (val) => Number.isFinite(val) ? 1 : 0,
+  number_is_integer: (val) => Number.isInteger(val) ? 1 : 0,
+  number_is_safe_integer: (val) => Number.isSafeInteger(val) ? 1 : 0,
   global_is_nan: (val) => isNaN(val) ? 1 : 0,
   global_is_finite: (val) => isFinite(val) ? 1 : 0,
 

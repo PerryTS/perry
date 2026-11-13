@@ -349,3 +349,20 @@ console.log(String(n?.[k]) + " " + String(u?.[0]));
         "null[key]: Cannot read properties of null (reading 'bar')\nundefined[0]: TypeError\nnull array[1]: TypeError\nundefined undefined"
     );
 }
+
+// The Number predicates do not coerce: a string is never NaN, finite or an integer.
+#[test]
+fn number_predicates_answer_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s: any = "1";
+console.log(Number.isNaN(NaN) + " " + Number.isNaN(s) + " " + Number.isNaN(1));
+console.log(Number.isFinite(1) + " " + Number.isFinite(s) + " " + Number.isFinite(Infinity));
+console.log(Number.isInteger(5) + " " + Number.isInteger(5.5) + " " + Number.isInteger(s));
+console.log(Number.isSafeInteger(9007199254740991) + " " + Number.isSafeInteger(9007199254740992) + " " + Number.isSafeInteger(s));
+"#
+        ),
+        "true false false\ntrue false false\ntrue false false\ntrue false false"
+    );
+}

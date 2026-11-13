@@ -92,6 +92,28 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                 func.instruction(&Instruction::End);
             }
+            // `is_nan` / `is_finite` are `Number.isNaN` / `Number.isFinite` (no coercion).
+            Expr::NumberIsNaN(val)
+            | Expr::NumberIsFinite(val)
+            | Expr::NumberIsInteger(val)
+            | Expr::NumberIsSafeInteger(val) => {
+                let bridge = match expr {
+                    Expr::NumberIsNaN(_) => "is_nan",
+                    Expr::NumberIsFinite(_) => "is_finite",
+                    Expr::NumberIsInteger(_) => "number_is_integer",
+                    _ => "number_is_safe_integer",
+                };
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall_i32(func, bridge, 1);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
+                func.instruction(&Instruction::Else);
+                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
+                func.instruction(&Instruction::End);
+            }
             Expr::BigIntCoerce(_) => {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
