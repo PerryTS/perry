@@ -192,6 +192,7 @@ def main():
         ("instance-literal-negative", "instlit", "array constant length"),
         ("named-length-negative", "namedlen", "named length"),
         ("quiet-sites-negative", "quiet", "quiet sites"),
+        ("quiet-strings-negative", "quiet-strings", "quiet sites"),
         ("typed-array-site-negative", "tasite", "method site"),
         ("array-site-negative", "arraysite", "method site"),
         ("collection-site-negative", "collsite", "method site"),

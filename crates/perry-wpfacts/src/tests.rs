@@ -175,6 +175,7 @@ mod literal_strings;
 mod named_lengths;
 mod method_sites;
 mod quiet_sites;
+mod quiet_strings;
 mod range_tightening;
 mod reach_accessor;
 mod reach_thenable;

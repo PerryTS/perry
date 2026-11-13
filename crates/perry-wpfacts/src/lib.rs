@@ -1140,7 +1140,7 @@ fn compute_act<'a>(
         &sites,
         &mut bindings,
         interp_guard.is_some(),
-        cfg.sabotage.as_deref() == Some("quiet"),
+        cfg.sabotage.as_deref(),
         cfg.diagnostics.then_some(&mut rep_probe),
     );
     method_sites::collect(
