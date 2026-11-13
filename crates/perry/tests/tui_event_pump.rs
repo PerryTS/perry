@@ -1,34 +1,99 @@
 #![cfg(unix)]
 
+use std::error::Error;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::fd::FromRawFd;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-struct ChildGuard(Child);
+type TestResult<Value> = Result<Value, Box<dyn Error>>;
 
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
+fn with_child<Value>(
+    mut child: Child,
+    action: impl FnOnce(&mut Child) -> TestResult<Value>,
+) -> TestResult<Value> {
+    let result = action(&mut child);
+    let _ = child.kill();
+    let reaped = child.wait();
+    let value = result?;
+    reaped?;
+    Ok(value)
 }
 
-fn read_request(stream: &mut TcpStream, expected: &[u8]) {
-    stream.set_nonblocking(false).unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
+fn read_request(stream: &mut TcpStream, expected: &[u8]) -> io::Result<()> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     let mut request = Vec::new();
     let mut reader = BufReader::new(stream);
     while !request.ends_with(b"\r\n\r\n") {
-        assert!(reader.read_until(b'\n', &mut request).unwrap() > 0);
-        assert!(request.len() <= 8192);
+        if reader.read_until(b'\n', &mut request)? == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "incomplete HTTP request",
+            ));
+        }
+        if request.len() > 8192 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "HTTP request exceeds fixture limit",
+            ));
+        }
     }
-    assert!(request.starts_with(expected));
+    if !request.starts_with(expected) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unexpected HTTP request line",
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn http_fixture_errors_kill_and_reap_the_child() {
+    for failure in [
+        io::ErrorKind::InvalidData,
+        io::ErrorKind::UnexpectedEof,
+        io::ErrorKind::WouldBlock,
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut stream, _) = listener.accept().unwrap();
+        match failure {
+            io::ErrorKind::InvalidData => {
+                client.write_all(b"POST /wrong HTTP/1.1\r\n\r\n").unwrap()
+            }
+            io::ErrorKind::UnexpectedEof => client.shutdown(std::net::Shutdown::Write).unwrap(),
+            _ => {}
+        }
+        let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
+        let child_id = child.id() as libc::pid_t;
+        assert_eq!(unsafe { libc::kill(child_id, 0) }, 0);
+        let error = with_child(child, |_| {
+            read_request(&mut stream, b"GET /ready HTTP/1.1\r\n")?;
+            Ok(())
+        })
+        .unwrap_err();
+        let actual = error.downcast_ref::<io::Error>().unwrap().kind();
+        if failure == io::ErrorKind::WouldBlock {
+            assert!(matches!(
+                actual,
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ));
+        } else {
+            assert_eq!(actual, failure);
+        }
+        assert_eq!(
+            unsafe { libc::waitpid(child_id, std::ptr::null_mut(), libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+    }
 }
 
 #[test]
@@ -116,55 +181,59 @@ console.log("RESULT", promiseDone, timeoutDone, intervalDone, httpDone, cancelDo
     let (master, slave) = unsafe { (File::from_raw_fd(master_fd), File::from_raw_fd(slave_fd)) };
     let mut before: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(slave_fd, &mut before) }, 0);
-    let mut child = ChildGuard(
-        Command::new(&binary)
-            .stdin(Stdio::from(slave.try_clone().unwrap()))
-            .stdout(Stdio::from(slave.try_clone().unwrap()))
-            .stderr(Stdio::from(slave.try_clone().unwrap()))
-            .spawn()
-            .unwrap(),
-    );
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = master;
-        let mut buffer = [0u8; 4096];
-        while let Ok(count) = reader.read(&mut buffer) {
-            if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
-                break;
+    let child = Command::new(&binary)
+        .stdin(Stdio::from(slave.try_clone().unwrap()))
+        .stdout(Stdio::from(slave.try_clone().unwrap()))
+        .stderr(Stdio::from(slave.try_clone().unwrap()))
+        .spawn()
+        .unwrap();
+    let (status, output, served, pending_request) = with_child(child, |child| {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new().spawn(move || {
+            let mut reader = master;
+            let mut buffer = [0u8; 4096];
+            while let Ok(count) = reader.read(&mut buffer) {
+                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
             }
-        }
-    });
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut served = false;
-    let mut pending_request = None;
-    let mut output = Vec::new();
-    let status = loop {
-        if let Ok((mut stream, _)) = server.accept() {
-            read_request(&mut stream, b"GET /ready HTTP/1.1\r\n");
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-                .unwrap();
-            served = true;
-        }
-        if let Ok((mut stream, _)) = pending.accept() {
-            read_request(&mut stream, b"GET /hang HTTP/1.1\r\n");
-            pending_request = Some(stream);
-        }
-        if let Ok(part) = receiver.recv_timeout(Duration::from_millis(10)) {
+        })?;
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut served = false;
+        let mut pending_request = None;
+        let mut output = Vec::new();
+        let status = loop {
+            if let Ok((mut stream, _)) = server.accept() {
+                read_request(&mut stream, b"GET /ready HTTP/1.1\r\n")?;
+                stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                )?;
+                served = true;
+            }
+            if let Ok((mut stream, _)) = pending.accept() {
+                read_request(&mut stream, b"GET /hang HTTP/1.1\r\n")?;
+                pending_request = Some(stream);
+            }
+            if let Ok(part) = receiver.recv_timeout(Duration::from_millis(10)) {
+                output.extend(part);
+            }
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() > deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("async TUI stalled: {}", String::from_utf8_lossy(&output)),
+                )
+                .into());
+            }
+        };
+        while let Ok(part) = receiver.recv_timeout(Duration::from_millis(100)) {
             output.extend(part);
         }
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break status;
-        }
-        if Instant::now() > deadline {
-            let _ = child.0.kill();
-            let _ = child.0.wait();
-            panic!("async TUI stalled: {}", String::from_utf8_lossy(&output));
-        }
-    };
-    while let Ok(part) = receiver.recv_timeout(Duration::from_millis(100)) {
-        output.extend(part);
-    }
+        Ok((status, output, served, pending_request))
+    })
+    .unwrap();
     let mut after: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(slave_fd, &mut after) }, 0);
     assert_eq!(after.c_iflag, before.c_iflag);
