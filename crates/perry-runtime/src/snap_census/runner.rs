@@ -871,7 +871,6 @@ struct State {
     births: Log<Birth>,
     listed: Log<usize>,
     regions: Vec<(usize, usize)>,
-    heap: PageMap,
     bin: PageMap,
     /// The main thread's program TLS slots (initialized data): module
     /// globals live there in a program with a Worker (per-thread init flags
