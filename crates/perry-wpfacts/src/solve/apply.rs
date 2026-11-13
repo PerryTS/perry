@@ -779,7 +779,10 @@ impl Model {
                                 ks.push(key);
                             }
                         }
-                        _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
+                        // A data descriptor under this NAMED key writes that
+                        // key alone (rule D1): HARD, no unknown write of any
+                        // other field (`mark_hard_as`).
+                        _ => self.mark_hard_as(t, Hard::E5DefineProperty, reason, !data),
                     }
                 }
             }
@@ -1516,18 +1519,17 @@ impl Model {
                     let f = self.num_fields(obj);
                     self.edge(f, dst);
                 }
-                // ToPropertyKey of `true`, `null`, `undefined` is a named key.
-                if !named {
-                    for (bit, keys) in [
-                        (prim::BOOL, &["true", "false"][..]),
-                        (prim::NULL, &["null"][..]),
-                        (prim::UNDEF, &["undefined"][..]),
-                    ] {
-                        if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
-                            for k in keys {
-                                let a = self.atom(k);
-                                self.load_program_key(obj, a, dst);
-                            }
+                // ToPropertyKey of `true`, `null`, `undefined` is a named key,
+                // also beside Strings read per entry (rule K8).
+                for (bit, keys) in [
+                    (prim::BOOL, &["true", "false"][..]),
+                    (prim::NULL, &["null"][..]),
+                    (prim::UNDEF, &["undefined"][..]),
+                ] {
+                    if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
+                        for k in keys {
+                            let a = self.atom(k);
+                            self.load_program_key(obj, a, dst);
                         }
                     }
                 }
@@ -1988,8 +1990,8 @@ impl Model {
                 }
             }
             // Rule K7: the case map of the receiver keeps its infix entries.
-            Cons::CaseMap { dst } => {
-                let strs = self.case_map_strs(n);
+            Cons::CaseMap { dst, upper } => {
+                let strs = self.case_map_strs(n, upper);
                 self.add_s(dst, &[], prim::STR, strs);
             }
             Cons::Plus {

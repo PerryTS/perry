@@ -2037,7 +2037,7 @@ impl Model {
             } => format!("range {n} {} {other} {dst} {}", op.name(), *right as u8),
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
-            Cons::CaseMap { dst } => format!("casemap {n} {dst}"),
+            Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::IdxKey { obj, dst, .. } => format!("idxkey {n} {obj} {dst}"),
