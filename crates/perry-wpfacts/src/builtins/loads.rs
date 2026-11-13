@@ -92,6 +92,8 @@ pub(super) fn family_load(
             // kind, never a builtin function. A store into the chain is
             // `intrinsic_miss`'s below.
             m.add_prim(dst, k);
+        } else if realm_chain_load(m, t, what, a, &name, dst) {
+            // The member as the realm declares it on the object's chain.
         } else if realm_accessor(m, fam, what, &name) {
             undeclared_getter_result(m, dst);
         } else {
@@ -245,6 +247,60 @@ fn realm_born_data(what: Option<&str>, name: &str) -> Option<u16> {
         return None;
     };
     realm_prim(p)
+}
+
+/// `dst` ⊇ member `name` (atom `a`) of builtin object `t` of kind `what`
+/// as the realm declares its [[Prototype]] chain (ECMA-262 10.1.8.1
+/// OrdinaryGet): the first object of the chain that owns the key gives a
+/// data property's primitive kind or runs its declared getter
+/// (`effects::getter_load`; `%TypedArray%.prototype[@@toStringTag]`,
+/// 23.2.3.38: String or undefined); a key no object of the chain owns
+/// reads `undefined`. The chain is a realm-born object's own
+/// (`members::realm_born`: it owns exactly what the realm declares), a
+/// typed array's or a Buffer's (`view_chain`: an instance owns its
+/// indices only), or, under a well-known symbol key, that of an instance
+/// of a realm constructor whose prototype is realm-born (an `ArrayBuffer`,
+/// a `RegExp`, an error): such an instance's own data the realm does not
+/// declare (an error's `stack`, a RegExp's `lastIndex`) is string-keyed.
+/// `false`: the realm does not answer (another value, an undeclared getter).
+fn realm_chain_load(
+    m: &mut Model,
+    t: Tok,
+    what: Option<&'static str>,
+    a: Atom,
+    name: &str,
+    dst: NodeId,
+) -> bool {
+    use perry_hir::realm_manifest::RealmOwnValue as V;
+    let Some(w) = what else {
+        return false;
+    };
+    let start = members::realm_born(w)
+        .or_else(|| view_chain(what).filter(|_| !members::is_index_name(name)))
+        .or_else(|| {
+            name.starts_with(super::WK_PREFIX)
+                .then(|| members::realm_born(&format!("{w}.prototype")))
+                .flatten()
+        });
+    let Some(start) = start else {
+        return false;
+    };
+    match members::realm_chain_find(start, name) {
+        members::RealmFind::Absent => m.add_prim(dst, prim::UNDEF),
+        members::RealmFind::Own(p, _) => {
+            if let Some(k) = realm_prim(p) {
+                m.add_prim(dst, k);
+            } else if let V::Accessor { get: Some(g), .. } = p.value {
+                match members::realm_entry(g).filter(|e| !e.effects.is_empty()) {
+                    Some(e) => super::effects::getter_load(m, e, t, a, dst),
+                    None => return false,
+                }
+            } else {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// The primitive kind of the realm's own data property `p`; `None` for

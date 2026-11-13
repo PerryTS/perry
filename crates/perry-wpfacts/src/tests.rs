@@ -82,6 +82,7 @@ mod map_entry_pairs;
 mod promise_all_positions;
 mod promise_all_result_instance;
 mod value_run_context;
+mod realm_chain_members;
 mod option_name_merge;
 mod ctor_observed;
 mod ctor_return;
