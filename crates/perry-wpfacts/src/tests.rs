@@ -265,6 +265,7 @@ mod typed_array_numeric_key;
 mod typed_array_this_throws;
 mod class_call_throws;
 mod numeric_key_names;
+mod index_key_read;
 mod unheld_key;
 mod unit_alias;
 mod unit_cjs;

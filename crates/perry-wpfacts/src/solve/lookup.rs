@@ -675,6 +675,23 @@ impl Model {
                 self.add_tok(dst, TOP);
                 return;
             }
+            // ToPropertyKey of an index is a canonical numeric String
+            // (ECMA-262 7.1.19, 10.1.8.1 [[Get]]): an ordinary object's
+            // number-named own fields (`num_fields`: numeric keys, the
+            // element key, what a computed store wrote) and, along its
+            // chain, only number-named members and accessors (`plain_key`),
+            // never an identifier-named method. A marker's fields are its
+            // reach markers, and another value (the global object, a
+            // namespace, a function) keeps the computed read.
+            if origin == t && matches!(self.toks[t as usize], TokKind::Obj(..)) && !self.is_marker(t)
+            {
+                self.builtin_field_use(t, key, ChainAct::Load(dst));
+                let f = self.num_fields(t);
+                self.edge(f, dst);
+                self.add_prim(dst, prim::UNDEF);
+                self.plain_key(t, ChainAct::Load(dst));
+                return;
+            }
             return self.load_from(origin, t, Key::any(), dst);
         }
         if t == TOP {
