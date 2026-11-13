@@ -524,15 +524,19 @@ pub fn check(
                 "native"
             } else if export_of_family {
                 "export body of a family module"
-            } else if !by_pointer
+            } else if origin[i] {
+                origins.0 += 1;
+                "by pointer, origin stated"
+            } else if !stored
                 && spellings
                     .iter()
                     .any(|s| !s.contains("::") && !s.starts_with('_'))
             {
+                // An entry point compiled code or a native library calls by
+                // name: what the program's code may call is the fact's node
+                // classification, not this check. (One an install stores in
+                // a slot is called through the slot: it needs its origin.)
                 "exported"
-            } else if origin[i] {
-                origins.0 += 1;
-                "by pointer, origin stated"
             } else {
                 origins.1 += 1;
                 report.failures += 1;
