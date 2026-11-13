@@ -373,15 +373,39 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                 }
                 for section in file.sections() {
                     if data_holds_addresses(section.kind(), section.name().unwrap_or("")) {
-                        // A function address a data section holds (a vtable,
-                        // a static table, a function-info record).
+                        // The addresses a data section holds (a vtable, a
+                        // static table, a function-info record).
+                        let mut targets = Vec::new();
                         for (_, reloc) in section.relocations() {
-                            if let RelocationTarget::Symbol(i) = reloc.target() {
-                                let s = file.symbol_by_index(i)?;
-                                if s.kind() != object::SymbolKind::Section {
-                                    held.push((name.clone(), fmt.norm(s.name()?)));
+                            let target = match reloc.target() {
+                                RelocationTarget::Symbol(i) => {
+                                    let s = file.symbol_by_index(i)?;
+                                    if s.kind() == object::SymbolKind::Section {
+                                        s.section_index()
+                                            .and_then(|i| file.section_by_index(i).ok())
+                                            .and_then(|s| s.name().ok().map(str::to_owned))
+                                            .unwrap_or_default()
+                                    } else {
+                                        fmt.norm(s.name()?)
+                                    }
                                 }
+                                RelocationTarget::Section(i) => {
+                                    file.section_by_index(i)?.name()?.to_owned()
+                                }
+                                _ => continue,
+                            };
+                            targets.push(target);
+                        }
+                        if !targets.is_empty() {
+                            let mut names = vec![section.name()?.to_owned()];
+                            if let Some(labels) = symbols.get(&section.index()) {
+                                names.extend(labels.values().flatten().map(|s| fmt.norm(s)));
                             }
+                            held.push(crate::graph::DataSection {
+                                obj: name.clone(),
+                                names,
+                                targets,
+                            });
                         }
                         continue;
                     }

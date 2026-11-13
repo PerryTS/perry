@@ -106,6 +106,22 @@ pub struct Graph {
     /// Per node: a data section holds its address (a vtable, a static
     /// table, a function-info record, an initializer array).
     pub in_data: Vec<bool>,
+    /// Per node: the functions whose code takes its address, directly or
+    /// by naming data that holds it at any depth (a vtable, a table of
+    /// thunks, a function-info record). Whoever runs it got it from one of
+    /// them.
+    pub taken_by: Vec<Vec<usize>>,
+    /// Per node: its address sits in data no code of the archives names
+    /// (compiled code or the linker reads that data).
+    pub loose: Vec<bool>,
+}
+
+/// A data section that holds addresses: the names it is reached under (its
+/// own and its symbols') and what its relocations name.
+pub struct DataSection {
+    pub obj: std::sync::Arc<str>,
+    pub names: Vec<String>,
+    pub targets: Vec<String>,
 }
 fn plain_llvm(s: &str) -> &str {
     rx!(r"(\s*\(\.llvm\.\d+\)|\.llvm\.\d+)$")
@@ -117,7 +133,7 @@ impl Graph {
     pub(crate) fn new(
         mut nodes: Vec<Node>,
         globals: HashSet<(std::sync::Arc<str>, String)>,
-        held: Vec<(std::sync::Arc<str>, String)>,
+        held: Vec<DataSection>,
     ) -> Result<Self> {
         let mut local: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
         let mut sections: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
@@ -163,33 +179,100 @@ impl Graph {
             targets.remove(&i);
             succ[i] = targets.into_iter().collect();
         }
-        let mut taken = vec![false; nodes.len()];
-        for n in &nodes {
-            for t in &n.refs {
-                let macho_sec = format!("__TEXT,{t}");
-                if let Some(ts) = local
-                    .get(&(n.obj.as_ref(), t.as_str()))
-                    .or_else(|| by_global.get(t))
-                    .or_else(|| sections.get(&(n.obj.as_ref(), t.as_str())))
-                    .or_else(|| sections.get(&(n.obj.as_ref(), macho_sec.as_str())))
-                {
-                    for &t in ts {
-                        taken[t] = true;
-                    }
+        // Data sections by the names code and other data reach them under.
+        let mut data_local: HashMap<(&str, &str), Vec<usize>> = HashMap::new();
+        let mut data_global: HashMap<&str, Vec<usize>> = HashMap::new();
+        for (d, sec) in held.iter().enumerate() {
+            for name in &sec.names {
+                data_local
+                    .entry((sec.obj.as_ref(), name.as_str()))
+                    .or_default()
+                    .push(d);
+                if globals.contains(&(sec.obj.clone(), name.clone())) {
+                    data_global.entry(name.as_str()).or_default().push(d);
                 }
             }
         }
-        let mut in_data = vec![false; nodes.len()];
-        for (obj, t) in &held {
-            if let Some(ts) = local
-                .get(&(obj.as_ref(), t.as_str()))
+        type ByObj<'a> = HashMap<(&'a str, &'a str), Vec<usize>>;
+        fn function_of(
+            local: &ByObj<'_>,
+            by_global: &HashMap<String, Vec<usize>>,
+            sections: &ByObj<'_>,
+            obj: &str,
+            t: &str,
+        ) -> Option<Vec<usize>> {
+            let macho_sec = format!("__TEXT,{t}");
+            local
+                .get(&(obj, t))
                 .or_else(|| by_global.get(t))
-            {
-                for &t in ts {
-                    in_data[t] = true;
+                .or_else(|| sections.get(&(obj, t)))
+                .or_else(|| sections.get(&(obj, macho_sec.as_str())))
+                .cloned()
+        }
+        fn data_of<'m, 'k>(
+            local: &'m ByObj<'k>,
+            global: &'m HashMap<&'k str, Vec<usize>>,
+            obj: &'k str,
+            t: &'k str,
+        ) -> Option<&'m Vec<usize>> {
+            local.get(&(obj, t)).or_else(|| global.get(t))
+        }
+        // Per data section: the functions and the data sections it names.
+        let mut data_fns: Vec<Vec<usize>> = vec![Vec::new(); held.len()];
+        let mut data_sub: Vec<Vec<usize>> = vec![Vec::new(); held.len()];
+        let mut in_data = vec![false; nodes.len()];
+        for (d, sec) in held.iter().enumerate() {
+            for t in &sec.targets {
+                if let Some(ts) = function_of(&local, &by_global, &sections, &sec.obj, t) {
+                    data_fns[d].extend(ts.iter().copied());
+                    for t in ts {
+                        in_data[t] = true;
+                    }
+                } else if let Some(ds) = data_of(&data_local, &data_global, &sec.obj, t) {
+                    data_sub[d].extend(ds.iter().copied().filter(|&s| s != d));
                 }
             }
         }
+        let mut taken = vec![false; nodes.len()];
+        let mut taken_by: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+        let mut data_seen = vec![false; held.len()];
+        for (i, n) in nodes.iter().enumerate() {
+            let mut mine: BTreeSet<usize> = BTreeSet::new();
+            let mut visited: HashSet<usize> = HashSet::new();
+            let mut stack: Vec<usize> = Vec::new();
+            for t in &n.refs {
+                if let Some(ts) = function_of(&local, &by_global, &sections, &n.obj, t) {
+                    for t in ts {
+                        taken[t] = true;
+                        mine.insert(t);
+                    }
+                } else if let Some(ds) = data_of(&data_local, &data_global, &n.obj, t) {
+                    stack.extend(ds.iter().copied());
+                }
+            }
+            // An address the data this code names holds, at any depth.
+            while let Some(d) = stack.pop() {
+                if !visited.insert(d) {
+                    continue;
+                }
+                data_seen[d] = true;
+                mine.extend(data_fns[d].iter().copied());
+                stack.extend(data_sub[d].iter().copied());
+            }
+            mine.remove(&i);
+            for t in mine {
+                taken_by[t].push(i);
+            }
+        }
+        // A function whose address sits in data no code in the archives
+        // names: whoever reads that data is not in the graph.
+        let mut loose = vec![false; nodes.len()];
+        for d in (0..held.len()).filter(|&d| !data_seen[d]) {
+            for &t in &data_fns[d] {
+                loose[t] = true;
+            }
+        }
+        drop((data_local, data_global));
         drop(local);
         drop(sections);
         for (n, ex) in nodes.iter_mut().zip(externs) {
@@ -222,6 +305,8 @@ impl Graph {
             edge_count,
             taken,
             in_data,
+            taken_by,
+            loose,
         })
     }
     pub fn label(&self, i: usize) -> String {

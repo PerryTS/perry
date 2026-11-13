@@ -20,6 +20,11 @@
 #          js_gc_init runs last). It must not reach the birth: the claim
 #          would not see that byte cell.
 #
+# fills    a function that takes addresses only to store them in slots (an
+#          install). The walk does not go from a stored function to it; a
+#          stored function the GC rules delegate to no wrapper needs an
+#          origin rule.
+#
 # A rule that matches no function fails the check.
 
 birth exact perry_runtime::buffer::store::store_alloc -- the one allocation of every byte cell that is a JavaScript value (typed arrays, Buffer, ArrayBuffer, SharedArrayBuffer); the two private index cells of a comparator sort come from store_alloc_scratch and are no values
@@ -33,3 +38,4 @@ in-hand exact perry_runtime::array::buffer_receiver::buffer_receiver_dispatch --
 in-hand exact perry_runtime::array::header::buffer_receiver_as_uint8_typed_array -- views a Buffer receiver as a Uint8Array: the Buffer exists
 in-hand exact perry_runtime::object::typed_array_proto_thunks::dispatch_uint8_buffer_method -- a method called on a Uint8Array or Buffer receiver: it exists
 in-hand exact perry_runtime::object::class_registry::construct::builtin::construct -- `new` of a built-in constructor value: a typed-array or Buffer arm runs only when the callee is that constructor, an observed entry of the family
+fills regex ^js_(runtime|nm)_install_ -- an install: it stores its group's operations in the hook slots and its module's dispatch function in the registry and runs none of them

@@ -305,6 +305,7 @@ pub fn check(
     let mut seed = vec![false; nn];
     let mut cut = vec![false; nn];
     let mut origin = vec![false; nn];
+    let mut fills = vec![false; nn];
     let mut early = vec![false; nn];
     let mut hits = vec![0usize; rules.len()];
     for i in 0..nn {
@@ -316,6 +317,7 @@ pub fn check(
                     "birth" => seed[i] = true,
                     "in-hand" => cut[i] = true,
                     "origin" => origin[i] = true,
+                    "fills" => fills[i] = true,
                     "before-claim" => early[i] = true,
                     other => bail!("{}: kind {other} is no byte-cell rule", rule.description()),
                 }
@@ -347,8 +349,14 @@ pub fn check(
             work.push_back(i);
         }
     }
+    // Who can make `t` run: its callers, the wrapper of the slot it is
+    // delegated to, and whoever takes its address (in code, or by naming
+    // data that holds it): that function runs it or hands it to what will
+    // (a completion it schedules, a callback it registers). A `fills`
+    // function only stores the address in a slot.
+    let takers = |t: usize| g.taken_by[t].iter().filter(|&&c| !fills[c]);
     while let Some(t) = work.pop_front() {
-        for &c in g.pred[t].iter().chain(&indirect_pred[t]) {
+        for &c in g.pred[t].iter().chain(&indirect_pred[t]).chain(takers(t)) {
             if next[c].is_none() && !cut[c] {
                 next[c] = Some(t);
                 work.push_back(c);
@@ -411,10 +419,13 @@ pub fn check(
         let called = g.pred[i]
             .iter()
             .chain(&indirect_pred[i])
+            .chain(takers(i))
             .any(|&c| c != i && next[c].is_some());
-        // A delegated callee (a hook's operation) is reached through its
-        // wrapper, which the walk already follows.
-        let by_pointer = (g.taken[i] || g.in_data[i]) && indirect_pred[i].is_empty();
+        // Reached in a way the walk cannot attribute: data no code of the
+        // archives names holds its address, or an install stored it in a
+        // slot no rule delegates to a wrapper.
+        let stored = indirect_pred[i].is_empty() && g.taken_by[i].iter().any(|&c| fills[c]);
+        let by_pointer = g.loose[i] || stored;
         if called && !by_pointer {
             continue;
         }
@@ -451,10 +462,10 @@ pub fn check(
                 "{}: FAIL: it can reach a byte-cell birth and is reached only through a pointer \
                  ({}), and no origin rule says what schedules it\n      {}",
                 g.label(i),
-                match (called, g.taken[i]) {
-                    (false, _) => "no caller",
-                    (true, true) => "its address is taken",
-                    (true, false) => "data holds its address",
+                match (g.loose[i], stored) {
+                    (true, _) => "data no runtime code names holds its address",
+                    (_, true) => "an install stores its address in a slot",
+                    _ => "no caller, and no code takes its address",
                 },
                 path(g, &next, i)
             ));
@@ -570,7 +581,7 @@ mod tests {
         assert_eq!(rules.iter().filter(|r| r.kind == "birth").count(), 1);
         assert!(rules.iter().all(|r| matches!(
             r.kind.as_str(),
-            "birth" | "in-hand" | "origin" | "before-claim"
+            "birth" | "in-hand" | "origin" | "before-claim" | "fills"
         )));
     }
 
