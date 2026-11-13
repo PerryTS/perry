@@ -2250,6 +2250,13 @@ impl Model {
         objs
     }
 
+    /// GP1: `t` is one built-in object (not ⊤, not a built-in prototype
+    /// every object of a family inherits from): a prototype given to it
+    /// is read through its lookups exactly.
+    pub(crate) fn gives_exactly(&self, t: Tok) -> bool {
+        t != TOP && matches!(self.toks[t as usize], TokKind::Builtin(_))
+    }
+
     /// Both prototype-change spellings contribute the same chain relation.
     /// Only an object (or `null`) is given: `src` is filtered first.
     pub(super) fn given_prototype(&mut self, t: Tok, given: NodeId) {
@@ -2272,16 +2279,25 @@ impl Model {
         {
             self.native_given.push((t, given));
             self.census_given(t, given);
-            let members = self.node_l("given-prototype-members");
-            self.cons(
-                src,
-                Cons::Load {
-                    key: Key::Any(0),
-                    dst: members,
-                },
-            );
-            let r = self.reason("E6 member of a prototype given to a runtime object");
-            self.sink_node(members, r);
+            // GP1: setting a built-in's [[Prototype]] reads and calls
+            // nothing (ECMA-262 10.1.2); a later [[Get]] on it continues at
+            // `src` (10.1.8.1). Program lookups read `src`'s chain
+            // (`settle_native_given` writes those values on `t`), and only a
+            // key of that chain the runtime's own protocol lookups name hands
+            // a member to code the model does not follow (sunk there). ⊤ and
+            // the built-in prototypes keep every member.
+            if !self.gives_exactly(t) {
+                let members = self.node_l("given-prototype-members");
+                self.cons(
+                    src,
+                    Cons::Load {
+                        key: Key::Any(0),
+                        dst: members,
+                    },
+                );
+                let r = self.reason("E6 member of a prototype given to a runtime object");
+                self.sink_node(members, r);
+            }
         }
         // `%Object.prototype%` is an immutable prototype exotic
         // object: setting its [[Prototype]] to anything but its

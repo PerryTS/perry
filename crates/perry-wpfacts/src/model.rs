@@ -1013,6 +1013,43 @@ pub enum Protocol {
 }
 
 impl Protocol {
+    pub const ALL: [Protocol; 16] = [
+        Protocol::ToPrimitive,
+        Protocol::Iterate,
+        Protocol::IterNext,
+        Protocol::IterResult,
+        Protocol::AsyncIterate,
+        Protocol::AsyncIterNext,
+        Protocol::AsyncIterResult,
+        Protocol::BufferFrom,
+        Protocol::Json,
+        Protocol::HasInstance,
+        Protocol::OwnKeys,
+        Protocol::Inspect,
+        Protocol::InspectShown,
+        Protocol::ShallowInspect,
+        Protocol::Clone,
+        Protocol::Any,
+    ];
+
+    /// Every key a protocol the runtime runs on a value looks up and calls,
+    /// or reads and runs a protocol on, on its chain (`keys` and `reads` of
+    /// every protocol; `Any` names none of its own). `instance_of_reads`
+    /// values only meet InstanceofOperator (ECMA-262 13.10.2), which reads
+    /// their `@@hasInstance` and `prototype` and hands them to no code.
+    pub fn runtime_keys() -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for p in Protocol::ALL {
+            let keys = p.keys().unwrap_or(&[]);
+            for &k in keys.iter().chain(p.reads()) {
+                if !out.contains(&k) {
+                    out.push(k);
+                }
+            }
+        }
+        out
+    }
+
     /// The keys looked up and called; `None`: any key.
     pub fn keys(self) -> Option<&'static [&'static str]> {
         Some(match self {
@@ -2307,6 +2344,13 @@ pub struct Model {
     /// may give a runtime object a new prototype: its lookups may now reach
     /// the keys of that prototype's chain (`settle_native_given`).
     pub native_given: Vec<(Tok, NodeId)>,
+    /// GP1: the read of key `k` on a given prototype `src`'s chain, the value
+    /// a lookup of `k` on the built-in it was given to finds past its own
+    /// keys (`settle_native_given`), one node per (src, k).
+    pub given_reads: crate::pts::FxHashMap<(NodeId, Atom), NodeId>,
+    /// Gives to a built-in whose chain's keys or values are not known
+    /// (`settle_native_given`): every member escapes, as for ⊤.
+    pub given_inexact: crate::pts::FxHashSet<(Tok, NodeId)>,
     /// (descs, map) defined under any key; descs whose E5 and store under
     /// any key are attached.
     pub define_any: crate::pts::FxHashSet<(NodeId, Tok)>,
