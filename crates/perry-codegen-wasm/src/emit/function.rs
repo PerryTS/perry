@@ -162,11 +162,42 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        // Emit field initializers: class_set_field(this, field_name, value) via mem_call
+        self.emit_field_initializers(&mut func, class, &local_map, temp_local_idx, temp_i32_idx);
+
+        // Emit constructor body.
+        //
+        // Constructors are declared in func_section as `(this, ...params) -> i64`
+        // unconditionally (see mod.rs around line 1688). Pass `in_returning_func=true`
+        // so that any explicit `return;` / `return expr;` inside the constructor
+        // body properly leaves an i64 on the operand stack before the WASM `return`
+        // instruction. Without this, an early `return` produced a bare `return`
+        // with empty stack, failing V8 validation with
+        // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
+        let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = Some(class.name.clone());
+        for stmt in &ctor.body {
+            ctx.emit_stmt(&mut func, stmt, true);
+        }
+
+        // Fallthrough: return `this` as the constructor's result.
+        func.instruction(&Instruction::LocalGet(0));
+        func.instruction(&Instruction::End);
+        func
+    }
+
+    /// The field initializers of `class`, each a `class_set_field(this, name, value)`.
+    fn emit_field_initializers(
+        &self,
+        func: &mut Function,
+        class: &perry_hir::ir::Class,
+        local_map: &BTreeMap<LocalId, u32>,
+        temp_local_idx: u32,
+        temp_i32_idx: u32,
+    ) {
         for field in &class.fields {
             if let Some(init) = &field.init {
-                let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-                ctx.emit_frame_begin(&mut func, 3);
+                let mut ctx = FuncEmitCtx::new(self, local_map, temp_local_idx, temp_i32_idx);
+                ctx.emit_frame_begin(func, 3);
                 // Compute base address (sp - 24) and save to temp_i32 local
                 let sp = self.nan_temp_global;
                 func.instruction(&Instruction::GlobalGet(sp));
@@ -198,28 +229,131 @@ impl WasmModuleEmitter {
                     memory_index: 0,
                 }));
                 // Store value to slot 2
-                ctx.emit_store_arg(&mut func, 2, init);
+                ctx.emit_store_arg(func, 2, init);
                 // Call via mem_call
-                ctx.emit_memcall_void(&mut func, "class_set_field", 3);
+                ctx.emit_memcall_void(func, "class_set_field", 3);
             }
         }
+    }
 
-        // Emit constructor body.
-        //
-        // Constructors are declared in func_section as `(this, ...params) -> i64`
-        // unconditionally (see mod.rs around line 1688). Pass `in_returning_func=true`
-        // so that any explicit `return;` / `return expr;` inside the constructor
-        // body properly leaves an i64 on the operand stack before the WASM `return`
-        // instruction. Without this, an early `return` produced a bare `return`
-        // with empty stack, failing V8 validation with
-        // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
-        let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-        ctx.current_class = Some(class.name.clone());
-        for stmt in &ctor.body {
-            ctx.emit_stmt(&mut func, stmt, true);
+    /// The WASM arity (`this` + parameters) of `class`'s constructor, declared or
+    /// synthesized, or `None` when it has none. Registration, the function section
+    /// and the code section all read it, so the three stay in the same order.
+    pub(super) fn ctor_param_count(&self, class: &perry_hir::ir::Class) -> Option<usize> {
+        match &class.constructor {
+            Some(ctor) => Some(1 + ctor.params.len()),
+            None => self
+                .synthesized_ctors
+                .get(&class.name)
+                .map(|forward| 1 + forward),
+        }
+    }
+
+    /// Which classes get a constructor from `compile_synthesized_constructor`, and how
+    /// many parameters each forwards. A class gets one when it declares none and either
+    /// has field initializers (they run only inside a constructor) or extends a class
+    /// with a constructor, declared or synthesized (otherwise the parent's never runs).
+    /// A chain that reaches a constructor with a rest parameter is left alone:
+    /// forwarding `...args` through a fixed arity would drop arguments.
+    pub(super) fn synthesized_ctors(
+        modules: &[(String, perry_hir::ir::Module)],
+    ) -> BTreeMap<String, usize> {
+        #[derive(Clone, Copy)]
+        enum Ctor {
+            Absent,
+            Arity(usize),
+            Unsupported,
+        }
+        fn ctor_of(
+            name: &str,
+            classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+            out: &mut BTreeMap<String, usize>,
+            depth: usize,
+        ) -> Ctor {
+            let Some(class) = classes.get(name) else {
+                return Ctor::Absent;
+            };
+            if depth > classes.len() {
+                return Ctor::Unsupported;
+            }
+            if let Some(ctor) = &class.constructor {
+                return if ctor.params.iter().any(|p| p.is_rest) {
+                    Ctor::Unsupported
+                } else {
+                    Ctor::Arity(ctor.params.len())
+                };
+            }
+            let parent = match &class.extends_name {
+                Some(parent) => ctor_of(parent, classes, out, depth + 1),
+                None => Ctor::Absent,
+            };
+            match parent {
+                Ctor::Unsupported => Ctor::Unsupported,
+                Ctor::Arity(n) => {
+                    out.insert(class.name.clone(), n);
+                    Ctor::Arity(n)
+                }
+                Ctor::Absent if class.fields.iter().any(|f| f.init.is_some()) => {
+                    out.insert(class.name.clone(), 0);
+                    Ctor::Arity(0)
+                }
+                Ctor::Absent => Ctor::Absent,
+            }
+        }
+        let classes: BTreeMap<&str, &perry_hir::ir::Class> = modules
+            .iter()
+            .flat_map(|(_, module)| module.classes.iter())
+            .map(|class| (class.name.as_str(), class))
+            .collect();
+        let mut out = BTreeMap::new();
+        for name in classes.keys() {
+            ctor_of(name, &classes, &mut out, 0);
+        }
+        out
+    }
+
+    /// The constructor TypeScript gives a class that declares none: `constructor() {}`
+    /// for a base class, `constructor(...args) { super(...args); }` for a derived one.
+    /// Here `forward` is the arity of the nearest ancestor constructor, whose
+    /// parameters are passed through unchanged, and `parent_ctor` is that parent's
+    /// constructor. As in JS, the parent constructor runs before this class's field
+    /// initializers. See `synthesized_ctors` for which classes get one.
+    pub(super) fn compile_synthesized_constructor(
+        &self,
+        class: &perry_hir::ir::Class,
+        forward: usize,
+        parent_ctor: Option<u32>,
+    ) -> Function {
+        let param_count = 1 + forward;
+        let mut local_map = BTreeMap::new();
+        let mut extra_locals = 0u32;
+        for field in &class.fields {
+            if let Some(init) = &field.init {
+                collect_expr_locals(init, &mut local_map, &mut extra_locals, param_count as u32);
+            }
+        }
+        let temp_local_idx = param_count as u32 + extra_locals;
+        let temp_i32_idx = temp_local_idx + 3;
+        let locals = vec![(extra_locals + 3, ValType::I64), (1, ValType::I32)];
+        let mut func = Function::new(locals);
+
+        if let Some(parent_idx) = parent_ctor {
+            for i in 0..param_count {
+                func.instruction(&Instruction::LocalGet(i as u32));
+            }
+            if let Some(&expected) = self.func_param_counts.get(&parent_idx) {
+                for _ in param_count..expected {
+                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                }
+            }
+            func.instruction(&Instruction::Call(parent_idx));
+            func.instruction(&Instruction::Drop);
+            let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+            ctx.emit_exception_guard(&mut func);
         }
 
-        // Fallthrough: return `this` as the constructor's result.
+        self.emit_field_initializers(&mut func, class, &local_map, temp_local_idx, temp_i32_idx);
+
         func.instruction(&Instruction::LocalGet(0));
         func.instruction(&Instruction::End);
         func

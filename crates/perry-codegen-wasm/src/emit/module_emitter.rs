@@ -48,6 +48,9 @@ pub(super) struct WasmModuleEmitter {
     pub(super) ffi_imports: Vec<(String, usize, bool)>,
     /// Class parent map: child_class_name → parent_class_name
     pub(super) class_parent_map: BTreeMap<String, String>,
+    /// Classes that declare no constructor but get one (`synthesized_ctors`), with
+    /// the number of parameters it forwards to the parent constructor.
+    pub(super) synthesized_ctors: BTreeMap<String, usize>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -114,6 +117,7 @@ impl WasmModuleEmitter {
             func_name_map: BTreeMap::new(),
             ffi_imports: Vec::new(),
             class_parent_map: BTreeMap::new(),
+            synthesized_ctors: BTreeMap::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),

@@ -776,6 +776,7 @@ impl WasmModuleEmitter {
         }
 
         // Register class constructors, methods, and static methods
+        self.synthesized_ctors = Self::synthesized_ctors(modules);
         for (_, module) in modules {
             for class in &module.classes {
                 // Record parent class relationship
@@ -784,8 +785,7 @@ impl WasmModuleEmitter {
                         .insert(class.name.clone(), parent.clone());
                 }
                 // Constructor: params = this + declared params, returns f64 (this)
-                if let Some(ctor) = &class.constructor {
-                    let param_count = 1 + ctor.params.len();
+                if let Some(param_count) = self.ctor_param_count(class) {
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
@@ -1137,8 +1137,7 @@ impl WasmModuleEmitter {
         // Class constructors, methods, static methods, getters, setters
         for (_, module) in modules {
             for class in &module.classes {
-                if let Some(ctor) = &class.constructor {
-                    let param_count = 1 + ctor.params.len();
+                if let Some(param_count) = self.ctor_param_count(class) {
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
@@ -1369,6 +1368,13 @@ impl WasmModuleEmitter {
             for class in &module.classes {
                 if let Some(ctor) = &class.constructor {
                     let func = self.compile_class_constructor(class, ctor);
+                    code_section.function(&func);
+                } else if let Some(&forward) = self.synthesized_ctors.get(&class.name) {
+                    let parent_ctor = class
+                        .extends_name
+                        .as_ref()
+                        .and_then(|parent| self.class_ctor_map.get(parent).copied());
+                    let func = self.compile_synthesized_constructor(class, forward, parent_ctor);
                     code_section.function(&func);
                 }
                 for method in &class.methods {

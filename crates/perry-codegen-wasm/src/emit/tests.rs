@@ -143,3 +143,31 @@ console.log("b");
         "a 1 true\n\nb"
     );
 }
+
+// A class that declares no constructor still runs its field initializers, and a
+// derived one runs its parent's constructor (with the arguments) before them.
+#[test]
+fn class_without_constructor_initializes_fields_and_runs_the_parent_constructor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class X { tag = "a"; n = 1 + 1; }
+class A { x: number; constructor(x: number) { this.x = x; } }
+class B extends A { y = 2; }
+class C extends B {}
+class P { v: number; constructor() { this.v = 1; } }
+class Q extends P { w = this.v + 1; }
+class E {}
+class F extends E { t = "f"; }
+const x = new X();
+const b = new B(7);
+const c = new C(9);
+const q = new Q();
+console.log(x.tag + " " + x.n);
+console.log(b.x + " " + b.y + " " + c.x + " " + c.y);
+console.log(q.v + " " + q.w + " " + new F().t);
+"#
+        ),
+        "a 2\n7 2 9 2\n1 2 f"
+    );
+}
