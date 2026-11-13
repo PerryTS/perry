@@ -208,13 +208,44 @@ unsafe fn place(t: *mut Table, slot: u32) {
 
 /// [`find`] with the key's hash supplied by the caller (the probe's
 /// compile-time atom hash, `layout_probe.rs`), so no key header is read.
+///
+/// This is the lookup of every caller that is not a probe front, and it is
+/// the body those callers were compiled with before the fronts got
+/// [`find_hashed_with`]: a table of fewer than 8 entries is scanned. The
+/// lookup is inlined into `layout_probe::probe_has` and the other walks, and
+/// a different body there moves their register allocation: with the fronts'
+/// body `probe_has` reloaded one spilled register on its path for a receiver
+/// with no table at all (one instruction per `for-in` key).
 #[inline]
 pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option<u32> {
-    find_hashed_with(t, key, || hash)
+    if (*t).length < 8 {
+        let keys = keys_ptr(t);
+        let mut i = (*t).length;
+        while i > 0 {
+            i -= 1;
+            if *keys.add(i as usize) == key {
+                return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
+            }
+        }
+        return None;
+    }
+    let mask = (*t).index_capacity as usize - 1;
+    let mut p = hash as usize & mask;
+    loop {
+        let i = *index(t).add(p);
+        if i == EMPTY {
+            return None;
+        }
+        if *key_at(t, i) == key {
+            return Some(i);
+        }
+        p = (p + 1) & mask;
+    }
 }
 
-/// [`find_hashed`] in its caller's body, the hash asked for only when the
-/// table has an index (a probe front that answers a table hit itself).
+/// [`find_hashed`] for a probe front that answers a table hit itself, in its
+/// caller's body: the index answers whenever the table has one, and the hash
+/// is asked for only then.
 #[inline(always)]
 pub(crate) unsafe fn find_hashed_with(
     t: *const Table,
@@ -259,6 +290,15 @@ pub(crate) unsafe fn find_hashed_with(
 pub(crate) unsafe fn own_data_value(t: *const Table, i: u32) -> Option<*mut u64> {
     (*attrs_at(t, i) & (SLOT_REF | super::key_attrs::ENTRY_ACCESSOR_MASK as u64) == 0)
         .then(|| value_at(t, i))
+}
+
+/// Does found entry `i` hold its own value word (no fixed-slot reference)?
+///
+/// # Safety
+/// As [`own_data_value`].
+#[inline(always)]
+pub(crate) unsafe fn holds_own_value(t: *const Table, i: u32) -> bool {
+    *attrs_at(t, i) & SLOT_REF == 0
 }
 
 /// [`own_data_value`] for a store: the entry is also writable
