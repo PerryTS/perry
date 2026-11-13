@@ -22,6 +22,13 @@
 //! object (a Proxy) and every primitive take the generic arm. An untagged raw
 //! word and a JS handle keep today's path (the runtime entries refuse them
 //! themselves). `PERRY_COLLECTION_RECEIVER_TESTS=0` keeps today's lowering.
+//!
+//! The same test guards the Map / Set calls the HIR leaves unfolded (a
+//! receiver that is no plain local: `this.k.get(x)`, `h.m.forEach(f)`; the
+//! own-override guard of `lower_call/property_get`) and the `size` read
+//! (`collection_receiver::lower_collection_size`), whose miss is the ordinary
+//! `Get` of `size`. `PERRY_COLLECTION_UNFOLDED_TESTS=0` keeps those as they
+//! were.
 
 use crate::expr::FnCtx;
 use crate::types::{I1, I64, I8};
@@ -36,6 +43,33 @@ pub(crate) fn enabled() -> bool {
         std::env::var("PERRY_COLLECTION_RECEIVER_TESTS").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
+}
+
+/// `PERRY_COLLECTION_UNFOLDED_TESTS=0` (`off`, `false`) keeps the Map / Set
+/// method calls the HIR did not fold (`this.k.get(x)`, `h.m.forEach(f)`: the
+/// own-override guard of `lower_call/property_get`) and the `size` read of a
+/// Map / Set receiver without a receiver test. Read per call; a compile-cache
+/// input.
+pub(crate) fn unfolded_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_COLLECTION_UNFOLDED_TESTS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// [`needed`] for an unfolded method call (`site` is its callee's site) or a
+/// `size` read (`site` `None`: no fact covers a property read).
+pub(crate) fn needed_unfolded(
+    ctx: &FnCtx<'_>,
+    family: crate::builtin_proto::BuiltinProto,
+    site: Option<Site>,
+    receiver: &Expr,
+    method: &str,
+) -> Option<(Brand, bool)> {
+    if !unfolded_enabled() {
+        return None;
+    }
+    needed(ctx, family, site, receiver, method)
 }
 
 /// A folded collection node's receiver kind: its GC type byte, its facts

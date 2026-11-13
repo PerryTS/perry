@@ -937,6 +937,7 @@ js_cluster_remove_listener	f64	f64,f64
 js_cluster_set_max_listeners	f64	f64
 js_cluster_setup_primary	f64	f64
 js_collection_method_dispatch	f64	f64,ptr,usize,f64,f64
+js_collection_size_get	f64	f64
 js_color_parse_channel	f64	f64,i32s
 js_component_call	f64	f64,f64,f64,f64
 js_component_dispose	f64	f64
