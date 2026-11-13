@@ -1651,3 +1651,24 @@ try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name
         "a!\nb!\na\nnull: TypeError\n1: TypeError"
     );
 }
+
+#[test]
+fn a_class_value_holds_static_side_properties_and_a_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class T {}
+(T as any).key = "class";
+console.log((T as any).key);
+const k = "dyn";
+(T as any)[k] = 2;
+console.log((T as any)[k]);
+const base = { tag: "base" };
+class U {}
+Object.setPrototypeOf(U, base);
+console.log((U as any).tag);
+"#
+        ),
+        "class\n2\nbase"
+    );
+}

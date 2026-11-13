@@ -1642,6 +1642,12 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// An object or a function: a class value (see __classRef) is a host function, and
+// its static side (`(K as any).key = 1`) is its own properties.
+function __holdsProperties(v) {
+  return v !== null && (typeof v === 'object' || typeof v === 'function');
+}
+
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
 // so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
 // the compiled constructor. `ctorIdx` is the constructor's
@@ -1935,11 +1941,11 @@ const __memDispatch = {
   },
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
-    if (!obj || typeof obj !== 'object') return undefined;
+    if (!__holdsProperties(obj)) return undefined;
     return obj[key];
   },
   object_set_dynamic: (obj, key, value) => {
-    if (obj && typeof obj === 'object') obj[key] = value;
+    if (__holdsProperties(obj)) obj[key] = value;
   },
   object_delete: (obj, key) => { if (obj && typeof obj === 'object') delete obj[String(key)]; },
   object_delete_dynamic: (obj, key) => { if (obj && typeof obj === 'object') delete obj[key]; },
@@ -2191,6 +2197,7 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
+  object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -2263,7 +2270,7 @@ const __memDispatch = {
   },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
-    if (!obj || typeof obj !== 'object') return undefined;
+    if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
     if (obj.__class__) {
@@ -2290,7 +2297,7 @@ const __memDispatch = {
     return obj[fname];
   },
   class_set_field: (obj, name, value) => {
-    if (!obj || typeof obj !== 'object') return;
+    if (!__holdsProperties(obj)) return;
     const fname = String(name);
     // Check for compiled setter method — WASM uses i64 (BigInt)
     if (obj.__class__) {
