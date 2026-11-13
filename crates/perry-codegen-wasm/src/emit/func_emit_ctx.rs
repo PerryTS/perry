@@ -33,6 +33,9 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) current_class: Option<String>,
     /// Local 0 is `this`: a class constructor, method or accessor.
     pub(super) this_is_local0: bool,
+    /// The local `this` reads: the receiver (local 0) in a method or constructor,
+    /// the captured `this` parameter in an arrow function that captures it.
+    pub(super) this_local: u32,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
     /// Completion kind while transferring to a shared finalizer.
@@ -71,6 +74,7 @@ impl<'a> FuncEmitCtx<'a> {
             pending_label: None,
             current_class: None,
             this_is_local0: false,
+            this_local: 0,
             temp_local,
             temp_local_i32,
             temp_store_local: temp_local + 1,

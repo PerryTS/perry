@@ -568,6 +568,7 @@ impl WasmModuleEmitter {
             Vec<Stmt>,
             Vec<LocalId>,
             Vec<LocalId>,
+            bool,
             usize,
         )> = Vec::new();
         // The class whose constructor, instance method, accessor or field initializer
@@ -650,7 +651,7 @@ impl WasmModuleEmitter {
                     .iter()
                     .chain(&module_closures[statics_end..instance_end])
                 {
-                    if closure.5 {
+                    if closure.6 {
                         closure_class.insert((mod_idx, closure.0), class.name.clone());
                     }
                 }
@@ -658,9 +659,9 @@ impl WasmModuleEmitter {
             // One function per FuncId: a closure the HIR reaches by two paths (a static
             // field initializer is also in `init`) is emitted once.
             let mut seen = std::collections::HashSet::new();
-            for (fid, params, body, caps, mut_caps, _) in module_closures {
+            for (fid, params, body, caps, mut_caps, this, _) in module_closures {
                 if seen.insert(fid) {
-                    closure_funcs.push((fid, params, body, caps, mut_caps, mod_idx));
+                    closure_funcs.push((fid, params, body, caps, mut_caps, this, mod_idx));
                 }
             }
         }
@@ -881,10 +882,15 @@ impl WasmModuleEmitter {
         }
 
         // Register closure functions into their per-module func_maps
-        for (func_id, params, body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, params, body, captures, mutable_captures, captures_this, mod_idx) in
+            &closure_funcs
+        {
             if !self.module_func_maps[*mod_idx].contains_key(func_id) {
-                // Closure params: captures first (as f64), then declared params
-                let total_params = captures.len() + mutable_captures.len() + params.len();
+                // Closure params: captures, then the captured `this`, then declared params
+                let total_params = captures.len()
+                    + mutable_captures.len()
+                    + usize::from(*captures_this)
+                    + params.len();
                 let wasm_params = vec![ValType::I64; total_params];
                 let results = if body.iter().any(has_return) {
                     vec![ValType::I64]
@@ -922,7 +928,7 @@ impl WasmModuleEmitter {
         }
         // Module-level lets are wasm globals, already shared by every closure.
         let mut boxed: Vec<(usize, LocalId)> = Vec::new();
-        for (_, _, body, _, mutable_captures, mod_idx) in &closure_funcs {
+        for (_, _, body, _, mutable_captures, _, mod_idx) in &closure_funcs {
             let ids = mutable_captures
                 .iter()
                 .chain(generator_record_captures(body));
@@ -1227,9 +1233,14 @@ impl WasmModuleEmitter {
             }
         }
         // Closure functions
-        for (func_id, _params, _body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, _params, _body, captures, mutable_captures, captures_this, mod_idx) in
+            &closure_funcs
+        {
             if self.module_func_maps[*mod_idx].contains_key(func_id) {
-                let total_params = captures.len() + mutable_captures.len() + _params.len();
+                let total_params = captures.len()
+                    + mutable_captures.len()
+                    + usize::from(*captures_this)
+                    + _params.len();
                 let wasm_params = vec![ValType::I64; total_params];
                 let results = vec![ValType::I64]; // closures always return f64
                 let type_idx = self.get_type_idx(wasm_params, results);
@@ -1271,7 +1282,7 @@ impl WasmModuleEmitter {
                     }
                 }
             }
-            for (func_id, _, _, _, _, mod_idx) in &closure_funcs {
+            for (func_id, _, _, _, _, _, mod_idx) in &closure_funcs {
                 if let Some(&idx) = self.module_func_maps[*mod_idx].get(func_id) {
                     if !indices.contains(&idx) {
                         indices.push(idx);
@@ -1453,13 +1464,21 @@ impl WasmModuleEmitter {
         }
 
         // Closure functions — swap in the parent module's func_map for each closure
-        for (func_id, params, body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, params, body, captures, mutable_captures, captures_this, mod_idx) in
+            &closure_funcs
+        {
             if self.module_func_maps[*mod_idx].contains_key(func_id) {
                 self.func_map = self.module_func_maps[*mod_idx].clone();
                 self.current_mod_idx = *mod_idx;
                 let home_class = closure_class.get(&(*mod_idx, *func_id)).map(String::as_str);
-                let func =
-                    self.compile_closure(params, body, captures, mutable_captures, home_class);
+                let func = self.compile_closure(
+                    params,
+                    body,
+                    captures,
+                    mutable_captures,
+                    *captures_this,
+                    home_class,
+                );
                 code_section.function(&func);
             }
         }
