@@ -1875,9 +1875,11 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
 
 /// [`probe_has`]'s presence walk for the resolved key `key` (its hash
 /// `hash`; `exact` when it is the key's atom or symbol, so that a miss
-/// proves absence) from the object at `payload`.
-#[inline(never)]
-pub(super) unsafe fn probe_has_walk(
+/// proves absence) from the object at `payload`. Inlined into its two
+/// callers ([`probe_has`] and the `in` operator's miss arm), so a miss pays
+/// one frame, not two.
+#[inline(always)]
+pub(crate) unsafe fn probe_has_walk(
     dir: *const u8,
     payload: usize,
     key: u64,
@@ -2177,7 +2179,7 @@ pub(crate) use keyed_delete::probe_delete_keyed;
 use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
-pub(crate) use computed::in_keyed;
+pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
 pub(crate) use computed::probe_set_keyed;
 pub(crate) use computed::{probe_store_keyed, store_key_mintable, KeyedStore};
 

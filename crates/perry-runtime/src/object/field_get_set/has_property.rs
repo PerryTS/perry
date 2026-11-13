@@ -215,11 +215,21 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
-    // The probe's presence mode first (`layout_probe::in_keyed`, the answers
-    // of `probe_has`): it declines a deferred namespace at every hop, so the
-    // namespace arm and the complete operation only see what it cannot
-    // answer.
-    match unsafe { crate::object::layout_probe::in_keyed(obj.to_bits(), key.to_bits()) } {
+    // The probe's own-slot answer is a leaf (no frame); everything else is
+    // one tail call.
+    match unsafe { crate::object::layout_probe::in_keyed_leaf(obj.to_bits(), key.to_bits()) } {
+        Ok(()) => f64::from_bits(JSValue::bool(true).bits()),
+        Err((k, h)) => in_operator_miss(obj, key, k, h),
+    }
+}
+
+/// [`js_in_operator`] past the own-slot answer: the probe's presence walk
+/// with the key the leaf resolved (`layout_probe::in_keyed_miss`, the answers
+/// of `probe_has`; it declines a deferred namespace at every hop), then the
+/// namespace arm and the complete operation for what it cannot answer.
+#[inline(never)]
+extern "C" fn in_operator_miss(obj: f64, key: f64, k: u64, h: u64) -> f64 {
+    match unsafe { crate::object::layout_probe::in_keyed_miss(obj.to_bits(), key.to_bits(), k, h) } {
         1 => return f64::from_bits(JSValue::bool(true).bits()),
         0 => return f64::from_bits(JSValue::bool(false).bits()),
         _ => {}

@@ -605,30 +605,48 @@ pub(super) unsafe fn own_slot_holds(dir: *const u8, obj: *const ObjectHeader, ke
         != TAG_HOLE
 }
 
-/// `key in obj` through the probe ([`super::probe_has`]'s answers): the
-/// key resolved once; an own key in a slot of the receiver is answered by
-/// the keyed read's own-slot arm, a leaf; every other case is one tail call
-/// into the presence walk with the resolved key.
+/// `key in obj` through the probe, the leaf half: the key resolved once by
+/// [`key_leaf`]; an own key in a slot of the receiver answers `Ok(())`
+/// (present) with no call. Otherwise `Err((key, hash))`: the resolved key
+/// word and its hash for [`in_keyed_miss`], or `(0, 0)` when the leaf
+/// resolved nothing (not a pointer receiver, or a key only the complete
+/// resolution answers). The caller ends in ONE call that runs the walk, so a
+/// miss pays one frame.
 ///
 /// # Safety
 /// Any value bits.
 #[inline(always)]
-pub(crate) unsafe fn in_keyed(obj_bits: u64, key_bits: u64) -> i32 {
+pub(crate) unsafe fn in_keyed_leaf(obj_bits: u64, key_bits: u64) -> Result<(), (u64, u64)> {
     if obj_bits & TAG_MASK != POINTER_TAG {
-        return -1;
+        return Err((0, 0));
     }
     let payload = (obj_bits & POINTER_MASK) as usize;
     if payload < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return -1;
+        return Err((0, 0));
     }
     let dir = super::super::ordinary_dir_addr();
     let Some((key, hash)) = key_leaf(dir, key_bits) else {
-        return super::probe_has(obj_bits, key_bits, false);
+        return Err((0, 0));
     };
     if own_slot_holds(dir, payload as *const ObjectHeader, key) {
-        return 1;
+        return Ok(());
     }
-    super::probe_has_walk(dir, payload, key, hash, true, false)
+    Err((key, hash))
+}
+
+/// The miss of [`in_keyed_leaf`]: the presence walk for the resolved key
+/// `key` (nonzero only when `obj_bits` is a pointer above the handle floor),
+/// else [`super::probe_has`] in full. The answers of `probe_has`.
+///
+/// # Safety
+/// Any value bits; `key` and `hash` from [`in_keyed_leaf`].
+#[inline(always)]
+pub(crate) unsafe fn in_keyed_miss(obj_bits: u64, key_bits: u64, key: u64, hash: u64) -> i32 {
+    if key == 0 {
+        return super::probe_has(obj_bits, key_bits, false);
+    }
+    let payload = (obj_bits & POINTER_MASK) as usize;
+    super::probe_has_walk(super::super::ordinary_dir_addr(), payload, key, hash, true, false)
 }
 
 /// What the keyed store probe ([`probe_store_keyed`]) did with
