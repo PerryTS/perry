@@ -309,8 +309,8 @@ pub(crate) extern "C" fn number_is_integer_thunk(
 /// passes through; Boolean → 0n/1n; String → StringToBigInt; an object is first
 /// reduced through ToPrimitive("number") (running its `valueOf`/`toString`) and
 /// re-coerced; a Number/undefined/null/Symbol throws a TypeError. The
-/// primitive cases reuse the same `to_bigint_for_store` helper that backs
-/// `BigInt64Array` element writes.
+/// primitive cases go through `bigint_coerce::to_bigint`, which needs no
+/// typed-array group (only a typed array as the value takes the group's arm).
 fn bigint_to_bigint_arg(value: f64) -> f64 {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_pointer() && !jv.is_bigint() {
@@ -329,7 +329,7 @@ fn bigint_to_bigint_arg(value: f64) -> f64 {
         // Object: ToPrimitive("number") then re-coerce. Try a custom
         // [Symbol.toPrimitive] first, then OrdinaryToPrimitive
         // (valueOf-before-toString). A primitive result recurses; anything
-        // unconvertible falls through to the TypeError in `to_bigint_for_store`.
+        // unconvertible falls through to the TypeError in `bigint_coerce`.
         let prim = unsafe { crate::symbol::js_to_primitive(value, 1) };
         if prim.to_bits() != value.to_bits() {
             return bigint_to_bigint_arg(prim);
@@ -342,7 +342,7 @@ fn bigint_to_bigint_arg(value: f64) -> f64 {
             }
         }
     }
-    crate::typedarray_hook_slots::bigint::to_bigint_for_store(value)
+    crate::bigint_coerce::to_bigint(value)
 }
 
 pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) -> f64 {
