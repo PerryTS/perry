@@ -104,7 +104,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         },
         // A ToNumeric operand: its integer rule decides (above); without
         // one (`/`, `**`) the result depends on the sign.
-        Cons::Arith { dst } => {
+        Cons::Arith { dst, .. } => {
             let ruled = m.nodes[n as usize]
                 .cons
                 .iter()

@@ -866,7 +866,7 @@ impl<'a> Gen<'a> {
                     perry_hir::UpdateOp::Decrement => -1,
                 };
                 self.range_rule(crate::model::RangeOp::Step(step), l, None, out);
-                self.m.cons(l, Cons::Arith { dst: out });
+                self.m.cons(l, Cons::Arith { dst: out, other: crate::model::NO_NODE });
                 let w = self.local_write(mi, *id);
                 self.m.edge(out, w);
                 self.narrowed_write(mi, *id, out);
@@ -952,8 +952,8 @@ impl<'a> Gen<'a> {
                         },
                     );
                 } else {
-                    for v in [l, rv] {
-                        self.m.cons(v, Cons::Arith { dst: out });
+                    for (v, other) in [(l, rv), (rv, l)] {
+                        self.m.cons(v, Cons::Arith { dst: out, other });
                     }
                 }
                 if shift {
@@ -986,7 +986,7 @@ impl<'a> Gen<'a> {
                         _ => crate::model::RangeOp::BitNot,
                     };
                     self.range_rule(rop, v, None, out);
-                    self.m.cons(v, Cons::Arith { dst: out });
+                    self.m.cons(v, Cons::Arith { dst: out, other: crate::model::NO_NODE });
                     out
                 }
             },
@@ -1332,7 +1332,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv2 = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv2 });
+                self.m.cons(cur, Cons::Arith { dst: nv2, other: crate::model::NO_NODE });
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1531,7 +1531,7 @@ impl<'a> Gen<'a> {
                     },
                 );
                 let nv = self.tmp("update-val");
-                self.m.cons(cur, Cons::Arith { dst: nv });
+                self.m.cons(cur, Cons::Arith { dst: nv, other: crate::model::NO_NODE });
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }

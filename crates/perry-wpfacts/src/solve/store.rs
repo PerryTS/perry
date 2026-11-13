@@ -279,6 +279,34 @@ impl Model {
         }
     }
 
+    /// A typed array element store (`store_into`): the element field holds
+    /// the Number (BigInt) TypedArraySetElement converts `src` to; the
+    /// conversion's ToPrimitive runs `src`'s `@@toPrimitive` / `valueOf` /
+    /// `toString` (once per value and site).
+    fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
+        let f = match self.is_elem_array(t) {
+            true => self.field_any(t),
+            false => self.numeric_field(t),
+        };
+        let p = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
+                TmplKind::BObj { what: "Buffer", .. } => prim::NUM,
+                _ => match self.ta_elem.get(&tm).copied() {
+                    Some(perry_hir::TYPED_ARRAY_KIND_BIGINT64 | perry_hir::TYPED_ARRAY_KIND_BIGUINT64) => {
+                        prim::BIGINT
+                    }
+                    Some(_) => prim::NUM,
+                    None => prim::NUM | prim::BIGINT,
+                },
+            },
+            _ => prim::NUM | prim::BIGINT,
+        };
+        self.add_prim(f, p);
+        if self.ta_store_done.insert((src, site)) {
+            builtins::string_methods::to_prim(self, src, "typed array element store's ToNumber / ToBigInt");
+        }
+    }
+
     /// Does `tm` descend from a class whose code this unit does not see:
     /// another unit's class, or a parent that is no class of this unit
     /// when it was generated (`parent_value`, §17.2). That code runs on
@@ -359,6 +387,15 @@ impl Model {
         // it writes the numeric range, never an arbitrary string key.
         let elem = self.is_elem_key(key);
         let key = if elem { Key::any() } else { key };
+        // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
+        // [[Set]] under a numeric key (an element-key store is one: a Number
+        // key, an index string, an append) runs TypedArraySetElement, which
+        // stores ToNumber(v), or ToBigInt(v) on a BigInt64/BigUint64 array,
+        // never `v`; no prototype setter is met.
+        if elem && self.typed_array_elements(t) {
+            self.typed_array_element_store(t, src, site);
+            return;
+        }
         // A computed store may be a runtime helper's write of a Map's
         // contents (`solve/map_vals.rs`).
         if matches!(key, Key::Any(_)) {

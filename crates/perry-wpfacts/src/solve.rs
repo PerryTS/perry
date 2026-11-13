@@ -2028,7 +2028,7 @@ impl Model {
                 format!("viewedbuffer {n} {view} {fresh:?} {share}")
             }
             Cons::BoundCall { reason, bound } => format!("boundcall {n} {reason} {bound}"),
-            Cons::Arith { dst } => format!("arith {n} {dst}"),
+            Cons::Arith { dst, .. } => format!("arith {n} {dst}"),
             Cons::Range {
                 op,
                 other,

@@ -1945,10 +1945,13 @@ impl Model {
                     }
                 }
             }
-            Cons::Arith { dst } => {
+            Cons::Arith { dst, other } => {
                 let mut out = 0u16;
                 // Objects go through ToPrimitive (user valueOf/toString).
-                let objs = prim::NUM | prim::BIGINT;
+                // ECMA-262 13.15.3: a BigInt beside a Number throws, so the
+                // BigInt reaches the result only when `other` may be one.
+                let big = if self.may_be_bigint(other) { prim::BIGINT } else { 0 };
+                let objs = prim::NUM | big;
                 // A described parameter's marker is no value (DECISIONS 74);
                 // an argument marker is none while it stands for such
                 // markers alone, and adds the kinds if it leaves (75).
@@ -1962,7 +1965,7 @@ impl Model {
                     }
                 }
                 if prim & prim::BIGINT != 0 {
-                    out |= prim::BIGINT;
+                    out |= big;
                 }
                 if prim & (prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
                     out |= prim::NUM;
@@ -1985,10 +1988,12 @@ impl Model {
                 let mut s = 0u16;
                 let mut k = 0u16;
                 // Objects go through ToPrimitive (user valueOf/toString): a
-                // String or a numeric value. Markers as in `Arith`.
+                // String or a numeric value. Markers as in `Arith`; a BigInt
+                // sum needs both operands to be BigInts (as in `Arith`).
+                let big = if self.may_be_bigint(other) { prim::BIGINT } else { 0 };
                 if toks.iter().any(|&t| !self.beside_values(t)) {
                     s |= prim::STR;
-                    k |= prim::NUM | prim::BIGINT;
+                    k |= prim::NUM | big;
                 } else {
                     for &t in toks {
                         if self.beside_markers.contains(&t) {
@@ -2002,7 +2007,7 @@ impl Model {
                     s |= prim::STR;
                 }
                 if prim & prim::BIGINT != 0 {
-                    k |= prim::BIGINT;
+                    k |= big;
                 }
                 if prim & (prim::NUM | prim::BOOL | prim::NULL | prim::UNDEF) != 0 {
                     k |= prim::NUM;
@@ -2295,5 +2300,21 @@ impl Model {
         if !seen {
             self.cons(target, Cons::BoundCall { reason, bound });
         }
+    }
+}
+
+impl Model {
+    /// ECMA-262 13.15.3 ApplyStringOrNumericBinaryOperator: ToNumeric of
+    /// both operands, and a TypeError when one is a BigInt and the other a
+    /// Number. `other` (a binary operator's other operand) may be a BigInt
+    /// after ToNumeric when it holds a BigInt or any value whose
+    /// ToPrimitive may return one (an object, ⊤, a marker); `NO_NODE` (a
+    /// unary operator) puts no condition.
+    pub(super) fn may_be_bigint(&self, other: NodeId) -> bool {
+        if other == NO_NODE {
+            return true;
+        }
+        let o = &self.nodes[other as usize];
+        o.prim & prim::BIGINT != 0 || !o.pts.is_empty()
     }
 }
