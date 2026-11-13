@@ -52,6 +52,10 @@ pub(super) struct WasmModuleEmitter {
     pub(super) ffi_imports: Vec<(String, usize, bool)>,
     /// Class parent map: child_class_name → parent_class_name
     pub(super) class_parent_map: BTreeMap<String, String>,
+    /// Every class the modules declare, with or without a constructor. The async JS
+    /// emitter needs it to tell a user class (built through `class_new`) from a host
+    /// constructor such as `Map`.
+    pub(super) user_classes: std::collections::BTreeSet<String>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -119,6 +123,7 @@ impl WasmModuleEmitter {
             func_name_map: BTreeMap::new(),
             ffi_imports: Vec::new(),
             class_parent_map: BTreeMap::new(),
+            user_classes: std::collections::BTreeSet::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),

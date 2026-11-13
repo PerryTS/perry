@@ -5052,6 +5052,47 @@ function __throwNullReceiver(obj, name) {
   throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
 }
 
+// A method call emitted in an async (JS) body, in two steps so that, as in `o.m(args)`,
+// the method is looked up before the arguments are evaluated. A user-class instance is a
+// `{__class__}` object whose methods live in the WASM function table: a name its class
+// chain defines wins over what the object inherits from Object.prototype (`toString`),
+// and loses only to an own property. Otherwise the property is read exactly once (an
+// inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
+// only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
+function __jsMethodGet(obj, mname) {
+  const tagged = obj && typeof obj === 'object' && obj.__class__
+    && !Object.prototype.hasOwnProperty.call(obj, mname);
+  if (tagged && __classHasMethod(obj.__class__, mname)) {
+    return { r: obj, m: mname, user: true };
+  }
+  const f = obj[mname];
+  if (tagged && typeof f !== 'function' && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
+    return { r: obj, m: mname, user: true };
+  }
+  return { r: obj, m: mname, f };
+}
+
+function __jsMethodInvoke(ref, args) {
+  if (ref.user) {
+    // As __invokeWasmCallback: a compiled method that threw under an enclosing WASM
+    // `try` leaves the exception pending; rethrow it here so the async body rejects.
+    const result = __classDispatch(ref.r, ref.m, args);
+    __memDispatch.propagate_exception(true);
+    return result;
+  }
+  if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
+  return ref.f.apply(ref.r, args);
+}
+
+// Own keys only: `mname in methods` would also find Object.prototype's names.
+function __classHasMethod(cls, mname) {
+  for (let c = cls; c; c = classParentTable[c] || null) {
+    const methods = classMethodTable[c];
+    if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) return true;
+  }
+  return false;
+}
+
 function __classDispatch(objVal, mname, rawArgs) {
   // Only a null/undefined receiver throws: this function is also mem_call's fallback
   // for bridge names it does not know, where an absent method still yields undefined.
@@ -5075,7 +5116,9 @@ function __classDispatch(objVal, mname, rawArgs) {
     let cls = objVal.__class__;
     while (cls) {
       const methods = classMethodTable[cls];
-      if (methods && mname in methods) {
+      // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`
+      // in a subclass's table and hands a host function to Table.get.
+      if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
         if (fn) {
           // Pad for omitted TS optional params (Issue #1035).
