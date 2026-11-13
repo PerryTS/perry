@@ -21,6 +21,21 @@ pub(crate) const fn has_attributes(keys: &[PerryLayoutKey]) -> bool {
 /// performs at most one write per slot; once published, every agent sees the
 /// same immutable words. Module-local symbols deliberately have no image list.
 pub(crate) unsafe fn prepare(keys: &[PerryLayoutKey], cell: *mut ArrayHeader) -> bool {
+    prepare_with(keys, cell, |key| super::layout_desc::layout_key_word(key, &[], &mut 0))
+}
+
+/// [`prepare`] for a lazy (realm image) row: its atoms name no registered
+/// symbol (`layout_desc::image_key_word`).
+pub(crate) unsafe fn prepare_lazy(keys: &[PerryLayoutKey], cell: *mut ArrayHeader) -> bool {
+    prepare_with(keys, cell, |key| super::layout_desc::image_key_word(key))
+}
+
+#[inline(always)]
+unsafe fn prepare_with(
+    keys: &[PerryLayoutKey],
+    cell: *mut ArrayHeader,
+    key_word: impl Fn(&PerryLayoutKey) -> u64,
+) -> bool {
     use std::sync::atomic::{AtomicU64, Ordering};
     if cell.is_null() {
         return false;
@@ -60,7 +75,7 @@ pub(crate) unsafe fn prepare(keys: &[PerryLayoutKey], cell: *mut ArrayHeader) ->
         } else {
             crate::value::TAG_UNDEFINED
         };
-        let actual = super::layout_desc::layout_key_word(key, &[], &mut 0);
+        let actual = key_word(key);
         let word = AtomicU64::from_ptr(values.add(i));
         // GC_STORE_AUDIT(INIT): unpublished immutable facts; the string or
         // process-lifetime symbol is immortal and introduces no heap edge.

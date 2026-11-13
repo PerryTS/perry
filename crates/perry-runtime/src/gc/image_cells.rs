@@ -134,7 +134,7 @@ pub(super) fn reconstruct_image_remembered_set() -> usize {
 /// (`gc::tests::image_cells::ImageFixture`), so concurrent collections in
 /// unrelated tests leave it alone.
 #[inline]
-pub(super) fn agent_uses_image() -> bool {
+pub(crate) fn agent_uses_image() -> bool {
     #[cfg(test)]
     return TEST_IMAGE_HOLDER.with(std::cell::Cell::get);
     #[cfg(not(test))]

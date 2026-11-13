@@ -201,6 +201,11 @@ pub struct PerryProgramTableV1 {
     /// `lazy_count` consecutive PerryLayoutDesc records, in row order.
     /// Runtime descriptor aliases and realm receivers name these same facts.
     pub lazy_layouts: *const u8,
+    /// The runtime's first-touch publisher for this image's pending cells
+    /// (`js_realm_touch_pending`): emitted with the lazy span and null
+    /// without one, so only a program whose image carries a lazy span links
+    /// the publish half of the receiver resolver.
+    pub touch_pending: Option<unsafe extern "C" fn(*mut u8, u32)>,
     pub seeds: [PerryStaticSeedV1; 0],
 }
 // Immutable program data every agent reads.
@@ -215,6 +220,7 @@ impl PerryProgramTableV1 {
         _pad: 0,
         prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
         lazy_layouts: core::ptr::null(),
+        touch_pending: None,
         seeds: [],
     };
 
@@ -505,7 +511,8 @@ const _: () = {
     assert!(offset_of!(PerryProgramTableV1, lazy_first) == 8);
     assert!(offset_of!(PerryProgramTableV1, prototype_serial_end) == 16);
     assert!(offset_of!(PerryProgramTableV1, lazy_layouts) == 24);
-    assert!(offset_of!(PerryProgramTableV1, seeds) == 32);
+    assert!(offset_of!(PerryProgramTableV1, touch_pending) == 32);
+    assert!(offset_of!(PerryProgramTableV1, seeds) == 40);
 };
 #[cfg(test)]
 mod tests {

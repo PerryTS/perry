@@ -656,7 +656,7 @@ impl ShapeSlab {
         let bound = dir.flat_ids.get();
         let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
         if band0 >= bound {
-            return Self::receiver_row_record_banded(obj, word, bound);
+            return Self::receiver_row_record_banded(obj, word);
         }
         let row = band0;
         // SAFETY: an issued row of this agent's readable reservation.
@@ -668,23 +668,43 @@ impl ShapeSlab {
     #[cold]
     #[inline(never)]
     pub(super) fn receiver_row_record_banded(
-        _obj: *const crate::object::ObjectHeader,
+        obj: *const crate::object::ObjectHeader,
         word: u32,
-        bound: usize,
     ) -> Option<*mut ShapeRecord> {
         use crate::codegen_abi::{
             LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
         };
+        // Keep the cold call at two operands; its inlined caller consumes
+        // its own bound snapshot in the ordinary band's single compare.
+        let bound = AGENT_SHAPE_DIR[0].flat_ids.get();
         let w = word & !LAYOUT_SHADOW_BIT;
         if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
             return None;
         }
         let row = (w & LAYOUT_ROW_MASK) as usize;
         if row >= bound {
+            if word & crate::codegen_abi::LAYOUT_ROW_PENDING != 0 {
+                return Self::resolve_pending(obj, word);
+            }
             return None;
         }
         // SAFETY: an issued row of this agent's readable reservation.
         Some(unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) })
+    }
+
+    /// The program table names the one materialization entry. Keeping the
+    /// delegate in image data leaves image-free programs' link graph alone.
+    #[cold]
+    #[inline(never)]
+    fn resolve_pending(obj: *const crate::object::ObjectHeader, word: u32) -> Option<*mut ShapeRecord> {
+        assert!(crate::gc::image_cells::agent_uses_image(), "pending cell on an agent without an image");
+        if !obj.is_null() {
+            let table = unsafe { &*crate::object::class_image::agent_layout_image().program };
+            let touch = table.touch_pending.expect("pending cell without a lazy span");
+            unsafe { touch(obj.cast_mut().cast(), word) };
+        }
+        let record = Self::resolved_row_record(word & !crate::codegen_abi::LAYOUT_ROW_PENDING)?;
+        unsafe { (*record).present() }.then_some(record)
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(in super::super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {

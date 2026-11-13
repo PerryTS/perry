@@ -110,11 +110,36 @@ mod tests;
 #[cold]
 #[inline(never)]
 pub(crate) unsafe fn link_image_list(
-    _proof: &SharedLayout,
+    proof: &SharedLayout,
     keys: &[PerryLayoutKey],
     cell: *mut ArrayHeader,
 ) -> Option<CanonicalKeys> {
     debug_assert!(crate::gc::gc_is_suppressed());
+    link_image_list_with(proof, keys, cell, |key| {
+        crate::object::layout_desc::layout_key_word(key, &[], &mut 0)
+    })
+}
+
+/// [`link_image_list`] for a lazy (realm image) row: its atoms name no
+/// registered symbol (`layout_desc::image_key_word`), and linking allocates
+/// nothing on the GC heap, so no suppression scope is held.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn link_lazy_image_list(
+    proof: &SharedLayout,
+    keys: &[PerryLayoutKey],
+    cell: *mut ArrayHeader,
+) -> Option<CanonicalKeys> {
+    link_image_list_with(proof, keys, cell, |key| crate::object::layout_desc::image_key_word(key))
+}
+
+#[inline(always)]
+unsafe fn link_image_list_with(
+    _proof: &SharedLayout,
+    keys: &[PerryLayoutKey],
+    cell: *mut ArrayHeader,
+    key_word: impl Fn(&PerryLayoutKey) -> u64,
+) -> Option<CanonicalKeys> {
     let count = keys.len() as u32;
     if keys.is_empty()
         || !crate::value::addr_class::realm::is_image_object(cell as usize)
@@ -140,7 +165,7 @@ pub(crate) unsafe fn link_image_list(
         {
             return None;
         }
-        let expected = crate::object::layout_desc::layout_key_word(key, &[], &mut 0);
+        let expected = key_word(key);
         if *slots.add(i) != expected {
             return None;
         }

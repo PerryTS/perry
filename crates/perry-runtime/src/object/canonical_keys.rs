@@ -703,10 +703,11 @@ impl CanonicalTable {
 #[optimize(size)]
 #[inline(never)]
 fn canonical_node_ids_exhausted() -> ! {
-    eprintln!(
-        "perry: canonical key-list node ids exhausted ({} live lists in one agent)",
-        NODE_ID_LIMIT
-    );
+    // A fatal diagnostic must not run Rust I/O error callbacks.
+    const _: () = assert!(NODE_ID_LIMIT == 16_777_215);
+    let message = b"perry: canonical key-list node ids exhausted (16777215 live lists in one agent)\n";
+    // SAFETY: the immutable bytes outlive the write and fit every CRT count.
+    unsafe { libc::write(2, message.as_ptr().cast(), message.len() as _) };
     std::process::abort()
 }
 
@@ -814,15 +815,16 @@ impl Appended {
     ///
     /// # Safety
     /// Both operands are live.
+    #[inline(always)]
     unsafe fn matches(self, stored: JSValue) -> bool {
         match self {
-            // A null key never matches by BYTES, so without this it would
-            // miss its own node on every probe and mint an array per call —
-            // an unbounded source of exactly the duplicates this module
-            // exists to remove. Callers guard against null earlier; this
-            // makes the guard's absence a shared node rather than a leak.
+            // A null key is stored as the empty string (`element_word`), so
+            // it matches a stored string of zero bytes: a read, no string is
+            // built. Without this it would miss its own node on every probe
+            // and mint a node per call. Callers guard against null earlier;
+            // this makes the guard's absence a shared node rather than a leak.
             Appended::Key(key) if key.is_null() => {
-                stored.bits() == crate::value::js_nanbox_string(0).to_bits()
+                crate::string::js_string_key_matches_bytes(stored, b"")
             }
             Appended::Key(key) => crate::string::js_string_key_matches(stored, key),
             Appended::Slot(v) => {
@@ -986,6 +988,7 @@ fn node_of(t: &CanonicalTable, keys: CanonicalKeys) -> Option<u32> {
 ///
 /// # Safety
 /// `parent` names a live canonical array (or is empty) and `appended` is live.
+#[inline(always)]
 unsafe fn probe_node(
     t: &CanonicalTable,
     pnode: u32,
@@ -1041,6 +1044,7 @@ unsafe fn probe_matching_node(
     None
 }
 
+#[inline(always)]
 unsafe fn probe(
     parent: CanonicalKeys,
     parent_len: u32,

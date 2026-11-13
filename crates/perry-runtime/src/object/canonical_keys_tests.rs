@@ -1032,3 +1032,22 @@ fn the_shape_record_carries_its_lists_node() {
         assert!(node_publishes_for_test(short_record.keys_view()));
     }
 }
+
+/// A null key is stored as the empty string, and a probe for it finds that
+/// node by reading: the second probe from the same parent returns the node
+/// the first grew and allocates nothing on the GC heap.
+#[test]
+fn a_null_key_probe_finds_its_own_node() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    reset_for_test();
+    unsafe {
+        let proof = SharedLayout::shape_cache_entry();
+        let first = extend_key(&proof, CanonicalKeys::EMPTY, std::ptr::null());
+        let second = {
+            let _no_gc = crate::object::layout_desc::NoGcAlloc::enter();
+            extend_key(&proof, CanonicalKeys::EMPTY, std::ptr::null())
+        };
+        assert_eq!(first.len(), 1);
+        assert_eq!(first.addr(), second.addr(), "a null-key probe finds the node it grew");
+    }
+}

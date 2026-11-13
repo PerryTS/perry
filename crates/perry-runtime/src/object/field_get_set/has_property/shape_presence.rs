@@ -113,7 +113,7 @@ pub(crate) unsafe fn own_position(
     let reusable = !table_owned
         && !holey
         && shape.hole_count == 0
-        && shapes::is_site_matchable_layout_word(shapes::object_shape_stamp(obj).0);
+        && shapes::is_site_fillable_word(shapes::object_shape_stamp(obj).0);
     Some((position, shape.proto_id, shape.object_kind, reusable))
 }
 

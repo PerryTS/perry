@@ -84,6 +84,8 @@ fn intrinsic_array() -> f64 {
 /// constructor, returning `Default` for the intrinsic / undefined case and
 /// `Custom(S)` for a usable user constructor. Throws on a non-constructor
 /// species; propagates any user getter exception.
+// Share the getter/constructor resolver while callers specialize allocation hints.
+#[inline(never)]
 unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     // ECMA-262 §23.1.5.1: only arrays consult `constructor`; a non-array
     // receiver (the generic `.call(arrayLike)` form) always gets a plain array.
@@ -175,6 +177,7 @@ pub(crate) unsafe fn array_species_create(original: f64, length: usize) -> f64 {
 /// custom `@@species` constructor can RETURN a plain-typed array too (frozen,
 /// sealed, or pre-populated), so callers wanting raw-write access must gate
 /// on this flag, not on the result's GC type.
+#[inline(always)]
 pub(crate) unsafe fn array_species_create_with_capacity(
     original: f64,
     length: usize,

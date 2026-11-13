@@ -60,5 +60,24 @@ chunk exhaustion then prevents any dynamic row from reaching the cap.
 Static publication relies on those bounds without repeating the row check.
 The dynamic encoder retains its checked encoding. A pending word
 keeps its band and kind and fails ordinary receiver admission. Image binding
-rejects any layout word ABI version other than 5. This stage reserves the bit;
-the single image resolver owns its eventual interpretation.
+rejects any layout word ABI version other than 5. The pending bit denotes an
+unpublished image row and its first-observation trigger consumes it.
+
+Image receiver observation uses the existing slab's cold receiver branch.
+A pending header cannot fill a site word or a PIC token. Its first program
+read publishes the compiler's row from immutable image keys, then clears
+the header's pending bit. Collector reads supply no receiver and therefore
+never publish; a pending cell contains no collectable edge. Publication
+runs without GC suppression and checked builds reject a GC allocation in
+that window. The rebuilt runtime archive must classify
+`js_realm_touch_pending` as Leaf.
+
+The archive analysis follows an erased HotKey resolver in the context of
+its proven receiver values. Exact address relocations and control-flow
+reaching definitions identify the values; each declaration's immutable
+resolver relocation supplies its initializer. Unknown receivers retain the
+conservative target union. Ordinary callees and actual initializers remain
+in the graph. A drop-glue call is omitted only when all control-flow
+successors unconditionally reach `std::process::abort`; a returning,
+unknown, or looping successor retains the edge. These are analysis rules,
+not TLS- or dropped-type exemptions.

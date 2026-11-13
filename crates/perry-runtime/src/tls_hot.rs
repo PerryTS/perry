@@ -659,6 +659,27 @@ impl Default for SlotId {
     }
 }
 
+// Slot identity construction cannot invoke a formatter callback on a cold
+// first touch. Keep the public claimant's anonymous key bytes unchanged.
+#[cold]
+#[inline(never)]
+fn anonymous_slot_key(mut address: usize) -> Vec<u8> {
+    let mut digits = [0; 20];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (address % 10) as u8;
+        address /= 10;
+        if address == 0 {
+            break;
+        }
+    }
+    let mut key = Vec::with_capacity(b"anonymous:".len() + digits.len() - start);
+    key.extend_from_slice(b"anonymous:");
+    key.extend_from_slice(&digits[start..]);
+    key
+}
+
 /// One slot per logical declaration across provider images. The C entry point
 /// below owns this registry even when the runtime's Rust crate hashes differ.
 /// Provider images must come from the same source/ABI, as for HotTls itself.
@@ -681,7 +702,7 @@ pub unsafe extern "C" fn js_tls_hot_claim_slot(
     anonymous: usize,
 ) -> u32 {
     let key = if len == 0 {
-        format!("anonymous:{anonymous}").into_bytes()
+        anonymous_slot_key(anonymous)
     } else {
         std::slice::from_raw_parts(name, len).to_vec()
     };
@@ -1096,6 +1117,16 @@ mod provider_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn anonymous_slot_keys_preserve_the_claimant_identity_bytes() {
+        for address in [0, 1, 9, 10, 99, 100, u32::MAX as usize, usize::MAX] {
+            assert_eq!(
+                super::anonymous_slot_key(address),
+                format!("anonymous:{address}").into_bytes()
+            );
+        }
+    }
+
     /// Every cached address must equal the address of the `thread_local!` it
     /// mirrors. The slots are untyped, so this is what stands between a
     /// mis-wired [`super::fill`] and a well-typed reference to the wrong

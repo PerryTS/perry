@@ -235,7 +235,7 @@ mod tests {
             );
             let payload = HeapSlotRange::new(fields, 2);
             let correct =
-                selection_by_shape(crate::object::shapes::object_shape_record(obj), payload);
+                selection_by_shape(crate::object::shapes::object_shape_record_in_gc(obj), payload);
             let correct_ok = skipped_pointer_slot(payload, &correct).is_none();
 
             // Sabotage: the same keys with BOTH lanes F64, stamped on the object.
@@ -258,7 +258,7 @@ mod tests {
             // Straight to the selection and its verify: the collector entry
             // would stop earlier, at the debug invariant in `gc_field_slot_range`.
             crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, wrong);
-            let record = crate::object::shapes::object_shape_record(obj);
+            let record = crate::object::shapes::object_shape_record_in_gc(obj);
             let sabotaged = selection_by_shape(record, payload);
             let found = skipped_pointer_slot(payload, &sabotaged);
             crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(id));

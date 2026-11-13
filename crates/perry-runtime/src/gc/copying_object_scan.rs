@@ -116,7 +116,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
     sabotage::note_plan_attempt();
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     let obj = user_ptr as *mut crate::object::ObjectHeader;
-    let shape = crate::object::shapes::object_shape_record(obj);
+    let shape = crate::object::shapes::object_shape_record_in_gc(obj);
     let Some(range) = crate::object::gc_field_slot_range(obj, shape) else {
         // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
         // edge and no carrier note, no meta edge, no payload.

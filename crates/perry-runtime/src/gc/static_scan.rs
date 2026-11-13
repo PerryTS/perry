@@ -86,7 +86,7 @@ unsafe fn static_scan_body<const BASE: usize, const META: bool>(
 ) -> Option<StaticScan> {
     let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
     let obj = user_ptr as *mut crate::object::ObjectHeader;
-    let record = crate::object::shapes::object_shape_record(obj)?;
+    let record = crate::object::shapes::object_shape_record_in_gc(obj)?;
     let mask = crate::object::layout_desc::static_gc_scan_mask(obj, record)?;
     #[cfg(test)]
     let mask = sabotage::perturb(mask);

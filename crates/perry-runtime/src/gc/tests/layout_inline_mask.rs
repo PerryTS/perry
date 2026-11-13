@@ -218,7 +218,7 @@ fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
             let obj_after = obj_after as *mut crate::object::ObjectHeader;
             *crate::object::gc_field_slot_range(
                 obj_after,
-                crate::object::shapes::object_shape_record(obj_after),
+                crate::object::shapes::object_shape_record_in_gc(obj_after),
             )
             .expect("the object must still enumerate its fields")
             .slot(top)

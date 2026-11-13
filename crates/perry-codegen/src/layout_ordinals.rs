@@ -201,15 +201,15 @@ impl ProgramLayoutOrdinals {
 
     /// The program table's lazy span fields after `count`
     /// (`PerryProgramTableV1`): count, first row, padding, prototype serial
-    /// end, span.
+    /// end, span, first-touch publisher.
     pub fn table_span_initializer(&self) -> String {
-        let lazy = if self.lazy_count == 0 {
-            "null"
+        let (lazy, touch) = if self.lazy_count == 0 {
+            ("null", "null")
         } else {
-            "@perry_lazy_layouts"
+            ("@perry_lazy_layouts", "@js_realm_touch_pending")
         };
         format!(
-            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}",
+            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}, ptr {touch}",
             self.lazy_count, self.lazy_first, self.prototype_serial_end,
         )
     }
@@ -317,12 +317,12 @@ mod tests {
         assert_eq!(plan.entries[first as usize + 1].proto_kind, 2);
         assert!(plan
             .table_span_initializer()
-            .ends_with("ptr @perry_lazy_layouts"));
+            .ends_with("ptr @perry_lazy_layouts, ptr @js_realm_touch_pending"));
         assert!(ProgramLayoutOrdinals::assign(native_inputs(), [])
             .unwrap()
             .table_span_initializer()
             .ends_with(&format!(
-                "i32 0, i32 {}, i32 0, i64 {}, ptr null",
+                "i32 0, i32 {}, i32 0, i64 {}, ptr null, ptr null",
                 perry_abi::NATIVE_LAYOUT_ROWS,
                 perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
             )));

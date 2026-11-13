@@ -244,7 +244,7 @@ fn test_regex_result_fixed_layout_value_is_rewritten_with_owner() {
     let owner = new_owner as *const crate::array::ArrayHeader;
     let named = unsafe { crate::array::array_property_bag(owner) };
     assert!(!named.is_null(), "the moved owner carries its named layout");
-    assert!(unsafe { crate::object::shapes::object_shape_record(named) }.is_some());
+    assert!(unsafe { crate::object::shapes::object_shape_record_in_gc(named) }.is_some());
     let new_value_bits = unsafe { crate::array::array_named_property_get_by_name(owner, "input") }
         .expect("the moved owner keeps its inline value")
         .to_bits();

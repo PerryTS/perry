@@ -286,6 +286,8 @@ pub(crate) fn malloc_state_slot_index() -> u32 {
 }
 
 pub fn gc_malloc(size: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     let total = GC_HEADER_SIZE + size;
     // Checked before anything is reserved: see `gc_header_size_word`.
     let size_word = super::gc_header_size_word(total);

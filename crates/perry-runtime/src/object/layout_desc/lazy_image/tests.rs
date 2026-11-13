@@ -171,3 +171,101 @@ fn image_prototype_binds_the_agent_word_and_preserves_a_worker_binding() {
     .join()
     .unwrap();
 }
+
+
+#[repr(C, align(8))]
+struct PendingCell {
+    gc: crate::gc::GcHeader,
+    obj: crate::object::ObjectHeader,
+}
+const fn pending_fixture() -> PendingCell {
+    PendingCell {
+        gc: crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_OBJECT,
+            gc_flags: crate::value::addr_class::realm::IMAGE_CELL_FLAGS,
+            _reserved: crate::gc::GC_LAYOUT_POINTER_FREE | crate::gc::OBJ_FLAG_PLAIN_ORDINARY,
+            size: std::mem::size_of::<PendingCell>() as u32,
+        },
+        obj: crate::object::ObjectHeader { class_id: 0, parent_class_id: 0, meta: std::ptr::null_mut() },
+    }
+}
+#[used]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_realm")]
+#[cfg_attr(target_os = "windows", link_section = ".perryrealm$m")]
+#[cfg_attr(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")), link_section = "perry_realm")]
+static mut PENDING_CELLS: [PendingCell; 2] = [pending_fixture(), pending_fixture()];
+
+#[test]
+fn pending_first_touch_publishes_its_row_and_leaves_sibling_pending() {
+    std::thread::spawn(|| unsafe {
+        use crate::codegen_abi::LAYOUT_ROW_PENDING as PENDING;
+        crate::gc::image_cells::hold_image_for_tests(true);
+        crate::object::class_image::enter_current_thread_image();
+        let facts = std::ptr::addr_of!(FACTS).cast::<PerryLayoutDesc>();
+        let program = Box::leak(Box::new(PerryProgramTableV1 {
+            lazy_first: FIRST, lazy_count: 3, lazy_layouts: facts.cast(),
+            touch_pending: Some(super::js_realm_touch_pending),
+            ..PerryProgramTableV1::EMPTY
+        }));
+        crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
+            static_rows: FIRST + 3, family_count: FIRST - NATIVE_LAYOUT_ROWS,
+            program, ..PerryLayoutImageV1::RUNTIME
+        });
+        crate::test_support::bootstrap_test_thread();
+        crate::gc::ensure_gc_initialized();
+        let word = (*facts).layout_id;
+        let first = std::ptr::addr_of_mut!(PENDING_CELLS[0].obj);
+        let sibling = std::ptr::addr_of_mut!(PENDING_CELLS[1].obj);
+        (*first).parent_class_id = word | PENDING;
+        (*sibling).parent_class_id = word | PENDING;
+        assert!(crate::object::shapes::shape_record_for_word(LayoutWord(word)).is_none());
+        assert!(crate::object::shapes::object_shape_record_in_gc(first).is_none());
+        assert!(crate::object::shapes::shape_record_of_receiver(word | PENDING).is_none());
+        assert_eq!((*first).parent_class_id, word | PENDING);
+        // The real collector must leave both cells pending and publish no row.
+        crate::gc::js_gc_collect();
+        assert!(crate::object::shapes::shape_record_for_word(LayoutWord(word)).is_none());
+        assert_eq!((*first).parent_class_id, word | PENDING);
+        let published = crate::object::shapes::object_shape_record(first).expect("first touch publishes");
+        assert_eq!((*first).parent_class_id, word);
+        assert_eq!((*sibling).parent_class_id, word | PENDING);
+        assert_eq!(published.identity(), crate::object::shapes::shape_record_for_word(LayoutWord(word)).unwrap().identity());
+        assert!(crate::object::shapes::object_shape_record_in_gc(sibling).is_some());
+        assert_eq!((*sibling).parent_class_id, word | PENDING);
+        assert!(crate::object::shapes::object_shape_record(sibling).is_some());
+        assert_eq!((*sibling).parent_class_id, word);
+        let child_bits = crate::object::js_object_create(crate::value::js_nanbox_pointer(first as i64));
+        let child = (child_bits.to_bits() & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
+        let key = crate::string::js_string_from_bytes(b"r1_pending".as_ptr(), 10);
+        (*first).parent_class_id = word | PENDING;
+        let _ = crate::object::js_object_get_field_by_name(child, key);
+        assert_eq!((*first).parent_class_id, word, "a keyed inherited read materializes its image holder");
+        (*first).parent_class_id = 0;
+        (*sibling).parent_class_id = 0;
+        crate::gc::image_cells::hold_image_for_tests(false);
+    }).join().unwrap();
+}
+
+#[test]
+fn pending_words_never_fill_site_words_or_tokens() {
+    use crate::codegen_abi::LAYOUT_ROW_PENDING as PENDING;
+    let word = unsafe { FACTS[0].layout_id };
+    assert!(crate::object::shapes::is_site_matchable_layout_word(word | PENDING));
+    assert!(!crate::object::shapes::is_site_fillable_word(word | PENDING));
+    assert!(!crate::object::shapes::is_site_fillable_token(crate::object::shapes::PIC_ID_TOKEN_BIT | u64::from(word | PENDING)));
+    assert!(crate::object::shapes::is_site_fillable_word(word));
+    assert!(crate::object::shapes::is_site_fillable_token(crate::object::shapes::PIC_ID_TOKEN_BIT | u64::from(word)));
+}
+
+#[test]
+#[should_panic(expected = "pending cell on an agent without an image")]
+fn an_agent_without_an_image_rejects_pending_words() {
+    crate::test_support::bootstrap_test_thread();
+    crate::gc::image_cells::hold_image_for_tests(false);
+    unsafe {
+        crate::object::shapes::shape_record_of_object(
+            std::ptr::null(),
+            crate::codegen_abi::LAYOUT_TAG | crate::codegen_abi::LAYOUT_ROW_PENDING | FIRST,
+        );
+    }
+}

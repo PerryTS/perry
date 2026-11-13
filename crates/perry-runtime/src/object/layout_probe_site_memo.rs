@@ -86,7 +86,7 @@ unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     }
     let word = (*obj).parent_class_id;
     // An overflow's SHADOW_BIT deliberately prevents a site comparison.
-    crate::object::shapes::is_site_matchable_layout_word(word).then_some(word)
+    crate::object::shapes::is_site_fillable_word(word).then_some(word)
 }
 
 #[inline(always)]
@@ -168,7 +168,7 @@ unsafe fn declined(obj: *const ObjectHeader, memo: &ReadSiteMemo) -> bool {
 unsafe fn decline(obj: *const ObjectHeader, memo: &ReadSiteMemo) {
     let word = (*obj).parent_class_id;
     let held = memo.pairs[0].load(Relaxed);
-    if crate::object::shapes::is_site_matchable_layout_word(word)
+    if crate::object::shapes::is_site_fillable_word(word)
         && (held == 0 || held as u32 == DECLINE)
     {
         // A decline uses only word zero. Do not clear a racing positive

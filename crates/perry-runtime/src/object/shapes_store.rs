@@ -1921,8 +1921,8 @@ pub(crate) const DYNAMIC_BASE_ROWS: u32 = if cfg!(target_pointer_width = "64") {
 const _: () = {
     use crate::codegen_abi::LAYOUT_ROW_LIMIT;
     assert!(crate::codegen_abi::NATIVE_LAYOUT_ROWS <= DYNAMIC_BASE_ROWS);
-    assert!(DYNAMIC_BASE_ROWS % DYNAMIC_CHUNK_ROWS == 0);
-    assert!(LAYOUT_ROW_LIMIT % DYNAMIC_CHUNK_ROWS == 0);
+    assert!(DYNAMIC_BASE_ROWS.is_multiple_of(DYNAMIC_CHUNK_ROWS));
+    assert!(LAYOUT_ROW_LIMIT.is_multiple_of(DYNAMIC_CHUNK_ROWS));
     assert!(DYNAMIC_BASE_ROWS + DYNAMIC_CHUNK_ROWS <= LAYOUT_ROW_LIMIT);
 };
 

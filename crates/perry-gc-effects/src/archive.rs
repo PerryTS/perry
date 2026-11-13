@@ -307,6 +307,7 @@ fn decode_sections<'data>(
 pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
     let mut nodes = Vec::new();
     let mut globals = HashSet::new();
+    let mut receiver_keys = HashMap::new();
     for archive in archives {
         let bytes =
             std::fs::read(archive).with_context(|| format!("read {}", archive.display()))?;
@@ -370,6 +371,10 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                         .or_default()
                         .push(sym.to_owned());
                 }
+                let keys = crate::receiver::data_keys(&file, fmt)?;
+                for (key, target) in &keys {
+                    receiver_keys.insert((name.clone(), key.clone()), target.clone());
+                }
                 for section in file.sections() {
                     if section.kind() != SectionKind::Text {
                         continue;
@@ -411,7 +416,21 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                             }
                             _ => continue,
                         };
-                        relocs.push((base + offset, reloc_type(reloc.flags(), arch), target));
+                        let mut kind = reloc_type(reloc.flags(), arch);
+                        // An exact address relocation, rather than a load of a
+                        // field or an interior pointer, is a receiver fact.
+                        let exact = match (reloc.flags(), arch) {
+                            (RelocationFlags::Elf { r_type }, Arch::X86) => {
+                                [object::elf::R_X86_64_PC32, object::elf::R_X86_64_GOTPCREL,
+                                 object::elf::R_X86_64_GOTPCRELX, object::elf::R_X86_64_REX_GOTPCRELX]
+                                    .contains(&r_type) && reloc.addend() == -4
+                            }
+                            _ => false,
+                        };
+                        if exact && keys.contains_key(&fmt.norm(&target)) {
+                            kind.push_str(":receiver");
+                        }
+                        relocs.push((base + offset, kind, target));
                     }
                     relocs.sort_by_key(|r| r.0);
                     batch.push((
@@ -444,7 +463,9 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
         })?;
         nodes.extend(decoded);
     }
-    Graph::new(nodes, globals)
+    let mut graph = Graph::new(nodes, globals)?;
+    crate::receiver::specialize(&mut graph, &receiver_keys);
+    Ok(graph)
 }
 
 #[cfg(test)]

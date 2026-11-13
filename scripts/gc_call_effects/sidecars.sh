@@ -35,7 +35,26 @@ case "$(uname -s)" in
       export PATH="$(cygpath -u "$LLVM_SYS_221_PREFIX")/bin:$PATH"
     fi ;;
 esac
-if [[ -n "${GC_EFFECTS_BIN:-}" ]]; then
-  exec "$GC_EFFECTS_BIN" sidecars "$dir"
+effects() {
+  if [[ -n "${GC_EFFECTS_BIN:-}" ]]; then
+    "$GC_EFFECTS_BIN" "$@"
+  else
+    cargo run --quiet --release -p perry-gc-effects -- "$@"
+  fi
+}
+effects sidecars "$dir"
+# Lazy realm publication allocates nothing on the GC heap and never collects,
+# so the first-touch publisher every receiver read can reach is a GC leaf
+# (receivers keep nounwind / "gc-leaf-function"). A change that reconnects an
+# allocator to it fails here.
+lib=""
+for name in libperry_runtime.a perry_runtime.lib; do
+  [[ -f "$dir/$name" ]] && lib="$dir/$name" && break
+done
+[[ -n "$lib" ]] || { echo "sidecars.sh: no perry-runtime archive in $dir" >&2; exit 1; }
+why="$(effects why --archive "$lib" --rules scripts/gc_call_effects/seeds.txt --root . js_realm_touch_pending)"
+if ! grep -qx "== js_realm_touch_pending: Leaf" <<<"$why"; then
+  printf '%s\n' "$why" >&2
+  echo "sidecars.sh: js_realm_touch_pending is not a GC leaf (lazy publication reaches an allocator)" >&2
+  exit 1
 fi
-exec cargo run --quiet --release -p perry-gc-effects -- sidecars "$dir"

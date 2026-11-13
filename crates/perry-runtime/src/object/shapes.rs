@@ -31,6 +31,10 @@
 //! #8047 removed `ObjectHeader::keys_array`; consumers derive the edge from
 //! this descriptor and no compatibility mirror remains.
 
+#[path = "shapes_fatal.rs"]
+mod shapes_fatal;
+use shapes_fatal::{invalid_shape_facts_abort, shape_id_exhausted_abort, static_shape_id_refused_abort};
+
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 #[path = "shapes_layout_registration.rs"]
@@ -1599,22 +1603,10 @@ pub(crate) fn is_layout_word(v: u32) -> bool {
         && LayoutWord(v).band() < 3
 }
 
-/// May a per-site cache word hold this id? True exactly for an ORDINARY-band
-/// ShapeId: never for a dictionary shape ([`SITE_SHAPE_ID_END`]), never
-/// for a class id, never for 0. Every site-word writer publishes only ids this
-/// accepts, so an emitted compare can never equal a dictionary receiver's word.
-#[inline]
-pub(crate) fn is_site_matchable_layout_word(v: u32) -> bool {
-    (crate::codegen_abi::LAYOUT_TAG..crate::codegen_abi::LAYOUT_ORDINARY_END).contains(&v)
-}
-
-/// [`is_site_matchable_layout_word`] for a per-site PIC TOKEN
-/// (`PIC_ID_TOKEN_BIT | ShapeId`): the exact token form over a matchable id.
-#[inline]
-pub(crate) fn is_site_matchable_token(token: u64) -> bool {
-    token == (PIC_ID_TOKEN_BIT | u64::from(token as u32))
-        && is_site_matchable_layout_word(token as u32)
-}
+#[path = "shapes_pending.rs"]
+mod pending;
+pub(crate) use pending::{is_site_matchable_layout_word, is_site_fillable_word,
+    is_site_matchable_token, is_site_fillable_token, object_shape_record_in_gc};
 
 /// Is this an exotic-receiver ShapeId ([`EXOTIC_SHAPE_ID_BASE`])? A fact of
 /// the value alone.
@@ -1773,18 +1765,6 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
         receiver,
         None,
     )
-}
-
-/// A static id the driver assigned by content was refused by the ordinary
-/// mint (see [`shape_descriptor_ensure_with_holes`]).
-#[cold]
-fn static_shape_id_refused_abort(requested: ShapeId, proto_id: u64) -> ! {
-    eprintln!(
-        "Perry internal error: the static ShapeId {requested:#x} (proto {proto_id:#x}) \
-         was refused by the shape mint (it is outside the static band or already \
-         names other facts in this agent); a static id must name one shape"
-    );
-    std::process::abort();
 }
 
 /// [`shape_descriptor_ensure_with_generation`] with an explicit tombstone
@@ -2741,21 +2721,7 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
     0
 }
 
-#[cold]
-#[optimize(size)]
-#[inline(never)]
-fn shape_id_exhausted_abort() -> ! {
-    eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
-    std::process::abort()
-}
 
-#[cold]
-#[optimize(size)]
-#[inline(never)]
-fn invalid_shape_facts_abort() -> ! {
-    eprintln!("Perry internal error: refusing to publish invalid object shape facts");
-    std::process::abort()
-}
 
 #[inline]
 fn shape_descriptor_error_abort(error: ShapeDescriptorError) -> ! {
@@ -3712,7 +3678,7 @@ fn region_loop_pack(
     r_mask: u32,
 ) -> Result<u64, RegionRefusal> {
     use RegionRefusal::*;
-    if !is_site_matchable_layout_word(shape_id.0) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+    if !is_site_fillable_word(shape_id.0) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return Err(Band);
     }
     let record = shape_record_for_word(shape_id).ok_or(Band)?;

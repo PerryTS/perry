@@ -113,6 +113,8 @@ fn arena_alloc_slow(size: usize, align: usize) -> *mut u8 {
 /// memory `arena_alloc_gc` would have handed back identically.
 #[inline(always)]
 pub(crate) fn arena_alloc_gc_no_collect(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     let total = gc_padded_total_size(size, align);
     super::alloc_sample::note(total, obj_type);
     // Old-gen birth walks page lists and can reserve — outside the contract.
@@ -204,6 +206,8 @@ pub fn arena_alloc_longlived(size: usize, align: usize) -> *mut u8 {
 /// (the cache's root scanner keeps them marked), so there's nothing to
 /// re-add to the free list.
 pub fn arena_alloc_gc_longlived(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     // Same alignment-preservation rationale as `arena_alloc_gc`: pad
@@ -273,6 +277,8 @@ pub(crate) fn arena_alloc_old_excluding_pages(
 /// for it, so an untenured old parent would lose its young children at the
 /// next minor whenever its page happened not to be dirty already.
 pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     arena_alloc_gc_old_registered(size, align, obj_type, |header, total| {
         defer_old_object_page_registration(header, total)
     })
@@ -289,6 +295,8 @@ pub(crate) fn arena_alloc_gc_promoted(
     obj_type: u8,
     pinned: bool,
 ) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     arena_alloc_gc_old_registered(size, align, obj_type, |header, total| {
         defer_promoted_old_object_page_registration(header, total, pinned)
     })
@@ -345,6 +353,8 @@ fn arena_alloc_gc_old_registered(
 /// O1 collecting-holder class: old from birth, never selected for relocation.
 /// A full trace reclaims it through the same ordinary object sweeper.
 pub(crate) fn arena_alloc_gc_collecting_holder(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     use crate::gc::{GcHeader, GC_HEADER_SIZE};
     let pad = align.max(8);
     let total = (GC_HEADER_SIZE + size + pad - 1) & !(pad - 1);
@@ -382,6 +392,8 @@ pub(crate) fn arena_alloc_gc_collecting_holder(size: usize, align: usize, obj_ty
 /// it nursery-resident and movable; asking for this shape explicitly keeps the
 /// invariant those callers were already written against.
 pub(crate) fn arena_alloc_gc_old_born_tenured(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     super::alloc_sample::note(gc_padded_total_size(size, align), obj_type);
     arena_alloc_gc_old(size, align, obj_type)
 }
@@ -402,6 +414,8 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
     obj_type: u8,
     excluded_pages: &crate::fast_hash::PtrHashSet<usize>,
 ) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_FLAG_TENURED, GC_HEADER_SIZE};
 
     let pad = align.max(8);
@@ -479,6 +493,8 @@ pub(crate) fn with_survivor_arena<R>(idx: usize, f: impl FnOnce(&Arena) -> R) ->
 /// Allocate into the inactive survivor semispace. The copying minor GC
 /// resets this space before use and flips it active after from-space reset.
 pub(crate) fn arena_alloc_gc_survivor(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     use crate::gc::{GcHeader, GC_FLAG_ARENA, GC_HEADER_SIZE};
 
     let total = gc_padded_total_size(size, align);
@@ -509,6 +525,8 @@ pub(crate) fn arena_alloc_gc_large_young_no_collect(
     align: usize,
     obj_type: u8,
 ) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     let total = gc_padded_total_size(size, align);
     if !crate::gc::is_large_object_total_size_for_type(total, obj_type)
         || !crate::gc::young_large_storage_admits(obj_type)
@@ -537,6 +555,8 @@ pub(crate) fn arena_alloc_gc_large_young_no_collect(
 /// behind a cold branch.
 #[inline(always)]
 pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     let total = gc_padded_total_size(size, align);
     super::alloc_sample::note(total, obj_type);
     if !crate::gc::is_large_object_total_size_for_type(total, obj_type)
@@ -568,6 +588,8 @@ pub(crate) unsafe fn arena_alloc_gc_object_word_offering(
     slots: u32,
     origin: Option<crate::gc::WalkOrigin>,
 ) -> *mut u8 {
+    #[cfg(any(test, debug_assertions))]
+    crate::object::layout_desc::assert_gc_alloc_allowed();
     use crate::gc::GC_TYPE_OBJECT;
     let size = crate::object::header::meta_form_alloc_bytes(slots as usize);
     let total = gc_padded_total_size(size, 8);

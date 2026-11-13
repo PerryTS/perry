@@ -98,7 +98,7 @@ pub const fn layout_id_of_word(word: u32) -> u32 {
     }
 }
 
-/// Shadowed words: an ordinary-band ShapeId (`is_site_matchable_layout_word`)
+/// Shadowed words: an ordinary-band ShapeId (`is_site_fillable_word`)
 /// with bit 30 set, `[0xC000_0000, 0xF000_0000)`. Only those ids carry the
 /// bit, so the band is exact: the word never holds a class id from it
 /// (class ids are small counters, `0x7FFF_FFxx` or `0xFFFF_xxxx`; synthetic
@@ -628,6 +628,64 @@ pub(crate) unsafe fn atom_symbol(
         .or_else(|| super::runtime_layouts::runtime_symbol_of_atom(atom))
         .or_else(|| registered_atom_symbol(atom))
         .or_else(|| image_atom_symbol(atom))
+}
+
+/// The key word of a lazy (realm image) row's key. The realm image writes
+/// only string and image symbol atoms into a lazy row
+/// (`register_lazy_row` refuses the others), so this word has no
+/// registered-symbol arm: `Symbol.for`, which can run ToString and allocate,
+/// is not in the lazy registration's call graph.
+pub(crate) unsafe fn image_key_word(key: &PerryLayoutKey) -> u64 {
+    let atom = key.atom;
+    debug_assert!(
+        (*atom).kind == crate::codegen_abi::ATOM_KIND_STRING
+            || (*atom).kind == crate::codegen_abi::ATOM_KIND_IMAGE_SYMBOL,
+        "a lazy row's key is a string or an image symbol (row_facts refused the rest)"
+    );
+    match image_atom_symbol(atom) {
+        Some(symbol) => crate::value::POINTER_TAG | symbol as u64,
+        None => crate::value::JSValue::string_ptr((*atom).string.cast_mut()).bits(),
+    }
+}
+
+// Checked builds: lazy publication (a row's registration and the image-slot
+// publishes) allocates nothing on the GC heap, so it never collects. Every
+// GC-heap allocation entry asserts it is outside such a window.
+#[cfg(any(test, debug_assertions))]
+std::thread_local! {
+    static NO_GC_ALLOC: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A window of lazy publication in which no GC-heap allocation may happen.
+#[cfg(any(test, debug_assertions))]
+pub(crate) struct NoGcAlloc;
+#[cfg(any(test, debug_assertions))]
+impl NoGcAlloc {
+    pub(crate) fn enter() -> Self {
+        NO_GC_ALLOC.with(|d| d.set(d.get() + 1));
+        NoGcAlloc
+    }
+}
+#[cfg(any(test, debug_assertions))]
+impl Drop for NoGcAlloc {
+    fn drop(&mut self) {
+        NO_GC_ALLOC.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// Every GC-heap allocation entry: never inside lazy publication.
+#[cfg(any(test, debug_assertions))]
+#[inline(always)]
+pub(crate) fn assert_gc_alloc_allowed() {
+    if NO_GC_ALLOC.try_with(|d| d.get()).unwrap_or(0) != 0 {
+        gc_alloc_in_lazy_publication()
+    }
+}
+#[cfg(any(test, debug_assertions))]
+#[cold]
+#[inline(never)]
+fn gc_alloc_in_lazy_publication() -> ! {
+    panic!("GC allocation inside lazy publication")
 }
 
 /// An image symbol atom names its static `SymbolHeader` directly.

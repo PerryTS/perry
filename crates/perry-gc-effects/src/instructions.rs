@@ -615,6 +615,11 @@ fn tlv_thunk(cfg: &Cfg<'_>, i: usize, reg: &str) -> bool {
     }
     false
 }
+#[path = "instructions/abort_tail.rs"]
+mod abort_tail;
+#[path = "instructions/receiver.rs"]
+mod receiver;
+
 pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
     if insns.is_empty() {
         return;
@@ -633,6 +638,7 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
         .map(|(i, _)| i)
         .collect();
     node.switches = switch_at.len();
+    let doomed = abort_tail::doomed(insns, arch, node.fmt);
     let mut cfg = None;
     for (i, ins) in insns.iter().enumerate() {
         let mn = ins.mn.as_str();
@@ -643,6 +649,10 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
             }
             if !ins.ops.starts_with('*') {
                 for (_, t) in &ins.relocs {
+                    if doomed[i] && abort_tail::is_drop(&node.fmt.norm(t)) {
+                        continue;
+                    }
+                    receiver::record(node, insns, arch, &switch_at, i, t);
                     node.calls.insert(node.fmt.norm(t));
                 }
                 continue;
@@ -656,6 +666,10 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
                 })
             };
             if let Some(g) = g {
+                if doomed[i] && abort_tail::is_drop(&node.fmt.norm(&g)) {
+                    continue;
+                }
+                receiver::record(node, insns, arch, &switch_at, i, &g);
                 node.calls.insert(node.fmt.norm(&g));
                 continue;
             }
@@ -674,6 +688,10 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
         } else {
             if ["b", "bl"].contains(&mn) || starts(mn, &["b.", "cbz", "cbnz", "tbz", "tbnz"]) {
                 for (_, t) in &ins.relocs {
+                    if doomed[i] && abort_tail::is_drop(&node.fmt.norm(t)) {
+                        continue;
+                    }
+                    receiver::record(node, insns, arch, &switch_at, i, t);
                     node.calls.insert(node.fmt.norm(t));
                 }
                 continue;
@@ -685,6 +703,10 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
                 .unwrap_or_else(|| ins.ops.clone());
             let cfg = cfg.get_or_insert_with(|| Cfg::new(insns, arch, &switch_at));
             if let Some(g) = cfg.pinned(i, &reg, arch, 0, false) {
+                if doomed[i] && abort_tail::is_drop(&node.fmt.norm(&g)) {
+                    continue;
+                }
+                receiver::record(node, insns, arch, &switch_at, i, &g);
                 node.calls.insert(node.fmt.norm(&g));
                 continue;
             }

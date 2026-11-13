@@ -38,7 +38,7 @@ pub(crate) fn attach(wrapper: usize, kind: Kind, handle: usize) {
     }
     let _publication = crate::gc::GcSuppressScope::new();
     unsafe {
-        let wrapper_type = crate::value::addr_class::try_read_tracked_gc_header_of_type(
+        let _wrapper_type = crate::value::addr_class::try_read_tracked_gc_header_of_type(
             wrapper,
             crate::gc::GC_TYPE_OBJECT,
         )
@@ -46,7 +46,7 @@ pub(crate) fn attach(wrapper: usize, kind: Kind, handle: usize) {
         .as_ref()
         .obj_type;
         let meta = crate::object::object_meta_ensure(
-            crate::meta_obj_from_type!(wrapper as *mut crate::ObjectHeader, wrapper_type),
+            crate::meta_obj_from_type!(wrapper as *mut crate::ObjectHeader, _wrapper_type),
             crate::object::MetaReason::WasmWrapper,
         );
         let cell = crate::native_handle::native_handle_new_rust_payload(

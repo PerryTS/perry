@@ -22,6 +22,8 @@ mod instructions;
 #[cfg(feature = "analyzer")]
 mod record_census;
 #[cfg(feature = "analyzer")]
+mod receiver;
+#[cfg(feature = "analyzer")]
 mod rules;
 pub mod sidecar;
 mod table;

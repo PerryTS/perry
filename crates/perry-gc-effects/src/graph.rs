@@ -7,7 +7,7 @@ use std::{
     path::Path,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Node {
     pub obj: std::sync::Arc<str>,
     pub sec: std::sync::Arc<str>,
@@ -21,6 +21,7 @@ pub struct Node {
     pub sites: Vec<String>,
     pub switches: usize,
     pub(crate) fmt: Format,
+    pub(crate) receiver_calls: Vec<(String, Option<BTreeSet<String>>)>,
 }
 impl Node {
     pub(crate) fn new(
@@ -41,6 +42,7 @@ impl Node {
             externs: BTreeSet::new(),
             idioms: BTreeSet::new(),
             sites: Vec::new(),
+            receiver_calls: Vec::new(),
             switches: 0,
         }
     }

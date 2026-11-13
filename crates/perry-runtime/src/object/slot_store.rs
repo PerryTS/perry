@@ -4,7 +4,8 @@
 //! (`field_rep_store::checked_slot_bits`) before the value reaches the slot.
 use super::ObjectHeader;
 
-#[inline]
+// Keep the slot funnel inside callers despite its cold pending-row edge.
+#[inline(always)]
 pub(crate) unsafe fn store_object_field_slot(
     obj: *mut ObjectHeader,
     field_index: usize,

@@ -831,7 +831,8 @@ mod dense_layout_tests {
         assert_eq!(std::mem::offset_of!(Table, lazy_first), 8);
         assert_eq!(std::mem::offset_of!(Table, prototype_serial_end), 16);
         assert_eq!(std::mem::offset_of!(Table, lazy_layouts), 24);
-        assert_eq!(std::mem::offset_of!(Table, seeds), 32);
+        assert_eq!(std::mem::offset_of!(Table, touch_pending), 32);
+        assert_eq!(std::mem::offset_of!(Table, seeds), 40);
         assert_eq!(std::mem::size_of::<Request>(), 8);
         assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
     }

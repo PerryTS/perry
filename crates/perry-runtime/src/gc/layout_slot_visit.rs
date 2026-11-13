@@ -785,7 +785,7 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
     F: FnMut(GcMutableSlotDescriptor) + ?Sized,
 {
     let obj = (header as *mut u8).add(GC_HEADER_SIZE) as *mut crate::object::ObjectHeader;
-    let shape = crate::object::shapes::object_shape_record(obj);
+    let shape = crate::object::shapes::object_shape_record_in_gc(obj);
     let Some(payload) = crate::object::gc_field_slot_range(obj, shape) else {
         return;
     };

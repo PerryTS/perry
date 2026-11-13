@@ -939,3 +939,21 @@ fn evacuation_shares_lists_and_copies_realm_objects_and_functions() {
         "every remaining image pointer must name a shared list cell"
     );
 }
+
+#[test]
+fn every_collector_leaves_pending_image_cells_unobserved() {
+    let _image = ImageFixture::take();
+    let _quiet = quiet();
+    let _verify = VerifyEvacuationTestGuard::on();
+    unsafe {
+        let obj = object_user() as *mut ObjectHeader;
+        let bound = (*obj).parent_class_id;
+        let pending = bound | crate::codegen_abi::LAYOUT_ROW_PENDING;
+        (*obj).parent_class_id = pending;
+        for collector in EVERY_COLLECTOR {
+            assert!(crate::object::shapes::object_shape_record_in_gc(obj).is_some());
+            collect(collector);
+            assert_eq!((*obj).parent_class_id, pending, "{collector:?} observed a pending image cell");
+        }
+    }
+}

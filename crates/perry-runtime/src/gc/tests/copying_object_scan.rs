@@ -149,7 +149,7 @@ fn promoted_receiver_notes_its_shape(sabotaged: bool) -> (bool, bool) {
         js_shadow_slot_set(0, ptr_bits(parent as usize));
         let noted = |obj: usize| unsafe {
             crate::object::shapes::old_generation_carrier_already_noted(
-                crate::object::shapes::object_shape_record(
+                crate::object::shapes::object_shape_record_in_gc(
                     obj as *const crate::object::ObjectHeader,
                 ),
             )

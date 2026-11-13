@@ -142,3 +142,14 @@ fn probe_and_prime_refuse_the_same_receivers() {
         }
     }
 }
+
+#[test]
+fn pending_token_cannot_prime_a_read_stub() {
+    let word = crate::codegen_abi::LAYOUT_TAG | 4096;
+    let token = crate::object::shapes::PIC_ID_TOKEN_BIT | u64::from(word);
+    let key = key_bits(b"p-r");
+    read_stub_prime_absent(token | u64::from(crate::codegen_abi::LAYOUT_ROW_PENDING), key, 0);
+    assert!(read_stub_probe(token | u64::from(crate::codegen_abi::LAYOUT_ROW_PENDING), key).is_none());
+    read_stub_prime_absent(token, key, 0);
+    assert_eq!(read_stub_probe(token, key), Some(ABSENT_ENTRY));
+}

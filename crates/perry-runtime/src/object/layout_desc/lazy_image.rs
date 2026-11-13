@@ -101,9 +101,6 @@ unsafe fn bind_family_image_prototype(desc: *const PerryLayoutDesc) {
 /// kind. Publish its row at that first read using the normal registrar. Held
 /// words and identity probes do not call this path, avoiding publication while
 /// the shape table is already being modified.
-// The production entry (WRT3b items 2-6) chooses where a first touch calls
-// this without a test on the receiver read path; until then only tests do.
-#[cfg_attr(not(test), allow(dead_code))]
 #[cold]
 #[optimize(size)]
 #[inline(never)]
@@ -121,6 +118,24 @@ pub(crate) fn publish_receiver(word: u32) {
         super::super::shapes::shape_record_for_word(LayoutWord(published)).is_some(),
         "realm receiver descriptor did not publish its static row"
     );
+}
+
+/// First observation of an image receiver publishes its emitted row.
+///
+/// # Safety
+/// `obj` is a live image receiver carrying the supplied pending `word`.
+#[no_mangle]
+pub unsafe extern "C" fn js_realm_touch_pending(obj: *mut u8, word: u32) {
+    assert!(crate::gc::image_cells::agent_uses_image(), "pending cell on an agent without an image");
+    assert!(!obj.is_null());
+    assert!(crate::value::addr_class::realm::is_image_object(obj as usize));
+    #[cfg(any(test, debug_assertions))]
+    let _no_gc = super::NoGcAlloc::enter();
+    let obj = obj.cast::<crate::object::ObjectHeader>();
+    debug_assert_eq!((*obj).parent_class_id, word);
+    let bound = word & !crate::codegen_abi::LAYOUT_ROW_PENDING;
+    publish_receiver(bound);
+    (*obj).parent_class_id = bound;
 }
 
 #[cfg(test)]

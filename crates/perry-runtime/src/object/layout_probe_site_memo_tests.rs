@@ -590,3 +590,18 @@ fn indexed_collisions_preserve_each_distinct_slots_value() {
         }
     }
 }
+
+#[test]
+fn pending_receiver_is_not_a_memo_fill_word() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = plain(b"pending-memo", 1.0);
+        let word = (*obj).parent_class_id;
+        assert_eq!(ordinary_word(obj), Some(word));
+        (*obj).parent_class_id = word | crate::codegen_abi::LAYOUT_ROW_PENDING;
+        assert_eq!(ordinary_word(obj), None);
+        (*obj).parent_class_id = word;
+        assert_eq!(ordinary_word(obj), Some(word));
+    }
+}
