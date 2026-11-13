@@ -127,8 +127,10 @@ console.log(fromNumber.toISOString());
 console.log(fromString.getUTCFullYear() + "-" + fromString.getUTCMonth() + "-" + fromString.getUTCDate() + " " + fromString.getUTCHours() + ":" + fromString.getUTCMinutes());
 console.log(Date.parse(iso));
 console.log(new Date().getTime() > 0);
+const invalid = new Date(undefined as any).getTime();
+console.log(invalid !== invalid);
 "#
         ),
-        "1794519755405\n2026-11-12T21:42:35.405Z\n2026-10-12 21:42\n1794519755405\ntrue"
+        "1794519755405\n2026-11-12T21:42:35.405Z\n2026-10-12 21:42\n1794519755405\ntrue\ntrue"
     );
 }

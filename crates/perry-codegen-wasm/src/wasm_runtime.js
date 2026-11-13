@@ -2088,7 +2088,7 @@ const __memDispatch = {
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),
-  date_new_val: (arg) => (arg === undefined) ? new Date() : new Date(arg),
+  date_new_val: (...args) => (args.length === 0) ? new Date() : new Date(args[0]),
   date_now: () => Date.now(),
   date_parse: (s) => Date.parse(String(s)),
   date_utc: (...args) => Date.UTC(...args.map(Number)),

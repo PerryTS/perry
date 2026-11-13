@@ -197,7 +197,7 @@ impl<'a> FuncEmitCtx<'a> {
                             memory_index: 0,
                         }));
                         // Same bridge as `Expr::DateNew`; see date_error.rs.
-                        self.emit_memcall(func, "date_new_val", 1);
+                        self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
                         return true;
                     }
                     // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
