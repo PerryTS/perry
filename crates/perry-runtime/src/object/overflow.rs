@@ -280,16 +280,38 @@ pub(crate) unsafe fn find_hashed_with(
     }
 }
 
-/// The value word of found entry `i` when the entry holds its own data value
-/// (no fixed-slot reference, no accessor pair): the whole read of a key the
-/// table owns.
+/// The value of found data entry `i` when one load answers it: the value
+/// word the table holds, or the word of the fixed inline slot the entry
+/// refers to (a layout key of a receiver that also has a table). `None`
+/// leaves the entry to [`get_found_from_record`], which gives the same
+/// answer for both of these: an accessor pair, a fixed slot past `live`
+/// (the spill), and the two slot words that are not their own value (the
+/// null pointer word, an I32 lane's word).
 ///
 /// # Safety
-/// `i` is a successful lookup in this live, unmodified `t`.
+/// `i` is a successful lookup in this live, unmodified `t` of `obj`, and
+/// `live` the live inline-slot bound of `obj`'s current record.
 #[inline(always)]
-pub(crate) unsafe fn own_data_value(t: *const Table, i: u32) -> Option<*mut u64> {
-    (*attrs_at(t, i) & (SLOT_REF | super::key_attrs::ENTRY_ACCESSOR_MASK as u64) == 0)
-        .then(|| value_at(t, i))
+pub(crate) unsafe fn found_data_word(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    i: u32,
+    live: u32,
+) -> Option<u64> {
+    let attrs = *attrs_at(t, i);
+    if attrs & super::key_attrs::ENTRY_ACCESSOR_MASK as u64 != 0 {
+        return None;
+    }
+    if attrs & SLOT_REF == 0 {
+        return Some(*value_at(t, i));
+    }
+    let fixed = *value_at(t, i) as u32;
+    if fixed >= live {
+        return None;
+    }
+    let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+    let w = *fields.add(fixed as usize);
+    (w != crate::value::POINTER_TAG && !crate::layout_slot::is_i32_word(w)).then_some(w)
 }
 
 /// Does found entry `i` hold its own value word (no fixed-slot reference)?

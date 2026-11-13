@@ -902,8 +902,8 @@ unsafe fn owned_accessor_answer<const ABSENT: bool>(
 /// The read of a receiver with a table, a tail of the front (which proved
 /// the current ordinary record and the actual table): one lookup of the
 /// table decides it. An entry that holds its own data value is the answer
-/// here, in a leaf with no frame; an accessor pair, a fixed-slot reference
-/// and a miss are tails.
+/// here, in a leaf with no frame, and so is a reference to a fixed inline
+/// slot; an accessor pair, a spilled fixed slot and a miss are tails.
 #[inline(never)]
 unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     dir: *const u8,
@@ -927,10 +927,10 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     {
         return hole();
     }
-    // One lookup of the table decides the read. An entry that
-    // holds its own data value is the answer here, with no frame
-    // and no second look at the object; an accessor pair, a
-    // fixed-slot reference and a miss are tails.
+    // One lookup of the table decides the read. A data entry is the answer
+    // here, with no frame: its own value word, or the word of the fixed
+    // inline slot it refers to. An accessor pair, a spilled fixed slot and
+    // a miss are tails.
     let Some(entry) =
         crate::object::overflow::find_hashed_with(table, key_bits, || {
             site_key_hash::<LAZY_HASH>(key_bits, hash)
@@ -938,10 +938,15 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     else {
         return owned_miss::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
     };
-    let Some(slot) = crate::object::overflow::own_data_value(table, entry) else {
+    let Some(word) = crate::object::overflow::found_data_word(
+        table,
+        obj,
+        entry,
+        (*r).live_inline_slot_count,
+    ) else {
         return owned_found::<ABSENT>(table, obj, entry, r, key_bits);
     };
-    let value = f64::from_bits(*slot);
+    let value = f64::from_bits(word);
     if ABSENT {
         verify::answer(obj as usize, key_bits, value)
     } else {
@@ -949,8 +954,9 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     }
 }
 
-/// The table front's found entry that does not hold its own data value: an
-/// accessor pair, or a reference to a fixed slot. Out of line, a tail of the
+/// The table front's found entry that one load does not answer
+/// (`overflow::found_data_word`): an accessor pair, or a reference to a fixed
+/// slot that is spilled or holds a lane word. Out of line, a tail of the
 /// front: the front proved this current ordinary record and actual table and
 /// its lookup proved the live entry; the shared checked entry reader consumes
 /// those same facts.
