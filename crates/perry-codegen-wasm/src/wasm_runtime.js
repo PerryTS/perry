@@ -2178,6 +2178,11 @@ const __memDispatch = {
   number_is_safe_integer: (val) => Number.isSafeInteger(val) ? 1 : 0,
   global_is_nan: (val) => isNaN(val) ? 1 : 0,
   global_is_finite: (val) => isFinite(val) ? 1 : 0,
+  // A malformed sequence throws URIError, which mem_call routes to an enclosing try.
+  encode_uri: (val) => encodeURI(val),
+  decode_uri: (val) => decodeURI(val),
+  encode_uri_component: (val) => encodeURIComponent(val),
+  decode_uri_component: (val) => decodeURIComponent(val),
 
   // Try/Catch — args are plain JS values
   try_start: () => { tryDepth++; },
