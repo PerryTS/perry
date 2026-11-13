@@ -120,7 +120,10 @@ SOURCE_DATE_EPOCH = "0"
 # CFLAGS_x86_64_unknown_linux_gnu set in the environment wins over this one
 # (no shim: lld then costs ~6K ld.so instructions per run); a CPATH set in
 # the environment must name that directory too.
-CFLAGS_x86_64_unknown_linux_gnu = "-include perry_noplt_libc.h"
+# One token (`-include<file>`, which gcc and clang accept): C builds that parse
+# CFLAGS themselves (openssl-src's Configure) read `-include <file>` as two
+# arguments and take the file for a second target.
+CFLAGS_x86_64_unknown_linux_gnu = "-includeperry_noplt_libc.h"
 CPATH = { value = "crates/perry-runtime/c-force-include", relative = true }
 
 # The compiler and every archive it links, in one Cargo graph (the workspace
