@@ -198,10 +198,13 @@ builtin_constructors! {
     Crypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Crypto; lazy true,
     CryptoKey => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::CryptoKey; lazy true,
     SubtleCrypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::SubtleCrypto,
-    Event => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT),
+    // LAZYPROTO P2 batch B3: Event and DOMException are born on first
+    // observation. Their constants are declared statics (the constructor's own
+    // keys after `prototype`, in the realm source's order).
+    Event => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT); lazy true; statics ["NONE", "CAPTURING_PHASE", "AT_TARGET", "BUBBLING_PHASE"],
     MessageEvent => NOOP_CONSTRUCTOR_INFO; lazy true,
     CustomEvent => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_CUSTOM_EVENT); lazy true,
-    DOMException => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_DOM_EXCEPTION),
+    DOMException => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_DOM_EXCEPTION); lazy true; statics ["INDEX_SIZE_ERR", "DOMSTRING_SIZE_ERR", "HIERARCHY_REQUEST_ERR", "WRONG_DOCUMENT_ERR", "INVALID_CHARACTER_ERR", "NO_DATA_ALLOWED_ERR", "NO_MODIFICATION_ALLOWED_ERR", "NOT_FOUND_ERR", "NOT_SUPPORTED_ERR", "INUSE_ATTRIBUTE_ERR", "INVALID_STATE_ERR", "SYNTAX_ERR", "INVALID_MODIFICATION_ERR", "NAMESPACE_ERR", "INVALID_ACCESS_ERR", "VALIDATION_ERR", "TYPE_MISMATCH_ERR", "SECURITY_ERR", "NETWORK_ERR", "ABORT_ERR", "URL_MISMATCH_ERR", "QUOTA_EXCEEDED_ERR", "TIMEOUT_ERR", "INVALID_NODE_TYPE_ERR", "DATA_CLONE_ERR"],
     FormData => NOOP_CONSTRUCTOR_INFO; lazy true,
     Blob => crate::fn_info!(#[realm(Blob, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, Promise, ReadableStream, Uint8Array], spec = {length = 0}, effects = { coerce(arg(0), Iterate); coerce(arg(0), ToPrimitive); coerce(elems(arg(0)), ToPrimitive); reads(arg(1)); coerce(field(arg(1), type), ToPrimitive); returns(fresh(Blob.prototype)) }, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::fetch_globals::global_this_blob_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0026); lazy true,
     File => crate::fn_info!(#[realm(File, kind = constructor, provider = builtin_constructor, births = [Blob], spec = {length = 2}, emit = metadata(realm_file_metadata))] export crate::object::global_this::fetch_globals::global_this_file_thunk, 3; with_declared(3)); instance BuiltinInstanceIdentity::Class(0xFFFF002F); lazy true,

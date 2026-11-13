@@ -326,6 +326,69 @@ const B2_LAZY: &[&str] = &[
     "ReadableStreamBYOBRequest",
 ];
 
+/// LAZYPROTO P2 batch B3: `Event` and `DOMException`, whose constants are
+/// declared statics.
+#[test]
+fn b3_families_are_lazy_and_unborn_after_setup() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    js_get_global_this();
+    for name in B3_LAZY {
+        let identity = crate::object::BuiltinConstructorIdentity::for_name(name)
+            .unwrap_or_else(|| panic!("{name} is not a builtin constructor"));
+        let declaration = identity.declaration();
+        assert!(declaration.lazy, "{name} is not declared lazy");
+        assert!(
+            !declaration.statics.is_empty(),
+            "{name} declares its constants"
+        );
+        assert_eq!(
+            crate::array::intrinsic_prototype_addr_if_bound(identity),
+            0,
+            "{name} was born at realm setup"
+        );
+        assert_ne!(
+            crate::array::intrinsic_constructor_addr_if_bound(identity),
+            0,
+            "{name}: setup binds the constructor"
+        );
+    }
+}
+
+/// A constant of an unborn B3 constructor reads as the birth installs it,
+/// and the read is what births the family.
+#[test]
+fn unborn_b3_constant_read_births_the_family() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    std::thread::spawn(|| {
+        js_get_global_this();
+        for (name, constant, expected) in [
+            ("Event", "BUBBLING_PHASE", 3.0),
+            ("DOMException", "DATA_CLONE_ERR", 25.0),
+        ] {
+            let identity = crate::object::BuiltinConstructorIdentity::for_name(name).unwrap();
+            assert_eq!(
+                crate::array::intrinsic_prototype_addr_if_bound(identity),
+                0,
+                "{name} was born before its constant was read"
+            );
+            let ctor = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+            let key = crate::string::js_string_from_bytes(constant.as_ptr(), constant.len() as u32);
+            let value = js_object_get_field_by_name_f64(
+                crate::value::js_nanbox_get_pointer(ctor) as *const ObjectHeader,
+                key,
+            );
+            assert_eq!(value, expected, "{name}.{constant}");
+            assert_ne!(
+                crate::array::intrinsic_prototype_addr_if_bound(identity),
+                0,
+                "{name}: reading {constant} births the family"
+            );
+        }
+    })
+    .join()
+    .unwrap();
+}
+
 /// RSTREAM A2: every Web Streams readable family, the byte-stream ones
 /// included, is an external family: its members are the streams provider's,
 /// so no stream code is linked into a program that never reaches one.

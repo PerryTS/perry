@@ -276,6 +276,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // on the same thread (a `vm` context) births its families here.
         let ctor_value = if declaration.lazy
             && crate::array::intrinsic_constructor_addr_if_bound(declaration.identity) == 0
+            && !(B3_LAZY.contains(&name) && b3_born_at_setup())
         {
             crate::array::note_realm_intrinsic(declaration.identity, 0, closure_ptr as usize);
             // Its declared statics are own keys its base Function shape does
@@ -1128,6 +1129,22 @@ fn birth_family(
         },
     );
     ctor_value
+}
+
+/// LAZYPROTO P2 batch B3: the families with declared constant statics that
+/// are born on first observation.
+pub(crate) const B3_LAZY: [&str; 2] = ["Event", "DOMException"];
+
+/// `PERRY_LAZY_EVENT_FAMILIES=0`: realm setup births the batch B3 families,
+/// as it did before they were declared lazy (the measurement's off arm). Read
+/// at most once per B3 row of a realm setup.
+#[cold]
+#[inline(never)]
+fn b3_born_at_setup() -> bool {
+    // SAFETY: a NUL-terminated literal; `getenv` only reads the environment.
+    let value = unsafe { libc::getenv(c"PERRY_LAZY_EVENT_FAMILIES".as_ptr()) };
+    // SAFETY: a non-null `getenv` result is a NUL-terminated string.
+    !value.is_null() && unsafe { std::ffi::CStr::from_ptr(value) }.to_bytes() == b"0"
 }
 
 crate::perry_thread_local! {
