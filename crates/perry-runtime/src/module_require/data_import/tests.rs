@@ -163,3 +163,42 @@ fn runtime_data_import_loaders_and_rejections() {
     assert_eq!(error_code(error.get_nanbox_f64()), Some("ENOENT"));
     std::fs::remove_dir(directory).unwrap();
 }
+
+/// #13488: a statically resolved `import()` site validates its options before
+/// loading: a non-object options bag, a non-object `with` and a non-string
+/// attribute value each reject with a TypeError; absent or object-valued
+/// options with string attributes pass.
+#[test]
+fn import_options_are_validated_before_loading() {
+    let scope = RuntimeHandleScope::new();
+    for source in [
+        "1",
+        "null",
+        "\"json\"",
+        "{\"with\":1}",
+        "{\"with\":null}",
+        "{\"with\":\"json\"}",
+        "{\"with\":{\"type\":1}}",
+        "{\"with\":{\"type\":\"json\",\"other\":null}}",
+    ] {
+        let options = scope.root_nanbox_f64(json(source));
+        let promise = js_module_dynamic_import_check_options(options.get_nanbox_f64());
+        assert_ne!(promise, 0, "{source} must reject");
+        let promise = scope.root_nanbox_f64(js_nanbox_pointer(promise));
+        let error = scope.root_nanbox_f64(settled(promise.get_nanbox_f64(), 2));
+        assert_eq!(
+            string_bytes(property(error.get_nanbox_f64(), b"name").unwrap()).as_deref(),
+            Some("TypeError"),
+            "{source}"
+        );
+    }
+    for source in ["{}", "{\"with\":{}}", "{\"with\":{\"type\":\"json\"}}"] {
+        let options = scope.root_nanbox_f64(json(source));
+        assert_eq!(
+            js_module_dynamic_import_check_options(options.get_nanbox_f64()),
+            0,
+            "{source} must pass"
+        );
+    }
+    assert_eq!(js_module_dynamic_import_check_options(undefined()), 0);
+}

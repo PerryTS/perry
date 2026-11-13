@@ -714,6 +714,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // successful compare resolves to its corresponding
                 // namespace global. The final fallback emits a rejected
                 // promise.
+                // #13488: `options.with` is read and validated before any
+                // module loads (EvaluateImportCall step 10); a getter's throw
+                // or an invalid attribute rejects the call's promise.
+                //
+                // Result slot: every arm (the rejection here, each match, the
+                // fallback) stores its promise and jumps to the join block,
+                // which loads it. #10463: in the entry block, like every alloca.
+                let result_slot = ctx.func.alloca_entry(DOUBLE);
+                let join_block_idx = ctx.new_block("dynamic_import_join");
+                let join_label = ctx.block_label(join_block_idx);
+                let options_val = roots.reread(ctx, options)?;
+                let rejected = ctx.block().call(
+                    I64,
+                    "js_module_dynamic_import_check_options",
+                    &[(DOUBLE, &options_val)],
+                );
+                let invalid = ctx.block().icmp_ne(I64, &rejected, "0");
+                let invalid_idx = ctx.new_block("dynamic_import_invalid_options");
+                let valid_idx = ctx.new_block("dynamic_import_valid_options");
+                let invalid_label = ctx.block_label(invalid_idx);
+                let valid_label = ctx.block_label(valid_idx);
+                ctx.block().cond_br(&invalid, &invalid_label, &valid_label);
+                ctx.current_block = invalid_idx;
+                let blk = ctx.block();
+                let boxed = nanbox_pointer_inline(blk, &rejected);
+                blk.store(DOUBLE, &boxed, &result_slot);
+                blk.br(&join_label);
+                ctx.current_block = valid_idx;
+
                 let raw_path_val = roots.reread(ctx, spec)?;
                 let path_val = ctx.block().call(
                     DOUBLE,
@@ -721,14 +750,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(DOUBLE, &raw_path_val)],
                 );
                 let path = roots.adopt_emitted(ctx, Repr::Boxed, &path_val, true);
-                // Result phi slot: every successful match stores the
-                // promise (NaN-boxed POINTER_TAG f64) here, then jumps to
-                // a join block which loads and returns. Using an alloca
-                // keeps the IR straightforward without proper phi nodes.
-                // #10463: in the entry block, like every alloca.
-                let result_slot = ctx.func.alloca_entry(DOUBLE);
-                let join_block_idx = ctx.new_block("dynamic_import_join");
-
                 // Unbox the path argument once into an i64 StringHeader*.
                 let path_handle =
                     ctx.block()

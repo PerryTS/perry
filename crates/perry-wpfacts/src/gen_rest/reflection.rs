@@ -188,8 +188,14 @@ impl<'a> Gen<'a> {
                         proto: Protocol::ToPrimitive,
                     },
                 );
+                // EvaluateImportCall step 10: the runtime reads `options.with`
+                // and every enumerable own value of it (#13488), so a getter
+                // on either runs.
                 if let Some(o) = options {
-                    let _ = self.expr(fx, o);
+                    let o = self.expr(fx, o);
+                    let with = self.m.atom("with");
+                    let attributes = self.load(o, Key::Named(with));
+                    let _ = self.own_values(attributes);
                 }
                 // DECISIONS 226: `paths` holds each specifier as written; the
                 // module's dynamic import entry for it names the module, as

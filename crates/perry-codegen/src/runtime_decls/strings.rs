@@ -1839,6 +1839,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #13488: a resolved `import()` site validates its options first; `0`
+    // or the rejected promise the call evaluates to.
+    module.declare_function("js_module_dynamic_import_check_options", I64, &[DOUBLE]);
     module.declare_function(
         "js_module_dynamic_import_deferred",
         DOUBLE,
