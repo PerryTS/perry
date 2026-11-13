@@ -1058,9 +1058,14 @@ mod tests {
             let req = crate::object::js_object_create(f64::from_bits(crate::value::TAG_NULL));
             let res = super::js_node_http_server_response_birth(proto, req);
             let obj = (res.to_bits() & POINTER_MASK) as usize;
-            assert!(on_layout(obj), "a pristine birth is born on the response layout");
+            assert!(
+                on_layout(obj),
+                "a pristine birth is born on the response layout"
+            );
             let word = (*(obj as *const ObjectHeader)).parent_class_id;
-            assert!(crate::native_payload::attach_to_object(res, &FAMILY, 7u64, 0));
+            assert!(crate::native_payload::attach_to_object(
+                res, &FAMILY, 7u64, 0
+            ));
             assert_eq!(
                 (*(obj as *const ObjectHeader)).parent_class_id,
                 word,

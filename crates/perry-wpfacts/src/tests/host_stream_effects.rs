@@ -30,17 +30,15 @@ fn controller_site(pf: &ProgramFacts, key: &str) -> bool {
     let s = site(pf, key);
     !s.top
         && !s.receivers.is_empty()
-        && s
-            .receivers
-            .iter()
-            .all(|r| {
-                r.contains("ReadableStreamDefaultController.prototype")
-                    || r.contains("ReadableByteStreamController.prototype")
-            })
+        && s.receivers.iter().all(|r| {
+            r.contains("ReadableStreamDefaultController.prototype")
+                || r.contains("ReadableByteStreamController.prototype")
+        })
 }
 
 fn no_unknown_ctor(pf: &ProgramFacts) -> bool {
-    !pf.dump_text().contains("unknown constructor ReadableStream")
+    !pf.dump_text()
+        .contains("unknown constructor ReadableStream")
 }
 
 const S1: &str = r#"
@@ -62,15 +60,19 @@ const S1: &str = r#"
 fn s1_start_controller_is_declared() {
     let pf = facts(&format!("{S1}\nexport const keep = 1;\n"));
     show(&pf, &["enqueue", "close", "x"], &["C"]);
-    assert!(controller_site(&pf, "enqueue") && controller_site(&pf, "close"), "{}", pf.dump_text());
+    assert!(
+        controller_site(&pf, "enqueue") && controller_site(&pf, "close"),
+        "{}",
+        pf.dump_text()
+    );
     let x = site(&pf, "x");
     assert!(
         !x.top
             && x.receivers.iter().any(|r| r.contains('C'))
             && x.receivers.iter().all(|r| r.contains('C')
-                    || r.contains("Array.prototype")
-                    || r.contains("DataView.prototype")
-                    || r.contains("Buffer.prototype")),
+                || r.contains("Array.prototype")
+                || r.contains("DataView.prototype")
+                || r.contains("Buffer.prototype")),
         "{:?}\n{}",
         x.receivers,
         pf.dump_text()
@@ -115,11 +117,19 @@ fn s2_fileloader_shape() {
         export const keep = 1;
     "#,
     );
-    show(&pf, &["close", "enqueue", "error", "loaded"], &["Ev", "Src"]);
+    show(
+        &pf,
+        &["close", "enqueue", "error", "loaded"],
+        &["Ev", "Src"],
+    );
     for k in ["close", "enqueue", "error"] {
         assert!(controller_site(&pf, k), "{k}\n{}", pf.dump_text());
     }
-    assert!(!esc(&pf, "Ev") && no_unknown_ctor(&pf), "{}", pf.dump_text());
+    assert!(
+        !esc(&pf, "Ev") && no_unknown_ctor(&pf),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// S3: the cancel callback is called with the reason the program cancels
@@ -136,7 +146,12 @@ fn s3_cancel_reason_reaches_cancel() {
     );
     show(&pf, &["y"], &["R"]);
     let y = site(&pf, "y");
-    assert!(!y.top && y.receivers.iter().any(|r| r.contains('R')), "{:?}\n{}", y.receivers, pf.dump_text());
+    assert!(
+        !y.top && y.receivers.iter().any(|r| r.contains('R')),
+        "{:?}\n{}",
+        y.receivers,
+        pf.dump_text()
+    );
     assert!(!esc(&pf, "R") && no_unknown_ctor(&pf), "{}", pf.dump_text());
 }
 
@@ -156,7 +171,12 @@ fn s4_start_thenable() {
     );
     show(&pf, &["z"], &["T"]);
     let z = site(&pf, "z");
-    assert!(!z.top && z.receivers.iter().any(|r| r.contains('T')), "{:?}\n{}", z.receivers, pf.dump_text());
+    assert!(
+        !z.top && z.receivers.iter().any(|r| r.contains('T')),
+        "{:?}\n{}",
+        z.receivers,
+        pf.dump_text()
+    );
     assert!(!esc(&pf, "T") && no_unknown_ctor(&pf), "{}", pf.dump_text());
 }
 
@@ -175,11 +195,25 @@ const C1: &str = r#"
 /// not proven; the controller the constructor makes stays the program's.
 #[test]
 fn c1_stream_given_to_unknown_code() {
-    let pf = facts(&format!("{C1}\nnew Function(\"v\", process.argv[2])(s);\nexport const keep = 1;\n"));
+    let pf = facts(&format!(
+        "{C1}\nnew Function(\"v\", process.argv[2])(s);\nexport const keep = 1;\n"
+    ));
     show(&pf, &["enqueue", "close", "y"], &["C", "R"]);
-    assert!(esc(&pf, "C"), "the queue of an escaped stream is reachable\n{}", pf.dump_text());
-    assert!(site(&pf, "y").top, "unknown code may cancel with any reason\n{}", pf.dump_text());
-    assert!(controller_site(&pf, "enqueue") && controller_site(&pf, "close"), "{}", pf.dump_text());
+    assert!(
+        esc(&pf, "C"),
+        "the queue of an escaped stream is reachable\n{}",
+        pf.dump_text()
+    );
+    assert!(
+        site(&pf, "y").top,
+        "unknown code may cancel with any reason\n{}",
+        pf.dump_text()
+    );
+    assert!(
+        controller_site(&pf, "enqueue") && controller_site(&pf, "close"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// C1 closed: `globalThis.sink` is never written in a closed program, so
@@ -187,7 +221,9 @@ fn c1_stream_given_to_unknown_code() {
 /// the only cancel reason is R.
 #[test]
 fn c1_closed_world_sink() {
-    let pf = facts(&format!("{C1}\nconst f = (globalThis as any).sink;\nf(s);\nexport const keep = 1;\n"));
+    let pf = facts(&format!(
+        "{C1}\nconst f = (globalThis as any).sink;\nf(s);\nexport const keep = 1;\n"
+    ));
     show(&pf, &["y"], &["C", "R"]);
     let y = site(&pf, "y");
     assert!(
@@ -210,7 +246,11 @@ fn c2_written_global() {
         export const keep = 1;
     "#,
     );
-    assert!(pf.dump_text().contains("argument of written constructor"), "{}", pf.dump_text());
+    assert!(
+        pf.dump_text().contains("argument of written constructor"),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 const S5: &str = r#"
@@ -236,7 +276,10 @@ fn s3b_bytes() {
     assert!(controller_site(&pf, "enqueue"), "{}", pf.dump_text());
     let q = site(&pf, "respond");
     assert!(
-        !q.top && q.receivers.iter().any(|r| r.contains("ReadableStreamBYOBRequest.prototype")),
+        !q.top
+            && q.receivers
+                .iter()
+                .any(|r| r.contains("ReadableStreamBYOBRequest.prototype")),
         "{:?}\n{}",
         q.receivers,
         pf.dump_text()
@@ -258,7 +301,10 @@ fn s3b_bytes() {
 /// proven.
 #[test]
 fn c3b_bytes_unknown_view() {
-    let src = S5.replace("q.respond(0);", "q.respondWithNewView(new Function(process.argv[2])());");
+    let src = S5.replace(
+        "q.respond(0);",
+        "q.respondWithNewView(new Function(process.argv[2])());",
+    );
     assert_ne!(src, S5);
     let pf = facts(&format!("{src}\n{S5_READ}"));
     show(&pf, &["length"], &[]);
@@ -283,7 +329,9 @@ fn c3_bytes() {
     let e = site(&pf, "enqueue");
     assert!(controller_site(&pf, "enqueue"), "{}", pf.dump_text());
     assert!(
-        e.receivers.iter().any(|r| r.contains("ReadableByteStreamController.prototype")),
+        e.receivers
+            .iter()
+            .any(|r| r.contains("ReadableByteStreamController.prototype")),
         "{:?}
 {}",
         e.receivers,

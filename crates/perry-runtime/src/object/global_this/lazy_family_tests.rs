@@ -161,7 +161,11 @@ fn lazy_declared_statics_are_the_realm_sources() {
             .into_iter()
             .chain(declaration.statics.iter().copied())
             .collect();
-        assert_eq!(order, declared, "{}: declared statics differ from the realm source", declaration.name);
+        assert_eq!(
+            order, declared,
+            "{}: declared statics differ from the realm source",
+            declaration.name
+        );
     }
 }
 
@@ -221,12 +225,28 @@ fn lazy_family_keys_do_not_depend_on_the_first_touch() {
     assert_eq!(by_intrinsic.1, ["length", "name", "prototype"]);
     assert_eq!(by_write.1, ["length", "name", "prototype", "x"]);
     assert_eq!(by_intrinsic.2, "Navigator");
-    assert_eq!(by_write.2, "Renamed", "the birth undid a define made before it");
-    for (order, keys) in [("write", &by_write), ("instance", &by_instance), ("read", &by_read)] {
-        assert_eq!(keys.0, by_intrinsic.0, "prototype keys, first touch {order}");
+    assert_eq!(
+        by_write.2, "Renamed",
+        "the birth undid a define made before it"
+    );
+    for (order, keys) in [
+        ("write", &by_write),
+        ("instance", &by_instance),
+        ("read", &by_read),
+    ] {
+        assert_eq!(
+            keys.0, by_intrinsic.0,
+            "prototype keys, first touch {order}"
+        );
         if order != "write" {
-            assert_eq!(keys.1, by_intrinsic.1, "constructor keys, first touch {order}");
-            assert_eq!(keys.2, by_intrinsic.2, "constructor name, first touch {order}");
+            assert_eq!(
+                keys.1, by_intrinsic.1,
+                "constructor keys, first touch {order}"
+            );
+            assert_eq!(
+                keys.2, by_intrinsic.2,
+                "constructor name, first touch {order}"
+            );
         }
     }
     assert_eq!(
@@ -252,14 +272,20 @@ fn global_enumeration_does_not_birth_lazy_families() {
     let names = own_names(global);
     assert!(names.iter().any(|name| name == "Navigator"));
     let navigator = crate::object::BuiltinConstructorIdentity::Navigator;
-    assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(navigator), 0);
+    assert_eq!(
+        crate::array::intrinsic_prototype_addr_if_bound(navigator),
+        0
+    );
     let ctor = js_get_global_this_builtin_value(b"Navigator".as_ptr(), 9);
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
     let proto = js_object_get_field_by_name_f64(
         crate::value::js_nanbox_get_pointer(ctor) as *const ObjectHeader,
         key,
     );
-    assert_ne!(crate::array::intrinsic_prototype_addr_if_bound(navigator), 0);
+    assert_ne!(
+        crate::array::intrinsic_prototype_addr_if_bound(navigator),
+        0
+    );
     assert_eq!(
         crate::value::js_nanbox_get_pointer(proto) as usize,
         crate::array::intrinsic_prototype_addr_if_bound(navigator)
@@ -316,7 +342,10 @@ fn readable_stream_families_are_external() {
         let declaration = crate::object::BuiltinConstructorIdentity::for_name(name)
             .unwrap_or_else(|| panic!("{name} is not a builtin constructor"))
             .declaration();
-        assert!(declaration.lazy && declaration.external, "{name}: lazy external");
+        assert!(
+            declaration.lazy && declaration.external,
+            "{name}: lazy external"
+        );
     }
 }
 
@@ -364,7 +393,11 @@ fn unborn_lazy_constructor_length_is_the_spec_length() {
         );
         builtin_prototype_value(name);
         let born = read_length(name);
-        assert_eq!(unborn.to_bits(), born.to_bits(), "{name}: length changed at birth");
+        assert_eq!(
+            unborn.to_bits(),
+            born.to_bits(),
+            "{name}: length changed at birth"
+        );
         if let Some(spec) = crate::object::builtin_constructor_spec_length(name) {
             assert_eq!(born, spec as f64, "{name}: declared length");
         }
@@ -378,13 +411,22 @@ fn storage_areas_are_made_by_their_getters() {
     let _lock = crate::gc::global_side_table_test_lock();
     js_get_global_this();
     let storage = crate::object::BuiltinConstructorIdentity::Storage;
-    assert_eq!(crate::object::LOCAL_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire), 0);
-    assert_eq!(crate::object::SESSION_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(
+        crate::object::LOCAL_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(
+        crate::object::SESSION_STORAGE_PTR.load(std::sync::atomic::Ordering::Acquire),
+        0
+    );
     assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(storage), 0);
     crate::web_storage::test_read_storage_globals();
     let proto = crate::array::intrinsic_prototype_addr_if_bound(storage);
     assert_ne!(proto, 0, "the first read of the global births Storage");
-    for slot in [&crate::object::LOCAL_STORAGE_PTR, &crate::object::SESSION_STORAGE_PTR] {
+    for slot in [
+        &crate::object::LOCAL_STORAGE_PTR,
+        &crate::object::SESSION_STORAGE_PTR,
+    ] {
         let area = slot.load(std::sync::atomic::Ordering::Acquire) as usize;
         assert_ne!(area, 0, "the getter made the area");
         assert_eq!(
@@ -408,7 +450,11 @@ fn lazy_interface_children_link_to_their_parent_in_their_birth() {
     ] {
         let child_id = crate::object::BuiltinConstructorIdentity::for_name(child).unwrap();
         let parent_id = crate::object::BuiltinConstructorIdentity::for_name(parent).unwrap();
-        assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(child_id), 0, "{child}");
+        assert_eq!(
+            crate::array::intrinsic_prototype_addr_if_bound(child_id),
+            0,
+            "{child}"
+        );
         let proto = crate::value::js_nanbox_get_pointer(builtin_prototype_value(child)) as usize;
         let parent_proto = crate::array::intrinsic_prototype_addr_if_bound(parent_id);
         assert_eq!(

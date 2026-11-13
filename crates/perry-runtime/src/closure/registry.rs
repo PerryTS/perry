@@ -183,7 +183,9 @@ pub fn closure_length(closure: *const ClosureHeader) -> Option<u32> {
     // An unborn lazy family's constructor answers its declared `length`, as
     // its birth installs it (the info's length is the thunk's argument count).
     if let Some(identity) = unsafe { closure.as_ref() }
-        .and_then(|header| crate::object::BuiltinConstructorIdentity::from_header(header.capture_count))
+        .and_then(|header| {
+            crate::object::BuiltinConstructorIdentity::from_header(header.capture_count)
+        })
         .filter(|identity| identity.declaration().lazy)
     {
         if let Some(length) = crate::object::builtin_constructor_spec_length(identity.name()) {

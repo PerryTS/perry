@@ -8,7 +8,10 @@ use super::*;
 
 const FORMS: [(&str, &str); 3] = [
     ("import * as t from \"util/types\";", "t.isArrayBufferView"),
-    ("import { isArrayBufferView } from \"node:util/types\";", "isArrayBufferView"),
+    (
+        "import { isArrayBufferView } from \"node:util/types\";",
+        "isArrayBufferView",
+    ),
     ("const t = require(\"util/types\");", "t.isArrayBufferView"),
 ];
 
@@ -36,13 +39,23 @@ fn is_array_buffer_view_keeps_its_argument_and_returns_a_boolean() {
             pf.dump_text()
         );
         let q = site(&pf, "q");
-        assert!(!q.top && q.receivers.is_empty(), "{import}\n{}", pf.dump_text());
+        assert!(
+            !q.top && q.receivers.is_empty(),
+            "{import}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
 #[test]
 fn every_declared_brand_predicate_returns_a_boolean() {
-    for p in ["isDate", "isMap", "isTypedArray", "isProxy", "isNativeError"] {
+    for p in [
+        "isDate",
+        "isMap",
+        "isTypedArray",
+        "isProxy",
+        "isNativeError",
+    ] {
         let pf = passed("import * as t from \"util/types\";", &format!("t.{p}"));
         let q = site(&pf, "q");
         assert!(!q.top && q.receivers.is_empty(), "{p}\n{}", pf.dump_text());

@@ -604,9 +604,11 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
         out.list_capacities
             .extend(mb.list_capacities.iter().copied());
         out.rest_pushes.extend(mb.rest_pushes.iter().copied());
-        out.fill_push_recvs.extend(mb.fill_push_recvs.iter().copied());
+        out.fill_push_recvs
+            .extend(mb.fill_push_recvs.iter().copied());
         out.fill_births.extend(mb.fill_births.iter().copied());
-        out.rest_lane_reads.extend(mb.rest_lane_reads.iter().copied());
+        out.rest_lane_reads
+            .extend(mb.rest_lane_reads.iter().copied());
         // DESIGN-p4l4 VR-4b: the record arrays. Their record's layout is
         // this module's (wpfacts rejects a record array held in another
         // module); without it codegen refuses the module.
@@ -735,7 +737,8 @@ fn elision_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> perry_codegen::E
     if quiet {
         out.quiet_reads.extend(mb.quiet_reads.iter().cloned());
         out.quiet_elements.extend(mb.quiet_elements.iter().copied());
-        out.primitive_reads.extend(mb.primitive_reads.iter().cloned());
+        out.primitive_reads
+            .extend(mb.primitive_reads.iter().cloned());
         out.primitive_elements
             .extend(mb.primitive_elements.iter().copied());
     }

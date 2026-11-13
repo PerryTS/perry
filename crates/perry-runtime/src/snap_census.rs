@@ -869,7 +869,11 @@ pub(crate) fn pc_check(pcs: &[usize], js_text: (usize, usize)) {
         let _scope = runner::input_record::Scope::enter();
         runner::input_event(
             "stack.pc_check",
-            format!("exec={};out={out};n={};text={lo:x}-{hi:x}", exec as u8, pcs.len()),
+            format!(
+                "exec={};out={out};n={};text={lo:x}-{hi:x}",
+                exec as u8,
+                pcs.len()
+            ),
         );
         runner::runtime_pcs(pcs, js_text);
     }
@@ -966,7 +970,11 @@ pub fn record_input_value<T: InputValue>(operation: &str, value: &T) {
 macro_rules! census_inputs { ($($code:tt)*) => {{ $($code)* }}; }
 #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
 #[macro_export]
-macro_rules! census_inputs { ($($code:tt)*) => {}; }
+macro_rules! census_inputs {
+    ($($code:tt)*) => {};
+}
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
-pub(crate) fn record_scope() -> impl Drop { runner::input_record::Scope::enter() }
+pub(crate) fn record_scope() -> impl Drop {
+    runner::input_record::Scope::enter()
+}

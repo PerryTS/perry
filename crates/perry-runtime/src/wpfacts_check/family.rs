@@ -39,7 +39,7 @@ static NEVER: AtomicU64 = AtomicU64::new(0);
 static SITE: AtomicI64 = AtomicI64::new(0);
 static SITE_LEN: AtomicI64 = AtomicI64::new(0);
 
-thread_local! {
+crate::perry_thread_local! {
     static SCRATCH: Cell<u32> = const { Cell::new(0) };
 }
 
