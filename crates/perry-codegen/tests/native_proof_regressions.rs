@@ -119,6 +119,37 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
     module_with_classes_and_params(name, Vec::new(), Vec::new(), Type::Number, body)
 }
 
+/// `opts` with the quiet-site facts the whole-program solve gives a
+/// `for (let i = 0; i < arr.length; i++)` loop over a local Array literal
+/// whose body reads and stores `arr[i]` (`perry compile`,
+/// `PERRY_FACTS_DUMP`: `arr.length` a quiet read with a primitive value,
+/// every `arr[…]` a quiet element site with a primitive value). The legacy
+/// length hoist keeps `arr.length` only on that word (#14537,
+/// `perry_codegen` `quiet`) and a unit test runs no solve: a test whose
+/// subject hangs on the hoisted length (the bounded index tiers, the
+/// versioned slow clone) states the facts it relies on. The HIR builders
+/// here put offset 0 at every site, so the facts are keyed by 0: every
+/// `length` read and element site of the module is quiet, as in the real
+/// program, where the Array is a local literal.
+fn with_quiet_sites(opts: CompileOptions) -> CompileOptions {
+    let mut elision = (*opts.program_facts.elision).clone();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    elision.primitive_elements.insert(0);
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..opts.program_facts
+        },
+        ..opts
+    }
+}
+
+fn compile_ir_quiet(name: &str, body: Vec<Stmt>) -> String {
+    compile_ir_with_opts(name, body, with_quiet_sites(empty_opts()))
+}
+
 fn module_with_classes_and_params(
     name: &str,
     classes: Vec<Class>,
@@ -250,6 +281,10 @@ fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
 
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
     compile_artifact_json_for_module(module(name, body))
+}
+
+fn compile_artifact_json_quiet(name: &str, body: Vec<Stmt>) -> serde_json::Value {
+    compile_artifact_json_for_module_with_opts(module(name, body), with_quiet_sites(empty_opts()))
 }
 
 fn compile_artifact_json_for_module(module: Module) -> serde_json::Value {
@@ -2885,9 +2920,9 @@ fn oversized_bigint_literal_records_small_bigint_rejection_and_falls_back() {
     );
 }
 
-#[test]
-fn packed_f64_loop_store_update_versions_with_side_exit() {
-    let module = module_with_classes_and_params(
+/// `probe()`: `const delta = 0.5; let values: number[] = [1, 2, 3]; for (let i = 0; i < values.length; i++) values[i] = values[i] + delta; return delta`.
+fn packed_f64_store_update_module() -> Module {
+    module_with_classes_and_params(
         "packed_f64_store_update_side_exit.ts",
         Vec::new(),
         Vec::new(),
@@ -2906,9 +2941,14 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
             ),
             Stmt::Return(Some(local(2))),
         ],
-    );
+    )
+}
 
-    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+#[test]
+fn packed_f64_loop_store_update_versions_with_side_exit() {
+    let module = packed_f64_store_update_module();
+    let ir =
+        compile_ir_for_module_with_opts(module.clone(), with_quiet_sites(empty_opts())).unwrap();
     assert!(
         ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
         "safe store-update loop should get a packed-f64 loop guard:\n{ir}"
@@ -3785,9 +3825,9 @@ fn packed_u32_loop_store_routes_to_generic_full_value_store() {
     );
 }
 
-#[test]
-fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
-    let module = module_with_classes_and_params(
+/// `probe()`: `let values: number[] = [-1, 2, -3]; for (let i = 0; i < values.length; i++) values[i] = Math.abs(values[i]); return 0`.
+fn packed_f64_unary_math_store_module() -> Module {
+    module_with_classes_and_params(
         "packed_f64_unary_math_store_side_exit.ts",
         Vec::new(),
         Vec::new(),
@@ -3805,9 +3845,14 @@ fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
             ),
             Stmt::Return(Some(int(0))),
         ],
-    );
+    )
+}
 
-    let ir = compile_ir_for_module_with_opts(module.clone(), empty_opts()).unwrap();
+#[test]
+fn packed_f64_loop_unary_math_store_versions_with_side_exit() {
+    let module = packed_f64_unary_math_store_module();
+    let ir =
+        compile_ir_for_module_with_opts(module.clone(), with_quiet_sites(empty_opts())).unwrap();
     assert!(
         ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
         "unary numeric math store loop should get a packed-f64 loop guard:\n{ir}"
@@ -17165,4 +17210,50 @@ fn a_literal_compared_through_a_runtime_helper_is_materialized_at_that_boundary(
              helper, so the literal's boxing records its runtime_api boundary:\n{materialized:#?}"
         );
     }
+}
+
+/// The versioned packed-f64 loop without the quiet-site facts. Its fast
+/// clone is entered only when no call survived in its emitted blocks, and
+/// that scan, not the length hoist's walker, is its proof: the clone is not
+/// asked (#14537) and keeps its inline range store with the side exit. The
+/// slow clone is an ordinary loop: without the facts' word on its sites the
+/// hoist is refused and its condition reads `values.length` at every step.
+fn assert_facts_less_packed_loop_keeps_the_fast_clone(ir: &str) {
+    assert!(
+        ir.contains("call i32 @js_typed_feedback_packed_f64_array_loop_guard"),
+        "the packed-f64 loop guard does not hang on the quiet-site facts:\n{ir}"
+    );
+    let body = ir
+        .find("\nfor.packed_f64_fast.body.")
+        .map(|at| &ir[at + 1..])
+        .map(|rest| &rest[..rest.find("\n\n").unwrap_or(rest.len())])
+        .unwrap_or_else(|| panic!("expected the packed-f64 fast body:\n{ir}"));
+    assert!(
+        body.contains("label %packed_f64_range_store.fast.")
+            && body.contains("label %packed_f64_range_store.side_exit."),
+        "the fast clone stores through the inline range store with its side exit:\n{body}\n\n{ir}"
+    );
+    let slow_cond = ir
+        .find("\nfor.packed_f64_slow.cond.")
+        .map(|at| &ir[at + 1..])
+        .map(|rest| &rest[..rest.find("\n\n").unwrap_or(rest.len())])
+        .unwrap_or_else(|| panic!("expected the packed-f64 slow condition:\n{ir}"));
+    assert!(
+        slow_cond.contains("label %plen."),
+        "without the facts the slow clone reads its length at every step:\n{slow_cond}\n\n{ir}"
+    );
+}
+
+#[test]
+fn packed_f64_loop_store_update_without_quiet_facts_keeps_the_fast_clone() {
+    let ir =
+        compile_ir_for_module_with_opts(packed_f64_store_update_module(), empty_opts()).unwrap();
+    assert_facts_less_packed_loop_keeps_the_fast_clone(&ir);
+}
+
+#[test]
+fn packed_f64_loop_unary_math_store_without_quiet_facts_keeps_the_fast_clone() {
+    let ir = compile_ir_for_module_with_opts(packed_f64_unary_math_store_module(), empty_opts())
+        .unwrap();
+    assert_facts_less_packed_loop_keeps_the_fast_clone(&ir);
 }
