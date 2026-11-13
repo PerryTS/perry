@@ -87,6 +87,7 @@ mod dce_reach;
 mod dead_dynamic_import;
 mod declared_effects;
 mod default_params;
+mod data_define_named;
 mod define_through_unknown;
 mod realm_accessor_call;
 mod iter_realm_value;

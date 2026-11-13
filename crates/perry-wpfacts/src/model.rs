@@ -1845,6 +1845,10 @@ pub struct Model {
     /// is no add.
     pub adds_named: FxHashMap<(TmplId, Atom), u32>,
     pub hard: FxHashMap<Tok, (Hard, u32)>,
+    /// Tokens HARD only through named data definitions (rule D1): their
+    /// any-key field has no "written by unknown code" seed yet; the first
+    /// HARD mark of another kind gives it (`mark_hard_as`).
+    pub hard_unseeded: crate::pts::FxHashSet<Tok>,
     pub escaped: FxHashMap<Tok, u32>,
     /// `escaped` as a bitset by token (the hot membership test).
     pub esc_bits: Vec<u64>,

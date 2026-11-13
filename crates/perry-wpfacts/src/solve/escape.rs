@@ -1229,6 +1229,16 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.mark_hard_as(t, kind, reason, true)
+    }
+
+    /// `mark_hard`; `seed` false for a definition of a NAMED key by a data
+    /// descriptor (rule D1, ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3): it
+    /// creates or changes that key alone, to the descriptor's value (stored
+    /// by `define_by_data`), and installs no accessor, so no field of the
+    /// object is written by unknown code. The object is HARD all the same
+    /// (layout, escape and the runtime lock unchanged).
+    pub fn mark_hard_as(&mut self, t: Tok, kind: Hard, reason: u32, seed: bool) {
         // DEC 250: a delete that reaches the runtime's prototypes (the
         // collapsed `ObjectProto`) removes only a key the lock admits: the
         // runtime refuses (TypeError) to delete a member the image gives a
@@ -1363,6 +1373,14 @@ impl Model {
             return;
         }
         if self.hard.contains_key(&t) {
+            // HARD so far only through named data definitions: this mark is
+            // the first that may write any field (rule D1).
+            if seed && self.hard_unseeded.remove(&t) {
+                self.seed_hard_fields(t);
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, true);
+                }
+            }
             return;
         }
         if self.rel_phase != b'S' {
@@ -1378,15 +1396,23 @@ impl Model {
             self.flush_shadowed(Some(t));
         }
         self.rel(|| format!("hardmark {t} {}", kind.code()));
-        // Deleting / redefining can move values or install accessors: the
-        // object's fields are now written by unknown code as well.
-        let any = self.any_key_node(t);
-        self.add_prim(any, prim::ALL);
+        if seed {
+            self.seed_hard_fields(t);
+        } else {
+            self.hard_unseeded.insert(t);
+        }
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }
         for s in self.wide_sites(t) {
-            self.mark_hard(s, kind, reason);
+            self.mark_hard_as(s, kind, reason, seed);
         }
+    }
+
+    /// Deleting / redefining can move values or install accessors: the
+    /// fields of HARD `t` are written by unknown code as well.
+    fn seed_hard_fields(&mut self, t: Tok) {
+        let any = self.any_key_node(t);
+        self.add_prim(any, prim::ALL);
     }
 }

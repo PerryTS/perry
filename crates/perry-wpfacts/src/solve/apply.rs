@@ -779,7 +779,10 @@ impl Model {
                                 ks.push(key);
                             }
                         }
-                        _ => self.mark_hard(t, Hard::E5DefineProperty, reason),
+                        // A data descriptor under this NAMED key writes that
+                        // key alone (rule D1): HARD, no unknown write of any
+                        // other field (`mark_hard_as`).
+                        _ => self.mark_hard_as(t, Hard::E5DefineProperty, reason, !data),
                     }
                 }
             }
