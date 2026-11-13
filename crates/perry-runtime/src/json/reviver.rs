@@ -836,6 +836,13 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
 ) -> JSValue {
     let scope = crate::gc::RuntimeHandleScope::new();
     let text_handle = scope.root_string_ptr(text_ptr);
+    // A reviver that is not callable is ignored (JSON.parse step 3): only an
+    // allocator-owned closure is kept (and rooted), as on the thunk path.
+    let reviver_ptr = if reviver_ptr != 0 && crate::closure::is_closure_ptr(reviver_ptr as usize) {
+        reviver_ptr
+    } else {
+        0
+    };
     let reviver = reviver_ptr as *const crate::closure::ClosureHeader;
     let reviver_handle = scope.root_raw_const_ptr(reviver);
 
