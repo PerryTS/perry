@@ -2257,6 +2257,14 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
 ) -> f64 {
     record_fallback_call(site_id);
 
+    // A null / undefined receiver behind an Array annotation: node's
+    // TypeError (RequireObjectCoercible), never `undefined`.
+    if matches!(
+        receiver.to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    ) {
+        return crate::value::js_dyn_index_get(receiver, index);
+    }
     let receiver_value = crate::value::JSValue::from_bits(receiver.to_bits());
     if receiver_value.is_string() || receiver_value.is_short_string() {
         return crate::value::js_dyn_index_get(receiver, index);
@@ -2629,6 +2637,19 @@ pub extern "C" fn js_typed_feedback_numeric_array_push_guard(
     }
 }
 
+/// `null[k] = v` / `undefined[k] = v`: the TypeError of `PutValue`'s
+/// `ToObject` (node: "Cannot set properties of null").
+#[cold]
+#[inline(never)]
+fn throw_nullish_index_set(receiver: f64) -> ! {
+    let what = if receiver.to_bits() == crate::value::TAG_NULL {
+        "null"
+    } else {
+        "undefined"
+    };
+    crate::collection_iter::throw_type_error(&format!("Cannot set properties of {what}"))
+}
+
 /// Cold continuation of a source-level `arr[index] = value` after the inline
 /// guard declines the receiver.
 ///
@@ -2647,6 +2668,15 @@ pub extern "C" fn js_typed_feedback_array_index_set_fallback_boxed(
     strict: i32,
 ) -> f64 {
     record_fallback_call(site_id);
+
+    // A null / undefined receiver behind an Array annotation: `PutValue`
+    // throws node's TypeError (ToObject), in sloppy code too.
+    if matches!(
+        receiver.to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    ) {
+        throw_nullish_index_set(receiver);
+    }
 
     // #11891: a Proxy held in a `T[]`-annotated binding reaches this cold
     // continuation as a pointer-tagged handle-band id. A declared element

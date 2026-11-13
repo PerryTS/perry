@@ -161,6 +161,15 @@ unsafe fn read_cold_dispatch(
         source.write(receiver.get_nanbox_f64());
         return value;
     }
+    // An Array-annotated receiver that is null / undefined (a declaration
+    // is no runtime fact): `GetValue` throws node's TypeError
+    // (RequireObjectCoercible), never `undefined`.
+    if matches!(
+        receiver.to_bits(),
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED
+    ) {
+        return crate::value::js_dyn_index_get(receiver, key);
+    }
     let value = plain_index_get(receiver, key).unwrap_or_else(|| {
         if mode != 0 {
             crate::typed_feedback::js_typed_feedback_array_index_get_fallback_boxed(
