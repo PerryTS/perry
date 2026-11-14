@@ -725,3 +725,47 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+#[test]
+fn a_join_inside_a_call_argument_keeps_the_other_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Box { items: number[] = [1, 2, 3]; }
+const inst = new Box();
+const n = 7;
+console.log(n, inst.items.join(","));
+console.log(inst.items.join("-"), inst instanceof Box);
+console.log(n, inst.items.join());
+const lit = { out: ["x", "y"] };
+console.log(lit.out.join(","), lit instanceof Object);
+"#
+        ),
+        "7 1,2,3\n1-2-3 true\n7 1,2,3\nx,y true"
+    );
+}
+
+#[test]
+fn an_array_bridge_call_opens_its_own_argument_frame() {
+    // Only the neighbours are asserted: what these calls return is a separate matter.
+    // Writing into the enclosing call's frame replaced them.
+    let out = run_web_source(
+        r#"
+const n = 7;
+const a = [3, 1, 2];
+console.log(n, a.toReversed(), n);
+console.log(n, a.toSorted(), n);
+console.log(n, a.toSorted((x, y) => y - x), n);
+console.log(n, a.with(0, 9), n);
+console.log(n, a.toSpliced(1, 1), n);
+console.log(n, a.keys(), n);
+console.log(n, a.values(), n);
+console.log(n, a.entries(), n);
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 8, "{out}");
+    for line in lines {
+        assert!(line.starts_with("7 ") && line.ends_with(" 7"), "{out}");
+    }
+}
