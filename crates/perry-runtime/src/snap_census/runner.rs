@@ -1257,6 +1257,8 @@ unsafe fn start_census(out: String) {
     std::mem::forget(st);
     let _input_logging = input_record::Scope::enter();
     let st = state();
+    let anchor = std::ptr::addr_of!(ANCHOR) as usize;
+    super::inventory::start((anchor, anchor + PAGE), st.tls_block, st.tls_ranges);
     // Nothing moves until the boundary. The weights run (no protection)
     // collects as production does: its Ir per init includes the collections.
     if !st.noprotect {
@@ -1706,6 +1708,11 @@ fn init_enter_with(addr: usize, forced: Option<Reach>) {
     st.seq += 1;
     let id = st.inits.len() as u32;
     assert!((id as usize) < MAX_INITS, "snap census: too many inits");
+    super::inventory::at_init(id, &st.out, !st.noprotect, &|a| {
+        let b = st.births.as_slice();
+        let i = b.partition_point(|x| x.addr <= a);
+        (i > 0 && a < b[i - 1].addr + b[i - 1].size as usize).then(|| b[i - 1].init)
+    });
     let mut init = blank_init(addr, parent_id, reach);
     init.enter_seq = st.seq;
     init.open = true;

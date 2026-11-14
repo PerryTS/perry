@@ -990,3 +990,7 @@ macro_rules! census_inputs {
 pub(crate) fn record_scope() -> impl Drop {
     runner::input_record::Scope::enter()
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[path = "snap_census/inventory.rs"]
+mod inventory;
