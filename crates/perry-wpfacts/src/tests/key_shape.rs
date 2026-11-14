@@ -116,9 +116,7 @@ fn keys_that_may_be_constructor_stay_any_key() {
         ("", r#"type + "s" + a"#),
         ("", r#"type + """#),
         ("", "`${type}${a}`"),
-        ("", r#""1" + type"#),
         ("", "type + a"),
-        ("const k = type + \"s\";", "k"),
     ];
     for (pre, key) in any {
         let pf = run(JSON_MAP, pre, key);
@@ -140,6 +138,33 @@ fn keys_that_may_be_constructor_stay_any_key() {
     }
 }
 
+/// A key `"1" + type` has the exact shape `1*` (a string that begins with
+/// `1`, any rest: "1NaN", "1Infinity", "1-5", "11e+21" included): no
+/// Object.prototype member name begins with a digit, so it never reads the
+/// Object constructor. The same shape through a variable (`const k = type +
+/// "s"`, shape `*s`) holds, `constructor` ends with `r`.
+#[test]
+fn a_key_with_a_literal_edge_through_a_variable_reads_no_constructor() {
+    use crate::model::KeyShape;
+    let one = KeyShape {
+        globs: vec![vec!["1".to_string(), String::new()]],
+        free: Vec::new(),
+    };
+    for s in ["1NaN", "1Infinity", "1-5", "11e+21", "10.5"] {
+        assert!(one.admits(s), "{s}");
+    }
+    assert!(!one.admits("constructor"));
+    for (pre, key) in [("", r#""1" + type"#), ("const k = type + \"s\";", "k")] {
+        let pf = run(JSON_MAP, pre, key);
+        let objs = pf
+            .sites
+            .iter()
+            .filter(|s| s.is_call && s.key == "map")
+            .any(|s| s.receivers.iter().any(|r| r == "builtin:Object"));
+        assert!(!objs, "{key}: {}", pf.dump_text());
+    }
+}
+
 /// Sabotage: a store whose shape admits `name` (or any key) reaches it.
 #[test]
 fn a_store_whose_shape_admits_the_name_reaches_it() {
@@ -147,12 +172,19 @@ fn a_store_whose_shape_admits_the_name_reaches_it() {
         ("", r#""na" + prefix"#),
         ("", r#"prefix + "me""#),
         ("", "`${prefix}${a}`"),
-        ("const k = prefix + \"_x\";", "k"),
     ];
     for (pre, key) in any {
         let pf = run(STORE, pre, key);
         assert!(!yy_proven(&pf), "{key}: {:?}", yy_reads(&pf));
     }
+}
+
+/// `prefix + "_x"` (held in a variable too) ends with `_x`: it never writes
+/// `name`.
+#[test]
+fn a_variable_key_ending_in_a_literal_writes_no_other_name() {
+    let pf = run(STORE, "const k = prefix + \"_x\";", "k");
+    assert!(yy_proven(&pf), "{:?}", yy_reads(&pf));
 }
 
 #[test]
