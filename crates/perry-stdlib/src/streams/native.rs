@@ -187,6 +187,10 @@ pub(super) unsafe fn advance_body(id: usize) {
                 Err(error) => js_promise_reject(promise.get_raw_mut_ptr(), error),
             }
         }
+        // The consumer just emptied a stream that closed with its body still
+        // queued (a small body that arrived before `text()`), so the close
+        // could not retire it; nothing else reaches this stream again (#12862).
+        idalloc::retire_readable_terminal(id);
     } else if READABLE_STREAMS
         .lock()
         .unwrap()
