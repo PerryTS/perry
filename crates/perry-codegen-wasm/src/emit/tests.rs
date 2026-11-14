@@ -725,3 +725,88 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// An async body is emitted as JS, which must lower `Object.keys/values/entries` itself
+// rather than read them as undefined (#14633).
+#[test]
+fn async_body_lists_an_objects_keys_values_and_entries() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const o: any = { a: 1, b: 2 };
+  return Object.keys(o).join("|") + " " + Object.values(o).join("|") + " " + Object.entries(o).join("|");
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "a|b 1|2 a,1|b,2"
+    );
+}
+
+// `for...of` over an array and `i++` / `k--` in an async body: the array check of the
+// for-of lowering and the update expression both reach the JS emitter (#14595).
+#[test]
+fn async_body_runs_for_of_over_an_array_and_update_expressions() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(xs: string[]): Promise<string> {
+  let s = "";
+  for (const p of xs) s = s + p;
+  let n = 0;
+  // The `n < 100` bound ends the loop even where `i++` does nothing.
+  for (let i = 0; i < 3 && n < 100; i++) n = n + i + 1;
+  let k = 5;
+  const before = k--;
+  return s + " " + n + " " + before + " " + k + " " + (++k);
+}
+f(["a", "b"]).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "ab 6 5 4 5"
+    );
+}
+
+// The `try` lowering declares a flag inside the `try` block and reads it in the `catch`;
+// the JS body must declare it where both can see it (#14595).
+#[test]
+fn async_body_catch_reads_a_local_the_try_block_declared() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  try {
+    throw new Error("boom");
+  } catch (e) {
+    return "caught " + (e as Error).message;
+  }
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "caught boom"
+    );
+}
+
+// Iterating a non-array and destructuring are not emitted in an async body; they reject
+// with a TypeError instead of running on with undefined values.
+#[test]
+fn async_body_rejects_iteration_it_cannot_emit() {
+    let out = run_web_source(
+        r#"
+async function each(): Promise<string> {
+  let s = "";
+  for (const v of new Set(["x", "y"])) s = s + v;
+  return s;
+}
+async function pick(xs: number[]): Promise<string> {
+  const [a, b] = xs;
+  return a + "," + b;
+}
+each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
+pick([1, 2]).then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
+"#,
+    );
+    assert_eq!(out, "threw TypeError\nthrew TypeError");
+}
