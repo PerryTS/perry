@@ -120,6 +120,48 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
     }
 }
 
+/// The source annotations the typed-array for-of lowering walks by index.
+pub(crate) fn is_numeric_typed_array(ty: Option<&Type>) -> bool {
+    matches!(ty, Some(Type::Named(name)) if matches!(name.as_str(),
+        "Uint8Array" | "Int8Array" | "Uint8ClampedArray"
+        | "Uint16Array" | "Int16Array"
+        | "Uint32Array" | "Int32Array"
+        | "Float16Array" | "Float32Array" | "Float64Array"
+    ))
+}
+
+/// The holder of a typed-array for-of the rewrite below does not admit (a
+/// pattern or `var` head, a labeled jump, a long body): the value itself
+/// when it is a numeric typed array (`typedArrayForOfAdmits`), else the
+/// values its iterator yields, drained into an Array (`ForOfToArray`: a
+/// value that is not iterable throws node's TypeError). The annotation does
+/// not hold for the second arm, so the holder and the element are `any`.
+pub(crate) fn admitted_typed_array_holder(
+    ctx: &mut LoweringContext,
+    source: Expr,
+    out: &mut Vec<Stmt>,
+) -> Expr {
+    let id = ctx.fresh_local();
+    let name = format!("{TEMP_PREFIX}ta_{id}");
+    ctx.locals.push((name.clone(), id, Type::Any));
+    out.push(Stmt::Let {
+        id,
+        name,
+        ty: Type::Any,
+        mutable: false,
+        init: Some(source),
+    });
+    Expr::Conditional {
+        condition: Box::new(Expr::Compare {
+            op: CompareOp::Eq,
+            left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)])),
+            right: Box::new(Expr::Bool(true)),
+        }),
+        then_expr: Box::new(Expr::LocalGet(id)),
+        else_expr: Box::new(Expr::ForOfToArray(Box::new(Expr::LocalGet(id)))),
+    }
+}
+
 /// A source the IteratorRecord or a collection view already lowers better
 /// than the walk: a (parenthesized or cast) array literal keeps the record's
 /// scalar custody and constant bound, and `x.values()` / `x.keys()` /
@@ -232,7 +274,13 @@ fn source_for_of(
         // Inside the proven arm the source is an ordinary array: rebind it
         // with an array type (the source's own, when it is a local declared
         // as one) so its `length` and element reads take the array lowering.
+        // A source annotated as a numeric typed array is walked through the
+        // temp, under its own admission (`typedArrayForOfAdmits`): the walk
+        // then reads the typed array live and binds Numbers. Any other value
+        // behind that annotation takes the IteratorRecord arm.
+        let typed = is_numeric_typed_array(Some(&source_ty));
         let array_ty = match stmt.right.as_ref() {
+            _ if typed => source_ty.clone(),
             ast::Expr::Ident(id) => match ctx.lookup_local_type(&id.sym) {
                 Some(Type::Array(element)) => Type::Array(element.clone()),
                 _ => Type::Array(Box::new(Type::Any)),
@@ -257,6 +305,7 @@ fn source_for_of(
         }
         let element_ty = match &array_ty {
             Type::Array(element) => element.as_ref().clone(),
+            _ if typed => Type::Number,
             _ => Type::Any,
         };
 
@@ -313,13 +362,29 @@ fn source_for_of(
             body: loop_body,
         };
 
+        // Behind a typed-array annotation the protocol arm iterates an `any`
+        // copy of the temp: the annotation is what its admission refused.
+        let mut protocol = Vec::new();
+        let mut protocol_source = source_name.clone();
+        if typed {
+            let any = ctx.fresh_local();
+            protocol_source = format!("{TEMP_PREFIX}any_{any}");
+            ctx.locals.push((protocol_source.clone(), any, Type::Any));
+            protocol.push(Stmt::Let {
+                id: any,
+                name: protocol_source.clone(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::LocalGet(source)),
+            });
+        }
         let mut fallback = stmt.clone();
         fallback.right = Box::new(ast::Expr::Ident(ast::Ident::new(
-            source_name.as_str().into(),
+            protocol_source.as_str().into(),
             DUMMY_SP,
             Default::default(),
         )));
-        let protocol = lower_fallback(ctx, &fallback)?;
+        protocol.extend(lower_fallback(ctx, &fallback)?);
 
         // The IteratorRecord's own array-mode proof: an ordinary array whose
         // iteration members (its prototype's, the array iterator's) nobody
@@ -330,10 +395,21 @@ fn source_for_of(
         if walk_source && matches!(&array_ty, Type::Array(e) if **e == Type::Number) {
             entry_args.push(Expr::Bool(true));
         }
-        let plain = Expr::Compare {
-            op: CompareOp::Eq,
-            left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
-            right: Box::new(Expr::Bool(false)),
+        let plain = if typed {
+            Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(runtime(
+                    "typedArrayForOfAdmits",
+                    vec![Expr::LocalGet(source)],
+                )),
+                right: Box::new(Expr::Bool(true)),
+            }
+        } else {
+            Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
+                right: Box::new(Expr::Bool(false)),
+            }
         };
         let then_branch = if walk_source {
             vec![counted]

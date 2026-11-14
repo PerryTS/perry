@@ -451,6 +451,18 @@ pub(crate) fn birth_user(user: usize, size: usize) {
     let _ = (user, size);
 }
 
+/// A born object was cut to `new_total` bytes in place (its tail became a
+/// dead header): the census records the new size. Empty in default archives.
+#[inline(always)]
+pub(crate) fn resize(header: *const u8, new_total: usize) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if runner::on() {
+        runner::resize(header as usize, new_total);
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    let _ = (header, new_total);
+}
+
 /// While the census runs, compiled code must allocate through the runtime
 /// (every birth is logged), so the inline bump bound is closed.
 #[inline(always)]
