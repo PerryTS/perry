@@ -72,6 +72,25 @@ impl WasmModuleEmitter {
         hir_func: &perry_hir::ir::Function,
         force_returning: bool,
     ) -> Function {
+        self.compile_function_in(hir_func, force_returning, None)
+    }
+
+    /// A static method or static block of `class`: `(params) -> i64`, and its
+    /// `this` is the class it runs on.
+    pub(super) fn compile_static_method(
+        &self,
+        class: &perry_hir::ir::Class,
+        method: &perry_hir::ir::Function,
+    ) -> Function {
+        self.compile_function_in(method, true, Some(&class.name))
+    }
+
+    fn compile_function_in(
+        &self,
+        hir_func: &perry_hir::ir::Function,
+        force_returning: bool,
+        static_class: Option<&str>,
+    ) -> Function {
         // Build local map: param locals come first, then body locals
         let mut local_map = BTreeMap::new();
         for (i, param) in hir_func.params.iter().enumerate() {
@@ -107,6 +126,7 @@ impl WasmModuleEmitter {
             force_returning || hir_func.body.iter().any(has_return) || hir_func.name == "main";
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.returns_value = wasm_returns_i64;
+        ctx.static_class = static_class.map(str::to_string);
         ctx.emit_box_params(&mut func, &hir_func.params);
 
         for stmt in &hir_func.body {
@@ -237,6 +257,19 @@ impl WasmModuleEmitter {
             for field in &class.fields {
                 let Some(init) = &field.init else { continue };
                 let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+                // A computed field is named by the key its class definition resolved
+                // into the hidden slot `field.name`.
+                if field.key_expr.is_some() {
+                    let slot = Expr::String(field.name.clone());
+                    ctx.emit_class_bridge(
+                        func,
+                        "class_init_computed_field",
+                        &class.name,
+                        &[&slot, &Expr::This, init],
+                    );
+                    func.instruction(&Instruction::Drop);
+                    continue;
+                }
                 ctx.emit_frame_begin(func, 3);
                 // Compute base address (sp - 24) and save to temp_i32 local
                 let sp = self.nan_temp_global;

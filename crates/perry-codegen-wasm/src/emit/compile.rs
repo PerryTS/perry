@@ -636,6 +636,9 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&setter.body, &mut module_closures);
                 }
+                for member in &class.computed_members {
+                    collect_closures_from_stmts(&member.function.body, &mut module_closures);
+                }
                 for field in &class.fields {
                     if let Some(init) = &field.init {
                         collect_closures_from_expr(init, &mut module_closures);
@@ -878,6 +881,17 @@ impl WasmModuleEmitter {
                     let _ = setter;
                     user_func_idx += 1;
                 }
+                // Computed members: `this` + declared params, installed under their
+                // key when the class definition evaluates it (`class_define_computed`).
+                for member in &class.computed_members {
+                    let param_count = 1 + member.function.params.len();
+                    self.class_computed_map.insert(
+                        (class.name.clone(), member.function.name.clone()),
+                        user_func_idx,
+                    );
+                    self.func_param_counts.insert(user_func_idx, param_count);
+                    user_func_idx += 1;
+                }
             }
         }
 
@@ -933,10 +947,14 @@ impl WasmModuleEmitter {
             boxed.extend(ids.map(|id| (*mod_idx, *id)));
         }
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            let methods = module
-                .classes
-                .iter()
-                .flat_map(|class| class.methods.iter().chain(&class.static_methods));
+            let methods = module.classes.iter().flat_map(|class| {
+                let computed = class.computed_members.iter().map(|m| &m.function);
+                class
+                    .methods
+                    .iter()
+                    .chain(&class.static_methods)
+                    .chain(computed)
+            });
             for func in module.functions.iter().chain(methods) {
                 boxed.extend(
                     generator_record_captures(&func.body)
@@ -1228,6 +1246,11 @@ impl WasmModuleEmitter {
                     let type_idx = self.get_type_idx(params, results);
                     func_section.function(type_idx);
                 }
+                for member in &class.computed_members {
+                    let params = vec![ValType::I64; 1 + member.function.params.len()];
+                    let type_idx = self.get_type_idx(params, vec![ValType::I64]);
+                    func_section.function(type_idx);
+                }
             }
         }
         // Closure functions
@@ -1276,6 +1299,11 @@ impl WasmModuleEmitter {
                     if !indices.contains(idx) {
                         indices.push(*idx);
                     }
+                }
+            }
+            for idx in self.class_computed_map.values() {
+                if !indices.contains(idx) {
+                    indices.push(*idx);
                 }
             }
             for (func_id, _, _, _, _, _, mod_idx) in &closure_funcs {
@@ -1445,7 +1473,7 @@ impl WasmModuleEmitter {
                     // falls through) produces a WASM body whose `return`
                     // instructions leave an empty operand stack — V8 rejects
                     // with "expected i64 but nothing on stack".
-                    let func = self.compile_function_with_signature(method, true);
+                    let func = self.compile_static_method(class, method);
                     code_section.function(&func);
                 }
                 for (_name, getter) in &class.getters {
@@ -1454,6 +1482,10 @@ impl WasmModuleEmitter {
                 }
                 for (_name, setter) in &class.setters {
                     let func = self.compile_class_method(&class.name, setter);
+                    code_section.function(&func);
+                }
+                for member in &class.computed_members {
+                    let func = self.compile_class_method(&class.name, &member.function);
                     code_section.function(&func);
                 }
             }
@@ -1493,16 +1525,9 @@ impl WasmModuleEmitter {
                         collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
                     }
                 }
-                for class in &module.classes {
-                    for field in &class.static_fields {
-                        if let Some(init) = &field.init {
-                            collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
-                        }
-                    }
-                }
                 per_module_init_locals.push(mod_map);
             }
-            // Global and static-field initializers use the module activation locals.
+            // Global initializers use the module activation locals.
 
             let num_locals = total_count;
             let start_temp_local = num_locals;
@@ -1640,62 +1665,9 @@ impl WasmModuleEmitter {
                         func.instruction(&Instruction::Drop);
                     }
 
-                    // Register static fields
-                    for field in &class.static_fields {
-                        if let Some(init) = &field.init {
-                            let field_name_id = self
-                                .string_map
-                                .get(field.name.as_str())
-                                .copied()
-                                .unwrap_or(0);
-                            let field_bits = (STRING_TAG << 48) | (field_name_id as u64);
-                            // Store class name
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::I64Const(class_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            // Store field name
-                            func.instruction(&Instruction::I32Const(0xFF08));
-                            func.instruction(&Instruction::I64Const(field_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            // Store value
-                            let mut ctx = FuncEmitCtx::new(
-                                self,
-                                &per_module_init_locals[mod_idx],
-                                start_temp_local,
-                                start_temp_i32,
-                            );
-                            ctx.returns_value = false;
-                            ctx.emit_expr(&mut func, init);
-                            // Use temp local to store the value
-                            func.instruction(&Instruction::LocalSet(start_temp_local));
-                            func.instruction(&Instruction::I32Const(0xFF10));
-                            func.instruction(&Instruction::LocalGet(start_temp_local));
-                            // Value is already i64, no conversion needed
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            let css_id = self
-                                .string_map
-                                .get("class_set_static")
-                                .copied()
-                                .unwrap_or(0);
-                            func.instruction(&f64_const(css_id as f64));
-                            func.instruction(&f64_const(3.0));
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::Call(rt.mem_call));
-                            func.instruction(&Instruction::Drop);
-                        }
-                    }
+                    // Static field initializers run where the HIR places them (a
+                    // `StaticFieldSet` in source order, or a class evaluation), in
+                    // the scope of the class definition.
                 }
             }
 

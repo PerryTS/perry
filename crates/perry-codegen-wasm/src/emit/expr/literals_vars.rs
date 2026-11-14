@@ -60,24 +60,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::LocalGet(id) => self.emit_local_or_global_get(func, id),
             Expr::LocalSet(id, val) => {
                 self.emit_expr(func, val);
-                if self.scoped_temp_ids.contains(id) {
-                    func.instruction(&Instruction::LocalTee(self.local_map[id]));
-                } else if let Some(&gidx) = self
-                    .emitter
-                    .module_let_globals
-                    .get(&(self.emitter.current_mod_idx, *id))
-                {
-                    // Module-level let — write to WASM global, then read back to leave on stack
-                    func.instruction(&Instruction::GlobalSet(gidx));
-                    func.instruction(&Instruction::GlobalGet(gidx));
-                } else if let Some(&idx) = self.local_map.get(id) {
-                    if self.is_boxed(id) {
-                        self.emit_box_set(func, idx);
-                    } else {
-                        // Tee: set and leave on stack
-                        func.instruction(&Instruction::LocalTee(idx));
-                    }
-                }
+                self.emit_local_tee(func, id);
             }
             Expr::GlobalGet(id) => {
                 if let Some(&idx) = self.emitter.global_map.get(id) {
@@ -504,5 +487,27 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// Store the value on the stack into `id`, leaving it on the stack.
+    pub(in crate::emit) fn emit_local_tee(&mut self, func: &mut Function, id: &LocalId) {
+        if self.scoped_temp_ids.contains(id) {
+            func.instruction(&Instruction::LocalTee(self.local_map[id]));
+        } else if let Some(&gidx) = self
+            .emitter
+            .module_let_globals
+            .get(&(self.emitter.current_mod_idx, *id))
+        {
+            // Module-level let — write to WASM global, then read back to leave on stack
+            func.instruction(&Instruction::GlobalSet(gidx));
+            func.instruction(&Instruction::GlobalGet(gidx));
+        } else if let Some(&idx) = self.local_map.get(id) {
+            if self.is_boxed(id) {
+                self.emit_box_set(func, idx);
+            } else {
+                // Tee: set and leave on stack
+                func.instruction(&Instruction::LocalTee(idx));
+            }
+        }
     }
 }
