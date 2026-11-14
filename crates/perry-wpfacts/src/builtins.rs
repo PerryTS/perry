@@ -3214,7 +3214,19 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         | BuiltinNs::Boolean
         | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
-            ret_prim(m, call, prim::ALL);
+            // The call form gives one primitive kind (NewTarget undefined):
+            // `String(v)` a String (22.1.1.1), `Number(v)` a Number
+            // (21.1.1.1), `BigInt(v)` a BigInt (21.2.1.1), `Boolean(v)` a
+            // Boolean (20.3.1.1), `Symbol(d)` a Symbol (20.4.1.1; `d` gets
+            // ToString when not `undefined`).
+            let kind = match ns {
+                BuiltinNs::String => prim::STR,
+                BuiltinNs::Number => prim::NUM,
+                BuiltinNs::BigInt => prim::BIGINT,
+                BuiltinNs::Boolean => prim::BOOL,
+                _ => prim::SYMBOL,
+            };
+            ret_prim(m, call, kind);
         }
         BuiltinNs::Object => object_value(m, call),
         BuiltinNs::Array => {
