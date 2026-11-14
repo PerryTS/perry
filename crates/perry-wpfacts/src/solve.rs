@@ -405,6 +405,82 @@ impl Model {
                 self.native_replays,
                 self.native_fed
             );
+            // PERRY_WPF_TOKCENSUS=<n> (diagnostic only): the census every n-th curve line.
+            if let Some(n) = std::env::var("PERRY_WPF_TOKCENSUS").ok().and_then(|v| v.parse::<u64>().ok()) {
+                if n > 0 && (self.work.get() / WorkProfile::STEP) % n == 0 {
+                    self.tok_census("tick");
+                }
+            }
+        }
+    }
+
+    /// PERRY_WPF_TOKCENSUS (diagnostic only; facts do not depend on it):
+    /// tokens per template / function and instances per function, top 25
+    /// by each, with the distinct instance layouts and closure contexts.
+    pub fn tok_census(&self, at: &str) {
+        let mut by: crate::pts::FxHashMap<String, (usize, usize, crate::pts::FxHashSet<u32>, crate::pts::FxHashSet<u32>)> = Default::default();
+        for k in self.toks.iter() {
+            let (key, ctx) = match k {
+                TokKind::Obj(tm, c) => (format!("obj {}#{}", self.tmpls[*tm as usize].display, tm), *c),
+                TokKind::Func(f, c) => (format!("fn {}#{}", self.funcs[*f as usize].name, f), *c),
+                _ => continue,
+            };
+            let e = by.entry(key).or_default();
+            e.0 += 1;
+            e.3.insert(ctx);
+        }
+        for i in self.sum.insts.iter() {
+            let e = by.entry(format!("fn {}#{}", self.funcs[i.f as usize].name, i.f)).or_default();
+            e.1 += 1;
+            e.2.insert(i.lay);
+        }
+        let mut v: Vec<_> = by.into_iter().collect();
+        eprintln!("perry: wpfacts census {at} work={} toks={} insts={} calls={}", self.work.get(), self.toks.len(), self.sum.insts.len(), self.calls.len());
+        v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
+        for (k, (t, n, l, c)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts census tok\t{k}\ttoks={t}\tctxs={}\tinsts={n}\tlays={}", c.len(), l.len());
+        }
+        v.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(&b.0)));
+        for (k, (t, n, l, c)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts census inst\t{k}\ttoks={t}\tctxs={}\tinsts={n}\tlays={}", c.len(), l.len());
+        }
+        // Makers: per maker template, the maker contexts it keys and its
+        // distinct maker tokens; and the maker-chain depth of each token.
+        let mut mk: crate::pts::FxHashMap<String, (usize, crate::pts::FxHashSet<Tok>, usize)> = Default::default();
+        for &(_, m) in self.sum.made.iter() {
+            let key = match m {
+                crate::summary::Maker::Obj(o, bym) => match self.toks[o as usize] {
+                    TokKind::Obj(tm, _) => format!("obj {}#{} bym={bym}", self.tmpls[tm as usize].display, tm),
+                    _ => format!("other bym={bym}"),
+                },
+                crate::summary::Maker::Site(_) => "site".into(),
+                crate::summary::Maker::Val => "val".into(),
+            };
+            let e = mk.entry(key).or_default();
+            e.0 += 1;
+            if let crate::summary::Maker::Obj(o, _) = m {
+                e.1.insert(o);
+            }
+        }
+        let mut depth = [0usize; 16];
+        for k in self.toks.iter() {
+            if let TokKind::Obj(_, mut c) = k {
+                let mut d = 0usize;
+                while let Some((_, crate::summary::Maker::Obj(o, _))) = (c < crate::summary::BORN).then(|| self.sum.made.get((crate::summary::BORN - 1 - c) as usize).copied()).flatten() {
+                    d += 1;
+                    match self.toks[o as usize] {
+                        TokKind::Obj(_, c2) => c = c2,
+                        _ => break,
+                    }
+                }
+                depth[d.min(15)] += 1;
+            }
+        }
+        eprintln!("perry: wpfacts census depth {:?}", depth);
+        let mut v: Vec<_> = mk.into_iter().collect();
+        v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
+        for (k, (n, o, _)) in v.iter().take(25) {
+            eprintln!("perry: wpfacts census maker\t{k}\tctxs={n}\tmakers={}", o.len());
         }
     }
 
@@ -412,6 +488,9 @@ impl Model {
     /// the 20 nodes the most work was spent for.
     pub fn prof_report(&mut self) {
         let Some(p) = self.prof.take() else { return };
+        if std::env::var_os("PERRY_WPF_TOKCENSUS").is_some() {
+            self.tok_census("end");
+        }
         let mut ph: Vec<_> = p.phase.iter().collect();
         ph.sort_by(|a, b| b.1.cmp(a.1));
         let in_pops: u64 = p.node.values().sum();
