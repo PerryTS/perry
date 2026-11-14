@@ -2242,13 +2242,15 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// exotic object `array_absent` admits, a String, Number or Boolean
 /// primitive): no own key of such a value (an array's indices and
 /// `length`, a String wrapper's indices and `length`, 10.4.2, 10.4.3; a
-/// Number or Boolean wrapper owns none), the family's intrinsic chain to
+/// Number or Boolean wrapper owns none, 21.1.3, 20.3.3, so `length` is
+/// absent on them), the family's intrinsic chain to
 /// `%Object.prototype%` lacks it, and nothing writes it there (the
 /// program, a store through ⊤, interpreted code, unknown code holding the
 /// realm: `builtin_protos_unwritten`). OrdinaryGet (10.1.8.1), for a
 /// primitive on GetV's ToObject wrapper (7.3.2), gives `undefined`.
 fn family_absent(m: &Model, fam: crate::builtins::NativeFamily, key: &str, a: Atom) -> bool {
-    key != "length"
+    (key != "length"
+        || matches!(fam, crate::builtins::NativeFamily::Num | crate::builtins::NativeFamily::Bool))
         && key != "__proto__"
         && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
         && !matches!(key, "Infinity" | "NaN")

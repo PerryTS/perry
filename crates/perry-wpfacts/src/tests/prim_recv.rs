@@ -288,6 +288,16 @@ fn a_absent_key_beside_nullish_names_the_type_error_arm() {
         .all(|s| s.receivers.iter().any(|r| r.ends_with("(TypeError)"))));
 }
 
+/// A Number or Boolean wrapper owns no `length` (21.1.3, 20.3.3: no own
+/// properties), and neither prototype nor `%Object.prototype%` has one.
+#[test]
+fn a_length_of_a_number_or_boolean_is_absent() {
+    let pf = one(&format!("{C}const n: number = c ? 1 : 2;\nconsole.log((n as any).length);\n"));
+    assert!(all(&at(&pf, "length", false), "OwnDataOrAbsent"));
+    let pf = one(&format!("{C}const x: any = c ? 1 : true;\nconsole.log(x.length);\n"));
+    assert!(all(&at(&pf, "length", false), "OwnDataOrAbsent"));
+}
+
 #[test]
 fn control_absent_key_held_realm() {
     let pf = one(&format!("{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"));
