@@ -1,0 +1,1 @@
+Binary size: `process.execArgv` decodes the `PERRY_PROCESS_EXEC_ARGV` value a forking parent writes with a small JSON string-array reader instead of serde_json, so a program that does not use `child_process` links no JSON deserializer (about 40 KB on Linux x86-64). The reader accepts exactly what serde_json accepted, with the same strings.

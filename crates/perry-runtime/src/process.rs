@@ -18,6 +18,7 @@ mod env_misc;
 mod environment;
 #[cfg(test)]
 mod environment_tests;
+mod exec_argv_wire;
 mod exec_env;
 mod metadata_values;
 pub(crate) use env_misc::{
@@ -429,7 +430,7 @@ fn process_exec_argv_value() -> f64 {
     let values = crate::once_init::get_or_init(&EXEC_ARGV, || {
         let raw = std::env::var("PERRY_PROCESS_EXEC_ARGV").unwrap_or_else(|_| "[]".to_string());
         std::env::remove_var("PERRY_PROCESS_EXEC_ARGV");
-        serde_json::from_str(&raw).unwrap_or_default()
+        exec_argv_wire::decode(&raw).unwrap_or_default()
     });
     crate::realm_decl! { birth crate::array::realm_string_array(&values.iter().map(String::as_str).collect::<Vec<_>>(), false); realm { process.execArgv, value = dynamic, elements = string; "node:process.execArgv", value = dynamic, elements = string; } }
 }
