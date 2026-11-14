@@ -133,6 +133,12 @@ impl<'a> FuncEmitCtx<'a> {
                         "setInterval" => Some(("set_interval", 2u32)),
                         "clearTimeout" => Some(("clear_timeout", 1u32)),
                         "clearInterval" => Some(("clear_interval", 1u32)),
+                        // A literal that needs its own builder (`__proto__`, a method
+                        // using `super`) defines its keys and prototype through these.
+                        "js_object_literal_define" => Some(("object_literal_define", 3u32)),
+                        "js_object_literal_set_prototype" => {
+                            Some(("object_literal_set_prototype", 2u32))
+                        }
                         _ => None,
                     };
                     if let Some((bridge, arity)) = timer {

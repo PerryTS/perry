@@ -1862,6 +1862,28 @@ const __memDispatch = {
     if (!obj || typeof obj !== 'object') return undefined;
     return obj[String(key)];
   },
+  // A literal's property is defined, so a setter on its prototype does not run.
+  object_literal_define: (obj, key, value) => {
+    if (obj && typeof obj === 'object') {
+      Object.defineProperty(obj, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+    return obj;
+  },
+  // Only an object or null becomes the prototype; any other value is ignored.
+  object_literal_set_prototype: (obj, proto) => {
+    if (obj && typeof obj === 'object' && (proto === null || typeof proto === 'object' || typeof proto === 'function')) {
+      Object.setPrototypeOf(obj, proto);
+    }
+    return obj;
+  },
+  // `super[key](args)` with HomeObject `home`: look up from home's [[Prototype]], call with `receiver`.
+  object_super_call: (home, key, receiver, args) => {
+    const proto = home && typeof home === 'object' ? Object.getPrototypeOf(home) : null;
+    if (proto === null) return undefined;
+    const fn = Reflect.get(proto, key, receiver);
+    if (typeof fn === 'function') return __callHostFunction(fn, args, receiver);
+    return __memDispatch.closure_call_spread(fn, args);
+  },
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!obj || typeof obj !== 'object') return undefined;
