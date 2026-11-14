@@ -725,3 +725,57 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+#[test]
+fn property_update_stores_and_returns_the_old_or_new_value() {
+    assert_eq!(
+        run_web_source(
+            "class P { x: number; constructor(x: number) { this.x = x } }
+             const r = new P(5); const a = r.x++; console.log(a, r.x);
+             const o: any = { x: 5 };
+             const b = o.x++; console.log(b, o.x);
+             const d = ++o.x; console.log(d, o.x);
+             o.x--; console.log(o.x);
+             const e = --o.x; console.log(e, o.x);
+             o.x++; console.log(o.x);"
+        ),
+        "5 6\n5 6\n7 7\n6\n5 5\n6"
+    );
+}
+
+#[test]
+fn member_update_on_this_computed_keys_and_elements() {
+    assert_eq!(
+        run_web_source(
+            "class C {
+               n = 0; items: number[] = [0, 0];
+               inc(): number { return this.n++; }
+               pre(): number { return ++this.n; }
+               bump(): number { this.n++; return this.items[1]++; }
+             }
+             const c = new C();
+             console.log(c.inc(), c.n); console.log(c.pre(), c.n);
+             console.log(c.bump(), c.n);
+             console.log(c.items.join(','));
+             const o: any = { y: 10 }; const k = 'y';
+             const a = o[k]++; console.log(a, o.y);
+             const b = ++o[k]; console.log(b, o.y);"
+        ),
+        "0 1\n2 2\n0 3\n0,1\n10 11\n12 12"
+    );
+}
+
+#[test]
+fn member_update_evaluates_base_and_key_once() {
+    assert_eq!(
+        run_web_source(
+            "let calls = 0; const o: any = { x: 1 };
+             function get(): any { calls++; return o; }
+             const a = get().x++; console.log(a, o.x, calls);
+             const b = ++get().x; console.log(b, o.x, calls);
+             const arr = [5, 6]; let i = 0;
+             const c = arr[i++]++; console.log(c, arr.join(','), i);"
+        ),
+        "1 2 1\n3 3 2\n5 6,6 1"
+    );
+}
