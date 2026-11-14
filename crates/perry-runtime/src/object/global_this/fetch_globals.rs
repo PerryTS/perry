@@ -448,6 +448,17 @@ fn realm_setup(phases: RealmPhases, poison: bool) -> f64 {
             &c.core as *const std::cell::Cell<u64>
         }
     });
+    if phases == RealmPhases::Both && realm_two_phase() {
+        // A two-phase program whose first touch is the full entry: its
+        // compiled reads of core names call the core entry from now on, so
+        // that entry gets its own copy of the word (a second registered
+        // root) instead of the slow half on every call.
+        THREAD_GLOBAL_THIS.with(|c| {
+            c.core
+                .set(crate::value::js_nanbox_pointer(new_ptr).to_bits());
+            crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
+        });
+    }
     // SAFETY: the thread-local's cell, live for the life of this thread.
     let cell = unsafe { &*cell };
     cell.set(crate::value::js_nanbox_pointer(new_ptr).to_bits());
