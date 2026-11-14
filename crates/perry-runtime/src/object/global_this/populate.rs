@@ -86,15 +86,16 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
     // Every install below is a builtin definition, which arms the own-override
     // guard only on a Map, Set or Date owner (#10697).
     super::super::own_override::as_builtin_definition(|| {
-        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Both)
+        populate_global_this_builtins_inner(singleton_at_entry)
     })
 }
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
+/// Linked only into a program compiled for a two-phase realm.
 #[inline(never)]
 pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     super::super::own_override::as_builtin_definition(|| {
-        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Core)
+        populate_realm_phase(singleton_at_entry, RealmPhases::Core)
     })
 }
 
@@ -107,7 +108,7 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
 #[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
     super::super::own_override::as_builtin_definition(|| {
-        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Rest)
+        populate_realm_phase(singleton_at_entry, RealmPhases::Rest)
     })
 }
 
@@ -142,8 +143,28 @@ impl RealmPhases {
 crate::realm_decl! { Infinity, value = Infinity; NaN, value = NaN; crypto, attrs = 6, get = "crypto.<get>", births = [ArrayBuffer, Crypto, CryptoKey, Promise, SubtleCrypto]; global, attrs = 7, alias = "%Global%"; globalThis, alias = "%Global%"; localStorage, attrs = 4, get = "localStorage.<get>", set = "localStorage.<set>"; sessionStorage, attrs = 6, get = "sessionStorage.<get>", set = "sessionStorage.<set>"; undefined, value = undefined; }
 // Compact the once-per-realm installer, not the methods it installs. Blanket
 // Oz also shrinks/outlines hot array and iterator helpers (#13662).
+//
+// The one-pass population: every row, in declaration order. Its body is
+// `populate_rows` specialized for `RealmPhases::Both`, so no row tests a
+// phase: the code of the population as it was before the realm had phases.
 #[optimize(size)]
-fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
+fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
+    populate_rows(singleton_at_entry, RealmPhases::Both)
+}
+
+/// One phase of a two-phase realm: the same rows, each behind its phase test
+/// (`RealmPhases::binds`). A second copy of the population, linked only into
+/// a program compiled for a two-phase realm.
+#[optimize(size)]
+#[inline(never)]
+fn populate_realm_phase(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
+    populate_rows(singleton_at_entry, phases)
+}
+
+/// The rows of the population. Inlined into its two callers: with the
+/// constant `Both` every phase test folds away.
+#[inline(always)]
+fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     if singleton_at_entry.is_null() {
         return;
     }

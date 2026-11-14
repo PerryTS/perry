@@ -310,6 +310,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_get_global_core", DOUBLE, &[]);
     module.declare_function("js_realm_two_phase", VOID, &[I32]);
     module.declare_function("js_realm_check_global_read", VOID, &[DOUBLE]);
+    module.declare_function("js_realm_complete", DOUBLE, &[]);
     module.declare_function("js_module_top_this", DOUBLE, &[]);
     module.declare_function("js_global_or_console_property_by_name", DOUBLE, &[I64]);
     // Refs #420: register a static computed-key Symbol field on a class.

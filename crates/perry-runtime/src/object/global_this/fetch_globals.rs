@@ -52,37 +52,68 @@ static REALM_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::ne
 const REALM_MODE_TWO_PHASE: u8 = 1;
 const REALM_MODE_POISON: u8 = 2;
 
-/// Is the program compiled for a two-phase realm? One load of a static, on
-/// paths that are about to build a realm or to ask which phase a name needs.
-/// When it is not, every such path is the call of [`js_get_global_this`] it
-/// always was.
-#[inline(always)]
-pub(crate) fn realm_two_phase() -> bool {
-    #[cfg(test)]
-    if TEST_TWO_PHASE.with(|c| c.get()) {
-        return true;
-    }
-    REALM_MODE.load(Ordering::Relaxed) != 0
-}
-
 #[cfg(test)]
 crate::perry_thread_local! {
     /// Tests: THIS thread runs as a thread of a two-phase program
-    /// ([`core_realm_for_test`]); the process-wide mode stays off for the
-    /// other test threads.
+    /// ([`core_realm_for_test`]); the other test threads stay one-pass.
     static TEST_TWO_PHASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// This thread's realm global for a runtime reader of a phase-A intrinsic
-/// (`%Function.prototype%`, `%RegExp.prototype%`, a lazy family's birth): the
-/// core of a two-phase realm, the realm otherwise.
-#[inline]
-pub(crate) fn realm_core() -> f64 {
-    if realm_two_phase() {
-        js_get_global_core()
-    } else {
-        js_get_global_this()
+// The two link-time hooks of the two-phase realm. The runtime defines both
+// WEAK; a program compiled with `PERRY_REALM_TWO_PHASE=1` defines both strong
+// in its entry module (`perry-codegen`, `codegen/entry.rs`), so which entry a
+// runtime reader of a phase-A intrinsic calls is decided by the LINK: no mode
+// is loaded and nothing is tested on any call, and a program that is not
+// compiled for two phases does not link the two-phase path at all (nothing
+// in it references `js_get_global_core` or the phase-B driver).
+
+/// The realm global for a runtime reader of a phase-A intrinsic
+/// (`%Function.prototype%`, `%RegExp.prototype%`, a lazy family's birth, a
+/// by-name read of a core name). The default, linked when the program is not
+/// compiled for two phases: the full entry, with its fast path here so that a
+/// call costs what a call of [`js_get_global_this`] costs. A two-phase
+/// program's definition is a jump to [`js_get_global_core`].
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_core_entry() -> f64 {
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
+    if mine != 0 {
+        return f64::from_bits(mine);
     }
+    js_get_global_this()
+}
+
+/// The full entry found a core-only realm: complete it. The default is never
+/// reached (only a two-phase program makes a core-only realm, and it defines
+/// this as a jump to [`js_realm_complete`]); it exists so that the one-pass
+/// link does not hold the phase-B driver.
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_complete() -> f64 {
+    realm_complete_unlinked()
+}
+
+#[cold]
+#[inline(never)]
+fn realm_complete_unlinked() -> ! {
+    eprintln!(
+        "perry: a core-only realm in a program whose entry was not compiled for a two-phase realm"
+    );
+    std::process::abort();
+}
+
+/// This thread's realm global for a runtime reader of a phase-A intrinsic:
+/// the core of a two-phase realm, the realm otherwise. One call, chosen at
+/// link time ([`perry_realm_core_entry`]).
+#[inline(always)]
+pub(crate) fn realm_core() -> f64 {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_get_global_core();
+    }
+    perry_realm_core_entry()
 }
 
 /// A program compiled with `PERRY_REALM_TWO_PHASE=1` calls this once from its
@@ -138,6 +169,7 @@ pub(crate) fn realm_is_complete() -> bool {
 
 /// This thread's realm global as a tagged word, complete or not; 0 before it
 /// exists. For identity questions only: never hand it to a reader of slots.
+#[inline(always)]
 fn thread_global_bits() -> u64 {
     THREAD_GLOBAL_THIS.with(|c| match c.whole.get() {
         0 => match c.core.get() {
@@ -146,37 +178,6 @@ fn thread_global_bits() -> u64 {
         },
         whole => whole,
     })
-}
-
-/// This thread's realm global for a BY-NAME read of the global `name`: the
-/// complete realm for a name phase B binds and for the value names (the
-/// global itself, an accessor); the core for every other name. A name the
-/// layout does not declare is absent from the core exactly as it is from the
-/// complete realm (phase B adds no key, and whatever adds one takes the full
-/// entry first), so its read needs no phase B either. One load when the realm
-/// is complete; the name is only looked at before that, in a two-phase
-/// program.
-#[inline]
-pub(crate) fn global_for_name(name: &str) -> f64 {
-    let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
-    if mine != 0 {
-        return f64::from_bits(mine);
-    }
-    if realm_two_phase() {
-        return global_for_name_slow(name);
-    }
-    js_get_global_this()
-}
-
-// Not cold: a two-phase program that never completes its realm comes here
-// on every by-name read (listed in the default hot-text order).
-#[inline(never)]
-fn global_for_name_slow(name: &str) -> f64 {
-    if crate::codegen_abi::realm_rest_global(name) || crate::codegen_abi::realm_value_global(name) {
-        js_get_global_this()
-    } else {
-        js_get_global_core()
-    }
 }
 
 #[cfg(test)]
@@ -297,10 +298,11 @@ fn complete_realm() {
 
 /// The full entry asked for a two-phase realm whose core exists: run phase B,
 /// unless the asker is phase A itself (the population reads the global it is
-/// filling: it gets the realm as it is). (Listed in the default hot-text
-/// order: phase A calls it for each of its own reads of the global.)
-#[inline(never)]
-fn complete_core_realm() -> f64 {
+/// filling: it gets the realm as it is). Reached only through
+/// [`perry_realm_complete`], which a two-phase program defines as a jump
+/// here.
+#[no_mangle]
+pub extern "C" fn js_realm_complete() -> f64 {
     if !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()) {
         complete_realm();
         return f64::from_bits(THREAD_GLOBAL_THIS.with(|c| c.whole.get()));
@@ -321,7 +323,11 @@ pub extern "C" fn js_get_global_this() -> f64 {
         return f64::from_bits(mine);
     }
     if THREAD_GLOBAL_THIS.with(|c| c.core.get()) != 0 {
-        return complete_core_realm();
+        #[cfg(test)]
+        if TEST_TWO_PHASE.with(|c| c.get()) {
+            return js_realm_complete();
+        }
+        return perry_realm_complete();
     }
     // First access on this thread: the complete realm in one pass, every row
     // in its declared place.
@@ -332,7 +338,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
 /// phase A's slots bound (`perry_abi::realm_phase`). Its only callers:
 /// a compiled static read of a `REALM_CORE_GLOBALS` name (the read's shape
 /// site loads that name's slot and nothing else), and, through
-/// [`realm_core`], [`global_for_name`] and `array::realm_intrinsic_addr`,
+/// [`realm_core`] and `array::realm_intrinsic_addr`,
 /// the runtime's readers of a phase-A intrinsic
 /// (`closure::shape::function_prototype_ptr_materialized`,
 /// `regex::instance::intrinsic_prototype`, a lazy family's birth). The value
@@ -349,17 +355,31 @@ pub extern "C" fn js_get_global_core() -> f64 {
     realm_core_slow()
 }
 
-/// The cold half of the core entry: a realm populated in one pass (it serves
-/// both entries), or this thread's first touch of the realm.
+/// The cold half of the core entry: this thread's first touch of the realm
+/// (phase A alone), or a realm that was populated in one pass because its
+/// first touch was the full entry: it serves both entries, and the core cell
+/// gets its own registered copy of the word here, once.
 #[inline(never)]
 fn realm_core_slow() -> f64 {
     let whole = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
-    if whole != 0 {
-        return f64::from_bits(whole);
-    }
     let mode = REALM_MODE.load(Ordering::Acquire);
+    #[cfg(test)]
+    let mode = if TEST_TWO_PHASE.with(|c| c.get()) {
+        mode | REALM_MODE_TWO_PHASE
+    } else {
+        mode
+    };
     if mode & REALM_MODE_TWO_PHASE == 0 {
+        // Not a two-phase program (an object compiled for one, linked into
+        // one that is not): the full entry.
         return js_get_global_this();
+    }
+    if whole != 0 {
+        THREAD_GLOBAL_THIS.with(|c| {
+            c.core.set(whole);
+            crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
+        });
+        return f64::from_bits(whole);
     }
     realm_setup(RealmPhases::Core, mode & REALM_MODE_POISON != 0)
 }
@@ -376,6 +396,9 @@ static KEEP_JS_REALM_TWO_PHASE: extern "C" fn(i32) = js_realm_two_phase;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_REALM_CHECK_GLOBAL_READ: extern "C" fn(f64) = js_realm_check_global_read;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_COMPLETE: extern "C" fn() -> f64 = js_realm_complete;
 
 /// First access on this thread: allocate the realm global and populate it,
 /// `phases` = `Both` (one pass, every row in its declared place) or `Core`
@@ -444,17 +467,6 @@ fn realm_setup(phases: RealmPhases, poison: bool) -> f64 {
             &c.core as *const std::cell::Cell<u64>
         }
     });
-    if phases == RealmPhases::Both && realm_two_phase() {
-        // A two-phase program whose first touch is the full entry: its
-        // compiled reads of core names call the core entry from now on, so
-        // that entry gets its own copy of the word (a second registered
-        // root) instead of the slow half on every call.
-        THREAD_GLOBAL_THIS.with(|c| {
-            c.core
-                .set(crate::value::js_nanbox_pointer(new_ptr).to_bits());
-            crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
-        });
-    }
     // SAFETY: the thread-local's cell, live for the life of this thread.
     let cell = unsafe { &*cell };
     cell.set(crate::value::js_nanbox_pointer(new_ptr).to_bits());

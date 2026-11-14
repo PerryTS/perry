@@ -237,7 +237,7 @@ mod tests {
             assert!(method.is_pointer(), "hasOwnProperty missing");
 
             crate::object::js_get_global_this();
-            let global_object = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+            let global_object = crate::object::builtin_value_core("Object");
             let (ctor_now, proto_now) = ensure_object_intrinsics();
             assert_eq!(
                 global_object.to_bits(),

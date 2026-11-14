@@ -284,11 +284,7 @@ fn realm_intrinsic_addr(
 ) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::realm_is_complete() {
-        if crate::object::realm_two_phase() {
-            run_phase_of(identity);
-        } else {
-            crate::object::js_get_global_this();
-        }
+        run_phase_of(identity);
         addr = cell.get();
     }
     if addr == 0 {
@@ -303,16 +299,24 @@ fn realm_intrinsic_addr(
     heal_prototype_addr(cell, addr)
 }
 
-/// A two-phase realm that is not complete: run the phase that binds
-/// `identity`'s family. Phase B through the full entry (which leaves the
-/// realm as it is when the asker is phase A itself); the core when this
-/// thread has no realm yet. (Not cold: listed in the default hot-text order.)
+/// The realm is not complete (this thread has none, or a two-phase realm's
+/// core only): run the phase that binds `identity`'s family. Phase B through
+/// the full entry (which leaves the realm as it is when the asker is phase A
+/// itself); the core when this thread has no realm yet, through the entry
+/// the link chose (`perry_realm_core_entry`: the full entry in a program
+/// that is not compiled for two phases). (Not cold: it is the first touch of
+/// the realm for a program that asks an intrinsic first; listed in the
+/// default hot-text order.)
 #[inline(never)]
 fn run_phase_of(identity: crate::object::BuiltinConstructorIdentity) {
-    if crate::codegen_abi::realm_rest_global(identity.name()) {
+    if !crate::object::global_this_is_materialized() {
+        if crate::codegen_abi::realm_rest_global(identity.name()) {
+            crate::object::js_get_global_this();
+        } else {
+            crate::object::realm_core();
+        }
+    } else if crate::codegen_abi::realm_rest_global(identity.name()) {
         crate::object::js_get_global_this();
-    } else if !crate::object::global_this_is_materialized() {
-        crate::object::js_get_global_core();
     }
 }
 
