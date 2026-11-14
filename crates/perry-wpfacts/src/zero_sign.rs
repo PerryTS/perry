@@ -210,6 +210,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ShareBuffer { .. }
         | Cons::Captures { .. }
         | Cons::StrReplace { .. }
+        | Cons::ClassReplace { .. }
         | Cons::RegExpPattern { .. }
         | Cons::ViewedBuffer { .. }
         | Cons::HolderStep { .. }

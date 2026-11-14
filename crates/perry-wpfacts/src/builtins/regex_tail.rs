@@ -428,6 +428,34 @@ impl Model {
     }
 }
 
+/// Rule M9: the ASCII characters (bit c for c) of a pattern that is one
+/// class or character, under flags `g` (and `d`) only: what a global
+/// `replace` removes.
+pub(crate) fn global_class(src: &str, flags: &str) -> Option<u128> {
+    if !flags.contains('g') || !flags.chars().all(|f| f == 'g' || f == 'd') {
+        return None;
+    }
+    let mut p = Parser {
+        s: src.encode_utf16().collect(),
+        i: 0,
+        groups: 0,
+    };
+    let seq = p.seq()?;
+    if p.i != p.s.len() {
+        return None;
+    }
+    let [q] = seq.as_slice() else { return None };
+    if (q.min, q.max) != (1, Some(1)) {
+        return None;
+    }
+    let k = match &q.item {
+        Item::Class(k) => k.clone(),
+        Item::Lit(c) => Class(vec![(*c, *c)]),
+        Item::Group { .. } => return None,
+    };
+    Some((0u16..128).filter(|&c| k.has(c)).fold(0, |m, c| m | 1u128 << c))
+}
+
 pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
     if !flags.chars().all(|f| f == 'd' || f == 'g') {
         return None;
@@ -696,6 +724,15 @@ mod unit {
         let src = r"^((?:[^\[\]\.:\/]+[\/:])*)([^\[\]:\/]+)?(?:\.([^\[\]\.:\/]+)(?:\[(.+)\])?)?\.([^\[\]\.:\/]+)(?:\[(.+)\])?$";
         let d = caps(src, ".quaternion");
         assert_eq!(d, vec![(5, Some(vec!["quaternion".to_string()]), false), (6, Some(vec![]), true)]);
+    }
+
+    #[test]
+    fn global_class_masks() {
+        let m = |s: &str| s.chars().fold(0u128, |m, c| m | 1u128 << c as u32);
+        assert_eq!(global_class(r"[\[\]\.:\/]", "g"), Some(m("[].:/")));
+        assert_eq!(global_class(r"\s", "g"), Some(m(" \t\n\u{b}\u{c}\r")));
+        assert_eq!(global_class(r"[\[\]\.:\/]", ""), None);
+        assert_eq!(global_class(r"[ab]c", "g"), None);
     }
 
     #[test]

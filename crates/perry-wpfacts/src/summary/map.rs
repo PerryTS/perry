@@ -432,6 +432,7 @@ pub fn map_cons(
             search: n(search),
             repl: n(repl),
         },
+        ClassReplace { dst, tok, repl } => ClassReplace { dst: n(dst), tok, repl: n(repl) },
         RegExpPattern { tok } => RegExpPattern { tok },
         ViewedBuffer { view, fresh, share } => ViewedBuffer { view, fresh, share },
         BoundCall { reason, bound } => BoundCall { reason, bound },
@@ -590,6 +591,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ShareBuffer { .. }
             | Captures { .. }
             | StrReplace { .. }
+            | ClassReplace { .. }
             | RegExpPattern { .. }
             | ViewedBuffer { .. }
             | BoundCall { .. }
@@ -622,6 +624,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | ArrayLenArg { dst }
         | CaseMap { dst, .. }
         | StrReplace { dst, .. }
+        | ClassReplace { dst, .. }
         | IterNext { dst }
         | FromArrayLike { dst }
         | ProtoOf { dst }

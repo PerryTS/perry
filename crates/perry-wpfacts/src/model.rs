@@ -1805,6 +1805,15 @@ pub struct Model {
     /// flags; the `exec` records (and inputs) waiting for an undecided P,
     /// and those records.
     pub(crate) regexp_ctor_toks: crate::pts::FxHashSet<Tok>,
+    /// Rule M9: the ASCII characters of a regex literal's one class when
+    /// its flags are `g` (and `d`) only (`regex_tail::global_class`).
+    pub(crate) regexp_class_of: crate::pts::FxHashMap<TmplId, u128>,
+    /// Rule M9: the pattern and flags operands of `new RegExp(P, F)`.
+    pub(crate) regexp_ctor_args: crate::pts::FxHashMap<Tok, (NodeId, NodeId)>,
+    /// Nodes given a String form that holds only while no unknown code
+    /// exists (`realm_held`): any string once it does
+    /// (`Model::realm_widen_strs`).
+    pub(crate) realm_str_dsts: Vec<NodeId>,
     pub(crate) regexp_pending: crate::pts::FxHashMap<Tok, Vec<(Tok, NodeId)>>,
     pub(crate) regexp_pending_recs: crate::pts::FxHashSet<Tok>,
     /// Rule M8: each regex literal template whose `source` is its pattern

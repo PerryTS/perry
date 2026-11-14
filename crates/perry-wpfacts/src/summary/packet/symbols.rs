@@ -487,6 +487,10 @@ impl Model {
                 search,
                 repl,
             } => format!("StrReplace dst={dst:?} recv={recv:?} search={search:?} repl={repl:?}"),
+            Cons::ClassReplace { dst, tok, repl } => format!(
+                "ClassReplace dst={dst:?} tok={:?} repl={repl:?}",
+                self.packet_token(tok, packet)
+            ),
             Cons::RegExpPattern { tok } => {
                 format!("RegExpPattern tok={:?}", self.packet_token(tok, packet))
             }

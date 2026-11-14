@@ -2093,6 +2093,16 @@ impl Model {
                     self.add_s(dst, &[], prim::STR, s);
                 }
             }
+            // Rule M9: RegExp.prototype[@@replace] of a global one-class
+            // pattern.
+            Cons::ClassReplace { dst, tok, repl } => {
+                if let Some(s) = self.class_replace_strs(tok, repl) {
+                    if s != STRS_TOP {
+                        self.realm_str_dsts.push(dst);
+                    }
+                    self.add_s(dst, &[], prim::STR, s);
+                }
+            }
             // Rule M7: the pattern of `new RegExp(P)`.
             Cons::RegExpPattern { tok } => self.regexp_pattern(n, tok),
             Cons::Captures { rec, pat } => {
