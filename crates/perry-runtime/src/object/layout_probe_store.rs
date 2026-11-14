@@ -68,8 +68,7 @@ pub(super) unsafe fn overflow(
     // one store, made here. The entry's kind is asked first, one test of its
     // attributes word: a fixed-slot reference never pays for the value's
     // barrier class.
-    if crate::object::overflow::holds_own_value(t, i)
-        && crate::gc::barrier_scalar_child_skips(bits)
+    if crate::object::overflow::holds_own_value(t, i) && crate::gc::barrier_scalar_child_skips(bits)
     {
         if let Some(slot) = crate::object::overflow::own_writable_value(t, i) {
             // GC_STORE_AUDIT(POINTER_FREE): a scalar word the barrier skips; the table owns this value word.
