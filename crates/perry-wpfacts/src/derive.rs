@@ -1772,6 +1772,13 @@ fn judge(
                         own_or_absent += 1;
                         continue;
                     }
+                    // An array whose own keys are data (a stored named key,
+                    // an index, `length`) and whose chain lacks the key past
+                    // it: an own data value or `undefined`.
+                    if !s.is_call && json_chain_array(m, t, key, s.key) {
+                        own_or_absent += 1;
+                        continue;
+                    }
                     if !s.is_call && json_own_or_absent(m, t, key, s.key) {
                         own_or_absent += 1;
                         if m.json_relink.contains(&t)
@@ -2448,7 +2455,9 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
 /// chain of `JSON.parse` object `t` after `__proto__` stores
 /// (`json_relink`, modeled by `given_prototype`) holds only `JSON.parse`
 /// objects under the same conditions (their own data is data; relinked
-/// ones are walked), arrays on which the key is absent (`array_absent`),
+/// ones are walked), arrays on which the key is absent (`array_absent`) or
+/// whose own keys are data and whose `%Array.prototype%` lacks the key
+/// (`json_chain_array`),
 /// `%Object.prototype%` and null; the end lacks the key. A named read then
 /// gives a data value of a chain object or `undefined`. `Ok(true)`: null
 /// may end the chain (the null-ended arm).
@@ -2487,7 +2496,7 @@ fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, Str
                 }
                 continue;
             }
-            if array_absent(m, p, key, a) {
+            if array_absent(m, p, key, a) || json_chain_array(m, p, key, a) {
                 continue;
             }
             return Err(format!("relink: prototype {} may hold the key", m.tok_name(p)));
@@ -2499,6 +2508,35 @@ fn json_relink_closed(m: &Model, t: Tok, key: &str, a: Atom) -> Result<bool, Str
         return Err("relink: the chain's end may hold the key".into());
     }
     Ok(null)
+}
+
+/// An Array exotic object `p` on a relinked `JSON.parse` object's chain
+/// whose own keys the program may store (the `t[k] = v` that relinks may
+/// write onto `p` too): the read under `key` ends on `p` with a data value
+/// or continues at `%Array.prototype%`. Its own keys are data: its indices
+/// and `length` (ECMA-262 10.4.2), a named key a store adds
+/// (`array_named_property_set`, perry-runtime array/indexing_keyed.rs
+/// `js_array_set_string_key`), no accessor (token or template), no hard
+/// operation, no escape. A store under `__proto__` onto an Array adds an
+/// own named data key in the runtime (the same funnel; `[[Prototype]]`
+/// stays `%Array.prototype%`, which `arr.__proto__` reads:
+/// get_field_by_name_tail.rs `array_proto_slot`), and a relink by
+/// `Object.setPrototypeOf` is hard. `length` is `p`'s own data. Any other
+/// key: `%Array.prototype%`'s chain lacks it and nothing writes it there
+/// (`family_absent` for the Array family; its own `__proto__`, index and
+/// private keys refuse).
+fn json_chain_array(m: &Model, p: Tok, key: &str, a: Atom) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[p as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
+        && exact_array(m, p)
+        && m.accessor_keys.get(&p).is_none_or(|k| k.is_empty())
+        && m.tmpls[tm as usize].accessor_keys.is_empty()
+        && !m.hard.contains_key(&p)
+        && !m.is_escaped(p)
+        && !m.is_private_atom(a)
+        && (key == "length" || family_absent(m, crate::builtins::NativeFamily::Array, key, a))
 }
 
 /// A `JSON.parse` object whose own keys are data and which unknown code

@@ -222,21 +222,46 @@ fn null_arm(pf: &ProgramFacts, key: &str) -> bool {
         .all(|s| s.receivers.iter().any(|r| r.contains("chain ends at null")))
 }
 
-/// The rule reads the chain: JSON objects' data, arrays lacking the key,
-/// the end (`Object.prototype` lacking it, or null, the null-ended arm).
-/// Here it refuses, exactly: ParseJSON may give an array at `j.a` as well
-/// (the parse's array token sits beside the object token), so the store
-/// `t[k] = j.b[k]` also writes a named key onto that array (or relinks
-/// it, or under `length` runs ArraySetLength, 10.4.2.4), and the array may
-/// be the new prototype: the chain holds an array that may hold the key.
+fn granted(pf: &ProgramFacts, key: &str) -> bool {
+    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
+    eprintln!("NOTUNIT4 {key}: {:?}", v.iter().map(|s| (&s.verdict, &s.receivers)).collect::<Vec<_>>());
+    !v.is_empty() && v.iter().all(|s| matches!(s.verdict, Verdict::OwnDataOrAbsent))
+}
+
+fn refused(pf: &ProgramFacts, key: &str) -> bool {
+    let v: Vec<_> = pf.sites.iter().filter(|s| s.key == key && !s.is_call).collect();
+    eprintln!("NOTUNIT4 {key}: {:?}", v.iter().map(|s| (&s.verdict, &s.receivers)).collect::<Vec<_>>());
+    !v.is_empty() && v.iter().all(|s| matches!(s.verdict, Verdict::No(_)))
+}
+
+/// The rule reads the chain: JSON objects' data, arrays, the end
+/// (`Object.prototype` lacking the key, or null, the null-ended arm).
+/// ParseJSON may give an array at `j.a` (the parse's array token sits
+/// beside the object token), so `t[k] = j.b[k]` may also store onto that
+/// array (a named own data key; under an index an element; under `length`
+/// ArraySetLength, 10.4.2.4; under `__proto__` the runtime adds an own
+/// named data key), and the array may be the new prototype. Its own keys
+/// are data and `%Array.prototype%` lacks `x`: both reads are own data or
+/// `undefined`, the null end named.
 #[test]
-fn relink_to_json_values_target_may_be_an_array() {
-    let pf = one(&format!("{C}{RL}console.log(t.x);\n"));
-    assert!(pf.sites.iter().filter(|s| s.key == "x" && !s.is_call).all(|s| matches!(
-        &s.verdict,
-        Verdict::No(r) if r.contains("relink: prototype") && r.contains("may hold the key")
-    )));
-    assert!(!null_arm(&pf, "x"));
+fn relink_to_json_values_target_may_be_an_array_is_closed() {
+    let pf = one(&format!("{C}{RL}console.log(t.x);\nconsole.log(j.c.x);\n"));
+    assert!(granted(&pf, "x"));
+    assert!(null_arm(&pf, "x"));
+}
+
+/// Control (i): `map` is an `%Array.prototype%` member: refused.
+#[test]
+fn control_relink_array_prototype_member_refused() {
+    let pf = one(&format!("{C}{RL}console.log(t.map);\n"));
+    assert!(refused(&pf, "map"));
+}
+
+/// Control (iii): the program writes `x` onto `%Array.prototype%`: refused.
+#[test]
+fn control_relink_array_prototype_written_refused() {
+    let pf = one(&format!("{C}(Array.prototype as any).x = 1;\n{RL}console.log(t.x);\n"));
+    assert!(refused(&pf, "x"));
 }
 
 /// Control: a program object may become the prototype: refused.
@@ -248,12 +273,19 @@ fn control_relink_to_a_program_object() {
     assert!(none(&at(&pf, "x", false), "OwnDataOrAbsent"));
 }
 
-/// Control: a JSON array may become the prototype; under `length` the read
-/// finds the array's own `length`: refused.
+/// Control (iv): under `length` the objects and arrays are closed (an
+/// array's `length` is its own data, a number; OwnDataOrAbsent states own
+/// data or `undefined`, no value set), but `t` may be a JSON string, whose
+/// `length` is the String wrapper's own key (10.4.3), which the primitive
+/// rule does not describe: refused, by the primitive.
 #[test]
 fn control_relink_to_an_array_reads_its_length() {
     let pf = one(&format!("{C}{RL}console.log(t.length);\n"));
-    assert!(none(&at(&pf, "length", false), "OwnDataOrAbsent"));
+    assert!(refused(&pf, "length"));
+    assert!(pf.sites.iter().filter(|s| s.key == "length" && !s.is_call).all(|s| matches!(
+        &s.verdict,
+        Verdict::No(r) if r.contains("primitive beside an object")
+    )));
 }
 
 /// A call on the relinked object: the JSON call claim refuses (a call).

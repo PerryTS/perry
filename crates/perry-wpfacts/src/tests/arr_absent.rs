@@ -72,6 +72,8 @@ fn iii_clone_uniforms_instances_and_array_literal() {
     assert!(all_own(&v), "{v:?}");
 }
 
+/// The array's own keys are data (`a.POSITION = 5` adds a named data key):
+/// own data or `undefined` holds (`json_chain_array`), no longer refused.
 #[test]
 fn control_named_store_on_the_array() {
     let pf = one(&format!(
@@ -79,16 +81,18 @@ fn control_named_store_on_the_array() {
          const v: any = c ? {{ POSITION: 1 }} : a;\nconsole.log(v.POSITION);\n"
     ));
     let v = reads(&pf, "POSITION");
-    assert!(none_own(&v), "{v:?}");
+    assert!(all_own(&v), "{v:?}");
 }
 
+/// An Array's `length` is its own data (10.4.2): own data or `undefined`
+/// holds (`json_chain_array`), no longer refused.
 #[test]
 fn control_length_is_not_this_rule() {
     let pf = one(&format!(
         "{C}const v: any = c ? {{ a: 1 }} : [1, 2];\nconsole.log(v.length);\n"
     ));
     let v = reads(&pf, "length");
-    assert!(none_own(&v), "{v:?}");
+    assert!(all_own(&v), "{v:?}");
 }
 
 #[test]
