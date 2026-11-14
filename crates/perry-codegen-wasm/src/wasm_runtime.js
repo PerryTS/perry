@@ -3042,8 +3042,10 @@ function perry_ui_toggle_create(label, callback) {
   if (label) { const sp = document.createElement("span"); sp.textContent = label; wrap.appendChild(sp); }
   wrap._perryCallback = callback;
   wrap._inp = inp;
+  // `Toggle(label, onChange: (value: boolean) => void)`: the callback receives the
+  // boolean itself, so `value === true` holds there.
   inp.addEventListener("change", () => {
-    if (wrap._perryCallback !== undefined) callWasmClosure(wrap._perryCallback, inp.checked ? 1.0 : 0.0);
+    if (wrap._perryCallback !== undefined) callWasmClosure(wrap._perryCallback, inp.checked);
   });
   return uiAlloc(wrap);
 }
