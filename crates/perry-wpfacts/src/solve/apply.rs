@@ -1439,6 +1439,24 @@ impl Model {
                         self.load_from(of, q, key, dst);
                         continue;
                     }
+                    // SKINROOT7: a typed-array link's enumerable own
+                    // properties are its elements (10.4.5.1): a Number or
+                    // BigInt under an index key.
+                    if self.typed_array_elements(q)
+                        && match key {
+                            Key::Any(_) => true,
+                            Key::Named(a) => {
+                                let s = self.atoms[a as usize].as_str();
+                                !s.is_empty()
+                                    && s.len() <= 10
+                                    && s.bytes().all(|b| b.is_ascii_digit())
+                                    && (s == "0" || !s.starts_with('0'))
+                            }
+                        }
+                    {
+                        let p = self.typed_array_elem_prim(q);
+                        self.add_prim(dst, p);
+                    }
                     self.enum_fields(of, q, key, dst);
                     if self
                         .idx_done

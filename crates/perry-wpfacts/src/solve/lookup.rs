@@ -1354,10 +1354,13 @@ impl Model {
     /// member: a built-in object of `enum_free`, a program value
     /// (`enum_obj`), or the collapsed `ObjectProto` where the seed of
     /// `from` makes it such an intrinsic prototype
-    /// (`builtins::enum_free_seed`).
+    /// (`builtins::enum_free_seed`), or a built-in instance whose own
+    /// enumerable properties are its program-written fields and, for a
+    /// typed array, its elements (`builtins::enum_free_link_obj`).
     pub(crate) fn enum_link(&self, from: Tok, q: Tok) -> bool {
         self.enum_free(q)
             || self.enum_obj(q)
+            || builtins::enum_free_link_obj(self, q)
             || matches!(self.toks[q as usize], TokKind::ObjectProto)
                 && builtins::enum_free_seed(self, from)
     }

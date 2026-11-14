@@ -2065,7 +2065,7 @@ pub(crate) fn enum_free_seed(m: &Model, from: Tok) -> bool {
     match &m.toks[from as usize] {
         TokKind::Builtin(_) | TokKind::NativeProto(..) => m.enum_free(from),
         TokKind::Obj(tm, _) if matches!(m.tmpls[*tm as usize].kind, TmplKind::BObj { .. }) => {
-            ordinary_box(m, from) || enum_free_instance(m, from)
+            ordinary_box(m, from) || enum_free_link_obj(m, from)
         }
         TokKind::Func(f, _) if m.funcs[*f as usize].gen_step() => false,
         _ => matches!(
@@ -2131,6 +2131,34 @@ fn is_site_builtin(m: &Model, t: Tok) -> bool {
     matches!(m.toks[t as usize], TokKind::Obj(tm, _)
         if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { .. }))
 }
+/// SKINROOT7: a built-in instance on a chain an enumerable-key read walks
+/// whose enumerable own properties are what the program wrote on it, plus,
+/// for a typed array, its elements (the EnumChain arm adds the element
+/// primitive), and whose built-in prototype holds no enumerable built-in
+/// property (ECMA-262 clause 18: "every other data property ...
+/// [[Enumerable]]: false"; accessors alike):
+/// - `ArrayBuffer`, `SharedArrayBuffer`, `DataView`: no own property
+///   (25.1.3.1 AllocateArrayBuffer, 25.2.2.1 AllocateSharedArrayBuffer,
+///   25.3.2.1 DataView: OrdinaryCreateFromConstructor + internal slots);
+/// - `TypedArray`: own properties are the integer-indexed elements
+///   (10.4.5.1 [[GetOwnProperty]]: {[[Enumerable]]: true}, a Number or
+///   BigInt, 10.4.5.15 TypedArrayGetElement), nothing else (23.2.5.1);
+/// - the `enum_free_instance` kinds (Map, Set, WeakMap, WeakSet, Promise).
+/// Not a host `Buffer` (Node's `Buffer.prototype` members are enumerable),
+/// not an Error, not a Date or RegExp (their prototype link is a
+/// `NativeProto` that `enum_free_ns` does not name), not a marker (it stands for a caller's value). A prototype
+/// the program gave the instance is the next link (`proto_node`); a
+/// program-made member of the built-in prototype is `enum_top_written`.
+pub(crate) fn enum_free_link_obj(m: &Model, t: Tok) -> bool {
+    !m.is_marker(t)
+        && (enum_free_instance(m, t)
+            || matches!(m.toks[t as usize], TokKind::Obj(tm, _)
+                if matches!(m.tmpls[tm as usize].kind, TmplKind::BObj {
+                    what: "ArrayBuffer" | "SharedArrayBuffer" | "DataView" | "TypedArray",
+                    ..
+                })))
+}
+
 
 /// Is `t` an array: an array literal or result (`TmplKind::Arr`), or an
 /// array a builtin makes (`members::box_chain` Array: `Object.keys`, the
