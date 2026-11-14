@@ -469,8 +469,6 @@ unsafe fn stringify_object_walk(
             let tag = bits & 0xFFFF_0000_0000_0000;
             let ptr_candidate = if tag == POINTER_TAG {
                 (bits & POINTER_MASK) as *const u8
-            } else if is_raw_pointer(bits) {
-                bits as *const u8
             } else {
                 std::ptr::null()
             };
@@ -687,7 +685,6 @@ unsafe fn stringify_object_walk(
         let mut member_probed = false;
         if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
             || (field_bits & 0xFFFF_0000_0000_0000) == crate::value::HANDLE_TAG
-            || is_raw_pointer(field_bits)
         {
             // Everything from here to the member's dispatch can run user code.
             *global_proof = false;
@@ -751,10 +748,7 @@ unsafe fn stringify_object_walk(
             } else {
                 buf.push_str("null");
             }
-        } else if val_tag == POINTER_TAG
-            || val_tag == crate::value::HANDLE_TAG
-            || is_raw_pointer(field_bits)
-        {
+        } else if val_tag == POINTER_TAG || val_tag == crate::value::HANDLE_TAG {
             // Nested object/array (or the object/array `toJSON` returned). The
             // `toJSON` key was recorded above; `member_probed` armed the guard.
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);

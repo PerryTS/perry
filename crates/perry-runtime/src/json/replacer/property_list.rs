@@ -347,11 +347,6 @@ pub(super) unsafe fn json_property_list_key(elem: f64) -> Option<String> {
             .ok()
             .map(|s| s.to_string());
     }
-    // Heap-string literal pointer (denormal-range bits, never a real number).
-    if is_raw_pointer(bits) {
-        let str_ptr = bits as *const StringHeader;
-        return str_from_header(str_ptr).map(|s| s.to_string());
-    }
     let jsval = JSValue::from_bits(bits);
     if jsval.is_number() {
         let p = crate::string::js_number_to_string(elem);

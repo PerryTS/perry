@@ -13,10 +13,6 @@ pub(super) fn field_is_primitive(bits: u64) -> bool {
         && bits & crate::value::TAG_MASK != POINTER_TAG
         && bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG
         && bits & crate::value::TAG_MASK != BIGINT_TAG
-        // Conservatively decline pointer-shaped subnormals too. The general
-        // walker distinguishes them from tracked raw pointers; this leaf
-        // needs only a cheap proof that neither case requires inspection.
-        && !untagged_pointer_bits(bits)
 }
 
 /// The caller has proved that `count` logical slots fit the live inline

@@ -174,9 +174,6 @@ pub(super) unsafe fn scalar_piece(bits: u64) -> Option<Piece> {
         POINTER_TAG | BIGINT_TAG | crate::value::HANDLE_TAG => return None,
         _ => {}
     }
-    if is_raw_pointer(bits) {
-        return None;
-    }
     let number = f64::from_bits(bits);
     if !number.is_finite() {
         return Some(Piece::inline(b"null"));

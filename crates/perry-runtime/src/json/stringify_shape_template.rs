@@ -128,8 +128,6 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     let tag = first_elem_bits & 0xFFFF_0000_0000_0000;
     let first_ptr = if tag == POINTER_TAG {
         (first_elem_bits & POINTER_MASK) as *const u8
-    } else if is_raw_pointer(first_elem_bits) {
-        first_elem_bits as *const u8
     } else {
         return None;
     };
@@ -337,8 +335,6 @@ pub(crate) unsafe fn try_emit_shape_element(
     let tag = elem_bits & 0xFFFF_0000_0000_0000;
     let elem_ptr = if tag == POINTER_TAG {
         (elem_bits & POINTER_MASK) as *const u8
-    } else if is_raw_pointer(elem_bits) {
-        elem_bits as *const u8
     } else {
         return false;
     };
@@ -514,7 +510,7 @@ pub(crate) unsafe fn try_emit_shape_element(
                 } else {
                     buf.push_str("null");
                 }
-            } else if crate::value::is_reference_bits(vtag) || is_raw_pointer(fb) {
+            } else if crate::value::is_reference_bits(vtag) {
                 set_to_json_key_for_template_field(cur_keys(), f);
                 stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
                 called_out = true;
@@ -596,7 +592,7 @@ pub(crate) unsafe fn try_emit_shape_element(
             } else {
                 buf.push_str("null");
             }
-        } else if crate::value::is_reference_bits(vtag) || is_raw_pointer(fb) {
+        } else if crate::value::is_reference_bits(vtag) {
             set_to_json_key_for_template_field(cur_keys(), f);
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
         } else {
