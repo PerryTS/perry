@@ -3071,9 +3071,20 @@ function perry_ui_progressview_create(value) {
   if (value !== undefined && value > 0) { el.max = 1; el.value = value; }
   return uiAlloc(el);
 }
+// perry/ui declares `Image(url, alt?)`, `Image({url, alt?})` and `Image({systemName})`;
+// numeric width/height stay for other callers. A string second argument is the alt
+// text, not a width.
 function perry_ui_image_create(src, width, height) {
+  let alt;
+  if (src && typeof src === 'object') {
+    if (src.systemName !== undefined) return perry_ui_image_create_symbol(src.systemName);
+    alt = src.alt; src = src.url;
+  } else if (typeof width === 'string') {
+    alt = width; width = undefined;
+  }
   const el = document.createElement("img");
   if (src) el.src = src;
+  if (alt !== undefined) el.alt = String(alt);
   if (width) el.style.width = width + "px";
   if (height) el.style.height = height + "px";
   return uiAlloc(el);
