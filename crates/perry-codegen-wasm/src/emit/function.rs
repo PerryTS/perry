@@ -128,6 +128,7 @@ impl WasmModuleEmitter {
         body: &[Stmt],
         captures: &[LocalId],
         mutable_captures: &[LocalId],
+        home_class: Option<&str>,
     ) -> Function {
         // Closure parameters: captures first, then declared params
         let mut local_map = BTreeMap::new();
@@ -156,6 +157,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
 
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
+        ctx.current_class = home_class.map(str::to_string);
         ctx.emit_box_params(&mut func, params);
         // A captured cell already exists; a `let` of it in the body (a lowered
         // generator re-declares its locals per state) fills that cell.
