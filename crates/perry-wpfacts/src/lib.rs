@@ -2391,6 +2391,7 @@ fn compute_act<'a>(
         dynamic_code_reach: cfg.dynamic_code_reach.clone(),
         sabotage: cfg.sabotage.clone(),
         relations: {
+            crate::diagnostics::keyread(&g);
             g.m.prov_finish();
             g.m.relations.take()
         },

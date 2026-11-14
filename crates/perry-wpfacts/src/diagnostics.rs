@@ -1637,3 +1637,71 @@ fn birth_gate(m: &Model, gate: Option<(Tok, Atom)>) -> String {
         format!("{{\"token\":{t},\"key\":{}}}", quote(&m.atoms[a as usize]))
     })
 }
+
+/// Off-by-default read-out (`PERRY_WPF_KEYREAD=1`): at the end of the
+/// solve, the decoded string set of every node of the functions along the
+/// three.js track-name chain (GLTF track build, sanitize/unique names,
+/// KeyframeTrack, PropertyBinding). `KF` = function, `KR` = node:
+/// id, label, prim bits, holds ⊤, strings (constants, prefix/infix/suffix
+/// entries, exclusion entries with their character sets, `ANY`).
+pub(crate) fn keyread(g: &Gen) {
+    if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
+        return;
+    }
+    const NAMES: &[&str] = &[
+        "sanitizeNodeName", "createUniqueName", "_createAnimationTracks", "loadAnimation",
+        "parseTrackName", "bind", "findNode", "Composite", "create", "parse", "toJSON",
+        "clone", "CreateFromMorphTargetSequence", "parseAnimation", "_getTrackTypeForValueTypeName",
+        "getValueSize", "validate", "_bindTrack", "_lendBinding", "clipAction", "subclip",
+    ];
+    let m = &g.m;
+    let mut want = vec![false; m.funcs.len()];
+    for (i, f) in m.funcs.iter().enumerate() {
+        let module = g.modules.get(f.module as usize);
+        let file = module.map_or("", |(p, _)| *p);
+        let hit = NAMES.contains(&f.name.as_str())
+            || f.name.contains("KeyframeTrack")
+            || f.name.contains("PropertyBinding")
+            || f.name.contains("AnimationClip")
+            || (file.ends_with("GLTFLoader.js") && f.name.contains("nimation"));
+        if !hit {
+            continue;
+        }
+        want[i] = true;
+        let src = module.and_then(|(_, m)| m.closure_source_text.get(&f.func_id));
+        let span = src.and_then(|s| s.source_span).unwrap_or((0, 0));
+        eprintln!("KF {i} {} {file} {} {} params={:?} this={} ret={}", f.name, span.0, span.1, f.params, f.this, f.ret);
+    }
+    let dec = |a: Atom| -> String {
+        let s = &m.atoms[a as usize];
+        let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
+        if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+            let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
+            let e = u128::from_str_radix(h, 16).unwrap_or(0);
+            let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+            format!("excl[{cs}]+{:?}", esc(t))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
+            format!("prefix({:?})", esc(r))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::INFIX_MARK) {
+            format!("infix({:?})", esc(r))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::SUFFIX_MARK) {
+            format!("suffix({:?})", esc(r))
+        } else {
+            format!("{:?}", esc(s))
+        }
+    };
+    for n in 0..m.nodes.len() {
+        let f = m.node_fn.get(n).copied().unwrap_or(NO_FN);
+        if f == NO_FN || !want.get(f as usize).copied().unwrap_or(false) {
+            continue;
+        }
+        let nd = &m.nodes[n];
+        let l = m.labels.get(n).copied().unwrap_or("?");
+        let strs = match nd.strs {
+            0 => "-".to_string(),
+            STRS_TOP => "ANY".to_string(),
+            s => m.str_atoms(s).iter().map(|&a| dec(a)).collect::<Vec<_>>().join(" | "),
+        };
+        eprintln!("KR {n} f{f} {l} prim={:#x} top={} ntok={} strs={strs}", nd.prim, nd.pts.contains_tok(TOP), nd.pts.len());
+    }
+}
