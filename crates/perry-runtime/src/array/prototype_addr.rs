@@ -306,8 +306,7 @@ fn realm_intrinsic_addr(
 /// A two-phase realm that is not complete: run the phase that binds
 /// `identity`'s family. Phase B through the full entry (which leaves the
 /// realm as it is when the asker is phase A itself); the core when this
-/// thread has no realm yet.
-#[cold]
+/// thread has no realm yet. (Not cold: listed in the default hot-text order.)
 #[inline(never)]
 fn run_phase_of(identity: crate::object::BuiltinConstructorIdentity) {
     if crate::codegen_abi::realm_rest_global(identity.name()) {

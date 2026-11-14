@@ -261,9 +261,15 @@ fn internal_readers_run_the_phase_they_need() {
         assert_ne!(intl.to_bits(), REALM_UNBOUND_POISON);
     });
     on_core_realm(|_| {
+        // An undeclared name is absent from the core as from the complete
+        // realm: its by-name read needs no phase B.
         let missing = js_get_global_this_builtin_value("notAGlobal".as_ptr(), 10);
-        assert!(fetch_globals::realm_is_complete());
+        assert!(!fetch_globals::realm_is_complete());
         assert_eq!(missing.to_bits(), UNDEFINED);
+        // The global itself is a value name: the complete realm.
+        let itself = js_get_global_this_builtin_value("globalThis".as_ptr(), 10);
+        assert!(fetch_globals::realm_is_complete());
+        assert_eq!(itself.to_bits(), js_get_global_this().to_bits());
     });
 }
 
