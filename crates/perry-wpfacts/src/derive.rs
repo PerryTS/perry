@@ -2069,16 +2069,33 @@ fn host_member(
     let name = &m.atoms[s.key as usize];
     let mut receivers = Vec::new();
     let mut native = true;
+    // A builtin namespace or constructor that is no host object (`Math`,
+    // `Promise`, `Array`): the realm's own member, unwritten
+    // (`builtins::ns_native`, BNSRECV).
+    let mut realm_ns = false;
     for &t in toks {
         let TokKind::Builtin(ns) = m.toks[t as usize] else {
             return None;
         };
-        let h = crate::builtins::host_of(ns, name, s.is_call)?;
-        native &= crate::builtins::host_native(m, h, s.key, s.is_call);
-        receivers.push(format!("host:{h:?}"));
+        match crate::builtins::host_of(ns, name, s.is_call) {
+            Some(h) => {
+                native &= crate::builtins::host_native(m, h, s.key, s.is_call);
+                receivers.push(format!("host:{h:?}"));
+            }
+            None if crate::builtins::ns_native(m, t, ns, s.key, s.is_call) => {
+                realm_ns = true;
+                receivers.push(m.tok_name(t));
+            }
+            None => return None,
+        }
     }
     if !native {
         return Some(Err("host member undescribed or written".into()));
+    }
+    // Interpreted code (DEC 150) names every global and may write the key;
+    // no namespace object is a lock holder, so nothing refuses the write.
+    if realm_ns && m.interp_runs {
+        return Some(Err("namespace member: interpreted code may write the key".into()));
     }
     // Unknown code holds the realm (9.3, `realm_held`): a host object's
     // members are writable, and the solve does not replay unknown code's

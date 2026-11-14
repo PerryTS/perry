@@ -2414,6 +2414,33 @@ pub(crate) fn host_native(m: &Model, h: BuiltinNs, a: Atom, call: bool) -> bool 
     described && !host_written(m, h, a)
 }
 
+/// BNSRECV: the site verdict's half of `loads::ns_load` on a builtin
+/// namespace or constructor that is no host object. Key `a` of namespace
+/// token `t` reads the realm's own value (ECMA-262 9.3.2 CreateIntrinsics:
+/// an own property the realm gives the object): its native function
+/// (`namespace_native`), a described primitive, or for `prototype` the
+/// family's prototype object, and no write the solve sees reached the key
+/// (`native_written`: a store of the key, a computed-key store, a write
+/// through ⊤). No namespace object is a lock holder (perry-abi lock.rs
+/// `LockHolder`): the runtime admits every replacement, so the caller adds
+/// that no unknown or interpreted code runs. Whole-program solves only.
+pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -> bool {
+    if m.unit_mode || members::is_host(ns) {
+        return false;
+    }
+    let name = &m.atoms[a as usize];
+    if m.native_property(t, name).is_some_and(|p| p.get.is_some()) {
+        return false;
+    }
+    let own = match members::ns_member(ns, name) {
+        Some(Some(Mem::Fn)) => namespace_native(m, t, ns, name).is_some(),
+        Some(Some(Mem::Prim(_))) => !call,
+        Some(Some(Mem::Proto)) => !call && name == "prototype",
+        _ => false,
+    };
+    own && !native_written(m, t, a)
+}
+
 /// A call of member `n` of host `h`: the runtime's own method (`native`)
 /// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
 /// that reads other members of its receiver), then an unknown method of the
