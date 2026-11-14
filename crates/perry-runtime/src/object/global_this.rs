@@ -164,8 +164,8 @@ pub(crate) use object_intrinsic::{
 };
 pub(crate) use populate::{
     birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
-    populate_global_this_builtins, scan_error_constructor_root_mut, unborn_declared_statics_of,
-    ERROR_CONSTRUCTOR_PTR,
+    populate_global_this_builtins, populate_realm_core, populate_realm_rest,
+    scan_error_constructor_root_mut, unborn_declared_statics_of, ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
     install_builtin_well_known_symbol_method, install_error_prototype_data_properties,
