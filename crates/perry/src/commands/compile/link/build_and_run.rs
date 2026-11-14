@@ -297,6 +297,15 @@ pub(crate) fn build_and_run_link(
         let stdlib_archive = stdlib_lib.as_deref().filter(|_| ctx.needs_stdlib);
         let runtime_archives: Vec<&Path> =
             std::iter::once(runtime_lib).chain(stdlib_archive).collect();
+        // The script must fit the linker that runs: the native lld switch,
+        // or a link line that picks lld itself (the cross links to Linux,
+        // `PERRY_EXTRA_LINK_ARGS`, appended last below).
+        let extra_args = super::extra_link_args();
+        let runs_lld = lld.is_some()
+            || super::elf_linker::driver_runs_lld(
+                cmd.get_args()
+                    .chain(extra_args.iter().map(std::ffi::OsStr::new)),
+            );
         super::function_layout::add_link_args(
             &mut cmd,
             &ctx.cache_dir,
@@ -306,7 +315,7 @@ pub(crate) fn build_and_run_link(
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
             &runtime_archives,
-            lld.is_some(),
+            runs_lld,
             // The default hot-data order: native glibc Linux executables,
             // where it was recorded and measured (`hot_data_order`).
             cfg!(target_os = "linux")

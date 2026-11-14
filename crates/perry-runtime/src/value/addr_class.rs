@@ -135,7 +135,7 @@ const _: () = assert!(PROXY_ID_BAND_END == STREAM_ID_BAND_START);
 const _: () = assert!(HANDLE_BAND_MAX == STREAM_ID_BAND_END);
 
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
-/// Values below `HANDLE_BAND_MAX` (2 MiB) are likely INT32_TAG extracts, small handles,
+/// Values below `HANDLE_BAND_MAX` (2 MiB) are likely INTERNAL_WORD_TAG extracts, small handles,
 /// or null. The upper bound filters out NaN-box tag bits that leaked through.
 /// Linux-family AArch64 targets can map userspace arenas anywhere in the full
 /// low 48-bit VA range, including addresses with bit 47 set (observed under
@@ -651,16 +651,16 @@ mod tests {
     #[test]
     fn object_ref_addr_classifies_by_tag_before_magnitude() {
         use crate::value::{
-            BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
-            TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+            BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_TAG, SHORT_STRING_TAG,
+            STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
         };
         let heap_addr = 0x7F12_3456_7890usize;
         let primitives = [
             SHORT_STRING_TAG | 0x0300_0069_7275, // "uri"
             SHORT_STRING_TAG | 0x0100_0000_0061, // "a"
             SHORT_STRING_TAG,                    // ""
-            INT32_TAG | 0x8000_0000,             // synthetic class ref
-            INT32_TAG | 5,
+            INTERNAL_WORD_TAG | 0x8000_0000,     // synthetic class ref
+            INTERNAL_WORD_TAG | 5,
             STRING_TAG | heap_addr as u64,
             BIGINT_TAG | heap_addr as u64,
             JS_HANDLE_TAG | 7,

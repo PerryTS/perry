@@ -882,8 +882,7 @@ unsafe fn message_init(this: f64, req: Option<f64>) {
     let minor = field_of(req.get_nanbox_f64(), b"httpVersionMinor");
     let below_one = |v: f64| {
         let j = JSValue::from_bits(v.to_bits());
-        (j.is_int32() && j.as_int32() < 1)
-            || (j.is_number() && !j.is_int32() && j.as_number() < 1.0)
+        j.is_number() && j.as_number() < 1.0
     };
     if below_one(major) || below_one(minor) {
         let headers = field_of(req.get_nanbox_f64(), b"headers");

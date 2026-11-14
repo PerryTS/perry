@@ -96,11 +96,6 @@ fn is_registered_collection(addr: usize, obj_type: u8) -> bool {
 }
 
 fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
-    let bits = index.to_bits();
-    if is_int32_bits(bits) {
-        let index = JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index <= i32::MAX as f64 {
         Some(index as i32)
     } else {
@@ -109,11 +104,6 @@ fn finite_nonnegative_i32_index(index: f64) -> Option<i32> {
 }
 
 fn finite_nonnegative_u32_index(index: f64) -> Option<u32> {
-    let bits = index.to_bits();
-    if is_int32_bits(bits) {
-        let index = JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if index.is_finite() && index >= 0.0 && index.fract() == 0.0 && index < u32::MAX as f64 {
         Some(index as u32)
     } else {
@@ -167,7 +157,7 @@ fn cached_u8_index_get(addr: usize, index: f64) -> Option<f64> {
 #[inline(never)]
 fn cached_u8_index_set(addr: usize, index: f64, value: f64) -> bool {
     let v = JSValue::from_bits(value.to_bits());
-    if !(v.is_number() || v.is_int32()) {
+    if !(v.is_number()) {
         return false;
     }
     let Some(idx) = finite_nonnegative_i32_index(index) else {
@@ -478,7 +468,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
         // INT32-tagged keys are integer property names (and class-ref values
         // used as keys, rare); pure f64 numbers keep the element path. Every
         // other tag is a ToPropertyKey case.
-        if !idx_js.is_number() && !idx_js.is_int32() {
+        if !idx_js.is_number() {
             let scope = crate::gc::RuntimeHandleScope::new();
             let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
             // Prefer `js_to_property_key` so a Symbol-returning toString is

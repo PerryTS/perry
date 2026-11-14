@@ -201,23 +201,18 @@ pub fn is_registered_set(addr: usize) -> bool {
     }
 }
 
-/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Set`
-/// pointer, or `None` if the receiver is not a `Set`. Backs the reflective
+/// Resolve a NaN-boxed `this` receiver to a registered `Set` pointer, or
+/// `None` if the receiver is not a `Set`. Backs the reflective
 /// `Set.prototype.*` thunks so they can perform the spec brand check
-/// (`TypeError` on a non-`Set` receiver) before dispatching. Mirrors the
-/// receiver extraction used by the `Array.prototype.slice` thunk: a
-/// NaN-boxed pointer, or a bare raw-i64 pointer some module-init call sites
-/// pass as the receiver. Primitives (undefined/null/number/string/bool)
-/// carry a non-zero tag in the top 16 bits and resolve to `None`.
+/// (`TypeError` on a non-`Set` receiver) before dispatching. The receiver
+/// names an object by its tag alone: every word that is not POINTER_TAG'd
+/// (undefined, null, a string, a boolean, a Number, also a denormal whose
+/// bits look like an address) resolves to `None`.
 pub fn set_ptr_from_receiver_bits(bits: u64) -> Option<*mut SetHeader> {
-    let jsv = crate::value::JSValue::from_bits(bits);
-    let addr = if jsv.is_pointer() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if bits >> 48 == 0 && bits > 0x10000 {
-        bits as usize
-    } else {
+    if !crate::value::JSValue::from_bits(bits).is_pointer() {
         return None;
-    };
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     if is_registered_set(addr) {
         Some(addr as *mut SetHeader)
     } else {
@@ -433,9 +428,7 @@ fn normalize_zero(value: f64) -> f64 {
 #[inline(always)]
 fn normalize_number_value_from_boxed(value: f64) -> Option<f64> {
     let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        Some(normalize_zero(js_value.as_int32() as f64))
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(normalize_zero(value))
     } else {
         None
@@ -1991,14 +1984,23 @@ fn js_set_foreach_impl(
 // is `this`'s leftover elements followed by `other`'s leftover elements.
 //
 // The `other` argument is received as a NaN-boxed value (f64). For the
-// scoped basic behavior (#2872) it is expected to be a real Set; we
-// recover its pointer via `clean_set_ptr` (which masks the NaN-box tag).
+// scoped basic behavior (#2872) it is expected to be a real Set; only a
+// POINTER_TAG'd value can name one.
 // =====================================================================
 
 /// Recover a `*const SetHeader` from a NaN-boxed `other` argument. Returns
 /// null if the value isn't a registered Set (callers treat null as empty).
+///
+/// The value names an object by its tag alone: any other word (a Number,
+/// including a denormal whose bits look like an address, a string, a
+/// negative Number whose low 48 bits are not zero) is not a Set, so no
+/// header is read at its bits.
 unsafe fn other_set_ptr(other: f64) -> *const SetHeader {
-    let raw = other.to_bits() as *const SetHeader;
+    let bits = other.to_bits();
+    if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
+        return ptr::null();
+    }
+    let raw = (bits & crate::value::POINTER_MASK) as *const SetHeader;
     let cleaned = clean_set_ptr(raw);
     if cleaned.is_null() {
         return ptr::null();
@@ -2010,10 +2012,23 @@ unsafe fn other_set_ptr(other: f64) -> *const SetHeader {
     }
 }
 
+/// GetSetRecord step 1: `other` must be an Object. A primitive (a Number,
+/// including one whose bits look like an address, a string, undefined, ...)
+/// throws the TypeError before anything is allocated or read.
+fn require_object_other(other: f64, method: &str) {
+    if other.to_bits() & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+        return;
+    }
+    let msg = format!("Set.prototype.{method} argument must be an object");
+    let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
+}
+
 /// `Set.prototype.union(other)` — new Set with elements of both sets,
 /// `this`'s elements first (insertion order) then `other`'s new elements.
 #[no_mangle]
 pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    require_object_other(other, "union");
     let set = clean_set_ptr(set);
     // Raw element walk below: squeeze holes out first, exactly as
     // `js_set_is_subset_of` does. Without this a tombstone is read as an
@@ -2065,6 +2080,7 @@ pub extern "C" fn js_set_union(set: *const SetHeader, other: f64) -> *mut SetHea
 /// both sets, keeping `this`'s insertion order.
 #[no_mangle]
 pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    require_object_other(other, "intersection");
     let set = clean_set_ptr(set);
     // Raw element walk below: squeeze holes out first, exactly as
     // `js_set_is_subset_of` does. Without this a tombstone is read as an
@@ -2112,6 +2128,7 @@ pub extern "C" fn js_set_intersection(set: *const SetHeader, other: f64) -> *mut
 /// are NOT in `other`, keeping `this`'s insertion order.
 #[no_mangle]
 pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    require_object_other(other, "difference");
     let set = clean_set_ptr(set);
     // Raw element walk below: squeeze holes out first, exactly as
     // `js_set_is_subset_of` does. Without this a tombstone is read as an
@@ -2160,6 +2177,7 @@ pub extern "C" fn js_set_difference(set: *const SetHeader, other: f64) -> *mut S
 /// first, then `other`'s leftover elements (not in `this`).
 #[no_mangle]
 pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64) -> *mut SetHeader {
+    require_object_other(other, "symmetricDifference");
     let set = clean_set_ptr(set);
     // Raw element walk below: squeeze holes out first, exactly as
     // `js_set_is_subset_of` does. Without this a tombstone is read as an
@@ -2229,6 +2247,7 @@ pub extern "C" fn js_set_symmetric_difference(set: *const SetHeader, other: f64)
 /// also in `other`. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 {
+    require_object_other(other, "isSubsetOf");
     // Raw element walk below: squeeze holes out first.
     unsafe {
         let resolved = clean_set_ptr(set);
@@ -2261,6 +2280,7 @@ pub extern "C" fn js_set_is_subset_of(set: *const SetHeader, other: f64) -> i32 
 /// is also in `this`. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i32 {
+    require_object_other(other, "isSupersetOf");
     let set = clean_set_ptr(set);
     // Raw element walk below: squeeze holes out first, exactly as
     // `js_set_is_subset_of` does. Without this a tombstone is read as an
@@ -2295,6 +2315,7 @@ pub extern "C" fn js_set_is_superset_of(set: *const SetHeader, other: f64) -> i3
 /// elements. Returns 1/0.
 #[no_mangle]
 pub extern "C" fn js_set_is_disjoint_from(set: *const SetHeader, other: f64) -> i32 {
+    require_object_other(other, "isDisjointFrom");
     // Raw element walk below: squeeze holes out first.
     unsafe {
         let resolved = clean_set_ptr(set);
@@ -2404,11 +2425,27 @@ mod tests {
     }
 
     // #2872: helper to pass a Set pointer as the NaN-boxed `other` argument.
-    // A raw heap pointer (top16 == 0) is returned unchanged by `clean_set_ptr`,
-    // so reinterpreting the pointer bits as f64 round-trips through
-    // `other_set_ptr`.
     fn as_other(set: *mut SetHeader) -> f64 {
-        f64::from_bits(set as u64)
+        crate::value::js_nanbox_pointer(set as i64)
+    }
+
+    /// A Number whose bits equal a live Set's address is a Number, not that
+    /// Set: the algebra methods see no `other` (and read no header at it).
+    #[test]
+    fn set_algebra_other_is_decoded_by_its_tag() {
+        let a = js_set_alloc(4);
+        js_set_add(a, 1.0);
+        let b = js_set_alloc(4);
+        js_set_add(b, 2.0);
+        let forged = f64::from_bits(b as u64);
+        unsafe {
+            assert!(other_set_ptr(forged).is_null());
+            assert!(other_set_ptr(f64::from_bits(0x1000_0000)).is_null());
+            assert!(other_set_ptr(-f64::from_bits(0x1000_0000)).is_null());
+            assert_eq!(other_set_ptr(as_other(b)), b as *const SetHeader);
+        }
+        let u = js_set_union(a, as_other(b));
+        assert_eq!(js_set_size(u), 2);
     }
 
     fn collect(set: *const SetHeader) -> Vec<f64> {

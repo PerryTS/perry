@@ -633,9 +633,7 @@ fn is_array_value(value: f64) -> bool {
 
 fn number_of(value: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        js.as_int32() as f64
-    } else if js.is_number() {
+    if js.is_number() {
         value
     } else {
         f64::NAN

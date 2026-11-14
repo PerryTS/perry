@@ -41,8 +41,8 @@ const C_NUMBER: u8 = C_INT32 | C_DOUBLE | C_NAN_INF;
 pub(super) fn value_class(bits: u64) -> u8 {
     use crate::value::*;
     match bits & TAG_MASK {
-        INT32_TAG if crate::value::is_int32_bits(bits) => C_INT32,
-        INT32_TAG => C_OTHER,
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => C_INT32,
+        INTERNAL_WORD_TAG => C_OTHER,
         POINTER_TAG | STRING_TAG | SHORT_STRING_TAG | BIGINT_TAG | JS_HANDLE_TAG | TAG_MARKER => {
             C_OTHER
         }
@@ -178,7 +178,7 @@ mod tests {
     use crate::value::*;
 
     fn int32(v: i32) -> u64 {
-        INT32_TAG | u64::from(v as u32)
+        INTERNAL_WORD_TAG | u64::from(v as u32)
     }
     const STRING: u64 = STRING_TAG | 0x1234_5678;
 

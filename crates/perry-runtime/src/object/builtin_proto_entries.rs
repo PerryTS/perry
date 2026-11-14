@@ -100,9 +100,7 @@ unsafe fn fast_recv(recv: f64) -> Option<*const StringHeader> {
 #[inline(always)]
 fn number_index(v: f64) -> Option<i32> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32())
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(v as i32)
     } else {
         None
@@ -113,9 +111,7 @@ fn number_index(v: f64) -> Option<i32> {
 #[inline(always)]
 fn number_value(v: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(f64::from(jsval.as_int32()))
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(v)
     } else {
         None

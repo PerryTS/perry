@@ -1580,7 +1580,7 @@ pub(super) fn is_single_chunk_value(value: f64) -> bool {
 
 pub(super) fn is_non_iterable_primitive_for_readable_from(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
-    (jsval.is_number() || jsval.is_int32() || jsval.is_bool()) && !jsval.is_any_string()
+    (jsval.is_number() || jsval.is_bool()) && !jsval.is_any_string()
 }
 
 pub(super) fn is_invalid_readable_from_input(value: f64) -> bool {
@@ -1801,10 +1801,6 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_any_string() {
         append_string_bytes(value, out);
-        return;
-    }
-    if jsval.is_int32() {
-        out.extend_from_slice(jsval.as_int32().to_string().as_bytes());
         return;
     }
     if jsval.is_number() && value.is_finite() {

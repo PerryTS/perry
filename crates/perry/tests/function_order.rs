@@ -521,6 +521,70 @@ fn the_default_runtime_order_packs_the_listed_functions_and_the_list_is_current(
     assert_eq!(names(&symbols), names(&off_symbols), "layout only");
 }
 
+/// A link line that picks lld itself (the cross links to Linux pass
+/// `-fuse-ld=lld`, `link/platform_cmd.rs`; here `PERRY_EXTRA_LINK_ARGS` gives
+/// the native link the same driver flag) takes the lld flavor of the default
+/// hot-text script: lld rejects the GNU one ("unable to insert .text before
+/// .text"). The run is in place and the program's output is GNU ld's.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_link_line_that_picks_lld_takes_the_lld_hot_text_script() {
+    let lld_on_path = std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join("ld.lld").is_file()));
+    if !lld_on_path {
+        eprintln!("skipped: no ld.lld on PATH");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("main.ts"), SOURCE).unwrap();
+    let build = |out: &str, extra_link_args: Option<&str>| {
+        let output = dir.path().join(out);
+        let mut cmd = Command::new(perry_bin());
+        cmd.current_dir(dir.path())
+            .env("PERRY_KEEP_SYMBOLS", "1")
+            .env_remove("PERRY_HOT_TEXT_ORDER")
+            .env_remove("PERRY_LINK_LLD")
+            .env_remove("PERRY_EXTRA_LINK_ARGS")
+            .arg("compile")
+            .arg(dir.path().join("main.ts"))
+            .arg("-o")
+            .arg(&output)
+            .args(["--no-cache", "--no-auto-optimize", "--verbose"]);
+        if let Some(args) = extra_link_args {
+            cmd.env("PERRY_EXTRA_LINK_ARGS", args);
+        }
+        let compile = cmd.output().expect("run perry compile");
+        let stderr = String::from_utf8_lossy(&compile.stderr).into_owned();
+        assert!(compile.status.success(), "perry compile failed:\n{stderr}");
+        (output, stderr)
+    };
+    let (gnu, gnu_log) = build("gnu", None);
+    let (lld, lld_log) = build("lld", Some("-fuse-ld=lld -Wl,--image-base=0x400000"));
+    let script = |log: &str| {
+        log.lines()
+            .find(|l| l.starts_with("[hot-text] "))
+            .unwrap_or_else(|| panic!("the link reports the default order:\n{log}"))
+            .split(':')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(script(&gnu_log).ends_with(".v1.ld"), "{gnu_log}");
+    assert!(script(&lld_log).ends_with(".v1.lld.ld"), "{lld_log}");
+    assert_eq!(run(&lld, None), run(&gnu, None));
+    let symbols = symbol_addresses(&lld);
+    let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);
+    let (start, end) = (
+        at("__perry_rt_hot_text_start").expect("hot run start"),
+        at("__perry_rt_hot_text_end").expect("hot run end"),
+    );
+    let inside = symbols
+        .iter()
+        .filter(|s| matches!(s.1.as_str(), "t" | "T") && start <= s.0 && s.0 < end)
+        .count();
+    assert!(inside >= 200, "{inside} functions in the hot run");
+}
+
 /// The runtime's default hot-data order (`link/hot_data_order.rs`): an
 /// ordinary x86-64 glibc build places the listed runtime data at the front of
 /// `.rodata` and `.data.rel.ro`, the list still names data of the runtime

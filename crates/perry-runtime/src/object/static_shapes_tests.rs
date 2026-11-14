@@ -404,7 +404,7 @@ fn a_rep_literal_seed_is_the_shape_its_lazy_mints_reach_and_keeps_its_f64_lanes(
             "a Number key-add chain of these keys must reach the seeded id"
         );
         // An F64-lane store of a Number stays on the shape.
-        crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
+        crate::object::store_object_field_slot(obj, 1, crate::value::INTERNAL_WORD_TAG | 7);
         assert_eq!(
             object_shape_stamp(obj),
             LayoutWord(requested),

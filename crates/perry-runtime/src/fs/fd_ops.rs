@@ -501,9 +501,7 @@ fn position_arg(value: f64) -> Option<u64> {
 /// A number argument as an f64, whether it is a plain double or an int32.
 fn number_arg(value: f64) -> Option<f64> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() {
+    if jv.is_number() {
         Some(value)
     } else {
         None

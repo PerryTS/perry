@@ -697,7 +697,7 @@ mod tests {
         assert!(!definitely_no_then(f64::from_bits(crate::value::TAG_NULL)));
         assert!(!definitely_no_then(f64::from_bits(crate::value::TAG_TRUE)));
         assert!(!definitely_no_then(f64::from_bits(
-            crate::value::INT32_TAG | 7
+            crate::value::INTERNAL_WORD_TAG | 7
         )));
         // A STRING_TAG value is a pointer, but not a POINTER_TAG one.
         assert!(!definitely_no_then(f64::from_bits(

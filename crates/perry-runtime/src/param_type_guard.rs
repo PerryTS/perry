@@ -528,7 +528,7 @@ impl GuardState<'_> {
         let op = tagged_op & OP_MASK;
         match op {
             OP_ANY => node.len() == 1,
-            OP_NUMBER => node.len() == 1 && (value.is_number() || value.is_int32()),
+            OP_NUMBER => node.len() == 1 && (value.is_number()),
             OP_INT32 => {
                 node.len() == 1
                     && crate::native_abi::js_typed_i32_arg_guard(f64::from_bits(value.bits())) != 0
