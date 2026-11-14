@@ -441,6 +441,9 @@ impl Model {
         self.solver_made += 1;
         let root = self.made_root.get(&by).copied().unwrap_or(by);
         self.made_root.insert(id, root);
+        if crate::solve::births_diag_t0().is_some() {
+            crate::solve::DIAG_BY.with(|m| m.borrow_mut().insert(id, by));
+        }
         if !self.sum.ready && self.diagnostic.is_some() {
             // Dump only: a call made before the summaries counts as a
             // program call (`origin_of` never reads it); the dump still

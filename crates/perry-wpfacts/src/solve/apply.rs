@@ -91,11 +91,17 @@ impl Model {
                 }
             }
             Cons::New { call } => {
+                if super::call_and_construct::births_diag_t0().is_some() {
+                    super::call_and_construct::DIAG_NEW_NODE.with(|c| c.set(n));
+                }
                 for &t in toks {
                     self.construct(call, t);
                 }
             }
             Cons::NewProgram { call } => {
+                if super::call_and_construct::births_diag_t0().is_some() {
+                    super::call_and_construct::DIAG_NEW_NODE.with(|c| c.set(n));
+                }
                 for &t in toks {
                     self.construct_program(call, t);
                 }

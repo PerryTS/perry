@@ -17,6 +17,7 @@ mod own_read;
 
 use crate::builtins;
 mod call_and_construct;
+pub(crate) use call_and_construct::{births_diag_t0, DIAG_BY};
 mod native_value;
 mod reflect_construct;
 mod shared;

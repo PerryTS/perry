@@ -672,6 +672,7 @@ impl Model {
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
                 let ctx = self.birth_ctx(call);
+                self.birth_diag(call, tm, ctx);
                 let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
@@ -1254,5 +1255,110 @@ impl Model {
         }
         // Getters returning functions (per receiver, accessor keys only).
         self.accessor_walk(t, t, key, ChainAct::Call(call));
+    }
+}
+
+// PERRY_WPF_BIRTHS (diagnostic only): once per (class, birth context) of a
+// `new` of a class object, who constructs it and the whole context key.
+thread_local! {
+    pub(crate) static DIAG_NEW_NODE: std::cell::Cell<NodeId> = const { std::cell::Cell::new(NO_NODE) };
+    static DIAG_BIRTHS: std::cell::RefCell<crate::pts::FxHashSet<(TmplId, CallId)>> = Default::default();
+    pub(crate) static DIAG_BY: std::cell::RefCell<crate::pts::FxHashMap<CallId, CallId>> = Default::default();
+}
+
+pub(crate) fn births_diag_t0() -> Option<std::time::Instant> {
+    static T0: std::sync::OnceLock<Option<std::time::Instant>> = std::sync::OnceLock::new();
+    *T0.get_or_init(|| std::env::var_os("PERRY_WPF_BIRTHS").map(|_| std::time::Instant::now()))
+}
+
+impl Model {
+    fn birth_diag(&self, call: CallId, tm: TmplId, ctx: CallId) {
+        let Some(t0) = births_diag_t0() else { return };
+        if !DIAG_BIRTHS.with(|s| s.borrow_mut().insert((tm, ctx))) {
+            return;
+        }
+        let fname = |c: CallId| -> String {
+            self.calls
+                .get(c as usize)
+                .and_then(|cs| self.node_fn.get(cs.ret as usize).copied())
+                .and_then(|f| self.funcs.get(f as usize).map(|x| x.name.to_string()))
+                .unwrap_or_else(|| "?".into())
+        };
+        let short = |tm: TmplId| self.tmpls[tm as usize].display.rsplit(':').next().unwrap_or("").to_string();
+        let n_prog = self.sum.n_prog as CallId;
+        let kind = if call < n_prog {
+            format!("prog c{call} in {}", fname(call))
+        } else if let Some(t) = self.sum.tmpl_of.get(&call) {
+            format!("copy c{call} of c{t} in {}", fname(*t))
+        } else if let Some(o) = self.sum.origin.get(&call) {
+            let by = self.made_root.get(&call).copied().unwrap_or(call);
+            let nat: Vec<&str> = self
+                .prof
+                .as_ref()
+                .map(|p| p.natives.iter().filter(|(_, (_, s))| s.contains(&by)).map(|(n, _)| *n).collect())
+                .unwrap_or_default();
+            format!("solver c{call} by c{by} for c{o} in {} ret={} natives={nat:?}", fname(*o), self.labels[self.calls[call as usize].ret as usize])
+        } else {
+            format!("other c{call} in {}", fname(call))
+        };
+        let mut chain = String::new();
+        let mut x = call;
+        for _ in 0..12 {
+            let cs = &self.calls[x as usize];
+            let this = match cs.this {
+                crate::model::ThisArg::Node(n) => {
+                    let ts = self.nodes[n as usize].pts.to_sorted();
+                    format!("{}#{n} n={} {:?}", self.labels[n as usize], ts.len(), ts.iter().take(3).map(|&t| self.tok_name(t)).collect::<Vec<_>>())
+                }
+                crate::model::ThisArg::Tok(t) => format!("tok {}", self.tok_name(t)),
+                _ => "-".into(),
+            };
+            let t = self.sum.tmpl_of.get(&x).map(|t| format!(" tmpl c{t}")).unwrap_or_default();
+            chain.push_str(&format!(" <c{x}{t} ret={} this={this}>", self.labels[cs.ret as usize]));
+            match DIAG_BY.with(|m| m.borrow().get(&x).copied()) {
+                Some(b) => x = b,
+                None => break,
+            }
+        }
+        let lay = self.sum.call_lay.get(&call).copied();
+        let n = DIAG_NEW_NODE.with(|c| c.get());
+        let ctor = if n == NO_NODE || n as usize >= self.nodes.len() {
+            "ctor=?".to_string()
+        } else {
+            let ts = self.nodes[n as usize].pts.to_sorted();
+            let first: Vec<String> = ts.iter().take(6).map(|&t| match self.toks[t as usize] {
+                TokKind::ClassObj(x) => format!("C:{}", short(x)),
+                _ => self.tok_name(t),
+            }).collect();
+            format!("ctor={}#{n} in {} n={} {first:?}", self.labels[n as usize], self.node_fn.get(n as usize).and_then(|f| self.funcs.get(*f as usize)).map(|x| x.name.to_string()).unwrap_or_default(), ts.len())
+        };
+        let mut key = String::new();
+        let mut c = ctx;
+        for _ in 0..32 {
+            match (c < crate::summary::BORN).then(|| self.sum.made.get((crate::summary::BORN - 1 - c) as usize).copied()).flatten() {
+                Some((s, m)) => {
+                    let vc = self.sum.made_of.iter().find(|(_, &v)| v == c).map(|(k, _)| k.2).unwrap_or(u32::MAX);
+                    key.push_str(&format!(" [k{c} site c{s} in {} vc={vc} ", fname(s)));
+                    match m {
+                        crate::summary::Maker::Obj(o, b) => {
+                            let (otm, oc) = match self.toks[o as usize] { TokKind::Obj(a, b) => (short(a), b), _ => ("?".into(), 0) };
+                            key.push_str(&format!("by{} t{o}:{otm}]", if b { "M" } else { "C" }));
+                            c = oc;
+                        }
+                        crate::summary::Maker::Site(z) => { key.push_str(&format!("site c{z} in {}]", fname(z))); break; }
+                        crate::summary::Maker::Val => { key.push_str("val]"); break; }
+                    }
+                }
+                None => {
+                    key.push_str(&if c == crate::summary::BORN { " [BORN]".to_string() } else { format!(" [prog c{c} in {}]", fname(c)) });
+                    break;
+                }
+            }
+        }
+        eprintln!(
+            "perry: wpfacts birth\t{:.1}\t{}\tctx={ctx}\t{kind}\tlay={lay:?}\t{ctor}\tkey:{key}\tchain:{chain}",
+            t0.elapsed().as_secs_f64(),
+            short(tm)
+        );
     }
 }
