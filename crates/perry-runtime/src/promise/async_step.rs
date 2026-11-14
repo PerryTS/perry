@@ -150,15 +150,6 @@ fn suspend_on_awaited(
     )
 }
 
-#[inline]
-fn closure_ptr_to_arg(ptr: ClosurePtr) -> f64 {
-    if ptr.is_null() {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     bump(&MT_PROMISE_RESOLVED_COUNT);
@@ -313,13 +304,25 @@ pub extern "C" fn js_promise_resolved_then(
     on_fulfilled: ClosurePtr,
     on_rejected: ClosurePtr,
 ) -> *mut Promise {
+    // Every path allocates before it hands the handlers on (`js_promise_new`,
+    // `capture_context`, `js_promise_resolved`, which can also run a user
+    // `constructor` or `then` getter), and a copying minor there moves them:
+    // each path reads them back from these handles after its last such call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let fulfilled_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_fulfilled));
+    let rejected_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_rejected));
+
     // The primitive fast path below bypasses `js_promise_new`/`then`, so it
     // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
     // through the real resolve+then path instead.
     if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
         bump(&MT_FAST_PATH_MISS);
         let p1 = js_promise_resolved(value);
-        return js_promise_then(p1, on_fulfilled, on_rejected);
+        return js_promise_then(
+            p1,
+            unboxed_closure(&fulfilled_h),
+            unboxed_closure(&rejected_h),
+        );
     }
 
     if is_definitely_primitive(value) {
@@ -327,21 +330,21 @@ pub extern "C" fn js_promise_resolved_then(
         // FAST PATH (primitive) — skip Promise.resolve()'s allocation
         // entirely. The callback runs once during the next microtask
         // drain via the `Task::Inline` arm.
-        let next = js_promise_new();
+        let next_h = scope.root_nanbox_f64(boxed_promise_or_undef(js_promise_new()));
+        let context = capture_context();
         TASK_QUEUE.with(|q| {
             q.borrow_mut().enqueue_promise_job(Task::Inline(
-                on_fulfilled,
+                unboxed_closure(&fulfilled_h),
                 value,
-                next,
+                unboxed_promise(&next_h),
                 true,
-                capture_context(),
+                context,
             ));
         });
         crate::event_pump::js_notify_promise_progress();
-        // Suppress the rejection-handler bookkeeping: it would only
-        // matter if `value` were a Promise, which it isn't here.
-        let _ = on_rejected;
-        return next;
+        // No rejection handler is attached: it would only matter if `value`
+        // were a Promise, which it isn't here.
+        return unboxed_promise(&next_h);
     }
 
     // FAST PATH (already-a-Promise) — `Promise.resolve(P)` is the
@@ -378,14 +381,19 @@ pub extern "C" fn js_promise_resolved_then(
                 // (#13556, test262 Promise/resolve/arg-uniq-ctor).
                 let resolved = js_promise_resolved(value);
                 let promise_val = box_promise_ptr(resolved);
-                let fulfilled_val = closure_ptr_to_arg(on_fulfilled);
-                let rejected_val = closure_ptr_to_arg(on_rejected);
-                let result =
-                    super::js_promise_then_checked(promise_val, fulfilled_val, rejected_val);
+                let result = super::js_promise_then_checked(
+                    promise_val,
+                    fulfilled_h.get_nanbox_f64(),
+                    rejected_h.get_nanbox_f64(),
+                );
                 return crate::value::js_nanbox_get_pointer(result) as *mut Promise;
             }
             bump(&MT_FAST_PATH_HIT);
-            return js_promise_then(inner, on_fulfilled, on_rejected);
+            return js_promise_then(
+                inner,
+                unboxed_closure(&fulfilled_h),
+                unboxed_closure(&rejected_h),
+            );
         }
     }
 
@@ -393,7 +401,11 @@ pub extern "C" fn js_promise_resolved_then(
     // Pointer-tagged but not a Promise — could be a thenable. Take
     // the unfused path so the assimilation probes can run on it.
     let p1 = js_promise_resolved(value);
-    js_promise_then(p1, on_fulfilled, on_rejected)
+    js_promise_then(
+        p1,
+        unboxed_closure(&fulfilled_h),
+        unboxed_closure(&rejected_h),
+    )
 }
 
 /// Specialized version of `js_promise_resolved_then` for the async-step
