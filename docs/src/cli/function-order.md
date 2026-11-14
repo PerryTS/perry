@@ -70,6 +70,24 @@ added to the binary: only the layout differs.
 - GNU ld and lld on Linux only. macOS, Windows, WebAssembly, Android and
   HarmonyOS builds are unchanged.
 
+The same link script carries a default order for the runtime's read-only
+data: the `.rodata` and `.data.rel.ro` sections (tables, vtables, constant
+strings) that ordinary programs read are placed at the front of their output
+sections, so the data pages a program touches are packed as well.
+
+- `PERRY_HOT_DATA_ORDER=off` keeps the previous data layout (the text order
+  has its own switch).
+- The list is `crates/perry/src/commands/compile/link/hot_data_order.txt`, one
+  hash-free key per data section: its symbol, or for an unnamed constant a
+  digest of its bytes and relocations. `scripts/hot_data_order.py` records it
+  (valgrind's lackey, every load) and builds it, and its `check` command is
+  the gate, as for the text list.
+- Native glibc Linux executables only. With GNU ld the `.rodata` half needs
+  x86-64's default script (`-z separate-code`); it adds at most one page of
+  alignment padding in front of `.eh_frame_hdr`. Merged sections
+  (`.rodata.str1.1`, `.rodata.cst16`) are pooled by the linker and not
+  ordered.
+
 ## Platforms
 
 | Platform | How the order is applied |

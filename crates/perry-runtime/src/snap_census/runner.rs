@@ -2266,7 +2266,8 @@ fn executable_tls_size() -> usize {
 
 #[inline]
 fn page_flags(st: &State, addr: usize) -> Option<*mut u8> {
-    st.cells.heap
+    st.cells
+        .heap
         .slot(addr)
         .or_else(|| st.bin.slot(addr))
         .or_else(|| tls_slot(st, addr))
@@ -2475,7 +2476,11 @@ fn top_pre_existing(st: &State, word: usize) -> bool {
     if st.pre_globals.contains(word as u64) {
         return true;
     }
-    match st.cells.object_start(word).and_then(|h| st.cells.start_bit(h)) {
+    match st
+        .cells
+        .object_start(word)
+        .and_then(|h| st.cells.start_bit(h))
+    {
         Some(i) => unsafe { *st.pre_bits.add(i / 64) & (1 << (i % 64)) != 0 },
         None => false,
     }
@@ -2891,7 +2896,8 @@ fn note_access_at(st: &mut State, word: usize, write: bool, pc: usize, watch_end
         // A word outside every born object is free space the allocator
         // touched (block setup), not a location.
         let inside = cell.is_some_and(|h| {
-            st.cells.sizes
+            st.cells
+                .sizes
                 .get(h as u64)
                 .is_some_and(|s| word < h + s as usize)
         });
@@ -2977,7 +2983,8 @@ fn note_repw(st: &mut State, word: usize) {
 
 /// The object starting at `h` was born while a member of D ran.
 fn born_in_d(st: &State, h: usize) -> bool {
-    st.cells.born_by
+    st.cells
+        .born_by
         .get(h as u64)
         .is_some_and(|(i, _)| i != 0 && st.inits[i as usize].in_d)
 }
@@ -2996,7 +3003,8 @@ fn repr_access(st: &mut State, word: usize, write: bool, pc: usize) {
         realm_cell(st, word)
     };
     let Some(h) = cell.filter(|&h| {
-        st.cells.sizes
+        st.cells
+            .sizes
             .get(h as u64)
             .is_some_and(|s| word < h + s as usize)
     }) else {
@@ -5832,7 +5840,9 @@ mod cells_tests {
         assert!(c.is_start(B));
         c.birth(B + 2 * MB + 64, 64, 2, 3);
         assert_eq!(c.object_start(B + 2 * MB + 72), Some(B + 2 * MB + 64));
-        let starts = (B + 2 * MB..B + 4 * MB).step_by(8).filter(|&a| c.is_start(a));
+        let starts = (B + 2 * MB..B + 4 * MB)
+            .step_by(8)
+            .filter(|&a| c.is_start(a));
         assert_eq!(starts.collect::<Vec<_>>(), vec![B + 2 * MB + 64]);
     }
 }

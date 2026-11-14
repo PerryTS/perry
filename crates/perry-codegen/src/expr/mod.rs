@@ -3394,6 +3394,7 @@ pub(crate) mod int32_shadow;
 pub(crate) mod int_product;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+pub(crate) mod booleans;
 pub(crate) mod literal_strings;
 #[cfg(test)]
 mod map_entry_fusion_tests;
