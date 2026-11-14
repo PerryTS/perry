@@ -335,6 +335,17 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 // If no compiled constructor, just leave the instance handle on stack
             }
+            Expr::ReflectApply {
+                func: target,
+                this_arg,
+                args,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, target);
+                self.emit_store_arg(func, 1, this_arg);
+                self.emit_store_arg(func, 2, args);
+                self.emit_memcall(func, "reflect_apply", 3);
+            }
             Expr::NewDynamic { callee, args, .. } => {
                 // `new_dynamic` constructs a host constructor and calls a Perry closure.
                 self.emit_frame_begin(func, (args.len() + 1) as u32);
@@ -410,10 +421,11 @@ impl<'a> FuncEmitCtx<'a> {
             } if self.current_class.is_some() => {
                 self.emit_super_method_call(func, key, receiver, args);
             }
-            // A class declared in a function body. Without per-evaluation state
-            // (captured locals, static initializers, computed member names)
-            // every evaluation builds what the shared class builds; a class
-            // with such state is not represented here and stays `undefined`.
+            // A class declared in a function body: each evaluation is its own
+            // constructor with its own capture environment, the first one included
+            // (`ClassIsFirstEvaluation` is not represented, so code takes the
+            // by-value forms). Static initializers and computed member names are not
+            // represented here and stay `undefined`.
             Expr::ClassExprFresh {
                 template,
                 named_statics,
@@ -427,29 +439,108 @@ impl<'a> FuncEmitCtx<'a> {
                 && computed_keys.is_empty()
                 && computed_statics.is_empty()
                 && static_init_order.is_empty()
-                && captured_args.is_empty()
                 && definition_steps.is_empty() =>
             {
-                self.emit_expr(func, &Expr::ClassRef(template.clone()));
+                // The self-binding (`evaluation_owner`) is assigned by the
+                // surrounding HIR, and the capture refresh that follows it
+                // republishes a capture that read it before then.
+                let ctor_slot = self.class_ctor_slot(template);
+                let caps = Expr::Array(captured_args.clone(), None);
+                self.emit_class_bridge(
+                    func,
+                    "class_fresh",
+                    template,
+                    &[&Expr::Number(ctor_slot), &caps],
+                );
+            }
+            Expr::RefreshClassExprCaptures {
+                class_value,
+                captures,
+                ..
+            } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, class_value);
+                self.emit_store_arg(func, 1, &Expr::Array(captures.clone(), None));
+                self.emit_memcall(func, "class_env_refresh", 2);
+            }
+            Expr::ClassEnvGet {
+                class_name, index, ..
+            } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(
+                    func,
+                    "class_env_get",
+                    class_name,
+                    &[&Expr::Number(*index as f64), &receiver],
+                );
+            }
+            // The constructor's publish of a fresh class expression's capture params
+            // is dropped: the evaluation itself publishes them (`class_fresh`).
+            Expr::ClassEnvSet {
+                value,
+                guarded: true,
+                publish: true,
+                ..
+            } => self.emit_expr(func, value),
+            Expr::ClassEnvSet {
+                class_name,
+                index,
+                value,
+                publish,
+                ..
+            } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(
+                    func,
+                    "class_env_set",
+                    class_name,
+                    &[
+                        &Expr::Number(*index as f64),
+                        &receiver,
+                        value,
+                        &Expr::Bool(*publish),
+                    ],
+                );
+            }
+            Expr::ClassEnvStamp {
+                class_name,
+                instance,
+                evaluation,
+            } => {
+                self.emit_class_bridge(func, "class_env_stamp", class_name, &[instance, evaluation])
+            }
+            Expr::ClassEnvCurrent { class_name } => {
+                let receiver = self.class_env_receiver();
+                self.emit_class_bridge(func, "class_env_current", class_name, &[&receiver]);
+            }
+            Expr::RegisterClassCaptures {
+                class_name,
+                captures,
+            } => {
+                let caps = Expr::Array(captures.clone(), None);
+                self.emit_class_bridge(func, "class_register_captures", class_name, &[&caps]);
+            }
+            Expr::ClassCaptureValue {
+                class_name,
+                index,
+                fallback,
+                prefer_fallback,
+            } => {
+                let fallback = fallback.as_deref().cloned().unwrap_or(Expr::Undefined);
+                self.emit_class_bridge(
+                    func,
+                    "class_capture_value",
+                    class_name,
+                    &[
+                        &Expr::Number(*index as f64),
+                        &fallback,
+                        &Expr::Bool(*prefer_fallback),
+                    ],
+                );
             }
             Expr::ClassRef(class_name) => {
-                let class_id = self
-                    .emitter
-                    .string_map
-                    .get(class_name.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let class_bits = (STRING_TAG << 48) | (class_id as u64);
-                let ctor_slot = self
-                    .emitter
-                    .class_ctor_map
-                    .get(class_name.as_str())
-                    .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
-                    .map_or(-1.0, |&slot| slot as f64);
-                self.emit_frame_begin(func, 2);
-                self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, ctor_slot);
-                self.emit_memcall(func, "class_ref", 2);
+                let ctor_slot = self.class_ctor_slot(class_name);
+                self.emit_class_bridge(func, "class_ref", class_name, &[&Expr::Number(ctor_slot)]);
             }
             Expr::StaticFieldGet {
                 class_name,
@@ -615,6 +706,14 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // `x instanceof C` with C a value that may be a class-expression evaluation.
+            Expr::InstanceOf {
+                expr,
+                ty,
+                ty_expr: Some(ty_expr),
+            } if !matches!(**ty_expr, Expr::ClassRef(_)) => {
+                self.emit_class_bridge(func, "class_instanceof_value", ty, &[expr, ty_expr]);
+            }
             // --- InstanceOf ---
             Expr::InstanceOf { expr, ty, .. } => {
                 self.emit_expr(func, expr);
@@ -649,6 +748,48 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
+    fn class_ctor_slot(&self, class_name: &str) -> f64 {
+        self.emitter
+            .class_ctor_map
+            .get(class_name)
+            .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
+            .map_or(-1.0, |&slot| slot as f64)
+    }
+
+    /// The receiver a class-environment node resolves its evaluation from: `this`
+    /// in a member.
+    fn class_env_receiver(&self) -> Expr {
+        if self.this_is_local0 {
+            Expr::This
+        } else {
+            Expr::Undefined
+        }
+    }
+
+    /// Call `bridge(class_name, args...)`.
+    fn emit_class_bridge(
+        &mut self,
+        func: &mut Function,
+        bridge: &str,
+        class_name: &str,
+        args: &[&Expr],
+    ) {
+        let class_id = self
+            .emitter
+            .string_map
+            .get(class_name)
+            .copied()
+            .unwrap_or(0);
+        let class_bits = (STRING_TAG << 48) | (class_id as u64);
+        self.emit_frame_begin(func, args.len() as u32 + 1);
+        self.emit_store_const(func, 0, f64::from_bits(class_bits));
+        for (i, arg) in args.iter().enumerate() {
+            self.emit_store_arg(func, i as u32 + 1, arg);
+        }
+        self.emit_memcall(func, bridge, args.len() as u32 + 1);
     }
 }
 

@@ -1673,34 +1673,102 @@ const __perryClassCtors = new WeakSet();
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
-    ctor = function (...args) {
-      if (new.target === undefined) {
-        throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
-      }
-      const self = __classInstance(className);
-      if (ctorIdx < 0) return self;
-      const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
-      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
-      // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
-      return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
-    };
-    Object.defineProperty(ctor, 'name', { value: className });
-    // Instances are `{__class__}` objects, not linked to ctor.prototype: host
-    // `instanceof` walks the class table as class_instanceof does.
-    Object.defineProperty(ctor, Symbol.hasInstance, {
-      value: (obj) => {
-        if (!obj || typeof obj !== 'object') return false;
-        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
-          if (c === className) return true;
-        }
-        return false;
-      },
-    });
-    __perryClassCtors.add(ctor);
+    ctor = __classCtor(className, ctorIdx, undefined);
     __classRefs.set(className, ctor);
   }
   return ctor;
+}
+
+// With `caps`, the constructor is one evaluation of a class expression
+// (`Expr::ClassExprFresh`) with that capture environment, and records itself on every
+// instance it builds. Its `prototype` exposes the class chain's methods, bound to the
+// evaluation as a method read off its instance is.
+function __classCtor(className, ctorIdx, caps) {
+  const evaluated = caps !== undefined;
+  const ctor = function (...args) {
+    if (new.target === undefined) {
+      throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
+    }
+    const self = __classInstance(className);
+    if (evaluated) __instanceEvaluation.set(self, ctor);
+    if (ctorIdx < 0) return self;
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
+    // The constructor's trailing params are the class's captures (see
+    // `synthesize_class_captures`): an evaluation passes its own.
+    const envCaps = evaluated ? __classEvaluations.get(ctor).caps : [];
+    if (envCaps.length) {
+      args = args.slice(0, impl.length - 1 - envCaps.length);
+      while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
+      args.push(...envCaps);
+    }
+    const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
+    return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+  };
+  Object.defineProperty(ctor, 'name', { value: className });
+  // Instances are `{__class__}` objects, not linked to ctor.prototype: host
+  // `instanceof` walks the class table as class_instanceof does, and an instance of
+  // an evaluated template answers for the evaluation that built it, as
+  // class_instanceof_value does.
+  Object.defineProperty(ctor, Symbol.hasInstance, {
+    value: (obj) => {
+      if (!obj || typeof obj !== 'object') return false;
+      if (evaluated && obj.__class__ === className) {
+        return (__instanceEvaluation.get(obj) || __classTemplate(className).first) === ctor;
+      }
+      for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+        if (c === className) return true;
+      }
+      return false;
+    },
+  });
+  __perryClassCtors.add(ctor);
+  if (evaluated) __classEvaluations.set(ctor, { template: className, caps });
+  const proto = { constructor: ctor };
+  for (let c = className; c; c = classParentTable[c] || null) {
+    for (const m of Object.keys(classMethodTable[c] || {})) {
+      if (m in proto || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+      proto[m] = __classMethodValue(c, m, evaluated ? ctor : undefined);
+    }
+  }
+  for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
+  ctor.prototype = proto;
+  return ctor;
+}
+
+// Class environments (`Expr::ClassEnvGet` and friends). Every evaluation of a capturing
+// class expression is its own constructor, keyed here to `{template, caps}`. A member
+// reads its captures from the evaluation it runs in: the evaluation of the method value
+// it was called through, else the receiver's, else the class's first evaluation (the
+// template's `slots` serve a class that never had one).
+const __classEvaluations = new WeakMap();
+const __instanceEvaluation = new WeakMap();
+const __classTemplates = new Map();
+let __classEnvCall = null;
+function __classTemplate(className) {
+  let t = __classTemplates.get(className);
+  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [] }));
+  return t;
+}
+function __classEvaluate(className, ctorIdx, caps) {
+  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+  const t = __classTemplate(className);
+  if (t.first === undefined) t.first = ctor;
+  return ctor;
+}
+function __classEvaluationOf(receiver, className) {
+  const call = __classEnvCall;
+  if (call && call.receiver === receiver && __classEvaluations.get(call.evaluation).template === className) {
+    return call.evaluation;
+  }
+  const own = receiver && typeof receiver === 'object' ? __instanceEvaluation.get(receiver) : undefined;
+  if (own && __classEvaluations.get(own).template === className) return own;
+  return __classTemplate(className).first;
+}
+function __classEnvCaps(receiver, className) {
+  const ev = __classEvaluationOf(receiver, className);
+  return ev ? __classEvaluations.get(ev).caps : __classTemplate(className).slots;
 }
 
 // A lowered sync generator drives its resume record, a wasm closure taking
@@ -2123,6 +2191,13 @@ const __memDispatch = {
     const padded = __padBigintArgs(fn, callee.captures.length, args.map(__jsValueToBits));
     return __bitsToJsValue(fn(...callee.captures, ...padded));
   },
+  // `Reflect.apply`: a host function (a class method value) gets `thisArg`; a Perry
+  // closure has no `this` to give.
+  reflect_apply: (fn, thisArg, args) => {
+    const argArr = Array.isArray(args) ? args : [];
+    if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
+    return __memDispatch.closure_call_spread(fn, argArr);
+  },
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (typeof closure === 'function') return __callHostFunction(closure, argArr);
@@ -2211,6 +2286,47 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
+  class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
+  // A refresh of a path that never evaluated the class gets `undefined`: a no-op.
+  class_env_refresh: (ctor, caps) => {
+    const evaluation = __classEvaluations.get(ctor);
+    if (evaluation && Array.isArray(caps)) evaluation.caps = caps;
+    return ctor;
+  },
+  class_env_get: (className, index, receiver) => __classEnvCaps(receiver, String(className))[index | 0],
+  // A constructor's publish of its capture params never overwrites a capture with
+  // a param the caller left out (see `class_env.rs` in perry-codegen).
+  class_env_set: (className, index, receiver, value, publish) => {
+    if (!(publish && value === undefined)) __classEnvCaps(receiver, String(className))[index | 0] = value;
+    return value;
+  },
+  class_env_stamp: (className, instance, evaluation) => {
+    const e = __classEvaluations.get(evaluation);
+    if (e && e.template === String(className) && instance && typeof instance === 'object') {
+      __instanceEvaluation.set(instance, evaluation);
+    }
+    return instance;
+  },
+  class_env_current: (className, receiver) => __classEvaluationOf(receiver, String(className)),
+  class_register_captures: (className, caps) => {
+    if (Array.isArray(caps)) __classTemplate(String(className)).slots = caps;
+  },
+  // The decl-site snapshot (`RegisterClassCaptures`) unless it is `undefined`, or the
+  // new-site param first when `preferFallback` says the param wins.
+  class_capture_value: (className, index, fallback, preferFallback) => {
+    const snapshot = __classTemplate(String(className)).slots[index | 0];
+    if (preferFallback) return fallback !== undefined ? fallback : snapshot;
+    return snapshot !== undefined ? snapshot : fallback;
+  },
+  // `obj instanceof C` where C is a class-expression evaluation: an instance of the
+  // template answers for the evaluation that built it.
+  class_instanceof_value: (classId, obj, ctor) => {
+    const e = __classEvaluations.get(ctor);
+    if (e && obj && typeof obj === 'object' && obj.__class__ === e.template) {
+      return (__instanceEvaluation.get(obj) || __classTemplate(e.template).first) === ctor;
+    }
+    return __memDispatch.class_instanceof(obj, classId) === 1;
+  },
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -2302,7 +2418,7 @@ const __memDispatch = {
         for (let c = obj.__class__; c; c = classParentTable[c] || null) {
           const methods = classMethodTable[c];
           if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
-            return __classMethodValue(c, fname);
+            return __classMethodValue(c, fname, __instanceEvaluation.get(obj));
           }
         }
       }
@@ -5353,22 +5469,32 @@ function __hostCallback(value) {
 // called with, as a JS method does (`f.call(other)` still runs this class's `m`).
 // `funcIdx` / `captures` make it a closure to the callback consumers (`arr.map(o.m)`),
 // which call it with an undefined `this`, as JS does for a detached method.
+// A method of a class-expression evaluation (`evaluation`, see __classCtor) is one
+// value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
-function __classMethodValue(cls, mname) {
+function __classMethodValue(cls, mname, evaluation) {
   const key = cls + '\u0000' + mname;
-  let fn = __classMethodValues.get(key);
+  const cache = evaluation ? __classEvaluations.get(evaluation) : null;
+  const values = cache ? (cache.methods ||= new Map()) : __classMethodValues;
+  let fn = values.get(key);
   if (!fn) {
     const funcIdx = classMethodTable[cls][mname];
     fn = function (...args) {
       const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
       const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-      return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+      const outer = __classEnvCall;
+      if (evaluation) __classEnvCall = { receiver: this, evaluation };
+      try {
+        return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(this), ...padded));
+      } finally {
+        __classEnvCall = outer;
+      }
     };
     fn.funcIdx = funcIdx;
     fn.captures = [TAG_UNDEFINED];
     __classMethodFns.add(fn);
-    __classMethodValues.set(key, fn);
+    values.set(key, fn);
   }
   return fn;
 }

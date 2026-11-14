@@ -1818,3 +1818,86 @@ main();
         "object"
     );
 }
+
+// Each evaluation of a capturing class expression is its own constructor, and its
+// members read the captures of the evaluation that built the instance.
+#[test]
+fn each_class_expression_evaluation_keeps_its_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { who() { return tag; } }; }
+const A = make("A");
+const B = make("B");
+const a = new A();
+const b = new B();
+console.log(a.who() + " " + b.who() + " " + (A === B));
+console.log((a instanceof A) + " " + (a instanceof B) + " " + (b instanceof B));
+"#
+        ),
+        "A B false\ntrue false true"
+    );
+}
+
+#[test]
+fn a_class_expression_sees_a_capture_assigned_after_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function counter(start: number) {
+  let n = start;
+  const K = class { bump() { n = n + 1; return n; } peek() { return n; } };
+  n = start * 10;
+  return K;
+}
+const C1 = counter(1);
+const C2 = counter(2);
+const c1 = new C1();
+console.log(c1.peek() + " " + new C2().peek());
+console.log(c1.bump() + " " + new C1().peek() + " " + new C2().bump());
+"#
+        ),
+        "10 20\n11 11 21"
+    );
+}
+
+// A method read off an instance or off `C.prototype` runs in that class's
+// evaluation whatever its `this`, as a JS method closes over its class (#12578).
+#[test]
+fn a_method_value_runs_in_its_class_expression_evaluation() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(tag: string) { return class { inst = tag; who() { return tag; } }; }
+const A = make("A");
+const B = make("B");
+const a: any = new A();
+const b: any = new B();
+console.log(a.who.call(b) + " " + A.prototype.who.call(b) + " " + Reflect.apply(A.prototype.who, b, []));
+const borrowed = { who: b.who, inst: "x" };
+console.log(borrowed.who() + " " + b.inst);
+"#
+        ),
+        "A A A\nB B"
+    );
+}
+
+#[test]
+fn a_class_declaration_in_a_function_is_fresh_per_call() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function declared(t: string) {
+  class K { v: number; constructor(v: number) { this.v = v; } who() { return t + this.v; } again() { return new K(this.v + 1); } }
+  return new K(1);
+}
+const x = declared("x");
+const y = declared("y");
+console.log(x.who() + " " + y.who() + " " + x.again().who() + " " + y.again().who());
+function bare() { return class {}; }
+console.log(bare() === bare());
+"#
+        ),
+        "x1 y1 x2 y2\nfalse"
+    );
+}

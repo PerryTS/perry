@@ -281,6 +281,7 @@ impl WasmModuleEmitter {
         // "expected i64 but nothing on stack" (#1081 sibling instance, constructor case).
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class.name.clone());
+        ctx.this_is_local0 = true;
         ctx.emit_box_params(&mut func, &ctor.params);
         for (index, stmt) in ctor.body.iter().enumerate() {
             ctx.emit_stmt(&mut func, stmt, true);
@@ -328,6 +329,7 @@ impl WasmModuleEmitter {
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
         ctx.current_class = Some(class_name.to_string());
+        ctx.this_is_local0 = true;
         ctx.emit_box_params(&mut func, &method.params);
 
         for stmt in &method.body {
