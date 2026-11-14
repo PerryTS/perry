@@ -29,8 +29,7 @@ use std::cell::Cell;
 
 use crate::array::{js_array_alloc, js_array_length, js_array_push_f64, ArrayHeader};
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::promise::{
     js_promise_attach_handlers, js_promise_new, js_promise_reject, js_promise_resolve,
@@ -349,7 +348,7 @@ extern "C" fn outer_thunk(
         return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         cb_handle.get_raw_mut_ptr(),
         0,
         promise_handle.get_raw_const_ptr::<Promise>() as i64,
@@ -442,7 +441,7 @@ extern "C" fn inner_callback_thunk(
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if promise_ptr.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -493,7 +492,7 @@ extern "C" fn gkp_outer_thunk(
         return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         cb_handle.get_raw_mut_ptr(),
         0,
         promise_handle.get_raw_const_ptr::<Promise>() as i64,
@@ -581,7 +580,7 @@ extern "C" fn gkp_inner_callback_thunk(
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if promise_ptr.is_null() {
         return TAG_UNDEFINED_F64;
     }

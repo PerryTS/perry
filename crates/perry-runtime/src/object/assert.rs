@@ -618,8 +618,7 @@ extern "C" fn assert_rejects_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     let err = make_assertion_error(
@@ -638,8 +637,7 @@ extern "C" fn assert_rejects_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     if expected_error_matches(reason, expected) {
@@ -662,8 +660,7 @@ extern "C" fn assert_does_not_reject_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     crate::promise::js_promise_resolve(result, undefined_f64());
     undefined_f64()
 }
@@ -673,8 +670,7 @@ extern "C" fn assert_does_not_reject_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let message = crate::closure::js_closure_get_capture_f64(closure, 1);
     let expected = crate::closure::js_closure_get_capture_f64(closure, 2);
     // With a matcher present, a rejection that does NOT match propagates the
@@ -702,7 +698,7 @@ fn closure3(
     message: f64,
 ) -> *const crate::closure::ClosureHeader {
     let closure = crate::closure::js_closure_alloc(func, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, result as i64);
+    crate::closure::closure_set_capture_ref(closure, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, expected);
     crate::closure::js_closure_set_capture_f64(closure, 2, message);
     closure
@@ -1274,8 +1270,8 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_fulfilled, 1), 1);
     let on_rejected =
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_rejected, 1), 3);
-    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
-    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_fulfilled, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
     crate::closure::js_closure_set_capture_f64(on_rejected, 2, expected);
     crate::promise::js_promise_then(source.promise, on_fulfilled, on_rejected);
