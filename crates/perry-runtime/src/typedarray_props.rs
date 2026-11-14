@@ -599,7 +599,7 @@ pub(crate) fn typed_array_set_number_key(owner: usize, key: f64, value: f64) -> 
         return false;
     }
     // A boxed int32 key decodes to its Number; a ClassRef that shares
-    // INT32_TAG, a string, a symbol or an object is not a Number key.
+    // INTERNAL_WORD_TAG, a string, a symbol or an object is not a Number key.
     let Some(index) = crate::array::value_bits_to_number(key.to_bits()) else {
         return false;
     };
@@ -873,9 +873,6 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
             key_ptr,
         );
     }
-    if jsval.is_int32() {
-        return typed_array_get_numeric_index_for(owner, kind, jsval.as_int32() as f64);
-    }
     if !jsval.is_number() {
         // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
         // first. `ta[undefined]` reads the ordinary property "undefined", and
@@ -939,9 +936,7 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
             }
             return value;
         }
-        if jsval.is_int32() {
-            typed_array_set_numeric_index(owner, jsval.as_int32() as f64, value);
-        } else if !jsval.is_number() {
+        if !jsval.is_number() {
             // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
             // first, then the string dispatch above. `ta[undefined] = v` creates
             // the ordinary property "undefined"; it used to be dropped. The key

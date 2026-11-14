@@ -1420,7 +1420,7 @@ pub(super) fn decode_heap_addr(bits: u64) -> usize {
         }
         decode_raw_pointer_candidate(addr)
     } else {
-        // SHORT_STRING_TAG (0x7FF9), INT32_TAG (0x7FFE),
+        // SHORT_STRING_TAG (0x7FF9), INTERNAL_WORD_TAG (0x7FFE),
         // primitive (0x7FFC), JS_HANDLE (0x7FFB) — none are
         // young-gen pointers.
         0

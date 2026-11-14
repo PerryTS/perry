@@ -667,13 +667,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                     unsafe { crate::typedarray_props::typed_array_has_property(ta, key_str) };
                 return if present { nanbox_true } else { nanbox_false };
             }
-            if key_val.is_int32() {
-                let index = key_val.as_int32();
-                let present = unsafe {
-                    index >= 0 && (index as u32) < crate::buffer::store::raw_length(ta as usize)
-                };
-                return if present { nanbox_true } else { nanbox_false };
-            }
             if key_val.is_number() {
                 let f = f64::from_bits(key_val.bits());
                 let present = unsafe {
@@ -746,14 +739,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
         if crate::buffer::is_registered_buffer(obj_addr as usize) {
             let buf = obj_addr as *const crate::buffer::BufferHeader;
             let len = crate::buffer::js_buffer_length(buf);
-            if key_val.is_int32() {
-                let idx = key_val.as_int32();
-                return if idx >= 0 && idx < len {
-                    nanbox_true
-                } else {
-                    nanbox_false
-                };
-            }
             if key_val.is_number() {
                 let f = f64::from_bits(key_val.bits());
                 let present = f.is_finite()
@@ -933,14 +918,7 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
                 // Numeric key: extract the index. Accept both NaN-boxed i32
                 // and plain f64 (e.g. literal `1`) provided it's a
                 // non-negative integer in range.
-                let idx: Option<u32> = if key_val.is_int32() {
-                    let i = key_val.as_int32();
-                    if i >= 0 {
-                        Some(i as u32)
-                    } else {
-                        None
-                    }
-                } else if key_val.is_number() {
+                let idx: Option<u32> = if key_val.is_number() {
                     let f = f64::from_bits(key_val.bits());
                     if f >= 0.0 && f.fract() == 0.0 && f < u32::MAX as f64 {
                         Some(f as u32)

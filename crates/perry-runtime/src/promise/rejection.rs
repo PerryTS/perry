@@ -166,9 +166,6 @@ fn describe_rejection_reason(v: f64) -> String {
     if jv.is_bool() {
         return format!("bool({})", jv.as_bool());
     }
-    if jv.is_int32() {
-        return format!("int32({})", jv.as_int32());
-    }
     if jv.is_any_string() {
         let ptr =
             crate::value::js_get_string_pointer_unified(v) as *const crate::string::StringHeader;

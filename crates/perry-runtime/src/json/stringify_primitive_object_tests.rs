@@ -80,13 +80,7 @@ fn primitive_object_preflight_rejects_callback_and_hole_tags() {
     ] {
         assert!(!field_is_primitive(bits));
     }
-    for bits in [
-        TAG_UNDEFINED,
-        TAG_NULL,
-        TAG_TRUE,
-        1.5f64.to_bits(),
-        INT32_TAG | 7,
-    ] {
+    for bits in [TAG_UNDEFINED, TAG_NULL, TAG_TRUE, 1.5f64.to_bits()] {
         assert!(field_is_primitive(bits));
     }
 }

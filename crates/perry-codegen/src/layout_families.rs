@@ -1541,6 +1541,11 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
         return ProgramLayouts::default();
     }
     let mut reads: HashMap<String, u64> = HashMap::new();
+    // Keys a fixed-key store site names. The store form of the coloured site
+    // (`layout_read::begin_store`) asks the record's store mask, which holds
+    // a bit only for a coloured key: a key the program stores but never
+    // reads needs its colour as much as a read key does.
+    let mut stores: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut layouts: Vec<Vec<String>> = Vec::new();
     let mut by_id: HashMap<u32, &Class> = HashMap::new();
     for hir in modules {
@@ -1553,6 +1558,14 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
             visit_stmts(body, &mut |_| {}, &mut |e| match e {
                 Expr::PropertyGet { property, .. } => {
                     *reads.entry(property.clone()).or_default() += 1;
+                }
+                Expr::PropertySet { property, .. } | Expr::PropertyUpdate { property, .. } => {
+                    stores.insert(property.clone());
+                }
+                Expr::PutValueSet { key, .. } => {
+                    if let Expr::String(k) = key.as_ref() {
+                        stores.insert(k.clone());
+                    }
                 }
                 Expr::Object(props) => {
                     let mut keys: Vec<String> = Vec::new();
@@ -1600,7 +1613,9 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
         for (pos, k) in l.iter().enumerate() {
             // A key a layout holds twice (a redeclared field) has no one
             // position there.
-            if l.iter().filter(|x| *x == k).count() != 1 || !reads.contains_key(k) {
+            if l.iter().filter(|x| *x == k).count() != 1
+                || !(reads.contains_key(k) || stores.contains(k))
+            {
                 continue;
             }
             if k.is_empty() || k.len() > 64 || k == "__proto__" || k == "length" || k == "size" {
@@ -1637,14 +1652,18 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
     out.mask_words = if out.colored.is_empty() { 0 } else { 2 };
     if explain() {
         for (k, (bit, slot)) in &out.colored {
-            eprintln!("perry: colour {k} bit {bit} slot {slot} reads {}", reads[k]);
+            eprintln!(
+                "perry: colour {k} bit {bit} slot {slot} reads {}",
+                reads.get(k).copied().unwrap_or(0)
+            );
         }
     }
     out
 }
 
 /// The keys that get a colour, at most [`MAX_COLOURED_KEYS`]: the most read
-/// first; among keys read as often, the one more layouts hold (a colour pays
+/// first (a key only stored counts as read zero times, so it never takes a
+/// read key's colour); among keys read as often, the one more layouts hold (a colour pays
 /// once per layout holding the key at its slot), then the name.
 fn colour_candidates<'a>(
     positions: &HashMap<&'a str, BTreeMap<u32, u32>>,

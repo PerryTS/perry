@@ -651,7 +651,7 @@ fn shared_scalar_storage_skips_handle_words_but_ordinary_arrays_keep_observers()
                 (array, slots)
             };
             *slots = if shared {
-                crate::value::INT32_TAG | 1
+                crate::value::INTERNAL_WORD_TAG | 1
             } else {
                 ptr_bits(7)
             };

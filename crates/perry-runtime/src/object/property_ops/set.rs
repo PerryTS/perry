@@ -1,17 +1,14 @@
 //! Ordinary receiver-aware property assignment.
 use super::*;
 
-/// Extract a raw heap pointer (48-bit) from either a NaN-boxed value
-/// (POINTER_TAG / STRING_TAG) or a raw i64/f64-reinterpreted pointer
-/// (module-level globals store Arrays/Objects as raw I64s, not NaN-boxed).
+/// Extract the heap pointer (48-bit) of a NaN-boxed value (POINTER_TAG /
+/// STRING_TAG / a native id). Every other value answers 0: a word whose top
+/// 16 bits are clear is a Number (a denormal, or +0), not a raw pointer.
 pub(crate) fn extract_pointer(bits: u64) -> u64 {
     let top = bits >> 48;
     // A native id reaches the by-name/handle dispatch as its raw id.
     if top == 0x7FFD || top == 0x7FFF || top == (crate::value::HANDLE_TAG >> 48) {
         bits & POINTER_MASK
-    } else if top == 0 {
-        // Raw untagged pointer (module-level I64 global).
-        bits
     } else {
         0
     }
@@ -162,13 +159,12 @@ pub(crate) fn target_set(target: f64, key: f64, value: f64) {
 pub(crate) fn raw_ptr_from_value(value: f64) -> Option<usize> {
     let bits = value.to_bits();
     let top16 = bits >> 48;
-    let raw = if top16 == (POINTER_TAG >> 48) {
-        bits & POINTER_MASK
-    } else if top16 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        bits
-    } else {
+    // A value names an object by its tag alone: a word with clear top 16 bits
+    // is a Number (a denormal), never an address.
+    if top16 != (POINTER_TAG >> 48) {
         return None;
-    } as usize;
+    }
+    let raw = (bits & POINTER_MASK) as usize;
     // #7531: `value` is a Proxy `target`/`key` candidate -- caller-supplied,
     // so it can be a fetch/zlib/proxy/common-registry handle id. The old
     // floor (`GC_HEADER_SIZE + 0x1000`) sits below every handle band; the
@@ -264,11 +260,6 @@ pub(crate) fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
 }
 
 pub(crate) fn integer_index_key(key: f64) -> Option<i32> {
-    let jsval = crate::value::JSValue::from_bits(key.to_bits());
-    if jsval.is_int32() {
-        let index = jsval.as_int32();
-        return (index >= 0).then_some(index);
-    }
     if !key.is_nan() {
         return (key.is_finite() && key >= 0.0 && key.fract() == 0.0 && key <= i32::MAX as f64)
             .then_some(key as i32);
@@ -976,11 +967,11 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
     //   - no recorded setPrototypeOf target (prototype chain is exactly
     //     Object.prototype) and no descriptor on Object.prototype,
     //   - string key.
+    // The target names an object by its tag alone: a word with clear top 16
+    // bits is a Number (a denormal), never a heap address.
     let target_top16 = target.to_bits() >> 48;
     if target.to_bits() == receiver.to_bits()
-        // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
-        // (top 16 bits zero).
-        && (target_top16 == 0x7FFD || target_top16 == 0)
+        && target_top16 == 0x7FFD
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
@@ -1309,17 +1300,6 @@ pub(crate) fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {
     crate::object::get_parent_class_id(class_id)
 }
 
-pub(crate) fn normalize_accessor_receiver(receiver: f64) -> f64 {
-    let bits = receiver.to_bits();
-    if bits != 0 && (bits >> 48) == 0 {
-        crate::value::js_nanbox_pointer(bits as i64)
-    } else if receiver.is_finite() && receiver > 65_536.0 && receiver.fract() == 0.0 {
-        crate::value::js_nanbox_pointer(receiver as i64)
-    } else {
-        receiver
-    }
-}
-
 /// `super[key] = value` for class methods. The property lookup starts at the
 /// parent prototype, but writes use the current `this` as Receiver.
 #[no_mangle]
@@ -1330,7 +1310,6 @@ pub extern "C" fn js_super_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    let receiver = normalize_accessor_receiver(receiver);
     // Static-context super uses the parent CONSTRUCTOR as the lookup target,
     // while retaining the child constructor as Receiver. A statically-known
     // class parent is represented by a ClassRef; a function-valued parent is

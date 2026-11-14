@@ -222,11 +222,13 @@ fn flat_output_observes_object_prototype_tojson_install_and_delete() {
         assert_ne!(proto_bits, 0);
         let proto = (proto_bits & POINTER_MASK) as *mut crate::ObjectHeader;
         key.with_const_ptr(|key| {
-            crate::object::own_override::as_builtin_definition(|| crate::object::js_object_set_field_by_name(
-                proto,
-                key,
-                f64::from_bits(crate::value::TAG_TRUE),
-            ))
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::js_object_set_field_by_name(
+                    proto,
+                    key,
+                    f64::from_bits(crate::value::TAG_TRUE),
+                )
+            })
         });
         assert!(
             try_object(input.get_nanbox_f64().to_bits()).is_none(),
@@ -235,7 +237,11 @@ fn flat_output_observes_object_prototype_tojson_install_and_delete() {
 
         let proto_bits = CACHED_OBJECT_PROTO_BITS.with(|cached| cached.get());
         let proto = (proto_bits & POINTER_MASK) as *mut crate::ObjectHeader;
-        let deleted = key.with_const_ptr(|key| crate::object::own_override::as_builtin_definition(|| crate::object::js_object_delete_field(proto, key)));
+        let deleted = key.with_const_ptr(|key| {
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::js_object_delete_field(proto, key)
+            })
+        });
         assert_eq!(deleted, 1);
         // Object model step 4: the delete gave the prototype an overflow,
         // whose keys the prototype verdict does not read (step 5's probe
@@ -293,9 +299,6 @@ fn flat_direct_number_spelling_matches_the_existing_emitter() {
             562949953421312.25,
         ] {
             check(number.to_bits());
-        }
-        for n in [i32::MIN, -1, 0, 1, i32::MAX] {
-            check(INT32_TAG | n as u32 as u64);
         }
         for _ in 0..16384 {
             state ^= state << 13;

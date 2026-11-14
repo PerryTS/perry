@@ -68,7 +68,10 @@ mod explicit_target_validation_tests {
             assert!(err.contains(bad), "error must name the bad value: {err}");
             // The diagnostic must list the accepted names, so a typo can be
             // self-corrected without reading docs.
-            assert!(err.contains("linux-x86_64"), "error must list targets: {err}");
+            assert!(
+                err.contains("linux-x86_64"),
+                "error must list targets: {err}"
+            );
         }
     }
 
@@ -78,14 +81,11 @@ mod explicit_target_validation_tests {
     // unknown target at the CLI".
     #[test]
     fn every_documented_target_name_is_accepted_by_the_gate() {
-        for name in perry_codegen::TARGET_NAMES
-            .iter()
-            .chain(
-                BACKEND_TARGET_NAME_GROUPS
-                    .iter()
-                    .flat_map(|group| group.iter()),
-            )
-        {
+        for name in perry_codegen::TARGET_NAMES.iter().chain(
+            BACKEND_TARGET_NAME_GROUPS
+                .iter()
+                .flat_map(|group| group.iter()),
+        ) {
             assert!(validate_explicit_target(Some(*name)).is_ok(), "{name}");
         }
     }
@@ -4187,12 +4187,12 @@ pub fn run_with_parse_cache(
             // Eager module is itself statically reachable from the entry, so
             // it is Eager, so this arm never fires for it.
             if !program_has_tla {
-            if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
-                deps.retain(|dep| {
-                    deferred_module_prefixes.contains(dep)
-                        || init_pos.get(dep).map_or(true, |&p| p < self_pos)
-                });
-            }
+                if let Some(&self_pos) = init_pos.get(&sanitize_name(&hir_module.name)) {
+                    deps.retain(|dep| {
+                        deferred_module_prefixes.contains(dep)
+                            || init_pos.get(dep).map_or(true, |&p| p < self_pos)
+                    });
+                }
             }
             if program_has_tla {
                 // A `defer` request is not an evaluation dependency: the
@@ -4209,8 +4209,11 @@ pub fn run_with_parse_cache(
                         }
                     }
                 }
-                deps = ordered.iter().filter_map(|p| ctx.native_modules.get(p))
-                    .map(|m| sanitize_name(&m.name)).collect();
+                deps = ordered
+                    .iter()
+                    .filter_map(|p| ctx.native_modules.get(p))
+                    .map(|m| sanitize_name(&m.name))
+                    .collect();
             }
             deps
         };
@@ -6923,6 +6926,8 @@ pub fn run_with_parse_cache(
             .collect::<Vec<_>>()
     });
     program_step("module options", Some(options_started));
+    // `family_reach`, for the generated installer below.
+    let family_live = crate::commands::stdlib_installs::family_live(program_facts.as_deref());
     // Per-module options now own the facts needed by lowering. Release the
     // program's preparation inputs before any LLVM worker starts.
     drop((
@@ -7752,14 +7757,17 @@ pub fn run_with_parse_cache(
     // full-feature one. Generated before the stub scan below so the scan sees
     // its install references resolved by the runtime/stdlib archives.
     {
-        let runtime_symbols = crate::commands::stdlib_installs::runtime_installer_callees(
-            &optimized_libs.runtime_installs,
-        );
+        let (runtime_symbols, runtime_never) =
+            crate::commands::stdlib_installs::runtime_installer_callees_by_fact(
+                &optimized_libs.runtime_installs,
+                family_live,
+            );
         let stdlib_symbols = (ctx.needs_stdlib && stdlib_lib_resolved.is_some()).then(|| {
             crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs)
         });
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!("  runtime installs: {}", runtime_symbols.join(", "));
+            eprintln!("  runtime families claimed never: {runtime_never:#x}");
             if let Some(stdlib) = &stdlib_symbols {
                 eprintln!("  stdlib installs: {}", stdlib.join(", "));
             }
@@ -7779,6 +7787,7 @@ pub fn run_with_parse_cache(
             &runtime_symbols,
             stdlib_symbols.as_deref(),
             &registrations,
+            runtime_never,
             target.as_deref(),
         )?;
         let installer_path = object_output_dir.join("_perry_feature_installs.o");

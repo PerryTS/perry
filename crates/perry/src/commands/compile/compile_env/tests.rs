@@ -450,6 +450,17 @@ fn quiet_sites_switch_is_a_cache_input() {
     );
 }
 
+/// Quiet sites over Strings: the switch decides whether a String's code
+/// unit counts as a primitive operand (a loop keeps its length on that
+/// word), so `=0` must never reuse an `=1` object.
+#[test]
+fn quiet_strings_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_QUIET_STRINGS"),
+        "PERRY_FACTS_QUIET_STRINGS must key the compile caches"
+    );
+}
+
 /// Activation reach, name-keyed folds: the switch changes which bodies the
 /// solve calls active (and every fact that follows from what they do), so
 /// `=0` must never reuse an `=1` object.
@@ -537,6 +548,23 @@ fn reach_thenable_switch_is_a_cache_input() {
     );
 }
 
+/// Activation reach, members on a built-in prototype (class H): each switch
+/// changes which bodies the solve calls active (the realm table's `held`
+/// rows; an accessor on a built-in prototype), so `=0` must never reuse an
+/// `=1` object.
+#[test]
+fn reach_proto_member_switches_are_cache_inputs() {
+    for name in [
+        "PERRY_FACTS_REACH_HELD_KEYS",
+        "PERRY_FACTS_REACH_PROTO_ACCESSORS",
+    ] {
+        assert!(
+            COMPILE_ENV_VARS.contains(&name),
+            "{name} must key the compile caches"
+        );
+    }
+}
+
 /// Literal strings: the switch changes the exported facts and every store
 /// and alias that drops its string demote, so `=0` must never reuse an `=1`
 /// object.
@@ -592,6 +620,16 @@ fn number_store_arm_switch_is_a_cache_input() {
     );
 }
 
+/// Proven Numbers are born raw (P3 B4b): the switch decides which births
+/// test a raw-`f64` lane's value, so `=0` must never reuse an `=1` object.
+#[test]
+fn number_births_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_NUMBER_BIRTHS"),
+        "PERRY_FACTS_NUMBER_BIRTHS must key the compile caches"
+    );
+}
+
 /// The rep-keyed element store: the switch changes every runtime-key store
 /// into an Array the facts give Number elements, so `=0` must never reuse an
 /// `=1` object.
@@ -621,6 +659,16 @@ fn slice_births_switch_is_a_cache_input() {
     assert!(
         COMPILE_ENV_VARS.contains(&"PERRY_FACTS_SLICE_BIRTHS"),
         "PERRY_FACTS_SLICE_BIRTHS must key the compile caches"
+    );
+}
+
+/// Booleans: the switch changes how the truthiness of a proven Boolean is
+/// lowered, so `=0` must never reuse an `=1` object.
+#[test]
+fn booleans_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_BOOLEANS"),
+        "PERRY_FACTS_BOOLEANS must key the compile caches"
     );
 }
 

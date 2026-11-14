@@ -2,8 +2,9 @@
 
 use super::{js_dyn_index_get, js_dyn_index_set_strict};
 
+/// An integer Number: its one encoding, the plain double (P3 B4b).
 fn boxed_i32(value: i32) -> f64 {
-    f64::from_bits(crate::value::INT32_TAG | u64::from(value as u32))
+    f64::from(value)
 }
 
 #[test]
@@ -45,6 +46,7 @@ fn a_non_number_0x7ffe_word_is_no_dynamic_index() {
     }
     assert_eq!(
         super::finite_nonnegative_u32_index(f64::from_bits(0x7FFE_0000_0000_0005)),
-        Some(5)
+        None
     );
+    assert_eq!(super::finite_nonnegative_u32_index(5.0), Some(5));
 }

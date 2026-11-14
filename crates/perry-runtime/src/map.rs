@@ -354,24 +354,16 @@ pub fn is_registered_map(addr: usize) -> bool {
     store::is_live_map(addr)
 }
 
-/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Map`
-/// pointer, or `None` if the receiver is not a `Map`. Backs the reflective
+/// Resolve a NaN-boxed `this` receiver to a registered `Map` pointer, or
+/// `None` if the receiver is not a `Map`. Backs the reflective
 /// `Map.prototype.*` thunks so they can perform the spec brand check
-/// (`TypeError` on a non-`Map` receiver) before dispatching. See
-/// `set::set_ptr_from_receiver_bits` for the receiver-extraction rationale.
+/// (`TypeError` on a non-`Map` receiver) before dispatching. Decodes by the
+/// tag alone, like `set::set_ptr_from_receiver_bits`.
 pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
-    let jsv = crate::value::JSValue::from_bits(bits);
-    let addr = if jsv.is_pointer() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if bits >> 48 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class: the bare-address branch must reject the handle bands, not
-        // just small integers. A hand-rolled `> 0x10000` floor sits an order of
-        // magnitude BELOW `HANDLE_BAND_MAX` (0x200000), so every fetch / zlib /
-        // proxy handle passed it and was treated as a candidate heap address.
-        bits as usize
-    } else {
+    if !crate::value::JSValue::from_bits(bits).is_pointer() {
         return None;
-    };
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     if is_registered_map(addr) {
         Some(addr as *mut MapHeader)
     } else {
@@ -670,7 +662,7 @@ pub(crate) fn is_plain_nonzero_number_bits(bits: u64) -> bool {
 #[inline]
 fn is_safe_numeric_key(bits: u64) -> bool {
     let upper = bits >> 48;
-    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INT32_TAG (0x7FFE) carry
+    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INTERNAL_WORD_TAG (0x7FFE) carry
     // heap pointers or need numeric normalization before reaching here.
     if upper == 0x7FFF || upper == 0x7FFD || upper == 0x7FFE {
         return false;
@@ -692,13 +684,8 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return false;
     }
-    // Raw pointer (0x0000) with a plausible heap address is also a pointer.
-    if upper == 0x0000 {
-        let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-        if lower > 0x10000 {
-            return false;
-        }
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0):
+    // it keys by its bits like every other Number.
     true
 }
 
@@ -753,10 +740,6 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
     let upper = bits >> 48;
     let addr = if upper == (crate::value::BIGINT_TAG >> 48) || upper == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if upper == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class — see `map_ptr_from_receiver_bits`: `> 0x10000` lets the
-        // whole handle band through; `is_above_handle_band` is the real floor.
-        bits as usize
     } else {
         return std::ptr::null();
     };
@@ -1071,9 +1054,7 @@ fn normalize_zero(key: f64) -> f64 {
 #[inline(always)]
 fn normalize_number_key_from_boxed(key: f64) -> Option<f64> {
     let js_value = crate::value::JSValue::from_bits(key.to_bits());
-    if js_value.is_int32() {
-        Some(normalize_zero(js_value.as_int32() as f64))
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(normalize_zero(key))
     } else {
         None
@@ -1089,15 +1070,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG (string stored as generic pointer)
-        0x0000 => {
-            // Raw pointer (no NaN-boxing tag)
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }

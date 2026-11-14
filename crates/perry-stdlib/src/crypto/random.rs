@@ -13,18 +13,14 @@ use perry_runtime::validators::{validate_integer, validate_string};
 /// call return an empty buffer instead of throwing.
 fn validate_random_bytes_size(size: f64) -> usize {
     let jv = JSValue::from_bits(size.to_bits());
-    if !jv.is_number() && !jv.is_int32() {
+    if !jv.is_number() {
         let message = format!(
             "The \"size\" argument must be of type number. Received {}",
             perry_runtime::fs::validate::describe_received(size)
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        size
-    };
+    let n = size;
     // Node truncates a fractional `randomBytes(1.5)` to 1 (no throw)
     // but rejects NaN/Infinity/negative/out-of-range with
     // ERR_OUT_OF_RANGE — fractional integers are NOT in the reject set.
@@ -349,7 +345,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// accepts for randomInt's `min`/`max`.
 fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
     let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_number() && !jv.is_int32() {
+    if !jv.is_number() {
         let message = format!(
             "The \"{}\" argument must be of type number. Received {}",
             arg_name,
@@ -357,11 +353,7 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        value
-    };
+    let n = value;
     if !n.is_finite() || n.fract() != 0.0 {
         let message = format!(
             "The \"{}\" argument must be a safe integer. Received {}",
@@ -855,7 +847,7 @@ fn random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
     if js.is_undefined() {
         return None;
     }
-    if !js.is_number() && !js.is_int32() {
+    if !js.is_number() {
         let message = format!(
             "The \"{}\" argument must be of type number. Received {}",
             name,
@@ -863,11 +855,7 @@ fn random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    Some(if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    })
+    Some(value)
 }
 
 fn validate_random_fill_range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
@@ -928,18 +916,9 @@ pub unsafe extern "C" fn js_crypto_random_fill_async(
 /// `undefined`, `null`, NaN, negatives → `None` (caller picks default).
 pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
     let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
     // Undefined / null / false / true sentinels.
     if matches!(raw, 0x7FFC_0000_0000_0001 | 0x7FFC_0000_0000_0002) {
         return None;
-    }
-    // Int32 tag (0x7FFE).
-    if top16 == 0x7FFE {
-        let i = (raw & 0xFFFF_FFFF) as u32 as i32;
-        if i < 0 {
-            return None;
-        }
-        return Some(i as usize);
     }
     // Otherwise treat as plain f64.
     if bits.is_nan() || bits.is_sign_negative() || bits.is_infinite() {
@@ -950,23 +929,6 @@ pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
 
 pub(super) unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
     let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
-    if top16 == 0x7FFE {
-        let i = (raw & 0xFFFF_FFFF) as u32 as i32;
-        if i < 0 {
-            return Vec::new();
-        }
-        let n = i as u64;
-        return if n <= 0xff {
-            vec![n as u8]
-        } else if n <= 0xffff {
-            (n as u16).to_be_bytes().to_vec()
-        } else if n <= 0xffff_ffff {
-            (n as u32).to_be_bytes().to_vec()
-        } else {
-            n.to_be_bytes().to_vec()
-        };
-    }
     let ptr = (raw & 0x0000_FFFF_FFFF_FFFF) as i64;
     bytes_from_ptr(ptr)
 }
@@ -1000,11 +962,6 @@ pub(super) unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<boo
 
 pub(super) unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u128> {
     let bits = object_field_bits(obj_bits, name)?;
-    let top16 = (bits >> 48) as u16;
-    if top16 == 0x7FFE {
-        let i = (bits & 0xFFFF_FFFF) as u32 as i32;
-        return (i >= 0).then_some(i as u128);
-    }
     bytes_to_u128(&crypto_value_bytes(f64::from_bits(bits)))
 }
 

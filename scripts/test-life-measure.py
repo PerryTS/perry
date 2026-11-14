@@ -125,6 +125,229 @@ def check_alloc(path):
     return bad
 
 
+# LIFE I3 fixture -> [(kind, function, loop ordinal or None, {column: exact value}, {column: minimum})].
+REGIONS = {
+    "r1_clean_loop": [("loop", "run", "#0", {"sampled": 200, "clean": 200, "dirty": 0, "unresolved": 0, "empty": 0},
+                       {"bytes": 1})],
+    "r2_push_outer": [("loop", "fill", "#0", {"sampled": 200, "dirty": 200, "surv1": 200, "surv_objs": 200,
+                                              "unresolved": 0, "held_by_object": 200}, {})],
+    "r3_every10": [("loop", "run", "#0", {"sampled": 200, "clean": 180, "dirty": 20, "surv1": 20, "unresolved": 0}, {})],
+    "r4_fn_clean": [("body", "work", None, {"sampled": 20, "clean": 20, "unresolved": 0}, {}),
+                    ("loop", "work", "#0", {"sampled": 1000, "dirty": 1000}, {})],
+    "r5_runtime_garbage": [("loop", "run", "#0", {"sampled": 200, "clean": 200, "unresolved": 0}, {"bytes": 20000})],
+    # LIFE I3d: promotion inside the iteration; the verdict must not depend on the sampling density
+    # (DENSITY below re-runs them sparse). r8: only shape key lists (engine metadata) outlive an iteration.
+    "r6_promote_clean": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
+    "r7_promote_keep1": [("loop", "run", "#0", {"sampled": 40, "dirty": 40, "surv1": 40, "surv_objs": 40,
+                                                "unresolved": 0}, {})],
+    "r8_shape_remint": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
+    # LIFE I3f: the only path to each iteration's object is a dead, not yet collected old holder (remembered set).
+    "r9_dead_old_holder": [("loop", "run", "#0", {"sampled": 40, "clean": 40, "dirty": 0, "unresolved": 0}, {})],
+}
+
+
+def check_regions(sites, tsv, tests):
+    """The region rows of the fixture's regions against the known answer; [] when right."""
+    keys = {}
+    for line in sites.read_text().splitlines():
+        sid, key = line.split("\t", 1)
+        keys[sid] = key.split("\t")
+    lines = tsv.read_text().splitlines()
+    head = lines[0].split("\t")
+    rows = [dict(zip(head, l.split("\t"))) for l in lines[1:] if not l.startswith("#")]
+    bad = []
+    for kind, function, ordinal, exact, least in tests:
+        mine = [r for r in rows if r["kind"] == kind and keys.get(r["id"], ["?"])[0] == kind
+                and keys[r["id"]][2] == function and (ordinal is None or keys[r["id"]][3] == ordinal)]
+        if len(mine) != 1:
+            bad.append(f"{kind} {function} {ordinal}: {len(mine)} rows")
+            continue
+        r = {k: float(v) for k, v in mine[0].items() if k not in ("kind", "id")}
+        r["held_by_object"] = r["h_object"] + r["h_remembered"]
+        for k, v in exact.items():
+            if r[k] != v:
+                bad.append(f"{kind} {function} {ordinal or ''} {k}={r[k]:.0f} want {v}")
+        for k, v in least.items():
+            if r[k] < v:
+                bad.append(f"{kind} {function} {ordinal or ''} {k}={r[k]:.0f} want >= {v}")
+    # Hook coverage: every body is named (a copy compiled under another address included), and every
+    # region the run saw has a site row.
+    unreg = [" ".join(k) for k in keys.values() if k[0] in ("loop", "body") and k[2].startswith("<unregistered")]
+    if unreg:
+        bad.append(f"unregistered bodies: {unreg}")
+    unknown = [r["id"] for r in rows if r["kind"] != "turn" and r["id"] not in keys]
+    if unknown:
+        bad.append(f"region ids without a site row: {len(unknown)}")
+    restarted = sum(float(r.get("restarted", 0)) for r in rows)
+    if restarted:
+        print(f"  note: {restarted:.0f} iterations ended by the next start (no back-edge hook)")
+    return bad
+
+
+# Fixtures whose checked region is cheap: no confirmation budget (`PERRY_LIFE_REGIONS_CONFIRM=all`), every
+# needed confirming full runs, so the checked rows must have unresolved 0. r6/r7 (1.6M inner instances) run
+# with the default budget: the driver loop (run #0) is decided exactly; inner ids may be unresolved.
+CONFIRM_ALL = ("r1_clean_loop", "r2_push_outer", "r3_every10", "r4_fn_clean", "r5_runtime_garbage",
+               "r8_shape_remint", "r9_dead_old_holder")
+
+# fixture -> (kind, function, ordinal) of an inner region the default budget must leave partly unresolved:
+# the budget's starvation lands on inner ids, never a wrong verdict. r6's inner iteration pushes its object
+# into tmp, which outlives the iteration: every decided inner instance is dirty, none clean.
+BUDGET_INNER = {"r6_promote_clean": ("loop", "run", "#1")}
+
+
+def check_budget_inner(name, sites, tsv):
+    """[] when the default budget left the inner id partly unresolved and every decided instance has a verdict
+    (empty+clean+dirty+unresolved = sampled) and none is clean."""
+    kind, function, ordinal = BUDGET_INNER[name]
+    rows = region_rows(sites, tsv, kind, function, ordinal)
+    if len(rows) != 1:
+        return [f"inner {kind} {function} {ordinal}: {len(rows)} rows"]
+    x = rows[0]
+    bad = []
+    total = x["empty"] + x["clean"] + x["dirty"] + x["unresolved"]
+    print(f"{name} inner {kind} {function} {ordinal} (default budget): sampled {x['sampled']:.0f} clean "
+          f"{x['clean']:.0f} dirty {x['dirty']:.0f} unresolved {x['unresolved']:.0f}")
+    if x["unresolved"] <= 0:
+        bad.append("inner unresolved 0: the default budget did not starve the inner id")
+    if total != x["sampled"]:
+        bad.append(f"inner verdicts {total:.0f} != sampled {x['sampled']:.0f}")
+    if x["clean"]:
+        bad.append(f"inner clean {x['clean']:.0f}: a kept object reported dead")
+    return bad
+
+
+DENSITY = ("r2_push_outer", "r6_promote_clean", "r7_promote_keep1", "r8_shape_remint", "r9_dead_old_holder")
+
+# fixture -> (sabotage, what it keeps): the control must turn the fixture's clean verdict dirty.
+CONTROLS = {"r8_shape_remint": ("lifemeta", "shape key lists as JS values"),
+            "r9_dead_old_holder": ("lifeminor", "the minor's reach through a dead old holder")}
+
+
+def density(name, exe, sites, tests, go, dense_out):
+    """The same fixture decided sparsely (`PERRY_LIFE_REGIONS_SHIFT=3`: about one instance in eight): every sampled
+    instance gets the dense verdict (all clean, or all dirty with the dense survivor count per instance);
+    r8 also runs the `lifemeta` control, which counts shape key lists as JS values, r9 the `lifeminor` control,
+    which keeps a minor's verdict for an object reached only through the remembered set; both must fail."""
+    failures = []
+    kind, function, ordinal, exact, _ = tests[0]
+    r, tsv = go(name, exe, {"PERRY_LIFE_REGIONS_RATE": "0", "PERRY_LIFE_REGIONS_SHIFT": "3"})
+    rows = region_rows(sites, tsv, kind, function, ordinal) if tsv.exists() else []
+    bad = []
+    if r.returncode != 0 or r.stdout != dense_out or len(rows) != 1:
+        bad.append(f"rc={r.returncode} rows={len(rows)}")
+    else:
+        x = rows[0]
+        n = x["sampled"]
+        if not 0 < n < exact["sampled"]:
+            bad.append(f"sparse sampled {n:.0f} (want 0 < n < {exact['sampled']})")
+        if x["unresolved"]:
+            bad.append(f"unresolved {x['unresolved']:.0f}")
+        if name == "r8_shape_remint" and not x.get("meta_objs"):
+            bad.append("meta_objs 0: no key list minted, the fixture does not exercise the exclusion")
+        if exact.get("clean") == exact["sampled"] and x["clean"] != n:
+            bad.append(f"clean {x['clean']:.0f} of {n:.0f}")
+        if exact.get("dirty") == exact["sampled"] and (x["dirty"] != n or x["surv1"] != n or x["surv_objs"] != n):
+            bad.append(f"dirty {x['dirty']:.0f} surv1 {x['surv1']:.0f} objs {x['surv_objs']:.0f} of {n:.0f}")
+    print(f"{name} sparse: sampled {rows[0]['sampled'] if rows else '-'} "
+          f"clean {rows[0]['clean'] if rows else '-'} dirty {rows[0]['dirty'] if rows else '-'}: "
+          f"{'dense == sparse' if not bad else 'DIFFERS ' + '; '.join(bad)}")
+    if bad:
+        failures.append(name + ":density")
+    if name in CONTROLS:
+        knob, what = CONTROLS[name]
+        r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": knob})
+        rows2 = region_rows(sites, tsv2, kind, function, ordinal) if tsv2.exists() else []
+        dirty = rows2[0]["dirty"] if rows2 else 0
+        ok = r2.returncode == 0 and dirty > 0
+        print(f"control {knob} {name} ({what}): dirty {dirty:.0f} -> {'FAILS (good)' if ok else 'passes (control BROKEN)'}")
+        if not ok:
+            failures.append(f"control:{knob}:regions")
+    return failures
+
+
+def region_rows(sites, tsv, kind, function, ordinal):
+    keys = {}
+    for line in sites.read_text().splitlines():
+        sid, key = line.split("\t", 1)
+        keys[sid] = key.split("\t")
+    lines = tsv.read_text().splitlines()
+    head = lines[0].split("\t")
+    rows = [dict(zip(head, l.split("\t"))) for l in lines[1:] if not l.startswith("#")]
+    return [{k: float(v) for k, v in x.items() if k not in ("kind", "id")} for x in rows
+            if x["kind"] == kind and keys.get(x["id"], ["?"])[0] == kind and keys[x["id"]][2] == function
+            and (ordinal is None or keys[x["id"]][3] == ordinal)]
+
+
+def regions(build, out, fixtures, env):
+    failures = []
+
+    def go(name, exe, extra=None):
+        tsv = out / (name + (".keep" if extra else "") + ".regions.tsv")
+        tsv.unlink(missing_ok=True)
+        e = dict(env, PERRY_LIFE_REGIONS=str(tsv), PERRY_LIFE_REGIONS_RATE="1")
+        e.pop("PERRY_LIFE_REGIONS_CONFIRM", None)
+        if name in CONFIRM_ALL:
+            e["PERRY_LIFE_REGIONS_CONFIRM"] = "all"
+        e.update(extra or {})
+        r = run([str(exe)], env=e)
+        return r, tsv
+
+    for name, tests in REGIONS.items():
+        c, exe, sites = build(name)
+        if c.returncode != 0:
+            print(f"{name}: compile rc={c.returncode} FAIL")
+            (out / (name + ".compile.txt")).write_bytes(c.stdout + c.stderr)
+            failures.append(name + ":compile")
+            continue
+        alloc = out / (name + ".alloc.tsv")
+        r, tsv = go(name, exe, None)
+        same = r.stdout == (fixtures / (name + ".node.txt")).read_bytes()
+        bad = check_regions(sites, tsv, tests) if tsv.exists() else ["no tsv"]
+        if name == "r5_runtime_garbage":
+            # Runtime-only garbage: no census birth site in run.
+            births = [k for k in (l.split("\t")[1:] for l in sites.read_text().splitlines())
+                      if k[0] not in ("loop", "body") and len(k) > 1 and k[1] == "run"]
+            if births:
+                bad.append(f"census births in run: {len(births)}")
+        if name == "r1_clean_loop" and tsv.exists():
+            # Consistency: bytes born before the first turn + in every turn + after the last = the census's
+            # total less its unplaced bytes (exact), from a second run that writes the census file too.
+            r3, tsv3 = go(name, exe, {"PERRY_LIFE_ALLOC": str(alloc)})
+            t = dict(kv.split("=", 1) for kv in tsv3.read_text().splitlines()[-1].split("\t")[1:])
+            tot = unplaced = 0
+            for line in alloc.read_text().splitlines():
+                f = line.split("\t")
+                if f[0] == "#type":
+                    tot += int(f[3]) + int(f[5])
+                elif f[0] == "#meta":
+                    unplaced = int(dict(kv.split("=", 1) for kv in f[1:]).get("unplaced_bytes", "0"))
+            mine = int(t["before_bytes"]) + int(t["turn_bytes"]) + int(t["tail_bytes"])
+            print(f"{name}: regions before+turns+tail {mine} B, census total-unplaced {tot - unplaced} B, "
+                  f"exit={t['exit']} unobserved={t['unobserved']} busy={t['busy']}")
+            if mine != tot - unplaced or t["exit"] != "1" or t["busy"] != "0":
+                bad.append("consistency")
+        if name in BUDGET_INNER and tsv.exists():
+            bad += check_budget_inner(name, sites, tsv)
+        ok = r.returncode == 0 and same and not bad
+        print(f"{name}: rc={r.returncode} node={'same' if same else 'DIFF'} regions: "
+              f"{'OK' if not bad else 'FAIL ' + '; '.join(bad)}")
+        if not ok:
+            failures.append(name)
+            (out / (name + ".stderr")).write_bytes(r.stderr)
+        if name in DENSITY:
+            failures += density(name, exe, sites, tests, go, r.stdout)
+        if name == "r1_clean_loop":
+            r2, tsv2 = go(name, exe, {"PERRY_FACTS_SABOTAGE": "lifekeep"})
+            bad2 = check_regions(sites, tsv2, tests) if tsv2.exists() else []
+            ok2 = r2.returncode == 0 and bool(bad2)
+            print(f"control lifekeep {name} regions: rc={r2.returncode} check "
+                  f"{'FAILS (' + bad2[0] + ')' if bad2 else 'passes'}: {'OK' if ok2 else 'FAIL'}")
+            if not ok2:
+                failures.append("control:lifekeep:regions")
+    return failures
+
+
 def main():
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument("--perry", type=Path, required=True)
@@ -200,6 +423,8 @@ def main():
     print(f"{name}: sampled = exact at 1 B: {'OK' if not bad else 'FAIL ' + '; '.join(bad)}")
     if bad:
         failures.append(name)
+    # LIFE I3: the region ceiling (PERRY_LIFE_REGIONS, every instance sampled).
+    failures += regions(build, out, fixtures, env)
     # The default archives under the instrumented names: no perry_life_ hooks.
     plain = out / "default-as-instr"
     plain.mkdir(exist_ok=True)

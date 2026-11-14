@@ -414,10 +414,8 @@ const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
 
 #[test]
 fn a_non_number_0x7ffe_word_converts_to_nan() {
-    assert_eq!(
-        jsvalue_to_number(f64::from_bits(0x7FFE_0000_0000_0005)),
-        5.0
-    );
+    // P3 B4b: no 0x7FFE word is a Number, the low-payload one included.
+    assert!(jsvalue_to_number(f64::from_bits(0x7FFE_0000_0000_0005)).is_nan());
     assert!(jsvalue_to_number(f64::from_bits(PROTO_REF_5)).is_nan());
     assert!(jsvalue_to_number(f64::from_bits(PROTO_REF_5)).to_bits() == f64::NAN.to_bits());
 }

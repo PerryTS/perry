@@ -84,7 +84,7 @@ function empty() { calls++; return nil; }
 console.log(empty()?.value, calls);
 "#,
     );
-    assert_eq!(output, "7\n1\n21\n4\n7\n5\npresent\n5\nundefined\n6");
+    assert_eq!(output, "7 1\n21 4\n7 5\npresent\n5\nundefined 6");
 }
 
 #[test]
@@ -99,7 +99,7 @@ console.log(take()?.read(4), calls);
 console.log(take()?.read?.(5), calls);
 "#,
     );
-    assert_eq!(output, "7\n1\n8\n2");
+    assert_eq!(output, "7 1\n8 2");
 }
 
 #[test]
@@ -204,7 +204,7 @@ class Static { static value = (() => ({text: 'static'}))()?.text; }
 console.log(Static.value);
 "#,
     );
-    assert_eq!(output, "3\n4\nstatic");
+    assert_eq!(output, "3 4\nstatic");
 }
 
 #[test]

@@ -1492,7 +1492,12 @@ pub(super) fn evacuate_tenured_nursery_objects_collecting(
             let new_user = crate::arena::arena_alloc_gc_old(payload, 8, (*header).obj_type);
             #[cfg(perry_gc_instruments)]
             if crate::arena::alloc_life::on() {
-                crate::arena::alloc_life::evacuated(total, (*header).obj_type);
+                crate::arena::alloc_life::evacuated(
+                    total,
+                    (*header).obj_type,
+                    user_ptr as usize,
+                    new_user as usize,
+                );
             }
             // Copy the user payload bytes verbatim. The new
             // GcHeader was set up by arena_alloc_gc_old; we don't

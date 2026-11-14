@@ -35,8 +35,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct, run_function,
-    run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
+    run_function, run_member,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -222,7 +222,9 @@ pub fn async_resource(m: &mut Model, n: NodeId, name: &'static str) {
         m.async_resources.push((n, name));
         return;
     };
-    let r = m.reason(&format!("{name} hands its resource to async_hooks init ({why})"));
+    let r = m.reason(&format!(
+        "{name} hands its resource to async_hooks init ({why})"
+    ));
     m.sink_node(n, r);
 }
 
@@ -590,6 +592,35 @@ fn site_tmpl_born(
     let ctx = m.birth_ctx(call);
     let t = m.site_tok(tm, ctx);
     t
+}
+
+/// ToObject(`v`) (ECMA-262 7.1.18) into a new node (`to_object_into`).
+pub(crate) fn to_object(m: &mut Model, v: NodeId, wrapper: Tok) -> NodeId {
+    let w = m.node_l("to-object-wrapper");
+    m.add_tok(w, wrapper);
+    let to = m.node_l("to-object");
+    to_object_into(m, v, wrapper, w, to);
+    to
+}
+
+/// `to` ⊇ ToObject(`v`) (ECMA-262 7.1.18): `v`'s objects as they are
+/// (`Cons::Objects`), and `wrapper` (a token of the `Object()` family,
+/// which node `w` holds) once `v` may hold a primitive but `undefined` /
+/// `null` (those throw). The primitive itself never reaches `to`. A String
+/// wrapper's own indices hold its characters: the wrapper's elements are
+/// strings.
+pub(crate) fn to_object_into(m: &mut Model, v: NodeId, wrapper: Tok, w: NodeId, to: NodeId) {
+    let fa = m.field_any(wrapper);
+    m.add_prim(fa, prim::STR);
+    m.cons(v, Cons::Objects { dst: to });
+    m.cons(
+        v,
+        Cons::Guard {
+            test: guard::BOXED,
+            from: w,
+            dst: to,
+        },
+    );
 }
 
 /// A synthetic resolve function of the promise whose settled value is
@@ -1087,7 +1118,9 @@ fn realm_accessor(m: &Model, fam: Family, what: Option<&'static str>, name: &str
 /// (`realm_accessor`; a declared one: `effects::getter_load`) reads: the
 /// host's result of the getter, unknown.
 fn undeclared_getter_result(m: &mut Model, dst: NodeId) {
-    m.add_top(dst, |_| "result of a getter the realm does not declare".into());
+    m.add_top(dst, |_| {
+        "result of a getter the realm does not declare".into()
+    });
     m.add_prim(dst, prim::ALL);
 }
 
@@ -1099,7 +1132,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named("Buffer.prototype", m)
             .and_then(|h| m.declarations.property(h, name, m))
         {
-            return p.native.map(|identity| Native::Member { identity, holder: None });
+            return p.native.map(|identity| Native::Member {
+                identity,
+                holder: None,
+            });
         }
     }
     // The prototype of an object a declaration made
@@ -1112,7 +1148,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             .named(w, m)
             .and_then(|h| m.declarations.property(h, name, m))?
             .native?;
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     let holder = realm_holder(m, fam, what)?;
     let identity = m
@@ -1126,7 +1165,10 @@ fn member_native(m: &Model, fam: Family, what: Option<&'static str>, name: &str)
             let object = m.declarations.family(Family::Object, m)?;
             m.declarations.property(object, name, m)?.native
         })?;
-    Some(Native::Member { identity, holder: None })
+    Some(Native::Member {
+        identity,
+        holder: None,
+    })
 }
 
 /// Canonical coordinates are resolved with the value's shape, once.
@@ -1637,7 +1679,10 @@ pub(crate) fn native_own_load(
             } else {
                 m.native_missing.push((holder, a, NativeMiss::Load(dst)));
                 if let Some(identity) = value {
-                    let value = m.tok(TokKind::BuiltinFn(Native::Member { identity, holder: None }));
+                    let value = m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity,
+                        holder: None,
+                    }));
                     m.add_tok(dst, value);
                 } else {
                     opaque_member(m, dst);
@@ -1659,7 +1704,10 @@ pub(crate) fn native_constructible(m: &Model, t: Tok) -> bool {
 /// Read the function reference from this receiver's declared property shape.
 pub(crate) fn namespace_native(m: &Model, t: Tok, ns: BuiltinNs, name: &str) -> Option<Native> {
     if let Some(identity) = m.native_property(t, name).and_then(|p| p.native) {
-        return Some(Native::Member { identity, holder: None });
+        return Some(Native::Member {
+            identity,
+            holder: None,
+        });
     }
     matches!(members::ns_member(ns, name), Some(Some(Mem::Fn)))
         .then(|| member_native(m, members::ns_chain(ns), None, name))
@@ -2040,7 +2088,11 @@ fn ns_method_inner(
         }
         (BuiltinNs::Object, "assign") => {
             let c = m.calls[call as usize].clone();
-            if let Some(&t) = c.args.first() {
+            if let Some(&target) = c.args.first() {
+                // ECMA-262 20.1.2.1 step 1: `to` is ToObject(target), the
+                // result; the sources copy into it.
+                let wrapper = site_tmpl(m, call, "Object()");
+                let t = to_object(m, target, wrapper);
                 let site = m.anon_post_site("Object.assign (value call)");
                 for &s in c.args.iter().skip(1) {
                     m.cons(s, Cons::Spread { into: t, site });

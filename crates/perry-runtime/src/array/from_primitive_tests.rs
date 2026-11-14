@@ -106,7 +106,11 @@ extern "C" fn two_value_iterator(_c: *const ClosureHeader, _this: crate::closure
     let obj = make_obj();
     let next = js_closure_alloc(crate::fn_info!(patched_next, 0), 0);
     unsafe {
-        set_field(obj, b"next", f64::from_bits(JSValue::pointer(next as *const u8).bits()));
+        set_field(
+            obj,
+            b"next",
+            f64::from_bits(JSValue::pointer(next as *const u8).bits()),
+        );
     }
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
 }
@@ -148,7 +152,8 @@ fn element_bytes(arr: *mut ArrayHeader, index: u32) -> Vec<u8> {
     let value = crate::array::js_array_get_f64(arr, index);
     let jsv = JSValue::from_bits(value.to_bits());
     assert!(jsv.is_any_string(), "element {index} is not a string");
-    let sptr = crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
+    let sptr =
+        crate::value::js_get_string_pointer_unified(value) as *const crate::string::StringHeader;
     unsafe {
         let len = (*sptr).byte_len as usize;
         let data = (sptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
@@ -195,7 +200,10 @@ fn unpatched_number_mapped_form_yields_empty_without_calling_mapfn() {
     take_map_calls();
     let arr = js_array_from_mapped(5.0, mapfn, f64::from_bits(crate::value::TAG_UNDEFINED));
     assert_eq!(array_length(arr), 0);
-    assert!(take_map_calls().is_empty(), "mapFn must not run for a length-0 source");
+    assert!(
+        take_map_calls().is_empty(),
+        "mapFn must not run for a length-0 source"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +238,8 @@ fn patched_string_iterator_next_is_honored() {
         crate::object::iterator_prototypes::string_iteration_not_pristine(),
         "premise: the escape must arm the not-pristine signal"
     );
-    let proto_obj = JSValue::from_bits(proto.to_bits()).as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
+    let proto_obj = JSValue::from_bits(proto.to_bits()).as_pointer::<crate::object::ObjectHeader>()
+        as *mut crate::object::ObjectHeader;
     let key = crate::string::js_string_from_bytes(b"next".as_ptr(), 4);
     let original_next = crate::object::js_object_get_field_by_name(proto_obj, key).bits();
     // A step function, not the iterator factory: `next` yields 40, 41, done.
@@ -265,10 +274,19 @@ fn patched_number_prototype_iterator_drives_array_from() {
     let method = boxed_two_value_iterator();
     unsafe { patch_prototype_iterator(number_prototype_value(), method) };
     let arr = js_array_from_value(5.0);
-    assert_eq!(array_length(arr), 2, "the patched iterator must drive Array.from(5)");
+    assert_eq!(
+        array_length(arr),
+        2,
+        "the patched iterator must drive Array.from(5)"
+    );
     assert_eq!(element_bits(arr, 0), 40.0f64.to_bits());
     assert_eq!(element_bits(arr, 1), 41.0f64.to_bits());
-    unsafe { patch_prototype_iterator(number_prototype_value(), f64::from_bits(crate::value::TAG_UNDEFINED)) };
+    unsafe {
+        patch_prototype_iterator(
+            number_prototype_value(),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        )
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -287,7 +305,12 @@ fn patched_number_iterator_with_mapfn_maps_with_the_right_index() {
     assert_eq!(element_bits(arr, 0), 400.0f64.to_bits());
     assert_eq!(element_bits(arr, 1), 411.0f64.to_bits());
     assert_eq!(take_map_calls(), vec![(40.0, 0.0), (41.0, 1.0)]);
-    unsafe { patch_prototype_iterator(number_prototype_value(), f64::from_bits(crate::value::TAG_UNDEFINED)) };
+    unsafe {
+        patch_prototype_iterator(
+            number_prototype_value(),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        )
+    };
 }
 
 #[test]

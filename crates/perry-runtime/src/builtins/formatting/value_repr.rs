@@ -18,18 +18,6 @@
 
 use crate::value::JSValue;
 
-/// Node's `util.inspect` label for a CLASS value: `[class Name]`,
-/// `[class Name extends Parent]`, `[class (anonymous)]`. `None` for anything
-/// that is not a registered class reference.
-///
-/// A class value is its function object (`js_class_value`); `class_ref_id`
-/// also names a `C.prototype` reference. An int32 number is never a class,
-/// whatever classes the program declares.
-pub(crate) fn class_ref_inspect_label(value: f64) -> Option<String> {
-    let class_id = crate::object::class_ref_id(value)?;
-    Some(class_label_for_id(class_id))
-}
-
 /// `[class …]` for a resolved class id.
 pub(crate) fn class_label_for_id(class_id: u32) -> String {
     // The name comes from whatever `class_name_for_id` reports — deliberately
@@ -60,17 +48,6 @@ fn parent_class_name(class_id: u32) -> Option<String> {
         return None;
     }
     crate::object::class_name_for_id(parent).filter(|n| !n.is_empty())
-}
-
-/// Node's rendering of an INT32-tagged NaN box. The tag is shared between small
-/// integers and class references, so this is the ONE place that decides which
-/// one a display ladder is looking at; every `else if v.is_int32()` arm in a
-/// console/inspect ladder calls it.
-pub(crate) fn int32_or_class_repr(value: f64) -> String {
-    match class_ref_inspect_label(value) {
-        Some(label) => label,
-        None => JSValue::from_bits(value.to_bits()).as_int32().to_string(),
-    }
 }
 
 /// True for the sparse-array hole sentinel (`TAG_HOLE`, #323).
@@ -191,17 +168,9 @@ where
     runs.finish(slots.len())
 }
 
-/// Classify a rendered element for the numeric column layout. A number or an
-/// int32 qualifies — unless the int32 was a class reference, whose label is not
-/// a numeral and must not be right-aligned into a column of them.
-pub(crate) fn entry_is_numeric(elem: f64, rendered: &str) -> bool {
+/// Classify an element for the numeric column layout.
+pub(crate) fn entry_is_numeric(elem: f64) -> bool {
     let jv = JSValue::from_bits(elem.to_bits());
-    if jv.is_int32() {
-        // Both renderings come from `int32_or_class_repr`, so this is a test on
-        // our own output, not a guess about arbitrary text: an integer never
-        // starts with `[`.
-        return !rendered.starts_with('[');
-    }
     // node right-aligns a column of numbers and bigints alike.
     jv.is_number() || jv.is_bigint()
 }
@@ -312,10 +281,7 @@ mod tests {
     #[test]
     fn the_show_hidden_tail_is_nodes_length_entry() {
         let parts = vec![entry("1", true), entry("2", true), hidden_length_entry(2)];
-        assert_eq!(
-            array_body(parts, 0, true),
-            "[ 1, 2, [length]: 2 ]"
-        );
+        assert_eq!(array_body(parts, 0, true), "[ 1, 2, [length]: 2 ]");
         // An empty array still carries it: node's `%o` on `[]` is
         // `[ [length]: 0 ]` where `%O` is a bare `[]`.
         assert_eq!(
@@ -357,35 +323,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_int32_is_not_a_class() {
-        // 0 is never a class id, and the registry probe rejects the rest.
-        let n = f64::from_bits(crate::value::INT32_TAG);
-        assert_eq!(class_ref_inspect_label(n), None);
-        assert_eq!(int32_or_class_repr(n), "0");
-        let big = f64::from_bits(crate::value::INT32_TAG | 0xFFFF_FFF0);
-        assert_eq!(class_ref_inspect_label(big), None);
-    }
-
-    #[test]
-    fn a_plain_double_is_never_a_class() {
-        assert_eq!(class_ref_inspect_label(49.0), None);
-        assert_eq!(class_ref_inspect_label(f64::NAN), None);
-    }
-
-    #[test]
     fn entry_numeric_classification() {
-        assert!(entry_is_numeric(49.0, "49"));
-        assert!(entry_is_numeric(
-            f64::from_bits(crate::value::INT32_TAG | 49),
-            "49"
-        ));
-        assert!(!entry_is_numeric(
-            f64::from_bits(crate::value::INT32_TAG | 49),
-            "[class Klass]"
-        ));
-        assert!(!entry_is_numeric(
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-            "undefined"
-        ));
+        assert!(entry_is_numeric(49.0));
+        // No JS value is in the 0x7FFE band (P3 B4b).
+        assert!(!entry_is_numeric(f64::from_bits(
+            crate::value::INTERNAL_WORD_TAG | 49
+        )));
+        assert!(!entry_is_numeric(f64::from_bits(
+            crate::value::TAG_UNDEFINED
+        )));
     }
 }

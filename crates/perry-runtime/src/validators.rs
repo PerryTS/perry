@@ -53,11 +53,7 @@ fn is_closure_value(value: f64) -> bool {
 /// Callers must have checked [`is_numeric`] first.
 pub fn number_value(value: f64) -> f64 {
     let v = jv(value);
-    if v.is_int32() {
-        v.as_int32() as f64
-    } else {
-        v.as_number()
-    }
+    v.as_number()
 }
 
 /// node `determineSpecificType` puts `argument` in the message for plain

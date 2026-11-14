@@ -93,6 +93,18 @@ fn coordinates(owner: &'static str, key: &'static str) -> Coordinates {
 
 impl Default for Declarations {
     fn default() -> Self {
+        Self::build(true)
+    }
+}
+
+impl Declarations {
+    /// The table's shapes. `held`: with the `held` rows, the own keys of a
+    /// function a host object that is no node module holds
+    /// (`Temporal.Duration`: `prototype`, `from`); without them the table
+    /// is the one before those rows existed (`reach::held_keys`). The rows
+    /// add keys to shapes the `native` rows name, never a shape: a token's
+    /// shape index is the same in both.
+    pub(crate) fn build(held: bool) -> Self {
         let mut holders: BTreeMap<&'static str, BTreeMap<&'static str, Property>> = BTreeMap::new();
         let mut namespaces: BTreeMap<BuiltinNs, (&'static str, BTreeMap<&'static str, Property>)> =
             BTreeMap::new();
@@ -107,6 +119,9 @@ impl Default for Declarations {
             let (Some(kind), Some(owner), Some(key)) = (row.next(), row.next(), row.next()) else {
                 continue;
             };
+            if kind == "held" && !held {
+                continue;
+            }
             let value = row.next();
             let accessor = (kind == "accessor").then(|| (value.filter(|&g| g != "-"), row.next()));
             let property = holders
@@ -140,7 +155,7 @@ impl Default for Declarations {
                     }
                 }
                 "getter-this" => property.getter_this = true,
-                "ns" => property.own_namespace = true,
+                "ns" | "held" => property.own_namespace = true,
                 "strings" => property.strings = value,
                 "object" => property.object = value,
                 "accessor" => (property.get, property.set) = accessor.unwrap(),
@@ -159,7 +174,7 @@ impl Default for Declarations {
                 if kind == "getter-this" {
                     p.getter_this = true;
                 }
-                if kind == "ns" {
+                if kind == "ns" || kind == "held" {
                     p.own_namespace = true;
                 }
                 if kind == "strings" {
@@ -236,12 +251,18 @@ impl Default for Declarations {
         }
         // The node module objects last: the linear namespace and family
         // searches (charged per step) of every other object never walk them.
-        shapes[named..].sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
+        shapes[named..]
+            .sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
         Self { shapes, named }
     }
 }
 
 impl Declarations {
+    #[cfg(test)]
+    pub(crate) fn names(&self) -> Vec<&'static str> {
+        self.shapes.iter().map(|s| s.name).collect()
+    }
+
     pub fn shape(&self, i: usize) -> &Shape {
         &self.shapes[i]
     }

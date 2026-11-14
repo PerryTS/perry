@@ -3701,6 +3701,9 @@ jobs:
       # runs in the full tier's binary-size job.
       - name: Hot-text order names (runtime archives)
         run: python3 scripts/hot_text_order.py check --names-only --runtime-dir target/release
+      # The same for the default hot-data order (link/hot_data_order.txt).
+      - name: Hot-data order names (runtime archives)
+        run: python3 scripts/hot_data_order.py check --names-only --runtime-dir target/release
 
   # macOS aarch64 builds its own archives; Windows x86-64 cross-builds them
   # with cargo-xwin on Linux (the same toolchain lint's Windows type-check
@@ -5288,7 +5291,8 @@ jobs:
 
       # The hot-text order's whole gate (scripts/hot_text_order.py): its
       # names, and the smoke program under callgrind with no more than 5% of
-      # the executed runtime bytes outside the hot run. ELF only.
+      # the executed runtime bytes outside the hot run. ELF only. Then the
+      # hot-data order's (scripts/hot_data_order.py, lackey).
       - name: Hot-text order coverage (callgrind)
         if: runner.os == 'Linux'
         env:
@@ -5296,6 +5300,7 @@ jobs:
         run: |
           sudo apt-get install -y valgrind
           python3 scripts/hot_text_order.py check --perry target/release/perry --runtime-dir target/release --require-coverage
+          python3 scripts/hot_data_order.py check --perry target/release/perry --runtime-dir target/release --require-coverage
 
       - name: Runtime size budget (small programs)
         if: runner.os == 'macOS'

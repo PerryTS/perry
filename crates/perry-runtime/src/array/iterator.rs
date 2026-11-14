@@ -30,6 +30,30 @@ use super::*;
 ///
 /// Refs #321 (effect Context/Layer iterate `for (const [tag, s] of
 /// self.unsafeMap)` over an untyped Map).
+/// The admission of a `for-of` whose source is annotated as a numeric typed
+/// array (HIR `typedArrayForOfAdmits`): true when the value really is a typed
+/// array of a numeric kind, so the loop may walk it by index and bind
+/// Numbers. Anything else (an Array, a Set, a generator, a BigInt view, a
+/// value that is not iterable) takes the loop's iterator-protocol arm, which
+/// iterates it or throws node's TypeError.
+#[no_mangle]
+pub extern "C" fn js_typed_array_for_of_admits(value: f64) -> f64 {
+    use crate::typedarray::{KIND_BIGINT64, KIND_BIGUINT64};
+    let jsv = crate::value::JSValue::from_bits(value.to_bits());
+    let numeric = jsv.is_pointer()
+        && matches!(
+            crate::byte_cell_support::lookup_typed_array_kind(
+                (value.to_bits() & crate::value::POINTER_MASK) as usize
+            ),
+            Some(kind) if kind != KIND_BIGINT64 && kind != KIND_BIGUINT64
+        );
+    f64::from_bits(if numeric {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
 #[no_mangle]
 pub extern "C" fn js_for_of_to_array(val_f64: f64) -> f64 {
     use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_LAZY_ARRAY, GC_TYPE_MAP, GC_TYPE_SET};
@@ -230,8 +254,6 @@ pub(crate) fn iter_bt_dump(tag: &str, value: f64) {
     let raw = crate::value::js_nanbox_get_pointer(value) as usize;
     let kind = if jv.is_number() {
         "number"
-    } else if jv.is_int32() {
-        "int32"
     } else if jv.is_bool() {
         "bool"
     } else if jv.is_undefined() {
@@ -935,7 +957,16 @@ pub(crate) fn spread_values(value: f64) -> *mut ArrayHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let value = &value_h;
-    let raw_ptr = || js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0),
+    // not a raw object pointer: it has no address.
+    let raw_ptr = || {
+        let value = value_h.get_nanbox_f64();
+        if value.to_bits() >> 48 == 0 {
+            0
+        } else {
+            js_nanbox_get_pointer(value) as usize
+        }
+    };
 
     let jsv = JSValue::from_bits((value.get_nanbox_f64()).to_bits());
     if jsv.is_null() || jsv.is_undefined() {

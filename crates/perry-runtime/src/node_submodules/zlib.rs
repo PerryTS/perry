@@ -37,9 +37,7 @@ pub extern "C" fn js_zlib_resolve_level(opts: f64) -> i32 {
         return DEFAULT_LEVEL;
     }
 
-    let level = if lv.is_int32() {
-        lv.as_int32()
-    } else if lv.is_number() {
+    let level = if lv.is_number() {
         f64::from_bits(level_value.to_bits()) as i32
     } else {
         // Non-numeric `level` — fall back to the default rather than throwing
@@ -81,9 +79,7 @@ pub extern "C" fn js_zlib_validate_params(level: f64, strategy: f64) -> i32 {
 
     fn as_number(v: f64, arg: &str) -> f64 {
         let jv = crate::value::JSValue::from_bits(v.to_bits());
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else if jv.is_number() {
+        if jv.is_number() {
             f64::from_bits(v.to_bits())
         } else {
             let received = crate::fs::validate::describe_received(v);
@@ -141,9 +137,6 @@ fn option_number(value: f64, name: &str) -> Option<f64> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return None;
-    }
-    if jv.is_int32() {
-        return Some(jv.as_int32() as f64);
     }
     if jv.is_number() {
         return Some(f64::from_bits(value.to_bits()));
@@ -333,9 +326,8 @@ pub extern "C" fn js_zlib_brotli_large_window(opts: f64) -> i32 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let opts = scope.root_nanbox_f64(opts);
     let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
-    let value = crate::value::JSValue::from_bits(
-        gzip_read_option(params.get_nanbox_f64(), b"1").to_bits(),
-    );
+    let value =
+        crate::value::JSValue::from_bits(gzip_read_option(params.get_nanbox_f64(), b"1").to_bits());
     let enabled = if value.is_number() {
         let n = value.as_number();
         n != 0.0 && !n.is_nan()
@@ -826,12 +818,8 @@ pub extern "C" fn js_zlib_stream_option(opts: f64, which: i32) -> usize {
     if jv.is_undefined() || jv.is_null() {
         return default;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    };
-    if !jv.is_number() && !jv.is_int32()
+    let n = v;
+    if !jv.is_number()
         || !n.is_finite()
         || n < (if which == 0 { 64.0 } else { 0.0 })
         || (which != 0 && n.fract() != 0.0)

@@ -97,6 +97,45 @@ pub(super) fn non_array_receiver_index_get(arr: *const ArrayHeader, index: u32) 
     Some(crate::value::js_dyn_index_get(receiver, f64::from(index)))
 }
 
+/// `Get(null / undefined, index)` behind an Array annotation: the element
+/// read's receiver is the NaN-boxed word masked to its payload, `0x2` for
+/// null and `0x1` for undefined (no allocation lives there). GetValue's
+/// RequireObjectCoercible throws node's TypeError; any other word returns.
+/// Called only from the element read's failure arm, so no read that
+/// succeeds pays for it.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_index_get(arr: *const ArrayHeader, index: u32) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        crate::value::js_dyn_index_get(receiver, f64::from(index));
+    }
+}
+
+/// [`nullish_receiver_index_get`] for a property-key read (`a[-1]`,
+/// `a[1.5]`, `a["0"]`): called only when no allocation lives at `arr`.
+#[cold]
+#[inline(never)]
+pub(super) fn nullish_receiver_key_get(arr: *const ArrayHeader, key: *const crate::StringHeader) {
+    if let Some(receiver) = masked_nullish_receiver(arr) {
+        let key = crate::value::JSValue::string_ptr(key as *mut crate::StringHeader);
+        crate::value::js_dyn_index_get(receiver, f64::from_bits(key.bits()));
+    }
+}
+
+/// The null / undefined value whose masked payload is `arr`, if any.
+#[inline]
+fn masked_nullish_receiver(arr: *const ArrayHeader) -> Option<f64> {
+    use crate::value::{POINTER_MASK, TAG_NULL, TAG_UNDEFINED};
+    let word = arr as u64;
+    if word == TAG_NULL & POINTER_MASK {
+        Some(f64::from_bits(TAG_NULL))
+    } else if word == TAG_UNDEFINED & POINTER_MASK {
+        Some(f64::from_bits(TAG_UNDEFINED))
+    } else {
+        None
+    }
+}
+
 /// `Set(O, ToString(index), value, strict)` for
 /// [`non_array_object_receiver_word`]: an inherited setter runs, a frozen or
 /// non-extensible receiver rejects, otherwise an own property is created.

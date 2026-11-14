@@ -5,11 +5,11 @@
 //! (`js_array_clone`, `js_array_from_arraylike`, ...) stay in their own
 //! modules; this module layers the spec validation (`TypeError` for nullish
 //! sources, callability checks, `Symbol.isConcatSpreadable`) on top of them.
+use super::generic::to_object;
 use super::{
     clean_arr_ptr, js_array_alloc, js_array_clone, js_array_is_array, js_array_push_f64,
     js_array_set_f64_extend, ArrayHeader,
 };
-use super::generic::to_object;
 use crate::closure::ClosureHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::value::JSValue;
@@ -118,7 +118,7 @@ fn boxed_primitive_source(value: f64, bits: u64) -> bool {
     }
     // Numbers: real doubles and INT32-tagged small integers — the latter are
     // bit-identical to a registered class ref, so the registry decides.
-    (jsv.is_number() || jsv.is_int32()) && crate::object::class_ref_id(value).is_none()
+    (jsv.is_number()) && crate::object::class_ref_id(value).is_none()
 }
 
 #[no_mangle]

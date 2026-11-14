@@ -479,7 +479,7 @@ mod tests {
             f64::from_bits(TAG_TRUE),
             f64::from_bits(TAG_UNDEFINED),
             f64::from_bits(MAP_HOLE_KEY_BITS),
-            f64::from_bits(crate::value::INT32_TAG | 5),
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5),
         ];
         for &key in &values {
             let Some(skey) = StrKey::decode(key.to_bits()) else {

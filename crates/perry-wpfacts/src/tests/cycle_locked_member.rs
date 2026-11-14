@@ -39,7 +39,8 @@ fn reads_top(member: &str) -> (bool, bool, String) {
         "const m: any = {member}; const x: any = process.argv[5] ? new Svc() : m; console.log(x.size);"
     ));
     let s = site(&pf, "size");
-    let any = prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF | prim::BIGINT | prim::SYMBOL;
+    let any =
+        prim::NUM | prim::STR | prim::BOOL | prim::NULL | prim::UNDEF | prim::BIGINT | prim::SYMBOL;
     let opaque = s.receiver_prims & any == any;
     let top = matches!(&s.verdict, Verdict::No(w) if w.contains("unmodeled code"));
     let r = format!("{:?} {:#x} {:?}", s.receivers, s.receiver_prims, s.verdict);

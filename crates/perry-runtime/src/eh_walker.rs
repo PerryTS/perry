@@ -851,7 +851,12 @@ impl std::ops::DerefMut for WalkerLock {
 }
 
 /// Run `f` while this thread holds the walker (census unit tests).
-#[cfg(all(test, perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(
+    test,
+    perry_gc_instruments,
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
 pub(crate) fn with_walker_locked<R>(f: impl FnOnce() -> R) -> R {
     let _held = locked_walker().expect("walker");
     f()
@@ -882,7 +887,6 @@ fn locked_walker_for_walk() -> Option<WalkerLock> {
         _funnel: crate::snap_census::funnel_enter(crate::snap_census::Funnel::Unwind),
     })
 }
-
 
 impl Walker {
     fn build() -> Option<Walker> {
@@ -2012,10 +2016,19 @@ mod tests {
             let mut guard = locked_walker_for_walk().expect("walker");
             let stale = guard.generation;
             let _ = guard.site(Walker::build as *const () as usize as u64);
-            assert_eq!(guard.generation, stale, "a site in the walker's own image read the loader state");
+            assert_eq!(
+                guard.generation, stale,
+                "a site in the walker's own image read the loader state"
+            );
             let _ = guard.site(addr);
-            assert_eq!(guard.generation, before, "a site of the opened object did not refresh the index");
-            assert!(guard.image_for(addr).is_some(), "opened object {addr:#x} not indexed by the walk");
+            assert_eq!(
+                guard.generation, before,
+                "a site of the opened object did not refresh the index"
+            );
+            assert!(
+                guard.image_for(addr).is_some(),
+                "opened object {addr:#x} not indexed by the walk"
+            );
         }
         let (generation, indexed) = {
             let guard = locked_walker().expect("walker");
@@ -2033,8 +2046,14 @@ mod tests {
         {
             let mut guard = locked_walker_for_walk().expect("walker");
             let _ = guard.site(addr);
-            assert_eq!(guard.generation, after, "a site in the closed range did not refresh the index");
-            assert!(guard.image_for(addr).is_none(), "closed range {addr:#x} still indexed by the walk");
+            assert_eq!(
+                guard.generation, after,
+                "a site in the closed range did not refresh the index"
+            );
+            assert!(
+                guard.image_for(addr).is_none(),
+                "closed range {addr:#x} still indexed by the walk"
+            );
         }
         let (generation, indexed) = {
             let guard = locked_walker().expect("walker");

@@ -899,9 +899,11 @@ unsafe fn owned_accessor_answer<const ABSENT: bool>(
     }
 }
 
-/// Actual table ownership was proved by the front on this NoCollect path.
-/// Keep the operation's inherited-call/verify register needs out of receivers
-/// whose ordinary record already answers without an owned table.
+/// The read of a receiver with a table, a tail of the front (which proved
+/// the current ordinary record and the actual table): one lookup of the
+/// table decides it. An entry that holds its own data value is the answer
+/// here, in a leaf with no frame, and so is a reference to a fixed inline
+/// slot; an accessor pair, a spilled fixed slot and a miss are tails.
 #[inline(never)]
 unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     dir: *const u8,
@@ -913,8 +915,11 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
 ) -> f64 {
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-        || (*meta).elements != 0
+    // A native namespace has its own record kind
+    // (`shapes_store_kind::receiver_ordinary_kind`), so the front's kind
+    // test excludes it.
+    debug_assert!((*obj).class_id != crate::object::NATIVE_MODULE_CLASS_ID);
+    if (*meta).elements != 0
         || (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
                 | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
@@ -922,35 +927,77 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     {
         return hole();
     }
-    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
-    let value = match crate::object::overflow::find_hashed(table, key_bits, hash) {
-        Some(entry) => {
-            if *crate::object::overflow::attrs_at(table, entry) as u8
-                & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
-                != 0
-            {
-                // The entry's value is its accessor pair: one tail call, so
-                // nothing of the data arm stays live across it.
-                return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
-            }
-            // The front proved this current ordinary record and actual
-            // table; find_hashed just proved the live entry. Consume those
-            // same facts through the shared checked entry reader.
-            let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-            crate::object::overflow::get_found_from_record(table, obj, entry, record)
-                .map(f64::from_bits)
-                .unwrap_or_else(hole)
-        }
-        // The actual table has proved own absence. Continue through
-        // the existing current-shape prototype walk, without deriving
-        // a redundant receiver-key index or learning an overflow memo.
-        None => inherited_get::<ABSENT>(dir, obj, r, key_bits, hash),
+    // One lookup of the table decides the read. A data entry is the answer
+    // here, with no frame: its own value word, or the word of the fixed
+    // inline slot it refers to. An accessor pair, a spilled fixed slot and
+    // a miss are tails.
+    let Some(entry) = crate::object::overflow::find_hashed_with(table, key_bits, || {
+        site_key_hash::<LAZY_HASH>(key_bits, hash)
+    }) else {
+        return owned_miss::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
     };
+    let Some(word) =
+        crate::object::overflow::found_data_word(table, obj, entry, (*r).live_inline_slot_count)
+    else {
+        return owned_found::<ABSENT>(table, obj, entry, r, key_bits);
+    };
+    let value = f64::from_bits(word);
     if ABSENT {
         verify::answer(obj as usize, key_bits, value)
     } else {
         value
     }
+}
+
+/// The table front's found entry that one load does not answer
+/// (`overflow::found_data_word`): an accessor pair, or a reference to a fixed
+/// slot that is spilled or holds a lane word. Out of line, a tail of the
+/// front: the front proved this current ordinary record and actual table and
+/// its lookup proved the live entry; the shared checked entry reader consumes
+/// those same facts.
+#[inline(never)]
+unsafe fn owned_found<const ABSENT: bool>(
+    table: *const crate::object::overflow::Table,
+    obj: *const ObjectHeader,
+    entry: u32,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+) -> f64 {
+    if *crate::object::overflow::attrs_at(table, entry) as u8
+        & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
+        != 0
+    {
+        // The entry's value is its accessor pair: one tail call, so
+        // nothing of the data arm stays live across it.
+        return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
+    }
+    let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
+    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+        .map(f64::from_bits)
+        .unwrap_or_else(hole);
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, value)
+    } else {
+        value
+    }
+}
+
+/// The table front's miss: the actual table has proved own absence. Continue
+/// through the existing current-shape prototype walk, without deriving a
+/// redundant receiver-key index or learning an overflow memo. Out of line, a
+/// tail of the front, and itself only the hash and a tail call: the chain's
+/// answer is returned as the front of a receiver with no table returns it
+/// (`probe_get_absent`), so the miss keeps no frame for the verify hook.
+#[inline(never)]
+unsafe fn owned_miss<const ABSENT: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    inherited_get::<ABSENT>(dir, obj, r, key_bits, hash)
 }
 
 /// The own-data front. With `SITE` (a compile-time choice) every own miss
@@ -2062,7 +2109,25 @@ enum SetPlan {
 /// and record an add starts from. GC leaf.
 #[inline(always)]
 unsafe fn set_plan(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, value: f64) -> SetPlan {
-    use SetPlan::Stored;
+    match set_front(dir, obj_bits, key_bits, hash, value) {
+        Ok(stored) => SetPlan::Stored(stored),
+        Err((obj, r, bits)) => record_plan(dir, obj, r, key_bits, hash, bits),
+    }
+}
+
+/// [`set_plan`]'s guards and its table arm: `Ok` is the store made (1) or
+/// the decline (0); `Err` the receiver, its record and the value word of a
+/// receiver with no table, which its record answers ([`record_plan`]).
+#[inline(always)]
+unsafe fn set_front(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> Result<i32, (*mut ObjectHeader, *mut ShapeRecord, u64)> {
+    #[allow(non_snake_case)]
+    let Stored = |stored: i32| Ok(stored);
     if obj_bits & TAG_MASK != POINTER_TAG {
         return Stored(0);
     }
@@ -2101,6 +2166,21 @@ unsafe fn set_plan(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, valu
             ));
         }
     }
+    Err((obj, r, bits))
+}
+
+/// [`set_plan`] for a receiver with no table: its record's own store, or the
+/// receiver and record an add starts from.
+#[inline(always)]
+unsafe fn record_plan(
+    dir: *const u8,
+    obj: *mut ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+    bits: u64,
+) -> SetPlan {
+    use SetPlan::Stored;
     match own_position(r, key_bits, hash) {
         Ok(pos) => {
             let keys = (*r).keys as usize as *const crate::array::ArrayHeader;

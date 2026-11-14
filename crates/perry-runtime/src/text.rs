@@ -639,8 +639,6 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
         const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
         if (bits & TAG_MASK) == POINTER_TAG {
             (bits & POINTER_MASK) as usize
-        } else if !value.is_nan() && bits != 0 && bits < 0x0001_0000_0000_0000 {
-            bits as usize
         } else {
             0
         }

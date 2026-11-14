@@ -227,9 +227,11 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
-                self.prim_node(prim::BOOL)
-            }
+            "arrayRecordNeedsIterator"
+            | "arrayRecordForBound"
+            | "hasPathModule"
+            | "isBuiltin"
+            | "typedArrayForOfAdmits" => self.prim_node(prim::BOOL),
             // What codegen lowers them to: the cursor itself, the payload's
             // length, and `mode ? 0 : update`.
             "arrayRecordIndex" => match arg(0) {
@@ -414,14 +416,17 @@ impl<'a> Gen<'a> {
                 // The target's init guard runs its body here when it has not
                 // run yet: what that body throws, this call throws.
                 if let Some(Expr::ExternFuncRef { name, .. }) = source_args.first() {
-                    let t = self.imports_of(fx.module as usize).into_iter().find_map(|i| {
-                        let binds = i.specifiers.iter().any(|sp| match sp {
-                            perry_hir::ImportSpecifier::Named { local, .. }
-                            | perry_hir::ImportSpecifier::Default { local }
-                            | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                    let t = self
+                        .imports_of(fx.module as usize)
+                        .into_iter()
+                        .find_map(|i| {
+                            let binds = i.specifiers.iter().any(|sp| match sp {
+                                perry_hir::ImportSpecifier::Named { local, .. }
+                                | perry_hir::ImportSpecifier::Default { local }
+                                | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                            });
+                            binds.then_some(i.resolved_path.as_ref()).flatten()
                         });
-                        binds.then_some(i.resolved_path.as_ref()).flatten()
-                    });
                     if let Some(t) = t.and_then(|p| self.path_index.get(p).copied()) {
                         let rt = self.module_raise(t);
                         let r = self.region();

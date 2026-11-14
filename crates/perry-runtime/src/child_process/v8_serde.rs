@@ -215,11 +215,6 @@ impl Serializer {
                 .push(if jsval.as_bool() { TAG_TRUE } else { TAG_FALSE });
             return;
         }
-        if jsval.is_int32() {
-            self.out.push(TAG_INT32);
-            self.write_zigzag(jsval.as_int32() as i64);
-            return;
-        }
         if jsval.is_number() {
             self.write_number(value);
             return;

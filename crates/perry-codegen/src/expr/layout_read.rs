@@ -743,7 +743,8 @@ pub(crate) struct LayoutStore {
 /// The store form of the 2c site for a coloured key: the receiver's layout
 /// holds `property` at its colour slot as a plain writable `Any`-lane data
 /// property of a store-admitted layout (the record's store mask), the object
-/// carries no metadata record (no prototype role, no exotic receiver), and
+/// carries no metadata record (no prototype role, no exotic receiver) or one
+/// that only holds an overflow table of plain writable data entries, and
 /// the slot is present; then the assignment is one store plus the write
 /// barrier's bookkeeping. On `Some`, the caller lowers its ordinary store
 /// site in the current block (the miss path) and passes its value to
@@ -874,7 +875,86 @@ pub(crate) fn begin_store(
             crate::expr::receiver_range::emit_field_ptr(blk, &biased, (header - 8) as i64);
         let meta = blk.load(I64, &meta_ptr);
         let plain = blk.icmp_eq(I64, &meta, "0");
-        blk.cond_br(&plain, &load_label, &miss_label);
+        // An object with a metadata record stays on the arm when the record
+        // only carries an overflow table of plain writable data entries: a
+        // table, no state flag (prototype role, exotic receiver, native
+        // alias, sealed intrinsic), and a table whose summary (the OR of
+        // every entry's attributes ever recorded: freeze, a non-writable or
+        // accessor redefinition and a private name all set it) blocks no
+        // store. The table owns the key's attributes; the fixed slot holds
+        // its value unless it is the hole (a deleted key, an accessor, a
+        // value the entry holds itself), which the load below tests.
+        // The table test comes first: most records carry no table (a
+        // spill, a prototype role), and their store leaves after one test.
+        let table_idx = ctx.new_block("l2s.table");
+        let summary_idx = ctx.new_block("l2s.summary");
+        let table_label = ctx.block_label(table_idx);
+        let summary_label = ctx.block_label(summary_idx);
+        ctx.block().cond_br(&plain, &load_label, &table_label);
+
+        // The record's word is loaded again here, off the hit path: the
+        // entry test above then has its load as its only use and stays one
+        // compare with memory (`cmpq $0, ..; jne`), as on a site with no
+        // table arm. Kept in a register for this path, the word cost every
+        // store to an object with no record one instruction more.
+        ctx.current_block = table_idx;
+        let blk = ctx.block();
+        let meta_again = blk.load_volatile(I64, &meta_ptr);
+        let meta_base = blk.inttoptr(I64, &meta_again);
+        let table_ptr = blk.gep(
+            I8,
+            &meta_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OBJECT_META_OVERFLOW_OFFSET.to_string(),
+            )],
+        );
+        let table = blk.load(I64, &table_ptr);
+        let has_table = blk.icmp_ne(I64, &table, "0");
+        // Each test is its own branch, so the site holds no materialized
+        // flags.
+        let held_idx = ctx.new_block("l2s.held");
+        let held_label = ctx.block_label(held_idx);
+        ctx.block().cond_br(&has_table, &held_label, &miss_label);
+
+        ctx.current_block = held_idx;
+        let blk = ctx.block();
+        let flags_ptr = blk.gep(
+            I8,
+            &meta_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OBJECT_META_FLAGS_OFFSET.to_string(),
+            )],
+        );
+        let flags = blk.load(I64, &flags_ptr);
+        let state = blk.and(
+            I64,
+            &flags,
+            &crate::runtime_abi::OBJECT_META_STATE_FLAGS.to_string(),
+        );
+        let no_state = blk.icmp_eq(I64, &state, "0");
+        ctx.block().cond_br(&no_state, &summary_label, &miss_label);
+
+        ctx.current_block = summary_idx;
+        let blk = ctx.block();
+        let table_base = blk.inttoptr(I64, &table);
+        let summary_ptr = blk.gep(
+            I8,
+            &table_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OVERFLOW_TABLE_SUMMARY_OFFSET.to_string(),
+            )],
+        );
+        let summary = blk.load(I32, &summary_ptr);
+        let blocking = blk.and(
+            I32,
+            &summary,
+            &crate::runtime_abi::OVERFLOW_SUMMARY_BLOCKS_PLAIN_STORE.to_string(),
+        );
+        let open = blk.icmp_eq(I32, &blocking, "0");
+        blk.cond_br(&open, &load_label, &miss_label);
     }
 
     ctx.current_block = load_idx;
