@@ -229,7 +229,7 @@ pub(crate) fn intrinsic_prototype_addr(
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
 /// else 0. Never builds the realm: a prototype that was never born cannot
 /// have been written either (the per-call `dv.get*` guard asks exactly that).
-#[inline]
+#[inline(always)]
 pub(crate) fn intrinsic_prototype_addr_if_bound(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
@@ -284,8 +284,17 @@ fn realm_intrinsic_addr(
 ) -> usize {
     let mut addr = cell.get();
     if addr == 0 && !crate::object::realm_is_complete() {
-        run_phase_of(identity);
-        addr = cell.get();
+        if !crate::object::global_this_is_materialized() {
+            // This thread's first touch of the realm, through the entry the
+            // link chose (the full entry unless the program is two-phase).
+            crate::object::realm_core();
+            addr = cell.get();
+        }
+        if addr == 0 && !crate::object::realm_is_complete() {
+            // A two-phase realm's core only: phase B if it binds the family.
+            crate::object::realm_family_phase(identity);
+            addr = cell.get();
+        }
     }
     if addr == 0 {
         if prototype && identity.declaration().lazy {
@@ -297,27 +306,6 @@ fn realm_intrinsic_addr(
         }
     }
     heal_prototype_addr(cell, addr)
-}
-
-/// The realm is not complete (this thread has none, or a two-phase realm's
-/// core only): run the phase that binds `identity`'s family. Phase B through
-/// the full entry (which leaves the realm as it is when the asker is phase A
-/// itself); the core when this thread has no realm yet, through the entry
-/// the link chose (`perry_realm_core_entry`: the full entry in a program
-/// that is not compiled for two phases). (Not cold: it is the first touch of
-/// the realm for a program that asks an intrinsic first; listed in the
-/// default hot-text order.)
-#[inline(never)]
-fn run_phase_of(identity: crate::object::BuiltinConstructorIdentity) {
-    if !crate::object::global_this_is_materialized() {
-        if crate::codegen_abi::realm_rest_global(identity.name()) {
-            crate::object::js_get_global_this();
-        } else {
-            crate::object::realm_core();
-        }
-    } else if crate::codegen_abi::realm_rest_global(identity.name()) {
-        crate::object::js_get_global_this();
-    }
 }
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).

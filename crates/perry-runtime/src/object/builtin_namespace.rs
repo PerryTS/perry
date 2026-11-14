@@ -441,6 +441,9 @@ fn function_identity(bits: u64) -> Option<usize> {
 }
 
 /// Record namespace `i`'s function members (contract runs).
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 unsafe fn snapshot_members(i: usize, holder: *mut ObjectHeader) {
     let names =
         super::js_object_get_own_property_names(crate::value::js_nanbox_pointer(holder as i64));

@@ -1367,6 +1367,9 @@ fn unborn_lazy_identity(
         .then_some(identity)
 }
 
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 fn alias_typed_array_proto_to_string(singleton_at_entry: *mut ObjectHeader) {
     let ta_proto_addr = crate::object::TYPED_ARRAY_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
     if ta_proto_addr == 0 {

@@ -95,6 +95,37 @@ pub extern "C" fn perry_realm_complete() -> f64 {
     realm_complete_unlinked()
 }
 
+/// A reader asks for the intrinsic of builtin family `identity` (a
+/// `BuiltinConstructorIdentity`) of a realm that is not complete. The
+/// default does nothing (a realm populated in one pass is never incomplete);
+/// a two-phase program defines it as a jump to [`js_realm_family_phase`].
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_family_phase(_identity: u32) {}
+
+/// Run phase B if it binds the family `identity`: the one point where the
+/// runtime's internal births of a phase-B family (a `WeakMap`'s inherited
+/// read, a typed array's prototype) complete the realm. Phase A's own asks
+/// get the realm as it is (`js_realm_complete`).
+#[no_mangle]
+pub extern "C" fn js_realm_family_phase(identity: u32) {
+    let name = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS[identity as usize - 1].name;
+    if crate::codegen_abi::realm_rest_global(name) {
+        js_get_global_this();
+    }
+}
+
+/// [`perry_realm_family_phase`] for the runtime's one caller.
+#[inline(always)]
+pub(crate) fn realm_family_phase(identity: crate::object::BuiltinConstructorIdentity) {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_realm_family_phase(identity as u32);
+    }
+    perry_realm_family_phase(identity as u32)
+}
+
 #[cold]
 #[inline(never)]
 fn realm_complete_unlinked() -> ! {
@@ -399,6 +430,9 @@ static KEEP_JS_REALM_CHECK_GLOBAL_READ: extern "C" fn(f64) = js_realm_check_glob
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_REALM_COMPLETE: extern "C" fn() -> f64 = js_realm_complete;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_FAMILY_PHASE: extern "C" fn(u32) = js_realm_family_phase;
 
 /// First access on this thread: allocate the realm global and populate it,
 /// `phases` = `Both` (one pass, every row in its declared place) or `Core`
