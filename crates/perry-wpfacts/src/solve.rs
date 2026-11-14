@@ -748,6 +748,7 @@ impl Model {
         }
         self.add_top_inner(n, why);
     }
+    #[track_caller]
     fn add_top_inner(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
         if self.explain || self.diagnostic.is_some() {
             let w = why(self);

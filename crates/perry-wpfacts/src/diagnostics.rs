@@ -2088,6 +2088,20 @@ impl Model {
         }
     }
 
+    /// `keysnap_arrivals` for a set adopted whole by copy delivery
+    /// (`adopt_delivery`): the batch is what is new in `dst`, from `src`.
+    #[cold]
+    #[track_caller]
+    pub(crate) fn keysnap_adopted(&mut self, src: NodeId, dst: NodeId, batch: &crate::delta::Batch) {
+        let at = std::panic::Location::caller();
+        let why = self.cur_why;
+        if let Some(ks) = self.keysnap.as_mut() {
+            for t in batch.each_token() {
+                ks.first.entry((dst, t)).or_insert((src, why, at));
+            }
+        }
+    }
+
     /// `ks3_call` for a rule that names the call it serves.
     pub(crate) fn keysnap_call_pos(&mut self, call: CallId) -> String {
         let Some(ks) = self.keysnap.take() else { return String::new() };
@@ -2228,8 +2242,8 @@ impl Model {
                     None => "not recorded".into(),
                 };
                 eprintln!("KS3   tok {t} {} name={} first: {first}", self.ks2_kind(t), self.tok_name(t));
-                if matches!(self.toks[t as usize], TokKind::Builtin(_)) || self.tok_name(t).contains("json") {
-                    self.ks3_chain(ks, *n, t, 8);
+                if t == TOP || matches!(self.toks[t as usize], TokKind::Builtin(_)) || self.tok_name(t).contains("json") {
+                    self.ks3_chain(ks, *n, t, 12);
                 }
             }
         }
