@@ -569,8 +569,8 @@ fn a_link_line_that_picks_lld_takes_the_lld_hot_text_script() {
             .unwrap()
             .to_string()
     };
-    assert!(script(&gnu_log).ends_with(".v1.ld"), "{gnu_log}");
-    assert!(script(&lld_log).ends_with(".v1.lld.ld"), "{lld_log}");
+    assert!(script(&gnu_log).ends_with(".v2.ld"), "{gnu_log}");
+    assert!(script(&lld_log).ends_with(".v2.lld.ld"), "{lld_log}");
     assert_eq!(run(&lld, None), run(&gnu, None));
     let symbols = symbol_addresses(&lld);
     let at = |name: &str| symbols.iter().find(|s| s.2 == name).map(|s| s.0);

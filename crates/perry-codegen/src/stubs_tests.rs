@@ -97,3 +97,25 @@ fn elf_startup_registration_lands_in_init_array() {
         );
     }
 }
+
+/// The link script names the installer object's functions by section
+/// (`FEATURE_INSTALLER_FUNCTIONS`): each one has its own `.text.<name>`.
+#[test]
+fn installer_functions_have_the_sections_the_hot_text_run_names() {
+    let obj = generate_feature_installer_object(
+        &["js_runtime_install_dyn_eval".to_string()],
+        Some(&["js_stdlib_install_fastify".to_string()]),
+        &[],
+        0,
+        Some("linux"),
+    )
+    .expect("the installer unit compiles");
+    let sections = elf64_sections(&obj);
+    for name in crate::stubs::FEATURE_INSTALLER_FUNCTIONS {
+        let want = format!(".text.{name}");
+        assert!(
+            sections.iter().any(|s| s.0 == want),
+            "no {want} in {sections:?}"
+        );
+    }
+}

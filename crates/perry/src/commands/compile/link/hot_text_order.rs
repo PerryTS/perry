@@ -266,6 +266,11 @@ fn text_rules(placement: &Placement, lld: bool) -> String {
         placement.sections.len(),
         if lld { LLD_HOT_SECTION } else { ".text" }
     );
+    // The generated feature-installer object runs at every start-up; behind
+    // the cold runtime text it would map a 64 KiB window of its own.
+    for name in perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS {
+        out.push_str(&format!("  *(.text.{name})\n"));
+    }
     for section in &placement.sections {
         out.push_str("  *(");
         out.push_str(section);
@@ -377,7 +382,7 @@ pub(super) fn link_script(
     let fingerprint = fingerprint(archives, text, data.then_some(rodata))?;
     let dir = cache.join("function-order");
     let flavor = if lld { ".lld" } else { "" };
-    let path = dir.join(format!("hot-text-{fingerprint:016x}.v1{flavor}.ld"));
+    let path = dir.join(format!("hot-text-{fingerprint:016x}.v2{flavor}.ld"));
     if !path.is_file() {
         let mut out = String::new();
         if text {
@@ -547,6 +552,17 @@ mod tests {
         assert!(two < one, "{script}");
         assert!(script.find("__perry_rt_hot_text_start").unwrap() < two);
         assert!(script.find("__perry_rt_hot_text_end").unwrap() > one);
+        // The generated installer object's functions open the run.
+        for text in [&lld, &script] {
+            let installers = text
+                .find("*(.text.perry_register_feature_installers)")
+                .unwrap();
+            assert!(text.find("__perry_rt_hot_text_start").unwrap() < installers);
+            assert!(installers < text.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap());
+            for name in perry_codegen::stubs::FEATURE_INSTALLER_FUNCTIONS {
+                assert!(text.contains(&format!("*(.text.{name})\n")), "{text}");
+            }
+        }
     }
 
     #[test]
