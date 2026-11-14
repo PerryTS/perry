@@ -402,8 +402,6 @@ pub struct Gen<'a> {
     /// Guards narrow locals by presence: a truthy or non-nullish test
     /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
     pub guard_presence: bool,
-    /// Rule R (`FactsConfig::no_forin_path`, `Gen::enum_scope`).
-    pub forin_path: bool,
     /// R1: a write of a narrowed local in a branch that always leaves past
     /// the narrowing's code does not end its narrowed reads after the branch
     /// (`gen::narrow`, "Writes on a leaving path";
@@ -775,7 +773,6 @@ impl<'a> Gen<'a> {
             push_fill_new: None,
             guard_ranges: true,
             guard_presence: true,
-            forin_path: true,
             leaving_writes: true,
             zs_ok: false,
             leaving_write_sabotage: false,

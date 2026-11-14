@@ -1406,6 +1406,19 @@ impl<'a> Gen<'a> {
                         let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
                         let shape = self.key_shape(fx.module, index);
                         let enumerable = self.enum_read(fx.module, object, index);
+                        // F-A: once the body may change the path, the
+                        // ordinary read too (`Gen::path_watch`).
+                        if let Some(g) = self.enum_gate(fx.module, object, index) {
+                            self.m.cons(
+                                g,
+                                Cons::IdxLoad {
+                                    idx,
+                                    dst,
+                                    shape,
+                                    enumerable: false,
+                                },
+                            );
+                        }
                         match self.own_reads.remove(&(e as *const Expr as usize)) {
                             // Behind an own-property test (`gen/own_guard.rs`).
                             Some(bad) => {

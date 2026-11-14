@@ -337,6 +337,12 @@ impl Model {
                     self.packet_shape(shape)
                 )
             }
+            Cons::ForInAcc { key, setter, probe } => {
+                format!("ForInAcc key={key:?} setter={setter} probe={probe:?}")
+            }
+            Cons::ForInMeet { other, src, gate } => {
+                format!("ForInMeet other={other:?} src={src:?} gate={gate:?}")
+            }
             Cons::EnumChain { key, dst, of, .. } => format!(
                 "EnumChain key={:?} dst={:?} of={:?}",
                 key,

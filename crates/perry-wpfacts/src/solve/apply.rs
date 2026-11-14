@@ -1476,6 +1476,32 @@ impl Model {
                     }
                 }
             }
+            Cons::ForInAcc { key, setter, probe } => {
+                for &t in toks {
+                    if t == TOP {
+                        self.add_tok(probe, TOP);
+                        continue;
+                    }
+                    self.accessor_walk(t, t, key, ChainAct::Lookup { dst: probe, setter });
+                }
+            }
+            Cons::ForInMeet { other, src, gate } => {
+                let hit = toks.iter().any(|&t| {
+                    t == TOP
+                        || if other == NO_NODE {
+                            !matches!(self.toks[t as usize], TokKind::BuiltinFn(..))
+                        } else {
+                            let p = &self.nodes[other as usize].pts;
+                            p.contains_tok(t) || p.contains_tok(TOP)
+                        }
+                });
+                if hit && !self.nodes[src as usize].succ.contains(&gate) {
+                    if std::env::var_os("PERRY_FACTS_FORIN_PATH_COUNT").is_some() {
+                        eprintln!("forin-path-open: gate {gate} at node {n}");
+                    }
+                    self.edge(src, gate);
+                }
+            }
             Cons::ElemUndef { obj, key, dst } => self.elem_undef(obj, key, dst),
             Cons::IdxOwnLoad {
                 idx,

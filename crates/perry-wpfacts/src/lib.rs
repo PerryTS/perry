@@ -138,10 +138,6 @@ pub struct FactsConfig {
     /// local's `null`/`undefined` (`gen::narrow` guards;
     /// `PERRY_FACTS_GUARD_PRESENCE=0`).
     pub no_guard_presence: bool,
-    /// Rule R off (`PERRY_FACTS_FORIN_PATH=0`): a for-in body read `P[k]`
-    /// that re-reads the loop subject path `P` (`gen::for_in::SubjPath`)
-    /// is a plain computed read again.
-    pub no_forin_path: bool,
     /// OPTIMISTIC rule, default off, measurement only (owner 2026-11-12;
     /// `PERRY_FACTS_OPTIMISTIC_JSON_KEY=1`): `Model::json_key_optimistic`.
     pub optimistic_json_key: bool,
@@ -595,7 +591,6 @@ fn generate<'a>(
     g.arr_lengths = g.int_ranges && !cfg.no_array_lengths;
     g.guard_ranges = g.int_ranges && !cfg.no_guard_ranges;
     g.guard_presence = !cfg.no_guard_presence;
-    g.forin_path = !cfg.no_forin_path;
     g.m.optimistic_json_key = cfg.optimistic_json_key;
     g.m.json_positions = cfg.json_positions;
     g.unit_in = published;
