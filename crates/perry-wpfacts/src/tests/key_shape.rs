@@ -159,7 +159,7 @@ fn a_store_whose_shape_admits_the_name_reaches_it() {
 fn shape_matching_is_exact() {
     use crate::model::KeyShape;
     let s = |p: &[&str]| KeyShape {
-        globs: vec![p.iter().map(|s| s.to_string()).collect()],
+        globs: vec![p.iter().map(|s| s.to_string()).collect()], free: Vec::new()
     };
     assert!(s(&["", "s"]).admits("meshes"));
     assert!(!s(&["", "s"]).admits("constructor"));
