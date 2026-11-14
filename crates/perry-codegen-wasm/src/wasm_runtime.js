@@ -2856,6 +2856,13 @@ function __invokeWasmCallback(fn, ...bigintArgs) {
   return result;
 }
 
+// A Perry closure as the UI bridges receive it: `{funcIdx, captures}` from the handle
+// store, or a host JS function.
+function __isPerryClosure(v) {
+  return (v !== null && typeof v === 'object' && typeof v.funcIdx !== 'undefined')
+    || typeof v === 'function';
+}
+
 // Accept a boxed handle or decoded closure; extra arguments are plain JS values.
 // Convert them once to i64: boxing strings through f64 can erase NaN payloads.
 function callWasmClosure(closureVal, ...extraArgs) {
@@ -3079,6 +3086,11 @@ function perry_ui_image_create(src, width, height) {
   return uiAlloc(el);
 }
 function perry_ui_picker_create(items_json, selected, callback) {
+  // perry/ui declares `Picker(onChange)`, so codegen passes the closure first; the
+  // three-argument (items_json, selected, callback) shape is kept for other callers.
+  if (__isPerryClosure(items_json) && callback === undefined) {
+    callback = items_json; items_json = undefined; selected = undefined;
+  }
   const el = document.createElement("select");
   el._perryCallback = callback;
   el.addEventListener("change", () => {
