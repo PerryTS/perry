@@ -1201,6 +1201,7 @@ fn verification_sites(
                 perry_wpfacts::Verdict::E0 => SiteVerdict::E0,
                 perry_wpfacts::Verdict::Dead => SiteVerdict::Dead,
                 perry_wpfacts::Verdict::OwnDataOrAbsent => SiteVerdict::OwnDataOrAbsent,
+                perry_wpfacts::Verdict::Throws => SiteVerdict::Throws,
                 perry_wpfacts::Verdict::NsExport => SiteVerdict::NsExport,
                 perry_wpfacts::Verdict::IntrinsicCall => SiteVerdict::IntrinsicCall,
                 perry_wpfacts::Verdict::No(_) => return None,

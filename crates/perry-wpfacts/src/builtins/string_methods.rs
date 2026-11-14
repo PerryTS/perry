@@ -337,6 +337,7 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 m.cur_range.replace(crate::model::Rg {
                     num: index_len.map_or(crate::model::Iv::TOP, |l| crate::model::Iv::int(-1, l)),
                     chr: crate::model::range::CHAR_ANY,
+                    frac: index_len.is_none(),
                 })
             });
             ret_prim(m, call, r);

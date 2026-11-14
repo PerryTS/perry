@@ -1317,7 +1317,7 @@ impl<'a> Gen<'a> {
                 v
             }
             Expr::PropertyUpdate {
-                object, property, ..
+                object, property, op, ..
             } => {
                 let o = self.expr(fx, object);
                 let a = self.member_atom(object, property);
@@ -1333,6 +1333,10 @@ impl<'a> Gen<'a> {
                 );
                 let nv2 = self.tmp("update-val");
                 self.m.cons(cur, Cons::Arith { dst: nv2, other: crate::model::NO_NODE });
+                // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
+                // the hull of the old and the new value (prefix or postfix).
+                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv2);
                 let owner = self.phase_owner(fx, e, object);
                 self.store_phased(
                     fx,
@@ -1506,7 +1510,7 @@ impl<'a> Gen<'a> {
                 self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Write);
                 v
             }
-            Expr::IndexUpdate { object, index, .. } => {
+            Expr::IndexUpdate { object, index, op, .. } => {
                 let o = self.expr(fx, object);
                 let i = self.expr_zs(fx, index);
                 self.m.nodes[i as usize].int_use = true;
@@ -1532,6 +1536,10 @@ impl<'a> Gen<'a> {
                 );
                 let nv = self.tmp("update-val");
                 self.m.cons(cur, Cons::Arith { dst: nv, other: crate::model::NO_NODE });
+                // The interval (and rule INT-OR-NAN) of ToNumeric(cur) ± 1,
+                // the hull of the old and the new value (prefix or postfix).
+                let step = if *op == perry_hir::BinaryOp::Sub { -1 } else { 1 };
+                self.range_rule(crate::model::RangeOp::Step(step), cur, None, nv);
                 self.store_elem(fx, e, o, key, i, nv, "[]++");
                 nv
             }

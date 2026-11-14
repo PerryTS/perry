@@ -281,6 +281,11 @@ impl Model {
         // rule's result takes its interval from the rule only.
         if prim & prim::NUM != 0 && !node.ruled {
             changed |= grow_range(node, iv.num);
+            if iv.frac && !node.frac {
+                node.frac = true;
+                node.drange = true;
+                changed = true;
+            }
         }
         // A String brings its code interval the same way.
         if prim & prim::STR != 0 && !node.cruled {
@@ -2149,6 +2154,7 @@ impl Model {
         crate::model::Rg {
             num: nd.range,
             chr: nd.crange,
+            frac: nd.frac,
         }
     }
 

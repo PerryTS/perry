@@ -406,3 +406,59 @@ fn a_conjunction_and_an_expression_bound_a_for_counter() {
         r["idx"]
     );
 }
+
+// Soundness controls for the Step rule of member `++` (gen_expr.rs
+// PropertyUpdate / IndexUpdate): the interval is only what the field read
+// holds from every writer. `q` (never written but by `++`) keeps one, so
+// each program can fail.
+#[test]
+fn member_step_of_a_field_written_with_a_fraction_has_no_interval() {
+    let r = ranges(
+        "class O { p: number = 0; q: number = 0; }
+const o = new O();
+if (process.argv.length > 5) o.p = 0.5;
+let r = o.p++;
+let r2 = ++o.p;
+let s = o.q++;
+console.log(r, r2, s);",
+    );
+    assert_eq!(r.get("r"), Some(&None), "{r:?}");
+    assert_eq!(r.get("r2"), Some(&None), "{r:?}");
+    assert!(matches!(r.get("s"), Some(Some(_))), "{r:?}");
+}
+
+#[test]
+fn index_step_under_an_unknown_key_of_a_string_field_has_no_interval() {
+    let r = ranges(
+        "class O { p: number = 0; s: any = 'abc'; }
+const o: any = new O();
+const k: any = process.argv[2];
+let r = o[k]++;
+const o2: any = new O();
+let s = o2['p']++;
+console.log(r, s);",
+    );
+    assert_eq!(r.get("r"), Some(&None), "{r:?}");
+    assert!(matches!(r.get("s"), Some(Some(_))), "{r:?}");
+}
+
+#[test]
+fn member_step_through_an_accessor_has_no_interval() {
+    let r = ranges(
+        "class O { _p: number = 0; q: number = 0; get p(): number { return this._p + 0.5; } set p(v: number) { this._p = v; } }
+const o: any = new O();
+let r = o.p++;
+const o3: any = { p: 1, q: 1 };
+Object.defineProperty(o3, 'p', { get() { return 0.5; }, set(v: any) {} });
+let r3 = o3.p++;
+const base: any = { get p() { return 0.5; } };
+const o4: any = Object.create(base);
+let r4 = o4.p++;
+let s = o.q++;
+console.log(r, r3, r4, s);",
+    );
+    assert_eq!(r.get("r"), Some(&None), "{r:?}");
+    assert_eq!(r.get("r3"), Some(&None), "{r:?}");
+    assert_eq!(r.get("r4"), Some(&None), "{r:?}");
+    assert!(matches!(r.get("s"), Some(Some(_))), "{r:?}");
+}
