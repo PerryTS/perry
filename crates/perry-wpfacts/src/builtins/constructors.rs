@@ -12,6 +12,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         let vals = all_arg_values(m, call);
         let c2 = m.calls.len() as CallId;
         m.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args: vec![vals; c.args.len().max(3)],
             spread: vec![],
@@ -73,6 +74,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.solver_call(
                     call,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args: vec![rn, jn],
                         spread: vec![],

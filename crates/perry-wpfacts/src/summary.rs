@@ -289,6 +289,14 @@ pub struct SumState {
     /// Plain calls (`Cons::Call` on the callee value) at program sites
     /// outside every summary: kind-0 keys.
     pub site_calls: FxHashSet<CallId>,
+    /// Templates that are plain calls (`Cons::Call` on the callee value):
+    /// a copy of one in a run is that run's kind-0 site (NESTED-SITE-RUN).
+    pub site_tmpls: FxHashSet<CallId>,
+    /// A call an instance made -> that instance.
+    pub call_inst: FxHashMap<CallId, u32>,
+    /// Instances that are some caller's own context (a site, an object, a
+    /// birth, a for-in key): not the shared run of every other caller.
+    pub site_run: FxHashSet<u32>,
     /// Calls that belong to a summary: the shared body never runs them.
     pub templates: FxHashSet<CallId>,
     pub stats: String,
@@ -863,6 +871,9 @@ impl Model {
             val,
         });
         self.sum.inst_key.insert(vkey, inst);
+        if matches!(key.0, 0 | 5 | 6 | 7) || (key.0 == 1 && key.1 != LAY_NONE) {
+            self.sum.site_run.insert(inst);
+        }
         self.sum.pending.push((inst, base));
         inst
     }
@@ -928,6 +939,7 @@ impl Model {
                 (7, site, ft)
             }
             _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
+            _ if let Some(site) = self.nested_site(call, ft) => (0, site, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
             _ => (1, lay, ft),
         };
@@ -1018,6 +1030,48 @@ impl Model {
     /// solver made for a call at such a site (a native method's callback, a
     /// bound target): the site's own call of that function would be one run
     /// per site, and so is this one.
+    /// Rule NESTED-SITE-RUN: a plain call an instance made (a copy of a
+    /// template, `tmpl_of`) inside a run that is its caller's own context
+    /// (`site_run`) is a site of that run: its key is the copy itself, one
+    /// per (template site, caller run), and the caller run's key is its own
+    /// site, so a run is keyed by the chain of sites from a program site.
+    /// A callee already on that chain (recursion, mutual recursion) folds
+    /// onto the run of its occurrence there: that run's executions are a
+    /// superset, and the chain holds each function token at most once, so
+    /// the runs are at most the acyclic call paths. A call in the shared
+    /// run (no site, no object) keeps the shared run.
+    fn nested_site(&self, call: CallId, ft: Tok) -> Option<CallId> {
+        if call == NO_NODE || (call as usize) < self.sum.n_prog {
+            return None;
+        }
+        let t = *self.sum.tmpl_of.get(&call)?;
+        if !self.sum.site_tmpls.contains(&t) {
+            return None;
+        }
+        let mut cur = *self.sum.call_inst.get(&call)?;
+        if !self.sum.site_run.contains(&cur) {
+            return None;
+        }
+        loop {
+            let it = &self.sum.insts[cur as usize];
+            let site = it.lay & LAY_MASK;
+            if it.lay & !LAY_MASK != LAY_SITE {
+                break;
+            }
+            if it.tok == ft {
+                return Some(site);
+            }
+            if (site as usize) < self.sum.n_prog {
+                break;
+            }
+            match self.sum.call_inst.get(&site) {
+                Some(&p) => cur = p,
+                None => break,
+            }
+        }
+        Some(call)
+    }
+
     fn site_of_call(&self, call: CallId) -> Option<CallId> {
         if self.sum.site_calls.contains(&call) {
             return Some(call);
@@ -1247,6 +1301,7 @@ impl Model {
             let id = self.calls.len() as CallId;
             self.calls.push(map_call(cs, tr));
             self.sum.tmpl_of.insert(id, *t);
+            self.sum.call_inst.insert(id, inst);
             // The copy is the template's operation in this context: a
             // runtime protocol's call (`Model::protocol_calls`: the step of
             // an iterated value, ToPrimitive ...) stays one, so every rule
@@ -1318,9 +1373,18 @@ impl Model {
         }
         // Literals born here: one token per (literal, maker object), or one
         // per literal in an instance no object is the context of.
+        // A run's rest array is its own birth too (8.6.3: each call makes a
+        // fresh array), except in a run no site or object is the context
+        // of (the escaped, widened or unknown callers' run): that one is
+        // the template token, which every run's arguments reach (the any
+        // context, `rest_template_any`).
         for &(slot, tm) in &s.births {
             let ctx = self.made_ctx(BORN, lay, vc);
-            let t = self.site_tok(tm, ctx);
+            let tt = self.tok_index.get(&TokKind::Obj(tm, NO_CTX)).copied();
+            let t = match tt {
+                Some(tt) if ctx == BORN && self.rest_param_tmpls.contains(&tm) => tt,
+                _ => self.site_tok(tm, ctx),
+            };
             self.add_tok(base[slot as usize], t);
         }
         for &(a, b) in &s.edges {
@@ -1393,6 +1457,21 @@ impl Model {
     /// Arguments and result of `call` into summarized function token `ft`.
     /// A function with a `this` term binds per receiver (`this_into`), the
     /// others their one instance.
+    /// The any-element node of `f`'s rest template token (gen: the rest
+    /// local's `TokKind::Obj(rest, NO_CTX)`): the rest array of the run no
+    /// site is the context of. Every run's arguments are its elements, so
+    /// what an escaped, widened or unknown caller's run reads holds what
+    /// any call passes (the merged array, as before runs had their own).
+    fn rest_template_any(&mut self, f: FnIdx) -> Option<NodeId> {
+        let r = self.funcs[f as usize].rest?;
+        let mut ts = Vec::new();
+        self.nodes[r as usize].pts.sorted_into(&mut ts);
+        let t = ts
+            .into_iter()
+            .find(|&t| matches!(self.toks[t as usize], TokKind::Obj(tm, NO_CTX) if self.rest_param_tmpls.contains(&tm)))?;
+        Some(self.field_any(t))
+    }
+
     pub(crate) fn bind_summarized(&mut self, call: CallId, ft: Tok) {
         if !self.has_this_term(self.tok_fn(ft)) {
             self.bind_layout(call, ft, None, 0);
@@ -1478,6 +1557,7 @@ impl Model {
         let exact = self.calls[c].spread.is_empty() && !has_arguments;
         let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
         let first = if has_arguments { 0 } else { terms.len() };
+        let merged = (rest != NO_NODE).then(|| self.rest_template_any(f)).flatten();
         if rest != NO_NODE {
             for i in first..nargs {
                 let a = self.calls[c].args[i];
@@ -1486,6 +1566,9 @@ impl Model {
                     None => self.rest_elem_node(rest, Some((i - first) as u32)),
                 };
                 self.edge(a, d);
+                if let Some(m) = merged {
+                    self.edge(a, m);
+                }
             }
         }
         for j in 0..self.calls[c].spread.len() {
@@ -1501,6 +1584,9 @@ impl Model {
             );
             if let Some(fa) = rest_fa {
                 self.edge(elems, fa);
+            }
+            if let Some(m) = merged {
+                self.edge(elems, m);
             }
             for i in 0..terms.len() {
                 if caps[i].is_some() {
@@ -1895,6 +1981,8 @@ impl Model {
                 if let Cons::Call { call } = *c {
                     if (call as usize) < self.sum.n_prog && !self.sum.templates.contains(&call) {
                         self.sum.site_calls.insert(call);
+                    } else if self.sum.templates.contains(&call) {
+                        self.sum.site_tmpls.insert(call);
                     }
                 }
             }

@@ -2029,6 +2029,39 @@ impl Model {
                 }
             }
             // Rule K7: the case map of the receiver keeps its infix entries.
+            // Rule CONSOLE-PCT: a first argument that may hold `%` lets the
+            // specifiers consume the later arguments.
+            Cons::ConsoleFormat { reason, agg } => {
+                let fired = self.nodes[agg as usize]
+                    .cons
+                    .iter()
+                    .any(|c| matches!(c, Cons::Implicit { proto: Protocol::Inspect, .. }));
+                if !fired && self.may_hold_percent(n) {
+                    self.cons(agg, Cons::Implicit { reason, proto: Protocol::Inspect });
+                }
+            }
+            Cons::ObjTagProbe { t, key } => {
+                // What each [[Get]] may give without another string: 7.1.1
+                // GetMethod(@@toPrimitive) is undefined for undefined and
+                // null; 7.1.1.1 OrdinaryToPrimitive skips a `toString` or
+                // `valueOf` that is not callable (every primitive: with
+                // neither left it throws, no string), so only the
+                // intrinsic functions may be objects there; 20.1.3.6 step
+                // 15 uses the builtin tag for a @@toStringTag that is not
+                // a String. The read gives `undefined` beside the inherited
+                // member while the own key is not surely present.
+                let prim_ok = match key {
+                    0 => prim::UNDEF | prim::NULL,
+                    3 => !prim::STR,
+                    _ => !0,
+                };
+                let name = if key == 1 { "toString" } else { "valueOf" };
+                let ok = prim & !prim_ok == 0
+                    && toks.iter().all(|&f| (key == 1 || key == 2) && self.object_proto_native(f, name));
+                if !ok {
+                    self.objtag_widen(t);
+                }
+            }
             Cons::CaseMap { dst, upper } => {
                 let strs = self.case_map_strs(n, upper);
                 self.add_s(dst, &[], prim::STR, strs);
@@ -2072,8 +2105,18 @@ impl Model {
                     // value yet (its own rule adds them when it does).
                     let (strs, gated) = match (other, right) {
                         (NO_NODE, _) => (STRS_TOP, false),
-                        (o, false) => self.plus_strs(n, o),
-                        (o, true) => self.plus_strs(o, n),
+                        (o, false) => {
+                            self.objtag_sink = Some(str);
+                            let r = self.plus_strs(n, o);
+                            self.objtag_sink = None;
+                            r
+                        }
+                        (o, true) => {
+                            self.objtag_sink = Some(str);
+                            let r = self.plus_strs(o, n);
+                            self.objtag_sink = None;
+                            r
+                        }
                     };
                     if gated && strs != STRS_TOP {
                         self.realm_str_dsts.push(str);

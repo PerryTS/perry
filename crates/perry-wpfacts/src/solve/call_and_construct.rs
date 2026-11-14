@@ -452,6 +452,7 @@ impl Model {
             (crate::summary::MK_BOUND_CALL, b, 0),
             None,
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(bthis),
                 args,
                 spread: c.spread.clone(),
@@ -493,6 +494,7 @@ impl Model {
         let ret = self.node_l("bound-ret");
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: if k != 0 {
                 ThisArg::Undef
             } else {
@@ -785,6 +787,7 @@ impl Model {
                     (crate::summary::MK_BOUND_NEW, b, 0),
                     None,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args,
                         spread: c.spread.clone(),
@@ -833,6 +836,7 @@ impl Model {
                     (crate::summary::MK_BOUND_NEW_PROGRAM, b, 0),
                     None,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args,
                         spread: c.spread.clone(),

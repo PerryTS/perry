@@ -284,7 +284,31 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
                     _ => false,
                 }
         };
-        let own_cons = |n: NodeId| m.nodes[n as usize].cons.iter().all(|c| cache(n, c));
+        // A method the body calls on the literal (`params.shift()`): its
+        // field node binds `this` to the literal and runs per (call,
+        // receiver) for this body's calls only (`Model::bind_via`), with
+        // the raise of the code it may run. A born token's own field binds
+        // the instance's copy of the call the same way on its own lookup:
+        // the binding is the token's, no effect of the body. Only a rest
+        // array (8.6.3: a fresh array per call) is born so: any other
+        // literal whose methods its body calls keeps the merged token, as
+        // its born tokens' method runs would birth again from born tokens.
+        let rest = m.rest_param_tmpls.contains(&tm);
+        let bound = |n: NodeId, c: &Cons| match c {
+            Cons::ThisTo { origin } => *origin == t,
+            Cons::BuiltinCallee => m.callee_sites.get(&n).is_some_and(|v| {
+                v.iter()
+                    .all(|&(k, o)| o == t && m.node_fn[m.calls[k as usize].ret as usize] == f)
+            }),
+            _ => false,
+        };
+        let own_cons = |n: NodeId| {
+            let cs = &m.nodes[n as usize].cons;
+            let binds = rest
+                && cs.iter().any(|c| bound(n, c))
+                && cs.iter().all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+            binds || cs.iter().all(|c| cache(n, c))
+        };
         let mut ok = own.iter().all(|&n| own_cons(n));
         let mut fields: Vec<(Key, NodeId, Vec<NodeId>, u16)> = Vec::new();
         let mut fl = fields_of.get(&t).cloned().unwrap_or_default();
@@ -584,6 +608,18 @@ fn plan(
     //    is plain nodes for every other summary).
     let mut refused: FxHashSet<FnIdx> = FxHashSet::default();
     let mut why: FxHashMap<FnIdx, String> = FxHashMap::default();
+    // The computed stores into each object node (`Cons::StoreIndexed` on
+    // the key, by its `o`): the hole marks they derive on the object
+    // (`IndexHole`, `IndexKept`) are relays a run rebuilds from its own
+    // copy of the store.
+    let mut indexed_into: FxHashMap<NodeId, Vec<(NodeId, u32)>> = FxHashMap::default();
+    for (x, nd) in m.nodes.iter().enumerate() {
+        for (i, c) in nd.cons.iter().enumerate() {
+            if let Cons::StoreIndexed { o, .. } = *c {
+                indexed_into.entry(o).or_default().push((x as NodeId, i as u32));
+            }
+        }
+    }
     loop {
         let mut dof: FxHashMap<NodeId, FnIdx> = FxHashMap::default();
         for &f in &fs {
@@ -638,6 +674,18 @@ fn plan(
                     return;
                 }
                 match disposition(m, lex, &dof, &oset, f, h, c) {
+                    // A hole mark the body's own computed store derived on
+                    // its object: each run's copy of that store derives it
+                    // on the run's copy of the object from the run's own key
+                    // (`Cons::StoreIndexed` in `solve/apply.rs`).
+                    Ok(true)
+                        if matches!(c, Cons::IndexHole | Cons::IndexKept)
+                            && indexed_into.get(&h).is_some_and(|v| {
+                                v.iter().any(|&(x, j)| {
+                                    let sc = &m.nodes[x as usize].cons[j as usize];
+                                    disposition(m, lex, &dof, &oset, f, x, sc) == Ok(true)
+                                })
+                            }) => {}
                     Ok(true) => {
                         if !gen_kind(c) {
                             *bad = true;

@@ -474,6 +474,7 @@ impl Model {
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::ObjectValue { dst } => format!("ObjectValue dst={:?}", dst),
             Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
+            Cons::ConsoleFormat { reason, agg } => format!("ConsoleFormat reason={reason} agg={:?}", agg),
             Cons::BoundCall { reason, bound } => format!(
                 "BoundCall reason={:?} bound={:?}",
                 self.reasons.get(reason as usize),
@@ -495,6 +496,7 @@ impl Model {
             Cons::RegExpPattern { tok } => {
                 format!("RegExpPattern tok={:?}", self.packet_token(tok, packet))
             }
+            Cons::ObjTagProbe { t, key } => format!("ObjTagProbe t={:?} key={key}", self.packet_token(t, packet)),
             Cons::Captures { rec, pat } => {
                 format!("Captures rec={:?} pat={pat}", self.packet_token(rec, packet))
             }

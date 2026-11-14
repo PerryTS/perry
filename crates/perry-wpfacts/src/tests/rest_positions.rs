@@ -55,7 +55,6 @@ fn run(body: &str) -> ProgramFacts {
 }
 
 #[test]
-#[ignore = "OVMB40: `params[0] += ..` keys its store by a compiler temp local, not a numeric literal: that store merges the positions (sound, not exact)"]
 fn rest_index_reads_only_its_argument() {
     let pf = run("error('TSL: m', new S(), new A()); error('TSL: n', 1);");
     assert_eq!(escape_of(&pf, "a"), None, "{}", pf.dump_text());
@@ -83,7 +82,6 @@ fn rest_fewer_arguments_read_nothing() {
 }
 
 #[test]
-#[ignore = "OVMB40: `params[0] += ..` keys its store by a compiler temp local, not a numeric literal: that store merges the positions (sound, not exact)"]
 fn rest_method_call_is_exact() {
     let pf = run(
         "class L { log(...p: any[]) { enhance(p); } }
@@ -93,7 +91,6 @@ fn rest_method_call_is_exact() {
 }
 
 #[test]
-#[ignore = "OVMB40: `params[0] += ..` keys its store by a compiler temp local, not a numeric literal: that store merges the positions (sound, not exact)"]
 fn rest_construct_is_exact() {
     let pf = run(
         "class K { constructor(...p: any[]) { enhance(p); } }
@@ -103,7 +100,6 @@ fn rest_construct_is_exact() {
 }
 
 #[test]
-#[ignore = "OVMB40: `params[0] += ..` keys its store by a compiler temp local, not a numeric literal: that store merges the positions (sound, not exact)"]
 fn rest_in_summarized_caller_is_exact() {
     let pf = run(
         "function g(x: any) { error('TSL: m', new S(), x); return 0; }
@@ -189,6 +185,28 @@ fn control_computed_index_reads_all() {
     let pf = run(
         "function e6(i: number, ...params: any[]) { const s = params[i]; if (s && s.isStackTrace) s.getLocation(); }
          e6(Number(process.argv[3]), 'm', new A());",
+    );
+    assert!(escape_of(&pf, "a").is_some(), "{}", pf.dump_text());
+}
+
+/// The key of `p[k] += v` held by a `const` binding of a numeric literal
+/// is that literal: the store writes index 0 only, so `p[1]` holds `S`.
+#[test]
+fn const_literal_key_compound_writes_its_index() {
+    let pf = run(
+        "function c(i: number, ...p: any[]) { const k = 0; p[k] += 1; const s = p[1]; if (s && s.isStackTrace) s.getLocation(); }
+         c(process.argv.length, new A(), new S());",
+    );
+    assert_eq!(escape_of(&pf, "a"), None, "{}", pf.dump_text());
+}
+
+/// Control: a key binding that is reassigned names no index; its store
+/// merges every position, so `p[1]` may hold `A`.
+#[test]
+fn reassigned_key_compound_merges_positions() {
+    let pf = run(
+        "function c(i: number, ...p: any[]) { let k = 0; k = i; p[k] += 1; const s = p[1]; if (s && s.isStackTrace) s.getLocation(); }
+         c(process.argv.length, new A(), new S());",
     );
     assert!(escape_of(&pf, "a").is_some(), "{}", pf.dump_text());
 }

@@ -43,6 +43,7 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
     let made = m.solver_call(
         call,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -265,6 +266,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(elem),
                     args: c.args.iter().take(2).copied().collect(),
                     spread: vec![],
@@ -290,6 +292,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             m.solver_call(
                 call,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Node(recv),
                     args: vec![],
                     spread: vec![],

@@ -134,6 +134,23 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The node of a computed key: the key expression's own node, or,
+    /// for a read of an immutable binding (`const`, HIR's `mutable: false`
+    /// temps such as the computed key `params[0] += v` spills) whose
+    /// initializer is a numeric literal, that literal's node
+    /// (`Gen::num_literal`): the binding holds nothing else. A read before
+    /// its initialization throws (TDZ) and keys no access at all.
+    pub(crate) fn index_key_node(&mut self, fx: &crate::gen::Fx, index: &Expr) -> NodeId {
+        let i = self.expr_zs(fx, index);
+        if !matches!(index, Expr::LocalGet(_) | Expr::GlobalGet(_)) {
+            return i;
+        }
+        match self.const_key_value(fx.module, index) {
+            Some(crate::gen_const::Const::Num(n)) => self.num_literal(n),
+            _ => i,
+        }
+    }
+
     /// A call's constant primitive argument as its ToPropertyKey spelling.
     pub(crate) fn const_property_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
         use crate::gen_const::Const;
