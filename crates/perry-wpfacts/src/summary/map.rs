@@ -422,6 +422,7 @@ pub fn map_cons(
         ConsoleFormat { reason, agg } => ConsoleFormat { reason, agg: n(agg) },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },
+        ObjTagProbe { t, key } => ObjTagProbe { t, key },
         StrReplace {
             dst,
             recv,
@@ -592,6 +593,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | NativeParent { .. }
             | ShareBuffer { .. }
             | Captures { .. }
+            | ObjTagProbe { .. }
             | StrReplace { .. }
             | ClassReplace { .. }
             | RegExpPattern { .. }

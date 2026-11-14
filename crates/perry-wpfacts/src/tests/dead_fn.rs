@@ -141,3 +141,87 @@ fn other_console_methods_keep_inspect() {
     // `console.table` is not `js_util_format`: unchanged (Inspect).
     assert_ne!(verdict_with("console.table('x', new A());\n"), crate::Verdict::Dead);
 }
+
+// Rule OBJECT-TO-STRING (ECMA-262 7.1.1.1, 20.1.3.6): the string of an
+// object whose ToPrimitive reaches only %Object.prototype.toString% is
+// "[object Object]", which holds no `%`: the console format string beside
+// `new A()` formats nothing, so A's toJSON never runs.
+const OTS: &str = "class A { constructor() { this.v = 1; } toJSON() { return this.w.z; } }
+class B { constructor() { this.v = 1; } }
+";
+fn ots(body: &str) -> crate::Verdict {
+    verdict_of(&format!("{OTS}{body}"))
+}
+#[test]
+fn object_literal_string_is_object_object() {
+    assert_eq!(ots("console.warn('' + { k: 1 }, new A());\n"), crate::Verdict::Dead);
+}
+#[test]
+fn class_instance_without_to_string_is_object_object() {
+    assert_eq!(ots("console.warn('X.' + new B(), new A());\n"), crate::Verdict::Dead);
+}
+#[test]
+fn to_string_tag_getter_runs() {
+    // 20.1.3.6 step 15: Get(O, @@toStringTag) calls the getter.
+    let src = "class T { constructor() { this.v = 1; } get [Symbol.toStringTag]() { return this.w.z; } }
+console.log('X.' + new T());
+";
+    assert_ne!(verdict_of(src), crate::Verdict::Dead);
+}
+#[test]
+fn to_string_tag_getter_result_is_any_string() {
+    let body = "class T { get [Symbol.toStringTag]() { return Math.random() > 2 ? '%j' : 'T'; } }
+console.warn('X.' + new T(), new A());
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}
+#[test]
+fn program_to_string_runs() {
+    let src = "class S { constructor() { this.v = 1; } toString() { return this.w.z; } }
+console.log('X.' + new S());
+";
+    assert_ne!(verdict_of(src), crate::Verdict::Dead);
+}
+#[test]
+fn program_to_string_result_is_its_string() {
+    let body = "class S { toString() { return Math.random() > 2 ? '%j' : 's'; } }
+console.warn('X.' + new S(), new A());
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}
+#[test]
+fn program_value_of_result_is_its_string() {
+    // `+` is ToPrimitive hint default: valueOf first (7.1.1.1 step 3).
+    let body = "class V { valueOf() { return Math.random() > 2 ? '%j' : 'v'; } }
+console.warn('X.' + new V(), new A());
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}
+#[test]
+fn inherited_program_to_string_is_its_string() {
+    let body = "class P { toString() { return Math.random() > 2 ? '%j' : 'p'; } }
+class C extends P {}
+console.warn('X.' + new C(), new A());
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}
+#[test]
+fn escaped_instance_is_any_string() {
+    let body = "const b = new B();
+(globalThis as any).sink(b);
+console.warn('X.' + b, new A());
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}
+#[test]
+fn top_value_is_any_string() {
+    assert_ne!(ots("console.warn('X.' + JSON.parse(process.env.J || '{}'), new A());\n"), crate::Verdict::Dead);
+}
+#[test]
+fn later_written_to_string_is_its_string() {
+    let body = "const b: any = new B();
+console.warn('X.' + b, new A());
+b.toString = () => (Math.random() > 2 ? '%j' : 'b');
+";
+    assert_ne!(ots(body), crate::Verdict::Dead);
+}

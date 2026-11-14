@@ -2047,6 +2047,7 @@ impl Model {
             } => format!("nativeparent {n} {tm} {expected} {reason}"),
             Cons::ShareBuffer { ta } => format!("sharebuffer {n} {ta}"),
             Cons::Captures { rec, pat } => format!("captures {n} {rec} {pat}"),
+            Cons::ObjTagProbe { t, key } => format!("objtagprobe {n} {t} {key}"),
             Cons::StrReplace { dst, .. } => format!("strreplace {n} {dst}"),
             Cons::ClassReplace { dst, .. } => format!("classreplace {n} {dst}"),
             Cons::RegExpPattern { tok } => format!("regexppattern {n} {tok}"),

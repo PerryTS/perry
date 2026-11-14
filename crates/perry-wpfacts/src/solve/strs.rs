@@ -550,6 +550,109 @@ impl Model {
         toks.into_iter().all(|t| self.native_fn_text(t, true))
     }
 
+    /// Rule OBJECT-TO-STRING, ECMA-262 7.1.17 ToString -> 7.1.1
+    /// ToPrimitive -> 7.1.1.1 OrdinaryToPrimitive -> 20.1.3.6
+    /// Object.prototype.toString: an object of a program class, literal,
+    /// `new f()` or `Object.create(p)` whose chain is program prototypes
+    /// ending at %Object.prototype% gives "[object Object]" while no
+    /// object of the chain holds `@@toPrimitive`, `toString`, `valueOf` or
+    /// `@@toStringTag` other than the intrinsic's (the probes,
+    /// `Cons::ObjTagProbe`, watch that monotonically) and none escaped (unknown
+    /// code could write them; `mark_escaped` widens) or is hard or
+    /// relinked. %Object.prototype% is add- and replace-locked
+    /// (perry-abi lock.rs): no `toString` replaced, no `@@toPrimitive` or
+    /// `@@toStringTag` added; the program writes none of the four there
+    /// either. The chain, or `None` (any string: arrays join, functions
+    /// show their source, builtin and host objects, ⊤, markers).
+    pub(crate) fn object_tag_chain(&mut self, t: Tok) -> Option<Vec<Tok>> {
+        if t == TOP || self.is_marker(t) {
+            return None;
+        }
+        let ordinary = match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Class { .. } | TmplKind::Lit { .. } | TmplKind::FnInst { .. } | TmplKind::ObjCreate { .. }
+            ),
+            _ => false,
+        };
+        if !ordinary {
+            return None;
+        }
+        let op = *self.tok_index.get(&TokKind::ObjectProto)?;
+        let mut chain = vec![t];
+        let mut i = 0;
+        while i < chain.len() {
+            let h = chain[i];
+            i += 1;
+            if self.is_escaped(h) || self.hard.contains_key(&h) || self.super_relink.contains(&h) || self.objtag_open.contains(&h) {
+                return None;
+            }
+            let pn = *self.proto_node.get(&h)?;
+            let pr = &self.nodes[pn as usize];
+            if pr.prim != 0 || pr.pts.is_empty() {
+                return None;
+            }
+            for p in pr.pts.to_sorted() {
+                if p == op {
+                    continue;
+                }
+                if !matches!(self.toks[p as usize], TokKind::Proto(_)) {
+                    return None;
+                }
+                if !chain.contains(&p) {
+                    chain.push(p);
+                }
+            }
+        }
+        for k in [crate::model::WK_TO_PRIMITIVE, "toString", "valueOf", crate::model::WK_TO_STRING_TAG] {
+            let a = self.atom(k);
+            if crate::builtins::native_written(self, op, a) {
+                return None;
+            }
+        }
+        Some(chain)
+    }
+
+    /// The four [[Get]]s OrdinaryToPrimitive and Object.prototype.toString
+    /// make on `t` (`Cons::ObjTagProbe`), once per object.
+    fn objtag_probe(&mut self, t: Tok) {
+        if !self.objtag_probed.insert(t) {
+            return;
+        }
+        let recv = self.node_l("objtag-recv");
+        for (i, k) in [crate::model::WK_TO_PRIMITIVE, "toString", "valueOf", crate::model::WK_TO_STRING_TAG]
+            .into_iter()
+            .enumerate()
+        {
+            let key = Key::Named(self.atom(k));
+            let dst = self.node_l("objtag-read");
+            self.cons(dst, Cons::ObjTagProbe { t, key: i as u8 });
+            self.cons(recv, Cons::Load { key, dst });
+        }
+        self.add_tok(recv, t);
+    }
+
+    /// Is `f` %Object.prototype.<name>%?
+    pub(crate) fn object_proto_native(&self, f: Tok, name: &str) -> bool {
+        let want = format!("Object.prototype.{name}");
+        match self.toks[f as usize] {
+            TokKind::BuiltinFn(Native::Member { identity, .. }) => identity == want,
+            TokKind::Builtin(ns) => crate::builtins::ns_by_name(&want) == Some(ns),
+            _ => false,
+        }
+    }
+
+    /// ToString of object `t` may be any string: every String node that
+    /// took its "[object Object]" is any string.
+    pub(crate) fn objtag_widen(&mut self, t: Tok) {
+        if !self.objtag_open.insert(t) {
+            return;
+        }
+        for d in self.objtag_watch.remove(&t).unwrap_or_default() {
+            self.add_s(d, &[], prim::STR, STRS_TOP);
+        }
+    }
+
     fn excl_parts(&mut self, n: NodeId) -> Option<(Vec<Result<String, (u128, String)>>, bool)> {
         let (p, toks, strs, rg) = {
             let x = &self.nodes[n as usize];
@@ -599,17 +702,33 @@ impl Model {
                 out.push(Ok(text.to_string()));
             }
         }
-        if !toks.is_empty() {
-            if self.realm_held {
+        // Rule OBJECT-TO-STRING: an ordinary object whose ToPrimitive
+        // reaches only %Object.prototype.toString% is "[object Object]"
+        // (`object_tag_chain`); a builtin function its NativeFunction text.
+        let (mut native, mut plain) = (false, false);
+        for t in toks {
+            if let Some(chain) = self.objtag_sink.and_then(|d| self.object_tag_chain(t).map(|c| (d, c))) {
+                let (d, chain) = chain;
+                self.objtag_probe(t);
+                for c in chain {
+                    let w = self.objtag_watch.entry(c).or_default();
+                    if !w.contains(&d) {
+                        w.push(d);
+                    }
+                }
+                plain = true;
+            } else if !self.realm_held && self.native_fn_text(t, false) {
+                native = true;
+            } else {
                 return None;
             }
-            for t in toks {
-                if !self.native_fn_text(t, false) {
-                    return None;
-                }
-            }
+        }
+        if native {
             out.push(Err((0, NATIVE_CODE_TAIL.to_string())));
             gated = true;
+        }
+        if plain {
+            out.push(Ok("[object Object]".to_string()));
         }
         // A part whose strings another part all holds adds no string: `c`
         // is in `X·s` when `c` ends with `s` and its head holds no character
@@ -648,7 +767,23 @@ impl Model {
         let (lp, lg) = self.excl_parts(l)?;
         let (rp, rg) = self.excl_parts(r)?;
         if lp.iter().chain(&rp).all(|p| p.is_ok()) {
-            return None;
+            // Rule OBJECT-TO-STRING: constants beside an object's
+            // "[object Object]" (`excl_parts`) are the concatenations of
+            // the texts; constants alone are rule M3's (`plus_const`).
+            if !lp.iter().chain(&rp).any(|p| p.as_ref().is_ok_and(|c| c == "[object Object]")) {
+                return None;
+            }
+            let mut out = Vec::new();
+            for a in &lp {
+                for b in &rp {
+                    if let (Ok(c), Ok(t)) = (a, b) {
+                        out.push(self.atom(&format!("{c}{t}")));
+                    }
+                }
+            }
+            out.sort_unstable();
+            out.dedup();
+            return Some((self.str_set(&out), lg || rg));
         }
         let alone = lp.len() == 1;
         let mut out = Vec::new();

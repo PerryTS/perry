@@ -335,6 +335,9 @@ impl Model {
             }
         }
         self.escaped.insert(t, reason);
+        if self.objtag_watch.contains_key(&t) {
+            self.objtag_widen(t);
+        }
         self.ta_len_open(t);
         self.index_slots_merge(t);
         self.arr_len_top(t);

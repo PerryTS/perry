@@ -672,6 +672,12 @@ pub enum Cons {
     /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
     /// derived groups hold the captures (`Model::capture_strs`).
     Captures { rec: Tok, pat: u32 },
+    /// Rule OBJECT-TO-STRING: the node is what [[Get]] of key `key` (0
+    /// `@@toPrimitive`, 1 `toString`, 2 `valueOf`, 3 `@@toStringTag`)
+    /// finds on object `t`: anything but `undefined` (keys 0, 3) or
+    /// `%Object.prototype.toString%` / `%Object.prototype.valueOf%` (keys
+    /// 1, 2) makes ToString(`t`) any string (`Model::objtag_widen`).
+    ObjTagProbe { t: Tok, key: u8 },
     /// Rule M6: the node is the receiver, search string or replacement of
     /// `String.prototype.replace` (22.1.3.19): `dst` holds a String, the
     /// one result of constants (`Model::replace_strs`).
@@ -927,6 +933,7 @@ impl Cons {
             Cons::AccessorKeyed { .. } => "accessorkeyed",
             Cons::ShareBuffer { .. } => "sharebuffer",
             Cons::Captures { .. } => "captures",
+            Cons::ObjTagProbe { .. } => "objtagprobe",
             Cons::StrReplace { .. } => "strreplace",
             Cons::ClassReplace { .. } => "classreplace",
             Cons::RegExpPattern { .. } => "regexppattern",

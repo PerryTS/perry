@@ -1826,6 +1826,16 @@ pub struct Model {
     /// exists (`realm_held`): any string once it does
     /// (`Model::realm_widen_strs`).
     pub(crate) realm_str_dsts: Vec<NodeId>,
+    /// Rule OBJECT-TO-STRING (ECMA-262 20.1.3.6): objects whose ToString
+    /// may be other than "[object Object]" (`objtag_open`), the objects
+    /// probed (`Cons::ObjTagProbe`), the String nodes that took
+    /// "[object Object]" for each object of a chain (any string once one
+    /// opens or escapes), and the Plus result the current `plus_strs` runs
+    /// for (`None`: no object gives that text).
+    pub(crate) objtag_open: crate::pts::FxHashSet<Tok>,
+    pub(crate) objtag_probed: crate::pts::FxHashSet<Tok>,
+    pub(crate) objtag_watch: crate::pts::FxHashMap<Tok, Vec<NodeId>>,
+    pub(crate) objtag_sink: Option<NodeId>,
     pub(crate) regexp_pending: crate::pts::FxHashMap<Tok, Vec<(Tok, NodeId)>>,
     pub(crate) regexp_pending_recs: crate::pts::FxHashSet<Tok>,
     /// Rule M8: each regex literal template whose `source` is its pattern
