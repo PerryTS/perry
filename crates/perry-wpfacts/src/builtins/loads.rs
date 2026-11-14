@@ -1314,7 +1314,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     // stored.
                     (Key::Named(a), Some(_)) if bobj_declared_getter(m, t, what, a).is_some() => {
                         let e = bobj_declared_getter(m, t, what, a).expect("declared");
-                        super::effects::getter_load(m, e, t, a, dst);
+                        // The locked getter that runs is the realm's own: on
+                        // a regex literal whose pattern is its own
+                        // EscapeRegExpPattern, `source` returns that one
+                        // String (rule M8, `regexp_literal_source`), the
+                        // exact subset of the declared result.
+                        let n = m.atoms[a as usize].clone();
+                        match regexp_literal_source(m, t, &n) {
+                            Some(s) => m.add_s(dst, &[], prim::STR, s),
+                            None => super::effects::getter_load(m, e, t, a, dst),
+                        }
                         if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                             opaque_member(m, dst);
                         }
