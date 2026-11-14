@@ -27,7 +27,8 @@
 //!   `-order_file` of exact names (`hot_text_order_macho`), opt-in until it is
 //!   measured there. COFF, wasm, Android and HarmonyOS keep today's layout.
 //! * `--function-order` (a per-program recording) replaces the default order.
-//! * `PERRY_HOT_TEXT_ORDER=off` keeps today's layout.
+//! * `PERRY_HOT_TEXT_ORDER=off` keeps today's layout. The same script carries
+//!   the default hot-data order (`hot_data_order`, `PERRY_HOT_DATA_ORDER`).
 //! * lld refuses an output section inserted before itself ("unable to insert
 //!   .text before .text"), so its script names the hot run's output section
 //!   `.text.perry_hot` and leaves the rest of `.text` to the linker's own
@@ -238,16 +239,24 @@ fn place<'a>(
     }
 }
 
-/// The linker script: one `.text` rule that takes the placed sections, in
-/// order, and then everything the default rule takes, in the default order
-/// (so the default rule that follows it is left empty and `.text` stays one
-/// output section); then the JS text rule every ELF link passes. The two
-/// symbols bound the run for `scripts/hot_text_order.py` (symbol-table entries
-/// only: a stripped binary carries nothing of them).
 /// The output section of the hot run under lld (see the module notes).
 pub(super) const LLD_HOT_SECTION: &str = ".text.perry_hot";
 
+/// The text rules and the JS text rule every ELF link passes.
+#[cfg(test)]
 fn script(placement: &Placement, lld: bool) -> String {
+    let mut out = text_rules(placement, lld);
+    out.push_str(perry_codegen::function_order::JS_TEXT_LINK_RULE);
+    out
+}
+
+/// The text rules: one `.text` rule that takes the placed sections, in
+/// order, and then everything the default rule takes, in the default order
+/// (so the default rule that follows it is left empty and `.text` stays one
+/// output section). The two symbols bound the run for
+/// `scripts/hot_text_order.py` (symbol-table entries only: a stripped binary
+/// carries nothing of them).
+fn text_rules(placement: &Placement, lld: bool) -> String {
     let mut out = format!(
         "/* perry default hot-text order: listed={} resolved={} core={}/{} sections={} */\nSECTIONS {{\n {} : {{\n  __perry_rt_hot_text_start = .;\n",
         placement.listed,
@@ -264,13 +273,11 @@ fn script(placement: &Placement, lld: bool) -> String {
     }
     if lld {
         out.push_str("  __perry_rt_hot_text_end = .;\n }\n} INSERT BEFORE .text;\n");
-        out.push_str(perry_codegen::function_order::JS_TEXT_LINK_RULE);
         return out;
     }
     out.push_str(
         "  __perry_rt_hot_text_end = .;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
     );
-    out.push_str(perry_codegen::function_order::JS_TEXT_LINK_RULE);
     out
 }
 
@@ -313,7 +320,7 @@ fn archive_functions(archive: &Path, out: &mut Vec<(String, String, u64)>) -> Op
 
 /// The cache identity of a resolved script: the list and each archive's path,
 /// size and modification time.
-fn fingerprint(archives: &[&Path]) -> Option<u64> {
+fn fingerprint(archives: &[&Path], text: bool, data: Option<bool>) -> Option<u64> {
     // FNV-1a: stable across processes and toolchains, unlike `DefaultHasher`.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {
@@ -323,6 +330,12 @@ fn fingerprint(archives: &[&Path]) -> Option<u64> {
         }
     };
     feed(DEFAULT_ORDER.as_bytes());
+    // Today's name for today's script: the data order and the text switch
+    // enter only when the data order is on.
+    if let Some(rodata) = data {
+        feed(super::hot_data_order::DEFAULT_ORDER.as_bytes());
+        feed(&[u8::from(text), u8::from(rodata)]);
+    }
     for archive in archives {
         let meta = std::fs::metadata(archive).ok()?;
         let modified = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
@@ -333,18 +346,23 @@ fn fingerprint(archives: &[&Path]) -> Option<u64> {
     Some(h)
 }
 
-/// The link script of a native ELF link that takes the default order: the
-/// hot run of `archives` (the runtime archives the link may pull from) and
-/// the JS text rule. `None` keeps today's script: the switch is off, the
-/// program has its own order, or an archive cannot be read. Never an error:
-/// the order is layout only.
+/// The link script of a native ELF link that takes the default orders: the
+/// hot-text run of `archives` (the runtime archives the link may pull from),
+/// when `data_order` the hot-data runs (`hot_data_order`; `rodata` where the
+/// `.rodata` rule can be placed), and the JS text rule. `None` keeps today's
+/// script: both switches are off, the program has its own order, or an
+/// archive cannot be read. Never an error: the orders are layout only.
 pub(super) fn link_script(
     cache: &Path,
     archives: &[&Path],
     lld: bool,
+    data_order: bool,
+    rodata: bool,
     verbose: u8,
 ) -> Option<PathBuf> {
-    if !enabled() || archives.is_empty() {
+    let text = enabled();
+    let data = data_order && super::hot_data_order::enabled();
+    if !(text || data) || archives.is_empty() {
         return None;
     }
     // A recording build is laid out by its own instrumentation, and a
@@ -355,30 +373,44 @@ pub(super) fn link_script(
     ) {
         return None;
     }
-    let fingerprint = fingerprint(archives)?;
+    let rodata = rodata || lld;
+    let fingerprint = fingerprint(archives, text, data.then_some(rodata))?;
     let dir = cache.join("function-order");
     let flavor = if lld { ".lld" } else { "" };
     let path = dir.join(format!("hot-text-{fingerprint:016x}.v1{flavor}.ld"));
     if !path.is_file() {
-        let (ranks, tiers) = parse_order(DEFAULT_ORDER);
-        let mut functions = Vec::new();
-        for archive in archives {
-            archive_functions(archive, &mut functions)?;
+        let mut out = String::new();
+        if text {
+            let (ranks, tiers) = parse_order(DEFAULT_ORDER);
+            let mut functions = Vec::new();
+            for archive in archives {
+                archive_functions(archive, &mut functions)?;
+            }
+            let placement = place(
+                &ranks,
+                &tiers,
+                functions
+                    .iter()
+                    .map(|(n, s, a)| (n.as_str(), s.as_str(), *a)),
+            );
+            if !placement.sections.is_empty() {
+                out.push_str(&text_rules(&placement, lld));
+            }
         }
-        let placement = place(
-            &ranks,
-            &tiers,
-            functions
-                .iter()
-                .map(|(n, s, a)| (n.as_str(), s.as_str(), *a)),
-        );
-        if placement.sections.is_empty() {
+        if data {
+            let placement = super::hot_data_order::placement(archives)?;
+            if !placement.is_empty() {
+                out.push_str(&super::hot_data_order::rules(&placement, lld, rodata));
+            }
+        }
+        if out.is_empty() {
             return None;
         }
+        out.push_str(perry_codegen::function_order::JS_TEXT_LINK_RULE);
         // Concurrent links share the cache: write a sibling, then rename.
         let tmp = path.with_extension(format!("tmp{}", std::process::id()));
         if std::fs::create_dir_all(&dir).is_err()
-            || std::fs::write(&tmp, script(&placement, lld)).is_err()
+            || std::fs::write(&tmp, out).is_err()
             || std::fs::rename(&tmp, &path).is_err()
         {
             let _ = std::fs::remove_file(&tmp);
@@ -386,10 +418,19 @@ pub(super) fn link_script(
         }
     }
     if verbose > 0 {
-        // The script's first line says how much of the list the archives hold.
+        // The summary comments say how much of each list the archives hold.
         let text = std::fs::read_to_string(&path).unwrap_or_default();
-        let summary = text.lines().next().unwrap_or_default();
-        eprintln!("[hot-text] {}: {summary}", path.display());
+        for summary in text
+            .lines()
+            .filter(|l| l.starts_with("/* perry default hot-"))
+        {
+            let tag = if summary.contains("hot-data") {
+                "hot-data"
+            } else {
+                "hot-text"
+            };
+            eprintln!("[{tag}] {}: {summary}", path.display());
+        }
     }
     Some(path)
 }

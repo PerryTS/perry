@@ -13,6 +13,7 @@ pub(super) fn add_link_args(
     xlinker_apple: bool,
     runtime_archives: &[&Path],
     lld: bool,
+    data_order: bool,
     verbose: u8,
 ) -> Result<()> {
     let dir = cache.join("function-order");
@@ -24,11 +25,18 @@ pub(super) fn add_link_args(
             // each one nothing references); gather them into the one JS text
             // output section whose bounds the stack capture reads.
             if elf {
-                // The runtime's default hot-text order, with the same JS
-                // text rule; without it, the rule alone as before.
-                if let Some(script) =
-                    super::hot_text_order::link_script(cache, runtime_archives, lld, verbose)
-                {
+                // The runtime's default hot-text and hot-data orders, with
+                // the same JS text rule; without them, the rule alone as
+                // before. The `.rodata` half needs the x86-64 GNU ld script's
+                // page alignment in front of `.rodata` (`hot_data_order`).
+                if let Some(script) = super::hot_text_order::link_script(
+                    cache,
+                    runtime_archives,
+                    lld,
+                    data_order,
+                    cfg!(target_arch = "x86_64"),
+                    verbose,
+                ) {
                     cmd.arg(format!("-Wl,-T,{}", script.display()));
                     return Ok(());
                 }

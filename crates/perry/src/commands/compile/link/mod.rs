@@ -48,6 +48,7 @@ mod elf_linker;
 mod function_layout;
 mod glibc_version;
 mod harmonyos_objects;
+mod hot_data_order;
 mod hot_text_order;
 mod hot_text_order_macho;
 mod link_cache;
