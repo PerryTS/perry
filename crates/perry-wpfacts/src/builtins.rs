@@ -1696,6 +1696,29 @@ pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
     matches!(what, "RegExp" | "Promise")
 }
 
+/// Does the realm's constructor create a builtin object of kind `what` with
+/// no own property at all, only internal slots: Map, Set, WeakMap, WeakSet
+/// (ECMA-262 24.1.1.1, 24.2.2.1, 24.3.1.1, 24.4.1.1), Date (21.4.2.1),
+/// ArrayBuffer, SharedArrayBuffer, DataView (25.1.4.1, 25.2.3.1, 25.3.2.1),
+/// WeakRef, FinalizationRegistry (26.1.1.1, 26.2.1.1)? A copy of its own
+/// enumerable properties reads only what the program stored on it (its
+/// fields). Only for a birth of this unit's code (`site != u32::MAX`).
+pub(crate) fn realm_born_without_own_props(what: &str) -> bool {
+    matches!(
+        what,
+        "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Date"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "WeakRef"
+            | "FinalizationRegistry"
+    )
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
