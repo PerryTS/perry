@@ -1601,22 +1601,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         right.as_ref()
                     };
-                    let others: Vec<String> = literal_union_members(ctx, operand)
-                        .into_iter()
-                        .filter(|m| *m != lit)
-                        .take(4)
-                        .collect();
-                    let other_boxes: Vec<String> = others
-                        .iter()
-                        .map(|m| super::lower_expr(ctx, &Expr::String(m.clone())))
-                        .collect::<Result<_>>()?;
-                    let bit = lower_string_literal_strict_eq_with_others(
-                        ctx,
-                        &val,
-                        &lit_box,
-                        &lit,
-                        &other_boxes,
-                    );
+                    // An operand the whole-program facts prove holds, as
+                    // Strings, only pool atoms (`expr::literal_atoms`):
+                    // the pointer compare is the whole test.
+                    let atom = super::literal_atoms::strict_eq(ctx, operand, &val, &lit_box, &lit);
+                    let bit = match atom {
+                        Some(bit) => bit,
+                        None => {
+                            let others: Vec<String> = literal_union_members(ctx, operand)
+                                .into_iter()
+                                .filter(|m| *m != lit)
+                                .take(4)
+                                .collect();
+                            let other_boxes: Vec<String> = others
+                                .iter()
+                                .map(|m| super::lower_expr(ctx, &Expr::String(m.clone())))
+                                .collect::<Result<_>>()?;
+                            lower_string_literal_strict_eq_with_others(
+                                ctx,
+                                &val,
+                                &lit_box,
+                                &lit,
+                                &other_boxes,
+                            )
+                        }
+                    };
                     let blk = ctx.block();
                     let bit_final = if matches!(op, CompareOp::Ne) {
                         blk.xor(I1, &bit, "true")

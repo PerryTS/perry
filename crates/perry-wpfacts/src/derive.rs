@@ -128,6 +128,9 @@ pub struct FieldFacts {
     /// (`literal_strings`, over every token of the template): never with an
     /// escaped template or a ⊤ kind.
     pub literal_strings: bool,
+    /// `literal_strings`, and every such literal is one the string pool
+    /// atomises (`literal_strings::atoms`).
+    pub literal_atoms: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Hash)]
@@ -282,6 +285,7 @@ impl FieldFacts {
         self.writers_post = self.writers_post.max(o.writers_post);
         self.kind.join(&o.kind);
         self.literal_strings &= o.literal_strings;
+        self.literal_atoms &= o.literal_atoms;
         self.ta_stable &= o.ta_stable;
         // The join, not the meet: the row must hold for either class.
         self.rep = crate::bindings::Rep::join(self.rep, o.rep);
@@ -959,18 +963,22 @@ fn template_facts(
         } else {
             rep
         };
-        let literal_strings = !kind.top && !is_accessor && {
+        let (literal_strings, literal_atoms) = if !kind.top && !is_accessor {
             let nodes: Vec<NodeId> = ts
                 .iter()
                 .filter_map(|t| m.fields.get(&(*t, a)).copied())
                 .collect();
-            crate::literal_strings::holds(m, &nodes)
+            let holds = crate::literal_strings::holds(m, &nodes);
+            (holds, holds && crate::literal_strings::atoms(m, &nodes))
+        } else {
+            (false, false)
         };
         fields.push(FieldFacts {
             rep,
             zero_tol,
             rest: false,
             literal_strings,
+            literal_atoms,
             fns,
             ta_stable,
             ta_kind,

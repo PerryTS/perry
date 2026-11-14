@@ -130,6 +130,11 @@ pub(crate) struct FieldProof {
     /// literals' values (`ElisionFacts::literal_string_fields`): what an
     /// unguarded store writes there is one (`expr::literal_strings`).
     pub literal_strings: bool,
+    /// Every class's field holds, as Strings, only pool atoms
+    /// (`ElisionFacts::literal_atom_fields`): an unguarded read equals a
+    /// pooled literal exactly when it is its pointer
+    /// (`expr::literal_atoms`).
+    pub literal_atoms: bool,
 }
 
 impl FieldProof {
@@ -757,6 +762,14 @@ pub(crate) fn prove(
             && recv.class_ids.iter().all(|&c| {
                 ctx.wpfacts
                     .literal_string_fields
+                    .contains(&(c, property.to_string()))
+            }),
+        literal_atoms: !guarded
+            && !maybe_absent
+            && !ctx.wpfacts.literal_atom_fields.is_empty()
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .literal_atom_fields
                     .contains(&(c, property.to_string()))
             }),
     };

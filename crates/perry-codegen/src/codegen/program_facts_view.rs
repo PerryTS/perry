@@ -401,6 +401,10 @@ pub struct ElisionFacts {
     /// born shared, never appended to in place, so a copy of one needs no
     /// string demote (`expr::literal_strings`).
     pub literal_string_locals: std::collections::BTreeSet<u32>,
+    /// Locals whose every String is the string pool's one String of its
+    /// spelling (wpfacts `BindingFacts::literal_atoms`): `x === "lit"` is
+    /// one pointer compare (`expr::literal_atoms`).
+    pub literal_atom_locals: std::collections::BTreeSet<u32>,
     /// Locals whose Arrays keep their length while the function that
     /// declares them runs (wpfacts `BindingFacts::stable_length`), with
     /// `stable_front` (`expr::held_len`).
@@ -426,6 +430,10 @@ pub struct ElisionFacts {
     /// such Strings into (wpfacts `FieldFacts::literal_strings`,
     /// `FieldProof::literal_strings`).
     pub literal_string_fields: std::collections::BTreeSet<(u32, String)>,
+    /// Class fields (class id, key) whose every String is the string
+    /// pool's one String of its spelling (wpfacts
+    /// `FieldFacts::literal_atoms`, `FieldProof::literal_atoms`).
+    pub literal_atom_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
     /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
@@ -615,6 +623,7 @@ impl ElisionFacts {
             && self.const_length_inputs.is_empty()
             && self.immutable_arrays.is_empty()
             && self.literal_string_locals.is_empty()
+            && self.literal_atom_locals.is_empty()
             && self.stable_length_locals.is_empty()
             && self.named_length_locals.is_empty()
             && self.const_arrays.is_empty()

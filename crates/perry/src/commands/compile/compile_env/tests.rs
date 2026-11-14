@@ -576,6 +576,17 @@ fn literal_strings_switch_is_a_cache_input() {
     );
 }
 
+/// Literal atoms: the switch changes how `x === "lit"` is lowered for an
+/// operand that holds only pool atoms, so `=0` must never reuse an `=1`
+/// object.
+#[test]
+fn literal_atoms_switch_is_a_cache_input() {
+    assert!(
+        COMPILE_ENV_VARS.contains(&"PERRY_FACTS_LITERAL_ATOMS"),
+        "PERRY_FACTS_LITERAL_ATOMS must key the compile caches"
+    );
+}
+
 /// The list birth capacity: the switch (and its slot count) changes the
 /// exported facts and every `let x = []` birth that reserves them, so `=0`
 /// must never reuse an object built with a capacity.

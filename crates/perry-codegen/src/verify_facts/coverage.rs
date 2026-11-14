@@ -62,6 +62,9 @@ pub(crate) enum Fact {
     /// A call's result kinds (wpfacts `call_kinds`): a string operand.
     CallKinds,
     LiteralString,
+    /// A local or a field holds, as Strings, only pool atoms (wpfacts
+    /// `literal_strings::atoms`).
+    LiteralAtom,
     /// A loop holds a local Array's length across its calls (wpfacts
     /// `held_lengths`).
     HeldLength,
@@ -136,6 +139,7 @@ impl Fact {
             Self::WideKey => "wide key",
             Self::CallKinds => "call kinds",
             Self::LiteralString => "literal string",
+            Self::LiteralAtom => "literal atom",
             Self::HeldLength => "held length",
             Self::NamedLength => "named length",
             Self::QuietSites => "quiet sites",

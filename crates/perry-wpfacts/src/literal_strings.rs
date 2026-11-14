@@ -27,7 +27,9 @@
 //! alias must catch. The dump (`PERRY_FACTS_DUMP`) prints one
 //! `# lit_strings` line per local and per field the fact holds for, with
 //! its constants, and one per other String field with what ends the fact
-//! (`refused=top:n<node>`, `any_string:n<node>`, `kind_top`, `accessor`).
+//! (`refused=top:n<node>`, `any_string:n<node>`, `kind_top`, `accessor`);
+//! one `# lit_atoms` line per local and field that holds only pool atoms
+//! (`atoms`; `PERRY_FACTS_LITERAL_ATOMS=0` exports none).
 
 use crate::gen::Gen;
 use crate::model::{prim, Atom, Model, NodeId, STRS_TOP, TOP};
@@ -105,6 +107,40 @@ pub(crate) fn holds(m: &Model, nodes: &[NodeId]) -> bool {
     constants(m, nodes).is_some()
 }
 
+/// `PERRY_FACTS_LITERAL_ATOMS=0` turns `atoms` off.
+pub fn atoms_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_LITERAL_ATOMS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The longest literal the string pool atomises, in bytes (perry-runtime
+/// `string/intern.rs` `INTERN_MAX_BYTE_LEN`, `js_string_pool_atom`).
+const ATOM_MAX_BYTE_LEN: usize = 64;
+
+/// Literal atoms (`BindingFacts::literal_atoms`,
+/// `FieldFacts::literal_atoms`): `constants` holds for `nodes`, and every
+/// constant is a literal the string pool atomises (not empty, at most
+/// `ATOM_MAX_BYTE_LEN` bytes). The pool holds one String per such spelling
+/// (an image record named by its spelling program-wide, or the agent's one
+/// property atom of it), and a String that reaches such a node is a
+/// literal's own value by an unbroken chain of copies (module docs). So
+/// every String the node holds IS the pool's String of its spelling: it
+/// equals a pooled literal exactly when it is that literal's pointer,
+/// which is what codegen consumes (`expr::literal_atoms`: `x === "lit"` is
+/// one pointer compare). Under the negative control `litstr` any node that
+/// may hold a String is claimed.
+pub(crate) fn atoms(m: &Model, nodes: &[NodeId]) -> bool {
+    atoms_enabled()
+        && constants(m, nodes).is_some_and(|atoms| {
+            atoms.iter().all(|&a| {
+                let s = &m.atoms[a as usize];
+                !s.is_empty() && s.len() <= ATOM_MAX_BYTE_LEN
+            })
+        })
+}
+
 /// The probe (module docs): the locals, then the fields of `templates`
 /// that carry the fact.
 pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<String> {
@@ -132,6 +168,9 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                     name.replace(' ', "_"),
                     show(&atoms)
                 ));
+                if self::atoms(m, &nodes.of(n)) {
+                    out.push(format!("# lit_atoms module={mi} local={id}"));
+                }
             }
         }
     }
@@ -157,6 +196,9 @@ pub(crate) fn probe(g: &Gen, templates: &[crate::derive::TemplateFacts]) -> Vec<
                     f.key,
                     show(&constants(m, &nodes).unwrap_or_default())
                 ));
+                if f.literal_atoms {
+                    out.push(format!("# lit_atoms field {}.{}", tf.display, f.key));
+                }
             } else if f.kind.top || f.kind.prims & prim::STR != 0 {
                 // A String field without the fact, and what ends it.
                 let refused = if f.kind.top {

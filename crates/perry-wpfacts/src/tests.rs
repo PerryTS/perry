@@ -125,6 +125,7 @@ mod layout_key;
 mod ledger;
 mod list_caps;
 mod lit_accessor;
+mod literal_atoms;
 mod literal_strings;
 mod locked_builtins;
 mod locked_delete;
