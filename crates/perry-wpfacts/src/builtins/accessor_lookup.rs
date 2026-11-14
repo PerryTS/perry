@@ -21,15 +21,15 @@ pub(crate) fn is_realm_accessor(identity: &str) -> bool {
 /// (`__proto__` 20.1.3.8.1), [[Get]]s the flag keys of `this`
 /// (`RegExp.prototype.flags` 22.2.6.4) or returns `this` (the @@species
 /// getters, 24.1.2.2); a setter takes its one argument: `__proto__` does
-/// `this.[[SetPrototypeOf]](proto)` (20.1.3.8.2), the host's lazy globals
-/// define it as a data property of `this`, the legacy RegExp statics do
+/// `this.[[SetPrototypeOf]](proto)` (20.1.3.8.2), the crypto streams'
+/// `_readableState` / `_writableState` define it under their key, the legacy RegExp statics do
 /// ToString of it (Annex B). A receiver of the wrong brand throws a
 /// TypeError (an Error the realm makes). No step hands `this` or an argument
 /// to code the realm does not name, so neither escapes: `this` is read by
 /// [[Get]] under any key (whose program getters run on it), its prototype is
 /// read and, with an argument, replaced (the `Object.setPrototypeOf`
-/// predicate: E6 and the prototype edge), and the argument may become a data
-/// property of it. No getter returns a value it reads from `this`: the
+/// predicate: E6 and the prototype edge), and the argument may become its
+/// `_readableState` / `_writableState` data property. No getter returns a value it reads from `this`: the
 /// result is an internal-slot primitive, `this` (@@species), its prototype
 /// (`__proto__`), a string (`flags`), or a host value no receiver decides
 /// (the lazy global getters return a host module object): ⊤.
@@ -85,15 +85,28 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
             },
         );
         m.cons(n, Cons::ProtoFrom { src: v });
-        let site = m.anon_post_site("realm accessor setter (data property)");
-        m.cons(
-            n,
-            Cons::Store {
-                key: Key::any(),
-                src: v,
-                site,
-            },
-        );
+        // One realm setter makes its argument a property of `this`: the
+        // `_readableState` / `_writableState` setters of the crypto stream
+        // prototypes define it as a data property under their own key
+        // (perry-runtime node_stream/native_hooks.rs `lazy_state_set`).
+        // No other does: `__proto__` only relinks (property_ops/common.rs
+        // `legacy_dunder_proto_set`); `localStorage`/`sessionStorage`
+        // (web_storage.rs `storage_global_setter`), `Module.prototype.parent`
+        // (module_cjs.rs) and the `fs` stream exports
+        // (callable_exports.rs `fs_namespace_descriptor_setter_thunk`)
+        // ignore it; the stream state setters (node_stream/proto_methods.rs
+        // `stream_property_set`) write the native state record; the http
+        // setters (node_http_prototypes.rs `http_setter_thunk`) reach a
+        // native handle only; the `EventEmitter` statics, URL, Event and
+        // the `on*` handler setters (event_target/prototype.rs
+        // `event_handler_set`) keep it in captured state or internal slots.
+        // So the argument is stored under exactly those two keys, never
+        // under any key.
+        for name in ["_readableState", "_writableState"] {
+            let key = Key::Named(m.atom(name));
+            let site = m.anon_post_site("realm accessor setter (lazy stream state)");
+            m.cons(n, Cons::Store { key, src: v, site });
+        }
     }
 }
 
