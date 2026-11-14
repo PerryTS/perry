@@ -526,10 +526,10 @@ pub(crate) unsafe fn name_runtime_prototype(
 /// Seal every family's intrinsic prototype of THIS thread's realm. Called once
 /// at the end of `populate_global_this_builtins`, after every runtime-owned
 /// install, link and the prototype-address priming.
-// Inlined into the population (its one-pass copy and its phase copy), as it was
-// when the population was its only caller.
-#[inline(always)]
+// Out of line (the population calls it from its one-pass copy and from its
+// phase copy); listed in the default hot-text order.
 #[optimize(size)]
+#[inline(never)]
 pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     if global.is_null() {
         return;

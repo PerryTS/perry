@@ -548,6 +548,9 @@ pub(crate) fn function_prototype_addr() -> usize {
 /// user code may have reassigned that global by then; priming pins the
 /// intrinsic. A row that cannot resolve yet stays unresolved and keeps its
 /// lazy fallback, exactly as before.
+// Out of line (the population calls it from both of its copies); listed in
+// the default hot-text order.
+#[inline(never)]
 pub(crate) fn prime_prototype_addr_cache() {
     // Every constructor and its prototype already exists in this realm.
     // Capture all seven intrinsic identities before user code can replace a
