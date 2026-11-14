@@ -765,3 +765,63 @@ fn control_r7hold5_undeclared_ctor_value_call_holds() {
     "#;
     assert!(r7hold5_realm_held(&facts(s)));
 }
+
+/// R7HOLD7: `V` escapes when the read under `name` (after a store of an
+/// unknown function under `key` into the JSON Array `a` and
+/// `Object.assign(o, a)`) is called with a `V`.
+fn r7hold7_escapes(key: &str, read: &str, assign: bool) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const j: any = JSON.parse(process.argv[2] ?? "{{}}");
+        const i: number = Number(process.argv[3]);
+        const a: any = j.arr;
+        const o: any = j.obj;
+        const f: any = (globalThis as any)[j.k];
+        a[{key}] = f;
+        {}
+        o{read}(new V());
+        console.log(new V().probe());
+        "#,
+        if assign { "Object.assign(o, a);" } else { "" }
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+/// R7HOLD7 RED, the r7 shape (GLTFLoader.js:2366 `Object.assign(object.userData,
+/// gltfDef.extras)` with `extras` a JSON Array whose elements
+/// InterleavedBufferAttribute.setX wrote, `this.data.array[index * stride +
+/// offset] = x`). The elements of an Array are its own properties under
+/// array-index keys (ECMA-262 10.4.2); `Object.assign` copies them under those
+/// keys (20.1.2.1, 7.3.25 CopyDataProperties): ToString of an index is digits,
+/// never `position`. So `o.position` never reads the stored function.
+#[test]
+fn red_r7hold7_assign_from_array_copies_elements_under_index_keys() {
+    assert!(!r7hold7_escapes("i * j.stride + 1", ".position", true));
+}
+
+/// Control (i): a JSON String key may name `position`: the copy carries it.
+#[test]
+fn control_r7hold7_string_key_store_is_copied_under_its_name() {
+    assert!(r7hold7_escapes("j.k", ".position", true));
+}
+
+/// Control (ii): `'' + j.offset` is a String that may be `position`.
+#[test]
+fn control_r7hold7_concat_key_store_is_copied_under_its_name() {
+    assert!(r7hold7_escapes("'' + j.offset", ".position", true));
+}
+
+/// Control (iii): a Number-only key into the object itself writes its
+/// numeric range, never `position` (existing).
+#[test]
+fn control_r7hold7_number_key_without_copy_no_escape() {
+    assert!(!r7hold7_escapes("i * 2 + 1", ".position", false));
+}
+
+/// Control (iv): `1 + j.s` may be the String `"1x"` (j.s = "x"): a member
+/// really named so is read after the copy.
+#[test]
+fn control_r7hold7_numeric_prefix_name_is_copied() {
+    assert!(r7hold7_escapes("1 + j.s", "[\"1x\"]", true));
+}
