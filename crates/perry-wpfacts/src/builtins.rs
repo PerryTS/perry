@@ -907,6 +907,10 @@ pub(crate) enum NativeFamily {
     /// Native Promise objects (`TmplKind::BObj { what: "Promise" }`, made
     /// by the realm: their [[Prototype]] is `%Promise.prototype%`).
     Promise,
+    /// Primitive Booleans: a member is `%Boolean.prototype%`'s (7.3.2 GetV;
+    /// a Boolean wrapper owns no property, 20.3.4). Only the absent-key
+    /// claim (`derive::family_absent`) is over it; no NativeMember.
+    Bool,
 }
 
 /// Does the intrinsic chain of every value of `fam` define `name` before
@@ -925,6 +929,7 @@ pub(crate) fn native_described(m: &Model, fam: NativeFamily, name: &str, call: b
         NativeFamily::RegExp => regexp_slot_getter(name).map(Mem::Prim),
         NativeFamily::Num => members::intrinsic_member(Family::Num, name),
         NativeFamily::Promise => members::intrinsic_member(Family::Promise, name),
+        NativeFamily::Bool => members::intrinsic_member(Family::Bool, name),
     };
     match mem {
         Some(Mem::Fn) => true,
@@ -978,8 +983,15 @@ pub(crate) fn object_proto_lacks(name: &str) -> bool {
 /// `%Array.prototype%`'s intrinsic description lacks `name`, and so does
 /// `%Object.prototype%`'s, which follows it on an array's chain
 /// (`derive::array_absent`).
-pub(crate) fn array_chain_lacks(name: &str) -> bool {
-    members::member(members::Family::Array, name).is_none()
+pub(crate) fn family_chain_lacks(fam: NativeFamily, name: &str) -> bool {
+    let f = match fam {
+        NativeFamily::Array => members::Family::Array,
+        NativeFamily::Str => members::Family::Str,
+        NativeFamily::Num => members::Family::Num,
+        NativeFamily::Bool => members::Family::Bool,
+        _ => return false,
+    };
+    members::member(f, name).is_none()
 }
 
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
@@ -1241,6 +1253,7 @@ pub(crate) fn native_locked(m: &Model, fam: NativeFamily, a: Atom) -> bool {
         NativeFamily::Buffer => false,
         NativeFamily::Num => members::locked_read(Family::Num, None, name),
         NativeFamily::Promise => members::locked_read(Family::Promise, None, name),
+        NativeFamily::Bool => members::locked_read(Family::Bool, None, name),
     }
 }
 
@@ -2244,7 +2257,10 @@ pub(crate) use methods::{accessor_callable, accessor_receiver, annexb_define};
 ///
 /// `positions`: the objects are position classes (`solve::json_pos`); a
 /// reviver parse keeps one object token for the whole tree.
-pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, Tok) {
+/// Without a reviver the primitives are strings, numbers, booleans and
+/// null (25.5.1 ParseJSON: JSON text has no other value); a reviver's
+/// results are any value (25.5.1.1 InternalizeJSONProperty).
+pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool, reviver: bool) -> (Tok, Tok) {
     let j = site_tmpl(m, call, "json");
     let ja = site_tmpl(m, call, "Array");
     if positions {
@@ -2252,8 +2268,9 @@ pub(crate) fn json_value(m: &mut Model, call: CallId, positions: bool) -> (Tok, 
         return (j, ja);
     }
     let fa = m.field_any(j);
+    let vals = if reviver { prim::ALL } else { prim::JSON };
     for f in [fa, m.field_any(ja)] {
-        m.add_prim(f, prim::ALL);
+        m.add_prim(f, vals);
         m.add_tok(f, j);
         m.add_tok(f, ja);
     }
@@ -3014,11 +3031,11 @@ fn ns_method_inner(
             implicit_args(m, call, "JSON.parse text", Protocol::ToPrimitive);
             let reviver = arg(m, call, 1).is_some();
             let positions = !reviver && m.json_positions;
-            let (j, ja) = json_value(m, call, positions);
+            let (j, ja) = json_value(m, call, positions, reviver);
             let fa = m.field_any(j);
             ret_tok(m, call, j);
             ret_tok(m, call, ja);
-            ret_prim(m, call, prim::ALL);
+            ret_prim(m, call, if reviver { prim::ALL } else { prim::JSON });
             if let Some(rv) = arg(m, call, 1) {
                 // reviver(key, value) with `this` = the holder, an object
                 // or an array

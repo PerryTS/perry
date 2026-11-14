@@ -207,6 +207,11 @@ pub enum Verdict {
     /// key (the `absent_key` walk over the chain): OrdinaryGet (ECMA-262
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
+    /// Also over an Array exotic object (`array_absent`) and over String,
+    /// Number and Boolean primitives (`prim_absent`: GetV's wrapper, 7.3.2)
+    /// whose families' chains lack a key nothing writes there
+    /// (`family_absent`); `undefined`/`null` beside the primitives are
+    /// named as their TypeError arm (the read's own type dispatch).
     OwnDataOrAbsent,
     /// A member read or method call whose receiver node holds only
     /// `undefined` and/or `null` (no object token but closed markers, no ⊤,
@@ -1371,11 +1376,19 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
-        // Throws and a claim naming the TypeError arm of a nullish receiver
-        // (`nullish_arms`) need every value of the sources too.
+        // Throws, a claim naming the TypeError arm of a nullish receiver
+        // (`nullish_arms`) and a member claim on a receiver set of
+        // primitives only (every token a closed marker) need every value of
+        // the sources too: a source that left a value out (`dropped`) holds
+        // a set that is not the whole truth.
         let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
+        let only_prims = prim != 0 && toks.iter().all(|&t| m.closed_marker(t));
         if (verdict == Verdict::Throws
-            || (nullish && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
+            || ((nullish || only_prims)
+                && matches!(
+                    verdict,
+                    Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
+                )))
             && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -1708,6 +1721,8 @@ fn judge(
     let mut slots: Vec<Option<u32>> = Vec::new();
     // Receivers read by an own data lookup or `undefined` (OwnDataOrAbsent).
     let mut own_or_absent = 0usize;
+    // A `JSON.parse` object among them (`json_own_or_absent`).
+    let mut json_obj = false;
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
@@ -1749,6 +1764,11 @@ fn judge(
                     // `undefined` under a key its chain lacks.
                     if !s.is_call && array_absent(m, t, key, s.key) {
                         own_or_absent += 1;
+                        continue;
+                    }
+                    if !s.is_call && json_own_or_absent(m, t, key, s.key) {
+                        own_or_absent += 1;
+                        json_obj = true;
                         continue;
                     }
                     verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
@@ -1875,6 +1895,18 @@ fn judge(
         }
     }
     // Birth-site tokens of one template are one receiver layout.
+    // The primitives beside a JSON object: the read's own dispatch on each.
+    if json_obj && prim != 0 && verdict.is_none() {
+        match json_prims(m, key, s.key, prim) {
+            Some(r) => receivers.extend(r),
+            None => {
+                verdict = Some(Verdict::No(format!(
+                    "primitive beside a JSON object (key not absent on its family) {}",
+                    crate::model::prim::name(prim)
+                )))
+            }
+        }
+    }
     let mut seen_r: FxHashSet<String> = FxHashSet::default();
     receivers.retain(|r| seen_r.insert(r.clone()));
     // A closed marker names no receiver: its callers' values sit beside it.
@@ -1888,6 +1920,12 @@ fn judge(
         use crate::model::prim::{NULL, UNDEF};
         if prim & !(NULL | UNDEF) == 0 {
             verdict.get_or_insert(Verdict::Throws);
+        }
+        if !s.is_call {
+            if let Some(r) = prim_absent(m, key, s.key, toks, prim) {
+                receivers.extend(r);
+                verdict.get_or_insert(Verdict::OwnDataOrAbsent);
+            }
         }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
@@ -2246,6 +2284,55 @@ fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
     ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()
 }
 
+/// [`Verdict::OwnDataOrAbsent`] for a `JSON.parse` object `t` (the
+/// `json` site template, `builtins::json_value`) and key `a`: ParseJSON
+/// (ECMA-262 25.5.1) evaluates the text as an ObjectLiteral, so the
+/// object is ordinary, its [[Prototype]] `%Object.prototype%`
+/// (OrdinaryObjectCreate) and every own key a data property
+/// (CreateDataPropertyOrThrow, 13.2.5.5; JSON text is not subject to
+/// Annex B.3.1, so `__proto__` too); the program's later stores and
+/// definitions are [`own_data_or_absent_tok`]'s conditions.
+fn json_own_or_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
+        && !m.is_marker(t)
+        && own_data_or_absent_tok(m, t, key, a)
+}
+
+/// The primitives beside a `JSON.parse` object in an OwnDataOrAbsent read
+/// (`judge`): `undefined`/`null` name the read's TypeError arm (6.2.5.5,
+/// 7.1.18), each String, Number or Boolean is `family_absent`; a BigInt or
+/// Symbol is not covered. The receivers.
+fn json_prims(m: &Model, key: &str, a: Atom, prim: u16) -> Option<Vec<String>> {
+    use crate::builtins::NativeFamily as F;
+    use crate::model::prim::{BOOL, NULL, NUM, STR, UNDEF};
+    if prim & !(STR | NUM | BOOL | NULL | UNDEF) != 0 {
+        return None;
+    }
+    let mut r = Vec::new();
+    if prim & UNDEF != 0 {
+        r.push("primitive:undefined (TypeError)".to_string());
+    }
+    if prim & NULL != 0 {
+        r.push("primitive:null (TypeError)".to_string());
+    }
+    for (bit, fam, name) in [
+        (STR, F::Str, "primitive:string"),
+        (NUM, F::Num, "primitive:number"),
+        (BOOL, F::Bool, "primitive:boolean"),
+    ] {
+        if prim & bit != 0 {
+            if !family_absent(m, fam, key, a) {
+                return None;
+            }
+            r.push(name.to_string());
+        }
+    }
+    Some(r)
+}
+
 /// [`Verdict::OwnDataOrAbsent`] for receiver `t` (layout `tf`) and key `a`:
 /// what [[Get]] finds is `t`'s own data property or nothing. `t`'s own
 /// keys hold only data (no accessor on the token or its template), its
@@ -2256,8 +2343,12 @@ fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
 /// optimistic JSON-key rule keeps tokens out of `super_relink` by
 /// assumption: with it on, no claim.
 fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> bool {
+    tf.prefix_stable && own_data_or_absent_tok(m, t, key, a)
+}
+
+/// The token conditions of [`own_data_or_absent`] (no layout needed).
+fn own_data_or_absent_tok(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     !m.optimistic_json_key
-        && tf.prefix_stable
         && !m.super_relink.contains(&t)
         && !m.is_escaped(t)
         && !m.hard.contains_key(&t)
@@ -2296,10 +2387,6 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
         && exact_array(m, t)
         && key != "length"
-        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
-        && !matches!(key, "Infinity" | "NaN")
-        && !m.is_private_atom(a)
-        && !m.optimistic_json_key
         && holds_nothing(m.fields.get(&(t, a)))
         && holds_nothing(if m.elems_apart(t) {
             m.named_any.get(&t)
@@ -2312,9 +2399,62 @@ fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && !m.super_relink.contains(&t)
         && !m.hard.contains_key(&t)
         && !m.is_escaped(t)
-        && crate::builtins::array_chain_lacks(key)
+        && family_absent(m, crate::builtins::NativeFamily::Array, key, a)
+}
+
+/// Key `a` (`key`) is absent on every value of family `fam` (an Array
+/// exotic object `array_absent` admits, a String, Number or Boolean
+/// primitive): no own key of such a value (an array's indices and
+/// `length`, a String wrapper's indices and `length`, 10.4.2, 10.4.3; a
+/// Number or Boolean wrapper owns none, 21.1.3, 20.3.3, so `length` is
+/// absent on them), the family's intrinsic chain to
+/// `%Object.prototype%` lacks it, and nothing writes it there (the
+/// program, a store through ⊤, interpreted code, unknown code holding the
+/// realm: `builtin_protos_unwritten`). OrdinaryGet (10.1.8.1), for a
+/// primitive on GetV's ToObject wrapper (7.3.2), gives `undefined`.
+fn family_absent(m: &Model, fam: crate::builtins::NativeFamily, key: &str, a: Atom) -> bool {
+    (key != "length"
+        || matches!(fam, crate::builtins::NativeFamily::Num | crate::builtins::NativeFamily::Bool))
+        && key != "__proto__"
+        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !matches!(key, "Infinity" | "NaN")
+        && !m.is_private_atom(a)
+        && !m.optimistic_json_key
+        && crate::builtins::family_chain_lacks(fam, key)
         && object_proto_unwritten(m, a)
-        && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), a).is_ok()
+        && builtin_protos_unwritten(m, Some(fam), a).is_ok()
+}
+
+/// Shape A: a named read whose receiver set holds only primitives (no
+/// token but closed markers), each of the String, Number and Boolean
+/// families with `family_absent`, `undefined`/`null` beside them naming
+/// their TypeError arm (`nullish_arms`: the read's own dispatch on the
+/// value's kind throws for them, 6.2.5.5, 7.1.18). The receivers.
+fn prim_absent(m: &Model, key: &str, a: Atom, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    use crate::builtins::NativeFamily as F;
+    use crate::model::prim::{BOOL, NUM, STR};
+    if !toks.iter().all(|&t| m.closed_marker(t)) {
+        return None;
+    }
+    let (rest, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
+    if rest == 0 || rest & !(STR | NUM | BOOL) != 0 {
+        return None;
+    }
+    for (bit, fam, name) in [
+        (STR, F::Str, "primitive:string"),
+        (NUM, F::Num, "primitive:number"),
+        (BOOL, F::Bool, "primitive:boolean"),
+    ] {
+        if rest & bit == 0 {
+            continue;
+        }
+        if !family_absent(m, fam, key, a) {
+            return None;
+        }
+        receivers.push(name.to_string());
+    }
+    receivers.sort();
+    Some(receivers)
 }
 
 /// `%Object.prototype%` holds nothing stored under `a` by the program: no
@@ -2387,7 +2527,7 @@ fn native_own_free(m: &Model, fam: crate::builtins::NativeFamily, t: Tok, a: Ato
     match fam {
         // A primitive owns no property ToObject's wrapper would not get
         // from its prototype (a Number wrapper owns no string key).
-        NativeFamily::Str | NativeFamily::Num => true,
+        NativeFamily::Str | NativeFamily::Num | NativeFamily::Bool => true,
         // `__proto__` (or a computed key that may be it) stored into it.
         NativeFamily::Array if m.super_relink.contains(&t) => false,
         NativeFamily::Array => match m.fields.get(&(t, a)) {
