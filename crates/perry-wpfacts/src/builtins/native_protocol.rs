@@ -281,6 +281,17 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if !m.realm_held {
         return false;
     }
+    // A built-in family's own prototype (`Buffer.prototype`,
+    // `%TypedArray%.prototype`, `URL.prototype`, `Error.prototype`, ...; the
+    // holder a lookup on a value of that family passes before
+    // `Object.prototype`, `builtins::intrinsic_miss_on`): unknown code that
+    // holds the realm holds it, and its [[Set]] of `a` succeeds unless the
+    // runtime's lock refuses it (ECMA-262 10.1.9; DEC 250 `final_on`). A
+    // read the lock makes final there stays exact; `Object.prototype`
+    // (`ObjectProto`) is asked under its own lock and never here.
+    if let TokKind::NativeProto(what, _) = &m.toks[np as usize] {
+        return !super::proto_read_final(m, what, a);
+    }
     let TokKind::Builtin(ns) = m.toks[np as usize] else {
         return false;
     };
@@ -291,12 +302,15 @@ fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
     if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
         return true;
     }
-    // The global object is an ordinary extensible object (ECMA-262 19.1)
-    // that unknown code holding the realm holds: its [[Set]] (10.1.9.2)
-    // defines or replaces any key but the non-writable `undefined`, `NaN`
-    // and `Infinity` (19.1.1-19.1.4): a function the realm or the program
-    // declares, and a key nobody declares (rule G reads it as absent,
-    // `undefined`, only while no unknown code holds the realm).
+    // The global object is an ordinary extensible object (ECMA-262 19.1,
+    // 9.1.1.4 its object record) that unknown code holding the realm holds:
+    // its [[Set]] (10.1.9.2) defines or replaces any key but the
+    // non-writable `undefined`, `NaN` and `Infinity` (19.1.1-19.1.4): a
+    // function the realm or the program declares, a key the program owns
+    // (`global_user_key`: `globalThis.gf = f`), and a key nobody declares
+    // (rule G reads it as absent, `undefined`, only while no unknown code
+    // holds the realm). A module's own bindings live in the module
+    // environment record, which no other code reaches.
     super::global_object(m, np) && !matches!(name, "undefined" | "NaN" | "Infinity")
 }
 
