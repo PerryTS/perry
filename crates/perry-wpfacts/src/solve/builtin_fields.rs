@@ -229,6 +229,7 @@ impl Model {
         for h in hs {
             self.realm_hold_tok(h, Some(reason));
         }
+        builtins::note_realm_held(self);
     }
 
     /// Unknown code exists: every String form that held only while it did
@@ -290,5 +291,6 @@ impl Model {
         for h in hs {
             self.builtin_fields_sink(h, None);
         }
+        builtins::note_realm_held(self);
     }
 }

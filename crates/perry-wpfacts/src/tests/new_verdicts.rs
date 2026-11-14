@@ -240,7 +240,10 @@ fn intrinsic_call_control_realm_held() {
     let pf = one(src);
     assert!(
         pf.sites.iter().any(|s| s.key == "()"
-            && matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("intrinsic callee: unknown code holds the realm"))),
+            // HOSTHELD: the read of `Math.sin` is the realm's function or
+            // what unknown code installed (`realm_replaced`): the callee set
+            // holds the opaque member, before the IntrinsicCall check.
+            && matches!(&s.verdict, crate::Verdict::No(r) if r.starts_with("intrinsic callee: unknown code holds the realm") || r == "callee set holds ⊤")),
         "{}",
         pf.dump_text()
     );
