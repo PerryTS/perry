@@ -152,6 +152,10 @@ pub struct TemplateFacts {
     /// A class's own statics that hold their definition for the program's
     /// life (FVA 3.4, `constant_statics`), sorted.
     pub statics: Vec<String>,
+    /// The class prototype's own members that are one data property for
+    /// the program's life (ECMA-262 15.7.14, `constant_proto_members`),
+    /// sorted.
+    pub proto_consts: Vec<String>,
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
@@ -369,6 +373,7 @@ impl TemplateFacts {
         common_prefix(&mut self.birth_keys, &o.birth_keys);
         common_prefix(&mut self.ancestors, &o.ancestors);
         self.statics.retain(|k| o.statics.contains(k));
+        self.proto_consts.retain(|k| o.proto_consts.contains(k));
         self.sabotaged |= o.sabotaged;
         for f in self.fields.iter_mut() {
             match o.fields.iter().find(|g| g.is(&f.key, f.private)) {
@@ -472,6 +477,56 @@ fn constant_statics(m: &Model, tm: TmplId) -> Vec<String> {
             .get(&(tm, a))
             .is_some_and(|w| !w.ctor.is_empty() || !w.post.is_empty());
         if m.static_fields.contains(&(tm, a)) || !stored {
+            out.push(m.atoms[a as usize].clone());
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// ECMA-262 15.7.14 ClassDefinitionEvaluation: the prototype object of a
+/// class is created with each method of the class body (15.4.4
+/// DefineMethodProperty) and `constructor` (MakeConstructor) as own,
+/// writable, non-enumerable data properties, before any code can reach the
+/// object. The prototype's own members whose read is one own data lookup
+/// for the program's life: the prototype reaches no unknown code (which
+/// could redefine or delete them), carries no HARD operation
+/// (defineProperty, delete), takes no computed-key store and has no
+/// computed member (either may name the key), and the key is no accessor.
+/// A program store of the key is an ordinary [[Set]] on an own writable
+/// data property (10.1.9.2 OrdinarySetWithOwnDescriptor): the key stays a
+/// data property and the store's value joins the field node the read takes.
+/// An object literal's layout is no class (decision 17); each evaluation of
+/// a per-evaluation class is its own prototype (Rule C).
+fn constant_proto_members(m: &Model, tm: TmplId) -> Vec<String> {
+    let tpl = &m.tmpls[tm as usize];
+    if tpl.per_evaluation
+        || tpl.has_computed_members
+        || !matches!(tpl.kind, TmplKind::Class { literal_shape: false, .. })
+    {
+        return Vec::new();
+    }
+    let Some(&proto) = m.tok_index.get(&TokKind::Proto(tm)) else {
+        return Vec::new();
+    };
+    let holds = |n: NodeId| {
+        let nd = &m.nodes[n as usize];
+        !nd.pts.is_empty() || nd.prim != 0
+    };
+    if m.is_escaped(proto)
+        || m.hard.contains_key(&proto)
+        || m.field_any.get(&proto).is_some_and(|&n| holds(n))
+    {
+        return Vec::new();
+    }
+    let accessors = m.accessor_keys.get(&proto);
+    let mut out: Vec<String> = Vec::new();
+    for &a in &tpl.proto_members {
+        if tpl.accessor_keys.contains(&a) || accessors.is_some_and(|ks| ks.contains(&a)) {
+            continue;
+        }
+        if m.fields.get(&(proto, a)).is_some_and(|&n| holds(n)) {
             out.push(m.atoms[a as usize].clone());
         }
     }
@@ -1075,6 +1130,7 @@ fn template_facts(
             .collect(),
         fields,
         statics: constant_statics(m, tm),
+        proto_consts: constant_proto_members(m, tm),
         sabotaged: false,
         record: Err(crate::records::Rejected::off()),
         record_elems: Vec::new(),
@@ -1306,9 +1362,16 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             }
         }
     }
+    // A site in a body the solve runs more than once (a summary instance,
+    // a for-in body's run per key) is one operation: its receiver holds
+    // what the node of EVERY run holds, the shared body's and each
+    // instance's copy (`Inst::fresh`). A run's copy may hold what the shared
+    // body never observes (a for-in run's key, FVA 4.3b).
+    let copies = element::run_copies(m);
     // The verdict of one site over the receiver nodes `recvs`.
     let verdict_of = |s: &crate::gen::ReadSite, recvs: &[u32]| {
-        let set = receiver_set(m, recvs);
+        let all = element::with_copies(&copies, recvs);
+        let set = receiver_set(m, &all);
         let toks = &set.toks;
         let prim = set.prims;
         let top_recv = set.top_recv;
@@ -1317,7 +1380,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             judge(m, &by_id, &runtime, s, &key, toks, prim, top_recv);
         // Dead needs every value of the sources: a node that left one out
         // (`dropped`) is not empty in the program.
-        if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+        if verdict == Verdict::Dead && all.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
         // Throws, a claim naming the TypeError arm of a nullish receiver
@@ -1334,7 +1397,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     Verdict::NativeMember | Verdict::OwnLength | Verdict::OwnDataOrAbsent
                 ))
             || (prim != 0 && matches!(verdict, Verdict::T0Mono | Verdict::T0Set)))
-            && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
+            && all.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
         }
@@ -1812,6 +1875,25 @@ fn judge(
                     }
                 }
             }
+            // A program class's prototype object: the key is one of its own
+            // constant members (15.7.14, `constant_proto_members`). A member
+            // it inherits is not proven here.
+            TokKind::Proto(tm) if by_id.contains_key(tm) => {
+                receivers.push(m.tok_name(t));
+                let constant = by_id
+                    .get(tm)
+                    .is_some_and(|tf| tf.proto_consts.iter().any(|k| k == key));
+                let n = m.fields.get(&(t, s.key)).copied();
+                match n {
+                    Some(n) if constant && s.is_call => callee.push(n),
+                    Some(_) if constant => statics += 1,
+                    _ => {
+                        verdict.get_or_insert(Verdict::No(
+                            "not a constant own member of the class prototype (15.7.14)".into(),
+                        ));
+                    }
+                }
+            }
             other => {
                 receivers.push(m.tok_name(t));
                 let _ = other;
@@ -2047,16 +2129,33 @@ fn host_member(
     let name = &m.atoms[s.key as usize];
     let mut receivers = Vec::new();
     let mut native = true;
+    // A builtin namespace or constructor that is no host object (`Math`,
+    // `Promise`, `Array`): the realm's own member, unwritten
+    // (`builtins::ns_native`, BNSRECV).
+    let mut realm_ns = false;
     for &t in toks {
         let TokKind::Builtin(ns) = m.toks[t as usize] else {
             return None;
         };
-        let h = crate::builtins::host_of(ns, name, s.is_call)?;
-        native &= crate::builtins::host_native(m, h, s.key, s.is_call);
-        receivers.push(format!("host:{h:?}"));
+        match crate::builtins::host_of(ns, name, s.is_call) {
+            Some(h) => {
+                native &= crate::builtins::host_native(m, h, s.key, s.is_call);
+                receivers.push(format!("host:{h:?}"));
+            }
+            None if crate::builtins::ns_native(m, t, ns, s.key, s.is_call) => {
+                realm_ns = true;
+                receivers.push(m.tok_name(t));
+            }
+            None => return None,
+        }
     }
     if !native {
         return Some(Err("host member undescribed or written".into()));
+    }
+    // Interpreted code (DEC 150) names every global and may write the key;
+    // no namespace object is a lock holder, so nothing refuses the write.
+    if realm_ns && m.interp_runs {
+        return Some(Err("namespace member: interpreted code may write the key".into()));
     }
     // Unknown code holds the realm (9.3, `realm_held`): a host object's
     // members are writable, and the solve does not replay unknown code's
