@@ -50,6 +50,7 @@ mod glibc_version;
 mod harmonyos_objects;
 mod hot_data_order;
 mod hot_text_order;
+mod hot_text_order_macho;
 mod link_cache;
 mod linux_dylib_libs;
 mod linux_ui_libs;

@@ -67,7 +67,11 @@ added to the binary: only the layout differs.
   programs, and `scripts/hot_text_order.py check` fails when it no longer
   matches the runtime (a listed function was renamed, or a smoke program
   executes too much code outside the ordered run).
-- GNU ld and lld on Linux only. macOS, Windows, WebAssembly, Android and
+- GNU ld and lld on Linux by default. On macOS / iOS / tvOS / watchOS /
+  visionOS the same list can be passed to ld64 (or ld64.lld) as an
+  `-order_file` of exact symbol names resolved from the runtime archives:
+  opt-in with `PERRY_HOT_TEXT_ORDER=on`, because its effect on Apple's 16 KiB
+  pages has not been measured yet. Windows, WebAssembly, Android and
   HarmonyOS builds are unchanged.
 
 The same link script carries a default order for the runtime's read-only
