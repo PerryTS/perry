@@ -462,11 +462,7 @@ fn sqlite_preparation_b1_preserves_original_unicode_sql_lexing() {
                 // Admit controls with SQLite's original bytes, including its actual column name.
                 let admitted = with_sqlite_connection(db.db, |conn| {
                     let mut stmt = conn.prepare(sql).unwrap();
-                    let names = stmt
-                        .column_names()
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect::<Vec<_>>();
+                    let names = stmt.column_names().map(str::to_owned).collect::<Vec<_>>();
                     let value = stmt.query_row([], |row| row.get::<_, f64>(0)).unwrap();
                     (names, value)
                 })
