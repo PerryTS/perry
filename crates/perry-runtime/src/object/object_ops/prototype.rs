@@ -43,7 +43,7 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
 /// literal) goes to [`js_get_global_this_builtin_value`], the full entry: an
 /// undeclared name's read can reach a getter on `Object.prototype`, which
 /// must never see an incomplete global as `this`.
-pub(crate) fn builtin_value_core(name: &'static str) -> f64 {
+pub fn builtin_value_core(name: &'static str) -> f64 {
     debug_assert!(
         crate::codegen_abi::realm_core_global(name),
         "{name} is not a declared phase-A global"
