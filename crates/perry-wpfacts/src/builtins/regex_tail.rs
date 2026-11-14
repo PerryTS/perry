@@ -303,6 +303,7 @@ impl Parser {
 
 /// The derived part of an analysable regex literal (rule RT).
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct Tail {
     /// The characters what precedes group k may end with (none in C), C,
     /// and `(C*)` (`true`) or `(C+)`.
@@ -315,6 +316,9 @@ pub(crate) struct Tail {
     tail_groups: Vec<u32>,
     tail: Vec<Quant>,
     groups: u32,
+    /// The whole pattern (rule RH) and whether it begins with `^`.
+    full: Vec<Quant>,
+    anchored: bool,
 }
 
 /// The characters a match of `seq` may end with, and whether it may be
@@ -506,83 +510,144 @@ pub(crate) fn analyse(src: &str, flags: &str) -> Option<Tail> {
             tail_groups,
             tail: seq[i + 1..].to_vec(),
             groups: p.groups,
+            full: seq.clone(),
+            anchored,
         });
     }
     None
 }
 
-type Caps = Vec<Option<(usize, usize)>>;
-/// A way needs a character left of the known suffix.
+/// No rule for the input (kept for a pattern class the matcher refuses).
+#[allow(dead_code)]
 struct Escape;
 
-fn back_seq(s: &[u16], seq: &[Quant], e: usize, caps: Caps, out: &mut Vec<(usize, Caps)>) -> Result<(), Escape> {
-    let Some((last, rest)) = seq.split_last() else {
-        out.push((e, caps));
-        return Ok(());
-    };
-    let mut ws = Vec::new();
-    back_quant(s, last, e, caps, &mut ws)?;
-    for (p, c) in ws {
-        back_seq(s, rest, p, c, out)?;
-    }
-    Ok(())
+/// Rule RH: where a backward match stands. `K(p)` before the known
+/// suffix's code unit `p` (p > 0); `X(i)` inside the head X after `i`
+/// steps that took a character of X (`X(0)`: the head's end, the known
+/// suffix's start).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pos {
+    K(usize),
+    X(u32),
 }
 
-/// Every way `q` ends at `e`: the rightmost iteration is the last one, so
-/// its captures stand; an iteration matching nothing is no rule
-/// (`Escape`).
-fn back_quant(s: &[u16], q: &Quant, e: usize, caps: Caps, out: &mut Vec<(usize, Caps)>) -> Result<(), Escape> {
-    if q.min == 0 {
-        out.push((e, caps.clone()));
-    }
-    let mut frontier = vec![(e, caps, 0u32)];
-    while let Some((p, c, n)) = frontier.pop() {
-        if q.max.is_some_and(|m| n >= m) {
-            continue;
+fn kp(p: usize) -> Pos {
+    if p == 0 { Pos::X(0) } else { Pos::K(p) }
+}
+
+/// What the input's head (the part before its known suffix) may be.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Head {
+    /// Empty: the input is the suffix (a constant).
+    Empty,
+    /// Any string with no ASCII character of the mask (0: any string).
+    Excl(u128),
+}
+
+type FCaps = Vec<Option<(Pos, Pos)>>;
+
+/// Rule RH, ECMA-262 22.2.2 / 22.2.7.2: every way the whole pattern
+/// matches `X + s` (X described by `h`), matched backwards from the
+/// input's end (`$`). A step at `X(i)` takes one character of X when the
+/// atom admits a character X may hold; X is any such string, so taking
+/// or not taking one is each a way. More iterations of a quantifier inside
+/// X change no capture of a way (the last iteration's stand, RepeatMatcher
+/// 22.2.2.3.1) and no "is it empty" of a span that crosses them, so one is
+/// enough (finite).
+struct Full<'a> {
+    s: &'a [u16],
+    h: Head,
+}
+
+impl Full<'_> {
+    fn x_takes(&self, it: &Item) -> bool {
+        let Head::Excl(e) = self.h else { return false };
+        let free = |c: u16| c >= 128 || e & (1u128 << c) == 0;
+        match it {
+            Item::Lit(c) => free(*c),
+            Item::Class(k) => k.0.iter().any(|&(a, b)| b >= 128 || (a..=b).any(free)),
+            Item::Group { .. } => false,
         }
+    }
+
+    fn seq(&self, seq: &[Quant], e: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+        let Some((last, rest)) = seq.split_last() else {
+            out.push((e, caps));
+            return Ok(());
+        };
         let mut ws = Vec::new();
-        back_item(s, &q.item, p, c.clone(), &mut ws)?;
-        for (p2, c2) in ws {
-            if p2 == p {
-                return Err(Escape);
-            }
-            let c3 = if n == 0 { c2 } else { c.clone() };
-            if n + 1 >= q.min {
-                out.push((p2, c3.clone()));
-            }
-            frontier.push((p2, c3, n + 1));
+        self.quant(last, e, caps, &mut ws)?;
+        for (p, c) in ws {
+            self.seq(rest, p, c, out)?;
         }
+        Ok(())
     }
-    Ok(())
-}
 
-fn back_item(s: &[u16], it: &Item, p: usize, caps: Caps, out: &mut Vec<(usize, Caps)>) -> Result<(), Escape> {
-    match it {
-        Item::Lit(_) | Item::Class(_) => {
-            if p == 0 {
-                return Err(Escape);
-            }
-            let ok = match it {
-                Item::Lit(c) => s[p - 1] == *c,
-                Item::Class(k) => k.has(s[p - 1]),
-                _ => false,
-            };
-            if ok {
-                out.push((p - 1, caps));
-            }
+    fn quant(&self, q: &Quant, e: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+        if q.min == 0 {
+            out.push((e, caps.clone()));
         }
-        Item::Group { cap, alts } => {
+        let mut frontier = vec![(e, caps, 0u32)];
+        while let Some((p, c, n)) = frontier.pop() {
+            if q.max.is_some_and(|m| n >= m) {
+                continue;
+            }
             let mut ws = Vec::new();
-            back_seq(s, &alts[0], p, caps, &mut ws)?;
-            for (st, mut c) in ws {
-                if let Some(g) = cap {
-                    c[*g as usize] = Some((st, p));
+            self.item(&q.item, p, c.clone(), &mut ws)?;
+            for (p2, c2) in ws {
+                // RepeatMatcher 22.2.2.3.1 step 2.b: an iteration past the
+                // minimum that matches nothing fails; one within it leaves
+                // the position, so its count is bounded by the minimum.
+                if p2 == p && n >= q.min {
+                    continue;
                 }
-                out.push((st, c));
+                let c3 = if n == 0 { c2 } else { c.clone() };
+                if n + 1 >= q.min {
+                    out.push((p2, c3.clone()));
+                }
+                let inside = matches!(p, Pos::X(_)) && matches!(p2, Pos::X(_));
+                if !inside || n + 1 < q.min {
+                    frontier.push((p2, c3, n + 1));
+                }
             }
         }
+        Ok(())
     }
-    Ok(())
+
+    fn item(&self, it: &Item, p: Pos, caps: FCaps, out: &mut Vec<(Pos, FCaps)>) -> Result<(), Escape> {
+        match it {
+            Item::Lit(_) | Item::Class(_) => match p {
+                Pos::K(p) => {
+                    let ok = match it {
+                        Item::Lit(c) => self.s[p - 1] == *c,
+                        Item::Class(k) => k.has(self.s[p - 1]),
+                        _ => false,
+                    };
+                    if ok {
+                        out.push((kp(p - 1), caps));
+                    }
+                }
+                Pos::X(i) => {
+                    if self.x_takes(it) {
+                        out.push((Pos::X(i + 1), caps));
+                    }
+                }
+            },
+            Item::Group { cap, alts } => {
+                for alt in alts {
+                    let mut ws = Vec::new();
+                    self.seq(alt, p, caps.clone(), &mut ws)?;
+                    for (st, mut c) in ws {
+                        if let Some(g) = cap {
+                            c[*g as usize] = Some((st, p));
+                        }
+                        out.push((st, c));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One derived capture: the strings it may be and whether it may be
@@ -590,55 +655,58 @@ fn back_item(s: &[u16], it: &Item, p: usize, caps: Caps, out: &mut Vec<(usize, C
 type Derived = Vec<(u32, Option<Vec<String>>, bool)>;
 
 impl Tail {
-    /// The groups rule RT derives: group k and the tail's groups.
+    /// The groups rules RT/RH derive: every capture group.
     pub(crate) fn derived(&self) -> Vec<u32> {
-        let mut g = vec![self.k];
-        g.extend(&self.tail_groups);
-        g
+        (1..=self.groups).collect()
     }
 
-    /// The captures of every way the input `X + sigma` (X any string)
-    /// matches; `None` when a way reaches into X.
-    fn ways(&self, sigma: &[u16]) -> Option<Vec<((usize, usize), Caps)>> {
-        let mut ws = Vec::new();
-        back_seq(sigma, &self.tail, sigma.len(), vec![None; self.groups as usize + 1], &mut ws).ok()?;
-        let mut out = Vec::new();
-        for (p, caps) in ws {
-            let mut j = p;
-            while j > 0 && self.c.has(sigma[j - 1]) {
-                j -= 1;
-            }
-            if j == 0 {
-                return None;
-            }
-            if !self.l.has(sigma[j - 1]) || (!self.star && j == p) {
-                continue;
-            }
-            out.push(((j, p), caps));
-        }
-        Some(out)
-    }
-
-    /// Rule RT over the suffixes `sigmas`: per derived group, its strings
-    /// (`None`: any string) and whether it may be `undefined`.
-    pub(crate) fn captures(&self, sigmas: &[Vec<u16>]) -> Derived {
+    /// Rule RH over the inputs `entries` (a head and a known suffix each):
+    /// per group, the union over every way of every entry of its strings
+    /// (`None`: any string) and whether it may be `undefined`. No way for
+    /// an entry: `exec` returns null for it (it adds nothing). A span that
+    /// takes characters of the head is any string; one inside the head
+    /// that takes none is "".
+    pub(crate) fn captures(&self, entries: &[(Head, Vec<u16>)]) -> Derived {
         let groups = self.derived();
-        let mut acc: Vec<(u32, Option<Vec<String>>, bool)> = groups.iter().map(|&g| (g, Some(Vec::new()), false)).collect();
-        for sigma in sigmas {
-            let Some(ws) = self.ways(sigma) else {
+        let mut acc: Derived = groups.iter().map(|&g| (g, Some(Vec::new()), false)).collect();
+        for (h, sigma) in entries {
+            let f = Full { s: sigma, h: *h };
+            let mut ws = Vec::new();
+            if f.seq(&self.full, kp(sigma.len()), vec![None; self.groups as usize + 1], &mut ws).is_err() {
                 return groups.iter().map(|&g| (g, None, true)).collect();
-            };
-            for ((j, p), caps) in ws {
+            }
+            for (st, caps) in ws {
+                // `^` holds only at the input's start (22.2.2.6).
+                if self.anchored && matches!(st, Pos::K(_)) {
+                    continue;
+                }
                 for (g, strs, undef) in acc.iter_mut() {
-                    let span = if *g == self.k { Some((j, p)) } else { caps[*g as usize] };
-                    match span {
+                    let at = |p: Pos| match p {
+                        Pos::K(p) => Some(p),
+                        Pos::X(0) => Some(0),
+                        Pos::X(_) => None,
+                    };
+                    match caps[*g as usize] {
                         None => *undef = true,
-                        Some((a, b)) => match (strs.as_mut(), String::from_utf16(&sigma[a..b])) {
-                            (Some(v), Ok(t)) => v.push(t),
-                            _ => *strs = None,
-                        },
+                        Some((a, b)) => {
+                            let t = match (at(a), at(b)) {
+                                (Some(a), Some(b)) => String::from_utf16(&sigma[a..b]).ok(),
+                                _ if a == b => Some(String::new()),
+                                _ => None,
+                            };
+                            match (strs.as_mut(), t) {
+                                (Some(v), Some(t)) => v.push(t),
+                                _ => *strs = None,
+                            }
+                        }
                     }
                 }
+            }
+        }
+        for (_, strs, _) in acc.iter_mut() {
+            if let Some(v) = strs.as_mut() {
+                v.sort();
+                v.dedup();
             }
         }
         acc
@@ -661,17 +729,18 @@ impl Model {
         if node.prim != prim::STR || !node.pts.is_empty() || node.strs < STRS_SET0 {
             return any(&tail);
         }
-        let mut sigmas = Vec::new();
+        let mut entries = Vec::new();
         for &a in self.str_atoms(node.strs) {
-            let t = match self.atom_suffix(a) {
-                Some(t) => t,
-                None if self.atom_is_mark(a) => return any(&tail),
-                None => self.atoms[a as usize].as_str(),
+            let (h, t) = match (self.atom_suffix(a), self.atom_excl(a)) {
+                (Some(t), _) => (Head::Excl(0), t),
+                (_, Some((e, t))) => (Head::Excl(e), t),
+                _ if self.atom_is_mark(a) => return any(&tail),
+                _ => (Head::Empty, self.atoms[a as usize].as_str()),
             };
-            sigmas.push(t.encode_utf16().collect::<Vec<u16>>());
+            entries.push((h, t.encode_utf16().collect::<Vec<u16>>()));
         }
         let mut out = Vec::new();
-        for (g, strs, undef) in tail.captures(&sigmas) {
+        for (g, strs, undef) in tail.captures(&entries) {
             let mut p = if undef { prim::UNDEF } else { 0 };
             let s = match strs {
                 None => STRS_TOP,
@@ -710,7 +779,10 @@ mod unit {
     use super::*;
 
     fn caps(src: &str, sigma: &str) -> Derived {
-        analyse(src, "").expect("analysable").captures(&[sigma.encode_utf16().collect()])
+        let t = analyse(src, "").expect("analysable");
+        let mut d = t.captures(&[(Head::Excl(0), sigma.encode_utf16().collect())]);
+        d.retain(|x| x.0 >= t.k);
+        d
     }
 
     #[test]
@@ -741,6 +813,6 @@ mod unit {
         assert!(analyse(r"^(.)\.([^.]+)\1$", "").is_none());
         assert!(analyse(r"^\.([^.]+)$", "i").is_none());
         // The C-run reaches the start of the known suffix: any string.
-        assert_eq!(caps(r"^(?:([^.]*)\.)?([^.]+)$", "position"), vec![(2, None, true)]);
+        assert_eq!(caps(r"^(?:([^.]*)\.)?([^.]+)$", "position"), vec![(2, None, false)]);
     }
 }
