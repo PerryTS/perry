@@ -277,9 +277,8 @@ fn quiet_full_eden_windows_restore_maximum_threshold_debounced() {
     }
 }
 
-/// Default ceiling (2) on real minors: the same quiet full Eden windows that
-/// climb to 4 under `PERRY_GC_TENURING_SURVIVALS_MAX=4` keep the threshold at
-/// the occupancy floor.
+/// Default ceiling (3) on real minors: the same quiet full Eden windows that
+/// climb to 4 under `PERRY_GC_TENURING_SURVIVALS_MAX=4` stop at 3.
 #[test]
 fn quiet_full_eden_windows_hold_the_default_ceiling() {
     let _guard = CopyingNurseryTestGuard::new(SLOTS);
@@ -307,7 +306,7 @@ fn quiet_full_eden_windows_hold_the_default_ceiling() {
     assert!(
         seen.iter()
             .all(|&s| s <= crate::gc::tenuring::OCCUPANCY_MAX_SURVIVALS),
-        "the default ceiling must hold the occupancy rule at or below 2, saw {seen:?}"
+        "the default ceiling must hold the occupancy rule at or below 3, saw {seen:?}"
     );
     assert_eq!(
         *seen.last().unwrap(),

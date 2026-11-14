@@ -189,12 +189,12 @@ The copying minor's tenuring threshold is **adaptive, not fixed**: it is the
 largest number of survivals `S` whose projected survivor occupancy still fits
 the desired survivor size, held between the occupancy floor of 2
 <!-- gc-fact: OCCUPANCY_MIN_SURVIVALS = 2 in crates/perry-runtime/src/gc/tenuring.rs -->
-and the occupancy ceiling of 2
-<!-- gc-fact: OCCUPANCY_MAX_SURVIVALS = 2 in crates/perry-runtime/src/gc/tenuring.rs -->,
+and the occupancy ceiling of 3
+<!-- gc-fact: OCCUPANCY_MAX_SURVIVALS = 3 in crates/perry-runtime/src/gc/tenuring.rs -->,
 and it drops to 1 (promote on first copy) when a measured survival-rate lock
 shows the aging round is filtering nothing. The ceiling bounds the occupancy
-rule only, not the lock: a small survivor influx no longer raises `S` to 3 or 4,
-which re-copied every survivor for no measured benefit.
+rule only, not the lock: a small survivor influx no longer raises `S` to 4, which
+re-copied every survivor once more for no measured benefit.
 `PERRY_GC_TENURING_SURVIVALS_MAX=4` restores the previous climb to the header's
 limit of 4
 <!-- gc-fact: GC_COPY_PROMOTION_SURVIVALS = 4 in crates/perry-runtime/src/gc/layout.rs -->;
@@ -445,7 +445,7 @@ These are the operational controls most useful outside collector development:
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
 | `PERRY_GC_RESTORE_DIRTY_PAGES=0` | walk whole owners in the post-minor coverage restore (`verify`: both walks, compared) |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
-| `PERRY_GC_TENURING_SURVIVALS_MAX=N` | ceiling of the adaptive tenuring threshold's occupancy rule (default 2, clamped to 2..4; `4` is the previous climb); the survival-rate lock is unaffected |
+| `PERRY_GC_TENURING_SURVIVALS_MAX=N` | ceiling of the adaptive tenuring threshold's occupancy rule (default 3, clamped to 2..4; `4` is the previous climb); the survival-rate lock is unaffected |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
 | `PERRY_GC_TRACE=1` | emit structured per-cycle trace records |

@@ -536,15 +536,16 @@ fn survival_rate_lock_breaks_a_saturated_pipeline() {
     reset_for_test();
 }
 
-/// Default ceiling (`OCCUPANCY_MAX_SURVIVALS`, 2): with a survivor round
+/// Default ceiling (`OCCUPANCY_MAX_SURVIVALS`, 3): with a survivor round
 /// measured and the influx quiet, the formula says 4 but the occupancy rule
-/// stays at 2 on every cycle. Sabotage: drop the `.min(occupancy_max_survivals())`
-/// in `retune_after_scavenge` and this reports 3, then 4.
+/// rises (debounced) to 3 and stops there. Sabotage: drop the
+/// `.min(occupancy_max_survivals())` in `retune_after_scavenge` and this
+/// reports 4.
 #[test]
-fn default_ceiling_holds_the_occupancy_rule_at_two() {
+fn default_ceiling_holds_the_occupancy_rule_at_three() {
     reset_for_test();
     let d = desired_survivor_bytes();
-    assert_eq!(OCCUPANCY_MAX_SURVIVALS, 2);
+    assert_eq!(OCCUPANCY_MAX_SURVIVALS, 3);
     assert_eq!(occupancy_max_survivals(), OCCUPANCY_MAX_SURVIVALS);
     // A measured survivor round whose cohort dies (no lock).
     retune_after_scavenge(d / 64, 3 * d, 0);
@@ -555,15 +556,25 @@ fn default_ceiling_holds_the_occupancy_rule_at_two() {
         GC_TENURING_SURVIVALS_MAX,
         "precondition: the formula still computes the ceiling; the cap is at the callsite"
     );
+    let mut seen = Vec::new();
     for _ in 0..12 {
         retune_after_scavenge(d / 64, 0, 0);
-        assert_eq!(tenuring_survivals(), OCCUPANCY_MAX_SURVIVALS);
+        seen.push(tenuring_survivals());
     }
+    assert!(
+        seen.iter().all(|&s| s <= OCCUPANCY_MAX_SURVIVALS),
+        "the default ceiling must hold the occupancy rule at or below 3, saw {seen:?}"
+    );
+    assert_eq!(
+        *seen.last().unwrap(),
+        OCCUPANCY_MAX_SURVIVALS,
+        "saw {seen:?}"
+    );
     assert!(!PROMOTE_LOCK.with(Cell::get));
     // The same readings under the previous ceiling climb: the cap, not the
-    // readings, is what holds the default at 2.
+    // readings, is what holds the default at 3.
     let _climb = set_occupancy_max_for_test(GC_TENURING_SURVIVALS_MAX);
-    for _ in 0..6 {
+    for _ in 0..4 {
         retune_after_scavenge(d / 64, 0, 0);
     }
     assert_eq!(tenuring_survivals(), GC_TENURING_SURVIVALS_MAX);
@@ -571,7 +582,8 @@ fn default_ceiling_holds_the_occupancy_rule_at_two() {
 }
 
 /// The default ceiling bounds the occupancy rule only: the survival-rate lock
-/// still reaches 1, holds, and unlocks to 2, where the default then stays.
+/// still reaches 1, holds, and unlocks to 2; the ladder then rises to the
+/// default ceiling of 3 and stays there.
 #[test]
 fn the_default_ceiling_keeps_the_survival_rate_lock() {
     reset_for_test();
@@ -590,14 +602,16 @@ fn the_default_ceiling_keeps_the_survival_rate_lock() {
     assert_eq!(tenuring_survivals(), 1);
     retune_after_scavenge(0, 0, 0);
     assert_eq!(tenuring_survivals(), 2, "unlock resumes at 2");
+    let mut seen = Vec::new();
     for _ in 0..6 {
         retune_after_scavenge(0, 0, 0);
-        assert_eq!(
-            tenuring_survivals(),
-            2,
-            "and the default ceiling holds it there"
-        );
+        seen.push(tenuring_survivals());
     }
+    assert_eq!(
+        seen,
+        [2, 3, 3, 3, 3, 3],
+        "the debounced ladder rises one step and the default ceiling holds it there"
+    );
     reset_for_test();
 }
 
@@ -1007,10 +1021,12 @@ fn dying_survivor_cohorts_do_not_lock() {
     // Medium-lived objects: a substantial intake of which only half
     // survives its survivor round. Aging is filtering — the lock must
     // stay out and the occupancy ladder must age from the power-on floor.
-    // Default ceiling (2): the cohort keeps aging at 2. Under the previous
-    // ceiling (`PERRY_GC_TENURING_SURVIVALS_MAX=4`) the ladder rises to 3.
+    // At a ceiling of 2 the cohort keeps aging at 2; at the default (3) and
+    // under the previous ceiling (`PERRY_GC_TENURING_SURVIVALS_MAX=4`) the
+    // ladder rises to the formula's 3. The lock stays out in every case.
     for (ceiling, expected) in [
-        (OCCUPANCY_MAX_SURVIVALS, [2, 2, 2, 2, 2, 2]),
+        (OCCUPANCY_MIN_SURVIVALS, [2, 2, 2, 2, 2, 2]),
+        (OCCUPANCY_MAX_SURVIVALS, [2, 2, 3, 3, 3, 3]),
         (GC_TENURING_SURVIVALS_MAX, [2, 2, 3, 3, 3, 3]),
     ] {
         reset_for_test();
