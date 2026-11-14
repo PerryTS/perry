@@ -445,6 +445,101 @@ impl Model {
     /// bound target, a step of a protocol): what it allocates is born at
     /// `by`'s program site.
     pub(crate) fn solver_call(&mut self, by: CallId, cs: CallSite) -> CallId {
+        self.solver_call_raw(by, cs)
+    }
+
+    /// The one call a native model makes at its code position while it
+    /// runs for `by`, with `solver_call_keyed`'s contract: its callee is
+    /// resolved once. Key: (the chain's root program call, `made_root[by]`
+    /// or `by` itself when a program site made it; the native's code
+    /// position, `track_caller`; a finite discriminator `disc`, a member
+    /// key, a holder index or 0; the argument and spread counts; whether
+    /// `this` is undefined), never the id of a call or token a native
+    /// minted (such a key is new per level of a recursion: `toLocaleString`
+    /// of the `Object(n)` a callback call boxes, 7.1.18).
+    ///
+    /// FIRST for a key: the shared call with its own `this`, argument,
+    /// spread, result and TARGET nodes (of the root's run); `callee` adds
+    /// the callee constraint on the shared target, here and only here, so
+    /// no caller can add it again. JOIN (key exists): only edges: the
+    /// caller's `target` into the shared target, its `this`, arguments
+    /// and spreads into the shared call's, the shared result into its
+    /// `ret`. The key is made before `callee` runs, so a run the callee
+    /// starts synchronously (`Model::cons` applies at once) that reaches
+    /// this key again joins it.
+    ///
+    /// TERMINATES (no cap, no depth limit): keys are (root program call,
+    /// code position, finite discriminator, counts): a finite set; a join
+    /// adds only edges between existing nodes: finitely many; no callee
+    /// constraint is ever added twice. EXACT: the runs joined under one
+    /// root only merge their value sets in the shared call (sound,
+    /// monotone); what the call births (`site_tmpl` keys templates by the
+    /// call) is finite with it.
+    #[track_caller]
+    pub(crate) fn chain_call(
+        &mut self,
+        by: CallId,
+        disc: u32,
+        target: NodeId,
+        cs: CallSite,
+        callee: impl FnOnce(&mut Self, NodeId, CallId),
+    ) -> CallId {
+        let root = self.made_root.get(&by).copied().unwrap_or(by);
+        let undef = matches!(cs.this, crate::model::ThisArg::Undef);
+        let loc = std::panic::Location::caller();
+        let k = (root, loc, disc, cs.args.len() as u32, cs.spread.len() as u32, undef);
+        let (c, tg, made) = match self.chain_calls.get(&k) {
+            Some(&(c, tg)) => (c, tg, false),
+            None => {
+                let frame = self.call_run(root);
+                let fresh = |m: &mut Self, l: &'static str| {
+                    let n = m.node_l(l);
+                    m.nodes[n as usize].frame = frame;
+                    n
+                };
+                let this = if undef { crate::model::ThisArg::Undef } else { crate::model::ThisArg::Node(fresh(self, "native-call-this")) };
+                let args = (0..cs.args.len()).map(|_| fresh(self, "native-call-arg")).collect::<Vec<_>>();
+                let spread = (0..cs.spread.len()).map(|_| fresh(self, "native-call-spread")).collect::<Vec<_>>();
+                let ret = fresh(self, "native-call-ret");
+                let tg = fresh(self, "native-call-target");
+                let id = self.calls.len() as CallId;
+                let site = if cs.site == id { id } else { cs.site };
+                self.solver_call_raw(
+                    by,
+                    CallSite { first_arg_fixed: cs.first_arg_fixed, this, args, spread, ret, site, region: cs.region },
+                );
+                self.chain_calls.insert(k, (id, tg));
+                (id, tg, true)
+            }
+        };
+        let sc = self.calls[c as usize].clone();
+        if let crate::model::ThisArg::Node(th) = sc.this {
+            match cs.this {
+                crate::model::ThisArg::Node(n) => self.edge(n, th),
+                crate::model::ThisArg::Tok(t) => self.add_tok(th, t),
+                crate::model::ThisArg::Undef => {}
+            }
+        }
+        for (&a, &p) in cs.args.iter().zip(sc.args.iter()) {
+            self.edge(a, p);
+        }
+        for (&a, &p) in cs.spread.iter().zip(sc.spread.iter()) {
+            self.edge(a, p);
+        }
+        if sc.ret != cs.ret {
+            self.edge(sc.ret, cs.ret);
+        }
+        if target != tg {
+            self.edge(target, tg);
+        }
+        if made {
+            callee(self, tg, c);
+        }
+        c
+    }
+
+    /// `solver_call` without the chain key (`solver_call_keyed` keys it).
+    pub(crate) fn solver_call_raw(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
         self.calls.push(cs);
         self.solver_made += 1;
@@ -495,7 +590,7 @@ impl Model {
             for (&a, &b) in cs.spread.iter().zip(mc.spread.iter()) {
                 self.edge(a, b);
             }
-            if let (ThisArg::Node(a), ThisArg::Node(b)) = (&cs.this, &mc.this) {
+            if let (crate::model::ThisArg::Node(a), crate::model::ThisArg::Node(b)) = (&cs.this, &mc.this) {
                 self.edge(*a, *b);
             }
             if mc.ret != cs.ret {
@@ -508,7 +603,7 @@ impl Model {
             }
             return None;
         }
-        let id = self.solver_call(by, cs);
+        let id = self.solver_call_raw(by, cs);
         self.solver_keyed.insert(k, (id, target));
         Some(id)
     }
@@ -2078,3 +2173,4 @@ impl Model {
 mod compose;
 pub use body::compress;
 use compose::compose;
+
