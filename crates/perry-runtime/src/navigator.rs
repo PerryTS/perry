@@ -116,7 +116,7 @@ fn navigator_language() -> String {
 /// / `#locks` (`lib/internal/navigator.js`). Nothing is read from the host here.
 #[no_mangle]
 pub extern "C" fn js_navigator_object() -> f64 {
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Navigator".as_ptr(), 9);
+    let ctor = crate::object::builtin_value_core("Navigator");
     navigator_object_with_constructor(ctor)
 }
 

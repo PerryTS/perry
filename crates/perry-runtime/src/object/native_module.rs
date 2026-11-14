@@ -1060,16 +1060,13 @@ unsafe fn native_module_property_by_name_impl(
         return bound_native_callable_export_value("util", "debuglog");
     }
     if module_name == "url" && property_name == "URL" {
-        return js_get_global_this_builtin_value(b"URL".as_ptr(), "URL".len());
+        return crate::object::builtin_value_core("URL");
     }
     if module_name == "url" && property_name == "URLSearchParams" {
-        return js_get_global_this_builtin_value(
-            b"URLSearchParams".as_ptr(),
-            "URLSearchParams".len(),
-        );
+        return crate::object::builtin_value_core("URLSearchParams");
     }
     if module_name == "url" && property_name == "URLPattern" {
-        return js_get_global_this_builtin_value(b"URLPattern".as_ptr(), "URLPattern".len());
+        return crate::object::builtin_value_core("URLPattern");
     }
     // #6560/#9599 — Bun globals shim pack. The stdio properties are
     // BunFile-like handles built by `bun_compat`. In Bun platform mode the

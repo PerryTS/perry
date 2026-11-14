@@ -199,7 +199,8 @@ fn internal_readers_run_the_phase_they_need() {
         for name in ["Map", "Array", "Promise", "Error", "RegExp"] {
             assert!(JSValue::from_bits(builtin_prototype_value(name).to_bits()).is_pointer());
             assert!(JSValue::from_bits(builtin_constructor_value(name).to_bits()).is_pointer());
-            let by_name = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+            // The core variant of the by-name reader (a literal phase-A name).
+            let by_name = crate::object::builtin_value_core(name);
             assert_eq!(by_name.to_bits(), builtin_constructor_value(name).to_bits());
         }
         // A lazy phase-A family is born without phase B.
@@ -264,15 +265,21 @@ fn internal_readers_run_the_phase_they_need() {
         assert_ne!(intl.to_bits(), REALM_UNBOUND_POISON);
     });
     on_core_realm(|_| {
-        // An undeclared name is absent from the core as from the complete
-        // realm: its by-name read needs no phase B.
+        // An undeclared name goes to the full entry: its read can reach a
+        // getter on `Object.prototype`, which must see the complete global.
         let missing = js_get_global_this_builtin_value("notAGlobal".as_ptr(), 10);
-        assert!(!fetch_globals::realm_is_complete());
-        assert_eq!(missing.to_bits(), UNDEFINED);
-        // The global itself is a value name: the complete realm.
-        let itself = js_get_global_this_builtin_value("globalThis".as_ptr(), 10);
         assert!(fetch_globals::realm_is_complete());
-        assert_eq!(itself.to_bits(), js_get_global_this().to_bits());
+        assert_eq!(missing.to_bits(), UNDEFINED);
+    });
+    on_core_realm(|_| {
+        // So does a phase-A name read through the full variant (a caller
+        // whose name is not a literal).
+        let array = js_get_global_this_builtin_value("Array".as_ptr(), 5);
+        assert!(fetch_globals::realm_is_complete());
+        assert_eq!(
+            array.to_bits(),
+            builtin_constructor_value("Array").to_bits()
+        );
     });
 }
 

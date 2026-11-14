@@ -174,6 +174,35 @@ pub(crate) fn emit_agent_ptr_or(ctx: &mut FnCtx<'_>, slot: usize, absent: &str) 
     }
 }
 
+/// May a compiled site use the agent slot of intrinsic `family` AS the
+/// intrinsic object (dereference it beyond its layout word)? Only for a
+/// family the realm's phase A binds (`perry_abi::realm_phase`): until phase B
+/// has sealed a phase-B family or namespace its slot names the pristine
+/// stand-in, which is good for the shadow word and for nothing else (DESIGN
+/// startup-realm, section 7 rule 7).
+pub(crate) fn intrinsic_slot_is_the_object(family: usize) -> bool {
+    let name = match perry_abi::BuiltinProto::ALL.get(family) {
+        Some((_, constructor)) => constructor,
+        None => match perry_abi::BUILTIN_NAMESPACES.get(family - perry_abi::BUILTIN_PROTO_FAMILIES)
+        {
+            Some(namespace) => namespace,
+            None => return false,
+        },
+    };
+    !perry_abi::realm_rest_global(name)
+}
+
+/// [`emit_intrinsic_proto`] for a site that goes on to read the object
+/// itself (its meta, its slots), not only its layout word: refused at
+/// compile time for a phase-B family.
+pub(crate) fn emit_intrinsic_proto_object(ctx: &mut FnCtx<'_>, family: usize) -> String {
+    assert!(
+        intrinsic_slot_is_the_object(family),
+        "intrinsic family {family} is bound in phase B: its agent slot is the stand-in until then"
+    );
+    emit_intrinsic_proto(ctx, family)
+}
+
 /// This agent's intrinsic prototype of builtin family `family` (object model
 /// step 3: the object whose layout word's shadow bit is `Pristine(family)`).
 /// The slot is never null (`PERRY_PRISTINE_PROTO` until the realm is sealed),
@@ -337,6 +366,64 @@ pub(crate) fn emit_agent_ptr(ctx: &mut FnCtx<'_>, slot: usize, fallback_fn: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// DESIGN startup-realm, rule 7: before phase B a phase-B family's agent
+    /// slot may be read for its layout word only. The slot loader has three
+    /// users: the two shadow-word readers of `builtin_proto.rs` (any family)
+    /// and `emit_intrinsic_proto_object` here, which refuses a phase-B
+    /// family. No other file may call the raw loader.
+    #[test]
+    fn a_phase_b_intrinsic_slot_is_never_used_as_the_object() {
+        use perry_abi::{BuiltinProto, BUILTIN_NAMESPACES, BUILTIN_PROTO_FAMILIES};
+        for (family, name) in BuiltinProto::ALL {
+            assert_eq!(
+                intrinsic_slot_is_the_object(family as usize),
+                !perry_abi::realm_rest_global(name),
+                "{name}"
+            );
+        }
+        for (i, name) in BUILTIN_NAMESPACES.iter().enumerate() {
+            assert_eq!(
+                intrinsic_slot_is_the_object(BUILTIN_PROTO_FAMILIES + i),
+                !perry_abi::realm_rest_global(name),
+                "{name}"
+            );
+        }
+        // The families the generic dispatcher dereferences are phase A.
+        assert!(intrinsic_slot_is_the_object(BuiltinProto::Map as usize));
+        assert!(intrinsic_slot_is_the_object(BuiltinProto::Set as usize));
+        // Every phase-B family and namespace with a slot is refused.
+        for name in perry_abi::REALM_REST_GLOBALS {
+            if let Some((family, _)) = BuiltinProto::ALL.iter().find(|(_, n)| n == name) {
+                assert!(!intrinsic_slot_is_the_object(*family as usize), "{name}");
+            }
+            if let Some(family) = perry_abi::builtin_namespace_family(name) {
+                assert!(!intrinsic_slot_is_the_object(family), "{name}");
+            }
+        }
+        // Source audit: the raw loader's call sites.
+        let shadow_readers = include_str!("../builtin_proto.rs");
+        assert_eq!(shadow_readers.matches("emit_intrinsic_proto(").count(), 2);
+        for site in shadow_readers.split("emit_intrinsic_proto(").skip(1) {
+            let after = &site[..site.len().min(400)];
+            assert!(
+                after.contains("&[(I64, \"4\")]"),
+                "a builtin_proto.rs reader goes beyond the layout word: {after}"
+            );
+        }
+        for (file, source) in [
+            (
+                "generic_dispatch.rs",
+                include_str!("property_get/generic_dispatch.rs"),
+            ),
+            ("property_get.rs", include_str!("property_get.rs")),
+        ] {
+            assert_eq!(
+                source.matches("emit_intrinsic_proto(").count(),
+                0,
+                "{file} calls the raw slot loader: use emit_intrinsic_proto_object"
+            );
+        }
+    }
 
     /// Local-exec only where the program is an ELF executable: Linux
     /// `executable` outputs. Android and OpenHarmony programs are shared

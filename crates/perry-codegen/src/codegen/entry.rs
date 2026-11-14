@@ -222,6 +222,25 @@ pub(super) fn compile_module_entry(
             stub.block_mut(0).unwrap().ret_void();
         }
 
+        // Two-phase realm (`PERRY_REALM_TWO_PHASE=1`): the entry module
+        // defines the runtime's two link-time hooks (weak in the runtime),
+        // so the runtime's own readers of a phase-A intrinsic call the core
+        // entry and the full entry can complete a core-only realm, with no
+        // mode test on any call; a program compiled without the switch
+        // defines neither and does not link the two-phase path.
+        if crate::expr::property_get::globalget::realm_two_phase() {
+            for (hook, target) in [
+                ("perry_realm_core_entry", "js_get_global_core"),
+                ("perry_realm_complete", "js_realm_complete"),
+            ] {
+                let f = llmod.define_function(hook, DOUBLE, vec![]);
+                let _ = f.create_block("entry");
+                let blk = f.block_mut(0).unwrap();
+                let value = blk.call(DOUBLE, target, &[]);
+                blk.ret(DOUBLE, &value);
+            }
+        }
+
         // For dylib output, emit `void perry_module_init()` instead of
         // `int main()`. The host process calls this once after dlopen to
         // initialize the GC, string pools, module globals (including GC

@@ -845,11 +845,11 @@ pub(crate) fn lower_property_site_tail(
         ctx.block()
             .cond_br(&no_meta, &intrinsic_label, &probe_label);
         ctx.current_block = intrinsic_idx;
-        let map_proto = crate::expr::agent_ptr::emit_intrinsic_proto(
+        let map_proto = crate::expr::agent_ptr::emit_intrinsic_proto_object(
             ctx,
             crate::builtin_proto::BuiltinProto::Map as usize,
         );
-        let set_proto = crate::expr::agent_ptr::emit_intrinsic_proto(
+        let set_proto = crate::expr::agent_ptr::emit_intrinsic_proto_object(
             ctx,
             crate::builtin_proto::BuiltinProto::Set as usize,
         );

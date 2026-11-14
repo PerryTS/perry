@@ -662,14 +662,15 @@ pub(super) unsafe fn instance_constructor_value(
             | CLASS_ID_BOXED_SYMBOL
     ) {
         let name = match class_id {
-            CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
-            CLASS_ID_BOXED_STRING => b"String".as_slice(),
-            CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
-            CLASS_ID_BOXED_BIGINT => b"BigInt".as_slice(),
-            CLASS_ID_BOXED_SYMBOL => b"Symbol".as_slice(),
+            CLASS_ID_BOXED_NUMBER => "Number",
+            CLASS_ID_BOXED_STRING => "String",
+            CLASS_ID_BOXED_BOOLEAN => "Boolean",
+            CLASS_ID_BOXED_BIGINT => "BigInt",
+            CLASS_ID_BOXED_SYMBOL => "Symbol",
             _ => unreachable!(),
         };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        // Declared phase-A globals, each a literal: the realm's core.
+        let v = crate::object::builtin_value_core(name);
         return Some(JSValue::from_bits(v.to_bits()));
     }
     // #11868: an anonymous shape is not a constructor identity. Let the

@@ -279,7 +279,7 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
         _ => {}
     }
     if module == "repl" && name == "Recoverable" {
-        let parent = crate::object::js_get_global_this_builtin_value(b"SyntaxError".as_ptr(), 11);
+        let parent = crate::object::builtin_value_core("SyntaxError");
         return link_parent(ctor.get_nanbox_f64(), parent);
     }
     if let Some(parent_value) = native_parent(module, name) {
