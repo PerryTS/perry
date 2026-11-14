@@ -2316,6 +2316,14 @@ pub struct Model {
     /// `true`, the one run of the member's declared getter on the receiver
     /// that every load of the key reads (`collections::getter_call`).
     pub recv_calls: FxHashMap<(Tok, Atom, bool), CallId>,
+    /// The callback call a native made from a call of a program site's
+    /// native (`collections::cb_call`) is its chain's root: the one the
+    /// chain's deeper callback calls hang under (`cb_calls`).
+    pub cb_root: FxHashMap<CallId, CallId>,
+    /// The one callback call of a native at code position `loc` with
+    /// `nargs` arguments under root callback call `root`
+    /// (`collections::cb_call`).
+    pub cb_calls: FxHashMap<(CallId, &'static std::panic::Location<'static>, usize), CallId>,
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,

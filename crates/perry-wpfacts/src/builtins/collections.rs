@@ -277,6 +277,20 @@ fn gen_throw_passes(
 
 // ------------------------------------------------------------- arrays
 
+/// A native's call of callback `cb` from the run of call `by`.
+///
+/// Where `by` is itself a callback call a native made (the callee of a
+/// callback is a native that calls back: `a.some(Array.prototype.some, 1)`
+/// calls `some` on `Object(1)`, whose callback is the element again), its
+/// call is the one call of this code position with this many arguments
+/// under the chain's root callback call (`Model::cb_calls`): a call per run
+/// never settles there, since every run makes a new call, whose run on the
+/// receiver its new call boxes (`Object(1)` born at the call, 7.1.18
+/// ToObject) makes a new call again. The root, the callback call of a
+/// program site's native run, stays one call per run. A shared call
+/// receives every run's `this` and arguments (edges into its own nodes)
+/// and its result reaches every run's caller.
+#[track_caller]
 pub(super) fn cb_call(
     m: &mut Model,
     by: CallId,
@@ -284,6 +298,54 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
+    if let Some(&root) = m.cb_root.get(&by) {
+        let key = (root, std::panic::Location::caller(), args.len());
+        let call2 = match m.cb_calls.get(&key) {
+            Some(&c) => c,
+            None => {
+                let frame = m.call_run(root);
+                let th = m.node_l("cb-shared-this");
+                m.nodes[th as usize].frame = frame;
+                let mut a2 = Vec::with_capacity(args.len());
+                for _ in 0..args.len() {
+                    let a = m.node_l("cb-shared-arg");
+                    m.nodes[a as usize].frame = frame;
+                    a2.push(a);
+                }
+                let ret = m.node_l("cb-ret");
+                m.nodes[ret as usize].frame = frame;
+                let c = m.calls.len() as CallId;
+                m.solver_call(
+                    by,
+                    CallSite {
+                        first_arg_fixed: false,
+                        this: ThisArg::Node(th),
+                        args: a2,
+                        spread: vec![],
+                        ret,
+                        site: c,
+                        region: m.thrown,
+                    },
+                );
+                m.cb_calls.insert(key, c);
+                m.cb_root.insert(c, root);
+                c
+            }
+        };
+        let c2 = m.calls[call2 as usize].clone();
+        if let ThisArg::Node(th) = c2.this {
+            match this {
+                ThisArg::Node(n) => m.edge(n, th),
+                ThisArg::Tok(t) => m.add_tok(th, t),
+                ThisArg::Undef => {}
+            }
+        }
+        for (&a, &p) in args.iter().zip(c2.args.iter()) {
+            m.edge(a, p);
+        }
+        m.cons(cb, Cons::Call { call: call2 });
+        return c2.ret;
+    }
     let ret = m.node_l("cb-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call2 = m.calls.len() as CallId;
@@ -299,6 +361,7 @@ pub(super) fn cb_call(
             region: m.thrown,
         },
     );
+    m.cb_root.insert(call2, call2);
     m.cons(cb, Cons::Call { call: call2 });
     ret
 }
