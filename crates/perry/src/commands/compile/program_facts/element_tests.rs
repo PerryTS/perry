@@ -104,6 +104,7 @@ fn take_element_keyed(
     keys.extend(take(&mut e.key_signs).into_keys());
     keys.extend(take(&mut e.wide_keys).into_keys());
     keys.extend(take(&mut e.inbounds_stores));
+    keys.extend(take(&mut e.inbounds_reads).into_keys());
     keys.extend(take(&mut e.rest_reads).into_keys());
     keys.extend(take(&mut e.rest_writes).into_keys());
     keys.extend(take(&mut e.quiet_elements));

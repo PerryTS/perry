@@ -43,6 +43,19 @@
 //!
 //! `PERRY_FACTS_INBOUNDS_STORE=0` turns it off. Probe: one
 //! `# inbounds_store` line per proven store site (`probe`).
+//!
+//! **In-bounds reads** (`in_bounds_read`): the same text proof at a read
+//! `a[k]` says `k <= i < length(a)` held at the guard, so the read of an
+//! Array that never shrinks is not past its end when `k` is an index (a
+//! non-negative integer, which the key's interval says in the solve:
+//! `Model::elem_index_key`). The solve then leaves the past-the-end
+//! `undefined` out of the read (`Cons::IdxLoad` with `kept`,
+//! `Model::kept_read`): it yields an element, or what a hole reads when
+//! the Array may hold one. `PERRY_FACTS_INBOUNDS_READ=0` turns the reads
+//! off. Probe: one `# inbounds_read` line per text-proven read site
+//! (`read_probe`). Codegen reads the verdict per site
+//! (`ModuleBindings::inbounds_reads`): no bound test, and no hole test
+//! when no Array the receiver holds may have a hole.
 
 use super::*;
 use perry_hir::{BinaryOp, Expr, Stmt, UpdateOp};
@@ -52,6 +65,15 @@ use perry_hir::{BinaryOp, Expr, Stmt, UpdateOp};
 pub(crate) fn enabled() -> bool {
     !matches!(
         std::env::var("PERRY_FACTS_INBOUNDS_STORE").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `PERRY_FACTS_INBOUNDS_READ=0` (`off`, `false`) turns the in-bounds
+/// reads off: every computed read may be past the end again.
+pub(crate) fn read_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_INBOUNDS_READ").as_deref(),
         Ok("0") | Ok("off") | Ok("false")
     )
 }
@@ -88,6 +110,9 @@ pub(crate) struct InBounds {
     /// Proven store sites: (module, byte offset of the store, receiver
     /// node), for the probe.
     pub(crate) proven: Vec<(u32, u32, NodeId)>,
+    /// Text-proven reads: (receiver node, key node) of each
+    /// (`in_bounds_read`), for the export and the probe.
+    pub(crate) reads: crate::pts::FxHashSet<(NodeId, NodeId)>,
 }
 
 /// A non-negative integer literal.
@@ -296,7 +321,7 @@ impl<'a> Gen<'a> {
         params: &[perry_hir::Param],
         body: &[Stmt],
     ) -> (Option<BodyLocals>, Vec<Derived>) {
-        let own = self.m.inbounds_store.then(|| scan(f, params, body));
+        let own = (self.m.inbounds_store || self.m.inbounds_read).then(|| scan(f, params, body));
         (
             std::mem::replace(&mut self.in_bounds.body, own),
             std::mem::take(&mut self.in_bounds.derived),
@@ -436,12 +461,36 @@ impl<'a> Gen<'a> {
             }
             _ => return,
         };
-        if matches!(key, Key::Any(_)) && self.in_bounds_store(fx, object, index) {
+        if self.m.inbounds_store
+            && matches!(key, Key::Any(_))
+            && self.in_bounds_store(fx, object, index)
+        {
             self.m.inbounds_sites.insert(site);
             self.in_bounds
                 .proven
                 .push((fx.module, *element_offset, recv));
         }
+    }
+
+    /// The read `object[index]` being walked, of receiver node `recv` under
+    /// key node `idx`: whether the text proves the key below the length
+    /// (`in_bounds_store`'s proof: `key <= i < a.length`). Recorded for the
+    /// export (`InBounds::reads`). Under the negative control every read
+    /// counts.
+    pub(crate) fn in_bounds_read(
+        &mut self,
+        fx: &Fx,
+        object: &Expr,
+        index: &Expr,
+        recv: NodeId,
+        idx: NodeId,
+    ) -> bool {
+        let kept = self.m.inbounds_read
+            && (self.m.inbounds_read_sabotage || self.in_bounds_store(fx, object, index));
+        if kept {
+            self.in_bounds.reads.insert((recv, idx));
+        }
+        kept
     }
 
     /// Whether the store `a[key] = v` being walked is in bounds by the
@@ -553,6 +602,123 @@ pub(crate) fn probe(g: &Gen<'_>) -> Vec<String> {
             format!(
                 "# inbounds_store module={mi} site={offset} arrays={arrays} kept={} shrunk={shrunk}",
                 (shrunk == 0) as u8
+            )
+        })
+        .collect()
+}
+
+/// The verdict of one copy of a text-proven read (receiver `recv`, key
+/// `idx`): `None` when the solve did not keep it for some Array the
+/// receiver may hold (one that may shrink or is not this unit's, a key
+/// that may be no index, a receiver that may be no Array), else whether no
+/// Array it may hold has a hole (`present`).
+fn read_copy(g: &Gen<'_>, recv: NodeId, idx: NodeId) -> Option<bool> {
+    let m = &g.m;
+    let node = &m.nodes[recv as usize];
+    if node.prim != 0 || node.pts.is_empty() || node.pts.contains_tok(crate::model::TOP) {
+        return None;
+    }
+    if m.elem_index_key(idx) != Some(true) {
+        return None;
+    }
+    let mut present = true;
+    for t in node.pts.to_sorted() {
+        if !m.kept_read(t) || m.is_marker(t) {
+            return None;
+        }
+        present &= m
+            .holes
+            .get(&t)
+            .is_some_and(|&h| m.nodes[h as usize].prim & crate::model::prim::UNDEF == 0);
+    }
+    Some(present)
+}
+
+/// Per read site `(module, offset)` with a text-proven read: `Some(present)`
+/// when every read at the offset is text-proven and kept at every copy
+/// (`read_copy`; reads that are no copies of one another may share an
+/// offset: in `a[i][0]` both start at `a`), else `None`.
+fn read_verdicts(g: &Gen<'_>) -> std::collections::BTreeMap<(u32, u32), Option<bool>> {
+    let mut insts: Vec<std::collections::HashMap<NodeId, NodeId>> = Vec::new();
+    for inst in 0..g.m.sum.insts.len() as u32 {
+        let mut map = std::collections::HashMap::new();
+        g.m.inst_copies(inst, |orig, copy| {
+            map.insert(orig, copy);
+        });
+        if !map.is_empty() {
+            insts.push(map);
+        }
+    }
+    let mut proven: crate::pts::FxHashSet<(u32, u32)> = Default::default();
+    for site in &g.element_sites {
+        if site.op == crate::derive::ElementOp::Read
+            && site.byte_offset != 0
+            && g.in_bounds.reads.contains(&(site.recv, site.idx))
+        {
+            proven.insert((site.module, site.byte_offset));
+        }
+    }
+    let mut out: std::collections::BTreeMap<(u32, u32), Option<bool>> = Default::default();
+    for site in &g.element_sites {
+        if site.op != crate::derive::ElementOp::Read
+            || !proven.contains(&(site.module, site.byte_offset))
+        {
+            continue;
+        }
+        let mut v = match g.in_bounds.reads.contains(&(site.recv, site.idx)) {
+            true => read_copy(g, site.recv, site.idx),
+            false => None,
+        };
+        for map in &insts {
+            if !map.contains_key(&site.recv) && !map.contains_key(&site.idx) {
+                continue;
+            }
+            let recv = map.get(&site.recv).copied().unwrap_or(site.recv);
+            let idx = map.get(&site.idx).copied().unwrap_or(site.idx);
+            v = match (v, read_copy(g, recv, idx)) {
+                (Some(a), Some(b)) => Some(a && b),
+                _ => None,
+            };
+        }
+        let e = out
+            .entry((site.module, site.byte_offset))
+            .or_insert(Some(true));
+        *e = match (*e, v) {
+            (Some(a), Some(b)) => Some(a && b),
+            _ => None,
+        };
+    }
+    out
+}
+
+/// Fill `ModuleBindings::inbounds_reads`: the read sites the solve kept
+/// (`read_verdicts`), each with whether its slot is present.
+pub(crate) fn collect_reads(g: &Gen<'_>, bindings: &mut [crate::ModuleBindings]) {
+    if g.m.aborted || !g.m.inbounds_read {
+        return;
+    }
+    for ((mi, offset), v) in read_verdicts(g) {
+        if let (Some(present), Some(mb)) = (v, bindings.get_mut(mi as usize)) {
+            mb.inbounds_reads.push((offset, present));
+        }
+    }
+}
+
+/// The probe (`PERRY_FACTS_DUMP`): one `# inbounds_read` line per read
+/// site with a text-proven read: `kept=1` when the solve kept it at every
+/// copy (the read is not past the end), and then `present=1` when no Array
+/// it reads may hold a hole.
+pub(crate) fn read_probe(g: &Gen<'_>) -> Vec<String> {
+    if !g.m.inbounds_read {
+        return Vec::new();
+    }
+    read_verdicts(g)
+        .into_iter()
+        .map(|((mi, offset), v)| {
+            format!(
+                "# inbounds_read module={mi} site={offset} kept={} present={}",
+                v.is_some() as u8,
+                (v == Some(true)) as u8
             )
         })
         .collect()

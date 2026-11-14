@@ -563,6 +563,8 @@ fn generate<'a>(
     g.m.slice_births = builtins::slice_births_enabled();
     g.m.inbounds_store = gen::in_bounds::enabled();
     g.m.inbounds_sabotage = cfg.sabotage.as_deref() == Some("inbounds");
+    g.m.inbounds_read_sabotage = cfg.sabotage.as_deref() == Some("inread");
+    g.m.inbounds_read = gen::in_bounds::read_enabled();
     g.m.no_hole_sabotage = cfg.sabotage.as_deref() == Some("nohole");
     g.m.slice_birth_sabotage = cfg.sabotage.as_deref() == Some("slicebirth");
     g.m.wide_key_sabotage = cfg.sabotage.as_deref() == Some("widekey");
@@ -1150,6 +1152,7 @@ fn compute_act<'a>(
     element_keys::collect_signs(&g, &mut bindings);
     element_keys::collect_wide(&g, &mut bindings);
     gen::in_bounds::collect(&g, &mut bindings);
+    gen::in_bounds::collect_reads(&g, &mut bindings);
     if !g.m.aborted && signatures::enabled() {
         signatures::collect(
             &g,

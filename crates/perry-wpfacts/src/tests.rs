@@ -107,6 +107,7 @@ mod hub_tokens;
 mod identity_routes;
 mod idx_prim_call;
 mod in_bounds;
+mod in_bounds_read;
 mod indexed_callees;
 mod indexed_owner;
 mod indirect_eval_call;

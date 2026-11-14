@@ -523,6 +523,11 @@ pub struct ElisionFacts {
     /// `ModuleBindings::inbounds_stores`): no lowering reads it; check mode
     /// tests the claim (`array_rep::witness_in_bounds_store`).
     pub inbounds_stores: std::collections::BTreeSet<u32>,
+    /// In-bounds reads (by `element_offset`; wpfacts
+    /// `ModuleBindings::inbounds_reads`): the key is an integer in
+    /// `[0, length)` of the Array read; `true` when the slot is a present
+    /// element too (`index_get::proven_array::RepRead::kept`).
+    pub inbounds_reads: std::collections::BTreeMap<u32, bool>,
     /// I32 at rest, PR B (wpfacts `ModuleBindings::rest_reads` /
     /// `rest_writes` / `rest_births`; `expr::rest_elems`): element reads and
     /// stores (by `element_offset`) whose every receiver is an at-rest

@@ -232,6 +232,7 @@ def main():
         ("rep-default-negative", "arrelem", "array rep"),
         ("slice-birth-negative", "slicebirth", "array rep"),
         ("inbounds-store-negative", "inbounds", "array rep"),
+        ("inbounds-read-negative", "inread", "array rep"),
         # A false "no hole" claim made at its source (not at a store) is
         # reported where the for-of reads the slot.
         ("forof-hole-negative", "nohole", "array rep"),
