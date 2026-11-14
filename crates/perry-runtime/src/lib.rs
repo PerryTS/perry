@@ -116,6 +116,7 @@ pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_coerce;
 mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
