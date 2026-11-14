@@ -307,6 +307,43 @@ impl Model {
         if foreign == 0 {
             return;
         }
+        if fam == Family::Object {
+            // `Object.prototype`'s Annex B accessor methods (B.2.2.2-5) with
+            // a primitive `this`, the method a value (`o.m =
+            // Object.prototype.__lookupGetter__`, then `o.m.call(1, k)`): the
+            // native that runs is the one the name finds on the primitive's
+            // chain (no primitive prototype has an own member of these
+            // names), so the call is the primitive's call by name.
+            // `__defineGetter__` / `__defineSetter__` call no argument and
+            // keep none: the runtime (`object_ops/accessors.rs`
+            // `define_accessor_annexb`) throws a TypeError for a non-callable
+            // function, then `js_object_define_property` throws on a
+            // non-object `this` (`define_property.rs:161`); ECMA-262 defines
+            // on the discarded wrapper (7.1.18). `__lookupGetter__` /
+            // `__lookupSetter__` walk the primitive's chain
+            // (`accessors.rs` `lookup_accessor_annexb`, B.2.2.4/5):
+            // `annexb_lookup_prim`.
+            let n: &str = &*name;
+            if matches!(
+                n,
+                "__defineGetter__" | "__defineSetter__" | "__lookupGetter__" | "__lookupSetter__"
+            ) {
+                let setter = n == "__lookupSetter__";
+                let lookup = n.starts_with("__lookup");
+                let mut b = foreign;
+                while b != 0 {
+                    let k = b & b.wrapping_neg();
+                    b &= !k;
+                    if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
+                        self.diagnostic_callee(call, f);
+                        if lookup {
+                            self.with_native(call, |m| builtins::annexb_lookup_prim(m, k, call, setter));
+                        }
+                    }
+                }
+                return;
+            }
+        }
         if builtins::native_prims(fam) == 0 {
             // A generic `Array.prototype` method ToObject's its `this`
             // (ECMA-262 23.1.3, 7.1.18): a string, number, boolean, symbol

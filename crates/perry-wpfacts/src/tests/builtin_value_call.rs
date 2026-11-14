@@ -308,3 +308,42 @@ fn skinhold5_control_typed_array_method_on_a_typed_array_runs() {
         (false, false)
     );
 }
+
+/// SKINSWEEP1: an `Object.prototype` Annex B accessor method read as a
+/// value and called with a primitive `this` (three.js skin: the receiver
+/// sets of `AnimationAction` hold primitives beside `Object`, the callee
+/// sets `Object.prototype.__defineGetter__` / `__lookupGetter__` /
+/// their setter forms, c2576-c2606). The method that runs is the one the
+/// name finds on the primitive's chain: `__defineGetter__` /
+/// `__defineSetter__` call nothing and keep nothing (the runtime throws in
+/// `js_object_define_property` on a non-object `this`; ECMA-262 defines on
+/// the discarded wrapper), `__lookupGetter__` / `__lookupSetter__` walk the
+/// primitive's prototype chain (B.2.2.4/5). No unknown code: the realm is
+/// not held, the sibling sites stay proven.
+#[test]
+fn red_sweep1_annexb_on_a_number_runs_no_unknown_code() {
+    assert_eq!(
+        run("const r: any = process.argv.length > 9 ? 1 : 2; const lg: any = Object.prototype.__lookupGetter__; const ls: any = Object.prototype.__lookupSetter__; const h: any = lg.call(r, json.k); const s: any = ls.call(r, json.k); if (h !== undefined) h.call(o); if (s !== undefined) s.call(o, 1); const dg: any = Object.prototype.__defineGetter__; const ds: any = Object.prototype.__defineSetter__; try { dg.call(r, json.k, function () { return o; }); ds.call(r, json.k, function (v: any) { hostTake(v); }); } catch (e) {}"),
+        (false, false)
+    );
+}
+
+/// The same with a string `this`, stored on an object and called as its
+/// method's `.call`.
+#[test]
+fn red_sweep1_annexb_on_a_string_runs_no_unknown_code() {
+    assert_eq!(
+        run("const r: any = process.argv.length > 9 ? \"a\" : \"b\"; const t: any = { m: Object.prototype.__lookupGetter__, d: Object.prototype.__defineSetter__ }; const h: any = t.m.call(r, json.k); if (h !== undefined) h.call(o); try { t.d.call(r, json.k, function (v: any) { hostTake(v); }); } catch (e) {}"),
+        (false, false)
+    );
+}
+
+/// Control: on an object `this` the define keeps its model: the getter
+/// installed on `t` is what `t.q` runs.
+#[test]
+fn sweep1_control_annexb_define_on_an_object_keeps_its_model() {
+    assert!(proven(
+        "const t: any = {}; const dg: any = Object.prototype.__defineGetter__; dg.call(t, \"q\", function () { return new Svc(); }); console.log(t.q.marker);",
+        "marker"
+    ));
+}
