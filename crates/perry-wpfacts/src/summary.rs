@@ -73,6 +73,19 @@ pub const MK_FN_APPLY: u8 = 9;
 /// own callback call reaches again (`forEach` called with `forEach` on a
 /// primitive receiver whose wrapper's elements hold it) joins that call.
 pub const MK_NATIVE_CB: u8 = 10;
+/// The callback call a builtin method model makes (`collections::cb_call`:
+/// `forEach`'s, `reduce`'s, a Promise reaction's, ...), per (model call
+/// site `tag`, method): a callback that is a builtin method again, run on a
+/// primitive receiver wrapped per call, joins the call its root already
+/// made instead of making a new call and a new wrapper per run.
+pub const MK_BUILTIN_CB: u8 = 11;
+/// The `then` call of a thenable adoption (`builtins::adopt`:
+/// `v.then(resolve, reject)`), per (adopting model site `tag`, aux):
+/// a then-callback whose result is adopted again runs `then` on a call
+/// made per run, whose reaction adopts again: joined, the adoption's
+/// value flows into the one call's `this` and what its resolver settles
+/// into every adopting promise of the key.
+pub const MK_ADOPT_THEN: u8 = 12;
 /// A closure context key for a closure whose captured cells are its
 /// creator's context's (`CAP_OUTER`): the creator's context id with this
 /// bit. Lexical contexts never set it (kinds stop at 7 << 28).
@@ -482,8 +495,42 @@ impl Model {
         target: Option<NodeId>,
         cs: CallSite,
     ) -> Option<CallId> {
+        match self.solver_call_joined(by, key, target, cs) {
+            Ok(id) => Some(id),
+            Err((_, tgt)) => {
+                if let (Some(a), Some(b)) = (target, tgt) {
+                    if a != b {
+                        self.edge(a, b);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    /// `solver_call_keyed` without the target edge: `Err` names the
+    /// existing call of the key and its target, for a maker whose target
+    /// flows the other way (`builtins::adopt`: the existing settled node
+    /// into the adopting promise's).
+    pub(crate) fn solver_call_joined(
+        &mut self,
+        by: CallId,
+        key: (u8, u32, u32),
+        target: Option<NodeId>,
+        cs: CallSite,
+    ) -> Result<CallId, (CallId, Option<NodeId>)> {
         let root = self.made_root.get(&by).copied().unwrap_or(by);
-        let k = (root, key.0, key.1, key.2, cs.args.len() as u32, cs.spread.len() as u32);
+        // The `this` kind is part of the key: a joined call's `this` flows
+        // only node to node, so a call with no `this` (or a token `this`)
+        // never joins one whose `this` is of another kind: under one root,
+        // `a.forEach(g)` and `forEach.bind(o, h, 5)` run as its callback
+        // are the same (maker, site, method), and h's `this` is 5.
+        let this_k = match cs.this {
+            crate::model::ThisArg::Undef => 0,
+            crate::model::ThisArg::Node(_) => 1,
+            crate::model::ThisArg::Tok(t) => 2 + t as u32,
+        };
+        let k = (root, key.0, key.1, key.2, cs.args.len() as u32, cs.spread.len() as u32, this_k);
         if let Some(&(m, tgt)) = self.solver_keyed.get(&k) {
             let mc = self.calls[m as usize].clone();
             for (&a, &b) in cs.args.iter().zip(mc.args.iter()) {
@@ -498,16 +545,11 @@ impl Model {
             if mc.ret != cs.ret {
                 self.edge(mc.ret, cs.ret);
             }
-            if let (Some(a), Some(b)) = (target, tgt) {
-                if a != b {
-                    self.edge(a, b);
-                }
-            }
-            return None;
+            return Err((m, tgt));
         }
         let id = self.solver_call(by, cs);
         self.solver_keyed.insert(k, (id, target));
-        Some(id)
+        Ok(id)
     }
 
     /// Is `call` a protocol touch of a token (`Model::implicit`: the

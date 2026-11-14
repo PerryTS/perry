@@ -896,14 +896,18 @@ pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -
             let c = m.calls[call as usize].clone();
             let this = m.node_l("written-prim-this");
             m.add_prim(this, p);
-            let call2 = m.solver_call(
+            let tg = m.atom("native written primitive call");
+            if let Some(call2) = m.solver_call_keyed(
                 call,
+                (crate::summary::MK_BUILTIN_CB, tg, a),
+                Some(w),
                 crate::model::CallSite {
                     this: crate::model::ThisArg::Node(this),
                     ..c
                 },
-            );
-            m.cons(w, Cons::Call { call: call2 });
+            ) {
+                m.cons(w, Cons::Call { call: call2 });
+            }
         }
         _ => unreachable!(),
     }
@@ -1180,18 +1184,25 @@ pub(super) fn native_method(
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Tok(origin),
-                    args: c.args.iter().skip(1).copied().collect(),
-                    spread: c.spread.clone(),
-                    ret,
-                    site: call2,
-                    region: m.thrown,
-                },
-            );
-            m.cons(fl, Cons::Call { call: call2 });
+            let tg = m.atom("EventEmitter emit listener");
+            if m
+                .solver_call_keyed(
+                    call,
+                    (crate::summary::MK_BUILTIN_CB, tg, a),
+                    Some(fl),
+                    CallSite {
+                        this: ThisArg::Tok(origin),
+                        args: c.args.iter().skip(1).copied().collect(),
+                        spread: c.spread.clone(),
+                        ret,
+                        site: call2,
+                        region: m.thrown,
+                    },
+                )
+                .is_some()
+            {
+                m.cons(fl, Cons::Call { call: call2 });
+            }
             ret_prim(m, call, prim::BOOL);
         }
         ("EventEmitter", "off" | "removeListener" | "removeAllListeners" | "setMaxListeners") => {

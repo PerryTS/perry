@@ -702,7 +702,7 @@ pub fn resolver(m: &mut Model, by: CallId, dst: NodeId) -> Tok {
     // Memoized before `adopt`, which asks for this resolver again.
     let (tok, p) = settle_fn(m, "<resolver>", dst, false);
     m.resolvers.insert(dst, tok);
-    adopt(m, by, p, dst);
+    adopt(m, by, "resolve function", 0, p, dst);
     tok
 }
 
@@ -844,7 +844,11 @@ fn promise_value(m: &mut Model, p: Tok) -> NodeId {
 
 /// `v` adopted by a promise: the value, the settled value of promise
 /// tokens in it, and whatever a thenable's `then` resolves.
-pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
+/// The `then` call is one per (root of `by`, `tag`, `aux`)
+/// (`MK_ADOPT_THEN`), made with its resolver before the resolver's own
+/// adoption asks for a call: joined, `v` flows into its `this` and its
+/// settled node into `dst`.
+pub fn adopt(m: &mut Model, by: CallId, tag: &'static str, aux: u32, v: NodeId, dst: NodeId) {
     if m.reach_thenable {
         m.cons(v, Cons::Fulfil { dst });
     } else {
@@ -858,17 +862,18 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             dst,
         },
     );
-    let res = resolver(m, by, dst);
-    let thrown = m.thrown;
-    let rej = rejecter(m, thrown);
+    let then = m.atom("then");
+    let tg = m.atom(tag);
+    let settled = m.node_l("adopt-settled");
+    m.edge(settled, dst);
     let rn = m.node_l("resolver");
-    m.add_tok(rn, res);
     let jn = m.node_l("rejecter");
-    m.add_tok(jn, rej);
     let ret = m.node_l("then-ret");
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let made = m.solver_call_joined(
         by,
+        (crate::summary::MK_ADOPT_THEN, tg, aux),
+        Some(settled),
         CallSite {
             this: ThisArg::Node(v),
             args: vec![rn, jn],
@@ -878,7 +883,17 @@ pub fn adopt(m: &mut Model, by: CallId, v: NodeId, dst: NodeId) {
             region: m.thrown,
         },
     );
-    let then = m.atom("then");
+    if let Err((_, old)) = made {
+        if let Some(o) = old {
+            m.edge(o, dst);
+        }
+        return;
+    }
+    let res = resolver(m, by, settled);
+    m.add_tok(rn, res);
+    let thrown = m.thrown;
+    let rej = rejecter(m, thrown);
+    m.add_tok(jn, rej);
     m.cons(
         v,
         Cons::MCall {
@@ -2591,7 +2606,7 @@ fn ns_method_inner(
                 } else {
                     ThisArg::Node(this)
                 };
-                let _ = collections::cb_call(m, call, cb, this_arg, args);
+                let _ = collections::cb_call(m, call, "builtins callback 1", None, cb, this_arg, args);
                 // HTML also accepts string handlers (ToString), which may
                 // run arbitrary script. Perry/Node only accept functions;
                 // no object handler is retained in either case.
@@ -2973,7 +2988,7 @@ fn ns_method_inner(
             let v = promise_value(m, p);
             if let Some(a) = arg(m, call, 0) {
                 if name == "resolve" {
-                    adopt(m, call, a, v);
+                    adopt(m, call, "Promise.resolve", 0, a, v);
                 } else {
                     let thrown = m.thrown;
                     m.edge(a, thrown);
@@ -3002,7 +3017,7 @@ fn ns_method_inner(
             if let Some(els) = lit {
                 for (i, e) in els.into_iter().enumerate() {
                     let s = m.node_l("settled");
-                    adopt(m, call, e, s);
+                    adopt(m, call, "Promise combinator element", i as u32, e, s);
                     m.edge(s, settled);
                     let slot = m.index_slot(arr, i as u32);
                     m.edge(s, slot);
@@ -3010,7 +3025,7 @@ fn ns_method_inner(
             } else {
                 let vals = all_arg_values(m, call);
                 let items = iterate(m, call, vals);
-                adopt(m, call, items, settled);
+                adopt(m, call, "Promise combinator items", 0, items, settled);
                 m.edge(settled, fa);
             }
             if name == "allSettled" {

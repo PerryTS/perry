@@ -1841,7 +1841,7 @@ impl Model {
                 let dst = self.node_l("implicit-settled");
                 self.nodes[dst as usize].sink = true;
                 self.nodes[dst as usize].frame = home;
-                crate::builtins::adopt(self, call, ret, dst);
+                crate::builtins::adopt(self, call, "implicit protocol result", 0, ret, dst);
                 dst
             } else {
                 ret

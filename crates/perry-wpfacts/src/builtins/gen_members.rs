@@ -68,8 +68,12 @@ fn pulled(m: &mut Model, t: Tok, call: CallId) -> NodeId {
     let sub = |m: &mut Model, name: &str| -> NodeId {
         let ret = m.node_l("generator-helper-step");
         m.nodes[ret as usize].frame = run;
-        let c2 = m.solver_call(
+        let tg = m.atom("generator helper step");
+        let na = m.atom(name);
+        if let Some(c2) = m.solver_call_keyed(
             call,
+            (crate::summary::MK_BUILTIN_CB, tg, na),
+            Some(recv),
             CallSite {
                 this: ThisArg::Node(recv),
                 args: vec![],
@@ -78,10 +82,10 @@ fn pulled(m: &mut Model, t: Tok, call: CallId) -> NodeId {
                 site,
                 region: m.thrown,
             },
-        );
-        m.protocol_calls.insert(c2);
-        let key = Key::Named(m.atom(name));
-        m.cons(recv, Cons::MCall { key, call: c2 });
+        ) {
+            m.protocol_calls.insert(c2);
+            m.cons(recv, Cons::MCall { key: Key::Named(na), call: c2 });
+        }
         ret
     };
     let step = sub(m, "next");

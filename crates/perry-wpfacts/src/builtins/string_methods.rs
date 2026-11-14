@@ -141,24 +141,31 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
     let ret = m.node_l("builtin-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
-        by,
-        CallSite {
-            this: ThisArg::Node(recv),
-            args,
-            spread: vec![],
-            ret,
-            site: call,
-            region: m.thrown,
-        },
-    );
-    m.cons(
-        recv,
-        Cons::MCall {
-            key: Key::Named(a),
-            call,
-        },
-    );
+    let tg = m.atom("string builtin method call");
+    if m
+        .solver_call_keyed(
+            by,
+            (crate::summary::MK_BUILTIN_CB, tg, a),
+            Some(recv),
+            CallSite {
+                this: ThisArg::Node(recv),
+                args,
+                spread: vec![],
+                ret,
+                site: call,
+                region: m.thrown,
+            },
+        )
+        .is_some()
+    {
+        m.cons(
+            recv,
+            Cons::MCall {
+                key: Key::Named(a),
+                call,
+            },
+        );
+    }
     ret
 }
 
@@ -190,7 +197,7 @@ fn replacer_arg(m: &mut Model, by: CallId) -> NodeId {
 fn replace_value(m: &mut Model, by: CallId, rv: NodeId) {
     to_prim(m, rv, "replaceValue ToString");
     let a = replacer_arg(m, by);
-    let r = cb_call(m, by, rv, ThisArg::Undef, vec![a; 5]);
+    let r = cb_call(m, by, "string_methods callback 1", None, rv, ThisArg::Undef, vec![a; 5]);
     to_prim(m, r, "replace callback result ToString");
 }
 
@@ -732,18 +739,25 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
     let ret = m.node_l("builtin-new");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
-        by,
-        CallSite {
-            this: ThisArg::Undef,
-            args,
-            spread: vec![],
-            ret,
-            site: call,
-            region: m.thrown,
-        },
-    );
-    m.cons(ctor, Cons::New { call });
+    let tg = m.atom("string builtin construct");
+    if m
+        .solver_call_keyed(
+            by,
+            (crate::summary::MK_BUILTIN_CB, tg, tg),
+            Some(ctor),
+            CallSite {
+                this: ThisArg::Undef,
+                args,
+                spread: vec![],
+                ret,
+                site: call,
+                region: m.thrown,
+            },
+        )
+        .is_some()
+    {
+        m.cons(ctor, Cons::New { call });
+    }
     ret
 }
 

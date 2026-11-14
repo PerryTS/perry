@@ -2325,10 +2325,11 @@ pub struct Model {
     /// at (`Model::solver_call`): a program call, or a call no solver
     /// maker made.
     pub made_root: FxHashMap<CallId, CallId>,
-    /// (root, maker, aux, aux2, args, spreads) → the one call that maker
-    /// makes for every call of that root, and the node its callee
-    /// constraint sits on (`Model::solver_call_keyed`).
-    pub solver_keyed: FxHashMap<(CallId, u8, u32, u32, u32, u32), (CallId, Option<NodeId>)>,
+    /// (root, maker, aux, aux2, args, spreads, this) → the one call that
+    /// maker makes for every call of that root, and the node its callee
+    /// constraint sits on (`Model::solver_call_keyed`). `this`: 0 no
+    /// `this` (`ThisArg::Undef`), 1 a node, 2 + t the token t.
+    pub solver_keyed: FxHashMap<(CallId, u8, u32, u32, u32, u32, u32), (CallId, Option<NodeId>)>,
     /// (receiver, member, getter) → the one call a builtin method makes of
     /// that member of the receiver (`collections::recv_call`), or, with
     /// `true`, the one run of the member's declared getter on the receiver

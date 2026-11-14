@@ -71,18 +71,25 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
                 m.add_tok(jn, rej);
                 let ret = m.node_l("executor-ret");
                 let call2 = m.calls.len() as CallId;
-                m.solver_call(
-                    call,
-                    CallSite {
-                        this: ThisArg::Undef,
-                        args: vec![rn, jn],
-                        spread: vec![],
-                        ret,
-                        site: call2,
-                        region: m.thrown,
-                    },
-                );
-                m.cons(ex, Cons::Call { call: call2 });
+                let tg = m.atom("Promise executor");
+                if m
+                    .solver_call_keyed(
+                        call,
+                        (crate::summary::MK_BUILTIN_CB, tg, tg),
+                        Some(ex),
+                        CallSite {
+                            this: ThisArg::Undef,
+                            args: vec![rn, jn],
+                            spread: vec![],
+                            ret,
+                            site: call2,
+                            region: m.thrown,
+                        },
+                    )
+                    .is_some()
+                {
+                    m.cons(ex, Cons::Call { call: call2 });
+                }
             }
             ret_tok(m, call, p);
         }

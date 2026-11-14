@@ -19,12 +19,12 @@ fn facts(src: &str) -> ProgramFacts {
 
 /// Every solver-made call is keyed by (program call, maker kind, a bound
 /// value or a protocol step), so there are at most calls x (3 x binds +
-/// 10 makers x 3 steps) of them; `(` counts the program's calls from above
+/// 12 makers x 3 steps) of them; `(` counts the program's calls from above
 /// and `.bind(` its bind sites.
 fn bound(src: &str) -> u64 {
     let calls = src.matches('(').count() as u64;
     let binds = src.matches(".bind(").count() as u64;
-    calls * (3 * binds + 30)
+    calls * (3 * binds + 36)
 }
 
 fn check(src: &str) {
@@ -111,6 +111,70 @@ f.call(1, f, 2);
 const g: any = Array.prototype.map;
 (String.prototype as any).length = 1;
 g.call(3, g, 4);
+"#,
+    );
+}
+
+/// The same recursion through a builtin method model's own callback call
+/// (`array_method`'s `findIndex`, no declared entry): each run's callback
+/// call ran `findIndex` on a new Number wrapper whose chain's element is
+/// `findIndex` again. Its callback call is one per (program call, model
+/// site, method) (`MK_BUILTIN_CB`), so the solve ends.
+#[test]
+fn builtin_method_callback_that_is_the_method_on_a_primitive() {
+    check(
+        r#"
+const f: any = Array.prototype.findIndex;
+(Number.prototype as any)[0] = f;
+(Number.prototype as any).length = 1;
+(Object.prototype as any)[0] = f;
+f.call(1, f, 2);
+"#,
+    );
+}
+
+/// DECISIONS 225: the activation pass solves before the summaries
+/// (`sum.ready` is false), so the wrapper of a primitive `this` is born per
+/// call (`birth_ctx`). A builtin model whose callback call is new per run
+/// then nests a new call and a new wrapper per level inside one `cons`
+/// replay (r7 on the main merge). The pass has to finish, within the bound.
+fn act_check(src: &str) {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
+    let cfg = FactsConfig {
+        roots: vec!["t.ts".into()],
+        max_work: Some(50_000_000),
+        ..FactsConfig::default()
+    };
+    let a = crate::activation(&[("t.ts".into(), &hir)], &cfg);
+    assert!(a.live_dynamic_imports().is_some(), "the activation pass finishes");
+}
+
+#[test]
+fn activation_builtin_method_callback_that_is_the_method_on_a_primitive() {
+    act_check(
+        r#"
+const f: any = Array.prototype.findIndex;
+(Number.prototype as any)[0] = f;
+(Number.prototype as any).length = 1;
+(Object.prototype as any)[0] = f;
+f.call(1, f, 2);
+"#,
+    );
+}
+
+/// The r7 shape: `f.apply(x, arguments)` forwards a call whose positions
+/// hold the method itself (`Model::positional` reads the spread elements).
+#[test]
+fn activation_forwarded_arguments_into_a_builtin_method_on_a_primitive() {
+    act_check(
+        r#"
+const f: any = Array.prototype.findIndex;
+function g(this: any) { return f.apply(7, arguments); }
+(Number.prototype as any)[0] = f;
+(Number.prototype as any)[1] = g;
+(Number.prototype as any).length = 2;
+g(g, 2);
 "#,
     );
 }

@@ -323,7 +323,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
             let it = iterate(m, call, x);
             let num = node(m, call, "b-index");
             m.add_prim(num, prim::NUM);
-            let k = cb_call(m, call, f, ThisArg::Undef, vec![it, num]);
+            let k = cb_call(m, call, "object_statics callback 1", None, f, ThisArg::Undef, vec![it, num]);
             let arr = site_tmpl(m, call, "Array");
             let afa = m.field_any(arr);
             m.edge(it, afa);

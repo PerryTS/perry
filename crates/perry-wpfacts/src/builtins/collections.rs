@@ -292,29 +292,25 @@ fn maybe_absent(m: &mut Model, c: &CallSite, n: NodeId) -> NodeId {
     v
 }
 
+/// The callback call `cb(this, ...args)` a builtin method model makes at
+/// its call site `tag`, for method `of` where one model serves several: the
+/// one call of (`MK_BUILTIN_CB`, `tag`, `of`) under the root of `by`
+/// (`cb_call_keyed`). A call per run never settles when the callback is a
+/// builtin method itself on a primitive receiver (ToObject: a wrapper born
+/// per call) whose wrapper's elements hold it: each run's callback call
+/// runs the method on a new wrapper, whose callback call is new again.
 pub(super) fn cb_call(
     m: &mut Model,
     by: CallId,
+    tag: &'static str,
+    of: Option<&str>,
     cb: NodeId,
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
-    let ret = m.node_l("cb-ret");
-    m.nodes[ret as usize].frame = m.call_run(by);
-    let call2 = m.calls.len() as CallId;
-    m.solver_call(
-        by,
-        CallSite {
-            this,
-            args,
-            spread: vec![],
-            ret,
-            site: call2,
-            region: m.thrown,
-        },
-    );
-    m.cons(cb, Cons::Call { call: call2 });
-    ret
+    let t = m.atom(tag);
+    let o = of.map_or(t, |s| m.atom(s));
+    cb_call_keyed(m, by, (crate::summary::MK_BUILTIN_CB, t, o), cb, this, args)
 }
 
 /// `cb_call` of a declared native's `calls(..)` effect: the one call of
@@ -482,8 +478,11 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
     let exec = m.node_l("capability-executor");
     m.add_tok(exec, executor);
     let c = m.calls[call as usize].clone();
-    let mc = m.solver_call(
+    let tg = m.atom("NewPromiseCapability");
+    if let Some(mc) = m.solver_call_keyed(
         call,
+        (crate::summary::MK_BUILTIN_CB, tg, sa),
+        Some(sp),
         CallSite {
             this: ThisArg::Undef,
             args: vec![exec],
@@ -492,8 +491,9 @@ fn promise_species(m: &mut Model, t: Tok, call: CallId, executor: Tok) {
             site: c.site,
             region: m.thrown,
         },
-    );
-    m.cons(sp, Cons::NewProgram { call: mc });
+    ) {
+        m.cons(sp, Cons::NewProgram { call: mc });
+    }
 }
 
 /// The executor NewPromiseCapability (27.2.1.5) hands `new C(executor)`: a
@@ -561,8 +561,8 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         settled
     };
     let thrown = m.thrown;
-    let _ = cb_call(m, by, res, ThisArg::Undef, vec![value]);
-    let _ = cb_call(m, by, rej, ThisArg::Undef, vec![thrown]);
+    let _ = cb_call(m, by, "collections callback 1", None, res, ThisArg::Undef, vec![value]);
+    let _ = cb_call(m, by, "collections callback 2", None, rej, ThisArg::Undef, vec![thrown]);
     tok
 }
 
@@ -580,24 +580,31 @@ pub(crate) fn method_call(
     let ret = m.node_l("method-ret");
     m.nodes[ret as usize].frame = m.call_run(call);
     let site = m.calls.len() as CallId;
-    m.solver_call(
-        call,
-        CallSite {
-            this: ThisArg::Node(recv),
-            args,
-            spread: vec![],
-            ret,
-            site,
-            region: m.thrown,
-        },
-    );
-    m.cons(
-        recv,
-        Cons::MCall {
-            key: Key::Named(a),
-            call: site,
-        },
-    );
+    let tg = m.atom("builtin method call");
+    if m
+        .solver_call_keyed(
+            call,
+            (crate::summary::MK_BUILTIN_CB, tg, a),
+            Some(recv),
+            CallSite {
+                this: ThisArg::Node(recv),
+                args,
+                spread: vec![],
+                ret,
+                site,
+                region: m.thrown,
+            },
+        )
+        .is_some()
+    {
+        m.cons(
+            recv,
+            Cons::MCall {
+                key: Key::Named(a),
+                call: site,
+            },
+        );
+    }
     ret
 }
 
@@ -737,7 +744,7 @@ pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             let Some(&cb) = c.args.first() else {
                 return;
             };
-            let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, num]);
+            let r = cb_call(m, call, "collections callback 3", None, cb, ThisArg::Undef, vec![elems, num]);
             match name {
                 Some("forEach") => ret_prim(m, call, prim::UNDEF),
                 Some("some" | "every") => ret_prim(m, call, prim::BOOL),
@@ -778,7 +785,7 @@ pub(super) fn iterator_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
             if !c.spread.is_empty() {
                 m.edge(elems, acc);
             }
-            let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num]);
+            let r = cb_call(m, call, "collections callback 4", None, cb, ThisArg::Undef, vec![acc, elems, num]);
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
@@ -847,8 +854,11 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
         vec![num]
     });
     let made = m.node_l("species-constructed");
-    let mc = m.solver_call(
+    let tg = m.atom("ArraySpeciesCreate");
+    let mc = m.solver_call_keyed(
         call,
+        (crate::summary::MK_BUILTIN_CB, tg, tg),
+        Some(sc),
         CallSite {
             this: ThisArg::Undef,
             args,
@@ -858,7 +868,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             region: m.thrown,
         },
     );
-    construct_into(m, sc, Some(mc), out, made, c.ret);
+    construct_into(m, sc, mc, out, made, c.ret);
 }
 
 /// The receivers' `constructor`, read off the receivers in `src`.
@@ -1284,7 +1294,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
         // is converted (ToNumber).
         Some("toSorted") => {
             if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, call, cb, ThisArg::Undef, vec![elems, elems]);
+                let r = cb_call(m, call, "collections callback 5", name, cb, ThisArg::Undef, vec![elems, elems]);
                 let why = m.reason("sort comparator result");
                 m.cons(
                     r,
@@ -1308,7 +1318,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 return;
             };
             let this = this_arg(m, 1);
-            let r = cb_call(m, call, cb, this, vec![elems, num, recv]);
+            let r = cb_call(m, call, "collections callback 6", name, cb, this, vec![elems, num, recv]);
             match name {
                 Some("flatMap") => {
                     let out = site_tmpl(m, call, "Array");
@@ -1344,7 +1354,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             if !c.spread.is_empty() {
                 m.edge(elems, acc);
             }
-            let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
+            let r = cb_call(m, call, "collections callback 7", name, cb, ThisArg::Undef, vec![acc, elems, num, recv]);
             m.edge(r, acc);
             m.edge(acc, c.ret);
         }
@@ -1580,7 +1590,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     "Map" => m.map_vals(t),
                     _ => elems,
                 };
-                let _ = cb_call(m, call, cb, this, vec![first, elems, recv]);
+                let _ = cb_call(m, call, "collections callback 8", name, cb, this, vec![first, elems, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }
@@ -1604,15 +1614,15 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 } else {
                     v
                 };
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![arg]);
+                let r = cb_call(m, call, "collections callback 9", name, f, ThisArg::Undef, vec![arg]);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    adopt(m, call, "promise reaction fulfilled", 0, r, ov);
                 }
             }
             if let Some(f) = on_err {
-                let r = cb_call(m, call, f, ThisArg::Undef, vec![thrown]);
+                let r = cb_call(m, call, "collections callback 10", name, f, ThisArg::Undef, vec![thrown]);
                 if name != Some("finally") {
-                    adopt(m, call, r, ov);
+                    adopt(m, call, "promise reaction rejected", 0, r, ov);
                 }
             }
             if name == Some("finally") || on_ok.is_none() || !c.spread.is_empty() {
@@ -1671,24 +1681,31 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             string_methods::to_prim(m, recv, "Date toJSON time");
             let a = m.atom("toISOString");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Node(recv),
-                    args: vec![],
-                    spread: vec![],
-                    ret: c.ret,
-                    site: nested,
-                    region: m.thrown,
-                },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                },
-            );
+            let tg = m.atom("Date toJSON");
+            if m
+                .solver_call_keyed(
+                    call,
+                    (crate::summary::MK_BUILTIN_CB, tg, a),
+                    Some(recv),
+                    CallSite {
+                        this: ThisArg::Node(recv),
+                        args: vec![],
+                        spread: vec![],
+                        ret: c.ret,
+                        site: nested,
+                        region: m.thrown,
+                    },
+                )
+                .is_some()
+            {
+                m.cons(
+                    recv,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call: nested,
+                    },
+                );
+            }
             ret_prim(m, call, prim::NULL);
         }
 
@@ -1730,7 +1747,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     .copied()
                     .map(ThisArg::Node)
                     .unwrap_or(ThisArg::Undef);
-                let _ = cb_call(m, call, cb, this, vec![text, text, recv]);
+                let _ = cb_call(m, call, "collections callback 11", name, cb, this, vec![text, text, recv]);
             }
             ret_prim(m, call, prim::UNDEF);
         }

@@ -40,8 +40,11 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
     // The construct call keeps its origin's source site: the objects it
     // makes are the method call's own templates, not a fresh one per run
     // (a result fed back to the same call would otherwise never settle).
-    let made = m.solver_call(
+    let tg = m.atom("TypedArraySpeciesCreate");
+    if let Some(made) = m.solver_call_keyed(
         call,
+        (crate::summary::MK_BUILTIN_CB, tg, sa),
+        Some(sp),
         CallSite {
             this: ThisArg::Undef,
             args,
@@ -50,8 +53,9 @@ fn species(m: &mut Model, t: Tok, call: CallId, args: Vec<NodeId>) {
             site: c.site,
             region: m.thrown,
         },
-    );
-    m.cons(sp, Cons::New { call: made });
+    ) {
+        m.cons(sp, Cons::New { call: made });
+    }
 }
 
 /// `ArrayBuffer.prototype.slice` / `SharedArrayBuffer.prototype.slice`
@@ -212,7 +216,7 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
         "forEach" | "map" | "filter" | "some" | "every" | "find" | "findLast" | "findIndex"
         | "findLastIndex" => {
             if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, call, cb, this_arg(), vec![elem, num, recv]);
+                let r = cb_call(m, call, "typed_array_methods callback 1", None, cb, this_arg(), vec![elem, num, recv]);
                 if name == "map" {
                     to_prim(m, r, "typed-array map result ToNumber/ToBigInt");
                 }
@@ -236,14 +240,14 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
                 m.edge(init, acc);
             }
             if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, call, cb, ThisArg::Undef, vec![acc, elem, num, recv]);
+                let r = cb_call(m, call, "typed_array_methods callback 2", None, cb, ThisArg::Undef, vec![acc, elem, num, recv]);
                 m.edge(r, acc);
             }
             m.edge(acc, c.ret); // No coercion or escape of the accumulator.
         }
         "sort" | "toSorted" => {
             if let Some(&cb) = c.args.first() {
-                let r = cb_call(m, call, cb, ThisArg::Undef, vec![elem, elem]);
+                let r = cb_call(m, call, "typed_array_methods callback 3", None, cb, ThisArg::Undef, vec![elem, elem]);
                 to_prim(m, r, "typed-array comparator result ToNumber");
             }
             if name == "sort" {
@@ -270,24 +274,31 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             let a = m.atom("toLocaleString");
             let nested = m.calls.len() as CallId;
             let r = m.node_l("typed-locale-result");
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Node(elem),
-                    args: c.args.iter().take(2).copied().collect(),
-                    spread: vec![],
-                    ret: r,
-                    site: nested,
-                    region: m.thrown,
-                },
-            );
-            m.cons(
-                elem,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                },
-            );
+            let tg = m.atom("typed-array toLocaleString");
+            if m
+                .solver_call_keyed(
+                    call,
+                    (crate::summary::MK_BUILTIN_CB, tg, a),
+                    Some(elem),
+                    CallSite {
+                        this: ThisArg::Node(elem),
+                        args: c.args.iter().take(2).copied().collect(),
+                        spread: vec![],
+                        ret: r,
+                        site: nested,
+                        region: m.thrown,
+                    },
+                )
+                .is_some()
+            {
+                m.cons(
+                    elem,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call: nested,
+                    },
+                );
+            }
             to_prim(m, r, "typed-array locale element ToString");
             ret_prim(m, call, prim::STR);
         }
@@ -295,24 +306,31 @@ pub(super) fn method(m: &mut Model, t: Tok, name: &str, call: CallId) -> bool {
             // Array.prototype.toString invokes the receiver's join.
             let a = m.atom("join");
             let nested = m.calls.len() as CallId;
-            m.solver_call(
-                call,
-                CallSite {
-                    this: ThisArg::Node(recv),
-                    args: vec![],
-                    spread: vec![],
-                    ret: c.ret,
-                    site: nested,
-                    region: m.thrown,
-                },
-            );
-            m.cons(
-                recv,
-                Cons::MCall {
-                    key: Key::Named(a),
-                    call: nested,
-                },
-            );
+            let tg = m.atom("typed-array toString");
+            if m
+                .solver_call_keyed(
+                    call,
+                    (crate::summary::MK_BUILTIN_CB, tg, a),
+                    Some(recv),
+                    CallSite {
+                        this: ThisArg::Node(recv),
+                        args: vec![],
+                        spread: vec![],
+                        ret: c.ret,
+                        site: nested,
+                        region: m.thrown,
+                    },
+                )
+                .is_some()
+            {
+                m.cons(
+                    recv,
+                    Cons::MCall {
+                        key: Key::Named(a),
+                        call: nested,
+                    },
+                );
+            }
             ret_prim(m, call, prim::STR);
         }
         "keys" | "values" | "entries" | "@@__perry_wk_iterator" => {

@@ -219,8 +219,15 @@ impl Model {
             let ret = node(self, "json-call-ret");
             let id = self.calls.len() as CallId;
             let thrown = self.thrown;
-            self.solver_call(
+            let (tag, tgt) = match callee {
+                None => ("JSON.stringify toJSON", n.seen),
+                Some(f) => ("JSON.stringify replacer", f),
+            };
+            let tg = self.atom(tag);
+            let made = self.solver_call_keyed(
                 call,
+                (crate::summary::MK_BUILTIN_CB, tg, tg),
+                Some(tgt),
                 CallSite {
                     this,
                     args,
@@ -230,15 +237,16 @@ impl Model {
                     region: thrown,
                 },
             );
-            match callee {
-                None => self.cons(
+            match (made, callee) {
+                (None, _) => {}
+                (Some(_), None) => self.cons(
                     n.seen,
                     Cons::MCall {
                         key: to_json,
                         call: id,
                     },
                 ),
-                Some(f) => self.cons(f, Cons::Call { call: id }),
+                (Some(_), Some(f)) => self.cons(f, Cons::Call { call: id }),
             }
             self.edge(ret, n.seen);
         }

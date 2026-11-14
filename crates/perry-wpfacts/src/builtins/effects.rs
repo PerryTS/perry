@@ -883,7 +883,7 @@ impl Run {
         let v = promise_value(m, p);
         for o in value {
             let n = self.operand(m, o);
-            adopt(m, self.call, n, v);
+            adopt(m, self.call, "native promise value", 0, n, v);
         }
         for o in reject {
             let n = self.operand(m, o);
