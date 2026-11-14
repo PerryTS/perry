@@ -2113,6 +2113,7 @@ js_module_constants	f64
 js_module_create_require	f64	f64
 js_module_create_require_devirt	f64	f64
 js_module_dynamic_import_apply_hooks	f64	f64
+js_module_dynamic_import_check_options	i64	f64
 js_module_dynamic_import_deferred	f64	f64,f64,f64
 js_module_dynamic_import_fallback	f64	f64,f64
 js_module_enable_compile_cache	f64	f64
