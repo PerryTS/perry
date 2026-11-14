@@ -2077,6 +2077,40 @@ impl Model {
 }
 
 impl Model {
+    /// ARRSRC: after the solve, every `new r.constructor(..)` site: the
+    /// token kinds of its receiver `r` (typed-array storage marked).
+    pub(crate) fn keysnap_ctor_recv(&self) {
+        let Some(ks) = self.keysnap.as_ref() else { return };
+        let mut news: FxHashMap<NodeId, CallId> = Default::default();
+        for (n, nd) in self.nodes.iter().enumerate() {
+            for k in nd.cons.iter() {
+                if let Cons::New { call } | Cons::NewProgram { call } = k {
+                    news.insert(n as NodeId, *call);
+                }
+            }
+        }
+        for (r, nd) in self.nodes.iter().enumerate() {
+            for k in nd.cons.iter() {
+                let Cons::Load { key: Key::Named(a), dst } = k else { continue };
+                let Some(call) = news.get(dst) else { continue };
+                if self.atoms[*a as usize] != "constructor" {
+                    continue;
+                }
+                let mut kinds: BTreeMap<String, u32> = Default::default();
+                for t in nd.pts.to_sorted() {
+                    let typed = match &self.toks[t as usize] {
+                        TokKind::Obj(tm, _) => self.tmpls[*tm as usize].kind.typed_storage(),
+                        _ => false,
+                    };
+                    let kd: String = format!("{:?}", self.toks[t as usize]).chars().take_while(|c| c.is_alphanumeric()).collect();
+                    *kinds.entry(if typed { format!("{kd}[typed]") } else { kd }).or_insert(0) += 1;
+                }
+                let kinds: Vec<String> = kinds.iter().map(|(k, c)| format!("{k}={c}")).collect();
+                eprintln!("KSA newctor c{call} recv {} kinds {}", self.ks3_node_pos(ks, r as NodeId), kinds.join(" "));
+            }
+        }
+    }
+
     /// HOLDPOS: a token arrived in `n` for the first time (only while the
     /// realm is not held).
     pub(crate) fn keysnap_arrivals(&mut self, n: NodeId, fresh: &[Tok], at: &'static std::panic::Location<'static>) {
@@ -2122,7 +2156,7 @@ impl Model {
                 eprintln!("KS3     hop seed into n{cur} reason {rs:?} added at {f}:{}", at.line());
                 return;
             }
-            eprintln!("KS3     hop {} -> n{cur} | edge {} | added at {f}:{}", self.ks3_node_pos(ks, src), self.ks3_edge(src, cur), at.line());
+            eprintln!("KS3     hop {} -> n{cur} | edge {} | reason {rs:?} | added at {f}:{}", self.ks3_node_pos(ks, src), self.ks3_edge(src, cur), at.line());
             if src == cur {
                 return;
             }
@@ -2226,6 +2260,52 @@ impl Model {
         }
         if callee.is_empty() {
             eprintln!("KS3 no node has a call constraint for c{c}");
+        }
+        // ARRSRC: the hold token's own first arrival leads, then the
+        // receivers of a `.constructor` read feeding the callee: their token
+        // kinds, and the first arrival of the first token of each kind that
+        // is not typed-array storage.
+        if let Some(t) = tok {
+            for (n, how) in callee.iter() {
+                if self.nodes[*n as usize].pts.to_sorted().contains(&t) {
+                    eprintln!("KS3 HOLD tok {t} {} name={} in callee {how} n{n}: first arrival chain", self.ks2_kind(t), self.tok_name(t));
+                    self.ks3_chain(ks, *n, t, 12);
+                }
+            }
+        }
+        for (cn, _) in callee.iter() {
+            for (r, nd) in self.nodes.iter().enumerate() {
+                for k in nd.cons.iter() {
+                    let Cons::Load { key: Key::Named(a), dst } = k else { continue };
+                    if *dst != *cn || self.atoms[*a as usize] != "constructor" {
+                        continue;
+                    }
+                    let r = r as NodeId;
+                    eprintln!("KS3 RECV of .constructor -> n{cn}: {}", self.ks2_node(ks, r));
+                    eprintln!("KS3 RECV   at {}", self.ks3_node_pos(ks, r));
+                    let mut kinds: std::collections::BTreeMap<String, (u32, Option<Tok>)> = Default::default();
+                    for t in self.nodes[r as usize].pts.to_sorted() {
+                        let typed = match &self.toks[t as usize] {
+                            TokKind::Obj(tm, _) => self.tmpls[*tm as usize].kind.typed_storage(),
+                            _ => false,
+                        };
+                        let kd: String = format!("{:?}", self.toks[t as usize]).chars().take_while(|c| c.is_alphanumeric()).collect();
+                        let kd = if typed { format!("{kd}[typed]") } else { kd };
+                        let e = kinds.entry(kd).or_insert((0, None));
+                        e.0 += 1;
+                        if !typed && e.1.is_none() {
+                            e.1 = Some(t);
+                        }
+                    }
+                    for (kd, (cnt, first)) in kinds.iter() {
+                        eprintln!("KS3 RECV   kind {kd} count {cnt}");
+                        if let Some(t) = first {
+                            eprintln!("KS3 RECV   first {kd} tok {t} {} name={}", self.ks2_kind(*t), self.tok_name(*t));
+                            self.ks3_chain(ks, r, *t, 30);
+                        }
+                    }
+                }
+            }
         }
         for (n, how) in callee.iter().take(4) {
             eprintln!("KS3 callee {how} {}", self.ks2_node(ks, *n));

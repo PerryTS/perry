@@ -822,6 +822,7 @@ fn activation_pass<'a>(
     while !g.m.aborted && g.walk_activated() {
         g.m.solve();
     }
+    g.m.keysnap_ctor_recv();
     if cfg.profile {
         // One line per pass; the key digest compares two passes' sets.
         let digest = g.m.act.as_ref().map_or(0u64, |a| {
@@ -904,6 +905,7 @@ fn compute_act<'a>(
         g.m.solve();
     }
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    g.m.keysnap_ctor_recv();
     let escaped_inactive = g.m.act.is_some().then(|| g.m.escaped_inactive());
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
