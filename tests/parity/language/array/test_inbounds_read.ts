@@ -11,6 +11,14 @@ function gen(n: number, seed: number): number[] {
   for (let i = 0; i < n; i++) out.push(((i * 37 + seed) & 127) | (((i * 11 + seed * 3) & 127) << 7));
   return out;
 }
+// The positive cases build their Arrays here: an Array is one of the facts'
+// per birth site, so a shrink of any Array `gen` built un-proves them all
+// (case n6), and the negative controls below shrink those.
+function mk(n: number, seed: number): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) out.push(((i * 37 + seed) & 127) | (((i * 11 + seed * 3) & 127) << 7));
+  return out;
+}
 // The consumer: a typed call that takes the element as a Number.
 function use(m: number): number {
   return ((m & 127) * 3 + ((m >> 7) & 127)) | 0;
@@ -26,7 +34,7 @@ function sum(xs: number[]): number {
   for (let i = 0; i < xs.length; i++) s = (s + use(xs[i] ?? 7)) | 0;
   return s;
 }
-console.log("sum", sum(gen(0, 1)), sum(gen(1, 2)), sum(gen(33, 3)));
+console.log("sum", sum(mk(0, 1)), sum(mk(1, 2)), sum(mk(33, 3)));
 
 // (b) The insertion sort of a copy: `result[i]`, `result[j]` and the stores.
 function order(moves: readonly number[]): number[] {
@@ -44,15 +52,15 @@ function order(moves: readonly number[]): number[] {
 }
 let acc = 0;
 for (let r = 0; r < 120; r++) {
-  const sorted = order(gen(3 + (r % 19), r));
+  const sorted = order(mk(3 + (r % 19), r));
   for (const m of sorted) acc = (acc + use(m)) | 0;
   if (r < 3) console.log("sort", sorted.join(","));
 }
-console.log("sort many", acc, order([]).length, order(gen(1, 4)).join(","));
+console.log("sort many", acc, order([]).length, order(mk(1, 4)).join(","));
 
 // (c) Keys below the counter, guards by `while`, `if`, `&&` and `?:`.
 function below(n: number): string {
-  const xs = gen(n, 5);
+  const xs = mk(n, 5);
   let s = 0;
   for (let i = 2; i < xs.length; i++) s = (s + use(xs[i - 2]) + use(xs[i - 1])) | 0;
   let k = 0;
