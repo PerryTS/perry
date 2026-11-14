@@ -264,10 +264,9 @@ pub fn interpreted_code_runs(m: &mut Model) {
 /// gives nothing to unknown code. The Function constructor converts every
 /// argument to a string first (`toString`/`valueOf` run: the ToPrimitive
 /// protocol), then throws a TypeError (perry-runtime
-/// `js_function_ctor_from_strings_impl`). The other constructors the token
-/// stands for as a function's `constructor` (`%AsyncFunction%`,
-/// `%GeneratorFunction%`, `%AsyncGeneratorFunction%`) run nothing and return
-/// `undefined`, or under `new` an object of the runtime's. Six arguments or
+/// `js_function_ctor_from_strings_impl`), so the call or `new` gives no
+/// value. The token is `%Function%` only (FUNCTION-CTOR-IDENTITY): the other
+/// three are `BuiltinNs::FunctionKindCtor`. Six arguments or
 /// a spread may be the runtime's depd `wrapfunction` shape, which returns a
 /// runtime-made function: that call runs code (true), as does any call with
 /// the interpreter linked. `skip`: leading arguments that are not the
@@ -296,10 +295,10 @@ pub(crate) fn function_ctor_runs_code(
             },
         );
     }
-    if construct {
-        m.add_top(c.ret, |_| "result: new of a function constructor".into());
-    }
-    m.add_prim(c.ret, prim::UNDEF);
+    // FUNCTION-CTOR-IDENTITY: the token is %Function% only; without the
+    // interpreter its call and its `new` throw a TypeError after the
+    // conversions (refuse_dynamic_function): the result gets no value.
+    let _ = construct;
     false
 }
 
@@ -1698,6 +1697,7 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
         | BuiltinNs::Number
         | BuiltinNs::BigInt
         | BuiltinNs::String
+        | BuiltinNs::FunctionKindCtor
         | BuiltinNs::Boolean
         | BuiltinNs::Function
         | BuiltinNs::Map
@@ -3339,6 +3339,12 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
         }
         BuiltinNs::ObjectProtoMethod => object_proto_method_call(m, call),
         BuiltinNs::ObjectProtoOwn(own) => object_proto_own_call(m, own, call),
+        // %AsyncFunction% & co.: the runtime's no-op thunk reads no argument
+        // and returns `undefined` (fetch_globals.rs global_this_builtin_noop_thunk).
+        BuiltinNs::FunctionKindCtor => {
+            let ret = m.calls[call as usize].ret;
+            m.add_prim(ret, prim::UNDEF);
+        }
         BuiltinNs::Error
         | BuiltinNs::NativeError(_)
         | BuiltinNs::AggregateError

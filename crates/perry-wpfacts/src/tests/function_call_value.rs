@@ -98,13 +98,14 @@ console.log(o.pa + 1, arg.pb + 1);
     );
 }
 
-// Control: the function is unknown (⊤): `o` is handed to unknown code.
+// Control: the function is unknown (⊤, a host value: without the interpreter
+// `new Function(..)` throws, ECMA-262 20.2.1.1): `o` is handed to unknown code.
 #[test]
 fn function_call_value_on_an_unknown_function_escapes_its_arguments() {
     let pf = whole(
         r#"
 const c = Function.prototype.call;
-const u = new Function(process.argv[2]);
+const u = (globalThis as any).hostFn();
 const o = { pa: 1 };
 c.call(u, o);
 console.log(o.pa + 1);

@@ -1188,6 +1188,9 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {
             (NsProto::Function, Some(&[]))
         }
+        // [[Prototype]] %Function% (27.7.2, 27.3.2, 27.4.2); its own
+        // `prototype` is its kind's, which no member here describes.
+        BuiltinNs::FunctionKindCtor => (NsProto::Constructor(BuiltinNs::Function), None),
         BuiltinNs::Map => (
             NsProto::Function,
             Some(&[

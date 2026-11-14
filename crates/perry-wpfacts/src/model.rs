@@ -253,7 +253,17 @@ pub enum BuiltinNs {
     BigInt,
     String,
     Boolean,
+    /// `%Function%` (ECMA-262 20.2.1): the global `Function` and the
+    /// `constructor` of every ordinary or builtin function and class
+    /// (`%Function.prototype%.constructor`, 20.2.3.2).
     Function,
+    /// `%AsyncFunction%`, `%GeneratorFunction%`, `%AsyncGeneratorFunction%`
+    /// (27.7.1, 27.3.1, 27.4.1): the `constructor` of an async, generator or
+    /// async-generator function value (27.7.3.1, 27.3.3.1, 27.4.3.1), one
+    /// token for the three. In perry's runtime each is a closure over the
+    /// no-op thunk: a call runs nothing and returns `undefined`; `new` makes an
+    /// ordinary object of the runtime's (construct.rs, generic path).
+    FunctionKindCtor,
     /// `Map`: `new` builds a collection of the entries' contents.
     Map,
     /// `Set`: `new` builds a collection of the values.

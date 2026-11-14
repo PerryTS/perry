@@ -1032,8 +1032,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         },
         TokKind::Func(f, _) => match name.as_deref() {
+            // FUNCTION-CTOR-IDENTITY: %Function.prototype%.constructor is
+            // %Function% (20.2.3.2); an async or generator function's
+            // prototype's is its own kind's constructor (27.7.3.1 & co.).
             Some("constructor") => {
-                let fc = m.tok(TokKind::Builtin(BuiltinNs::Function));
+                let ns = if super::born_with_function_proto(m, f) {
+                    BuiltinNs::Function
+                } else {
+                    BuiltinNs::FunctionKindCtor
+                };
+                let fc = m.tok(TokKind::Builtin(ns));
                 m.add_tok(dst, fc);
             }
             // DECISIONS 210: another unit's constructor function: its

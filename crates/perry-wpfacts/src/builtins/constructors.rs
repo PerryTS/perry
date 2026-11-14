@@ -246,6 +246,13 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             set_dyn_eval(m, "E14 new Function(...)");
             unknown_method(m, call, "E14 dynamic code");
         }
+        // %AsyncFunction% & co. (construct.rs generic path): an ordinary
+        // object of the runtime's, [[Prototype]] the constructor's
+        // `prototype`, which the model does not describe. No argument is read.
+        BuiltinNs::FunctionKindCtor => {
+            let ret = m.calls[call as usize].ret;
+            m.add_top(ret, |_| "result: new of an async or generator function constructor".into());
+        }
         // Not a constructor (TypeError).
         BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {}
         // A constructor whose [[Construct]] throws a TypeError before it reads
