@@ -557,3 +557,47 @@ fn control_protoinh_held_realm_member_escapes() {
         "(globalThis as any).hostGet()(Blob.prototype);"
     ));
 }
+
+/// ABSCALL (r7 hold after PROTOINH, GLTFLoader.js:4447
+/// `node.position.fromArray(nodeDef.translation)`): the receiver set holds a
+/// program object with `fromArray` and an ArrayBuffer. No object of the
+/// ArrayBuffer's chain (the instance, `ArrayBuffer.prototype`,
+/// `Object.prototype`) holds `fromArray`, so [[Get]] is `undefined` and the
+/// call throws a TypeError before any argument is used (10.1.8.1, 13.3.6.2
+/// EvaluateCall, 7.3.14 Call): V given as the argument never escapes, and the
+/// program method's `this` holds only the program instance. GREEN on
+/// ed2c278107 (collections.rs bobj_method, the ArrayBuffer absent arm): pins.
+fn abscall_proven(src_recv: &str, wrap: bool) -> (bool, bool) {
+    let call = "const r: any = id(json.c ? new P() : RECV);\n            const v = new V();\n            console.log(r.fromArray(v), v.probe());".replace("RECV", src_recv);
+    let body = if wrap {
+        format!("fetch(json.uri).then((r: any) => r.arrayBuffer()).then((hb: any) => {{\n            {call}\n        }});")
+    } else {
+        call
+    };
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        class P {{ px = 0; fromArray(a: any) {{ return this.px; }} }}
+        function id(x: any): any {{ return x; }}
+        const json: any = JSON.parse(process.argv[2] ?? "{{}}");
+        {body}
+        "#
+    );
+    let pf = facts(&s);
+    (
+        !matches!(site(&pf, "zz").verdict, Verdict::No(_)),
+        !matches!(site(&pf, "px").verdict, Verdict::No(_)),
+    )
+}
+
+#[test]
+fn abscall_absent_member_of_array_buffer_is_a_type_error() {
+    assert_eq!(abscall_proven("new ArrayBuffer(8)", false), (true, true));
+}
+
+/// The r7 kind of buffer (FileLoader: `fetch(..).then(r => r.arrayBuffer())`,
+/// WHATWG Fetch: an ArrayBuffer).
+#[test]
+fn abscall_absent_member_of_fetched_buffer_is_a_type_error() {
+    assert_eq!(abscall_proven("hb", true), (true, true));
+}
