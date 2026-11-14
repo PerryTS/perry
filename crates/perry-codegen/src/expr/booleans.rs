@@ -101,3 +101,7 @@ fn witness(ctx: &mut FnCtx<'_>, value: &str, bits: &str, what: &str) {
     ctx.block().unreachable();
     ctx.current_block = next;
 }
+
+#[cfg(test)]
+#[path = "booleans_tests.rs"]
+mod tests;
