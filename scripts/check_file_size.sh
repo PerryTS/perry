@@ -32,17 +32,17 @@ crates/perry-codegen/src/expr/mod.rs	2880
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8453
 # Representation-aware map core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/map.rs	3021
+crates/perry-runtime/src/map.rs	3019
 # Representation-aware set core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/set.rs	2370
+crates/perry-runtime/src/set.rs	2368
 # Representation feedback core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/typed_feedback.rs	2460
+crates/perry-runtime/src/typed_feedback.rs	2450
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	4875
 # Native ABI proof cases; test organization is a separate follow-up.
 crates/perry-codegen/tests/native_proof_regressions.rs	15874
 # Representation feedback regression cases; test organization is a separate follow-up.
-crates/perry-runtime/src/typed_feedback/tests.rs	2304
+crates/perry-runtime/src/typed_feedback/tests.rs	2300
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.

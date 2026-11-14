@@ -373,19 +373,11 @@ pub extern "C" fn js_switch_strict_equals(a: f64, b: f64) -> i32 {
         let pb = js_get_string_pointer_unified(b) as *const crate::string::StringHeader;
         return crate::string::js_string_equals(pa, pb);
     }
-    let a_numeric = av.is_number() || av.is_int32();
-    let b_numeric = bv.is_number() || bv.is_int32();
+    let a_numeric = av.is_number();
+    let b_numeric = bv.is_number();
     if a_numeric && b_numeric {
-        let an = if av.is_int32() {
-            av.as_int32() as f64
-        } else {
-            f64::from_bits(av.bits())
-        };
-        let bn = if bv.is_int32() {
-            bv.as_int32() as f64
-        } else {
-            f64::from_bits(bv.bits())
-        };
+        let an = f64::from_bits(av.bits());
+        let bn = f64::from_bits(bv.bits());
         return (an == bn) as i32;
     }
     (a.to_bits() == b.to_bits()) as i32

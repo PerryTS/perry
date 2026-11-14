@@ -265,9 +265,7 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
         return None;
     }
 
-    let length = if length_value.is_int32() {
-        length_value.as_int32() as f64
-    } else if length_value.is_number() {
+    let length = if length_value.is_number() {
         length_value.as_number()
     } else {
         return Some(super::pool::copy(0));
@@ -335,7 +333,6 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     if jsval.is_undefined()
         || jsval.is_null()
         || jsval.is_bool()
-        || jsval.is_int32()
         || jsval.is_number()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 }
@@ -1100,8 +1097,6 @@ pub extern "C" fn js_buffer_fill_value_range(
     let value = crate::JSValue::from_bits(fill_value.to_bits());
     let byte = if value.is_number() {
         Some(fill_value as i64 as u8)
-    } else if value.is_int32() {
-        Some(value.as_int32() as u8)
     } else if value.is_bool() {
         Some(u8::from(value.as_bool()))
     } else if value.is_undefined() || value.is_null() {
@@ -1192,9 +1187,6 @@ fn normalize_buffer_concat_total_length(total_length: f64) -> Option<usize> {
     let jsval = crate::JSValue::from_bits(total_length.to_bits());
     if jsval.is_undefined() {
         return None;
-    }
-    if jsval.is_int32() {
-        return Some((jsval.as_int32().max(0)) as usize);
     }
     if jsval.is_bool() {
         return Some(if jsval.as_bool() { 1 } else { 0 });

@@ -185,16 +185,13 @@ pub(super) unsafe fn dispatch_common(
         // reach this dispatch (the `call` arm below guards `class_ref_id` for
         // exactly that reason). Without the `is_int32()` half, an int32 number
         // with a locale argument would still take the arg-less default arm.
-        // A *registered ClassRef* shares INT32_TAG and must stay on the
+        // A *registered ClassRef* shares INTERNAL_WORD_TAG and must stay on the
         // default arm: `Object.prototype.toLocaleString` ignores its
         // arguments per spec, and falling through would resolve
         // `Number.prototype.toLocaleString` against a class reference.
         "toLocaleString"
             if !jsval.is_bigint()
-                && !((jsval.is_number()
-                    || (jsval.is_int32() && super::class_ref_id(object).is_none()))
-                    && args_len > 0
-                    && !args_ptr.is_null()) =>
+                && !(jsval.is_number() && args_len > 0 && !args_ptr.is_null()) =>
         {
             // An ordinary object reads `toLocaleString` off its prototype
             // chain like any method: a function-constructor, replaced or

@@ -2405,7 +2405,7 @@ fn normalize_raw_object_addr_rejects_inline_nanboxed_receivers() {
     );
 
     // INT32: inline integer payload (max i32, well above the handle band).
-    let int32 = crate::value::INT32_TAG | 0x7fff_ffff;
+    let int32 = crate::value::INTERNAL_WORD_TAG | 0x7fff_ffff;
     assert_eq!(
         normalize_raw_object_addr(int32),
         0,
@@ -2609,11 +2609,7 @@ fn function_source_array_literal_keeps_the_array_index_fast_path_armed() {
     };
     let result = crate::value::JSValue::from_bits(result.to_bits());
     assert_eq!(
-        if result.is_int32() {
-            result.as_int32() as f64
-        } else {
-            f64::from_bits(result.bits())
-        },
+        f64::from_bits(result.bits()),
         4.0,
         "the interpreted body must actually have run — otherwise the flag \
          assertions below are vacuous"
@@ -2685,9 +2681,11 @@ fn a_non_number_0x7ffe_word_is_no_index_and_no_int32_kind() {
         assert_eq!(finite_nonnegative_i32_index(f64::from_bits(bits)), None);
         assert_ne!(stable_value_kind(bits), STABLE_VALUE_INT32);
     }
+    // An I32 slot word is no JS value, so no index; as a slot word it keeps
+    // its kind.
     assert_eq!(
         finite_nonnegative_u32_index(f64::from_bits(0x7FFE_0000_0000_0005)),
-        Some(5)
+        None
     );
     assert_eq!(stable_value_kind(0x7FFE_0000_0000_0005), STABLE_VALUE_INT32);
 }

@@ -499,11 +499,6 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub(super) fn number_from_bits(bits: u64) -> Option<u32> {
-    let top16 = (bits >> 48) as u16;
-    if top16 == 0x7FFE {
-        let raw = (bits & 0xFFFF_FFFF) as i32;
-        return (raw >= 0).then_some(raw as u32);
-    }
     let f = f64::from_bits(bits);
     if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 {
         Some(f as u32)

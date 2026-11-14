@@ -150,11 +150,7 @@ fn execve_throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 fn execve_received_value(value: f64) -> String {
     let jv = JSValue::from_bits(value.to_bits());
     if crate::fs::validate::is_numeric(jv) {
-        let n = if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        };
+        let n = jv.as_number();
         return crate::fs::validate::format_received_number(n);
     }
     if let Some(value) = module_value_to_string(value) {

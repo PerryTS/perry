@@ -125,9 +125,7 @@ fn string_to_rust(value: f64) -> Option<String> {
 
 fn number_value(value: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(value)
     } else {
         None

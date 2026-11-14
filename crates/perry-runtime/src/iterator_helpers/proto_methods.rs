@@ -288,12 +288,8 @@ unsafe fn includes(this: f64, search: f64, skipped_elements: f64) -> f64 {
     let number = JSValue::from_bits(raw.to_bits());
     let to_skip = if number.is_undefined() {
         0.0
-    } else if number.is_number() || number.is_int32() {
-        let value = if number.is_int32() {
-            f64::from(number.as_int32())
-        } else {
-            raw
-        };
+    } else if number.is_number() {
+        let value = raw;
         if !(value.is_infinite() || (value.is_finite() && value.trunc() == value)) {
             close_this_quietly(this.get_nanbox_f64());
             type_error("skippedElements must be an integer or infinity");

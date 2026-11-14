@@ -1610,7 +1610,6 @@ fn render_callback_plain(cb_boxed: f64) -> String {
         || jv.is_null()
         || jv.is_bool()
         || jv.is_number()
-        || jv.is_int32()
         || jv.is_any_string()
         || jv.is_bigint()
     {

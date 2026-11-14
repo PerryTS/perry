@@ -432,9 +432,7 @@ unsafe fn string_header_bytes<'a>(ptr: *const StringHeader) -> Option<&'a [u8]> 
 }
 
 fn number_matches_source(value: JSValue, source_number: f64) -> bool {
-    let current = if value.is_int32() {
-        value.as_int32() as f64
-    } else if value.is_number() {
+    let current = if value.is_number() {
         value.as_number()
     } else {
         return false;

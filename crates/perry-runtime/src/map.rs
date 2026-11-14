@@ -662,7 +662,7 @@ pub(crate) fn is_plain_nonzero_number_bits(bits: u64) -> bool {
 #[inline]
 fn is_safe_numeric_key(bits: u64) -> bool {
     let upper = bits >> 48;
-    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INT32_TAG (0x7FFE) carry
+    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INTERNAL_WORD_TAG (0x7FFE) carry
     // heap pointers or need numeric normalization before reaching here.
     if upper == 0x7FFF || upper == 0x7FFD || upper == 0x7FFE {
         return false;
@@ -1054,9 +1054,7 @@ fn normalize_zero(key: f64) -> f64 {
 #[inline(always)]
 fn normalize_number_key_from_boxed(key: f64) -> Option<f64> {
     let js_value = crate::value::JSValue::from_bits(key.to_bits());
-    if js_value.is_int32() {
-        Some(normalize_zero(js_value.as_int32() as f64))
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(normalize_zero(key))
     } else {
         None

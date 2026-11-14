@@ -49,10 +49,7 @@ fn a_registered_class_reads_prototype_as_its_object_never_the_ref_word() {
         "a registered class's prototype is an object: {:#x}",
         value.bits()
     );
-    assert!(
-        !crate::value::is_int32_bits(value.bits()),
-        "never an INT32-space word"
-    );
+    assert!(value.bits() >> 48 != 0x7FFE, "never an internal word");
     assert_eq!(
         value.bits(),
         crate::object::class_registry::class_decl_prototype_value(cid).to_bits(),

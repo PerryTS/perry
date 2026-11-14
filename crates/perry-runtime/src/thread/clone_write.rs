@@ -19,7 +19,7 @@ use crate::object::descriptors::{OwnNamesSnapshot, OwnProperty};
 use super::{
     fs_thread_codec, unsupported_transfer_type_name, SerializedValue, VIEW_KIND_DATA_VIEW,
 };
-use super::{BIGINT_TAG, INT32_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+use super::{BIGINT_TAG, INTERNAL_WORD_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
 use super::{TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{real_capture_count, ClosureHeader};
@@ -457,7 +457,7 @@ impl Writer<'_> {
             _ => {}
         }
         let tag = bits & TAG_MASK;
-        if tag == INT32_TAG {
+        if tag == INTERNAL_WORD_TAG {
             return SerializedValue::Inline(bits);
         }
         if tag == STRING_TAG {

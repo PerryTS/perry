@@ -260,11 +260,6 @@ pub(crate) fn parse_canonical_nonnegative_i32(bytes: &[u8]) -> Option<i32> {
 }
 
 pub(crate) fn integer_index_key(key: f64) -> Option<i32> {
-    let jsval = crate::value::JSValue::from_bits(key.to_bits());
-    if jsval.is_int32() {
-        let index = jsval.as_int32();
-        return (index >= 0).then_some(index);
-    }
     if !key.is_nan() {
         return (key.is_finite() && key >= 0.0 && key.fract() == 0.0 && key <= i32::MAX as f64)
             .then_some(key as i32);

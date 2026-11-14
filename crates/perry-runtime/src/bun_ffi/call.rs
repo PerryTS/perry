@@ -318,9 +318,6 @@ unsafe fn bigint_low_u64(v: JSValue) -> u64 {
 /// here — Bun requires numeric-ish args for integer slots too.
 pub(crate) unsafe fn value_to_u64_int(v: f64) -> u64 {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as i64 as u64;
-    }
     if jv.is_number() {
         return jv.as_number() as i64 as u64;
     }
@@ -336,9 +333,6 @@ pub(crate) unsafe fn value_to_u64_int(v: f64) -> u64 {
 /// Numeric coercion for float-typed args.
 pub(crate) unsafe fn value_to_f64_num(v: f64) -> f64 {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
-    }
     if jv.is_number() {
         return jv.as_number();
     }
@@ -396,9 +390,6 @@ pub(crate) unsafe fn value_to_pointer_arg(v: f64) -> usize {
     }
     if jv.is_bool() {
         return jv.as_bool() as usize;
-    }
-    if jv.is_int32() {
-        return jv.as_int32() as i64 as usize;
     }
     if jv.is_number() {
         return jv.as_number() as i64 as usize;

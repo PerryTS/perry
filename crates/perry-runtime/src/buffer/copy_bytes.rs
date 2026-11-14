@@ -42,11 +42,7 @@ fn optional_index(value: f64, name: &str) -> Option<usize> {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let number = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else {
-        js_value.as_number()
-    };
+    let number = js_value.as_number();
     if !number.is_finite() || number.fract() != 0.0 {
         let message = format!(
             "The value of \"{}\" is out of range. It must be an integer. Received {}",

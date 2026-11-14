@@ -69,13 +69,8 @@ pub extern "C" fn js_is_truthy(value: f64) -> i32 {
         return 1;
     }
 
-    // Check for int32 tag
-    if is_int32_bits(bits) {
-        let int_val = (bits & INT32_MASK) as i32;
-        return if int_val == 0 { 0 } else { 1 };
-    }
-    // Any other `0x7FFE` word (a `C.prototype` ref) is an object: truthy.
-    if (bits & TAG_MASK) == INT32_TAG {
+    // An internal word (`INTERNAL_WORD_TAG`) is no JS value.
+    if (bits & TAG_MASK) == INTERNAL_WORD_TAG {
         return 1;
     }
 

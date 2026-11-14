@@ -357,7 +357,7 @@ pub extern "C" fn js_get_iterator(val_f64: f64) -> f64 {
     // class ref through to that lookup; if it resolves no `[Symbol.iterator]` it
     // still throws, at the tail of this function.
     //
-    // Note `INT32_TAG | 2` (the number 2) and a ClassRef with `class_id == 2`
+    // Note `INTERNAL_WORD_TAG | 2` (the number 2) and a ClassRef with `class_id == 2`
     // are bit-identical — `class_ref_id`'s registry check is the only thing
     // separating them. That is why the tail must throw rather than return the
     // value as its own iterator: it keeps `for (const x of 37) {}` a TypeError
