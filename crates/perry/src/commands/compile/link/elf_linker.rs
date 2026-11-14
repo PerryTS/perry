@@ -13,9 +13,10 @@
 //! instructions on its first call (GNU ld routes such a call through
 //! `.plt.got`, the bound GOT entry). mimalloc made 16 such calls (mmap,
 //! memcpy, clock_gettime, ...: chess +6K per run). On x86_64 glibc the
-//! runtime build force-includes `perry_noplt_libc.h` into mimalloc, which
-//! sends exactly those calls through the GOT (`.cargo/config.toml`); with it
-//! lld runs no more instructions than GNU ld, so lld is the default there.
+//! vendored libmimalloc-sys (`third_party/libmimalloc-sys`, VENDORED.md)
+//! sends exactly those calls through the GOT and fails its build if one
+//! stays a PLT call; with it lld runs no more instructions than GNU ld, so
+//! lld is the default there.
 //! A global `-fno-plt` would do the same but rewrites every call of the C
 //! parts and cost 256 KiB of peak RSS. aarch64 was not measured: opt-in.
 //!

@@ -457,7 +457,7 @@ _RNvNvNtNtCs_13perry_runtime5arena9page_meta31DEFERRED_OLD_PAGE_REGISTRATIONS7re
 mi_bbitmap_try_find_and_clearNX
 mi_bchunk_try_find_and_clearNX
 # Placed by hand until the next rebuild: mimalloc's GOT stubs for its library
-# calls of memcpy / memset (crates/perry-runtime/c-force-include/perry_noplt_libc.h).
+# calls of memcpy / memset (third_party/libmimalloc-sys/perry/perry_noplt_libc.h).
 perry_mi_memset
 perry_mi_memcpy
 # tier common: 50% to 90%; 698 functions, 683895 bytes

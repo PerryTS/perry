@@ -89,6 +89,7 @@ members = [
 exclude = [
     "third_party/windows-winui",
     "third_party/wac-graph",
+    "third_party/libmimalloc-sys",
     "tests/integration/wasi/p1-host",
 ]
 
@@ -121,6 +122,13 @@ default-members = [
     "crates/perry-ext-ws",
     "crates/perry-ext-zlib",
 ]
+
+# libmimalloc-sys 0.1.49, vendored verbatim but for its build script, which
+# sends mimalloc's libc calls through the GOT on x86_64 glibc Linux and fails
+# the build if one stays a PLT call (third_party/libmimalloc-sys/VENDORED.md;
+# lld, the default Linux linker, would give each a lazily bound slot).
+[patch.crates-io]
+libmimalloc-sys = { path = "third_party/libmimalloc-sys" }
 
 # Aggressive release optimizations for small, fast binaries
 [profile.release]

@@ -1,9 +1,8 @@
 /* perry: mimalloc's libc calls through the GOT, not the PLT.
  *
- * Force-included into every C unit built for x86_64 glibc Linux
- * (`.cargo/config.toml`: CFLAGS_x86_64_unknown_linux_gnu and CPATH) and
- * active only in mimalloc's unity TU (libmimalloc-sys puts `MI_DEBUG` on its
- * command line); everywhere else it is empty.
+ * Force-included (`-include`) into mimalloc's unity TU only, by this crate's
+ * build.rs on x86_64 glibc Linux with gcc (perry/noplt.rs, which also fails
+ * the build if one of these calls is still a PLT call).
  *
  * Why: Rust code takes these functions' addresses from the GOT (GLOB_DAT,
  * bound at start), and mimalloc called them through the PLT. GNU ld routes
