@@ -83,15 +83,6 @@ pub(crate) struct RepresentationFacts {
     /// canonical-i32 gate for the same reason as
     /// `reassociable_f64_accumulators`: it is not a storage decision.
     pub loop_induction: super::loop_bounded_i32::LoopInductionFacts,
-    /// Locals whose canonical-i32 promotion is PROVABLE but not PROFITABLE
-    /// (#7128): written after declaration, no i32-consuming read anywhere in
-    /// the body, and at least one double-consuming read inside a loop — so the
-    /// i32 slot only ever converts back, emitting strictly more work than the
-    /// boxed representation. A refusal set, subtracted from the canonical-i32
-    /// eligibility conjunction and from nothing else. See
-    /// `collectors/repsel_benefit.rs` for the +14.87% `15_mandelbrot`
-    /// measurement that motivates it.
-    pub unprofitable_canonical_i32_locals: HashSet<u32>,
     /// #8105: locals whose value is a JS **Number by construction** — every
     /// write (the `let` initialiser and every later assignment) is an
     /// expression the spec guarantees evaluates to a Number.
@@ -292,10 +283,6 @@ impl TypeFacts {
 
     pub(crate) fn loop_induction(&self) -> &super::loop_bounded_i32::LoopInductionFacts {
         &self.representation.loop_induction
-    }
-
-    pub(crate) fn unprofitable_canonical_i32_locals(&self) -> &HashSet<u32> {
-        &self.representation.unprofitable_canonical_i32_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -700,26 +687,6 @@ pub(crate) fn collect_type_facts(
         &numeric_locals,
     );
     strictly_i32_bounded_locals.extend(proven_int32.iter().copied());
-    // #7128: the profitability half of canonical-i32 selection. Every term
-    // above answers "may we?"; this one answers "should we?", and it is
-    // computed here — after the storage facts it consults — rather than folded
-    // into any of them, so a future widening of a range proof cannot silently
-    // move the benefit verdict (and vice versa). Skipped entirely when
-    // canonical selection is off: that arm selects nothing, so a refusal set
-    // for it would be dead work.
-    let unprofitable_canonical_i32_locals = if crate::expr::canonical_i32_locals_enabled() {
-        super::repsel_benefit::collect_unprofitable_canonical_i32_locals(
-            stmts,
-            &super::repsel_benefit::I32StorageFacts {
-                index_used: &index_used_locals,
-                strictly_bounded: &strictly_i32_bounded_locals,
-                unsigned: &unsigned_i32_locals,
-                int_valued_ta: &int_valued_ta_locals,
-            },
-        )
-    } else {
-        HashSet::new()
-    };
     let non_escaping_news = super::escape_news::collect_non_escaping_news(
         stmts,
         boxed_vars,
@@ -973,7 +940,6 @@ pub(crate) fn collect_type_facts(
             overflow_exit_counters,
             reassociable_f64_accumulators,
             loop_induction,
-            unprofitable_canonical_i32_locals,
             number_by_construction_locals,
         },
         arrays: array_facts,

@@ -322,9 +322,10 @@ pub(crate) struct CanonicalI32Denial {
     pub closure_referenced: bool,
     pub array_row_alias: bool,
     pub not_index_used_or_bounded: bool,
-    /// #7128: every range proof passed, and the promotion would still emit
-    /// more work than the box. Distinct from every other field here, which
-    /// records a *provability* failure.
+    /// The whole-program facts cover the local and give it no `I32`: its
+    /// value has no int demand (#7128's `15_mandelbrot` counter), or the
+    /// facts do not prove it an int32. Distinct from every other field
+    /// here, which records a failure of the per-function proof.
     pub no_i32_consuming_use: bool,
     pub context: Option<&'static str>,
 }
@@ -411,14 +412,12 @@ impl CanonicalI32Denial {
         if self.no_i32_consuming_use {
             return Some((
                 "no_i32_consuming_use",
-                "provable, but not profitable: the local is written after its \
-                 declaration, no read of it anywhere is consumed as an i32 (no \
-                 array index, no bitwise operand, no `Math.imul`), and at least \
-                 one read inside a loop needs the double back. The i32 slot \
-                 would emit a `sitofp` per iteration and buy nothing — this is \
-                 the +14.87% instructions #7128 measured on 15_mandelbrot, \
-                 where the mixed representation also costs the loop its fused \
-                 single-block exit test",
+                "the whole-program facts give the local no I32 representation: \
+                 no int consumer (an array index, a bitwise operand, \
+                 `Math.imul`) is reachable from its value, or the facts do not \
+                 prove it an int32. An i32 slot for a value that only feeds \
+                 double arithmetic emits a `sitofp` per read and buys nothing \
+                 (the +14.87% instructions #7128 measured on 15_mandelbrot)",
                 Tier::CompilerLimitation,
                 Some(NO_BENEFIT_ISSUE),
             ));
@@ -1107,7 +1106,7 @@ mod repsel_denial_tests {
     }
 
     /// #7128: a local that passed every range proof and lost only to the
-    /// profitability model names that, and not the context gate — otherwise
+    /// facts' int demand names that, and not the context gate — otherwise
     /// `15_mandelbrot`'s `iter` would report `module_init_context`, which is
     /// exactly the rule #7121 removed, sending the next reader back to a bug
     /// that is already fixed.

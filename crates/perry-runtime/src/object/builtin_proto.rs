@@ -1651,7 +1651,7 @@ pub extern "C-unwind" fn js_borrowed_object_has_own(this: f64, key: f64) -> f64 
     if let Some(v) = borrowed_object_redirect(b"hasOwnProperty", this, &[key]) {
         return v;
     }
-    super::js_object_has_own(this, key)
+    super::object_ops::has_own::object_prototype_has_own_property(this, key)
 }
 
 #[no_mangle]

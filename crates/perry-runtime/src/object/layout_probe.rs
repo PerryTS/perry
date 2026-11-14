@@ -899,9 +899,11 @@ unsafe fn owned_accessor_answer<const ABSENT: bool>(
     }
 }
 
-/// Actual table ownership was proved by the front on this NoCollect path.
-/// Keep the operation's inherited-call/verify register needs out of receivers
-/// whose ordinary record already answers without an owned table.
+/// The read of a receiver with a table, a tail of the front (which proved
+/// the current ordinary record and the actual table): one lookup of the
+/// table decides it. An entry that holds its own data value is the answer
+/// here, in a leaf with no frame, and so is a reference to a fixed inline
+/// slot; an accessor pair, a spilled fixed slot and a miss are tails.
 #[inline(never)]
 unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     dir: *const u8,
@@ -913,8 +915,11 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
 ) -> f64 {
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-        || (*meta).elements != 0
+    // A native namespace has its own record kind
+    // (`shapes_store_kind::receiver_ordinary_kind`), so the front's kind
+    // test excludes it.
+    debug_assert!((*obj).class_id != crate::object::NATIVE_MODULE_CLASS_ID);
+    if (*meta).elements != 0
         || (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
                 | crate::object::OBJECT_META_FLAG_NATIVE_ALIAS)
@@ -922,35 +927,77 @@ unsafe fn owned_get<const ABSENT: bool, const LAZY_HASH: bool>(
     {
         return hole();
     }
-    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
-    let value = match crate::object::overflow::find_hashed(table, key_bits, hash) {
-        Some(entry) => {
-            if *crate::object::overflow::attrs_at(table, entry) as u8
-                & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
-                != 0
-            {
-                // The entry's value is its accessor pair: one tail call, so
-                // nothing of the data arm stays live across it.
-                return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
-            }
-            // The front proved this current ordinary record and actual
-            // table; find_hashed just proved the live entry. Consume those
-            // same facts through the shared checked entry reader.
-            let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
-            crate::object::overflow::get_found_from_record(table, obj, entry, record)
-                .map(f64::from_bits)
-                .unwrap_or_else(hole)
-        }
-        // The actual table has proved own absence. Continue through
-        // the existing current-shape prototype walk, without deriving
-        // a redundant receiver-key index or learning an overflow memo.
-        None => inherited_get::<ABSENT>(dir, obj, r, key_bits, hash),
+    // One lookup of the table decides the read. A data entry is the answer
+    // here, with no frame: its own value word, or the word of the fixed
+    // inline slot it refers to. An accessor pair, a spilled fixed slot and
+    // a miss are tails.
+    let Some(entry) = crate::object::overflow::find_hashed_with(table, key_bits, || {
+        site_key_hash::<LAZY_HASH>(key_bits, hash)
+    }) else {
+        return owned_miss::<ABSENT, LAZY_HASH>(dir, obj, r, key_bits, hash);
     };
+    let Some(word) =
+        crate::object::overflow::found_data_word(table, obj, entry, (*r).live_inline_slot_count)
+    else {
+        return owned_found::<ABSENT>(table, obj, entry, r, key_bits);
+    };
+    let value = f64::from_bits(word);
     if ABSENT {
         verify::answer(obj as usize, key_bits, value)
     } else {
         value
     }
+}
+
+/// The table front's found entry that one load does not answer
+/// (`overflow::found_data_word`): an accessor pair, or a reference to a fixed
+/// slot that is spilled or holds a lane word. Out of line, a tail of the
+/// front: the front proved this current ordinary record and actual table and
+/// its lookup proved the live entry; the shared checked entry reader consumes
+/// those same facts.
+#[inline(never)]
+unsafe fn owned_found<const ABSENT: bool>(
+    table: *const crate::object::overflow::Table,
+    obj: *const ObjectHeader,
+    entry: u32,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+) -> f64 {
+    if *crate::object::overflow::attrs_at(table, entry) as u8
+        & crate::object::key_attrs::ENTRY_ACCESSOR_MASK
+        != 0
+    {
+        // The entry's value is its accessor pair: one tail call, so
+        // nothing of the data arm stays live across it.
+        return owned_accessor_answer::<ABSENT>(table, obj, entry, r, key_bits);
+    }
+    let record = super::ShapeRecordRef(std::ptr::NonNull::new_unchecked(r));
+    let value = crate::object::overflow::get_found_from_record(table, obj, entry, record)
+        .map(f64::from_bits)
+        .unwrap_or_else(hole);
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, value)
+    } else {
+        value
+    }
+}
+
+/// The table front's miss: the actual table has proved own absence. Continue
+/// through the existing current-shape prototype walk, without deriving a
+/// redundant receiver-key index or learning an overflow memo. Out of line, a
+/// tail of the front, and itself only the hash and a tail call: the chain's
+/// answer is returned as the front of a receiver with no table returns it
+/// (`probe_get_absent`), so the miss keeps no frame for the verify hook.
+#[inline(never)]
+unsafe fn owned_miss<const ABSENT: bool, const LAZY_HASH: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
+    inherited_get::<ABSENT>(dir, obj, r, key_bits, hash)
 }
 
 /// The own-data front. With `SITE` (a compile-time choice) every own miss
@@ -974,7 +1021,11 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     let word = (*obj).parent_class_id;
     let r = record_of(dir, LayoutWord(word));
     if r.is_null() {
-        return array_named_get::<ABSENT>(
+        // An exotic receiver whose named own keys live in an ordinary bag
+        // answers an own key from that bag first, by the ordinary own arm.
+        // Out of line and cold like the exotic continuation it replaces, so
+        // the ordinary front keeps its layout and caller-saved registers.
+        return bag_first_get::<ABSENT>(
             dir,
             obj,
             key_bits,
@@ -1166,7 +1217,7 @@ unsafe fn array_named_get<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
-    let v = exotic_get::<ABSENT>(dir, obj, key_bits, hash);
+    let v = exotic_get::<ABSENT, true>(dir, obj, key_bits, hash);
     if ABSENT {
         verify::answer(obj as usize, key_bits, v)
     } else {
@@ -1174,8 +1225,98 @@ unsafe fn array_named_get<const ABSENT: bool>(
     }
 }
 
+/// The read of an exotic receiver (no ordinary record): its bag's own key
+/// by the ordinary own arm ([`bag_own`]), else the exotic continuation.
+#[cold]
+#[inline(never)]
+unsafe fn bag_first_get<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    match bag_own(dir, obj, key_bits, hash) {
+        Ok(v) if ABSENT => verify::answer(obj as usize, key_bits, v),
+        Ok(v) => v,
+        Err(true) => array_named_get_past_bag::<ABSENT>(dir, obj, key_bits, hash),
+        Err(false) => array_named_get::<ABSENT>(dir, obj, key_bits, hash),
+    }
+}
+
+/// [`array_named_get`] after [`bag_own`] proved the key absent from the
+/// receiver's bag (or found no bag): the exotic own keys, then the chain.
+#[cold]
+#[inline(never)]
+unsafe fn array_named_get_past_bag<const ABSENT: bool>(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    let v = exotic_get::<ABSENT, false>(dir, obj, key_bits, hash);
+    if ABSENT {
+        verify::answer(obj as usize, key_bits, v)
+    } else {
+        v
+    }
+}
+
+/// `atom_hash(b"length")`: an array's `length` is its header's, never a
+/// key of its bag.
+const LENGTH_HASH: u64 = crate::object::runtime_layouts::atom_hash(b"length");
+
+/// The own key `key_bits` (hash `hash`) of an exotic receiver whose named
+/// own properties live in an ordinary bag object (a function's `props`, an
+/// array's `named`), read by the ordinary own arm on that bag: `Ok(value)`
+/// for a hit (a hole when the entry is no plain data slot, which the site
+/// treats as a decline, as for any receiver), `Err(true)` when the bag's
+/// record proves the key absent or there is no bag, `Err(false)` when the
+/// bag cannot answer here (no ordinary or derived record, an owned table, a
+/// forwarded cell, another receiver kind, an array's `length`).
 #[inline(always)]
-unsafe fn exotic_get<const ABSENT: bool>(
+pub(super) unsafe fn bag_own(
+    dir: *const u8,
+    obj: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> Result<f64, bool> {
+    let header = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return Err(false);
+    }
+    let bag = match (*header).obj_type {
+        crate::gc_array_type_pat!() => {
+            if hash == LENGTH_HASH {
+                return Err(false);
+            }
+            (*(obj as *const crate::array::ArrayHeader)).named as *const ObjectHeader
+        }
+        crate::gc::GC_TYPE_CLOSURE => {
+            (*(obj as *const crate::closure::ClosureHeader)).props as *const ObjectHeader
+        }
+        _ => return Err(false),
+    };
+    if bag.is_null() {
+        return Err(true);
+    }
+    let word = (*bag).parent_class_id;
+    if word & crate::object::overflow::SHADOW_BIT != 0 {
+        return Err(false);
+    }
+    let r = record_of(dir, LayoutWord(word));
+    if r.is_null() {
+        return Err(false);
+    }
+    let pw = (*r).probe;
+    if pw & (PROBE_READY | PROBE_DECLINE | PROBE_CHECKED | PROBE_ATOMS) != PROBE_READY | PROBE_ATOMS
+    {
+        return Err(false);
+    }
+    list_position(r, pw, key_bits, hash).map(|(pos, load)| hit_value(bag, r, pos, load))
+}
+
+#[inline(always)]
+unsafe fn exotic_get<const ABSENT: bool, const BAG: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,
     key_bits: u64,
@@ -1228,7 +1369,7 @@ unsafe fn exotic_get<const ABSENT: bool>(
         }
         _ => return hole(),
     };
-    if !named.is_null() {
+    if BAG && !named.is_null() {
         let word = (*named).parent_class_id;
         let r = record_of(dir, LayoutWord(word));
         if r.is_null() {
@@ -1827,6 +1968,19 @@ unsafe fn own_method_by_bytes(recv: f64, key_bits: u64) -> f64 {
     )
 }
 
+/// Whether `probe_has` must leave a layout accessor entry of `cur` to the
+/// overflow probe: only an object with an overflow keeps its attributes (and
+/// a deleted accessor's tombstone) there. The shadow bit's absence proves no
+/// overflow (`LAYOUT_SHADOW_BIT`); a shadowed object without a table still
+/// answers from the layout. Out of line so the data-entry path of
+/// `probe_has` keeps its register shape.
+#[cold]
+#[inline(never)]
+unsafe fn accessor_defers_to_overflow(cur: *const ObjectHeader) -> bool {
+    (*cur).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
+        && crate::object::overflow::has_overflow(cur)
+}
+
 /// The probe's presence mode (`in`, `Object.hasOwn`,
 /// `hasOwnProperty`): `1` when `key` is present on the object at `obj_bits`
 /// (own, or along its prototype chain unless `own_only`), `0` when the
@@ -1865,8 +2019,29 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
         }
         None => return -1,
     };
-    let absent = if exact { 0 } else { -1 };
     let dir = super::ordinary_dir_addr();
+    // The keyed read's own-slot arm, asked for presence.
+    if exact && computed::own_slot_holds(dir, payload as *const ObjectHeader, key) {
+        return 1;
+    }
+    probe_has_walk(dir, payload, key, hash, exact, own_only)
+}
+
+/// [`probe_has`]'s presence walk for the resolved key `key` (its hash
+/// `hash`; `exact` when it is the key's atom or symbol, so that a miss
+/// proves absence) from the object at `payload`. Inlined into its two
+/// callers ([`probe_has`] and the `in` operator's miss arm), so a miss pays
+/// one frame, not two.
+#[inline(always)]
+pub(crate) unsafe fn probe_has_walk(
+    dir: *const u8,
+    payload: usize,
+    key: u64,
+    hash: u64,
+    exact: bool,
+    own_only: bool,
+) -> i32 {
+    let absent = if exact { 0 } else { -1 };
     let mut cur = payload as *const ObjectHeader;
     for _ in 0..MAX_HOPS {
         if (*cur).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
@@ -1886,20 +2061,28 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
                 if entry & crate::object::key_attrs::ENTRY_PRIVATE != 0 {
                     return -1;
                 }
+                // The attributes of an object with an overflow live in its
+                // entries, not in its layout (`overflow::set_entry_attrs`),
+                // and a deleted accessor leaves only its tombstone there: the
+                // layout's accessor entry answers only when there is no
+                // overflow, else the overflow probe below does.
                 if entry & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
-                    return 1;
-                }
-                let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-                let v = if slot < (*r).live_inline_slot_count {
-                    *((cur as *const u8)
-                        .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
-                        as *const u64)
+                    if !accessor_defers_to_overflow(cur) {
+                        return 1;
+                    }
                 } else {
-                    crate::object::spill::spill_get_present(cur as usize, slot as usize)
-                        .unwrap_or(TAG_HOLE)
-                };
-                if v != TAG_HOLE {
-                    return 1;
+                    let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
+                    let v = if slot < (*r).live_inline_slot_count {
+                        *((cur as *const u8)
+                            .add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
+                            as *const u64)
+                    } else {
+                        crate::object::spill::spill_get_present(cur as usize, slot as usize)
+                            .unwrap_or(TAG_HOLE)
+                    };
+                    if v != TAG_HOLE {
+                        return 1;
+                    }
                 }
                 // A hole slot: the key is absent here; a re-add lives in the
                 // overflow.
@@ -2041,7 +2224,25 @@ enum SetPlan {
 /// and record an add starts from. GC leaf.
 #[inline(always)]
 unsafe fn set_plan(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, value: f64) -> SetPlan {
-    use SetPlan::Stored;
+    match set_front(dir, obj_bits, key_bits, hash, value) {
+        Ok(stored) => SetPlan::Stored(stored),
+        Err((obj, r, bits)) => record_plan(dir, obj, r, key_bits, hash, bits),
+    }
+}
+
+/// [`set_plan`]'s guards and its table arm: `Ok` is the store made (1) or
+/// the decline (0); `Err` the receiver, its record and the value word of a
+/// receiver with no table, which its record answers ([`record_plan`]).
+#[inline(always)]
+unsafe fn set_front(
+    dir: *const u8,
+    obj_bits: u64,
+    key_bits: u64,
+    hash: u64,
+    value: f64,
+) -> Result<i32, (*mut ObjectHeader, *mut ShapeRecord, u64)> {
+    #[allow(non_snake_case)]
+    let Stored = |stored: i32| Ok(stored);
     if obj_bits & TAG_MASK != POINTER_TAG {
         return Stored(0);
     }
@@ -2080,6 +2281,21 @@ unsafe fn set_plan(dir: *const u8, obj_bits: u64, key_bits: u64, hash: u64, valu
             ));
         }
     }
+    Err((obj, r, bits))
+}
+
+/// [`set_plan`] for a receiver with no table: its record's own store, or the
+/// receiver and record an add starts from.
+#[inline(always)]
+unsafe fn record_plan(
+    dir: *const u8,
+    obj: *mut ObjectHeader,
+    r: *mut ShapeRecord,
+    key_bits: u64,
+    hash: u64,
+    bits: u64,
+) -> SetPlan {
+    use SetPlan::Stored;
     match own_position(r, key_bits, hash) {
         Ok(pos) => {
             let keys = (*r).keys as usize as *const crate::array::ArrayHeader;
@@ -2152,10 +2368,15 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 
 #[path = "layout_probe/computed.rs"]
 mod computed;
+#[path = "layout_probe/keyed_delete.rs"]
+mod keyed_delete;
 use computed::computed_key;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;
+pub(crate) use computed::{in_keyed_leaf, in_keyed_miss};
+pub(crate) use computed::{probe_store_keyed, store_key_mintable, KeyedStore};
+pub(crate) use keyed_delete::probe_delete_keyed;
 
 #[path = "layout_probe/diagnostics.rs"]
 mod diagnostics;

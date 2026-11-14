@@ -1286,7 +1286,16 @@ impl<'a> Gen<'a> {
                             None if self.own_store_reads.contains(&(e as *const Expr as usize)) => {
                                 self.m.cons(o, Cons::IdxOwnLoad { idx, dst, shape })
                             }
-                            None => self.m.cons(o, Cons::IdxLoad { idx, dst, shape }),
+                            None => {
+                                let kept = self.in_bounds_read(fx, object, index, o, idx);
+                                let c = Cons::IdxLoad {
+                                    idx,
+                                    dst,
+                                    shape,
+                                    kept,
+                                };
+                                self.m.cons(o, c)
+                            }
                         }
                         dst
                     }

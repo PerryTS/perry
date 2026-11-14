@@ -1614,6 +1614,18 @@ pub struct Model {
     /// store under a Number key counts as in bounds, a wrong claim the
     /// element read's witness must catch (a hole read as a Number).
     pub inbounds_sabotage: bool,
+    /// In-bounds reads (`gen/in_bounds.rs`): a read whose key a length
+    /// test bounds is not past the end of an Array that never shrinks
+    /// (`Model::kept_read`; `PERRY_FACTS_INBOUNDS_READ=0` turns it off).
+    pub inbounds_read: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=inread`): every computed
+    /// read counts as text-proven and any Number key as an index, a wrong
+    /// claim the read's witness must catch (a key at or past the length).
+    pub inbounds_read_sabotage: bool,
+    /// Per Array: the in-bounds reads `(key, dst)` whose past-the-end
+    /// `undefined` the solve withheld; a shrink adds it
+    /// (`Model::arr_len_top`).
+    pub kept_reads: crate::pts::FxHashMap<Tok, Vec<(NodeId, NodeId)>>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=nohole`): no Array ever holds
     /// a hole (`hole`, `mark_hole`): its iteration never yields the
     /// `undefined` of one, a wrong claim the read's witness must catch.

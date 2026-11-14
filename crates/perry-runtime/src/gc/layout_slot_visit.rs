@@ -685,6 +685,13 @@ pub(super) unsafe fn visit_gc_rewrite_slots<const DIAGNOSTICS: bool>(
     });
 }
 
+/// The slots the collector traces in `header`'s object, by address: the census
+/// reads a holder's words through the collector's own enumeration.
+#[cfg(perry_gc_instruments)]
+pub(crate) unsafe fn visit_traced_slots(header: *mut GcHeader, mut visit: impl FnMut(usize)) {
+    visit_gc_rewrite_slots::<false>(header, |slot| visit(slot.slot as usize));
+}
+
 /// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
 /// `visit`: the copying drain. Indirect descriptor and slot visitor calls
 /// were a measured share of that path's per-object
@@ -795,7 +802,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
         return;
     };
     let meta = crate::object::gc_object_meta_slot(obj as usize);
-    let arguments = crate::object::arguments_mapping_slot(obj);
     let selection = heap_payload_slot_selection_from(header, payload, shape);
     let full = full_trace_active();
     let prototype = crate::object::gc_shape_prototype_edge_slot(shape, full);
@@ -827,9 +833,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
     }
     if let Some(slot) = meta {
         visit(pointer_slot(slot.cast()).with_layout(HeapChildSlotReadKind::Prefix));
-    }
-    if let Some(slot) = arguments {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     match selection {
         HeapPayloadSlotSelection::Empty => {}

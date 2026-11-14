@@ -663,6 +663,12 @@ pub struct ModuleBindings {
     /// most the Array's length (`gen/in_bounds.rs`): check mode tests the
     /// claim at the store. Sorted, unique.
     pub inbounds_stores: Vec<u32>,
+    /// In-bounds reads by `element_offset` (`gen/in_bounds.rs`,
+    /// `collect_reads`): at every copy the receiver holds only Arrays of
+    /// this unit that never shrink and the key is an index below the
+    /// length the Array has at the read. `true`: none of them may hold a
+    /// hole either, so the slot is a present element. Sorted by offset.
+    pub inbounds_reads: Vec<(u32, bool)>,
     /// I32 at rest, PR B (`rest_elems`): element reads and element stores
     /// by `element_offset` whose every receiver holds only Arrays of at-rest
     /// templates, with the least floor of those Arrays; the `fill` call
@@ -1208,6 +1214,7 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     out.extend(g.m.map_values_probe());
     out.extend(crate::element_keys::probe(g));
     out.extend(crate::gen::in_bounds::probe(g));
+    out.extend(crate::gen::in_bounds::read_probe(g));
     out
 }
 
