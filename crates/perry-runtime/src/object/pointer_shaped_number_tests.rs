@@ -32,6 +32,22 @@ fn own(obj: *mut crate::ObjectHeader, name: &str) -> u64 {
     super::js_object_get_field_by_name_f64(obj, key(name)).to_bits()
 }
 
+/// Truthiness of a Number never reads a string: the Number whose bits are the
+/// empty string's address is a nonzero Number (truthy), not `""` (falsy).
+#[test]
+fn truthiness_of_the_number_reads_no_string() {
+    let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+    let forged = f64::from_bits(empty as u64);
+    assert_eq!(forged.to_bits() >> 48, 0, "an address is a denormal");
+    assert_eq!(crate::value::js_is_truthy(forged), 1);
+    assert_eq!(crate::value::js_is_truthy(f64::from_bits(0x1000_0000)), 1);
+    assert_eq!(
+        crate::value::js_is_truthy(crate::value::js_nanbox_string(empty as i64)),
+        0
+    );
+    assert_eq!(crate::value::js_is_truthy(0.0), 0);
+}
+
 #[test]
 fn a_named_read_answers_as_a_number() {
     let (obj, forged) = object_and_forgery();
@@ -59,6 +75,20 @@ fn a_runtime_read_of_the_value_answers_as_a_number() {
     );
 }
 
+/// The Set / Map brand checks decode the receiver by its tag: the Number whose
+/// bits are a live Set's / Map's address is no Set / Map receiver.
+#[test]
+fn collection_brand_checks_reject_the_number() {
+    let set = crate::set::js_set_alloc(4);
+    let map = crate::map::js_map_alloc(4);
+    assert!(crate::set::set_ptr_from_receiver_bits(set as u64).is_none());
+    assert!(crate::map::map_ptr_from_receiver_bits(map as u64).is_none());
+    let set_value = crate::value::js_nanbox_pointer(set as i64).to_bits();
+    let map_value = crate::value::js_nanbox_pointer(map as i64).to_bits();
+    assert_eq!(crate::set::set_ptr_from_receiver_bits(set_value), Some(set));
+    assert_eq!(crate::map::map_ptr_from_receiver_bits(map_value), Some(map));
+}
+
 #[test]
 fn a_named_store_does_not_write_the_object() {
     let (obj, forged) = object_and_forgery();
@@ -66,6 +96,26 @@ fn a_named_store_does_not_write_the_object() {
     super::property_ops::put_value::js_put_value_set(forged, key_value("y"), 7.0, forged, 0);
     assert_eq!(own(obj, "x"), 42.0f64.to_bits(), "x was overwritten");
     assert_eq!(own(obj, "y"), TAG_UNDEFINED, "y was created");
+}
+
+/// A string parameter that is a Number is that Number's string form: the
+/// Number whose bits are a live string's address is not that string.
+#[test]
+fn a_string_argument_that_is_the_number_is_its_string_form() {
+    let s = key("perry");
+    let forged = f64::from_bits(s as u64);
+    assert_eq!(forged.to_bits() >> 48, 0, "an address is a denormal");
+    let got = crate::value::js_get_string_pointer_unified(forged);
+    assert_ne!(got, s as i64);
+    let expected = crate::string::js_number_to_string(forged);
+    assert_eq!(
+        crate::string::js_string_equals(got as *const _, expected as *const _),
+        1
+    );
+    assert_eq!(
+        crate::value::js_get_string_pointer_unified(crate::value::js_nanbox_string(s as i64)),
+        s as i64
+    );
 }
 
 #[test]
@@ -196,4 +246,25 @@ fn entries_behind_the_shared_decoder_answer_as_a_number() {
         0,
         "Array.from(number) copied the array"
     );
+}
+
+/// `[[Set]]` with the forged Number as target and receiver (`EventEmitter.prototype.on.call(e, ..)`
+/// stores `_events` this way) does not write the object at the Number's bits.
+#[test]
+fn ordinary_set_on_the_number_leaves_the_object_alone() {
+    let (obj, forged) = object_and_forgery();
+    let _ =
+        super::property_ops::set::ordinary_set_with_receiver(forged, key_value("x"), 7.0, forged);
+    let _ =
+        super::property_ops::set::ordinary_set_with_receiver(forged, key_value("y"), 8.0, forged);
+    assert_eq!(f64::from_bits(own(obj, "x")), 42.0);
+    assert_eq!(own(obj, "y"), TAG_UNDEFINED);
+    let tagged = crate::value::js_nanbox_pointer(obj as i64);
+    assert!(super::property_ops::set::ordinary_set_with_receiver(
+        tagged,
+        key_value("x"),
+        7.0,
+        tagged
+    ));
+    assert_eq!(f64::from_bits(own(obj, "x")), 7.0);
 }

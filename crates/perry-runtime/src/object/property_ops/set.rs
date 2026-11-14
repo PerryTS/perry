@@ -967,11 +967,11 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
     //   - no recorded setPrototypeOf target (prototype chain is exactly
     //     Object.prototype) and no descriptor on Object.prototype,
     //   - string key.
+    // The target names an object by its tag alone: a word with clear top 16
+    // bits is a Number (a denormal), never a heap address.
     let target_top16 = target.to_bits() >> 48;
     if target.to_bits() == receiver.to_bits()
-        // POINTER_TAG'd heap object, or a module-level slot's raw I64 pointer
-        // (top 16 bits zero).
-        && (target_top16 == 0x7FFD || target_top16 == 0)
+        && target_top16 == 0x7FFD
         && unsafe { crate::symbol::js_is_symbol(key) } == 0
     {
         let addr = extract_pointer(target.to_bits()) as usize;
@@ -1300,17 +1300,6 @@ pub(crate) fn receiver_super_parent_class_id(receiver: f64) -> Option<u32> {
     crate::object::get_parent_class_id(class_id)
 }
 
-pub(crate) fn normalize_accessor_receiver(receiver: f64) -> f64 {
-    let bits = receiver.to_bits();
-    if bits != 0 && (bits >> 48) == 0 {
-        crate::value::js_nanbox_pointer(bits as i64)
-    } else if receiver.is_finite() && receiver > 65_536.0 && receiver.fract() == 0.0 {
-        crate::value::js_nanbox_pointer(receiver as i64)
-    } else {
-        receiver
-    }
-}
-
 /// `super[key] = value` for class methods. The property lookup starts at the
 /// parent prototype, but writes use the current `this` as Receiver.
 #[no_mangle]
@@ -1321,7 +1310,6 @@ pub extern "C" fn js_super_put_value_set(
     receiver: f64,
     strict: i32,
 ) -> f64 {
-    let receiver = normalize_accessor_receiver(receiver);
     // Static-context super uses the parent CONSTRUCTOR as the lookup target,
     // while retaining the child constructor as Receiver. A statically-known
     // class parent is represented by a ClassRef; a function-valued parent is

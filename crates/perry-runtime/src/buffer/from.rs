@@ -1233,13 +1233,15 @@ fn js_buffer_concat_impl(
         let arr_data =
             crate::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const f64;
 
-        // Helper to strip NaN-boxing tags from buffer element pointers
+        // A list element names a buffer by its tag alone: a POINTER_TAG'd
+        // value gives its payload, every other word (a Number, also one whose
+        // bits look like an address, a string, a handle) gives 0, which the
+        // check below rejects with ERR_INVALID_ARG_TYPE.
         let strip_nanbox = |bits: u64| -> u64 {
-            let top16 = (bits >> 48) as u16;
-            if top16 >= 0x7FF8 {
-                bits & 0x0000_FFFF_FFFF_FFFF
+            if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+                bits & crate::value::POINTER_MASK
             } else {
-                bits
+                0
             }
         };
 

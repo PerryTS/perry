@@ -4351,6 +4351,7 @@ js_typed_array_find_index	f64	ptr,ptr
 js_typed_array_find_last	f64	ptr,ptr
 js_typed_array_find_last_index	f64	ptr,ptr
 js_typed_array_for_each	f64	ptr,ptr
+js_typed_array_for_of_admits	f64	f64
 js_typed_array_get	f64	ptr,i32s
 js_typed_array_index_get_dynamic	f64	ptr,f64
 js_typed_array_index_set_dynamic	f64	ptr,f64,f64
