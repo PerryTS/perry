@@ -37,9 +37,15 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             canon.push((bits, None, false));
             continue;
         }
-        if let Some(h) = key_word_hash(bits) {
-            canon.push((bits, Some(h), false));
-            continue;
+        // Image strings are not all registered as this agent's program
+        // atoms: a runtime Get may have minted another atom for their text.
+        // Symbols already carry their identity; every string meets the same
+        // canonicalization below, including a property-atom image cell.
+        if bits & TAG_MASK != STRING_TAG {
+            if let Some(h) = key_word_hash(bits) {
+                canon.push((bits, Some(h), false));
+                continue;
+            }
         }
         let v = crate::JSValue::from_bits(bits);
         let Some(text) = crate::string::js_string_key_bytes(v, &mut sso) else {
@@ -48,10 +54,11 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             continue;
         };
         let h = crate::object::key_bytes_hash(text.as_ptr(), text.len());
-        aliased = true;
         match crate::string::atom_lookup(text, h) {
             Some(a) if crate::string::is_program_atom(a) => {
-                canon.push((STRING_TAG | a as u64, Some(h), false))
+                let word = STRING_TAG | a as u64;
+                aliased |= word != bits;
+                canon.push((word, Some(h), false))
             }
             // A TEXT entry: no program atom names the text yet. Its index
             // entry answers a site key by text, so the list still proves
@@ -59,7 +66,10 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             // alias, a namespace, an exotic read receiver) is not walked from
             // (`inherited::walks_from`); that is decided by its kind and meta,
             // never by how its keys were spelled (DEC 243(5)).
-            _ => canon.push((bits, Some(h), true)),
+            _ => {
+                aliased = true;
+                canon.push((bits, Some(h), true));
+            }
         }
     }
     let flags = PROBE_READY | checked | if atoms { PROBE_ATOMS } else { 0 };

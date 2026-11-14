@@ -48,17 +48,15 @@ pub(super) unsafe fn lookup_value(recv: f64, name: &[u8], direct: f64) -> Option
     {
         return None;
     }
-    // The static FUNCTION_PROTOTYPE layout's apply/bind/call positions.
-    let slot = match name {
-        b"apply" => 5,
-        b"bind" => 6,
-        b"call" => 7,
-        _ => return None,
-    };
     let proto = crate::agent_ptrs::intrinsic_proto(BuiltinProto::Function as usize);
-    Some(f64::from_bits(
-        super::super::js_object_get_field(proto, slot).bits(),
-    ))
+    // The selected image row and the runtime-born row need not have the
+    // same positions. The pristine shape owns the method's storage slot.
+    let method = super::super::native_get::try_data_get_bytes(
+        crate::value::JSValue::pointer(proto.cast()),
+        name,
+    )
+    .expect("pristine Function.prototype lacks its selected intrinsic");
+    Some(f64::from_bits(method.bits()))
 }
 
 /// `recv.call(args…)` on a function `function_ok` admitted: a compiled body

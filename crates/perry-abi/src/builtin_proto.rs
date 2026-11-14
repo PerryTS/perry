@@ -82,3 +82,72 @@ impl FunctionProtoKind {
         }
     }
 }
+
+/// Sealed prototype metadata families beyond the agent's builtin slots.
+/// Births and image bytes use these same existing encodings.
+pub const RUNTIME_PROTOTYPE_FAMILY: usize = crate::INTRINSIC_FAMILIES + 1;
+pub const ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 1;
+pub const ARRAY_ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 2;
+pub const GENERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 3;
+pub const ASYNC_GENERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 4;
+pub const MAP_ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 5;
+pub const SET_ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 6;
+pub const STRING_ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 7;
+pub const REGEXP_STRING_ITERATOR_PROTOTYPE_FAMILY: usize = RUNTIME_PROTOTYPE_FAMILY + 8;
+
+/// The five existing sealed iterator families after the common root.
+/// This is the runtime birth's existing catalog, shared with byte emission.
+pub const ITERATOR_PROTOTYPE_FAMILIES: [usize; 5] = [
+    ARRAY_ITERATOR_PROTOTYPE_FAMILY,
+    MAP_ITERATOR_PROTOTYPE_FAMILY,
+    SET_ITERATOR_PROTOTYPE_FAMILY,
+    STRING_ITERATOR_PROTOTYPE_FAMILY,
+    REGEXP_STRING_ITERATOR_PROTOTYPE_FAMILY,
+];
+
+/// A source-declared iterator root's existing seal. Helper and wrapper
+/// prototypes are not sealed; their serials confer identity only.
+pub const fn iterator_sealed_family(serial: u64) -> Option<usize> {
+    use crate::intrinsic_serials::*;
+    if serial == INTRINSIC_SERIAL_ITERATOR_PROTOTYPE {
+        Some(ITERATOR_PROTOTYPE_FAMILY)
+    } else if serial >= INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE
+        && serial <= INTRINSIC_SERIAL_REGEXP_STRING_ITERATOR_PROTOTYPE
+    {
+        Some(
+            ITERATOR_PROTOTYPE_FAMILIES
+                [(serial - INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE) as usize],
+        )
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod sealed_family_tests {
+    use super::*;
+    #[test]
+    fn realm_metadata_seals_share_the_birth_catalog_and_exclude_unsealed_roots() {
+        use crate::intrinsic_serials::*;
+        assert_eq!(
+            iterator_sealed_family(INTRINSIC_SERIAL_ITERATOR_PROTOTYPE),
+            Some(ITERATOR_PROTOTYPE_FAMILY)
+        );
+        for (index, family) in ITERATOR_PROTOTYPE_FAMILIES.into_iter().enumerate() {
+            assert_eq!(
+                iterator_sealed_family(INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE + index as u64),
+                Some(family)
+            );
+        }
+        assert_eq!(
+            iterator_sealed_family(INTRINSIC_SERIAL_ITERATOR_HELPER_PROTOTYPE),
+            None
+        );
+        assert_eq!(
+            iterator_sealed_family(INTRINSIC_SERIAL_WRAP_FOR_VALID_ITERATOR_PROTOTYPE),
+            None
+        );
+        assert_eq!(iterator_sealed_family(0), None);
+        assert_ne!(GENERATOR_PROTOTYPE_FAMILY, ASYNC_GENERATOR_PROTOTYPE_FAMILY);
+    }
+}

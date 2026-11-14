@@ -84,6 +84,13 @@ pub(super) fn read(source: &str) -> Result<BTreeMap<String, Value>, String> {
             };
             facts.insert(field.into(), value);
         }
+        let constants = info::constants(include_str!("../../perry-abi/src/intrinsic_serials.rs"))?;
+        for field in ["prototype_serial", "sealed_serial", "named_serial"] {
+            if let Some(expression) = facts.get(field).and_then(Value::string) {
+                let value = info::integer(expression, &constants)?;
+                facts.insert(format!("{field}_value"), Value::Number(value.to_string()));
+            }
+        }
         if out.insert(name.clone(), Value::Object(facts)).is_some() {
             return Err(format!("duplicate constructor family {name}"));
         }
@@ -149,7 +156,7 @@ mod tests {
 
     #[test]
     fn enum_words_and_family_fields_follow_the_owning_macro() {
-        let source = "builtin_constructors! { Array => info; instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::shape::ARRAY, Function => info; prototype_callable true, }";
+        let source = "builtin_constructors! { Array => info; instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE, Function => info; prototype_callable true, }";
         let families = read(source).unwrap();
         assert_eq!(
             families["Array"].get("identity"),
@@ -167,7 +174,13 @@ mod tests {
             families["Array"]
                 .get("named_serial")
                 .and_then(Value::string),
-            Some("crate::shape::ARRAY")
+            Some("crate::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE")
+        );
+        assert_eq!(
+            families["Array"].get("named_serial_value"),
+            Some(&Value::Number(
+                perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ARRAY_PROTOTYPE.to_string()
+            ))
         );
     }
 }

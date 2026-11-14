@@ -101,6 +101,14 @@ pub struct ConstructorFacts {
     pub sealed_serial: Option<String>,
     #[serde(default)]
     pub named_serial: Option<String>,
+    /// Numeric forms of the source serial expressions, resolved by the
+    /// shared producer from the defining ABI constants.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prototype_serial_value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sealed_serial_value: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_serial_value: Option<u64>,
     pub prototype_callable: bool,
     #[serde(default)]
     pub instance_identity: Option<String>,
@@ -133,6 +141,16 @@ impl RealmStorageFacts {
     }
 }
 
+/// Whether this declaration denotes one realm identity or a body template
+/// allocated for each owner instance. Both retain the same logical reach.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RealmBirthDomain {
+    #[default]
+    Singleton,
+    Instance,
+}
+
 /// A declaration belongs to the source that owns the body or object birth.
 /// Names are symbolic paths, never addresses. Symbol keys use `@@iterator`
 /// etc.; accessors declare their two independently callable entries.
@@ -140,6 +158,11 @@ impl RealmStorageFacts {
 #[serde(deny_unknown_fields)]
 pub struct RealmDeclaration {
     pub name: String,
+    #[serde(default)]
+    pub birth_domain: RealmBirthDomain,
+    /// A hook target exists only after this source-owned installer executes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_by: Option<String>,
     pub kind: RealmKind,
     #[serde(default)]
     pub owner: Option<String>,
@@ -194,8 +217,19 @@ pub struct RealmDeclaration {
     pub elements: Option<String>,
     #[serde(default)]
     pub native_namespace: Option<String>,
+    /// The native namespace that owns this source birth and its own-value graph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_birth_owner: Option<String>,
     #[serde(default)]
     pub constructor: Option<ConstructorFacts>,
+    /// The source-owned materialize group of a non-builtin root. Members
+    /// inherit the group through declared own-value edges at compile time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub materialize_family: Option<u8>,
+    /// An intrinsic root's source-owned serial, already resolved by the
+    /// producer; this is emitted into its existing metadata word.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intrinsic_serial: Option<u64>,
     #[serde(default)]
     pub storage: Option<RealmStorageFacts>,
     /// What the body does to its inputs; empty = undeclared (unknown code).

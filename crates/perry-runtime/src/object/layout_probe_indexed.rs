@@ -49,7 +49,7 @@ pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: 
         crate::array::array_elements_ptr(keys as usize as *const _) as *const u64
     };
     let i = pos & POS_BITS;
-    if *words.add(i as usize) != key_bits {
+    if !super::computed::key_eq(*words.add(i as usize), key_bits) {
         // A matching memo proves the entire live chain, including any
         // own key in a later bucket. An unanswered proof still continues
         // this same index; the first bucket is not treated as own absence.
@@ -113,7 +113,7 @@ pub(super) unsafe fn continued<const ABSENT: bool, const SITE: bool, const LAZY_
         } else {
             *list.add(i as usize)
         };
-        if w == key_bits {
+        if super::computed::key_eq(w, key_bits) {
             let load = entry_load(table, pos, i);
             if load == NO_LOAD && pos & ACCESSOR_ENTRY != 0 {
                 return accessor_answer_slot(obj, KeyIndex::word(table, i));

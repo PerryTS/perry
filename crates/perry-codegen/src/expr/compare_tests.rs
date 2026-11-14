@@ -111,7 +111,7 @@ fn dynamic_relations_admit_unboxed_numbers_with_one_sign_closed_guard_per_operan
 }
 
 #[test]
-fn strict_eq_against_a_proven_symbol_is_raw_identity() {
+fn strict_eq_against_a_proven_symbol_uses_its_header_identity() {
     let ir = ir_for(
         "streq_proven_symbol",
         vec![
@@ -149,8 +149,19 @@ fn strict_eq_against_a_proven_symbol_is_raw_identity() {
         "proven Symbol identity fell through to js_eq:\n{ir}"
     );
     assert!(
-        ir.contains("icmp eq i64"),
-        "proven Symbol identity did not become a raw-bit compare:\n{ir}"
+        ir.contains("@js_symbol_equals"),
+        "proven Symbol identity lost its image/runtime header comparison:\n{ir}"
+    );
+    let helper = ir
+        .find("call i32 @js_symbol_equals")
+        .expect("symbol identity call");
+    let call_block = ir[..helper]
+        .lines()
+        .rfind(|line| line.trim_end().ends_with(':'));
+    assert!(
+        call_block.is_some_and(|line| line.contains("symbol.distinct"))
+            && ir[..helper].contains("br i1"),
+        "equal pointers must bypass symbol classification:\n{ir}"
     );
 }
 

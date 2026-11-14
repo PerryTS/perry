@@ -66,3 +66,40 @@ fn runtime_value_read_of_unrooted_cell_aborts_by_name() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn projected_runtime_value_root_is_readable_without_a_birth_fallback() {
+    const CHILD: &str = "REALM_ROOTS_PROJECTION_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        crate::test_support::bootstrap_test_thread();
+        let held = std::env::var_os("REALM_ROOTS_PROJECTION_PATH")
+            .map(|path| {
+                std::fs::read_to_string(path)
+                    .unwrap()
+                    .lines()
+                    .any(|name| name == "Ctor.prototype")
+            })
+            .unwrap_or(true);
+        // The fixture's held pointer is an image cell, never a collectable
+        // edge. A missing close referent leaves the private slot undefined,
+        // exactly as the image value projection does.
+        let global = image_global();
+        let value = if held {
+            global
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        };
+        crate::object::intrinsic_private_add(global, "[[RegExpPrototype]]", value);
+        let value = crate::realm_value_read! { "RegExp" => "RegExp.prototype"; PROTOTYPE_READ.read(global) };
+        assert_eq!(value.unwrap().to_bits(), global.to_bits());
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "object::field_get_set::ic_miss::private_read_tests::projected_runtime_value_root_is_readable_without_a_birth_fallback", "--nocapture"])
+        .env(CHILD, "1").output().unwrap();
+    assert!(
+        output.status.success(),
+        "closed runtime value root was not readable: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

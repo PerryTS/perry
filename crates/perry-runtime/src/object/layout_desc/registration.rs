@@ -19,7 +19,7 @@ pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProg
     }
     unsafe {
         for (index, desc) in image_layouts().enumerate() {
-            if !register_static_row(index, desc) {
+            if !register_static_row(|| index, desc) {
                 break;
             }
         }
@@ -28,32 +28,34 @@ pub(crate) fn register_static_layouts_in(program: &crate::codegen_abi::PerryProg
 
 /// The startup walk of an image with a lazy span. The span is one contiguous
 /// run of the section, so the walk goes around it and no row pays a test.
-#[cold]
-#[optimize(size)]
-#[inline(never)]
+#[inline(always)]
 unsafe fn register_around_lazy_span(program: &crate::codegen_abi::PerryProgramTableV1) {
     let (start, end) = layout_bounds();
     let (lazy_start, lazy_end) = super::lazy_image::section_span(program, start, end);
-    let size = std::mem::size_of::<PerryLayoutDesc>();
-    for (index, desc) in records::<PerryLayoutDesc>((start, lazy_start)).enumerate() {
-        if !register_static_row(index, desc) {
+    for desc in records::<PerryLayoutDesc>((start, lazy_start)) {
+        if !register_static_row(|| descriptor_section_index(desc, start), desc) {
             return;
         }
     }
-    if lazy_end != end {
-        // Rows after the span keep their section index.
-        let after = (lazy_end - start) / size;
-        for (index, desc) in records::<PerryLayoutDesc>((lazy_end, end)).enumerate() {
-            if !register_static_row(after + index, desc) {
-                return;
-            }
+    for desc in records::<PerryLayoutDesc>((lazy_end, end)) {
+        if !register_static_row(|| descriptor_section_index(desc, start), desc) {
+            return;
         }
     }
 }
 
+/// Only a publishable program row needs its section index. Namespace,
+/// native and sentinel rows answer before this arithmetic, including when
+/// they are the only records outside the lazy span.
+#[cold]
+#[inline(never)]
+fn descriptor_section_index(desc: *const PerryLayoutDesc, start: usize) -> usize {
+    (desc as usize - start) / std::mem::size_of::<PerryLayoutDesc>()
+}
+
 /// One static row at startup; false stops the walk (no ids left).
 #[inline(always)]
-unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool {
+unsafe fn register_static_row(index: impl FnOnce() -> usize, desc: *mut PerryLayoutDesc) -> bool {
     {
         {
             if (*desc).family == SENTINEL_FAMILY || (*desc).keys.is_null() && (*desc).key_count != 0
@@ -73,7 +75,7 @@ unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool 
             {
                 return true;
             }
-            let Some(id) = layout_id_of_index(index as u32) else {
+            let Some(id) = layout_id_of_index(index() as u32) else {
                 return false;
             };
             let _ = register_one(desc, id);
@@ -278,10 +280,7 @@ unsafe fn bound_key_ok(key: &PerryLayoutKey, d: &PerryLayoutDesc) -> bool {
 /// with every layout it holds) and install the row: reads image data only,
 /// allocates nothing on the GC heap. 0 when the list is missing or does not
 /// match the descriptor's keys.
-unsafe fn install_from_image_list(
-    desc: *const PerryLayoutDesc,
-    facts: &RowFacts,
-) -> u32 {
+unsafe fn install_from_image_list(desc: *const PerryLayoutDesc, facts: &RowFacts) -> u32 {
     let list_keys = if facts.keys.is_empty() {
         super::super::ObjectKeys::NONE
     } else {
@@ -290,7 +289,9 @@ unsafe fn install_from_image_list(
         if !super::super::image_keys::prepare_lazy(facts.keys, cell) {
             return 0;
         }
-        let list = super::super::canonical_keys::static_seed::link_lazy_image_list(&proof, facts.keys, cell);
+        let list = super::super::canonical_keys::static_seed::link_lazy_image_list(
+            &proof, facts.keys, cell,
+        );
         match list {
             Some(list) => list.view(),
             None => return 0,
@@ -689,15 +690,30 @@ mod lazy_contract_tests {
                 crate::codegen_abi::ATOM_KIND_BINDING_SYMBOL,
                 crate::codegen_abi::ATOM_KIND_PROGRAM_SYMBOL,
             ] {
-                let atom = StaticAtom { hash: base_atom.hash, string: base_atom.string, kind, index: 0, _pad: [0; 3] };
-                let key = PerryLayoutKey { atom: &atom, slot: 0, attrs: 0, ..std::mem::zeroed() };
+                let atom = StaticAtom {
+                    hash: base_atom.hash,
+                    string: base_atom.string,
+                    kind,
+                    index: 0,
+                    _pad: [0; 3],
+                };
+                let key = PerryLayoutKey {
+                    atom: &atom,
+                    slot: 0,
+                    attrs: 0,
+                    ..std::mem::zeroed()
+                };
                 let mut desc = std::ptr::read(source);
                 desc.shape_id = 0;
                 desc.key_count = 1;
                 desc.slot_count = 1;
                 desc.keys = &key;
                 let facts = row_facts::<KEYS_LAZY>(&desc, 0, &[], None);
-                assert_eq!(facts.is_ok(), kind == crate::codegen_abi::ATOM_KIND_STRING, "kind {kind}");
+                assert_eq!(
+                    facts.is_ok(),
+                    kind == crate::codegen_abi::ATOM_KIND_STRING,
+                    "kind {kind}"
+                );
             }
         }
     }
@@ -706,7 +722,10 @@ mod lazy_contract_tests {
     fn lazy_row_facts_use_the_declared_prototype_with_native_class_headers() {
         crate::test_support::bootstrap_test_thread();
         unsafe {
-            let family = PerryProtoFamily { serial: 58, image_prototype: std::ptr::null() };
+            let family = PerryProtoFamily {
+                serial: 58,
+                image_prototype: std::ptr::null(),
+            };
             let mut desc = std::ptr::read(crate::object::runtime_layouts::ITERATOR_RESULT::desc());
             desc.shape_id = 0;
             desc.key_count = 0;
@@ -714,11 +733,20 @@ mod lazy_contract_tests {
             desc.class_id = 77;
             desc.proto = &family;
             let image = row_facts::<KEYS_LAZY>(&desc, 0, &[], None).ok().unwrap();
-            assert_eq!(image.proto_id, 58, "the image declares the prototype identity");
+            assert_eq!(
+                image.proto_id, 58,
+                "the image declares the prototype identity"
+            );
             assert!(!image.class_family);
             let birth = row_facts::<KEYS_BOUND>(&desc, 0, &[], None).ok().unwrap();
-            assert!(birth.class_family, "ordinary class-family births retain their existing rule");
-            assert_eq!(birth.proto_id, super::super::super::shapes::PROTO_ID_CLASS | 77);
+            assert!(
+                birth.class_family,
+                "ordinary class-family births retain their existing rule"
+            );
+            assert_eq!(
+                birth.proto_id,
+                super::super::super::shapes::PROTO_ID_CLASS | 77
+            );
         }
     }
 
@@ -728,5 +756,37 @@ mod lazy_contract_tests {
         crate::gc::ensure_gc_initialized();
         let _window = crate::object::layout_desc::NoGcAlloc::enter();
         let _ = crate::arena::arena_alloc_gc(16, 8, crate::gc::GC_TYPE_OBJECT);
+    }
+}
+
+#[cfg(test)]
+mod startup_index_tests {
+    use super::*;
+
+    #[test]
+    fn startup_registrar_only_requests_an_index_for_a_publishable_row() {
+        let calls = std::cell::Cell::new(0);
+        let index = || {
+            calls.set(calls.get() + 1);
+            usize::MAX
+        };
+        unsafe {
+            let mut desc = std::ptr::read(std::ptr::addr_of!(LAYOUT_SECTION_SENTINEL));
+            assert!(register_static_row(index, &mut desc));
+            desc.family = 0;
+            assert!(register_static_row(index, &mut desc));
+            desc.layout_id = crate::codegen_abi::LAYOUT_TAG
+                | crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS;
+            desc.variant = crate::codegen_abi::LAYOUT_VARIANT_NAMESPACE;
+            assert!(register_static_row(index, &mut desc));
+            desc.variant = 0;
+            desc.layout_id = crate::codegen_abi::LAYOUT_TAG;
+            assert!(register_static_row(index, &mut desc));
+            assert_eq!(calls.get(), 0);
+            desc.layout_id = crate::codegen_abi::LAYOUT_TAG
+                | crate::object::runtime_layouts::RUNTIME_LAYOUT_ROWS;
+            assert!(!register_static_row(index, &mut desc));
+            assert_eq!(calls.get(), 1);
+        }
     }
 }

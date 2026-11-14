@@ -95,6 +95,9 @@ impl<'a> Row<'a> {
                     .is_some_and(|v| v == key)
             })
     }
+    pub fn installed_by(self) -> Option<&'a str> {
+        self.0.facts.get("installed_by").and_then(|v| v.as_str())
+    }
     pub fn name(self) -> &'static str {
         self.0.entry.name
     }

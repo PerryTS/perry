@@ -769,8 +769,8 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
 }
 
 /// Pointer-key index entry (#6084): object / symbol / function keys hash and
-/// compare by their raw NaN-box bits (identity — matching the linear scan's
-/// `jsvalue_eq` bit-equality for non-string pointers); BigInt keys hash and
+/// compare by their raw NaN-box bits; symbols use their header identity in
+/// both the index and the linear scan. BigInt keys hash and
 /// compare by CONTENT (limbs) per SameValueZero. The stored bits go stale
 /// whenever gen-GC evacuates a pointee, so this key type may only live in
 /// `MapStore::pointers`, which is rebuilt from the (already rewritten) entries
@@ -781,6 +781,12 @@ struct MapPtrKey(f64);
 impl Hash for MapPtrKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         let bits = self.0.to_bits();
+        if unsafe { crate::symbol::js_is_symbol(self.0) != 0 } {
+            let symbol = (bits & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
+            0x5359_4D42u32.hash(state);
+            unsafe { crate::symbol::identity_hash(symbol) }.hash(state);
+            return;
+        }
         let big = bigint_ptr_from_bits(bits);
         if !big.is_null() {
             // Distinct domain tag so bigint content hashes never collide
@@ -1172,13 +1178,10 @@ fn jsvalue_eq(a: f64, b: f64) -> bool {
         return true;
     }
 
-    // Symbols are compared by identity only — two distinct symbols are never
-    // equal (and a same-symbol match was already caught by the bit-equality
-    // fast path). A description-less `Symbol()` exposes a zero-length string
-    // view, so without this guard it would content-compare equal to the ""
-    // key and collide inside Map/Set. (#4570)
+    // Header identity also joins image and runtime cells of one symbol.
+    // A symbol never compares equal to a string or ordinary receiver.
     if unsafe { crate::symbol::js_is_symbol(a) != 0 || crate::symbol::js_is_symbol(b) != 0 } {
-        return false;
+        return unsafe { crate::symbol::js_symbol_equals(a, b) != 0 };
     }
 
     // BigInts compare by mathematical value (SameValueZero, 23.1.3.9): two

@@ -259,6 +259,13 @@ pub(crate) fn note_realm_intrinsic(
     constructor: usize,
 ) {
     note_family_intrinsic(identity as u8, prototype, constructor);
+    if prototype != 0 {
+        for (slot, &builtin) in PROTOTYPE_ADDR_BUILTINS.iter().enumerate() {
+            if builtin == identity && prototype_addrs()[slot].get() == usize::MAX {
+                prototype_addrs()[slot].set(prototype);
+            }
+        }
+    }
 }
 
 /// This realm's intrinsic prototype of `identity`, or 0 when the realm has

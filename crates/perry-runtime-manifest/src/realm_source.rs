@@ -12,6 +12,8 @@ mod birth;
 mod capture;
 #[path = "realm_capture_call.rs"]
 mod capture_call;
+#[path = "realm_capture_write.rs"]
+mod capture_write;
 #[path = "realm_colors.rs"]
 mod colors;
 #[path = "realm_derive.rs"]
@@ -564,6 +566,7 @@ fn declarations(
     )];
     merge_effects(&mut all, |module, key| dispatch_arm(&file, module, key))?;
     derive::finish(&mut all)?;
+    capture_write::attach(&mut all, [source])?;
     Ok(all)
 }
 
@@ -782,6 +785,11 @@ fn declarations_with_receivers(
                     );
                     out.push(declaration);
                 }
+                skip_until = end + 1;
+                continue;
+            }
+            if entries.first().is_some_and(|t| t.text == "capture_write") {
+                // The write is consumed after all births have been derived.
                 skip_until = end + 1;
                 continue;
             }
@@ -1183,6 +1191,7 @@ pub fn read(runtime_src: &Path) -> Result<Value, String> {
     merge_effects(&mut all, |module, key| dispatch_arm(&sources, module, key))?;
     native::resolve_receivers(&mut all, &native_receivers)?;
     derive::finish(&mut all)?;
+    capture_write::attach(&mut all, sources.iter().map(|(_, source)| source.as_str()))?;
     exports.link(&mut all)?;
     keys::attach(&mut all, &runtime_keys);
     reads::attach(&mut all, &runtime_reads, &runtime_constructor_names)?;

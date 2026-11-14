@@ -532,7 +532,10 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
         ));
         (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::symbol::SymbolHeader
     } else {
-        crate::symbol::persistent_symbol(std::str::from_utf8_unchecked(text))
+        crate::symbol::persistent_symbol_with_identity(
+            std::str::from_utf8_unchecked(text),
+            perry_abi::runtime_symbol_identity((*atom).index),
+        )
     };
     match RUNTIME_SYMBOLS[n].compare_exchange(
         0,
@@ -549,7 +552,9 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
 /// (`None` before its first use: no object can list it yet).
 pub(crate) fn bound_runtime_symbol(atom: &'static StaticAtom) -> Option<usize> {
     let n = atom.index as usize;
-    let bound = RUNTIME_SYMBOLS.get(n)?.load(std::sync::atomic::Ordering::Acquire);
+    let bound = RUNTIME_SYMBOLS
+        .get(n)?
+        .load(std::sync::atomic::Ordering::Acquire);
     (bound != 0).then_some(bound)
 }
 

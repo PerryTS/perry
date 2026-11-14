@@ -6,7 +6,7 @@ use crate::object::ObjectHeader;
 const JSON_MEMBERS: &[Member] = &[
     Member::method(
         "parse",
-        crate::fn_info!(#[realm(JSON.parse, arguments = converted, births = [Array, Boolean, Number, Object, String])] export crate::object::global_this::bigint_promise::json_parse_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm(JSON.parse, arguments = converted, calls = [js_json_parse, js_json_parse_with_reviver], births = [Array, Boolean, Number, Object, String])] export crate::object::global_this::bigint_promise::json_parse_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
         2,
     ),
     Member::method(

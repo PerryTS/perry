@@ -448,7 +448,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(#[realm(Array.prototype.toString)] export crate::object::global_this::array_error::array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.toString, owner = Array.prototype)] export crate::object::global_this::array_error::array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_noop_proto_methods(proto_obj, &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length)), ("toSpliced", realm_noop_tospliced_2_metadata!(length))]);
@@ -479,7 +479,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "with",
-                crate::fn_info!(#[realm(Array.prototype.with)] export crate::object::global_this::array_error::array_prototype_with_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.with, calls = [js_array_with, js_arraylike_with])] export crate::object::global_this::array_error::array_prototype_with_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method(
@@ -589,7 +589,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
                 ),
                 (
                     "flatMap",
-                    crate::fn_info!(#[realm(Array.prototype.flatMap)] export native_args crate::object::global_this::array_error::array_proto_flatMap_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.flatMap, births = [TypeError])] export native_args crate::object::global_this::array_error::array_proto_flatMap_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
@@ -730,7 +730,7 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
             install_proto_method(
                 proto_obj,
                 "grow",
-                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.grow)] export crate::object::global_this::typed_array::shared_array_buffer_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.grow, births = [RangeError, TypeError])] export crate::object::global_this::typed_array::shared_array_buffer_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");

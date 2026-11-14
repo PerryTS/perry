@@ -108,7 +108,7 @@ pub(crate) fn generator_function_proto_of(closure_ptr: usize) -> Option<f64> {
         0,
     );
     // Realm intrinsics, built once: born old and never-move (O3).
-    let proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; [Symbol.toStringTag] = "AsyncFunction"; }; } };
+    let proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncFunctionPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ASYNC_FUNCTION, extends = Function.prototype, members = { constructor, attrs = configurable; [Symbol.toStringTag] = "AsyncFunction"; }; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     if ctor.is_null() || proto.is_null() {
@@ -881,11 +881,11 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     // Use the ordinary intrinsic installer with only the room these fixed
     // holders need. Old allocations cannot return spare capacity at fit time;
     // the installed keys and final shape still own the live inline bound.
-    let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
+    let proto = crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(3); realm { "%AsyncGeneratorFunctionPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ASYNC_GENERATOR_FUNCTION, extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%AsyncGeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "AsyncGeneratorFunction"; }; "%GeneratorFunctionPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_GENERATOR_FUNCTION, extends = Function.prototype, members = { constructor, attrs = configurable; prototype = ref("%GeneratorPrototype%"), attrs = configurable; [Symbol.toStringTag] = "GeneratorFunction"; }; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     let gen_proto =
-        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(5); realm { "%AsyncGeneratorPrototype%", extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", extends = "%IteratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "Generator"; }; } };
+        crate::realm_decl! { birth super::proto_room::alloc_builtin_prototype_with_room(5); realm { "%AsyncGeneratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, extends = "%AsyncIteratorPrototype%", members = { constructor = ref("%AsyncGeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "AsyncGenerator"; }, births = [Promise]; "%GeneratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, extends = "%IteratorPrototype%", members = { constructor = ref("%GeneratorFunctionPrototype%"), attrs = configurable; next; return; throw; [Symbol.toStringTag] = "Generator"; }; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(gen_proto) };
     if ctor.is_null() || proto.is_null() || gen_proto.is_null() {
@@ -970,7 +970,7 @@ pub extern "C" fn js_generator_attach_closure_prototype(
     if is_async {
         // Reflection reaches this parent with two `Object.getPrototypeOf`
         // calls from an async generator function's `.prototype`.
-        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
+        let async_iterator_proto = crate::realm_decl! { birth crate::object::object_alloc_prototype_old(0, 0); realm { "%AsyncIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_FUNCTION_TOWERS, members = { [Symbol.asyncIterator]; }, births = [Promise]; } };
         // SAFETY: the keyless newborn, unexposed, in this no-move window.
         unsafe { crate::object::shapes::stamp_born_prototype_root(async_iterator_proto) };
         install_proto_symbol_self_method(

@@ -566,14 +566,20 @@ unsafe fn tracked_gc_header_admitting(
 ) -> Option<std::ptr::NonNull<GcHeader>> {
     #[cfg(test)]
     TRACKED_HEADER_PROBES.with(|probes| probes.set(probes.get() + 1));
+    let mut realm_header = None;
     let Some((header_addr, storage)) = classify_tracked_gc_header_with(
         addr,
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
-        crate::gc::gc_malloc_header_is_tracked,
+        |candidate| {
+            // Arena receivers keep their first range proof. Outside it, a
+            // section-owned cell needs no search in the malloc registry.
+            realm_header = realm::header(addr);
+            realm_header.is_none() && crate::gc::gc_malloc_header_is_tracked(candidate)
+        },
     ) else {
-        // Outside every allocator: an immutable image string, or a cell of the
-        // realm image (WRT): both are immortal and admitted by their sections.
-        let header = image::header(addr).or_else(|| realm::header(addr))?;
+        // The section proof carries its validated header through this call;
+        // no second image or allocator lookup is needed.
+        let header = realm_header.or_else(|| image::header(addr))?;
         return admit((*header.as_ptr()).obj_type).then_some(header);
     };
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {

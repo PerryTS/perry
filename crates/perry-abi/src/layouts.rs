@@ -24,7 +24,9 @@ pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;
 pub const LAYOUT_PROBE_INDEX_MASK: u32 = 0xb3ff_ffff;
-pub const LAYOUT_WORD_ABI_VERSION: u32 = 5;
+// v6 extends the program table with the realm global and intrinsic RUN.
+// The image version is checked before dereferencing that longer table.
+pub const LAYOUT_WORD_ABI_VERSION: u32 = 6;
 pub const LAYOUT_KIND_PLAIN: u32 = 0;
 pub const LAYOUT_KIND_WORD: u32 = 1;
 pub const LAYOUT_KIND_NULL: u32 = 2;
@@ -145,8 +147,9 @@ impl PerryLayoutImageV1 {
     /// apart from the families ([`PerryProgramTableV1::valid_span`]).
     ///
     /// # Safety
-    /// `program` is null or names a program table.
-    pub const unsafe fn valid(self) -> bool {
+    /// When `abi_version` matches this runtime, `program` is null or names
+    /// a program table. Other versions are rejected without reading it.
+    pub const unsafe fn valid_binding(self) -> bool {
         if self.abi_version != LAYOUT_WORD_ABI_VERSION || self.program.is_null() {
             return false;
         }
@@ -157,8 +160,20 @@ impl PerryLayoutImageV1 {
                 self.family_first == NATIVE_LAYOUT_ROWS
                     && self.family_count <= self.static_rows - self.family_first
             } else {
-                table.valid_span(self)
+                self.family_first >= NATIVE_LAYOUT_ROWS
+                    && self.family_first as u64 + self.family_count as u64
+                        <= self.static_rows as u64
             }
+    }
+
+    /// All header and lazy-span facts. A span is checked at its first use;
+    /// binding alone needs only the slab and class-family prefix geometry.
+    ///
+    /// # Safety
+    /// Same program-table ownership contract as `valid_binding`.
+    pub const unsafe fn valid(self) -> bool {
+        self.valid_binding()
+            && ((*self.program).lazy_count == 0 || (*self.program).valid_span(self))
     }
 }
 
@@ -212,6 +227,11 @@ pub struct PerryProgramTableV1 {
     /// without one, so only a program whose image carries a lazy span links
     /// the publish half of the receiver resolver.
     pub touch_pending: Option<unsafe extern "C" fn(*mut u8, u32)>,
+    /// The emitted realm global's user address; read only by its materialize point.
+    pub realm_global: *mut u8,
+    /// The contiguous GC-headed intrinsic run, excluding the end marker.
+    pub realm_start: *const u8,
+    pub realm_end: *const u8,
     pub seeds: [PerryStaticSeedV1; 0],
 }
 // Immutable program data every agent reads.
@@ -227,6 +247,9 @@ impl PerryProgramTableV1 {
         prototype_serial_end: crate::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
         lazy_layouts: core::ptr::null(),
         touch_pending: None,
+        realm_global: core::ptr::null_mut(),
+        realm_start: core::ptr::null(),
+        realm_end: core::ptr::null(),
         seeds: [],
     };
 
@@ -234,6 +257,23 @@ impl PerryProgramTableV1 {
     /// `self` is the program's table: `count` seeds follow the header.
     pub unsafe fn seeds(&self) -> &[PerryStaticSeedV1] {
         core::slice::from_raw_parts(self.seeds.as_ptr(), self.count as usize)
+    }
+
+    /// Geometry of the emitted GC run, checked only at first global use.
+    /// The startup registrar reads neither the global nor these bounds.
+    pub fn valid_realm_run(&self) -> bool {
+        let global = self.realm_global as usize;
+        let start = self.realm_start as usize;
+        let end = self.realm_end as usize;
+        if global == 0 {
+            return start == 0 && end == 0;
+        }
+        self.lazy_count != 0
+            && self.touch_pending.is_some()
+            && start != 0
+            && start < global
+            && global < end
+            && (start | global | end) & 7 == 0
     }
 
     /// The span's facts under `image` (rows in u64, so no sum wraps): the
@@ -518,18 +558,80 @@ const _: () = {
     assert!(offset_of!(PerryProgramTableV1, prototype_serial_end) == 16);
     assert!(offset_of!(PerryProgramTableV1, lazy_layouts) == 24);
     assert!(offset_of!(PerryProgramTableV1, touch_pending) == 32);
-    assert!(offset_of!(PerryProgramTableV1, seeds) == 40);
+    assert!(offset_of!(PerryProgramTableV1, realm_global) == 40);
+    assert!(offset_of!(PerryProgramTableV1, realm_start) == 48);
+    assert!(offset_of!(PerryProgramTableV1, realm_end) == 56);
+    assert!(offset_of!(PerryProgramTableV1, seeds) == 64);
 };
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn layout_word_abi_five_rejects_mismatched_images() {
-        assert_eq!(LAYOUT_WORD_ABI_VERSION, 5);
+    fn realm_image_rejects_obsolete_table_formats_before_reading_the_table() {
+        assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
+        for abi_version in [0, 1, 5, u32::MAX] {
+            let image = PerryLayoutImageV1 {
+                abi_version,
+                program: core::ptr::without_provenance(1),
+                ..PerryLayoutImageV1::RUNTIME
+            };
+            // No table of the current format exists at this pointer; an
+            // incompatible header must be refused before constructing a reference.
+            assert!(!unsafe { image.valid() });
+        }
+    }
+
+    #[test]
+    fn realm_run_is_absent_or_contains_its_global_and_has_a_touch_span() {
+        unsafe extern "C" fn touch(_: *mut u8, _: u32) {}
+        assert!(PerryProgramTableV1::EMPTY.valid_realm_run());
+        let table = || PerryProgramTableV1 {
+            lazy_count: 1,
+            touch_pending: Some(touch),
+            realm_global: 0x1008 as *mut u8,
+            realm_start: 0x1000 as *const u8,
+            realm_end: 0x1100 as *const u8,
+            ..PerryProgramTableV1::EMPTY
+        };
+        assert!(table().valid_realm_run());
+        for (global, start, end) in [
+            (0, 0x1000, 0x1100),
+            (0x1008, 0, 0x1100),
+            (0x1008, 0x1000, 0),
+            (0x1000, 0x1000, 0x1100),
+            (0x1100, 0x1000, 0x1100),
+            (0x1008, 0x1100, 0x1000),
+            (0x1009, 0x1000, 0x1100),
+            (0x1008, 0x1001, 0x1100),
+            (0x1008, 0x1000, 0x1101),
+        ] {
+            assert!(!PerryProgramTableV1 {
+                realm_global: global as *mut u8,
+                realm_start: start as *const u8,
+                realm_end: end as *const u8,
+                ..table()
+            }
+            .valid_realm_run());
+        }
+        assert!(!PerryProgramTableV1 {
+            lazy_count: 0,
+            ..table()
+        }
+        .valid_realm_run());
+        assert!(!PerryProgramTableV1 {
+            touch_pending: None,
+            ..table()
+        }
+        .valid_realm_run());
+    }
+
+    #[test]
+    fn layout_word_abi_six_rejects_mismatched_images() {
+        assert_eq!(LAYOUT_WORD_ABI_VERSION, 6);
         let image = PerryLayoutImageV1::RUNTIME;
         assert!(unsafe { image.valid() });
-        for abi_version in [0, 4, 6, u32::MAX] {
+        for abi_version in [0, 4, 5, LAYOUT_WORD_ABI_VERSION + 1, u32::MAX] {
             assert!(!unsafe {
                 PerryLayoutImageV1 {
                     abi_version,
@@ -707,3 +809,45 @@ const _: () = {
     assert!(core::mem::offset_of!(PerryProtoFamily, image_prototype) == 8);
     assert!(core::mem::size_of::<PerryProtoFamily>() == 16);
 };
+
+#[cfg(test)]
+mod lazy_observation_validation_tests {
+    use super::*;
+
+    #[test]
+    fn binding_checks_slab_geometry_and_first_observation_checks_the_lazy_span() {
+        let table = PerryProgramTableV1 {
+            lazy_count: 2,
+            lazy_first: NATIVE_LAYOUT_ROWS,
+            lazy_layouts: core::ptr::NonNull::<u8>::dangling().as_ptr(),
+            ..PerryProgramTableV1::EMPTY
+        };
+        let image = PerryLayoutImageV1 {
+            static_rows: NATIVE_LAYOUT_ROWS + 1,
+            family_first: NATIVE_LAYOUT_ROWS + 1,
+            family_count: 0,
+            program: &table,
+            ..PerryLayoutImageV1::RUNTIME
+        };
+        assert!(unsafe { image.valid_binding() });
+        assert!(
+            !unsafe { image.valid() },
+            "lazy rows exceed the static range"
+        );
+        assert!(!table.valid_span(image));
+        assert!(!unsafe {
+            PerryLayoutImageV1 {
+                family_count: 1,
+                ..image
+            }
+            .valid_binding()
+        });
+        assert!(!unsafe {
+            PerryLayoutImageV1 {
+                abi_version: 0,
+                ..image
+            }
+            .valid_binding()
+        });
+    }
+}

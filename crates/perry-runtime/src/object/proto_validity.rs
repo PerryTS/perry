@@ -64,7 +64,7 @@ pub(crate) unsafe fn mark_object_as_prototype(obj: usize) -> Option<u64> {
         (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
         // GC_STORE_AUDIT(POINTER_FREE): a scalar serial, never a reference.
         if (*meta).proto_serial == 0 {
-            (*meta).proto_serial = PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed);
+            (*meta).proto_serial = next_prototype_serial();
         }
         let serial = (*meta).proto_serial;
         #[cfg(feature = "shape-mint-diag")]
@@ -109,17 +109,6 @@ pub(crate) use perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL;
 static PROTOTYPE_SERIAL_NEXT: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(FIRST_DYNAMIC_PROTOTYPE_SERIAL);
 
-/// Reserve the image's serial interval before any dynamic prototype can be
-/// born. The existing allocator remains the one authority for later serials.
-pub(crate) fn reserve_image_prototype_serials(end: u64) {
-    if end > FIRST_DYNAMIC_PROTOTYPE_SERIAL {
-        PROTOTYPE_SERIAL_NEXT.fetch_max(end, Ordering::Relaxed);
-    }
-    // Image prototypes already carry their mark in metadata. Mutations must
-    // enter the same notification path as heap-born marked prototypes.
-    ANY_PROTOTYPE_MARKED.store(true, Ordering::Relaxed);
-}
-
 /// Give a shared evaluation holder an identity without declaring it a
 /// prototype or invalidating prototype-chain caches. The existing identity
 /// word directory uses this same serial namespace.
@@ -131,7 +120,7 @@ pub(crate) unsafe fn ensure_object_identity_serial(obj: *mut crate::object::Obje
     );
     // GC_STORE_AUDIT(POINTER_FREE): a scalar identity, never a heap reference.
     if (*meta).proto_serial == 0 {
-        (*meta).proto_serial = PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed);
+        (*meta).proto_serial = next_prototype_serial();
     }
     (*meta).proto_serial
 }
@@ -179,7 +168,21 @@ pub(crate) unsafe fn assign_intrinsic_prototype_serial(obj: usize, serial: u64) 
 /// a family prototype's serial (`layout_desc::PerryProtoFamily`) is drawn
 /// here once, at layout registration, before any user code runs.
 pub(crate) fn next_prototype_serial() -> u64 {
-    PROTOTYPE_SERIAL_NEXT.fetch_add(1, Ordering::Relaxed)
+    // The slab publishes its bound image before a layout or object can draw
+    // a serial. Apply that image's immutable floor at the draw itself: no
+    // startup reservation is needed when no prototype is observed or born.
+    let image = crate::object::class_image::agent_layout_image();
+    let table = unsafe { &*image.program };
+    if table.lazy_count != 0 {
+        assert!(table.valid_span(image), "invalid lazy layout span");
+    }
+    let floor = table.prototype_serial_end;
+    let previous = PROTOTYPE_SERIAL_NEXT
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            Some(next.max(floor).wrapping_add(1))
+        })
+        .expect("serial draw always advances");
+    previous.max(floor)
 }
 
 /// Mark `obj`, born as the singleton prototype of a compile-time family, as
@@ -562,3 +565,39 @@ pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
 #[cfg(test)]
 #[path = "proto_validity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod image_serial_range_tests {
+    use super::*;
+
+    #[test]
+    fn a_dynamic_draw_respects_the_bound_image_range_without_startup_reservation() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let previous_image = crate::object::class_image::agent_layout_image();
+        struct Restore(crate::codegen_abi::PerryLayoutImageV1);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::object::class_image::publish_agent_layout_image(self.0);
+            }
+        }
+        let _restore = Restore(previous_image);
+        let floor = PROTOTYPE_SERIAL_NEXT.load(Ordering::Relaxed) + 1000;
+        let table = Box::leak(Box::new(crate::codegen_abi::PerryProgramTableV1 {
+            prototype_serial_end: floor,
+            ..crate::codegen_abi::PerryProgramTableV1::EMPTY
+        }));
+        crate::object::class_image::publish_agent_layout_image(
+            crate::codegen_abi::PerryLayoutImageV1 {
+                program: table,
+                ..previous_image
+            },
+        );
+        assert_eq!(
+            PROTOTYPE_SERIAL_NEXT.load(Ordering::Relaxed),
+            floor - 1000,
+            "publishing the image does not reserve serials"
+        );
+        assert_eq!(next_prototype_serial(), floor);
+        assert_eq!(next_prototype_serial(), floor + 1);
+    }
+}

@@ -44,6 +44,14 @@ unsafe fn facts(cell: usize, kind: u8, flags: u8) -> Option<*const PerryLayoutDe
     descriptor((*bag).parent_class_id & !PENDING)
 }
 
+fn cells() -> crate::value::addr_class::realm::Cells {
+    let table = span().expect("family cells require the image's lazy span");
+    crate::value::addr_class::realm::cells_in_run(
+        table.realm_start as usize,
+        table.realm_end as usize,
+    )
+}
+
 unsafe fn family(cell: usize, kind: u8, flags: u8) -> Option<u8> {
     if kind == crate::gc::GC_TYPE_CLOSURE {
         if let Some(identity) = crate::object::BuiltinConstructorIdentity::from_header(
@@ -53,7 +61,7 @@ unsafe fn family(cell: usize, kind: u8, flags: u8) -> Option<u8> {
         }
     }
     let value = (*facts(cell, kind, flags)?).realm_family;
-    (value != 0).then_some(value)
+    Some(value)
 }
 
 fn pointer(bits: u64) -> Option<usize> {
@@ -145,7 +153,7 @@ struct Roots {
 
 unsafe fn roots(encoding: u8) -> Roots {
     let mut result = Roots::default();
-    for header in crate::value::addr_class::realm::cells() {
+    for header in cells() {
         let cell = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE) as usize;
         let kind = (*header).obj_type;
         let flags = (*header).gc_flags;
@@ -268,11 +276,14 @@ impl Roots {
     }
 }
 
-/// A checked birth must not manufacture a second copy beside any held cell.
-#[cfg(any(debug_assertions, test))]
+/// Whether the emitted run holds this family. Birth checks and observers
+/// share this predicate, so neither can manufacture a copy beside its image.
 pub(crate) fn holds(encoding: u8) -> bool {
+    if span().is_none() {
+        return false;
+    }
     unsafe {
-        crate::value::addr_class::realm::cells().any(|header| {
+        cells().any(|header| {
             let cell = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE) as usize;
             family(cell, (*header).obj_type, (*header).gc_flags) == Some(encoding)
         })
@@ -301,6 +312,75 @@ pub(crate) fn seed(encoding: u8) {
     }
 }
 
+/// The realm arm's ONE walk writes only plain existing Intrinsics halves.
+/// It neither observes a referent nor publishes any sibling family's row.
+pub(crate) fn seed_run() {
+    unsafe {
+        for header in cells() {
+            let cell = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE) as usize;
+            let kind = (*header).obj_type;
+            let flags = (*header).gc_flags;
+            let Some(encoding) = family(cell, kind, flags) else {
+                continue;
+            };
+            if encoding == 0 {
+                continue;
+            }
+            let mut prototype = 0;
+            let mut constructor = 0;
+            if kind == crate::gc::GC_TYPE_CLOSURE {
+                let closure = &*(cell as *const crate::closure::ClosureHeader);
+                if crate::object::BuiltinConstructorIdentity::from_header(closure.capture_count)
+                    .is_some()
+                {
+                    constructor = cell;
+                    prototype = own(cell, kind, b"prototype").unwrap_or(0);
+                }
+            }
+            let metadata = meta(cell, kind);
+            let serial = if metadata.is_null() {
+                0
+            } else {
+                (*metadata).proto_serial
+            };
+            match encoding {
+                crate::codegen_abi::REALM_FAMILY_ITERATORS => {
+                    if kind == crate::gc::GC_TYPE_OBJECT
+                        && serial
+                            == perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_PROTOTYPE
+                    {
+                        prototype = cell;
+                    }
+                }
+                crate::codegen_abi::REALM_FAMILY_FUNCTION_TOWERS => {
+                    let first = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ASYNC_FUNCTION;
+                    if kind == crate::gc::GC_TYPE_OBJECT && (first..first + 3).contains(&serial) {
+                        prototype = cell;
+                        constructor = own(cell, kind, b"constructor").unwrap_or(0);
+                    }
+                }
+                crate::codegen_abi::REALM_FAMILY_TYPED_ARRAY => {
+                    if kind == crate::gc::GC_TYPE_CLOSURE {
+                        let closure = &*(cell as *const crate::closure::ClosureHeader);
+                        if closure.capture_count == 1
+                            && !closure.info.is_null()
+                            && (*closure.info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0
+                        {
+                            constructor = cell;
+                            prototype = own(cell, kind, b"prototype").unwrap_or(0);
+                        }
+                    } else if prototype_candidate(encoding, cell, kind, flags) {
+                        prototype = cell;
+                    }
+                }
+                _ if prototype_candidate(encoding, cell, kind, flags) => prototype = cell,
+                _ => {}
+            }
+            crate::array::note_family_intrinsic(encoding, prototype, constructor);
+        }
+    }
+}
+
 /// Publish exactly this family's held rows and clear its cells, then use
 /// the same external-word body as main's birth.
 pub(super) unsafe fn bind(object: *mut ObjectHeader, word: u32) {
@@ -310,7 +390,7 @@ pub(super) unsafe fn bind(object: *mut ObjectHeader, word: u32) {
         .cast::<crate::gc::GcHeader>();
     let encoding = family(object as usize, header.obj_type, header.gc_flags)
         .expect("pending image cell has no family fact");
-    for header in crate::value::addr_class::realm::cells() {
+    for header in cells() {
         let cell = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE) as usize;
         if family(cell, (*header).obj_type, (*header).gc_flags) != Some(encoding) {
             continue;
@@ -325,12 +405,20 @@ pub(super) unsafe fn bind(object: *mut ObjectHeader, word: u32) {
         }
         let bound = pending & !PENDING;
         publish_receiver(bound);
+        crate::object::global_this::family_link::image_parent(
+            descriptor(bound).expect("published image row has no descriptor"),
+        );
         slot.write(bound);
+        if (*header).obj_type == crate::gc::GC_TYPE_OBJECT {
+            crate::object::global_this::family_link::image_holder(owner as *mut ObjectHeader);
+        }
     }
     assert_eq!(
         (*object).parent_class_id,
         word & !PENDING,
         "family bind did not clear the observed cell"
     );
-    roots(encoding).link(encoding);
+    if encoding != 0 {
+        roots(encoding).link(encoding);
+    }
 }

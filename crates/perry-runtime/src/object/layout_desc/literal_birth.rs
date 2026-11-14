@@ -31,7 +31,8 @@ static mut SENTINEL: PerryLayoutDesc = PerryLayoutDesc {
     gc_plan: 0,
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
     realm_family: 0,
-    _tail_pad: [0; 31],
+    realm_rank: 0,
+    _tail_pad: [0; 30],
 };
 
 // COFF groups `$` sections by their characteristics before sorting the

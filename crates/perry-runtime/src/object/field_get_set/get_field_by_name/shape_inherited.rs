@@ -75,6 +75,13 @@ pub(super) unsafe fn get(
             bits,
             key,
         )
-        .unwrap_or_else(JSValue::undefined),
+        .unwrap_or_else(|| {
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            crate::realm_reads::check_structure_named_lookup_miss(
+                obj as usize,
+                crate::value::js_nanbox_string(key as i64).to_bits(),
+            );
+            JSValue::undefined()
+        }),
     )
 }

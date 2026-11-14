@@ -62,11 +62,19 @@ pub extern "C" fn js_object_get_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    let receiver_bits = obj as u64;
+    let receiver = JSValue::from_bits(receiver_bits);
     if !key.is_null() {
-        let receiver = crate::value::js_nanbox_pointer(obj as i64);
+        // This ABI also carries tagged primitives and unboxed Number bits.
+        // Only a raw address needs boxing; another tag must stay its value.
+        let deferred_receiver = if receiver_bits >> 48 == 0 {
+            crate::value::js_nanbox_pointer(obj as i64)
+        } else {
+            f64::from_bits(receiver_bits)
+        };
         let property_key = crate::value::js_nanbox_string(key as i64);
         if let Some(result) = super::super::deferred_namespace::with_key_target(
-            receiver,
+            deferred_receiver,
             property_key,
             |target, key| {
                 get_field_by_name_past_data_probe(
@@ -78,8 +86,6 @@ pub extern "C" fn js_object_get_field_by_name(
             return result;
         }
     }
-    let receiver_bits = obj as u64;
-    let receiver = JSValue::from_bits(receiver_bits);
     if receiver.is_bool() || receiver.is_bigint() {
         if !key.is_null() {
             unsafe {

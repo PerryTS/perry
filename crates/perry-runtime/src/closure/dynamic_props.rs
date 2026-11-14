@@ -366,8 +366,16 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             }
         }
     }
-    function_prototype_inherited_get(ptr, prop, receiver)
-        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
+    if let Some(value) = function_prototype_inherited_get(ptr, prop, receiver) {
+        return value;
+    }
+    #[cfg(any(test, debug_assertions, perry_diagnostics))]
+    crate::realm_reads::check_structure_named_lookup_miss(
+        ptr,
+        crate::value::js_nanbox_string(crate::string::canonical_key(prop.as_bytes()) as i64)
+            .to_bits(),
+    );
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// The [[Get]] of `prop` on a function whose own lookup missed and whose

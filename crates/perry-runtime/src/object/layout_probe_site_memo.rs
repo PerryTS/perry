@@ -168,9 +168,7 @@ unsafe fn declined(obj: *const ObjectHeader, memo: &ReadSiteMemo) -> bool {
 unsafe fn decline(obj: *const ObjectHeader, memo: &ReadSiteMemo) {
     let word = (*obj).parent_class_id;
     let held = memo.pairs[0].load(Relaxed);
-    if crate::object::shapes::is_site_fillable_word(word)
-        && (held == 0 || held as u32 == DECLINE)
-    {
+    if crate::object::shapes::is_site_fillable_word(word) && (held == 0 || held as u32 == DECLINE) {
         // A decline uses only word zero. Do not clear a racing positive
         // proof's tail; the CAS also preserves a concurrently published proof.
         let _ = memo.pairs[0].compare_exchange(

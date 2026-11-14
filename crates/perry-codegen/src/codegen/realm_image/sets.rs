@@ -127,10 +127,16 @@ pub(crate) fn emit_set(
     };
     let payload = types.join(", ");
     let store_size = elements_offset + u64::from(capacity) * 8;
-    module.add_raw_global(format!(
-        "@{store} = internal global {{ i8, i8, i16, i32, i64, ptr, {integer}, {integer}, ptr, ptr, {pad_type}{{ {payload} }} }} {{ i8 36, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {store_size}, i64 0, ptr {elements}, {integer} {capacity}, {integer} {size}, ptr null, ptr null, {pad_value}{{ {payload} }} {{ {} }} }}, section \"{}\", align 8",
-        values.join(", "), section(&module.target_triple),
-    ));
+    run::record(module, run::Record {
+        name: store.clone(),
+        exported: false,
+        size: store_size,
+        ty: format!("{{ i8, i8, i16, i32, i64, ptr, {integer}, {integer}, ptr, ptr, {pad_type}{{ {payload} }} }}"),
+        initializer: format!(
+            "{{ i8 36, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {store_size}, i64 0, ptr {elements}, {integer} {capacity}, {integer} {size}, ptr null, ptr null, {pad_value}{{ {payload} }} {{ {} }} }}",
+            values.join(", "),
+        ),
+    }, "");
     let (tail_type, tail_value, header_size) = if ilp32 {
         (", i32", ", i32 0", 40)
     } else {
@@ -141,10 +147,16 @@ pub(crate) fn emit_set(
     } else {
         "null".into()
     };
-    module.add_raw_global(format!(
-        "@{name} = global {{ i8, i8, i16, i32, i32, i32, ptr, ptr, i32, i32, ptr{tail_type} }} {{ i8 12, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {header_size}, i32 {size}, i32 {capacity}, ptr {elements}, ptr {meta}, i32 {size}, i32 0, ptr {}{tail_value} }}, section \"{}\", align 8",
-        header.reserved, user_address(&store), section(&module.target_triple),
-    ));
+    run::record(module, run::Record {
+        name,
+        exported: true,
+        size: header_size,
+        ty: format!("{{ i8, i8, i16, i32, i32, i32, ptr, ptr, i32, i32, ptr{tail_type} }}"),
+        initializer: format!(
+            "{{ i8 12, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {header_size}, i32 {size}, i32 {capacity}, ptr {elements}, ptr {meta}, i32 {size}, i32 0, ptr {}{tail_value} }}",
+            header.reserved, user_address(&store),
+        ),
+    }, "");
     Ok(fixups)
 }
 

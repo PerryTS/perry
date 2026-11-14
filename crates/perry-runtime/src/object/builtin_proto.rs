@@ -279,29 +279,30 @@ pub(crate) unsafe fn prepare_constructor_prototype(
 /// The meta family field of a sealed RUNTIME prototype (one the runtime
 /// builds, such as `%URL.prototype%` or a timer prototype; not a
 /// [`BuiltinProto`]). A write marks only that prototype.
-pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+pub(crate) const RUNTIME_FAMILY: usize = perry_abi::RUNTIME_PROTOTYPE_FAMILY;
 /// The meta family field of `%IteratorPrototype%` and of
 /// `%ArrayIteratorPrototype%`: built-in prototypes that are not a
 /// [`BuiltinProto`] family, sealed by `iterator_prototypes` (DEC 250 (i)).
-pub(crate) const ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 1;
-pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
+pub(crate) const ITERATOR_FAMILY: usize = perry_abi::ITERATOR_PROTOTYPE_FAMILY;
+pub(crate) const ARRAY_ITERATOR_FAMILY: usize = perry_abi::ARRAY_ITERATOR_PROTOTYPE_FAMILY;
 /// The meta family field of `%GeneratorPrototype%` and of
 /// `%AsyncGeneratorPrototype%` (DEC 250 as narrowed 2026-11-03): their image
 /// members (`next`, `return`, `throw`, `@@toStringTag`; not `constructor`)
 /// are locked, adds stay open. Sealed by `seal_generator_prototype` when
 /// `build_generator_tower` completes them.
-pub(crate) const GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 3;
-pub(crate) const ASYNC_GENERATOR_FAMILY: usize = RUNTIME_FAMILY + 4;
+pub(crate) const GENERATOR_FAMILY: usize = perry_abi::GENERATOR_PROTOTYPE_FAMILY;
+pub(crate) const ASYNC_GENERATOR_FAMILY: usize = perry_abi::ASYNC_GENERATOR_PROTOTYPE_FAMILY;
 /// The meta family fields of `%MapIteratorPrototype%`,
 /// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
 /// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
 /// the generator prototypes): their image members (`next`,
 /// `@@toStringTag`) are locked, adds stay open. Sealed by
 /// `seal_iterator_prototypes` with the shared and array ones.
-pub(crate) const MAP_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 5;
-pub(crate) const SET_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 6;
-pub(crate) const STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 7;
-pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 8;
+pub(crate) const MAP_ITERATOR_FAMILY: usize = perry_abi::MAP_ITERATOR_PROTOTYPE_FAMILY;
+pub(crate) const SET_ITERATOR_FAMILY: usize = perry_abi::SET_ITERATOR_PROTOTYPE_FAMILY;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = perry_abi::STRING_ITERATOR_PROTOTYPE_FAMILY;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize =
+    perry_abi::REGEXP_STRING_ITERATOR_PROTOTYPE_FAMILY;
 const _: () = assert!(
     REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
@@ -343,13 +344,7 @@ pub(crate) unsafe fn seal_iterator_prototypes(
 
 /// The family of each built-in iterator prototype `seal_iterator_prototypes`
 /// seals past `%IteratorPrototype%`: Array, Map, Set, String, RegExp String.
-const ITERATOR_FAMILIES: [usize; 5] = [
-    ARRAY_ITERATOR_FAMILY,
-    MAP_ITERATOR_FAMILY,
-    SET_ITERATOR_FAMILY,
-    STRING_ITERATOR_FAMILY,
-    REGEXP_STRING_ITERATOR_FAMILY,
-];
+const ITERATOR_FAMILIES: [usize; 5] = perry_abi::ITERATOR_PROTOTYPE_FAMILIES;
 
 /// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
 /// its tower is built, before any program code can reach it.

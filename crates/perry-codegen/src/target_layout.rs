@@ -802,7 +802,7 @@ pub fn layout_descriptor_identity_offset(target: &str) -> usize {
 mod dense_layout_tests {
     use super::*;
     #[test]
-    fn descriptor_and_image_offsets_match_both_pointer_widths() {
+    fn descriptor_and_realm_image_offsets_match_both_pointer_widths() {
         for target in ["x86_64-unknown-linux-gnu", "aarch64-pc-windows-msvc"] {
             assert_eq!(layout_descriptor_size_bytes(target), 80);
             assert_eq!(layout_descriptor_identity_offset(target), 72);
@@ -832,7 +832,10 @@ mod dense_layout_tests {
         assert_eq!(std::mem::offset_of!(Table, prototype_serial_end), 16);
         assert_eq!(std::mem::offset_of!(Table, lazy_layouts), 24);
         assert_eq!(std::mem::offset_of!(Table, touch_pending), 32);
-        assert_eq!(std::mem::offset_of!(Table, seeds), 40);
+        assert_eq!(std::mem::offset_of!(Table, realm_global), 40);
+        assert_eq!(std::mem::offset_of!(Table, realm_start), 48);
+        assert_eq!(std::mem::offset_of!(Table, realm_end), 56);
+        assert_eq!(std::mem::offset_of!(Table, seeds), 64);
         assert_eq!(std::mem::size_of::<Request>(), 8);
         assert_eq!(std::mem::offset_of!(Request, layout_word), 4);
     }
@@ -894,5 +897,57 @@ fn emitted_descriptor_type_has_exact_llvm_target_layout() {
             let want = if lp64 { lp } else { ilp };
             assert_eq!(data.offset_of_element(&ty, element), Some(want as u64));
         }
+    }
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+#[test]
+fn emitted_realm_program_table_offsets_follow_the_actual_seed_header() {
+    use inkwell::{context::Context, targets::TargetData};
+    for triple in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "wasm32-wasip2",
+        "arm64_32-apple-watchos",
+    ] {
+        let plan =
+            crate::ProgramLayoutOrdinals::assign(crate::layout_ordinals::native_inputs(), [])
+                .unwrap();
+        let ir = crate::stubs::static_shape_seed_ll_with_plan(
+            &[],
+            &plan,
+            true,
+            Some(triple),
+            "executable",
+            None,
+        );
+        let context = Context::create();
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "realm_table").unwrap();
+        module.verify().unwrap();
+        let value = module
+            .get_global("perry_static_seeds")
+            .unwrap()
+            .get_initializer()
+            .unwrap()
+            .into_struct_value();
+        let ty = value.get_type();
+        assert_eq!(ty.count_fields(), 11);
+        let ilp32 = target_is_ilp32(triple);
+        let data = TargetData::create(if ilp32 {
+            "e-p:32:32-i64:64"
+        } else {
+            "e-p:64:64-i64:64"
+        });
+        let offsets = if ilp32 {
+            [0, 4, 8, 12, 16, 24, 28, 32, 36, 40, 48]
+        } else {
+            [0, 4, 8, 12, 16, 24, 32, 40, 48, 56, 64]
+        };
+        for (field, expected) in offsets.into_iter().enumerate() {
+            assert_eq!(data.offset_of_element(&ty, field as u32), Some(expected));
+        }
+        assert_eq!(data.get_abi_size(&ty), if ilp32 { 48 } else { 64 });
+        assert!(!ir.contains("call void @js_realm_"));
     }
 }

@@ -174,19 +174,13 @@ unsafe fn physical_target<'scope>(
         return crate::object::class_value::class_decl_prototype_link(want);
     }
     if target.is_none() {
-        let name = super::static_dispatch::heap_builtin_name(want).or(match want {
-            0xFFFF0024 => Some("Array"),
-            0xFFFF0027 => Some("Promise"),
-            0xFFFF002C => Some("WeakMap"),
-            0xFFFF002D => Some("WeakSet"),
-            0xFFFF0050 => Some("Object"),
-            0xFFFF00D0 => Some("Number"),
-            0xFFFF00D1 => Some("String"),
-            0xFFFF00D2 => Some("Boolean"),
-            0xFFFF00D3 => Some("BigInt"),
-            0xFFFF00D4 => Some("Symbol"),
-            _ => None,
-        });
+        let name = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS
+            .iter()
+            .find(|declaration| {
+                declaration.instance_identity
+                    == Some(crate::object::global_this_tables::BuiltinInstanceIdentity::Class(want))
+            })
+            .map(|declaration| declaration.name);
         let bits = name
             .map(|n| crate::realm_value_read! { table = GLOBAL_THIS_BUILTIN_CONSTRUCTORS; crate::object::builtin_prototype_value(n) }.to_bits())
             .or_else(|| crate::object::class_registry::reserved_native_parent_prototype_bits(want));

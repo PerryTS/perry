@@ -714,11 +714,13 @@ mod tests {
 pub(crate) fn bind_layout_image(image: crate::codegen_abi::PerryLayoutImageV1) {
     // SAFETY: the entry's header names its program's table; `valid` tests
     // the pointer before reading through it.
-    assert!(unsafe { image.valid() }, "invalid layout image ABI/range");
-    let table = unsafe { &*image.program };
-    if table.lazy_count != 0 {
-        super::proto_validity::reserve_image_prototype_serials(table.prototype_serial_end);
-    }
+    assert!(
+        unsafe { image.valid_binding() },
+        "invalid layout image ABI/range"
+    );
+    // Image prototypes become observable through their materialize arm.
+    // That arm links their existing prototype mark; pending rows cannot
+    // populate receiver memos before this first observation.
     // The first initialization stores `image`; only a repeated one compares.
     let mut stored = false;
     let bound = current().layout_image.get_or_init(|| {

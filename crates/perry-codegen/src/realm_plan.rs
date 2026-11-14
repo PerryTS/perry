@@ -9,8 +9,8 @@ use perry_hir::realm_reach::RealmReach;
 
 #[derive(Clone, Debug)]
 pub struct RealmPlan {
-    /// Physical cells, keyed by their source-owned graph identity. The global
-    /// is always present, with only the properties selected by R.
+    /// Physical cells keyed by source identity. A program whose realm-creating
+    /// operation never executes emits none; R still owns its runtime layouts.
     pub cells: BTreeMap<String, RealmDeclaration>,
     /// Non-image births such as live process arrays and native providers.
     /// A provider must be wired by its owner; it is never permission to run
@@ -51,11 +51,12 @@ impl RealmPlan {
                 return Err(format!("duplicate realm declaration {name}"));
             }
         }
+        let executing = reach.executing(index);
         let mut global = all
             .get("%Global%")
             .ok_or("realm has no global cell")?
             .clone();
-        select_properties(&mut global, reach, index)?;
+        select_properties(&mut global, reach, index, &executing)?;
 
         let mut result = Self {
             cells: BTreeMap::from([("%Global%".into(), global)]),
@@ -69,6 +70,13 @@ impl RealmPlan {
         for (name, declaration) in &all {
             // The global cell's own layout is in every R (RealmReach::close).
             if name == "%Global%" || (!reach.is_full() && !reach.names.contains(name)) {
+                continue;
+            }
+            if !reach.installed_in_exec(index, name, &executing)
+                || declaration.birth_domain == perry_hir::realm_manifest::RealmBirthDomain::Instance
+            {
+                // Instance body templates have reach, but their identity is born
+                // only with the owner allocation, never in the realm image.
                 continue;
             }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
@@ -87,7 +95,7 @@ impl RealmPlan {
                     .last(name)
                     .is_some_and(|row| row.runtime_layout_holder())
                 {
-                    select_properties(&mut selected, reach, index)?;
+                    select_properties(&mut selected, reach, index, &executing)?;
                 }
                 result.cells.insert(name.clone(), selected);
             }
@@ -97,10 +105,6 @@ impl RealmPlan {
             .values_mut()
             .chain(result.native_namespaces.values_mut())
         {
-            if let Some(module) = &declaration.native_namespace {
-                result.atoms.insert(module.clone());
-                result.atoms.insert("__module__".into());
-            }
             // The witness stores descriptors independently of enumeration
             // order. Slot order follows the declared string/symbol orders.
             declaration.properties = ordered_properties(declaration)?;
@@ -130,35 +134,6 @@ impl RealmPlan {
                         set: None,
                     },
                 );
-            }
-            if declaration
-                .header
-                .as_ref()
-                .is_some_and(|header| header.gc_type == 4)
-                && crate::codegen::realm_image::properties::function_has_prototype_state(
-                    declaration,
-                )?
-            {
-                result.atoms.insert("p".into());
-                result.key_atoms.insert("p".into());
-            }
-            for property in &declaration.properties {
-                if property.symbol {
-                    result.symbols.insert(property.key.clone());
-                } else {
-                    result.atoms.insert(property.key.clone());
-                    result.key_atoms.insert(property.key.clone());
-                }
-                if let Some(value) = &property.value {
-                    collect_value(value, &mut result.atoms, &mut result.symbols);
-                }
-            }
-            for capture in declaration
-                .captures
-                .iter()
-                .chain(declaration.storage.iter().flat_map(|s| s.values()))
-            {
-                collect_value(capture, &mut result.atoms, &mut result.symbols);
             }
         }
         // R must already be closed. Do not make an absent declaration appear
@@ -198,8 +173,168 @@ impl RealmPlan {
                 }
             }
         }
+        result.refresh_atoms()?;
         Ok(result)
     }
+
+    pub(crate) fn refresh_atoms(&mut self) -> Result<(), String> {
+        self.atoms.clear();
+        self.key_atoms.clear();
+        self.symbols.clear();
+        for declaration in self.cells.values().chain(self.native_namespaces.values()) {
+            if declaration
+                .header
+                .as_ref()
+                .is_some_and(|header| header.gc_type == 4)
+                && crate::codegen::realm_image::properties::function_has_prototype_state(
+                    declaration,
+                )?
+            {
+                self.atoms.insert("p".into());
+                self.key_atoms.insert("p".into());
+            }
+            for property in &declaration.properties {
+                if property.symbol {
+                    self.symbols.insert(property.key.clone());
+                } else {
+                    self.atoms.insert(property.key.clone());
+                    self.key_atoms.insert(property.key.clone());
+                }
+                if let Some(value) = &property.value {
+                    collect_value(value, &mut self.atoms, &mut self.symbols);
+                }
+            }
+            for value in declaration.captures.iter().chain(
+                declaration
+                    .storage
+                    .iter()
+                    .flat_map(|storage| storage.values()),
+            ) {
+                collect_value(value, &mut self.atoms, &mut self.symbols);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Native ownership follows the source birth's own values and captures, never
+/// [[Prototype]] or operation births. Other declared materialize roots own
+/// their graph independently. This classification stages native graphs until
+/// their namespace membership protocol can back the same materialize point.
+fn native_namespace_birth(row: &RealmDeclaration) -> bool {
+    row.native_namespace.is_some()
+        || (row.kind == perry_hir::realm_manifest::RealmKind::Namespace && row.module.is_some())
+}
+
+pub(crate) fn native_owned_cells(
+    all: &BTreeMap<String, RealmDeclaration>,
+) -> Result<BTreeSet<String>, String> {
+    let mut owned = BTreeSet::new();
+    let roots = all
+        .values()
+        .filter(|row| native_namespace_birth(row) || row.native_birth_owner.is_some())
+        .map(|row| row.name.clone())
+        .collect::<BTreeSet<_>>();
+    for root in &roots {
+        if let Some(owner) = &all[root].native_birth_owner {
+            if !all.get(owner).is_some_and(native_namespace_birth) {
+                return Err(format!(
+                    "native birth {root} has no namespace owner {owner}"
+                ));
+            }
+        }
+        let mut todo = vec![root.clone()];
+        let mut seen = BTreeSet::new();
+        while let Some(name) = todo.pop() {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let row = all
+                .get(&name)
+                .ok_or_else(|| format!("native birth references absent cell {name}"))?;
+            if name != *root
+                && !roots.contains(&name)
+                && (row.constructor.is_some() || row.materialize_family.is_some())
+            {
+                continue;
+            }
+            owned.insert(name);
+            for property in &row.properties {
+                todo.extend(property.get.iter().chain(&property.set).cloned());
+                if let Some(RealmValue::Reference(target) | RealmValue::RawReference(target)) =
+                    &property.value
+                {
+                    todo.push(target.clone());
+                }
+            }
+            for value in row
+                .captures
+                .iter()
+                .chain(row.storage.iter().flat_map(|storage| storage.values()))
+            {
+                if let RealmValue::Reference(target) | RealmValue::RawReference(target) = value {
+                    todo.push(target.clone());
+                }
+            }
+        }
+    }
+    Ok(owned)
+}
+
+/// Add physical realm rows after the close contains the actual lowered EXEC
+/// set. Every module receives this same final ordinal plan.
+pub fn image_ordinals(
+    preliminary: &crate::layout_ordinals::ProgramLayoutOrdinals,
+    reach: &RealmReach,
+    target: Option<&str>,
+) -> Result<crate::layout_ordinals::ProgramLayoutOrdinals, String> {
+    use crate::layout_ordinals::{LayoutRole, OrdinalInput, ProgramLayoutOrdinals};
+    let host;
+    let target = if let Some(target) = target {
+        target
+    } else {
+        host = inkwell::targets::TargetMachine::get_default_triple()
+            .as_str()
+            .to_string_lossy()
+            .into_owned();
+        &host
+    };
+    let image = crate::codegen::realm_image::plan::ImagePlan::new(reach, target)?;
+    if image.realm.cells.is_empty() {
+        if preliminary.realm_image {
+            return Err("preliminary plan already contains a realm image".into());
+        }
+        return Ok(preliminary.clone());
+    }
+    let input = |entry: &crate::layout_ordinals::OrdinalEntry| OrdinalInput {
+        key: entry.key.clone(),
+        requested_shape_id: entry.requested_shape_id,
+        band: entry.band,
+        proto_kind: entry.proto_kind,
+        role: entry.role,
+    };
+    if preliminary
+        .entries
+        .iter()
+        .any(|entry| entry.role == LayoutRole::LazyImage)
+    {
+        return Err("preliminary plan already contains lazy realm rows".into());
+    }
+    let native = preliminary
+        .entries
+        .iter()
+        .filter(|entry| entry.role == LayoutRole::Native)
+        .map(input);
+    let program = preliminary
+        .entries
+        .iter()
+        .filter(|entry| entry.role != LayoutRole::Native)
+        .map(input)
+        .chain(image.rows.inputs());
+    let mut result = ProgramLayoutOrdinals::assign(native, program)?;
+    result.realm_image = true;
+    result.prototype_serial_end = result.prototype_serial_end.max(image.metadata.serial_end);
+    Ok(result)
 }
 
 /// Every ordinary cell, including the global, uses the logical member rule.
@@ -208,33 +343,27 @@ fn select_properties(
     declaration: &mut RealmDeclaration,
     reach: &RealmReach,
     index: &perry_hir::realm_reach_index::RealmIndex,
+    executing: &BTreeSet<String>,
 ) -> Result<(), String> {
     if let Some(header) = &declaration.header {
         if perry_abi::gc_type_is_object!(header.gc_type) {
             crate::codegen::realm_image::header::object_word(declaration, header)?;
         }
     }
-    if reach.is_full() {
-        return Ok(());
-    }
     let holder = index
         .last(&declaration.name)
         .expect("selected realm holder is indexed");
     declaration.properties.retain_mut(|property| {
         let enumerable = property.attributes & 2 != 0;
-        property.get = property
-            .get
-            .take()
-            .filter(|name| reach.keeps_member(index, holder, &property.key, name, enumerable));
-        property.set = property
-            .set
-            .take()
-            .filter(|name| reach.keeps_member(index, holder, &property.key, name, enumerable));
+        property.get = property.get.take().filter(|name| {
+            reach.keeps_member_in_exec(index, holder, &property.key, name, enumerable, executing)
+        });
+        property.set = property.set.take().filter(|name| {
+            reach.keeps_member_in_exec(index, holder, &property.key, name, enumerable, executing)
+        });
         let value = match &property.value {
-            Some(RealmValue::Reference(name) | RealmValue::RawReference(name)) => {
-                name == "%Global%"
-                    || reach.keeps_member(index, holder, &property.key, name, enumerable)
-            }
+            Some(RealmValue::Reference(name) | RealmValue::RawReference(name)) => reach
+                .keeps_member_in_exec(index, holder, &property.key, name, enumerable, executing),
             Some(_) => true,
             None => false,
         };
@@ -331,7 +460,7 @@ fn ordered_properties(declaration: &RealmDeclaration) -> Result<Vec<RealmPropert
 /// manifest records ECMAScript writable/enumerable/configurable bits.
 pub fn property_entry(property: &RealmProperty) -> u8 {
     if property.value.is_some() {
-        !property.attributes & 7
+        (!property.attributes & 7) | (property.attributes & 64)
     } else {
         // A fresh accessor's internal writable bit is true. Missing halves
         // are represented by undefined values in its four-word pair.
@@ -408,9 +537,44 @@ mod tests {
     }
 
     #[test]
-    fn hello_has_only_reached_cells_and_the_filtered_global() {
+    fn realm_hello0_image_zero_preserves_the_closed_logical_reach() {
         let r = reach("console.log('hi');");
-        let plan = RealmPlan::from_reach(&r).unwrap();
+        let before = r.clone();
+        let image =
+            crate::codegen::realm_image::plan::ImagePlan::new(&r, "x86_64-unknown-linux-gnu")
+                .unwrap();
+        let plan = image.realm;
+        assert!(plan.cells.is_empty());
+        assert!(plan.providers.is_empty());
+        assert!(plan.native_namespaces.is_empty());
+        assert!(plan.atoms.is_empty());
+        assert!(plan.key_atoms.is_empty());
+        assert!(plan.symbols.is_empty());
+        assert_eq!(r, before);
+        let preliminary = crate::layout_ordinals::ProgramLayoutOrdinals::assign(
+            crate::layout_ordinals::native_inputs(),
+            Vec::new(),
+        )
+        .unwrap();
+        let final_plan =
+            image_ordinals(&preliminary, &r, Some("x86_64-unknown-linux-gnu")).unwrap();
+        assert_eq!(final_plan, preliminary);
+        assert!(!final_plan.realm_image);
+        assert_eq!(final_plan.lazy_count, 0);
+        assert!(final_plan
+            .table_span_initializer()
+            .ends_with("ptr null, ptr null, ptr null"));
+    }
+
+    #[test]
+    fn hello_logical_projection_keeps_its_filtered_global() {
+        let r = reach("console.log('hi');");
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let declarations = index
+            .rows()
+            .map(|row| serde_json::from_value(row.facts().clone()).unwrap())
+            .collect();
+        let plan = RealmPlan::from_declarations(&r, declarations, &index).unwrap();
         for ctor in ["Object", "Function", "Array"] {
             assert!(!plan.cells.contains_key(ctor), "{ctor}");
         }
@@ -425,6 +589,10 @@ mod tests {
             .properties
             .iter()
             .any(|p| p.key == "Array"));
+        assert!(!plan.cells["%Global%"]
+            .properties
+            .iter()
+            .any(|p| matches!(p.key.as_str(), "global" | "globalThis")));
     }
 
     #[test]
@@ -771,3 +939,227 @@ mod tests {
 #[cfg(test)]
 #[path = "realm_plan_selection_tests.rs"]
 mod selection_tests;
+
+#[cfg(test)]
+mod native_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn realm_native_owner_is_source_graph_not_name_parent_or_body_birth() {
+        let declarations: Vec<RealmDeclaration> = serde_json::from_str(r#"[
+          {"name":"%Global%","kind":"namespace"},
+          {"name":"Host","kind":"constructor","constructor":{"identity":7,"prototype_callable":false},
+           "native_birth_owner":"Receiver","prototype":"UnrelatedCtor","births":["BodyBirth"],
+           "properties":[{"key":"prototype","symbol":false,"attributes":0,"value":{"kind":"reference","value":"HostProto"}},
+                         {"key":"f","symbol":false,"attributes":7,"value":{"kind":"reference","value":"Member"}}]},
+          {"name":"Receiver","kind":"exotic","native_namespace":"test.host"},
+          {"name":"HostProto","kind":"prototype","prototype":"ParentProto"},
+          {"name":"Member","kind":"method","captures":[{"kind":"reference","value":"Receiver"}]},
+          {"name":"UnrelatedCtor","kind":"constructor","constructor":{"identity":8,"prototype_callable":false}},
+          {"name":"ParentProto","kind":"prototype"},
+          {"name":"BodyBirth","kind":"prototype"},
+          {"name":"PlainModule","kind":"namespace","module":"test.plain","properties":[
+            {"key":"value","symbol":false,"attributes":7,"value":{"kind":"reference","value":"PlainValue"}}]},
+          {"name":"PlainValue","kind":"method"}
+        ]"#).unwrap();
+        let all = declarations
+            .into_iter()
+            .map(|row| (row.name.clone(), row))
+            .collect();
+        let owned = native_owned_cells(&all).unwrap();
+        assert_eq!(
+            owned,
+            BTreeSet::from([
+                "Host".into(),
+                "HostProto".into(),
+                "Member".into(),
+                "Receiver".into(),
+                "PlainModule".into(),
+                "PlainValue".into()
+            ])
+        );
+        let mut bad = all.clone();
+        bad.get_mut("Host").unwrap().native_birth_owner = Some("ParentProto".into());
+        assert!(native_owned_cells(&bad)
+            .unwrap_err()
+            .contains("no namespace owner"));
+    }
+    #[test]
+    fn realm_native_instances_declare_their_prototype_birth_owner() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let all = index
+            .rows()
+            .map(|entry| {
+                let cell: RealmDeclaration = serde_json::from_value(entry.facts().clone()).unwrap();
+                (cell.name.clone(), cell)
+            })
+            .collect();
+        let owned = native_owned_cells(&all).unwrap();
+        for name in [
+            "node:http.globalAgent.<prototype>",
+            "node:https.globalAgent.<prototype>",
+            "node:worker_threads.locks.<prototype>",
+            "Buffer",
+            "%BufferSpeciesConstructor%",
+            "Buffer[\"@@species\"].<get>",
+        ] {
+            assert!(owned.contains(name), "{name}");
+        }
+        assert!(!owned.contains("Object.prototype"));
+    }
+
+    #[test]
+    fn realm_instance_birth_keeps_body_reach_without_an_image_identity() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let ast =
+            perry_parser::parse_typescript("console.log(globalThis.Intl.Collator);", "instance.ts")
+                .unwrap();
+        let mut reach = perry_hir::realm_reach::scan(&ast, &index);
+        reach.own("%CollatorCompare%");
+        reach.close(&index);
+        let row = index.last("%CollatorCompare%").unwrap();
+        let declaration: RealmDeclaration = serde_json::from_value(row.facts().clone()).unwrap();
+        assert_eq!(
+            declaration.birth_domain,
+            perry_hir::realm_manifest::RealmBirthDomain::Instance
+        );
+        assert!(reach.names.contains(row.name()));
+        assert!(reach.executes(&index, row));
+        let plan = RealmPlan::from_reach(&reach).unwrap();
+        assert!(!plan.cells.contains_key(row.name()));
+        assert!(!plan.providers.contains_key(row.name()));
+    }
+    #[test]
+    fn realm_nullish_read_exec_keeps_the_caught_type_error_constructor() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let mut reach = RealmReach::default();
+        reach.exec("js_object_get_field_value");
+        reach.receiver_keys.insert("constructor".into());
+        reach.receiver_keys.insert("name".into());
+        reach.close(&index);
+        assert!(reach.executing(&index).contains("js_throw_type_error_property_access"));
+        assert!(reach.names.contains("TypeError.prototype"));
+        assert!(reach.names.contains("TypeError"));
+        let plan = RealmPlan::from_reach(&reach).unwrap();
+        assert!(plan.cells["TypeError.prototype"].properties.iter().any(|p| p.key == "constructor"));
+    }
+
+    #[test]
+    fn realm_match_all_body_keeps_its_allocated_iterator_prototype() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        for callee in ["RegExp.prototype[\"@@matchAll\"]", "String.prototype.matchAll"] {
+            let mut reach = RealmReach::default();
+            reach.own(callee);
+            reach.exec("js_runtime_install_regex_engine");
+            reach.close(&index);
+            assert!(reach.names.contains("%RegExpStringIteratorPrototype%"), "{callee}");
+            assert!(RealmPlan::from_reach(&reach).unwrap().cells.contains_key("%RegExpStringIteratorPrototype%"));
+        }
+    }
+
+    #[test]
+    fn realm_hook_targets_follow_installer_exec_in_logical_and_physical_selection() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        for (holder, target, installer, key) in [
+            (
+                "RegExp.prototype",
+                "RegExp.prototype.exec",
+                "js_runtime_install_regex_engine",
+                "exec",
+            ),
+            (
+                "ReadableStream.prototype",
+                "ReadableStream.prototype.getReader",
+                "js_stdlib_install_bundled_streams",
+                "getReader",
+            ),
+        ] {
+            let mut reach = RealmReach::default();
+            reach.own(holder);
+            reach.receiver_keys.insert(key.to_owned());
+            reach.close(&index);
+            assert!(
+                !reach.names.contains(target),
+                "inactive hook target {target}"
+            );
+            assert!(!reach.executing(&index).contains(
+                index
+                    .last(target)
+                    .unwrap()
+                    .body()
+                    .unwrap()
+                    .rsplit("::")
+                    .next()
+                    .unwrap()
+            ));
+            let plan = RealmPlan::from_reach(&reach).unwrap();
+            assert!(!plan.cells[holder].properties.iter().any(|p| p.key == key));
+            reach.exec(installer);
+            reach.close(&index);
+            assert!(reach.names.contains(target), "installed target {target}");
+            let plan = RealmPlan::from_reach(&reach).unwrap();
+            assert!(plan.cells[holder].properties.iter().any(|p| p.key == key));
+            assert!(plan.cells.contains_key(target));
+        }
+    }
+    #[test]
+    fn realm_full_reach_does_not_install_optional_hook_members() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        for (holder, target, installer, key) in [
+            (
+                "RegExp.prototype",
+                "RegExp.prototype.exec",
+                "js_runtime_install_regex_engine",
+                "exec",
+            ),
+            (
+                "ReadableStream.prototype",
+                "ReadableStream.prototype.getReader",
+                "js_stdlib_install_bundled_streams",
+                "getReader",
+            ),
+        ] {
+            let ast = perry_parser::parse_typescript("with ({}) {}", "full.cjs").unwrap();
+            let mut reach = perry_hir::realm_reach::scan(&ast, &index);
+            assert!(reach.is_full());
+            assert!(reach.names.contains(target), "full R retains body reach");
+            assert!(
+                reach.executes(&index, index.last(target).unwrap()),
+                "R5 unchanged"
+            );
+            let plan = RealmPlan::from_reach(&reach).unwrap();
+            assert!(!plan.cells[holder].properties.iter().any(|p| p.key == key));
+            assert!(!plan.cells.contains_key(target));
+            reach.exec(installer);
+            reach.close(&index);
+            let plan = RealmPlan::from_reach(&reach).unwrap();
+            assert!(plan.cells[holder].properties.iter().any(|p| p.key == key));
+            assert!(plan.cells.contains_key(target));
+        }
+    }
+    #[test]
+    fn realm_full_plan_excludes_all_instance_birth_templates() {
+        let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+        let ast = perry_parser::parse_typescript("with ({}) {}", "all.cjs").unwrap();
+        let reach = perry_hir::realm_reach::scan(&ast, &index);
+        assert!(reach.is_full());
+        let image =
+            crate::codegen::realm_image::plan::ImagePlan::new(&reach, "x86_64-unknown-linux-gnu")
+                .unwrap();
+        let mut instances = 0;
+        for row in index.rows() {
+            let cell: RealmDeclaration = serde_json::from_value(row.facts().clone()).unwrap();
+            if cell.birth_domain == perry_hir::realm_manifest::RealmBirthDomain::Instance {
+                instances += 1;
+                assert!(reach.names.contains(row.name()));
+                assert!(
+                    !image.realm.cells.contains_key(row.name()),
+                    "instance image cell {}",
+                    row.name()
+                );
+                assert!(!image.realm.providers.contains_key(row.name()));
+            }
+        }
+        assert!(instances >= 15, "all declared per-owner births covered");
+    }
+}

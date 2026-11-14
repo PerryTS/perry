@@ -336,8 +336,11 @@ pub struct PerryLayoutDesc {
     /// Intrinsic family of a non-constructor realm image cell. Constructors
     /// carry their immutable identity in their own header.
     pub realm_family: u8,
+    /// Source reach rank of this emitted receiver, for checked named misses.
+    /// Zero on runtime-born and program layouts.
+    pub realm_rank: u8,
     /// Keeps the size at 128 bytes (112 on ILP32), see `LAYOUT_DESC_FULL_SIZE_LP64`.
-    pub _tail_pad: [u8; 31],
+    pub _tail_pad: [u8; 30],
 }
 
 const _: () = assert!(
@@ -513,7 +516,8 @@ section_sentinel!(
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
         realm_family: 0,
-        _tail_pad: [0; 31],
+        realm_rank: 0,
+        _tail_pad: [0; 30],
     },
     "perry_layouts",
     "__DATA,__perry_layouts",
@@ -716,12 +720,13 @@ pub(crate) use atoms::{atom_bytes, coloured_atoms, seed_static_atoms, shadow_nam
 
 #[path = "layout_desc/lazy_image.rs"]
 mod lazy_image;
-#[cfg(any(debug_assertions, test))]
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+pub(crate) use lazy_image::structure_receiver;
 pub(crate) use lazy_image::holds_image_family;
 #[cfg(test)]
 pub(crate) use lazy_image::js_realm_touch_pending;
 pub(crate) use lazy_image::{
-    pending_cell, pending_closure_cell, pending_intrinsic_word, seed_image_family,
+    pending_cell, pending_closure_cell, pending_intrinsic_word, seed_image_family, seed_image_run,
 };
 #[path = "layout_desc/registration.rs"]
 mod registration;

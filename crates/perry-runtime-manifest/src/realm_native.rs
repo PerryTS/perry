@@ -428,6 +428,7 @@ pub(super) fn method(facts: Facts, abi: &Abi) -> Result<Value, String> {
         ("function_info", function_info),
         ("info_symbol", string(info_symbol)),
         ("captures", Value::Array(captures)),
+        ("native_birth_owner", string(receiver)),
         (
             "births",
             Value::Array(births.into_iter().map(string).collect()),

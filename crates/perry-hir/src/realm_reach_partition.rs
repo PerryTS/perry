@@ -215,6 +215,39 @@ impl RealmReach {
         }
     }
 
+    /// A hook member edge follows the actual installer call, never pointer
+    /// registration. Direct body EXEC and program-owned bodies retain R5.
+    pub fn installed(&self, index: &RealmIndex, name: &str) -> bool {
+        self.installed_with(index, name, None)
+    }
+
+    pub fn installed_in_exec(
+        &self,
+        index: &RealmIndex,
+        name: &str,
+        executing: &BTreeSet<String>,
+    ) -> bool {
+        self.installed_with(index, name, Some(executing))
+    }
+
+    fn installed_with(
+        &self,
+        index: &RealmIndex,
+        name: &str,
+        executing: Option<&BTreeSet<String>>,
+    ) -> bool {
+        index
+            .last(name)
+            .and_then(|row| row.installed_by())
+            .is_none_or(|installer| {
+                let symbol = installer.rsplit("::").next().unwrap();
+                match executing {
+                    Some(fact) => fact.contains(symbol),
+                    None => self.executing(index).contains(symbol),
+                }
+            })
+    }
+
     /// A declared slot or a write by an operation which the program executes.
     pub fn resolve<'a>(&self, index: &'a RealmIndex, holder: &str, key: &str) -> Option<&'a str> {
         index
@@ -297,6 +330,9 @@ impl RealmReach {
                 let Some(row) = index.last(&name) else {
                     continue;
                 };
+                // R7: a held reader owns every intrinsic value it may read.
+                // These are held names; program naming alone owns bodies.
+                self.names.extend(row.runtime_reads().map(str::to_owned));
                 for birth in row.births() {
                     if !row.members().any(|(_, _, v)| v == birth)
                         && self.whole.contains(&name)
@@ -450,7 +486,14 @@ impl RealmReach {
         let mut member = false;
         for (key, symbol, value) in row.members().filter(|(_, _, value)| *value == birth) {
             member = true;
-            if self.keeps_member(index, row, key, value, row.member_enumerable(key, symbol)) {
+            if self.keeps_member_with(
+                index,
+                row,
+                key,
+                value,
+                row.member_enumerable(key, symbol),
+                Some(executing),
+            ) {
                 return true;
             }
         }
@@ -480,7 +523,35 @@ impl RealmReach {
         value: &str,
         enumerable: bool,
     ) -> bool {
-        self.owned_member(index, value)
+        self.keeps_member_with(index, holder, key, value, enumerable, None)
+    }
+
+    pub fn keeps_member_in_exec(
+        &self,
+        index: &RealmIndex,
+        holder: crate::realm_reach_index::Row<'_>,
+        key: &str,
+        value: &str,
+        enumerable: bool,
+        executing: &BTreeSet<String>,
+    ) -> bool {
+        self.keeps_member_with(index, holder, key, value, enumerable, Some(executing))
+    }
+
+    fn keeps_member_with(
+        &self,
+        index: &RealmIndex,
+        holder: crate::realm_reach_index::Row<'_>,
+        key: &str,
+        value: &str,
+        enumerable: bool,
+        executing: Option<&BTreeSet<String>>,
+    ) -> bool {
+        if !self.installed_with(index, value, executing) {
+            return false;
+        }
+        self.is_full()
+            || self.owned_member(index, value)
             || index.rows().any(|op| {
                 op.writes()
                     .any(|(h, k, v)| h == holder.name() && k == key && v == value)

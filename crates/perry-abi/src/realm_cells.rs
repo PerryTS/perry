@@ -6,6 +6,12 @@
 /// the link address.
 pub const IMAGE_SYMBOL_ORDINALS: u64 = 1 << 32;
 pub const IMAGE_SYMBOL_ORDINAL_BASE: u64 = 0u64.wrapping_sub(IMAGE_SYMBOL_ORDINALS);
+/// Runtime-owned symbol atoms carry their source ordinal in the upper half
+/// of the image band. Native births and emitted cells share this identity.
+pub const fn runtime_symbol_identity(index: u32) -> u64 {
+    assert!(index < (IMAGE_SYMBOL_ORDINALS / 2) as u32);
+    symbol_identity(IMAGE_SYMBOL_ORDINAL_BASE + IMAGE_SYMBOL_ORDINALS / 2 + index as u64)
+}
 
 /// A symbols identity is MurmurHash3s bijective 64-bit finalizer of its birth
 /// ordinal: it spreads sequential births across the power-of-two buckets shared

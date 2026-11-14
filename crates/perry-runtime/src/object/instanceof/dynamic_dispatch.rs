@@ -726,7 +726,7 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
                     && crate::object::shapes::object_shape_record(bag)
                         .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
         };
-        if crate::closure::is_closure_ptr(addr) {
+        if crate::closure::is_closure_bits(bits) {
             let hop = addr as *const crate::closure::ClosureHeader;
             if crate::closure::shape::is_class_info((*hop).info) || !proves((*hop).props) {
                 return true;

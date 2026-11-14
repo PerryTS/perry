@@ -834,6 +834,7 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
     text_ptr: *const StringHeader,
     reviver_ptr: i64,
 ) -> JSValue {
+    crate::realm_decl! { operation js_json_parse_with_reviver, births = [SyntaxError] }
     let scope = crate::gc::RuntimeHandleScope::new();
     let text_handle = scope.root_string_ptr(text_ptr);
     let reviver = reviver_ptr as *const crate::closure::ClosureHeader;

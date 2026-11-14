@@ -518,6 +518,7 @@ fn spec_result_to_promise(result: f64) -> *mut Promise {
 /// spec-compliant combinator.
 #[no_mangle]
 pub extern "C" fn js_promise_all_iterable(value: f64) -> *mut Promise {
+    crate::realm_decl! { operation js_promise_all_iterable, births = [TypeError] }
     let c = super::spec_combinators::default_promise_ctor();
     spec_result_to_promise(super::spec_combinators::js_promise_all_spec(c, value))
 }
@@ -532,6 +533,7 @@ pub extern "C" fn js_promise_race_iterable(value: f64) -> *mut Promise {
 /// Iterable-accepting entry for `Promise.allSettled` (issue #2822 / #4521).
 #[no_mangle]
 pub extern "C" fn js_promise_all_settled_iterable(value: f64) -> *mut Promise {
+    crate::realm_decl! { operation js_promise_all_settled_iterable, births = [TypeError] }
     let c = super::spec_combinators::default_promise_ctor();
     spec_result_to_promise(super::spec_combinators::js_promise_all_settled_spec(
         c, value,
@@ -976,6 +978,7 @@ fn promise_resolve_for_combinator(value: f64) -> Result<*mut Promise, f64> {
 /// Returns: a new Promise that resolves with an array of results
 #[no_mangle]
 pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
+    crate::realm_decl! { operation js_promise_all, births = [TypeError] }
     use crate::array::{js_array_get_f64, js_array_length, js_array_set_f64};
 
     // Each input's `then` lookup and every promise created or settled here can
@@ -1466,6 +1469,7 @@ fn build_settled_rejected(reason: f64) -> f64 {
 pub extern "C" fn js_promise_all_settled(
     promises_arr: *const crate::array::ArrayHeader,
 ) -> *mut Promise {
+    crate::realm_decl! { operation js_promise_all_settled, births = [TypeError] }
     use crate::array::{js_array_get_f64, js_array_length, js_array_set_f64};
     use crate::closure::js_closure_set_capture_f64;
 

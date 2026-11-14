@@ -44,7 +44,8 @@ const fn row(index: u32, kind: ShapeObjectKind, proto: *const PerryProtoFamily) 
             1 => crate::object::BuiltinConstructorIdentity::Date as u8,
             _ => crate::object::BuiltinConstructorIdentity::Function as u8,
         },
-        _tail_pad: [0; 31],
+        realm_rank: 0,
+        _tail_pad: [0; 30],
     }
 }
 static mut FACTS: [PerryLayoutDesc; 3] = [
@@ -224,6 +225,10 @@ fn pending_first_touch_publishes_its_row_and_leaves_sibling_pending() {
             lazy_count: 3,
             lazy_layouts: facts.cast(),
             touch_pending: Some(super::js_realm_touch_pending),
+            realm_start: std::ptr::addr_of!(PENDING_CELLS).cast::<u8>(),
+            realm_end: std::ptr::addr_of!(PENDING_CELLS)
+                .cast::<u8>()
+                .add(std::mem::size_of_val(&*std::ptr::addr_of!(PENDING_CELLS))),
             ..PerryProgramTableV1::EMPTY
         }));
         crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
@@ -313,6 +318,123 @@ fn an_agent_without_an_image_rejects_pending_words() {
         crate::object::shapes::shape_record_of_object(
             std::ptr::null(),
             crate::codegen_abi::LAYOUT_TAG | crate::codegen_abi::LAYOUT_ROW_PENDING | FIRST,
+        );
+    }
+}
+
+#[test]
+fn realm_parent_link_preserves_pending_rows_and_existing_agent_words() {
+    std::thread::spawn(|| unsafe {
+        use crate::codegen_abi::LAYOUT_ROW_PENDING as PENDING;
+        crate::test_support::bootstrap_test_thread();
+        let parent = std::ptr::addr_of_mut!(PENDING_CELLS[1].obj);
+        let old_word = (*parent).parent_class_id;
+        let word = (*std::ptr::addr_of!(FACTS[1])).layout_id | PENDING;
+        (*parent).parent_class_id = word;
+        let family = PerryProtoFamily {
+            serial: 60,
+            image_prototype: parent.cast(),
+        };
+        let desc = row(0, ShapeObjectKind::Ordinary, &family);
+        assert_eq!(proto_family_serial(&family), 60);
+        assert_eq!(crate::object::shapes::identity_prototype_word(60), 0);
+        crate::object::global_this::family_link::image_parent(&desc);
+        let bits = crate::value::js_nanbox_pointer(parent as i64).to_bits();
+        assert_eq!(crate::object::shapes::identity_prototype_word(60), bits);
+        assert_eq!((*parent).parent_class_id, word, "link observed its parent");
+        let other = std::ptr::addr_of_mut!(PENDING_CELLS[0].obj);
+        let other_bits = crate::value::js_nanbox_pointer(other as i64).to_bits();
+        crate::object::shapes::write_identity_word(60, other_bits);
+        crate::object::global_this::family_link::image_parent(&desc);
+        assert_eq!(
+            crate::object::shapes::identity_prototype_word(60),
+            other_bits
+        );
+        assert_eq!((*parent).parent_class_id, word);
+        (*parent).parent_class_id = old_word;
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn structure_named_miss_aborts_and_whole_absence_remains_undefined() {
+    const CHILD: &str = "PERRY_RB6_STRUCTURE_MISS_CHILD";
+    if let Ok(mode) = std::env::var(CHILD) {
+        unsafe {
+            crate::gc::image_cells::hold_image_for_tests(true);
+            crate::object::class_image::enter_current_thread_image();
+            let facts = std::ptr::addr_of_mut!(FACTS).cast::<PerryLayoutDesc>();
+            (*facts.add(1)).realm_rank = if mode.starts_with("structure") {
+                crate::codegen_abi::REALM_RANK_STRUCTURE
+            } else {
+                crate::codegen_abi::REALM_RANK_WHOLE
+            };
+            let program = Box::leak(Box::new(PerryProgramTableV1 {
+                lazy_first: FIRST,
+                lazy_count: 3,
+                lazy_layouts: facts.cast(),
+                ..PerryProgramTableV1::EMPTY
+            }));
+            crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
+                static_rows: FIRST + 3,
+                family_count: FIRST - NATIVE_LAYOUT_ROWS,
+                program,
+                ..PerryLayoutImageV1::RUNTIME
+            });
+            crate::test_support::bootstrap_test_thread();
+            let object = std::ptr::addr_of_mut!(PENDING_CELLS[1].obj);
+            (*object).parent_class_id = (*facts.add(1)).layout_id;
+            publish_receiver((*object).parent_class_id);
+            let key = crate::string::js_string_pool_atom(
+                b"getDate".as_ptr(),
+                7,
+                crate::object::key_bytes_hash(b"getDate".as_ptr(), 7),
+                0,
+            );
+            let value = if mode.ends_with("tail") {
+                crate::object::field_get_set::get_field_by_name_object_tail(object, key).bits()
+            } else if mode.ends_with("slow") {
+                crate::object::js_object_get_field_by_name(object, key).bits()
+            } else {
+                crate::object::layout_probe::perry_probe_get(
+                    crate::object::layout_probe::test_dir(),
+                    (object as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64,
+                    crate::value::js_nanbox_string(key as i64).to_bits(),
+                    crate::string::property_atom_hash(key),
+                )
+                .to_bits()
+            };
+            assert_eq!(value, crate::value::TAG_UNDEFINED);
+            return;
+        }
+    }
+    let exe = std::env::current_exe().unwrap();
+    let test = "object::layout_desc::lazy_image::tests::structure_named_miss_aborts_and_whole_absence_remains_undefined";
+    for mode in ["structure", "structure-slow", "structure-tail"] {
+        let structure = std::process::Command::new(&exe)
+            .args(["--exact", test, "--nocapture"])
+            .env(CHILD, mode)
+            .output()
+            .unwrap();
+        assert!(!structure.status.success(), "{mode} unexpectedly succeeded");
+        assert!(
+            String::from_utf8_lossy(&structure.stderr)
+                .contains("getDate misses a STRUCTURE realm image cell"),
+            "{}",
+            String::from_utf8_lossy(&structure.stderr)
+        );
+    }
+    for mode in ["whole", "whole-slow", "whole-tail"] {
+        let whole = std::process::Command::new(&exe)
+            .args(["--exact", test, "--nocapture"])
+            .env(CHILD, mode)
+            .output()
+            .unwrap();
+        assert!(
+            whole.status.success(),
+            "{}",
+            String::from_utf8_lossy(&whole.stderr)
         );
     }
 }

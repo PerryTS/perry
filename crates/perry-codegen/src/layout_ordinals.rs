@@ -52,6 +52,8 @@ pub struct ProgramLayoutOrdinals {
     pub family_first: u32,
     pub family_count: u32,
     pub prototype_serial_end: u64,
+    /// Data emission of the realm creating operation, using the existing EXEC rule.
+    pub realm_image: bool,
 }
 
 impl ProgramLayoutOrdinals {
@@ -125,6 +127,7 @@ impl ProgramLayoutOrdinals {
             family_first,
             family_count,
             prototype_serial_end: perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+            realm_image: false,
         })
     }
 
@@ -208,8 +211,16 @@ impl ProgramLayoutOrdinals {
         } else {
             ("@perry_lazy_layouts", "@js_realm_touch_pending")
         };
+        let realm = if self.realm_image {
+            format!(
+                "ptr getelementptr (i8, ptr @perry_realm_global, i64 {}), ptr @perry_realm_run_start, ptr @perry_realm_run_end",
+                crate::target_layout::GC_HEADER_SIZE_BYTES,
+            )
+        } else {
+            "ptr null, ptr null, ptr null".into()
+        };
         format!(
-            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}, ptr {touch}",
+            "i32 {}, i32 {}, i32 0, i64 {}, ptr {lazy}, ptr {touch}, {realm}",
             self.lazy_count, self.lazy_first, self.prototype_serial_end,
         )
     }
@@ -315,17 +326,34 @@ mod tests {
         assert_eq!((plan.family_first, plan.family_count), (first + 2, 1));
         assert_eq!(plan.entries[first as usize].role, LayoutRole::LazyImage);
         assert_eq!(plan.entries[first as usize + 1].proto_kind, 2);
-        assert!(plan
-            .table_span_initializer()
-            .ends_with("ptr @perry_lazy_layouts, ptr @js_realm_touch_pending"));
-        assert!(ProgramLayoutOrdinals::assign(native_inputs(), [])
-            .unwrap()
-            .table_span_initializer()
-            .ends_with(&format!(
-                "i32 0, i32 {}, i32 0, i64 {}, ptr null, ptr null",
+        assert_eq!(
+            plan.table_span_initializer(),
+            format!(
+                "i32 2, i32 {first}, i32 0, i64 {}, ptr @perry_lazy_layouts, ptr @js_realm_touch_pending, ptr null, ptr null, ptr null",
+                perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+            )
+        );
+        let mut held = plan.clone();
+        held.realm_image = true;
+        assert_eq!(
+            held.table_span_initializer(),
+            format!(
+                "i32 2, i32 {first}, i32 0, i64 {}, ptr @perry_lazy_layouts, ptr @js_realm_touch_pending, ptr getelementptr (i8, ptr @perry_realm_global, i64 {}), ptr @perry_realm_run_start, ptr @perry_realm_run_end",
+                perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+                crate::target_layout::GC_HEADER_SIZE_BYTES,
+            )
+        );
+        assert_ne!(held.cache_key(), plan.cache_key());
+        assert_eq!(
+            ProgramLayoutOrdinals::assign(native_inputs(), [])
+                .unwrap()
+                .table_span_initializer(),
+            format!(
+                "i32 0, i32 {}, i32 0, i64 {}, ptr null, ptr null, ptr null, ptr null, ptr null",
                 perry_abi::NATIVE_LAYOUT_ROWS,
-                perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL
-            )));
+                perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+            )
+        );
     }
 
     #[test]

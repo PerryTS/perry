@@ -784,11 +784,44 @@ fn tla_program_emits_record_owned_dependency_visitor_in_source_order() {
     opts.program_has_tla = true;
     opts.module_init_deps = vec!["first".into(), "second".into()];
     let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
-    let start = ir.find("__async_dependencies(i64 %walk, i64 %parent)").unwrap();
+    let start = ir
+        .find("__async_dependencies(i64 %walk, i64 %parent)")
+        .unwrap();
     let body = &ir[start..];
     let first = body.find("call i64 @first__async_record()").unwrap();
     let second = body.find("call i64 @second__async_record()").unwrap();
     assert!(first < second);
     assert!(ir.contains("call void @js_async_module_entry"));
     assert!(ir.contains("internal global [16 x i64] zeroinitializer"));
+}
+
+#[test]
+fn realm_hello0_emits_no_image_and_no_realm_entry_call() {
+    let ast = perry_parser::parse_typescript("console.log('hi');", "hello0.ts").unwrap();
+    let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+    let reach = perry_hir::realm_reach::scan(&ast, &index);
+    let module = perry_hir::lower_module(&ast, "hello0", "hello0.ts").unwrap();
+    let mut opts = entry_opts("executable");
+    opts.target = Some("x86_64-unknown-linux-gnu".into());
+    crate::codegen::ensure_layout_plan(&module, &mut opts).unwrap();
+    let preliminary = opts.program_layout_ordinals.as_ref().clone();
+    let plan =
+        crate::realm_plan::image_ordinals(&preliminary, &reach, Some("x86_64-unknown-linux-gnu"))
+            .unwrap();
+    assert_eq!(plan, preliminary);
+    assert!(!plan.realm_image);
+    opts.program_layout_ordinals = std::sync::Arc::new(plan);
+    opts.program_facts.realm_reach = Some(std::sync::Arc::new(reach));
+    let ir = String::from_utf8(compile_module(&module, opts).unwrap()).unwrap();
+    assert!(!ir.contains("@perry_realm_run ="));
+    assert!(!ir.contains("@perry_realm_global ="));
+    let start = ir.find("define i32 @main(").expect("hello main exists");
+    let main = &ir[start..];
+    let main = &main[..main.find("\n}").expect("hello main ends")];
+    assert!(
+        !main
+            .lines()
+            .any(|line| line.contains("call ") && line.contains("js_realm_")),
+        "{main}"
+    );
 }

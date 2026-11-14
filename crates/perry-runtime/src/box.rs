@@ -184,6 +184,7 @@ pub fn box_slot_contents_bits(bits: u64) -> Option<u64> {
 /// rather than dereferencing. See perry#393 for the failure mode.
 #[no_mangle]
 pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
+    crate::realm_decl! { operation js_box_get_bits, calls = [js_throw_reference_error_tdz] }
     box_get_bits_named(ptr, f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
@@ -191,6 +192,7 @@ pub extern "C" fn js_box_get_bits(ptr: *mut Box) -> i64 {
 /// The name is consumed only on the TDZ error path, before any GC allocation.
 #[no_mangle]
 pub extern "C" fn js_box_get_bits_named(ptr: *mut Box, name: f64) -> i64 {
+    crate::realm_decl! { operation js_box_get_bits_named, calls = [js_throw_reference_error_tdz] }
     box_get_bits_named(ptr, name)
 }
 
@@ -286,6 +288,7 @@ static KEEP_JS_CAPTURE_CELL_ASSERT: extern "C" fn(i64) = js_capture_cell_assert;
 
 #[no_mangle]
 pub unsafe extern "C" fn js_box_get_bits_trusted(ptr: *mut Box) -> i64 {
+    crate::realm_decl! { operation js_box_get_bits_trusted, calls = [js_box_get_bits_trusted_named] }
     unsafe { js_box_get_bits_trusted_named(ptr, f64::from_bits(crate::value::TAG_UNDEFINED)) }
 }
 
@@ -295,6 +298,7 @@ pub unsafe extern "C" fn js_box_get_bits_trusted(ptr: *mut Box) -> i64 {
 /// `ptr` must be a live box cell, as for `js_box_get_bits_trusted`.
 #[no_mangle]
 pub unsafe extern "C" fn js_box_get_bits_trusted_named(ptr: *mut Box, name: f64) -> i64 {
+    crate::realm_decl! { operation js_box_get_bits_trusted_named, calls = [js_throw_reference_error_tdz] }
     let bits = unsafe { (*ptr).value };
     if bits == crate::value::TAG_TDZ {
         if TDZ_SUPPRESS_DEPTH.with(|d| d.get()) > 0 {
@@ -340,6 +344,7 @@ static KEEP_JS_TDZ_SUPPRESS_END: extern "C" fn() = js_tdz_suppress_end;
 /// Compatibility wrapper for legacy f64-lowered boxed locals.
 #[no_mangle]
 pub extern "C" fn js_box_get(ptr: *mut Box) -> f64 {
+    crate::realm_decl! { operation js_box_get, calls = [js_box_get_bits] }
     f64::from_bits(js_box_get_bits(ptr) as u64)
 }
 

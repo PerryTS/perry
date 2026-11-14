@@ -456,8 +456,12 @@ pub(super) fn birth_at(
     let mut operation = None;
     let mut declared = None;
     let mut never_move = false;
+    let mut materialize_family = None;
+    let mut intrinsic_serial = None;
     let mut integrity = Integrity::Extensible;
     let mut native_namespace = None;
+    let mut native_birth_owner = None;
+    let mut birth_domain = None;
     let mut module = None;
     let mut seen = BTreeSet::new();
     for clause in &clauses[1..] {
@@ -487,6 +491,25 @@ pub(super) fn birth_at(
             {
                 declared = Some(pair_members(&name, source, clause[4].text)?);
             }
+            "materialize_family" | "intrinsic_serial" => {
+                let constants = info::constants(concat!(
+                    include_str!("../../perry-abi/src/layouts.rs"),
+                    "\n",
+                    include_str!("../../perry-abi/src/intrinsic_serials.rs")
+                ))?;
+                let value = info::integer(&info::text(&clause[2..]), &constants)?;
+                if clause[0].text == "materialize_family" {
+                    materialize_family = Some(
+                        u8::try_from(value)
+                            .map_err(|_| "materialize family must fit its descriptor byte")?,
+                    );
+                } else {
+                    if value == 0 {
+                        return Err("intrinsic serial must be nonzero".into());
+                    }
+                    intrinsic_serial = Some(value);
+                }
+            }
             "never_move" if clause.len() == 3 && clause[2].text == "true" => never_move = true,
             "native_namespace" | "module" if clause.len() == 3 && native => {
                 let literal = clause[2]
@@ -512,6 +535,8 @@ pub(super) fn birth_at(
                 }
             }
             "operation" => operation = Some(facts::path(&clause[2..])?),
+            "native_birth_owner" => native_birth_owner = Some(facts::path(&clause[2..])?),
+            "birth_domain" => birth_domain = Some(facts::birth_domain(&clause[2..])?),
             "births" if clause[2].text == "[" && clause.last().unwrap().text == "]" => {
                 for path in info::split(&clause[3..clause.len() - 1], ",") {
                     extra.push(facts::path(path)?);
@@ -629,6 +654,18 @@ pub(super) fn birth_at(
     let Value::Object(map) = &mut declaration else {
         unreachable!()
     };
+    if let Some(family) = materialize_family {
+        map.insert("materialize_family".into(), number(u64::from(family)));
+    }
+    if let Some(serial) = intrinsic_serial {
+        map.insert("intrinsic_serial".into(), number(serial));
+    }
+    if let Some(domain) = birth_domain {
+        map.insert("birth_domain".into(), string(domain));
+    }
+    if let Some(owner) = native_birth_owner {
+        map.insert("native_birth_owner".into(), string(owner));
+    }
     if let Some(operation) = operation {
         map.insert("operation".into(), string(operation));
     }
@@ -788,6 +825,38 @@ mod tests {
 
     use super::super::tokens;
     use super::*;
+    #[test]
+    fn realm_materialize_byte_and_intrinsic_serial_resolve_defining_abi_facts() {
+        let d = birth(
+            &tokens("js_object_alloc(0,0)").unwrap(),
+            &tokens("Example.prototype, materialize_family=perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial=perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_PROTOTYPE, members={}").unwrap(),
+        ).unwrap();
+        assert_eq!(
+            d.get("materialize_family"),
+            Some(&number(u64::from(perry_abi::REALM_FAMILY_ITERATORS)))
+        );
+        assert_eq!(
+            d.get("intrinsic_serial"),
+            Some(&number(
+                perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_PROTOTYPE
+            ))
+        );
+        for fact in [
+            "materialize_family=256",
+            "intrinsic_serial=0",
+            "intrinsic_serial=NOT_AN_ABI_CONSTANT",
+        ] {
+            assert!(
+                birth(
+                    &tokens("js_object_alloc(0,0)").unwrap(),
+                    &tokens(&format!("Example.prototype,{fact},members={{}}")).unwrap(),
+                )
+                .is_err(),
+                "{fact}"
+            );
+        }
+    }
+
     #[test]
     fn never_move_is_a_declared_header_fact_and_not_repeatable_from_derivation() {
         let d = birth(

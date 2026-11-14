@@ -104,6 +104,11 @@ pub(super) fn inherited_field_if_overridden(
     if crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(
         obj as usize,
     ) {
+        #[cfg(any(test, debug_assertions, perry_diagnostics))]
+        crate::realm_reads::check_structure_named_lookup_miss(
+            obj as usize,
+            crate::value::js_nanbox_string(key as i64).to_bits(),
+        );
         return InheritedRead::Hit(JSValue::undefined());
     }
     // #12029: a class evaluation owns its entire prototype surface. A miss

@@ -248,7 +248,7 @@ pub(crate) fn install_core_methods(prototype: *mut ObjectHeader) {
     install_method(prototype, "close", crate::fn_info!(#[realm(BroadcastChannel.prototype.close, constructible = true)] export crate::messaging::broadcast_operations::close, 0; with_declared(0)), 0);
     install_method(prototype, "ref", crate::fn_info!(#[realm(BroadcastChannel.prototype.ref, constructible = true)] export crate::messaging::broadcast_operations::ref_channel, 0; with_declared(0)), 0);
     install_method(prototype, "unref", crate::fn_info!(#[realm(BroadcastChannel.prototype.unref, constructible = true)] export crate::messaging::broadcast_operations::unref_channel, 0; with_declared(0)), 0);
-    let getter = closure_value(crate::fn_info!(name_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)), "get name", 0);
+    let getter = closure_value(crate::fn_info!(#[realm("BroadcastChannel.prototype.name.<get>")] export crate::messaging::broadcast_operations::name_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)), "get name", 0);
     object::install_fresh_accessor_property(
         prototype as usize,
         "name".to_string(),

@@ -148,8 +148,7 @@ unsafe fn cell_header_is_well_formed(header_addr: usize, end: usize) -> bool {
 /// the image-string check (`image::header`), this is a structural proof: an
 /// aligned word inside a cell whose bytes happen to form a well-formed header
 /// is not excluded. Exact cell starts are what [`for_each_cell`] walks.
-#[cold]
-#[inline(never)]
+#[inline(always)]
 pub(crate) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> {
     let (start, end) = bounds();
     let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
@@ -188,6 +187,21 @@ pub(crate) fn cells() -> Cells {
         at: (start + 7) & !7,
         end,
     }
+}
+
+/// A descriptor-owned contiguous run inside this executable's realm section.
+/// Callers use the program table's immutable run bounds.
+pub(crate) fn cells_in_run(start: usize, end: usize) -> Cells {
+    let (section_start, section_end) = bounds();
+    assert!(
+        start >= section_start
+            && start < end
+            && end <= section_end
+            && start & 7 == 0
+            && end & 7 == 0,
+        "realm run is outside its image section"
+    );
+    Cells { at: start, end }
 }
 
 impl Iterator for Cells {

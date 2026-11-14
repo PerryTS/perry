@@ -231,7 +231,7 @@ fn deferred_namespace_method_lookup_reads_before_call_arguments() {
     let ns = fixture();
     let scope = crate::gc::RuntimeHandleScope::new();
     let ns = scope.root_nanbox_f64(ns);
-    let key = unsafe { crate::string::js_string_from_bytes(b"value".as_ptr(), 5) };
+    let key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
     let id = crate::value::js_nanbox_string(key as i64).to_bits() as i64;
     assert_eq!(CALLS.load(Ordering::SeqCst), 0);
     // A non-callable value still has to be read now, not deferred to the
@@ -257,5 +257,19 @@ fn deferred_namespace_zero_argument_dispatch_performs_property_get() {
         )
     });
     assert!(result.is_err());
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn deferred_namespace_lookup_preserves_a_raw_number_receiver() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let ns = fixture();
+    let length = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let number = 12345.0f64.to_bits() as usize as *const ObjectHeader;
+    assert!(js_object_get_field_by_name(number, length).is_undefined());
+    assert_eq!(CALLS.load(Ordering::SeqCst), 0);
+    let value = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
+    let ptr = JSValue::from_bits(ns.to_bits()).as_pointer::<ObjectHeader>();
+    assert_eq!(js_object_get_field_by_name(ptr, value).as_number(), 42.0);
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
 }

@@ -1354,12 +1354,12 @@ fn poll_closure_value(
 fn build_fs_watcher_object(id: usize) -> f64 {
     let obj = crate::object::js_object_alloc(0, 8);
     let self_value = boxed_ptr(obj as *const u8);
-    let close = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherClose%", provider = closure, effects = { calls(islot(islot(callee, self), listeners), this = islot(callee, self), args = []); stores(fresh); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_close_impl, 0; with_declared(0));
-    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherRef%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_ref_impl, 0; with_declared(0));
-    let unref = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherUnref%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_unref_impl, 0; with_declared(0));
-    let on = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOn%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_on_impl, 2; with_declared(2));
-    let once = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOnce%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_once_impl, 2; with_declared(2));
-    let off = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOff%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_off_impl, 2; with_declared(2));
+    let close = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherClose%", provider = closure, birth_domain = instance, effects = { calls(islot(islot(callee, self), listeners), this = islot(callee, self), args = []); stores(fresh); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_close_impl, 0; with_declared(0));
+    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherRef%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_ref_impl, 0; with_declared(0));
+    let unref = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherUnref%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_unref_impl, 0; with_declared(0));
+    let on = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOn%", provider = closure, birth_domain = instance, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_on_impl, 2; with_declared(2));
+    let once = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOnce%", provider = closure, birth_domain = instance, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_once_impl, 2; with_declared(2));
+    let off = crate::fn_info!(#[realm(realm_decl! { "%FsWatcherOff%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::fs_watcher_off_impl, 2; with_declared(2));
     let fields: [(&[u8], _); 8] = [
         (b"close", close),
         (b"ref", ref_),
@@ -1379,11 +1379,11 @@ fn build_fs_watcher_object(id: usize) -> f64 {
 fn build_stat_watcher_object(id: usize) -> f64 {
     let obj = crate::object::js_object_alloc(0, 7);
     let self_value = boxed_ptr(obj as *const u8);
-    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherRef%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_ref_impl, 0; with_declared(0));
-    let unref = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherUnref%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_unref_impl, 0; with_declared(0));
-    let on = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOn%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_on_impl, 2; with_declared(2));
-    let once = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOnce%", provider = closure, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_once_impl, 2; with_declared(2));
-    let off = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOff%", provider = closure, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_off_impl, 2; with_declared(2));
+    let ref_ = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherRef%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_ref_impl, 0; with_declared(0));
+    let unref = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherUnref%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_unref_impl, 0; with_declared(0));
+    let on = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOn%", provider = closure, birth_domain = instance, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_on_impl, 2; with_declared(2));
+    let once = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOnce%", provider = closure, birth_domain = instance, effects = { stores(arg(1) -> islot(islot(callee, self), listeners)); returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_once_impl, 2; with_declared(2));
+    let off = crate::fn_info!(#[realm(realm_decl! { "%StatWatcherOff%", provider = closure, birth_domain = instance, effects = { returns(islot(callee, self)) } })] export crate::fs::dir_glob_watch::watch::stat_watcher_off_impl, 2; with_declared(2));
     let fields: [(&[u8], _); 7] = [
         (b"ref", ref_),
         (b"unref", unref),

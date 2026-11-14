@@ -62,6 +62,8 @@ pub struct LlModule {
     functions: Vec<LlFunction>,
     defined_names: HashSet<String>,
     globals: Vec<String>,
+    /// Selected realm records are packed once before the entry is split.
+    pub(crate) realm_records: Option<Vec<crate::codegen::realm_image::run::Record>>,
     /// Globals whose same-named definitions own one linker COMDAT.
     comdat_globals: HashSet<String>,
     /// The definition of every coalesced global in this module, by name. A
@@ -186,6 +188,7 @@ impl LlModule {
             functions: Vec::new(),
             defined_names: HashSet::new(),
             globals: Vec::new(),
+            realm_records: None,
             comdat_globals: HashSet::new(),
             coalesced_definitions: HashMap::new(),
             string_constants: Vec::new(),
@@ -1653,62 +1656,27 @@ impl LlModule {
             })
             .collect();
         let replicate_globals = self.target_triple.contains("apple");
-        // An alias must name a definition in its own object, so its owner
-        // follows the aliasee. This applies to Mach-O too: LLVM emits hidden
-        // offset aliases as strong symbols even with linkonce_odr linkage;
-        // replicating them makes ld -r reject duplicate .fnname symbols.
-        // Other units declare the alias; the aliasee may still be replicated
-        // under Mach-O's dead-strip policy.
-        for gi in 0..all_globals.len() {
-            if let Some(aliasee) = alias_target(all_globals[gi]) {
-                if let Some(&ai) = global_index.get(aliasee) {
-                    global_owners[gi] = global_owners[ai];
-                }
-            }
-        }
-        // A function record (`crate::fn_record`) is tied to its body's own
-        // section, which exists only in the body's object: it is owned by the
-        // body's unit, and what it names (the body's info) is needed there.
-        let body_unit: HashMap<&str, usize> = bucket_names
-            .iter()
-            .enumerate()
-            .flat_map(|(bi, names)| names.iter().map(move |n| (n.as_str(), bi)))
-            .collect();
-        for gi in 0..all_globals.len() {
-            let Some(&bi) =
-                crate::fn_record::record_body(all_globals[gi]).and_then(|body| body_unit.get(body))
-            else {
-                continue;
-            };
-            global_owners[gi] = bi;
-            let mut work = vec![gi];
-            bucket_needs[bi].insert(gi);
-            while let Some(gj) = work.pop() {
-                for nm in &global_refs[gj] {
-                    if let Some(&next) = global_index.get(nm.as_str()) {
-                        if bucket_needs[bi].insert(next) {
+        assign_associated_global_owners(
+            &all_globals,
+            &global_index,
+            &bucket_names,
+            &mut global_owners,
+        );
+        // Every retained owner's initializer contributes dependencies, even
+        // when no function text references that global. Close after assigning
+        // owners so the unique-definition policy stays intact.
+        for (bi, needs) in bucket_needs.iter_mut().enumerate() {
+            let mut work: Vec<usize> = global_owners
+                .iter()
+                .enumerate()
+                .filter_map(|(gi, &owner)| (owner == bi && needs.insert(gi)).then_some(gi))
+                .collect();
+            while let Some(gi) = work.pop() {
+                for name in &global_refs[gi] {
+                    if let Some(&next) = global_index.get(name.as_str()) {
+                        if needs.insert(next) {
                             work.push(next);
                         }
-                    }
-                }
-            }
-        }
-        // #10152: otherwise-unreferenced globals are retained in unit 0, but
-        // their initializers were absent from the function-rooted closure
-        // above. An orphaned string dispatch descriptor can still name bytes
-        // owned by another unit. Close those retained roots too, AFTER choosing
-        // owners so ELF/COFF keep existing definitions and only add declares;
-        // Mach-O's replication counts below include the added dependencies.
-        let mut work: Vec<usize> = global_owners
-            .iter()
-            .enumerate()
-            .filter_map(|(gi, &owner)| (owner == 0 && bucket_needs[0].insert(gi)).then_some(gi))
-            .collect();
-        while let Some(gi) = work.pop() {
-            for nm in &global_refs[gi] {
-                if let Some(&next) = global_index.get(nm.as_str()) {
-                    if bucket_needs[0].insert(next) {
-                        work.push(next);
                     }
                 }
             }
@@ -1770,6 +1738,13 @@ impl LlModule {
 
             let mut unit_records: Vec<&str> = Vec::new();
             for (gi, def) in all_globals.iter().enumerate() {
+                // Named type declarations are module syntax; every unit that
+                // uses an instance must see its complete definition.
+                if def.starts_with('%') && def.contains(" = type ") {
+                    pre.push_str(def);
+                    pre.push('\n');
+                    continue;
+                }
                 let referenced = bucket_needs[bi].contains(&gi);
                 // Unreferenced globals (anchors, `llvm.*`, appending lists)
                 // keep a home in unit 0 so nothing is lost.

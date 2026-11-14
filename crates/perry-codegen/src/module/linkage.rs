@@ -3,7 +3,7 @@
 //! single-unit globals gained their own linkage so zero-init caches stay
 //! in `__bss`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::function::LlFunction;
 
@@ -311,6 +311,15 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     }
 }
 
+/// An associated record must be defined with its linked-to owner. Merely
+/// declaring that owner lets LLVM replace a metadata-only reference by null.
+pub(crate) fn association_target(line: &str) -> Option<&str> {
+    let (_, tail) = line.split_once("!associated !{ptr ")?;
+    let (target, _) = tail.split_once('}')?;
+    let target = target.trim();
+    target.starts_with('@').then_some(target)
+}
+
 /// The aliasee symbol (`@name`) of an alias definition
 /// (`@a = [linkage] ... alias TY, <constant naming @aliasee>`), or `None`
 /// when `line` is not an alias.
@@ -329,6 +338,49 @@ pub(crate) fn alias_target(line: &str) -> Option<&str> {
         .find(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '-')))
         .map_or(tail.len(), |i| i + 1);
     Some(&tail[..end])
+}
+
+/// Aliases and definitions share LLVM's complete aggregate type prefix.
+fn llvm_type_end(rest: &str, alias: bool) -> Option<usize> {
+    if rest.is_empty() {
+        return None;
+    }
+    let (mut square, mut curly, mut angle, mut paren) = (0i32, 0i32, 0i32, 0i32);
+    let (mut quoted, mut escaped) = (false, false);
+    for (i, byte) in rest.bytes().enumerate() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+            continue;
+        }
+        if square == 0
+            && curly == 0
+            && angle == 0
+            && paren == 0
+            && (byte == b',' || (!alias && byte.is_ascii_whitespace()))
+        {
+            return Some(i);
+        }
+        match byte {
+            b'"' => quoted = true,
+            b'[' => square += 1,
+            b']' => square -= 1,
+            b'{' => curly += 1,
+            b'}' => curly -= 1,
+            b'<' => angle += 1,
+            b'>' => angle -= 1,
+            b'(' => paren += 1,
+            b')' => paren -= 1,
+            _ => {}
+        }
+    }
+    (!alias && !quoted && square == 0 && curly == 0 && angle == 0 && paren == 0)
+        .then_some(rest.len())
 }
 
 pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
@@ -360,7 +412,7 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
     // An alias is declared, in a unit that does not define it, as an
     // external global of its value type: object files see only a symbol.
     if let Some(rest) = rhs.strip_prefix("alias ") {
-        let ty = rest.split_once(',')?.0.trim();
+        let ty = &rest[..llvm_type_end(rest, true)?];
         let prefix: String = [preemption, visibility, tls]
             .iter()
             .filter(|keyword| !keyword.is_empty())
@@ -376,29 +428,7 @@ pub(crate) fn external_decl_for_global(line: &str) -> Option<String> {
         return None;
     };
     let rest = rest.trim_start();
-    let ty_end = match rest.as_bytes().first().copied() {
-        Some(b'[') | Some(b'{') | Some(b'<') => {
-            let (mut square, mut curly, mut angle) = (0i32, 0i32, 0i32);
-            let mut end = None;
-            for (i, b) in rest.bytes().enumerate() {
-                match b {
-                    b'[' => square += 1,
-                    b']' => square -= 1,
-                    b'{' => curly += 1,
-                    b'}' => curly -= 1,
-                    b'<' => angle += 1,
-                    b'>' => angle -= 1,
-                    _ => {}
-                }
-                if square == 0 && curly == 0 && angle == 0 {
-                    end = Some(i + 1);
-                    break;
-                }
-            }
-            end?
-        }
-        _ => rest.find(char::is_whitespace).unwrap_or(rest.len()),
-    };
+    let ty_end = llvm_type_end(rest, false)?;
     let prefix: String = [preemption, visibility, tls, initialized]
         .iter()
         .filter(|keyword| !keyword.is_empty())
@@ -689,4 +719,56 @@ pub(crate) fn force_external_linkage(f: &LlFunction, ir: String) -> String {
         );
     }
     ir
+}
+
+/// Co-locate associated data and aliases with the definition they name.
+pub(crate) fn assign_associated_global_owners(
+    all_globals: &[&String],
+    global_index: &HashMap<&str, usize>,
+    bucket_names: &[Vec<String>],
+    global_owners: &mut [usize],
+) {
+    // ELF associations name a definition in the same object. This is a
+    // property of every associated record, including descriptor-owned
+    // lists and the realm run, not just function records.
+    let body_unit: HashMap<&str, usize> = bucket_names
+        .iter()
+        .enumerate()
+        .flat_map(|(bi, names)| names.iter().map(move |n| (n.as_str(), bi)))
+        .collect();
+    for round in 0..=all_globals.len() {
+        let mut changed = false;
+        for gi in 0..all_globals.len() {
+            let target =
+                association_target(all_globals[gi]).or_else(|| alias_target(all_globals[gi]));
+            let owner = target
+                .and_then(|target| {
+                    global_index
+                        .get(target)
+                        .map(|&index| global_owners[index])
+                        .or_else(|| {
+                            body_unit
+                                .get(target.trim_start_matches('@').trim_matches('"'))
+                                .copied()
+                        })
+                })
+                .or_else(|| {
+                    crate::fn_record::record_body(all_globals[gi])
+                        .and_then(|body| body_unit.get(body).copied())
+                });
+            if let Some(owner) = owner {
+                if global_owners[gi] != owner {
+                    global_owners[gi] = owner;
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+        assert!(
+            round < all_globals.len(),
+            "cyclic global ownership constraints"
+        );
+    }
 }

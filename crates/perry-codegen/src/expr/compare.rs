@@ -79,21 +79,13 @@ fn typeof_literal_pair<'a>(
     }
 }
 
-/// True only when compiler-owned initializer provenance establishes that this
-/// expression currently contains a Symbol identity.
-///
-/// This deliberately does not consult an erased TypeScript `symbol`
-/// annotation: `const s: symbol = value as any` is legal source and may hold a
-/// moving object at runtime. Fresh `Symbol()` values use system `gc_malloc`
-/// storage (reclaimable but non-moving), while `Symbol.for()` values are
-/// process-lifetime `Box` allocations. Therefore a proven Symbol can equal
-/// another JS value iff their NaN-boxed pointer bits are identical.
-/// A declared class named as a value (`Expr::ClassRef`): its pinned function
-/// object (`js_class_value`).
+/// A declared class named as a value has its pinned function object.
 fn is_class_value_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     matches!(expr, Expr::ClassRef(name) if ctx.class_ids.contains_key(name))
 }
 
+/// Initializer provenance proves the Symbol brand, independently of erased
+/// annotations. Its header identity can be shared by runtime and image cells.
 pub(crate) fn is_proven_symbol_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
         Expr::SymbolNew(_) | Expr::SymbolFor(_) => true,
@@ -1431,24 +1423,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     return Ok(blk.bitcast_i64_to_double(&tagged));
                 }
-                // Symbol identity is raw pointer identity when at least one
-                // operand is proven from a Symbol constructor. Unlike arrays,
-                // Symbols never relocate through grow forwarding, and unlike
-                // GC-arena objects their system allocation is never evacuated.
-                // Thus different bits are decisively unequal without entering
-                // `js_eq`'s tracked-GC forwarding classifier. This is the hot
-                // sentinel shape `value === MISSING_COMPONENT` in codehz/ecs.
-                // STRICT only: loose equality still has coercion/throw rules.
+                // Source provenance proves a Symbol, whose identity is the
+                // header id even when an image and a runtime cell differ.
+                // Loose equality retains its coercion and throwing rules.
                 let either_proven_symbol =
                     is_proven_symbol_expr(ctx, left) || is_proven_symbol_expr(ctx, right);
+                if either_proven_symbol && matches!(op, CompareOp::Eq | CompareOp::Ne) {
+                    // Equal bits prove identity without classifying either
+                    // address. Only distinct representations need the shared
+                    // symbol-header identity rule.
+                    let l_bits = ctx.block().bitcast_double_to_i64(&l);
+                    let r_bits = ctx.block().bitcast_double_to_i64(&r);
+                    let same = ctx.block().icmp_eq(I64, &l_bits, &r_bits);
+                    let same_pred = ctx.block().label.clone();
+                    let distinct_idx = ctx.new_block("symbol.distinct");
+                    let merge_idx = ctx.new_block("symbol.merge");
+                    let distinct_label = ctx.block_label(distinct_idx);
+                    let merge_label = ctx.block_label(merge_idx);
+                    ctx.block().cond_br(&same, &merge_label, &distinct_label);
+                    ctx.current_block = distinct_idx;
+                    let header_equal =
+                        ctx.block()
+                            .call(I32, "js_symbol_equals", &[(DOUBLE, &l), (DOUBLE, &r)]);
+                    let distinct_pred = ctx.block().label.clone();
+                    ctx.block().br(&merge_label);
+                    ctx.current_block = merge_idx;
+                    let blk = ctx.block();
+                    let equal = blk.phi(I32, &[("1", &same_pred), (&header_equal, &distinct_pred)]);
+                    let bit = if matches!(op, CompareOp::Ne) {
+                        blk.icmp_eq(I32, &equal, "0")
+                    } else {
+                        blk.icmp_ne(I32, &equal, "0")
+                    };
+                    let tagged = blk.select(
+                        I1,
+                        &bit,
+                        I64,
+                        crate::nanbox::TAG_TRUE_I64,
+                        crate::nanbox::TAG_FALSE_I64,
+                    );
+                    return Ok(blk.bitcast_i64_to_double(&tagged));
+                }
                 // A class value is its class's pinned function object — one
                 // per class, never moved or forwarded — so strict identity
                 // against one is bit identity too.
                 let either_class_value =
                     is_class_value_expr(ctx, left) || is_class_value_expr(ctx, right);
-                if (either_proven_symbol || either_class_value)
-                    && matches!(op, CompareOp::Eq | CompareOp::Ne)
-                {
+                if either_class_value && matches!(op, CompareOp::Eq | CompareOp::Ne) {
                     let blk = ctx.block();
                     let l_bits = blk.bitcast_double_to_i64(&l);
                     let r_bits = blk.bitcast_double_to_i64(&r);

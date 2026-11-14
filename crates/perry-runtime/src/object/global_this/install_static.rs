@@ -447,17 +447,17 @@ pub(crate) fn install_builtin_constructor_statics(
             }
             s.method(
                 "captureStackTrace",
-                crate::fn_info!(#[realm(Error.captureStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Error.captureStackTrace)] export crate::object::global_this::builtin_thunks::global_this_error_capture_stack_trace_thunk, 2; with_declared(2)),
                 2,
             );
             s.method(
                 "isError",
-                crate::fn_info!(#[realm(Error.isError, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(Error.isError)] export crate::object::global_this::builtin_thunks::global_this_error_is_error_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "prepareStackTrace",
-                crate::fn_info!(#[realm(Error.prepareStackTrace, constructible = true)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Error.prepareStackTrace)] export crate::object::global_this::builtin_thunks::global_this_error_prepare_stack_trace_thunk, 2; with_declared(2)),
                 2,
             );
             s.data(
@@ -766,7 +766,7 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "json",
-                crate::fn_info!(#[realm(Response.json, spec = {length = 1}, emit = metadata(realm_response_json_metadata))] export crate::object::global_this::fetch_globals::global_this_response_json_thunk, 2; with_declared(2)),
+                crate::fn_info!(#[realm(Response.json, births = [RangeError, TypeError], spec = {length = 1}, emit = metadata(realm_response_json_metadata))] export crate::object::global_this::fetch_globals::global_this_response_json_thunk, 2; with_declared(2)),
                 realm_response_json_metadata!(length),
             );
             s.method(

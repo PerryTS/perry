@@ -308,7 +308,9 @@ unsafe fn key_word_hash(bits: u64) -> Option<u64> {
         return Some(crate::string::property_atom_hash(s));
     }
     if crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 {
-        return Some((*((bits & POINTER_MASK) as *const crate::symbol::SymbolHeader)).id);
+        return Some(crate::symbol::identity_hash(
+            (bits & POINTER_MASK) as *const crate::symbol::SymbolHeader,
+        ));
     }
     None
 }
@@ -623,7 +625,7 @@ unsafe fn bucket_matches(
     } else {
         *list.add(p as usize)
     };
-    if w == key_bits || (pos & TEXT_ENTRY != 0 && text_entry_matches(w, key_bits)) {
+    if computed::key_eq(w, key_bits) || (pos & TEXT_ENTRY != 0 && text_entry_matches(w, key_bits)) {
         Some(p)
     } else {
         None
@@ -682,7 +684,7 @@ unsafe fn own_entry(r: *mut ShapeRecord, key_bits: u64, hash: u64) -> Result<(u3
         let words = crate::array::array_elements_ptr((*r).keys as usize as *const _) as *const u64;
         let mut i = 0;
         while i < count {
-            if *words.add(i as usize) == key_bits {
+            if computed::key_eq(*words.add(i as usize), key_bits) {
                 return Ok((i, NO_PAIR));
             }
             i += 1;
@@ -1032,7 +1034,7 @@ unsafe fn probe_get_at<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bo
     let bound = (*r).position_bound_raw();
     let mut pos = 0u32;
     loop {
-        if *words.add(pos as usize) == key_bits {
+        if computed::key_eq(*words.add(pos as usize), key_bits) {
             break;
         }
         pos += 1;
@@ -2132,7 +2134,7 @@ pub(crate) unsafe fn symbol_store(obj_bits: u64, sym_bits: u64, value: f64) -> b
             symbol as usize,
         );
     }
-    let hash = (*symbol).id;
+    let hash = crate::symbol::identity_hash(symbol);
     let dir = super::ordinary_dir_addr();
     match set_plan(dir, obj_bits, sym_bits, hash, value) {
         SetPlan::Stored(stored) => stored != 0,
@@ -2153,6 +2155,7 @@ pub(crate) use write::{function_link_admits_add, function_put_plan, FunctionPut}
 #[path = "layout_probe/computed.rs"]
 mod computed;
 use computed::computed_key;
+pub(crate) use computed::key_eq;
 pub use computed::perry_probe_get_keyed;
 pub use computed::perry_probe_get_value;
 pub(crate) use computed::probe_set_keyed;

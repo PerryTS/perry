@@ -134,6 +134,7 @@ pub extern "C" fn js_array_buffer_new_with_options(
     size_value: f64,
     options: f64,
 ) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_array_buffer_new_with_options, births = [RangeError, TypeError] }
     buffer_new_with_options(size_value, options, false)
 }
 
@@ -143,6 +144,7 @@ pub extern "C" fn js_shared_array_buffer_new_with_options(
     size_value: f64,
     options: f64,
 ) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_shared_array_buffer_new_with_options, births = [RangeError, TypeError] }
     buffer_new_with_options(size_value, options, true)
 }
 

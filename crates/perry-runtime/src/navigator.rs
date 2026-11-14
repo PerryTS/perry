@@ -147,7 +147,7 @@ pub(crate) fn navigator_object_with_constructor(constructor: f64) -> f64 {
     // The R node `navigator` is the global key as well as this object, and
     // the key's value is the accessor `navigator.<get>` (born with the key
     // when the realm is populated), so reaching the key births the getter.
-    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 3); realm { navigator, kind = namespace, extends = Navigator.prototype, members = { }, births = ["navigator.<get>"]; } };
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, 3); realm { navigator, kind = namespace, birth_domain = instance, extends = Navigator.prototype, members = { }, births = ["navigator.<get>"]; } };
     let obj = scope.root_raw_mut_ptr(obj);
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
         (*obj).class_id = NAVIGATOR_CLASS_ID;
@@ -276,7 +276,7 @@ extern "C" fn get_locks(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this.as_f64());
-    let locks = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { navigator.locks, kind = namespace, members = { }; } };
+    let locks = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { navigator.locks, kind = namespace, birth_domain = instance, members = { }; } };
     let locks = js_nanbox_pointer(locks as i64);
     crate::object::intrinsic_private_set(receiver.get_nanbox_f64(), LOCKS, locks);
     locks

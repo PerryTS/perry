@@ -48,17 +48,17 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     let receiver = scope.root_nanbox_f64(receiver);
     let mut output = [0u8; 8];
     let mut length = 0;
-    for (name, byte) in [
-        (b"hasIndices".as_slice(), b'd'),
-        (b"global", b'g'),
-        (b"ignoreCase", b'i'),
-        (b"multiline", b'm'),
-        (b"dotAll", b's'),
-        (b"unicode", b'u'),
-        (b"unicodeSets", b'v'),
-        (b"sticky", b'y'),
+    for (present, byte) in [
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"hasIndices")?), b'd'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"global")?), b'g'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"ignoreCase")?), b'i'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"multiline")?), b'm'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"dotAll")?), b's'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"unicode")?), b'u'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"unicodeSets")?), b'v'),
+        (crate::value::js_is_truthy(dispatch::get(&receiver, b"sticky")?), b'y'),
     ] {
-        if crate::value::js_is_truthy(dispatch::get(&receiver, name)?) != 0 {
+        if present != 0 {
             output[length] = byte;
             length += 1;
         }

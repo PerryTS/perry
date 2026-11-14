@@ -479,6 +479,19 @@ pub(super) fn compile_module_entry(
             }
             None => Vec::new(),
         };
+        // The program table carries these addresses as data. Global and family
+        // observations enter their existing runtime materialize points.
+        let realm_cell_fixups = match realm_reach {
+            Some(reach) => {
+                let image =
+                    crate::codegen::realm_image::plan::ImagePlan::new(reach, &llmod.target_triple)
+                        .map_err(|error| anyhow::anyhow!("realm plan: {error}"))?;
+                image
+                    .emit(llmod, &crate::layout_ordinals::current_plan())
+                    .map_err(|error| anyhow::anyhow!("realm cells: {error}"))?
+            }
+            None => Vec::new(),
+        };
         let entry_name = if is_dylib {
             "perry_module_init".to_string()
         } else {
@@ -540,6 +553,7 @@ pub(super) fn compile_module_entry(
             // Apple pointer tags the emitted key lists cannot carry statically,
             // stored before the first birth can read a list.
             crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            crate::codegen::realm_image::emit_tag_fixups(blk, &realm_cell_fixups);
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",

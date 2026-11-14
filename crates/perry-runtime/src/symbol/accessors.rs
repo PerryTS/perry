@@ -49,7 +49,7 @@ const SYMBOL_ACCESSOR_ID_WORDS: usize = 4;
 /// `sym_key_from_f64` result, which has already checked the magic).
 #[inline]
 unsafe fn symbol_accessor_id_bit(sym_key: usize) -> (usize, u64) {
-    let id = (*(sym_key as *const crate::symbol::SymbolHeader)).id;
+    let id = super::identity_hash(sym_key as *const crate::symbol::SymbolHeader);
     let bit = (id % (SYMBOL_ACCESSOR_ID_WORDS as u64 * 64)) as usize;
     (bit / 64, 1u64 << (bit % 64))
 }

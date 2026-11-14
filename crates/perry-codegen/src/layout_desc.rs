@@ -30,7 +30,7 @@ use crate::strings::StringPool;
 /// methods, identity, pad, image keys, then the A1 precompute gc_header_word,
 /// the intrinsic family byte and 31 bytes of padding (128 bytes LP64; 112 bytes ILP32).
 pub const DESC_TY: &str =
-    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, i8, [31 x i8] }";
+    "{ i32, i16, i8, i8, i32, i32, i64, ptr, ptr, i32, i32, ptr, i32, i32, ptr, i32, i32, ptr, i64, i8, i8, [30 x i8] }";
 pub(crate) mod methods;
 /// `%PerryLayoutKey`: atom, slot, attrs, pad, off (16 bytes on LP64, 12 on ILP32).
 pub const KEY_TY: &str = "{ ptr, i32, i8, i8, i16 }";
@@ -50,9 +50,19 @@ pub(crate) fn desc_tail_for_family(
     slot_count: u32,
     realm_family: u8,
 ) -> String {
+    desc_tail_for_realm(triple, form, slot_count, realm_family, 0)
+}
+
+pub(crate) fn desc_tail_for_realm(
+    triple: &str,
+    form: crate::target_layout::HeaderForm,
+    slot_count: u32,
+    realm_family: u8,
+    realm_rank: u8,
+) -> String {
     use crate::target_layout::layout_gc_header_word;
     format!(
-        "i64 {}, i8 {realm_family}, [31 x i8] zeroinitializer",
+        "i64 {}, i8 {realm_family}, i8 {realm_rank}, [30 x i8] zeroinitializer",
         layout_gc_header_word(triple, form, slot_count)
     )
 }
@@ -293,6 +303,27 @@ pub(crate) fn atom(
     emitted: &mut BTreeMap<String, String>,
     key: &str,
 ) -> Option<String> {
+    atom_record(llmod, strings, emitted, key, false)
+}
+
+/// Immutable lazy-row keys are observed through their descriptor, not the
+/// startup section walk. The record layout and string identity stay shared.
+pub(crate) fn realm_atom(
+    llmod: &mut LlModule,
+    strings: &mut StringPool,
+    emitted: &mut BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    atom_record(llmod, strings, emitted, key, true)
+}
+
+fn atom_record(
+    llmod: &mut LlModule,
+    strings: &mut StringPool,
+    emitted: &mut BTreeMap<String, String>,
+    key: &str,
+    realm_owned: bool,
+) -> Option<String> {
     let colour = COLOURS.with(|c| c.borrow().get(key).copied());
     if let Some(name) = emitted.get(key) {
         return Some(name.clone());
@@ -304,13 +335,27 @@ pub(crate) fn atom(
     }
     let image = crate::codegen::string_pool_image_pointer(entry);
     let spelling: String = key.bytes().map(|b| format!("{b:02x}")).collect();
-    let name = format!("perry_atom_{spelling}");
-    let sect = section(
-        &llmod.target_triple,
-        "perry_atoms",
-        "__DATA,__perry_atoms",
-        ".perryatm$m",
-    );
+    let prefix = if realm_owned {
+        "perry_realm_atom"
+    } else {
+        "perry_atom"
+    };
+    let name = format!("{prefix}_{spelling}");
+    let sect = if realm_owned {
+        section(
+            &llmod.target_triple,
+            "perry_realm_atoms",
+            "__DATA,__realm_atoms",
+            ".realmats$m",
+        )
+    } else {
+        section(
+            &llmod.target_triple,
+            "perry_atoms",
+            "__DATA,__perry_atoms",
+            ".perryatm$m",
+        )
+    };
     let atom_storage = atom_storage(&llmod.target_triple);
     llmod.add_coalesced_global(&name, format!(
         "@{name} = weak_odr {atom_storage} {ATOM_TY} {{ i64 {}, ptr {image}, i8 {}, [3 x i8] [i8 {}, i8 0, i8 0], i32 {} }}, section \"{sect}\", align 8",

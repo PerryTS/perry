@@ -337,6 +337,10 @@ pub(super) unsafe fn computed_key(key_bits: u64) -> Option<(u64, u64)> {
             if index_like(text) {
                 return None;
             }
+            // A reflected image key need not be the atom a runtime site
+            // registered. Resolve its canonical word just like plain text.
+            let atom = crate::string::atom_lookup(text, h)?;
+            return crate::string::is_property_atom(atom).then_some((STRING_TAG | atom as u64, h));
         }
         return Some((key_bits, h));
     }
@@ -404,4 +408,15 @@ pub(crate) unsafe fn probe_set_keyed(
         return false;
     };
     perry_probe_set(dir, obj_bits, key, hash, value) != 0
+}
+
+/// A probe key is a property atom or a symbol. Atoms compare by their
+/// canonical word; symbol cells compare by the identity in their header.
+/// Native and image cells can carry the same identity at different addresses.
+#[inline(always)]
+pub(crate) unsafe fn key_eq(left: u64, right: u64) -> bool {
+    left == right
+        || (right & TAG_MASK == POINTER_TAG
+            && left & TAG_MASK == POINTER_TAG
+            && crate::symbol::js_symbol_equals(f64::from_bits(left), f64::from_bits(right)) != 0)
 }

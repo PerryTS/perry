@@ -379,6 +379,7 @@ pub(crate) extern "C" fn native_noop0(
 /// Source-owned realm facts; an owned body-info item passes through unchanged.
 #[macro_export]
 macro_rules! realm_decl {
+    (capture_write $write:expr; realm { $($facts:tt)* }) => { $write };
     (@native_compare $property:expr; $key:literal) => { $property == $key };
     (@native_compare $property:expr; $first:literal | $($key:literal)|+) => { matches!($property, $first | $($key)|+) };
     (native_nonconstructors($module:expr, $property:expr); $($($owner:literal)|+ => [$($key:literal)|+]),* $(,)?) => { match $module { $($($owner)|+ => $crate::realm_decl!(@native_compare $property; $($key)|+),)* _ => false, } }; (info $info:item realm { $($facts:tt)* }) => { $info }; (info_expr $info:expr; realm { $($facts:tt)* }) => { $info }; (native_key $key:literal; realm { $($facts:tt)* }) => { $key }; (module_provider $provider:item realm { $($facts:tt)* }) => { $provider }; (record $builder:ident, $layout:ident; realm { $($facts:tt)* }) => { $crate::object::runtime_layouts::runtime_record!($builder, $layout); }; (birth $birth:expr; realm { $($facts:tt)* }) => { $birth }; (object $name:literal, $object:ident; $($members:tt)*) => { $crate::realm_native_object!($object; $($members)*); }; ($($facts:tt)*) => {};

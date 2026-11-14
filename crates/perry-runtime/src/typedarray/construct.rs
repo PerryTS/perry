@@ -11,6 +11,7 @@ use crate::array::ArrayHeader;
 /// Allocate a typed array of `length` elements, all zero.
 #[no_mangle]
 pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut TypedArrayHeader {
+    crate::realm_decl! { operation js_typed_array_new_empty, births = [RangeError, TypeError] }
     let len = typed_array_length_or_throw(length as f64);
     typed_array_alloc(kind as u8, len)
 }
@@ -26,6 +27,7 @@ pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut Typed
 /// constructor argument is a length or a source array.
 #[no_mangle]
 pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHeader {
+    crate::realm_decl! { operation js_typed_array_new, births = [RangeError, TypeError] }
     let bits = val.to_bits();
     let top16 = (bits >> 48) as u16;
     // `new TA(arg)` with a non-object arg performs ToIndex(arg) = ToNumber(arg)
@@ -430,6 +432,7 @@ pub extern "C" fn js_typed_array_new_from_array(
     kind: i32,
     arr: *const ArrayHeader,
 ) -> *mut TypedArrayHeader {
+    crate::realm_decl! { operation js_typed_array_new_from_array, births = [RangeError, TypeError] }
     let kind = kind as u8;
     // Strip NaN-box from the array pointer if needed.
     let arr = {

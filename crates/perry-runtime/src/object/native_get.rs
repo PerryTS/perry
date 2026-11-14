@@ -94,8 +94,16 @@ pub(crate) unsafe fn try_settled_get_by_name(
     match try_data_lookup_key(receiver, key_bits, bytes) {
         Some(Some(value)) => Some(value),
         Some(None) => {
-            shapes::plain_receiver_miss_is_final(receiver.as_pointer::<ObjectHeader>(), bytes)
-                .then(JSValue::undefined)
+            shapes::plain_receiver_miss_is_final(receiver.as_pointer::<ObjectHeader>(), bytes).then(
+                || {
+                    #[cfg(any(test, debug_assertions, perry_diagnostics))]
+                    crate::realm_reads::check_structure_named_text_miss(
+                        receiver.as_pointer::<ObjectHeader>() as usize,
+                        bytes,
+                    );
+                    JSValue::undefined()
+                },
+            )
         }
         // The data walk declines at a declared class's prototype hop: an
         // instance of one is settled by its class chain's shapes instead.

@@ -634,10 +634,13 @@ pub(crate) unsafe fn bag_own_key_names(ptr: usize) -> Vec<String> {
 pub(crate) unsafe fn bag_own_key_names_bytes(ptr: usize) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let bag = bag_of(ptr);
-    if bag.is_null() {
+    let declared = crate::object::unborn_declared_statics_of(ptr);
+    if bag.is_null()
+        || (!declared.is_empty() && crate::object::layout_desc::pending_cell(ptr).is_some())
+    {
         // An unborn lazy constructor's declared statics follow its intrinsic
-        // slots; listing them births nothing.
-        for key in crate::object::unborn_declared_statics_of(ptr) {
+        // slots; listing them births nothing, including an image-held bag.
+        for key in declared {
             out.push(key.as_bytes().to_vec());
         }
         return out;

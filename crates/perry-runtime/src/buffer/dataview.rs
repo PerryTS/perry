@@ -498,6 +498,7 @@ pub extern "C" fn js_data_view_get_direct(
     kind_code: i32,
     argc: i32,
 ) -> f64 {
+    crate::realm_decl! { operation js_data_view_get_direct, births = [RangeError, TypeError] }
     let Some(kind) = DataViewKind::from_code(kind_code) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
@@ -522,6 +523,7 @@ pub extern "C" fn js_data_view_set_direct(
     kind_code: i32,
     argc: i32,
 ) -> f64 {
+    crate::realm_decl! { operation js_data_view_set_direct, births = [RangeError, TypeError] }
     let Some(kind) = DataViewKind::from_code(kind_code) else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };

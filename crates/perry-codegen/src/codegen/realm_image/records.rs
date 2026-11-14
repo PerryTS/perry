@@ -71,10 +71,20 @@ fn emit_word_record(module: &mut LlModule, name: &str, kind: u8, words: &[Slot])
     }
     let payload = types.join(", ");
     let size = GC_HEADER_SIZE + words.len() as u64 * 8;
-    module.add_raw_global(format!(
-        "@{name} = internal global {{ i8, i8, i16, i32, {{ {payload} }} }} {{ i8 {kind}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, {{ {payload} }} {{ {} }} }}, section \"{}\", align 8",
-        values.join(", "), section(&module.target_triple)
-    ));
+    run::record(
+        module,
+        run::Record {
+            name: name.into(),
+            exported: false,
+            size,
+            ty: format!("{{ i8, i8, i16, i32, {{ {payload} }} }}"),
+            initializer: format!(
+            "{{ i8 {kind}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, {{ {payload} }} {{ {} }} }}",
+            values.join(", "),
+        ),
+        },
+        "",
+    );
     fixups
 }
 
@@ -94,15 +104,17 @@ pub(crate) fn emit_symbol_cell(
         ("", "")
     };
     let size = GC_HEADER_SIZE + std::mem::size_of::<perry_abi::SymbolHeader<u8>>() as u64;
-    module.add_raw_global(format!(
-        "@{name} = global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i64 }} {{ i8 {}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, i32 {}, i32 {}, ptr {}, {pad_init}i64 {} }}, section \"{}\", align 8",
-        perry_abi::GC_TYPE_SYMBOL,
-        perry_abi::SYMBOL_HEADER_MAGIC,
-        registered,
-        user_address(description),
-        crate::nanbox::i64_literal(id),
-        section(&module.target_triple)
-    ));
+    run::record(module, run::Record {
+        name: name.into(),
+        exported: true,
+        size,
+        ty: format!("{{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i64 }}"),
+        initializer: format!(
+            "{{ i8 {}, i8 {IMAGE_CELL_FLAGS}, i16 0, i32 {size}, i32 {}, i32 {}, ptr {}, {pad_init}i64 {} }}",
+            perry_abi::GC_TYPE_SYMBOL, perry_abi::SYMBOL_HEADER_MAGIC,
+            registered, user_address(description), crate::nanbox::i64_literal(id),
+        ),
+    }, "");
 }
 
 /// The ordinary four-word accessor pair, not a canonical/shared array.

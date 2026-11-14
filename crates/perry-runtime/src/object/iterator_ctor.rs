@@ -71,15 +71,17 @@ pub(crate) fn install_prototype_accessors(proto: *mut ObjectHeader) {
 /// property. Its getter answers `%Iterator%`, bound by [`bind_constructor`]
 /// once the global bootstrap creates it.
 fn install_constructor_accessor(proto: *mut ObjectHeader) {
+    crate::fn_info!(#[realm("%IteratorPrototype%.constructor.<get>", spec = {name = "get constructor"}, emit = metadata, provider = closure_alloc, capture = [undefined])] export crate::object::iterator_ctor::iterator_constructor_getter_thunk, 0; with_declared(0); bind iterator_accessor_info_0, iterator_accessor_metadata_0);
     let get = native_fn(
-        crate::fn_info!(iterator_constructor_getter_thunk, 0; with_declared(0)),
-        "get constructor",
+        iterator_accessor_info_0,
+        iterator_accessor_metadata_0!(name),
         0,
         Some(f64::from_bits(crate::value::TAG_UNDEFINED)),
     );
+    crate::fn_info!(#[realm("%IteratorPrototype%.constructor.<set>", spec = {name = "set constructor"}, emit = metadata, provider = closure_alloc)] export crate::object::iterator_ctor::iterator_constructor_setter_thunk, 1; with_declared(1); bind iterator_accessor_info_1, iterator_accessor_metadata_1);
     let set = native_fn(
-        crate::fn_info!(iterator_constructor_setter_thunk, 1; with_declared(1)),
-        "set constructor",
+        iterator_accessor_info_1,
+        iterator_accessor_metadata_1!(name),
         1,
         None,
     );
@@ -96,11 +98,18 @@ pub(crate) fn bind_constructor(proto: *mut ObjectHeader, ctor_value: f64) {
     };
     let getter = JSValue::from_bits(accessor.get);
     if getter.is_pointer() {
-        crate::closure::js_closure_set_capture_f64(
-            getter.as_pointer::<ClosureHeader>() as *mut _,
-            0,
-            ctor_value,
-        );
+        crate::realm_decl! {
+            capture_write crate::closure::js_closure_set_capture_f64(
+                getter.as_pointer::<ClosureHeader>() as *mut _,
+                0,
+                ctor_value,
+            );
+            realm {
+                holder = "%IteratorPrototype%.constructor.<get>",
+                index = 0,
+                value = ref(Iterator)
+            }
+        };
     }
 }
 
@@ -110,15 +119,17 @@ fn install_to_string_tag_accessor(proto: *mut ObjectHeader) {
     if proto.is_null() || sym.is_null() {
         return;
     }
+    crate::fn_info!(#[realm("%IteratorPrototype%[\"@@toStringTag\"].<get>", spec = {name = "get [Symbol.toStringTag]"}, emit = metadata, provider = closure_alloc)] export crate::object::iterator_ctor::iterator_to_string_tag_getter_thunk, 0; with_declared(0); bind iterator_accessor_info_2, iterator_accessor_metadata_2);
     let get = native_fn(
-        crate::fn_info!(iterator_to_string_tag_getter_thunk, 0; with_declared(0)),
-        "get [Symbol.toStringTag]",
+        iterator_accessor_info_2,
+        iterator_accessor_metadata_2!(name),
         0,
         None,
     );
+    crate::fn_info!(#[realm("%IteratorPrototype%[\"@@toStringTag\"].<set>", spec = {name = "set [Symbol.toStringTag]"}, emit = metadata, provider = closure_alloc)] export crate::object::iterator_ctor::iterator_to_string_tag_setter_thunk, 1; with_declared(1); bind iterator_accessor_info_3, iterator_accessor_metadata_3);
     let set = native_fn(
-        crate::fn_info!(iterator_to_string_tag_setter_thunk, 1; with_declared(1)),
-        "set [Symbol.toStringTag]",
+        iterator_accessor_info_3,
+        iterator_accessor_metadata_3!(name),
         1,
         None,
     );
@@ -156,7 +167,24 @@ extern "C" fn iterator_constructor_getter_thunk(
     closure: *const ClosureHeader,
     _this: JsThis,
 ) -> f64 {
-    crate::closure::js_closure_get_capture_f64(closure, 0)
+    crate::realm_value_read! {
+        "%IteratorPrototype%.constructor.<get>" => "Iterator";
+        {
+            let value = crate::closure::js_closure_get_capture_f64(closure, 0);
+            // Before Global birth this capture is intentionally undefined.
+            // Once Global exists, its bootstrap must have linked the root.
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            {
+                let value = JSValue::from_bits(value.to_bits());
+                crate::realm_reads::check_image_intrinsic_read(
+                    if value.is_pointer() { value.as_pointer::<ClosureHeader>() as usize } else { 0 },
+                    "Iterator",
+                    false,
+                );
+            }
+            value
+        }
+    }
 }
 
 extern "C" fn iterator_to_string_tag_getter_thunk(

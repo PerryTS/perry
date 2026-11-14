@@ -494,3 +494,90 @@ fn quoted_external_declarations_follow_their_users_into_every_unit() {
         );
     }
 }
+
+#[test]
+fn realm_associated_data_stays_with_its_defined_owner() {
+    let target = "x86_64-unknown-linux-gnu";
+    let mut module = LlModule::new(target);
+    module.add_raw_global("@owner = private constant i64 7".into());
+    module.add_raw_global("@realm_payload = global i64 0, section \"perry_realm\", align 8, !associated !{ptr @owner}".into());
+    module.add_raw_global("@realm_alias = alias i64, ptr @realm_payload".into());
+    module.declare_function("consume", VOID, &[PTR]);
+    let big = module
+        .define_function("big", VOID, vec![])
+        .create_block("entry");
+    for _ in 0..20 {
+        big.call_void("consume", &[(PTR, "null")]);
+    }
+    big.ret_void();
+    let small = module
+        .define_function("owner_user", VOID, vec![])
+        .create_block("entry");
+    small.call_void("consume", &[(PTR, "@owner")]);
+    small.ret_void();
+    let units = module.render_codegen_units(2);
+    assert_eq!(units.len(), 2);
+    assert!(!units[0].contains("@realm_payload = global"));
+    assert!(units[1].contains("@owner = hidden constant i64 7"));
+    assert!(units[1].contains("@realm_payload = global"));
+    assert!(units[1].contains("@realm_alias = alias"));
+    #[cfg(feature = "llvm-inprocess")]
+    for (index, unit) in units.iter().enumerate() {
+        let pieces = crate::inprocess::compile_ll_to_object_inprocess(
+            unit,
+            target,
+            &["-O2".into()],
+            &format!("realm_owner_{index}"),
+            false,
+        )
+        .unwrap();
+        assert!(pieces.iter().all(|piece| piece.starts_with(b"\x7fELF")));
+    }
+}
+
+#[test]
+fn realm_packed_aggregate_alias_and_named_type_survive_split_units() {
+    let target = "x86_64-unknown-linux-gnu";
+    let mut module = LlModule::new(target);
+    module.add_raw_global("%Payload = type <{ { i8, i64 }, [2 x i32] }>".into());
+    module.add_raw_global("@owner = private constant i64 7".into());
+    module.add_raw_global("@run = global %Payload <{ { i8, i64 } { i8 2, i64 8 }, [2 x i32] zeroinitializer }>, !associated !{ptr @owner}".into());
+    module.add_raw_global(
+        "@cell = internal alias { i8, i64 }, ptr getelementptr (%Payload, ptr @run, i32 0, i32 0)"
+            .into(),
+    );
+    module.declare_function("consume", VOID, &[PTR]);
+    let big = module
+        .define_function("big", VOID, vec![])
+        .create_block("entry");
+    for _ in 0..20 {
+        big.call_void("consume", &[(PTR, "@cell")]);
+    }
+    big.ret_void();
+    let small = module
+        .define_function("owner_user", VOID, vec![])
+        .create_block("entry");
+    small.call_void("consume", &[(PTR, "@owner")]);
+    small.call_void("consume", &[(PTR, "@cell")]);
+    small.ret_void();
+    let units = module.render_codegen_units(2);
+    assert_eq!(units.len(), 2);
+    for (_index, unit) in units.iter().enumerate() {
+        assert!(unit.contains("%Payload = type <{ { i8, i64 }, [2 x i32] }>"));
+        #[cfg(feature = "llvm-inprocess")]
+        {
+            let pieces = crate::inprocess::compile_ll_to_object_inprocess(
+                unit,
+                target,
+                &["-O2".into()],
+                &format!("realm_alias_{_index}"),
+                false,
+            )
+            .unwrap();
+            assert!(pieces.iter().all(|piece| piece.starts_with(b"\x7fELF")));
+        }
+    }
+    assert!(units
+        .iter()
+        .any(|unit| unit.contains("@cell = external hidden global { i8, i64 }")));
+}

@@ -548,7 +548,7 @@ fn global_agent_listener_value(is_https: bool, once: bool) -> f64 {
 }
 
 unsafe fn global_agent_prototype(is_https: bool, agent: *mut ObjectHeader) -> f64 {
-    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:http.globalAgent.<prototype>", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; "node:https.globalAgent.<prototype>", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; } };
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:http.globalAgent.<prototype>", native_birth_owner = "node:http.default", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; "node:https.globalAgent.<prototype>", native_birth_owner = "node:https.default", members = { keepSocketAlive; reuseSocket; getName; addRequest; destroy; on; once; }; } };
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     let attrs = super::PropertyAttrs::new(true, false, true);
     for (name, value) in [

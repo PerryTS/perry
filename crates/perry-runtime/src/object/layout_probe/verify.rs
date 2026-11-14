@@ -51,7 +51,11 @@ pub(crate) unsafe fn check(obj: usize, key_bits: u64) {
     }
     let (o, k, a) = HELD.replace((0, 0, 0));
     // A computed key is held as its canonical atom (`computed_key`).
-    if o != obj || o == 0 || (k != key_bits && computed_key(key_bits).map(|c| c.0) != Some(k)) {
+    if o != obj
+        || o == 0
+        || (!super::computed::key_eq(k, key_bits)
+            && !computed_key(key_bits).is_some_and(|c| super::computed::key_eq(c.0, k)))
+    {
         return;
     }
     let boxed = f64::from_bits(POINTER_TAG | obj as u64);
@@ -146,7 +150,7 @@ pub(crate) unsafe fn slot(obj_bits: u64, key_bits: u64, slot: u32) {
         (0..(*r).logical_key_count)
             .find(|&i| {
                 let w = *list.add(i as usize);
-                w == key_bits || text_entry_matches(w, key_bits)
+                super::computed::key_eq(w, key_bits) || text_entry_matches(w, key_bits)
             })
             .map(|pos| crate::object::key_attrs::key_storage_slot(keys, pos))
     };
@@ -220,7 +224,8 @@ unsafe fn chain(obj: *const ObjectHeader, key_bits: u64) -> String {
         let mut names = Vec::new();
         if !keys.is_null() {
             let words = crate::array::array_elements_ptr(keys) as *const u64;
-            let scan = (0..rr.logical_key_count as usize).position(|i| *words.add(i) == key_bits);
+            let scan = (0..rr.logical_key_count as usize)
+                .position(|i| super::computed::key_eq(*words.add(i), key_bits));
             let texts = (0..rr.logical_key_count as usize)
                 .filter(|&i| key_text(*words.add(i)) == key_text(key_bits))
                 .map(|i| (i, *words.add(i), key_word_hash(*words.add(i))))

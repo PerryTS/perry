@@ -30,14 +30,20 @@ use crate::types::{DOUBLE, I64, I8, VOID};
 
 pub(crate) mod arrays;
 pub(crate) mod atoms;
+mod emission;
+mod families;
 pub(crate) mod functions;
 pub(crate) mod header;
 #[cfg(test)]
 mod key_list_tests;
 pub(crate) mod layouts;
+mod metadata;
 pub(crate) mod objects;
+pub(crate) mod plan;
 pub(crate) mod properties;
 mod records;
+mod rows;
+pub(crate) mod run;
 pub(crate) mod sets;
 pub(crate) use records::{
     emit_accessor_pair, emit_metadata_cell, emit_metadata_with_expando, emit_symbol_cell,
@@ -219,7 +225,6 @@ pub(crate) fn emit_closure_cell_with_fields(
     cell: &ClosureCell<'_>,
 ) -> Vec<TagFixup> {
     let triple = llmod.target_triple.clone();
-    let linkage = if cell.exported { "" } else { "internal " };
     // Rust's source-derived export spelling can contain qualified paths and
     // ABI builder punctuation. LLVM identifiers quote those bytes verbatim.
     let info_symbol = llvm_identifier(cell.info_symbol);
@@ -250,18 +255,17 @@ pub(crate) fn emit_closure_cell_with_fields(
             });
         }
     }
-    llmod.add_raw_global(format!(
-        "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, ptr, ptr, {{ {} }} }} \
-         {{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 {}, i32 {}, ptr @{info_symbol}, ptr {props}, {{ {} }} {{ {} }} }}, \
-         section \"{}\", align 8",
-        types.join(", "),
-        cell.reserved,
-        count_and_flags as i32,
-        cell.shape as i32,
-        types.join(", "),
-        inits.join(", "),
-        section(&triple)
-    ));
+    run::record(llmod, run::Record {
+        name: name.into(),
+        exported: cell.exported,
+        size,
+        ty: format!("{{ i8, i8, i16, i32, i32, i32, ptr, ptr, {{ {} }} }}", types.join(", ")),
+        initializer: format!(
+            "{{ i8 {GC_TYPE_CLOSURE}, i8 {IMAGE_CELL_FLAGS}, i16 {}, i32 {size}, i32 {}, i32 {}, ptr @{info_symbol}, ptr {props}, {{ {} }} {{ {} }} }}",
+            cell.reserved, count_and_flags as i32, cell.shape as i32,
+            types.join(", "), inits.join(", "),
+        ),
+    }, "");
     fixups
 }
 
@@ -321,7 +325,6 @@ pub(crate) fn emit_object_cell_with_fields(
     name: &str,
     cell: &ObjectCell<'_>,
 ) -> Vec<TagFixup> {
-    let linkage = if cell.exported { "" } else { "internal " };
     let class_id = cell.class_id as i32;
     let layout_word = cell.layout_word;
     let reserved = cell.reserved;
@@ -359,16 +362,16 @@ pub(crate) fn emit_object_cell_with_fields(
         }
     }
     let gc_type_object = perry_abi::GC_TYPE_OBJECT;
-    llmod.add_raw_global(format!(
-        "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }} \
-         {{ i8 {gc_type_object}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}, \
-         section \"{}\", align 8",
-        types.join(", "),
-        layout_word as i32,
-        types.join(", "),
-        inits.join(", "),
-        section(&triple)
-    ));
+    run::record(llmod, run::Record {
+        name: name.into(),
+        exported: cell.exported,
+        size,
+        ty: format!("{{ i8, i8, i16, i32, i32, i32, {pad_ty}ptr, {{ {} }} }}", types.join(", ")),
+        initializer: format!(
+            "{{ i8 {gc_type_object}, i8 {IMAGE_CELL_FLAGS}, i16 {reserved}, i32 {size}, i32 {class_id}, i32 {}, {pad_init}ptr {meta}, {{ {} }} {{ {} }} }}",
+            layout_word as i32, types.join(", "), inits.join(", "),
+        ),
+    }, "");
     fixups
 }
 
@@ -573,7 +576,6 @@ pub(crate) fn emit_array_cell_with_fields(
     name: &str,
     cell: &ArrayCell<'_>,
 ) -> Vec<TagFixup> {
-    let linkage = if cell.exported { "" } else { "internal " };
     let flags = if cell.shared {
         KEY_LIST_FLAGS
     } else {
@@ -622,12 +624,16 @@ pub(crate) fn emit_array_cell_with_fields(
             });
         }
     }
-    llmod.add_raw_global(format!(
-        "@{name} = {linkage}global {{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }} \
-         {{ i8 {GC_TYPE_ARRAY}, i8 {flags}, i16 {reserved}, i32 {size}, i32 {length}, i32 {capacity}, ptr {named}, {pad_init}i32 {dense_prefix}, i32 0, {{ {} }} {{ {} }} }}, \
-         section \"{}\", align 8{associated}",
-        types.join(", "), types.join(", "), inits.join(", "), section(&triple)
-    ));
+    run::record(llmod, run::Record {
+        name: name.into(),
+        exported: cell.exported,
+        size,
+        ty: format!("{{ i8, i8, i16, i32, i32, i32, ptr, {pad_ty}i32, i32, {{ {} }} }}", types.join(", ")),
+        initializer: format!(
+            "{{ i8 {GC_TYPE_ARRAY}, i8 {flags}, i16 {reserved}, i32 {size}, i32 {length}, i32 {capacity}, ptr {named}, {pad_init}i32 {dense_prefix}, i32 0, {{ {} }} {{ {} }} }}",
+            types.join(", "), inits.join(", "),
+        ),
+    }, &associated);
     fixups
 }
 

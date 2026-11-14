@@ -74,7 +74,9 @@ pub(crate) fn function_prototype_ptr_materialized() -> usize {
         return proto as usize;
     }
     let _ = crate::object::js_get_global_this();
-    FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire) as usize
+    crate::realm_value_read! { "Function.prototype" => "Function.prototype";
+        crate::array::intrinsic_prototype_addr(crate::object::BuiltinConstructorIdentity::Function)
+    }
 }
 
 /// GC root for [`FUNCTION_PROTOTYPE_PTR`].
@@ -755,8 +757,8 @@ unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: LayoutWord)
         b"prototype",
     ) {
         None => PROTOTYPE_SLOT_ABSENT,
-        Some(index) if !crate::object::key_attrs::key_is_accessor_at(keys, index as u32) => {
-            let slot = crate::object::key_attrs::key_storage_slot(keys, index as u32);
+        Some(index) if !crate::object::key_attrs::key_is_accessor_at(keys, index) => {
+            let slot = crate::object::key_attrs::key_storage_slot(keys, index);
             if slot < descriptor.live_inline_slot_count {
                 slot
             } else {

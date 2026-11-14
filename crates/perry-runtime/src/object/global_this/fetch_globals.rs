@@ -124,6 +124,14 @@ pub extern "C" fn js_get_global_this() -> f64 {
     if TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC.with(|c| c.replace(false)) {
         let _ = crate::gc::gc_collect_minor();
     }
+    // Image presence is read only at the realm's existing cold materialize
+    // point. The immutable table adds no entry-time call or registration.
+    if crate::gc::image_cells::agent_uses_image() {
+        let table = unsafe { &*crate::object::class_image::agent_layout_image().program };
+        if !table.realm_global.is_null() {
+            return bind_thread_global_image(table);
+        }
+    }
     // First access on this thread — allocate our own global.
     // The birth joins population's no-move window (`populate_global_this_builtins`):
     // the static layout's record is one allocation that can cross an arena
@@ -133,7 +141,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     let _realm = crate::snap_census::realm_build();
     let bootstrap_window = crate::gc::GcSuppressScope::new();
     let new_ptr = unsafe {
-        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, operation = js_get_global_this, births = ["%Layout:ARRAY_PROTOTYPE_NAMED%"], never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, operation = js_get_global_this, births = ["%Layout:ARRAY_PROTOTYPE_NAMED%"], never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"); sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; Iterator = ref(Iterator); }; } }
     } as i64;
     // Born on its static layout: every builtin key is declared, and
     // population fills the declared slots (each starts undefined).
@@ -146,22 +154,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
             *fields.add(slot) = crate::value::TAG_UNDEFINED;
         }
     }
-    THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
-    // The thread-local cache stores the tagged JSValue, independently of
-    // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
-    // uses that encoding and every copying collection rewrites the cache too.
-    // Otherwise later js_get_global_this() calls could read the from-space
-    // object after its overflow fields were rekeyed to the moved copy.
-    crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
-    let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
-    crate::gc::js_gc_register_global_root(cache_slot as i64);
-    // Publish to the process-global GC-root slot so this thread's collector marks
-    // it (the unit-test harness runs tests sequentially, so the slot always holds
-    // the running thread's global). `GLOBAL_THIS_READY` is toggled around
-    // population so any concurrent reader spins until the field bag is complete.
-    GLOBAL_THIS_READY.store(false, Ordering::Release);
-    // GC_STORE_AUDIT(ROOT): GLOBAL_THIS_PTR is a mutable root visited by scan_object_cache_roots_mut.
-    crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
+    publish_thread_global(new_ptr);
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
     populate_global_this_builtins(new_ptr as *mut ObjectHeader);
@@ -1459,6 +1452,54 @@ mod dynamic_super_new_target_tests {
 
 #[cfg(any(test, debug_assertions, perry_diagnostics))]
 pub(crate) fn has_image_global() -> bool {
-    let addr = (THREAD_GLOBAL_THIS.with(|c| c.get()) & crate::value::POINTER_MASK) as usize;
-    crate::value::addr_class::realm::is_image_object(addr)
+    if !crate::gc::image_cells::agent_uses_image() {
+        return false;
+    }
+    // Checked reads cover pre-Global observations as well. This descriptor
+    // inspection exists only in checked builds; the production presence
+    // read remains at the cold realm materialize point.
+    let table = unsafe { &*crate::object::class_image::agent_layout_image().program };
+    !table.realm_global.is_null()
+}
+
+/// Both realm arms publish the same mutable roots before any observation.
+fn publish_thread_global(new_ptr: i64) {
+    THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
+    // The thread-local cache stores the tagged JSValue, independently of
+    // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
+    // uses that encoding and every copying collection rewrites the cache too.
+    // Otherwise later js_get_global_this() calls could read the from-space
+    // object after its overflow fields were rekeyed to the moved copy.
+    crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
+    let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
+    crate::gc::js_gc_register_global_root(cache_slot as i64);
+    // Publish to the process-global GC-root slot so this thread's collector marks
+    // it (the unit-test harness runs tests sequentially, so the slot always holds
+    // the running thread's global). `GLOBAL_THIS_READY` is toggled around
+    // population so any concurrent reader spins until the field bag is complete.
+    GLOBAL_THIS_READY.store(false, Ordering::Release);
+    // GC_STORE_AUDIT(ROOT): GLOBAL_THIS_PTR is a mutable root visited by scan_object_cache_roots_mut.
+    crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
+}
+
+/// The realm-level held arm, measured at the same cold materialize point as
+/// main's population. Its input is the program's immutable image descriptor.
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+fn bind_thread_global_image(table: &crate::codegen_abi::PerryProgramTableV1) -> f64 {
+    assert!(table.valid_span(crate::object::class_image::agent_layout_image()), "invalid lazy layout span");
+    assert!(table.valid_realm_run(), "invalid emitted realm run");
+    let global = table.realm_global as i64;
+    publish_thread_global(global);
+    crate::object::layout_desc::seed_image_run();
+    unsafe {
+        let word = (*(global as *mut ObjectHeader)).parent_class_id;
+        table
+            .touch_pending
+            .expect("image Global has no materialize delegate")(global as *mut u8, word);
+        super::image_global::birth_providers(global as *mut ObjectHeader);
+    }
+    GLOBAL_THIS_READY.store(true, Ordering::Release);
+    crate::value::js_nanbox_pointer(global)
 }

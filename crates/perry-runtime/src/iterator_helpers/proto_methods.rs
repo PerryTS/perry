@@ -46,57 +46,175 @@ const METHODS: [Method; 13] = [
     Method::Includes,
 ];
 
-macro_rules! method_thunks {
-    ($($method:ident => $thunk:ident),* $(,)?) => {
-        $(
-            unsafe extern "C" fn $thunk(
-                _closure: *const ClosureHeader,
-                this: JsThis,
-                args: *const f64,
-                len: usize,
-            ) -> f64 {
-                let args = if args.is_null() || len == 0 {
-                    &[][..]
-                } else {
-                    std::slice::from_raw_parts(args, len)
-                };
-                run_iterator_method(Method::$method, this.as_f64(), args)
-            }
-        )*
-
-        impl Method {
-            fn code(self) -> *const u8 {
-                match self {
-                    $(Method::$method => $thunk as *const u8,)*
-                }
-            }
-
-            fn info(self) -> *const crate::closure::JsFunctionInfo {
-                match self {
-                    $(Method::$method => crate::fn_info!(
-                        native_args $thunk, 1; with_flags(crate::closure::FN_BUILTIN)
-                    ),)*
-                }
-            }
-        }
+#[inline(always)]
+unsafe fn dispatch_native_method(
+    method: Method,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    let args = if args.is_null() || len == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(args, len)
     };
+    run_iterator_method(method, this.as_f64(), args)
 }
 
-method_thunks!(
-    Map => map_thunk,
-    Filter => filter_thunk,
-    Take => take_thunk,
-    Drop => drop_thunk,
-    FlatMap => flat_map_thunk,
-    Reduce => reduce_thunk,
-    ToArray => to_array_thunk,
-    ForEach => for_each_thunk,
-    Some => some_thunk,
-    Every => every_thunk,
-    Find => find_thunk,
-    Join => join_thunk,
-    Includes => includes_thunk,
-);
+unsafe extern "C" fn map_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Map, this, args, len)
+}
+
+unsafe extern "C" fn filter_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Filter, this, args, len)
+}
+
+unsafe extern "C" fn take_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Take, this, args, len)
+}
+
+unsafe extern "C" fn drop_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Drop, this, args, len)
+}
+
+unsafe extern "C" fn flat_map_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::FlatMap, this, args, len)
+}
+
+unsafe extern "C" fn reduce_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Reduce, this, args, len)
+}
+
+unsafe extern "C" fn to_array_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::ToArray, this, args, len)
+}
+
+unsafe extern "C" fn for_each_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::ForEach, this, args, len)
+}
+
+unsafe extern "C" fn some_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Some, this, args, len)
+}
+
+unsafe extern "C" fn every_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Every, this, args, len)
+}
+
+unsafe extern "C" fn find_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Find, this, args, len)
+}
+
+unsafe extern "C" fn join_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Join, this, args, len)
+}
+
+unsafe extern "C" fn includes_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    args: *const f64,
+    len: usize,
+) -> f64 {
+    dispatch_native_method(Method::Includes, this, args, len)
+}
+
+impl Method {
+    fn code(self) -> *const u8 {
+        match self {
+            Method::Map => map_thunk as *const u8,
+            Method::Filter => filter_thunk as *const u8,
+            Method::Take => take_thunk as *const u8,
+            Method::Drop => drop_thunk as *const u8,
+            Method::FlatMap => flat_map_thunk as *const u8,
+            Method::Reduce => reduce_thunk as *const u8,
+            Method::ToArray => to_array_thunk as *const u8,
+            Method::ForEach => for_each_thunk as *const u8,
+            Method::Some => some_thunk as *const u8,
+            Method::Every => every_thunk as *const u8,
+            Method::Find => find_thunk as *const u8,
+            Method::Join => join_thunk as *const u8,
+            Method::Includes => includes_thunk as *const u8,
+        }
+    }
+
+    fn info(self) -> *const crate::closure::JsFunctionInfo {
+        match self {
+            Method::Map => crate::realm_value_read! { "%IteratorPrototype%.map" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("%IteratorPrototype%.map")] export native_args crate::iterator_helpers::proto_methods::map_thunk, 1; with_flags(crate::closure::FN_BUILTIN)) },
+            Method::Filter => crate::realm_value_read! { "%IteratorPrototype%.filter" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("%IteratorPrototype%.filter")] export native_args crate::iterator_helpers::proto_methods::filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN)) },
+            Method::Take => crate::realm_value_read! { "%IteratorPrototype%.take" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("%IteratorPrototype%.take")] export native_args crate::iterator_helpers::proto_methods::take_thunk, 1; with_flags(crate::closure::FN_BUILTIN)) },
+            Method::Drop => crate::realm_value_read! { "%IteratorPrototype%.drop" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("%IteratorPrototype%.drop")] export native_args crate::iterator_helpers::proto_methods::drop_thunk, 1; with_flags(crate::closure::FN_BUILTIN)) },
+            Method::FlatMap => crate::realm_value_read! { "%IteratorPrototype%.flatMap" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("%IteratorPrototype%.flatMap")] export native_args crate::iterator_helpers::proto_methods::flat_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN)) },
+            Method::Reduce => crate::fn_info!(#[realm("%IteratorPrototype%.reduce")] export native_args crate::iterator_helpers::proto_methods::reduce_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::ToArray => crate::fn_info!(#[realm("%IteratorPrototype%.toArray")] export native_args crate::iterator_helpers::proto_methods::to_array_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+            Method::ForEach => crate::fn_info!(#[realm("%IteratorPrototype%.forEach")] export native_args crate::iterator_helpers::proto_methods::for_each_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::Some => crate::fn_info!(#[realm("%IteratorPrototype%.some")] export native_args crate::iterator_helpers::proto_methods::some_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::Every => crate::fn_info!(#[realm("%IteratorPrototype%.every")] export native_args crate::iterator_helpers::proto_methods::every_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::Find => crate::fn_info!(#[realm("%IteratorPrototype%.find")] export native_args crate::iterator_helpers::proto_methods::find_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::Join => crate::fn_info!(#[realm("%IteratorPrototype%.join")] export native_args crate::iterator_helpers::proto_methods::join_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+            Method::Includes => crate::fn_info!(#[realm("%IteratorPrototype%.includes")] export native_args crate::iterator_helpers::proto_methods::includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+        }
+    }
+}
 
 impl Method {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
@@ -152,7 +270,7 @@ pub(crate) fn install_prototype_methods(
     crate::object::global_this::install_proto_method(
         helper_proto,
         "return",
-        crate::fn_info!(helper_return_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("%IteratorHelperPrototype%.return")] export crate::iterator_helpers::proto_methods::helper_return_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
 }

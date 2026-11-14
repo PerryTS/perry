@@ -145,7 +145,7 @@ pub unsafe extern "C-unwind" fn js_method_lookup(
         let vb = v.to_bits();
         if vb != crate::value::TAG_HOLE
             && vb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-            && crate::closure::is_closure_ptr((vb & crate::value::POINTER_MASK) as usize)
+            && crate::closure::is_closure_bits(vb)
         {
             return v;
         }
@@ -383,7 +383,7 @@ unsafe fn prepare_ordinary(recv: f64, addr: usize, name: &[u8]) -> f64 {
     let value = spec_get(recv_h.get_nanbox_f64(), name);
     let vb = value.to_bits();
     if vb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-        && crate::closure::is_closure_ptr((vb & crate::value::POINTER_MASK) as usize)
+        && crate::closure::is_closure_bits(vb)
     {
         return value;
     }

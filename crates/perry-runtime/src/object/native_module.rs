@@ -376,11 +376,15 @@ pub(crate) fn worker_messaging_constructor_value(module: &str, property: &str) -
     if module != "worker_threads" || !is_worker_messaging_constructor(property) {
         return None;
     }
-    // Birth publishes the original value; reading a mutable global here would
-    // let reassignment or an accessor redefine a core-module export.
-    crate::object::js_get_global_this();
-    let key = format!("worker_threads\0{property}");
-    NATIVE_CALLABLE_EXPORTS.with(|cache| cache.borrow().get(&key).copied().map(f64::from_bits))
+    // The realm's Intrinsics entry owns the original value in both arms.
+    // A Global binding and the native-export cache are mutable publication
+    // sites, so neither supplies this intrinsic identity.
+    Some(match property {
+        "MessageChannel" => crate::realm_value_read! { "MessageChannel" => "MessageChannel"; crate::object::builtin_constructor_value("MessageChannel") },
+        "MessagePort" => crate::realm_value_read! { "MessagePort" => "MessagePort"; crate::object::builtin_constructor_value("MessagePort") },
+        "BroadcastChannel" => crate::realm_value_read! { "BroadcastChannel" => "BroadcastChannel"; crate::object::builtin_constructor_value("BroadcastChannel") },
+        _ => unreachable!("worker messaging constructor was admitted above"),
+    })
 }
 
 pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

@@ -235,7 +235,8 @@ const fn descriptor() -> PerryLayoutDesc {
         image_keys: std::ptr::null_mut(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
         realm_family: 0,
-        _tail_pad: [0; 31],
+        realm_rank: 0,
+        _tail_pad: [0; 30],
     }
 }
 static mut FACTS: [PerryLayoutDesc; ROWS] = [const { descriptor() }; ROWS];
@@ -311,13 +312,21 @@ unsafe fn prepare_rows(encoding: u8) {
     object(15, 6);
 }
 unsafe fn enter_image() {
+    enter_image_with_global(std::ptr::null_mut());
+}
+unsafe fn enter_image_with_global(global: *mut u8) {
     crate::gc::image_cells::hold_image_for_tests(true);
     crate::object::class_image::enter_current_thread_image();
     let program = Box::leak(Box::new(PerryProgramTableV1 {
+        realm_global: global,
         lazy_first: FIRST,
         lazy_count: ROWS as u32,
         lazy_layouts: std::ptr::addr_of!(FACTS).cast(),
         touch_pending: Some(crate::object::layout_desc::js_realm_touch_pending),
+        realm_start: std::ptr::addr_of!(IMAGE).cast::<u8>(),
+        realm_end: std::ptr::addr_of!(IMAGE)
+            .cast::<u8>()
+            .add(std::mem::size_of_val(&*std::ptr::addr_of!(IMAGE))),
         ..PerryProgramTableV1::EMPTY
     }));
     crate::object::class_image::bind_layout_image(PerryLayoutImageV1 {
@@ -370,6 +379,11 @@ unsafe fn external(identity: BuiltinConstructorIdentity, proto: usize, ctor: usi
     let (p, c) = crate::array::realm_intrinsic_cells(identity);
     assert_eq!((p, c), (proto, ctor), "plain Intrinsics halves");
     let mut words = vec![normal(p), normal(c)];
+    if identity == BuiltinConstructorIdentity::Array {
+        let cached = crate::array::array_prototype_addr_if_resolved();
+        assert_eq!(cached, proto, "Array prototype's identity-only cache");
+        words.push(normal(cached));
+    }
     if let Some(family) = crate::object::builtin_proto::constructor_family(decl) {
         let addr = crate::agent_ptrs::intrinsic_proto(family as usize) as usize;
         assert_eq!(addr, holder, "BuiltinProto agent root");
@@ -447,15 +461,15 @@ fn birth(name: &'static str) -> Birth {
         } else {
             proto as *mut ObjectHeader
         };
-        let meta = &*(*holder).meta;
+        let meta = (*holder).meta.as_ref();
         let kind = crate::object::shapes::object_shape_descriptor(holder)
             .unwrap()
             .object_kind
             .code() as u8;
         Birth {
             identity,
-            flags: meta.flags,
-            serial: meta.proto_serial,
+            flags: meta.map_or(0, |m| m.flags),
+            serial: meta.map_or(0, |m| m.proto_serial),
             class: (*holder).class_id,
             kind,
             external: external(identity, proto, ctor),
@@ -859,5 +873,211 @@ fn pending_family_link_global_private_slot_has_one_declared_regexp_key() {
             private[0].atom,
             &crate::object::runtime_layouts::intrinsic_private_atoms::REGEXP_PROTOTYPE
         ));
+    }
+}
+
+#[test]
+fn materialize_global_image_first_use_seeds_all_entries_without_observing_siblings() {
+    let _lock = LOCK.lock().unwrap();
+    let source = birth("Map");
+    std::thread::spawn(move || unsafe {
+        let (proto, ctor) = builtin_fixture(&source);
+        FACTS[8].realm_family = 0;
+        let global = object(14, 8);
+        enter_image_with_global(global.cast());
+        assert!(!global_this_is_materialized());
+        let _no_alloc = crate::object::layout_desc::NoGcAlloc::enter();
+        let value = js_get_global_this();
+        assert_eq!(value.to_bits(), pointer(global as usize));
+        assert!(global_this_is_materialized());
+        assert_eq!(bound_thread_global(), global);
+        assert_eq!(
+            GLOBAL_THIS_PTR.load(std::sync::atomic::Ordering::Acquire),
+            global as i64
+        );
+        assert!(GLOBAL_THIS_READY.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!((*global).parent_class_id & PENDING, 0);
+        assert_eq!(
+            crate::array::realm_intrinsic_cells(source.identity),
+            (proto, ctor)
+        );
+        assert_ne!((*(proto as *mut ObjectHeader)).parent_class_id & PENDING, 0);
+        assert_ne!(
+            (*(ctor as *mut crate::closure::ClosureHeader)).shape_id.0 & PENDING,
+            0
+        );
+        assert_ne!(IMAGE.objects[15].object.parent_class_id & PENDING, 0);
+        assert_eq!(js_get_global_this().to_bits(), value.to_bits());
+        assert_ne!(IMAGE.objects[15].object.parent_class_id & PENDING, 0);
+        drop(_no_alloc);
+        crate::object::materialize_family(MaterializeFamily::Builtin(source.identity));
+        assert_eq!(external(source.identity, proto, ctor), source.external);
+        assert_ne!(IMAGE.objects[15].object.parent_class_id & PENDING, 0);
+        cleanup();
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn materialize_real_image_missing_constructor_aborts_before_global() {
+    const CHILD: &str = "REALM_IMAGE_MISSING_HALF_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        let _lock = LOCK.lock().unwrap();
+        let source = birth("Object");
+        std::thread::spawn(move || unsafe {
+            let _ = builtin_fixture(&source);
+            IMAGE.closures[0] = closure_cell();
+            IMAGE.objects[1] = object_cell();
+            FACTS[8].realm_family = 0;
+            let global = object(14, 8);
+            enter_image_with_global(global.cast());
+            assert!(!global_this_is_materialized());
+            let _ = crate::array::intrinsic_constructor_addr(source.identity);
+        })
+        .join()
+        .unwrap();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "object::global_this::materialize_tests::materialize_real_image_missing_constructor_aborts_before_global", "--nocapture"])
+        .env(CHILD, "1").output().unwrap();
+    assert!(
+        !output.status.success(),
+        "unrooted image constructor read succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("runtime value read of Object is unrooted"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn materialize_global_namespace_publishes_its_word_without_observing_sibling() {
+    let _lock = LOCK.lock().unwrap();
+    let source = birth("Map");
+    std::thread::spawn(move || unsafe {
+        let _ = builtin_fixture(&source);
+        IMAGE.closures[0] = closure_cell();
+        IMAGE.objects[1] = object_cell();
+        FACTS[0].realm_family = 0;
+        FACTS[8].realm_family = 0;
+        let namespace = object(0, 0);
+        let index = crate::codegen_abi::BUILTIN_NAMESPACES
+            .iter()
+            .position(|name| *name == "Math")
+            .unwrap();
+        let family = crate::object::builtin_namespace::FIRST + index;
+        use crate::object::meta_flags::*;
+        IMAGE.metadata[0].meta.flags = OBJECT_META_FLAG_IS_PROTOTYPE
+            | OBJECT_META_FLAG_SEALED_INTRINSIC
+            | ((family as u64) << OBJECT_META_SEALED_FAMILY_SHIFT);
+        let global = object(14, 8);
+        enter_image_with_global(global.cast());
+        let previous = std::env::var_os("PERRY_CHECK_CONTRACTS");
+        std::env::set_var("PERRY_CHECK_CONTRACTS", "1");
+        let no_alloc = crate::object::layout_desc::NoGcAlloc::enter();
+        let _ = js_get_global_this();
+        assert_eq!(
+            crate::agent_ptrs::intrinsic_proto(family) as usize,
+            namespace as usize
+        );
+        assert_eq!((*namespace).parent_class_id & PENDING, 0);
+        assert_ne!(IMAGE.objects[15].object.parent_class_id & PENDING, 0);
+        drop(no_alloc);
+        if let Some(value) = previous {
+            std::env::set_var("PERRY_CHECK_CONTRACTS", value);
+        } else {
+            std::env::remove_var("PERRY_CHECK_CONTRACTS");
+        }
+        cleanup();
+    })
+    .join()
+    .unwrap();
+}
+
+#[test]
+fn materialize_pending_lazy_constructor_lists_declared_keys_without_binding() {
+    let _lock = LOCK.lock().unwrap();
+    let source = birth("ReadableStream");
+    std::thread::spawn(move || unsafe {
+        let (proto, ctor) = builtin_fixture(&source);
+        enter_image();
+        crate::object::layout_desc::seed_image_family(source.identity as u8);
+        for _ in 0..2 {
+            let keys = crate::closure::props::bag_own_key_names_bytes(ctor);
+            assert_eq!(keys, vec![b"from".to_vec()]);
+            assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(source.identity), 0);
+            assert_ne!((*(ctor as *const crate::closure::ClosureHeader)).shape_id.0 & PENDING, 0);
+        }
+        materialize_family(MaterializeFamily::Builtin(source.identity));
+        assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(source.identity), proto);
+        cleanup();
+    }).join().unwrap();
+}
+
+#[test]
+fn materialize_function_prototype_ensure_observes_the_held_family_after_global() {
+    let _lock = LOCK.lock().unwrap();
+    let source = birth("Function");
+    std::thread::spawn(move || unsafe {
+        let (proto, _) = builtin_fixture(&source);
+        let global = object(14, 8);
+        FACTS[8].realm_family = 0;
+        FACTS[8].proto = crate::object::layout_desc::LAYOUT_PROTO_NULL;
+        enter_image_with_global(global.cast());
+        assert_eq!(crate::closure::shape::function_prototype_ptr_materialized(), proto);
+        assert_eq!(crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire) as usize, proto);
+        cleanup();
+    }).join().unwrap();
+}
+
+#[test]
+fn materialize_search_params_ensure_links_the_held_prototype_before_instance_birth() {
+    let _lock = LOCK.lock().unwrap();
+    let source = birth("URLSearchParams");
+    std::thread::spawn(move || unsafe {
+        let (proto, _) = builtin_fixture(&source);
+        let global = object(14, 8);
+        FACTS[8].realm_family = 0;
+        FACTS[8].proto = crate::object::layout_desc::LAYOUT_PROTO_NULL;
+        enter_image_with_global(global.cast());
+        let _params = crate::url::js_url_search_params_new_empty();
+        assert_eq!(crate::array::intrinsic_prototype_addr_if_bound(source.identity), proto);
+        assert_eq!(crate::object::shapes::identity_prototype_word(crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS), pointer(proto));
+        cleanup();
+    }).join().unwrap();
+}
+
+#[test]
+fn materialize_object_prototype_shape_never_births_a_sentinel_beside_its_image() {
+    let _lock = LOCK.lock().unwrap();
+    for after_global in [false, true] {
+        let source = birth("Object");
+        std::thread::spawn(move || unsafe {
+            let (proto, _) = builtin_fixture(&source);
+            IMAGE.closures[0] = closure_cell();
+            IMAGE.objects[1] = object_cell();
+            if after_global {
+                let global = object(14, 8);
+                FACTS[8].realm_family = 0;
+                FACTS[8].proto = crate::object::layout_desc::LAYOUT_PROTO_NULL;
+                enter_image_with_global(global.cast());
+                js_get_global_this();
+            } else {
+                enter_image();
+            }
+            let _no_alloc = crate::object::layout_desc::NoGcAlloc::enter();
+            assert_eq!(super::object_intrinsic::ensure_object_prototype_shape() as usize, proto);
+            assert_eq!(crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(Ordering::Acquire) as usize, proto);
+            assert_eq!(crate::object::OBJECT_INTRINSIC_PTR.load(Ordering::Acquire), 0);
+            assert_eq!(IMAGE.objects[0].object.parent_class_id & PENDING, 0);
+            assert_ne!(IMAGE.objects[15].object.parent_class_id & PENDING, 0);
+            assert_eq!(global_this_is_materialized(), after_global);
+            drop(_no_alloc);
+            cleanup();
+        }).join().unwrap();
     }
 }

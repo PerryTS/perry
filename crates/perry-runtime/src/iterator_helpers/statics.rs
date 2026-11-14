@@ -142,13 +142,13 @@ pub(crate) fn install_wrap_prototype_methods(proto: *mut ObjectHeader) {
     crate::object::global_this::install_proto_method(
         proto,
         "next",
-        crate::fn_info!(wrap_next_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("%WrapForValidIteratorPrototype%.next")] export crate::iterator_helpers::statics::wrap_next_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     crate::object::global_this::install_proto_method(
         proto,
         "return",
-        crate::fn_info!(wrap_return_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("%WrapForValidIteratorPrototype%.return")] export crate::iterator_helpers::statics::wrap_return_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
 }
@@ -173,7 +173,7 @@ extern "C" fn iterator_dispose_thunk(_closure: *const ClosureHeader, this: JsThi
 pub(crate) fn install_dispose(proto: *mut ObjectHeader) {
     let sym = crate::symbol::well_known_symbol("dispose");
     let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(iterator_dispose_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("%IteratorPrototype%[\"@@dispose\"]")] export crate::iterator_helpers::statics::iterator_dispose_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
         0,
     );
     if sym.is_null() || closure.is_null() {
@@ -242,12 +242,12 @@ extern "C" fn iterator_from_thunk(
 pub(crate) fn install_iterator_statics(s: &mut crate::object::global_this::ConstructorStatics) {
     s.method(
         "from",
-        crate::fn_info!(iterator_from_thunk, 1; with_declared(1)),
+        crate::realm_value_read! { "Iterator.from" => "%WrapForValidIteratorPrototype%"; crate::fn_info!(#[realm("Iterator.from")] export crate::iterator_helpers::statics::iterator_from_thunk, 1; with_declared(1)) },
         1,
     );
     s.method(
         "concat",
-        crate::fn_info!(native_args concat_thunk, 0; with_flags(crate::closure::FN_BUILTIN)),
+        crate::realm_value_read! { "Iterator.concat" => "%IteratorHelperPrototype%"; crate::fn_info!(#[realm("Iterator.concat")] export native_args crate::iterator_helpers::statics::concat_thunk, 0; with_flags(crate::closure::FN_BUILTIN)) },
         0,
     );
 }

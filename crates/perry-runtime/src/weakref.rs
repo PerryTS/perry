@@ -448,6 +448,9 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
+    let prototype = scope.root_nanbox_f64(crate::realm_value_read! {
+        "WeakRef" => "WeakRef.prototype"; crate::object::builtin_prototype_value("WeakRef")
+    });
     let packed = b"__perry_wr_target\0";
     let obj = js_object_alloc_with_shape(WEAKREF_SHAPE_ID, 1, packed.as_ptr(), packed.len() as u32);
     js_object_set_field(
@@ -457,7 +460,10 @@ pub extern "C" fn js_weakref_new(target: f64) -> *mut ObjectHeader {
     );
     unsafe {
         (*obj).class_id = CLASS_ID_WEAKREF;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            obj as usize,
+            prototype.get_nanbox_u64(),
+        );
     }
     weak_holder_register(obj);
     obj

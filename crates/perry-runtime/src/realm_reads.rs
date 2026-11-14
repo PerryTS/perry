@@ -40,19 +40,63 @@ pub(crate) fn check_private_read(receiver: f64, value: Option<f64>, spelling: &[
         // Qualified intrinsic private keys carry their own name. They are
         // atoms minted from UTF-8 source, not a parallel name registry.
         let spelling = std::str::from_utf8(spelling).expect("intrinsic private key is UTF-8");
-        let role = spelling
-            .rsplit_once("[[")
-            .expect("qualified intrinsic key")
-            .1
-            .strip_suffix("]]>")
-            .expect("qualified intrinsic key suffix");
-        let target = if let Some(kind) = role.strip_suffix("Prototype") {
-            format!("{kind}.prototype")
-        } else if let Some(kind) = role.strip_suffix("Constructor") {
-            kind.to_owned()
-        } else {
-            role.to_owned()
+        let (kind, part) = perry_abi::realm_private::intrinsic_target(spelling)
+            .expect("intrinsic private key has its target role");
+        let target = match part {
+            perry_abi::realm_private::IntrinsicPart::Prototype => format!("{kind}.prototype"),
+            perry_abi::realm_private::IntrinsicPart::Constructor => kind.to_owned(),
         };
         undefined_realm_value(&target);
+    }
+}
+
+/// A complete named lookup proved absence on an unchanged STRUCTURE cell.
+/// Such a read was not covered by the closed reach facts. Kept undefined
+/// values and getter results never call this miss entrance.
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+#[cold]
+#[inline(never)]
+pub(crate) fn check_structure_named_miss(receiver: usize, key_bits: u64) {
+    if key_bits & crate::value::TAG_MASK != crate::value::STRING_TAG {
+        return;
+    }
+    let key = (key_bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
+    let name = unsafe {
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize)
+    };
+    check_structure_named_text_miss(receiver, name);
+}
+
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+#[cold]
+#[inline(never)]
+pub(crate) fn check_structure_named_text_miss(receiver: usize, name: &[u8]) {
+    if !unsafe { crate::object::layout_desc::structure_receiver(receiver) } {
+        return;
+    }
+    eprintln!(
+        "Perry internal error: named read {} misses a STRUCTURE realm image cell",
+        String::from_utf8_lossy(name)
+    );
+    std::process::abort();
+}
+
+/// Generic lookup helpers can conflate absence with a present undefined
+/// value. Their diagnostic uses the existing value-free presence walk,
+/// so it never invokes an inherited getter again to decide the miss.
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+#[cold]
+#[inline(never)]
+pub(crate) fn check_structure_named_lookup_miss(receiver: usize, key_bits: u64) {
+    if unsafe { crate::object::layout_desc::structure_receiver(receiver) }
+        && unsafe {
+            crate::object::layout_probe::probe_has(
+                crate::value::js_nanbox_pointer(receiver as i64).to_bits(),
+                key_bits,
+                false,
+            )
+        } == 0
+    {
+        check_structure_named_miss(receiver, key_bits);
     }
 }

@@ -6596,7 +6596,22 @@ pub fn run_with_parse_cache(
         module_births.iter().flat_map(|(_, b)| b),
         &static_shape_ids,
     );
+    let installer_symbols = optimized_libs.as_ref().map(|libs| {
+        let runtime =
+            crate::commands::stdlib_installs::runtime_installer_callees(&libs.runtime_installs);
+        let stdlib = (ctx.needs_stdlib && find_stdlib_library(target.as_deref()).is_some())
+            .then(|| crate::commands::stdlib_installs::installer_callees(&libs.stdlib_installs));
+        (runtime, stdlib)
+    });
     let mut realm_reach = ctx.realm_reach.clone();
+    if let Some((runtime, stdlib)) = &installer_symbols {
+        realm_reach
+            .exec
+            .extend(perry_codegen::stubs::feature_installer_exec(
+                runtime,
+                stdlib.as_deref(),
+            ));
+    }
     if let Some(birth) = perry_codegen::startup_global_birth(&program_nextjs_path_inits) {
         realm_reach.exec(birth);
     }
@@ -6678,21 +6693,24 @@ pub fn run_with_parse_cache(
     // job starts, not here: the slice includes the producer classes of every
     // short-spread candidate, so prepared for all modules at once it held
     // the program's class shapes once per module.
-    let slice_shape_ids = |path: &PathBuf, opts: &mut perry_codegen::CompileOptions| {
-        opts.program_layout_ordinals = std::sync::Arc::clone(&program_layout_ordinals);
-        if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
-            opts.static_shape_ids = ids.clone();
-            for cid in class_ids.iter() {
-                if let Some(finals) = class_final_shapes.get(cid) {
-                    opts.static_shape_ids.extend(finals.iter().cloned());
+    let slice_shape_ids =
+        |path: &PathBuf,
+         opts: &mut perry_codegen::CompileOptions,
+         ordinals: &std::sync::Arc<perry_codegen::ProgramLayoutOrdinals>| {
+            opts.program_layout_ordinals = std::sync::Arc::clone(ordinals);
+            if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
+                opts.static_shape_ids = ids.clone();
+                for cid in class_ids.iter() {
+                    if let Some(finals) = class_final_shapes.get(cid) {
+                        opts.static_shape_ids.extend(finals.iter().cloned());
+                    }
                 }
+                opts.static_shape_ids.sort();
+                opts.static_shape_ids.dedup();
+                opts.program_class_shape_ids =
+                    program_class_shape_ids.restricted_to(class_ids.iter().copied());
             }
-            opts.static_shape_ids.sort();
-            opts.static_shape_ids.dedup();
-            opts.program_class_shape_ids =
-                program_class_shape_ids.restricted_to(class_ids.iter().copied());
-        }
-    };
+        };
     let mut prepared_options: Vec<_> = module_pool.install(|| {
         codegen_modules
             .par_iter()
@@ -6729,7 +6747,7 @@ pub fn run_with_parse_cache(
                 .zip(prepared_options.par_iter())
                 .map(|(path, opts)| -> Result<_, String> {
                     let mut opts = opts.as_ref().map_err(Clone::clone)?.clone();
-                    slice_shape_ids(path, &mut opts);
+                    slice_shape_ids(path, &mut opts, &program_layout_ordinals);
                     perry_codegen::module_realm_exec(
                         &ctx.native_modules[path],
                         opts,
@@ -6784,24 +6802,20 @@ pub fn run_with_parse_cache(
         );
     }
     realm_reach.close(&ctx.realm_index);
-    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
-        let reasons: Vec<_> = realm_reach.top.iter().map(|r| r.reason()).collect();
-        eprintln!(
-            "[realm-reach] {}/{} top={:?}",
-            realm_reach.names.len(),
-            perry_codegen::realm_manifest::REALM.len(),
-            reasons
-        );
-        eprintln!(
-            "[realm-reach-json] {}",
-            serde_json::json!({
-                "names": realm_reach.names, "top": reasons,
-                "reach": realm_reach, "exec_only": exec_only,
-                "fixture_exec": fixture_exec, "dumper_exec": dumper_exec,
-                "full": perry_codegen::realm_manifest::REALM.len()
-            })
-        );
-    }
+    // The actual lowering's Exec facts close R before it supplies any realm
+    // cell row. The same final Arc reaches every module and the seed unit.
+    let realm_target = target
+        .as_deref()
+        .and_then(perry_codegen::resolve_target_triple);
+    let program_layout_ordinals = std::sync::Arc::new(
+        perry_codegen::realm_plan::image_ordinals(
+            &program_layout_ordinals,
+            &realm_reach,
+            realm_target.as_deref(),
+        )
+        .map_err(|error| anyhow!(error))?,
+    );
+    super::reach_report::print_realm_reach(&realm_reach, &exec_only, &fixture_exec, &dumper_exec)?;
     // R drives the entry module's realm emission (WRT3p-A1: the runtime
     // layouts' descriptors and key lists).
     let realm_reach = std::sync::Arc::new(realm_reach);
@@ -6809,6 +6823,7 @@ pub fn run_with_parse_cache(
     let source_need = super::source_need::start(need, &dropped_source, source_need_seconds)?;
     for opts in &mut prepared_options {
         if let Ok(opts) = opts {
+            opts.program_layout_ordinals = std::sync::Arc::clone(&program_layout_ordinals);
             if opts.is_entry_module {
                 opts.program_facts.realm_reach = Some(std::sync::Arc::clone(&realm_reach));
             }
@@ -7167,7 +7182,7 @@ pub fn run_with_parse_cache(
                     .take()
                     .expect("module job runs exactly once");
                 if let Ok(opts) = &mut opts {
-                    slice_shape_ids(path, opts);
+                    slice_shape_ids(path, opts, &program_layout_ordinals);
                 }
                 let module_name = hir_module.name.clone();
                 let callable_count = module_codegen_callable_count(&hir_module);
@@ -7647,12 +7662,8 @@ pub fn run_with_parse_cache(
     // full-feature one. Generated before the stub scan below so the scan sees
     // its install references resolved by the runtime/stdlib archives.
     {
-        let runtime_symbols = crate::commands::stdlib_installs::runtime_installer_callees(
-            &optimized_libs.runtime_installs,
-        );
-        let stdlib_symbols = (ctx.needs_stdlib && stdlib_lib_resolved.is_some()).then(|| {
-            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs)
-        });
+        let (runtime_symbols, stdlib_symbols) =
+            installer_symbols.expect("native installer calls resolved before realm planning");
         if matches!(format, OutputFormat::Text) && verbose > 0 {
             eprintln!("  runtime installs: {}", runtime_symbols.join(", "));
             if let Some(stdlib) = &stdlib_symbols {

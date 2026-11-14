@@ -209,3 +209,5 @@ pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeade
 
 #[cfg(any(test, debug_assertions, perry_diagnostics))]
 pub(crate) use fetch_globals::has_image_global;
+
+mod image_global;

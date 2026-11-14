@@ -15,6 +15,16 @@ pub(crate) fn link_named_prototype_first(serial: u64, proto: usize) {
     }
 }
 
+/// A row's carried parent is an immutable image pointer. Link its existing
+/// serial word without observing the pending parent or replacing a later
+/// realm's already-established identity.
+pub(crate) unsafe fn image_parent(desc: *const crate::object::layout_desc::PerryLayoutDesc) {
+    let family = (*desc).proto;
+    if family.addr() >= crate::object::layout_desc::LAYOUT_PROTO_TAG_END {
+        link_named_prototype_first((*family).serial, (*family).image_prototype as usize);
+    }
+}
+
 /// Link a builtin's completed cells. No property installation, prototype
 /// ensure, managed allocation, or collection is permitted in this body.
 #[cold]
@@ -241,5 +251,28 @@ pub(crate) fn intrinsic_proto(
     if !prototype.is_null() {
         crate::object::proto_validity::link_intrinsic_prototype_mark();
         crate::agent_ptrs::publish_intrinsic_proto(family as usize, prototype);
+    }
+}
+
+/// Seals are emitted metadata. Publication links the same per-agent words
+/// as BIRTH without preparing or observing any sibling cell.
+pub(crate) unsafe fn image_holder(holder: *mut ObjectHeader) {
+    use crate::object::meta_flags::*;
+    let meta = (*holder).meta;
+    if meta.is_null() || (*meta).flags & OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
+        return;
+    }
+    crate::object::proto_validity::link_intrinsic_prototype_mark();
+    if (*meta).proto_serial != 0 {
+        link_named_prototype_first((*meta).proto_serial, holder as usize);
+    }
+    if (*meta).flags & OBJECT_META_FLAG_SEALED_INTRINSIC == 0 {
+        return;
+    }
+    let family = (((*meta).flags >> OBJECT_META_SEALED_FAMILY_SHIFT)
+        & OBJECT_META_SEALED_FAMILY_MASK) as usize;
+    let first = crate::object::builtin_namespace::FIRST;
+    if (first..crate::object::builtin_namespace::GLOBAL_FAMILY).contains(&family) {
+        crate::object::builtin_namespace::link_holder(family - first, holder);
     }
 }

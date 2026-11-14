@@ -30,6 +30,22 @@ pub(crate) unsafe fn object_key_field_at_with_keys(
     }
 }
 
+/// Read the same current key position without callbacks or diagnostics.
+/// Ordered overflow entries retain their own position-to-storage mapping.
+#[inline(always)]
+pub(crate) unsafe fn object_key_value_at_with_keys(
+    obj: *const ObjectHeader,
+    keys: *const ArrayHeader,
+    position: u32,
+    live: u32,
+) -> Option<JSValue> {
+    match crate::object::key_attrs::list_storage_slot(keys, position) {
+        Some(slot) => object_field_value_at_with_live(obj, slot, live),
+        None => crate::object::overflow::get_from_storage(keys.cast(), obj, position, live)
+            .map(JSValue::from_bits),
+    }
+}
+
 /// Get a field from an object by index
 ///
 /// #1129/#1136: the small-pointer guard below previously used a 16 MB
@@ -83,8 +99,36 @@ pub(crate) unsafe fn object_field_at_with_live(
     field_index: u32,
     live: u32,
 ) -> JSValue {
+    field_value_with_live(obj, field_index, live, || {
+        Some(object_field_past_live(obj, field_index))
+    })
+    .unwrap_or_else(|| null_pointer_field(obj, field_index, live))
+}
+
+/// A canonical row's physical storage ordinal, without diagnostics. A slot
+/// beyond its inline bound lives in the receiver's spill buffer. Ordered
+/// overflow positions are resolved by the ordinary indexed reader instead.
+#[inline(always)]
+pub(crate) unsafe fn object_field_value_at_with_live(
+    obj: *const ObjectHeader,
+    field_index: u32,
+    live: u32,
+) -> Option<JSValue> {
+    field_value_with_live(obj, field_index, live, || {
+        crate::object::spill::spill_get_present(obj as usize, field_index as usize)
+            .map(JSValue::from_bits)
+    })
+}
+
+#[inline(always)]
+unsafe fn field_value_with_live(
+    obj: *const ObjectHeader,
+    field_index: u32,
+    live: u32,
+    past_live: impl FnOnce() -> Option<JSValue>,
+) -> Option<JSValue> {
     if field_index >= live {
-        return object_field_past_live(obj, field_index);
+        return past_live();
     }
     // The published shape bound already proves this slot is inline. JSON
     // objects can legitimately have more than 10,000 slots (#10175); their
@@ -93,15 +137,15 @@ pub(crate) unsafe fn object_field_at_with_live(
     let val = *fields_ptr.add(field_index as usize);
     // Guard: null POINTER_TAG (0x7FFD_0000_0000_0000) is never legitimate — replace with undefined
     if val.bits() == 0x7FFD_0000_0000_0000 {
-        return null_pointer_field(obj, field_index, live);
+        return None;
     }
     // I32 at rest (PR C): an I32 lane's word reads as its canonical double,
     // through the layout accessor (one compare for every other word).
-    JSValue::from_bits(crate::layout_slot::slot_word_value(
+    Some(JSValue::from_bits(crate::layout_slot::slot_word_value(
         obj,
         field_index,
         val.bits(),
-    ))
+    )))
 }
 
 /// A field past the inline bound: the spill.

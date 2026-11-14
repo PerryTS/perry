@@ -295,8 +295,8 @@ pub unsafe extern "C" fn js_symbol_typeof() -> *mut StringHeader {
     js_string_from_bytes(s.as_ptr(), s.len() as u32)
 }
 
-/// Compare two Symbol JSValues for equality. Two symbols are equal iff they
-/// point to the same SymbolHeader (including Symbol.for dedup).
+/// Compare symbol identities carried by their headers. Image and runtime
+/// cells of one declared symbol may have different addresses.
 #[no_mangle]
 pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
     let abits = a.to_bits();
@@ -311,16 +311,16 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
     }
     let aptr = (abits & POINTER_MASK) as *const SymbolHeader;
     let bptr = (bbits & POINTER_MASK) as *const SymbolHeader;
-    if aptr.is_null() || bptr.is_null() {
+    if js_is_symbol(a) == 0 || js_is_symbol(b) == 0 {
         return 0;
     }
-    if (*aptr).magic != SYMBOL_MAGIC || (*bptr).magic != SYMBOL_MAGIC {
-        return 0;
-    }
-    if (*aptr).id == (*bptr).id {
-        1
-    } else {
-        0
+    match (
+        super::identity::registry_key(&*aptr),
+        super::identity::registry_key(&*bptr),
+    ) {
+        (Some(a), Some(b)) => i32::from(a == b),
+        (None, None) => i32::from((*aptr).id == (*bptr).id),
+        _ => 0,
     }
 }
 

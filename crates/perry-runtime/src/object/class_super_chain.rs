@@ -29,6 +29,25 @@ pub unsafe extern "C" fn js_class_method_home(mut owner: f64, is_static: i32) ->
         }
     }
     if is_static != 0 {
+        if let Some(cid) = constructor {
+            // A bare static body receives the template constructor. Its
+            // dispatch frame retains the lexical evaluation, as capture reads
+            // do; an inherited call walks that evaluation's pinned heritage.
+            // A method object already carries its concrete owner in capture 0.
+            for candidate in [
+                super::field_get_set::current_private_lexical_brand_value(cid),
+                super::static_private_owner_current(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(evaluation) =
+                    super::class_constructors::capture_owner_for_template(candidate, cid)
+                {
+                    return evaluation;
+                }
+            }
+        }
         return owner;
     }
     if let Some(cid) = super::class_method_home_id(owner) {
@@ -148,3 +167,41 @@ static KEEP_SUPER_PARENT: extern "C" fn(u32) -> f64 = js_class_super_parent;
 #[used(compiler)]
 static KEEP_SUPER_APPLY: unsafe extern "C-unwind" fn(f64, f64, f64) -> f64 =
     js_class_super_construct_apply;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bare_static_home_uses_its_lexical_evaluation_and_keeps_captured_home() {
+        unsafe {
+            const CID: u32 = 62_551;
+            crate::object::REGISTERED_CLASS_IDS
+                .write()
+                .unwrap()
+                .get_or_insert_with(crate::fast_hash::new_ptr_hash_set)
+                .insert(CID);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let template = scope.root_nanbox_f64(crate::object::class_value::class_value(CID));
+            let evaluated = |cid| {
+                let object = crate::object::js_object_alloc(cid, 0);
+                crate::object::class_registry::js_object_mark_class(object as i64);
+                crate::value::js_nanbox_pointer(object as i64)
+            };
+            let a = scope.root_nanbox_f64(evaluated(CID));
+            let b = scope.root_nanbox_f64(evaluated(CID));
+            assert_eq!(
+                js_class_method_home(template.get_nanbox_f64(), 1).to_bits(),
+                template.get_nanbox_f64().to_bits()
+            );
+            for evaluation in [&a, &b] {
+                crate::object::static_private_owner_push(evaluation.get_nanbox_f64());
+                let resolved = js_class_method_home(template.get_nanbox_f64(), 1);
+                let retained = js_class_method_home(a.get_nanbox_f64(), 1);
+                crate::object::static_private_owner_pop();
+                assert_eq!(resolved.to_bits(), evaluation.get_nanbox_f64().to_bits());
+                assert_eq!(retained.to_bits(), a.get_nanbox_f64().to_bits());
+            }
+        }
+    }
+}

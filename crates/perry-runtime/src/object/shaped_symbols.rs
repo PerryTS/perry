@@ -24,7 +24,7 @@ pub(crate) unsafe fn position_in(keys: ObjectKeys, symbol: usize) -> Option<u32>
     let bits = crate::value::POINTER_TAG | symbol as u64;
     let (slots, count) = keys.dense_slots();
     (0..count)
-        .find(|&i| (*slots.add(i)).to_bits() == bits)
+        .find(|&i| crate::object::shapes::layout_probe::key_eq((*slots.add(i)).to_bits(), bits))
         .map(|i| i as u32)
 }
 
@@ -83,8 +83,7 @@ pub(crate) unsafe fn fill_listed_hole(
     let slot = keys.storage_slot(index);
     if slot >= object_inline_capacity(obj)
         || (index..keys.count()).any(|i| {
-            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits()
-                != crate::value::TAG_HOLE
+            object_key_field_at_with_keys(obj, keys.arr(), i, live).bits() != crate::value::TAG_HOLE
         })
     {
         return false;

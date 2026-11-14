@@ -120,7 +120,8 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     methods: std::ptr::null(),
     gc_header_word: crate::object::layout_desc::layout_gc_header_word(HOLEY::SLOT_COUNT as u32),
     realm_family: 0,
-    _tail_pad: [0; 31],
+    realm_rank: 0,
+    _tail_pad: [0; 30],
 };
 
 // A constructor's `Object.defineProperty(this, "holes_b", { value })`: the
@@ -176,7 +177,8 @@ static mut LITERAL_FAMILY: PerryLayoutDesc = PerryLayoutDesc {
         LITERAL_OPTIONAL::SLOT_COUNT as u32,
     ),
     realm_family: 0,
-    _tail_pad: [0; 31],
+    realm_rank: 0,
+    _tail_pad: [0; 30],
 };
 
 const TRUE: u64 = crate::value::TAG_TRUE;
@@ -912,7 +914,8 @@ mod first_birth {
         methods: std::ptr::null(),
         gc_header_word: crate::object::layout_desc::layout_gc_header_word(2),
         realm_family: 0,
-        _tail_pad: [0; 31],
+        realm_rank: 0,
+        _tail_pad: [0; 30],
     };
 
     #[test]

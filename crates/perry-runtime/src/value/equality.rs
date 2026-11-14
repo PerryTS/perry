@@ -162,6 +162,7 @@ pub extern "C" fn js_jsvalue_equals(a: f64, b: f64) -> i32 {
         if ra != 0 && ra == rb {
             return 1;
         }
+        return unsafe { crate::symbol::js_symbol_equals(a, b) };
     }
 
     // Different types or different NaN-boxed values → not equal

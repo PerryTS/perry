@@ -62,7 +62,7 @@ unsafe fn key_word(key: Key<'_>) -> Option<(u64, u64)> {
             if crate::symbol::js_is_symbol(f64::from_bits(bits)) == 0 {
                 return None;
             }
-            Some((bits, (*(symbol as *const crate::symbol::SymbolHeader)).id))
+            Some((bits, crate::symbol::identity_hash(symbol as *const crate::symbol::SymbolHeader)))
         }
     }
 }

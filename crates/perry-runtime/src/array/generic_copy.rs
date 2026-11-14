@@ -72,6 +72,7 @@ pub extern "C" fn js_arraylike_toSorted(recv: f64, comparator: f64) -> f64 {
 /// (§23.1.3.39): the replaced index is not read; every other index is `Get`.
 #[no_mangle]
 pub extern "C" fn js_arraylike_with(recv: f64, index: f64, value: f64) -> f64 {
+    crate::realm_decl! { operation js_arraylike_with, births = [RangeError] }
     let scope = crate::gc::RuntimeHandleScope::new();
     let value_h = scope.root_nanbox_f64(value);
     let recv_h = scope.root_nanbox_f64(to_object(recv));

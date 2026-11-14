@@ -518,6 +518,7 @@ pub(crate) fn tape_route_eligible(len: usize, bytes: &[u8]) -> bool {
 
 #[no_mangle]
 pub unsafe extern "C" fn js_json_parse(text_ptr: *const StringHeader) -> JSValue {
+    crate::realm_decl! { operation js_json_parse, births = [SyntaxError] }
     if text_ptr.is_null() {
         throw_syntax_error("Unexpected end of JSON input");
     }
@@ -935,6 +936,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
     packed_keys_len: u32,
     field_count: u32,
 ) -> JSValue {
+    crate::realm_decl! { operation js_json_parse_typed_array, births = [SyntaxError] }
     if text_ptr.is_null() {
         // Fall through to generic (which will throw the standard error).
         return js_json_parse(text_ptr);

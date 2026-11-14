@@ -124,7 +124,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     let mut hasher = crate::fast_hash::PtrHasher.build_hasher();
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         let addr = (bits & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
-        unsafe { (*addr).id }.hash(&mut hasher);
+        unsafe { crate::symbol::identity_hash(addr) }.hash(&mut hasher);
         return Some(hasher.finish() as u32);
     }
     if is_string_like(bits) {

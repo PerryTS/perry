@@ -32,7 +32,7 @@ fn holders_select_exactly_the_logical_members() {
                 let get = property.get.as_ref().filter(|n| reach.keeps_member(&index, row, &property.key, n, enumerable));
                 let set = property.set.as_ref().filter(|n| reach.keeps_member(&index, row, &property.key, n, enumerable));
                 let value = match &property.value {
-                    Some(RealmValue::Reference(n) | RealmValue::RawReference(n)) => n == "%Global%" || reach.keeps_member(&index, row, &property.key, n, enumerable),
+                    Some(RealmValue::Reference(n) | RealmValue::RawReference(n)) => reach.keeps_member(&index, row, &property.key, n, enumerable),
                     Some(_) => true,
                     None => false,
                 };
@@ -519,3 +519,157 @@ fn fresh_callable_and_object_bodies_declare_instance_births() {
 
 #[path = "realm_exec_tests.rs"]
 mod realm_exec_tests;
+
+#[test]
+fn realm_prototype_key_orders_match_the_existing_birth_installers() {
+    let index = RealmIndex::new(crate::realm_manifest::REALM);
+    let mut reach = RealmReach::default();
+    reach.own("String.prototype");
+    reach.own("Uint8Array.prototype");
+    reach.keyless_read = Some(perry_hir::realm_reach::KeylessRead::All);
+    reach.close(&index);
+    let plan = RealmPlan::from_reach(&reach).unwrap();
+    let string = &plan.cells["String.prototype"].own_key_order;
+    assert_eq!(&string[string.len() - 2..], &["toString", "valueOf"]);
+    assert_eq!(
+        plan.cells["Uint8Array.prototype"].own_key_order,
+        [
+            "constructor",
+            "BYTES_PER_ELEMENT",
+            "toBase64",
+            "setFromBase64",
+            "toHex",
+            "setFromHex"
+        ]
+    );
+}
+
+#[test]
+fn realm_birth_metadata_matches_iterator_accessors_error_statics_and_url_alias() {
+    use perry_hir::realm_manifest::RealmValue;
+    let index = RealmIndex::new(crate::realm_manifest::REALM);
+    for (name, public) in [
+        ("%IteratorPrototype%.constructor.<get>", "get constructor"),
+        ("%IteratorPrototype%.constructor.<set>", "set constructor"),
+        (
+            "%IteratorPrototype%[\"@@toStringTag\"].<get>",
+            "get [Symbol.toStringTag]",
+        ),
+        (
+            "%IteratorPrototype%[\"@@toStringTag\"].<set>",
+            "set [Symbol.toStringTag]",
+        ),
+    ] {
+        let cell: RealmDeclaration =
+            serde_json::from_value(index.last(name).unwrap().facts().clone()).unwrap();
+        let property = cell.properties.iter().find(|p| p.key == "name").unwrap();
+        assert_eq!(
+            property.value,
+            Some(RealmValue::String(public.into())),
+            "{name}"
+        );
+    }
+    for name in [
+        "Error.captureStackTrace",
+        "Error.isError",
+        "Error.prepareStackTrace",
+    ] {
+        let cell: RealmDeclaration =
+            serde_json::from_value(index.last(name).unwrap().facts().clone()).unwrap();
+        assert_eq!(cell.own_key_order, ["length", "name"], "{name}");
+    }
+    let cell: RealmDeclaration = serde_json::from_value(
+        index
+            .last("URLSearchParams.prototype")
+            .unwrap()
+            .facts()
+            .clone(),
+    )
+    .unwrap();
+    let iterator = cell
+        .properties
+        .iter()
+        .find(|p| p.symbol && p.key == "@@iterator")
+        .unwrap();
+    assert_eq!(
+        iterator.value,
+        Some(RealmValue::Reference(
+            "URLSearchParams.prototype.entries".into()
+        ))
+    );
+    assert_eq!(cell.own_symbol_order, ["@@iterator", "@@toStringTag"]);
+}
+
+#[test]
+fn realm_source_exception_operations_retain_their_own_families() {
+    let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+    for (operation, family) in [
+        (
+            "js_throw_reference_error_this_before_super",
+            "ReferenceError",
+        ),
+        ("js_box_get_bits_named", "ReferenceError"),
+        ("js_box_get_bits_trusted_named", "ReferenceError"),
+        ("js_data_view_new", "RangeError"),
+        ("js_typed_array_new", "RangeError"),
+        ("js_json_parse", "SyntaxError"),
+        ("JSON.parse", "SyntaxError"),
+        ("js_arraylike_with", "RangeError"),
+        ("Array.prototype.with", "RangeError"),
+        ("js_global_assign_existing_or_throw", "ReferenceError"),
+        ("js_stack_overflow", "RangeError"),
+        ("js_promise_all", "TypeError"),
+    ] {
+        let mut reach = perry_hir::realm_reach::RealmReach::default();
+        if operation.contains(".") {
+            reach.own(operation);
+        } else {
+            reach.exec(operation);
+        }
+        reach.close(&index);
+        let prototype = format!("{family}.prototype");
+        assert!(
+            reach.names.contains(&prototype),
+            "{operation} must retain its instance prototype"
+        );
+        // The allocation's chain does not itself read the constructor. The
+        // catch clause's explicit .constructor observation owns that value.
+        reach.receiver_keys.insert("constructor".into());
+        reach.chain_read = true;
+        reach.close(&index);
+        assert!(
+            reach.names.contains(family),
+            "{operation}: observing .constructor must retain {family}"
+        );
+    }
+}
+
+#[test]
+fn realm_iterator_getter_carries_the_native_bootstrap_capture_write() {
+    let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+    let mut reach = perry_hir::realm_reach::RealmReach::default();
+    reach.own("%IteratorPrototype%.constructor.<get>");
+    reach.close(&index);
+    assert!(
+        reach.names.contains("Iterator"),
+        "the getter's final capture is a value root"
+    );
+}
+
+#[test]
+fn realm_reader_creation_retains_both_instance_chains_and_its_promise() {
+    let index = perry_hir::realm_reach_index::RealmIndex::new(crate::realm_manifest::REALM);
+    let mut reach = perry_hir::realm_reach::RealmReach::default();
+    reach.exec("js_readable_stream_get_reader_with_options");
+    reach.close(&index);
+    for name in [
+        "ReadableStreamDefaultReader.prototype",
+        "ReadableStreamBYOBReader.prototype",
+        "Promise.prototype",
+    ] {
+        assert!(
+            reach.names.contains(name),
+            "reader creation must retain {name}"
+        );
+    }
+}

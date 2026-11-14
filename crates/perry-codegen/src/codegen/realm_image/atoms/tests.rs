@@ -162,10 +162,22 @@ fn function_prototype_state_key_links_to_its_image_string() {
             panic!("function state key must be an image string")
         };
         let ir = module.to_ir();
+        let atom = atoms.key_records.get("p").unwrap();
         let key = ir
             .lines()
-            .find(|line| line.starts_with("@perry_atom_70 ="))
+            .find(|line| line.starts_with(&format!("@{atom} =")))
             .unwrap();
+        let section = if target.contains("apple") {
+            "__DATA,__realm_atoms"
+        } else if target.contains("windows") {
+            ".realmats$m"
+        } else {
+            "perry_realm_atoms"
+        };
+        assert!(
+            key.contains(section),
+            "function state key is descriptor-owned"
+        );
         assert!(
             key.contains(&symbol),
             "key atom must carry the emitted string address"
@@ -194,4 +206,44 @@ fn runtime_layout_facts_preserve_target_variants_and_symbol_registration() {
     assert!(keys.contains(&RealmValue::Symbol("@for:nodejs.rejection".into())));
     assert!(keys.contains(&RealmValue::Symbol("@for:Stream.toAsyncStreamable".into())));
     assert!(keys.contains(&RealmValue::Symbol("@runtime:kCapture".into())));
+}
+
+#[test]
+fn realm_owned_atoms_do_not_join_the_startup_section() {
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    let mut strings = crate::strings::StringPool::new();
+    let mut cold = BTreeMap::new();
+    let mut startup = BTreeMap::new();
+    let key = "unobserved_realm_key";
+    let cold_name =
+        crate::layout_desc::realm_atom(&mut module, &mut strings, &mut cold, key).unwrap();
+    let startup_name =
+        crate::layout_desc::atom(&mut module, &mut strings, &mut startup, key).unwrap();
+    let ir = module.to_ir();
+    let cold_line = ir
+        .lines()
+        .find(|line| line.starts_with(&format!("@{cold_name} =")))
+        .unwrap();
+    let startup_line = ir
+        .lines()
+        .find(|line| line.starts_with(&format!("@{startup_name} =")))
+        .unwrap();
+    assert!(cold_line.contains("section \"perry_realm_atoms\""));
+    assert!(startup_line.contains("section \"perry_atoms\""));
+    assert_ne!(cold_name, startup_name);
+    let index = strings.intern(key);
+    let image = crate::codegen::string_pool::image_record_symbol(strings.entry(index));
+    assert!(cold_line.contains(&image));
+    assert!(startup_line.contains(&image));
+    assert!(!ir.contains("call "));
+}
+
+#[test]
+fn runtime_atom_identity_is_its_source_ordinal() {
+    let identities = super::symbol_identities().unwrap();
+    assert_eq!(
+        identities["@runtime:kCapture"],
+        perry_abi::runtime_symbol_identity(0)
+    );
+    assert_ne!(identities["@runtime:kCapture"], identities["@@iterator"]);
 }

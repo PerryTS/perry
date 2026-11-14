@@ -151,7 +151,7 @@ def check_restricted(log, names_file, names):
         raise GateError(f"restricted dumper R is not the names file: extra {extra}, missing {missing}")
 
 
-def dump(binary, names=None, walk=False):
+def dump(binary, names=None, walk=False, projection=None, whole=()):
     """Run a dumper; `walk` hands it the names (realm-dump.names) so a
     restricted dumper walks only roots in R. Its output is restricted to
     `names` either way."""
@@ -168,7 +168,7 @@ def dump(binary, names=None, walk=False):
                          capture_output=True, text=True)
     if run.returncode != 0:
         raise GateError(f"{binary} exited {run.returncode}: {run.stderr[-500:]}")
-    text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names, projection, whole)
     return text.replace(str(work_dir()), WORK_TOKEN)
 
 

@@ -14,6 +14,12 @@ extern crate alloc;
 
 pub mod accessor_guards;
 mod builtin_proto;
+pub use builtin_proto::{
+    iterator_sealed_family, ARRAY_ITERATOR_PROTOTYPE_FAMILY, ASYNC_GENERATOR_PROTOTYPE_FAMILY,
+    GENERATOR_PROTOTYPE_FAMILY, ITERATOR_PROTOTYPE_FAMILIES, ITERATOR_PROTOTYPE_FAMILY,
+    MAP_ITERATOR_PROTOTYPE_FAMILY, REGEXP_STRING_ITERATOR_PROTOTYPE_FAMILY,
+    RUNTIME_PROTOTYPE_FAMILY, SET_ITERATOR_PROTOTYPE_FAMILY, STRING_ITERATOR_PROTOTYPE_FAMILY,
+};
 pub use builtin_proto::{BuiltinProto, FunctionProtoKind};
 pub mod intrinsic_serials;
 pub mod lock;
@@ -27,6 +33,7 @@ pub use realm_cells::*;
 pub mod layouts;
 pub use layouts::*;
 pub mod realm_header;
+pub mod realm_private;
 
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
@@ -353,6 +360,11 @@ pub const GC_TYPE_BUFFER: u8 = 0x4c;
 pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
 /// Header-less symbols must be screened before trusting a buffer layout.
 pub const SYMBOL_HEADER_MAGIC: u32 = 0x5359_4D42;
+/// Emitted receiver rank, retained only to diagnose a missing STRUCTURE read.
+/// Member selection is still exclusively `keeps_member` for both ranks.
+pub const REALM_RANK_STRUCTURE: u8 = 1;
+pub const REALM_RANK_WHOLE: u8 = 2;
+
 /// `SymbolHeader.registered` bits. `SYMBOL_GLOBAL_REGISTRY`: born by
 /// `Symbol.for` (the spec's GlobalSymbolRegistry; `Symbol.keyFor` answers it,
 /// WeakRef refuses it). `SYMBOL_NATIVE_TEXT`: a runtime-born immortal cell whose

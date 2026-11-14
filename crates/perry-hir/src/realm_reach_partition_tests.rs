@@ -539,3 +539,82 @@ fn unknown_key_can_set_a_prototype_only_after_setprototypeof_is_held() {
     r.close(&index);
     assert_eq!(r, once);
 }
+
+#[test]
+fn held_runtime_value_readers_close_as_names_without_owning_their_values() {
+    const BACK: &[RealmOwn] = &[RealmOwn {
+        key: "constructor",
+        symbol: false,
+        value: RealmOwnValue::Reference("Ctor"),
+    }];
+    let index = RealmIndex::new(&[
+        row(
+            "Reader",
+            RealmKind::Method,
+            &[],
+            &[],
+            r#"{"runtime_reads":["Intermediate"]}"#,
+        ),
+        row(
+            "Intermediate",
+            RealmKind::Method,
+            &[],
+            &[],
+            r#"{"runtime_reads":["Ctor.prototype"]}"#,
+        ),
+        row(
+            "Ctor",
+            RealmKind::Constructor,
+            &["Ctor.prototype"],
+            PROTOTYPE,
+            r#"{"constructor":{}}"#,
+        ),
+        row(
+            "Ctor.prototype",
+            RealmKind::Prototype,
+            &["Ctor"],
+            BACK,
+            "{}",
+        ),
+    ]);
+    for owned in [false, true] {
+        let mut reach = RealmReach::default();
+        if owned {
+            reach.own("Reader");
+        } else {
+            reach.names.insert("Reader".into());
+        }
+        let own = reach.own_names.clone();
+        reach.close(&index);
+        // The cross-crate sabotage harness feeds this actual closed result
+        // into the runtime's checked image-private-read fixture.
+        if let Some(path) = std::env::var_os("REALM_ROOTS_PROJECTION_PATH") {
+            std::fs::write(
+                path,
+                reach.names.iter().cloned().collect::<Vec<_>>().join("\n"),
+            )
+            .unwrap();
+        }
+        assert!(reach.names.contains("Intermediate"));
+        assert!(reach.structure.contains("Intermediate"));
+        assert!(reach.names.contains("Ctor.prototype"));
+        assert!(reach.structure.contains("Ctor.prototype"));
+        assert!(!reach.names.contains("Ctor"));
+        assert_eq!(reach.own_names, own);
+        assert!(!reach.keeps_member(
+            &index,
+            index.last("Ctor.prototype").unwrap(),
+            "constructor",
+            "Ctor",
+            false
+        ));
+        reach.assert_whole_fixpoint(&index);
+        let closed = reach.clone();
+        reach.close(&index);
+        assert_eq!(reach, closed);
+    }
+    let mut absent = RealmReach::default();
+    absent.close(&index);
+    assert!(!absent.names.contains("Intermediate"));
+    assert!(!absent.names.contains("Ctor.prototype"));
+}

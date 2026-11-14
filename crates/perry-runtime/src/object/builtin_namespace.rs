@@ -55,7 +55,10 @@ pub(crate) const CONSOLE_FAMILY: usize = FIRST + console_index();
 const fn console_index() -> usize {
     let mut i = 0;
     while i < COUNT {
-        if matches!(crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(), b"console") {
+        if matches!(
+            crate::codegen_abi::BUILTIN_NAMESPACES[i].as_bytes(),
+            b"console"
+        ) {
             return i;
         }
         i += 1;
@@ -154,29 +157,7 @@ pub(crate) fn seal_namespaces(global: *mut ObjectHeader) {
             let Some(bits) = global_data_binding(global, name) else {
                 continue;
             };
-            // A constructor without statics has no bag yet: give it one, so
-            // a later write lands in a sealed holder.
-            let addr = (bits & crate::value::POINTER_MASK) as usize;
-            if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
-                && crate::closure::is_closure_ptr(addr)
-            {
-                crate::closure::props::bag_ensure(addr);
-            }
-            let obj = holder_of_value(bits);
-            if obj.is_null() {
-                continue;
-            }
-            super::builtin_proto::seal_object_family(obj, FIRST + i);
-            if contract_mode() {
-                snapshot_members(i, obj);
-            }
-            trace(name, "sealed", (*obj).parent_class_id);
-            if super::shapes::is_site_matchable_layout_word((*obj).parent_class_id) {
-                crate::agent_ptrs::publish_intrinsic_proto(FIRST + i, obj);
-            } else {
-                // Its word cannot carry the bit: never pristine.
-                crate::agent_ptrs::publish_patched_intrinsic(FIRST + i);
-            }
+            prepare_binding(i, bits);
         }
         super::builtin_proto::seal_object_family(global, GLOBAL_FAMILY);
     }
@@ -406,23 +387,35 @@ fn function_identity(bits: u64) -> Option<usize> {
 
 /// Record namespace `i`'s function members (contract runs).
 unsafe fn snapshot_members(i: usize, holder: *mut ObjectHeader) {
-    let names =
-        super::js_object_get_own_property_names(crate::value::js_nanbox_pointer(holder as i64));
-    let names = (names.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
-    if names.is_null() {
+    let (keys, live) = layout_keys(holder);
+    if keys.is_null() {
         return;
     }
     let mut out = Vec::new();
-    for k in 0..crate::array::js_array_length(names) {
-        let name = crate::array::js_array_get_f64(names, k);
-        let s = crate::value::js_jsvalue_to_string(name);
-        if s.is_null() {
+    for k in 0..keys.count() {
+        if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys.arr(), k))
+            || super::key_attrs::key_is_accessor_at(keys.arr(), k)
+        {
             continue;
         }
+        let name = crate::array::array_elements_ptr(keys.arr())
+            .cast::<u64>()
+            .add(k as usize)
+            .read();
+        let name = crate::value::JSValue::from_bits(name);
+        if !name.is_string() {
+            continue;
+        }
+        let s = name.as_string_ptr();
         let bytes =
             std::slice::from_raw_parts(super::string_header_payload(s), (*s).byte_len as usize)
                 .to_vec();
-        if let Some(bits) = own_data(holder, &bytes) {
+        // The walk already has this entry's position. Read its storage
+        // directly; a second by-name lookup could initialize global atoms.
+        let bits = super::field_get_set::object_key_value_at_with_keys(holder, keys.arr(), k, live)
+            .unwrap_or_else(crate::value::JSValue::undefined)
+            .bits();
+        if bits != crate::value::TAG_HOLE {
             out.push((i, bytes, function_identity(bits)));
         }
     }
@@ -432,3 +425,50 @@ unsafe fn snapshot_members(i: usize, holder: *mut ObjectHeader) {
 #[cfg(test)]
 #[path = "builtin_namespace_tests.rs"]
 mod tests;
+
+/// Cell preparation remains on BIRTH. Both arms publish the same holder
+/// word and optional contract evidence after its row exists.
+unsafe fn prepare_binding(i: usize, bits: u64) {
+    // Main population supplies this window already. A selected native
+    // provider has the same BIRTH preparation without a whole population.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr(addr)
+    {
+        crate::closure::props::bag_ensure(addr);
+    }
+    let obj = holder_of_value(bits);
+    if obj.is_null() {
+        return;
+    }
+    super::builtin_proto::seal_object_family(obj, FIRST + i);
+    trace(
+        crate::codegen_abi::BUILTIN_NAMESPACES[i],
+        "sealed",
+        (*obj).parent_class_id,
+    );
+    link_holder(i, obj);
+}
+
+pub(crate) unsafe fn link_holder(i: usize, obj: *mut ObjectHeader) {
+    assert!(i < COUNT);
+    if contract_mode() {
+        snapshot_members(i, obj);
+    }
+    if super::shapes::is_site_matchable_layout_word((*obj).parent_class_id) {
+        crate::agent_ptrs::publish_intrinsic_proto(FIRST + i, obj);
+    } else {
+        crate::agent_ptrs::publish_patched_intrinsic(FIRST + i);
+    }
+}
+
+/// A staged native provider fills one selected Global slot on its BIRTH arm.
+pub(crate) unsafe fn prepare_selected_binding(name: &str, bits: u64) {
+    if let Some(i) = crate::codegen_abi::BUILTIN_NAMESPACES
+        .iter()
+        .position(|n| *n == name)
+    {
+        prepare_binding(i, bits);
+    }
+}

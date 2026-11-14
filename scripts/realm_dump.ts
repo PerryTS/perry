@@ -110,7 +110,7 @@ function ref(v: any, path: string): any {
 }
 function descriptor(d: any, path: string): any {
     const out: any = { configurable: d.configurable, enumerable: d.enumerable };
-    if (Object.prototype.hasOwnProperty.call(d, "value")) {
+    if (Object.getOwnPropertyDescriptor(d, "value") !== undefined) {
         out.writable = d.writable;
         out.value = ref(d.value, path);
     } else {

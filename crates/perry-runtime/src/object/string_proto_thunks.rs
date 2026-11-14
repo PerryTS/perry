@@ -128,7 +128,7 @@ fn install_generic_string_proto_methods(proto_obj: *mut ObjectHeader) {
                     crate::fn_info!(#[realm(String.prototype.match, births = [RegExp], calls = [js_string_match_js])] export crate::object::string_proto_thunks::string_proto_match_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "matchAll" => {
-                    crate::fn_info!(#[realm(String.prototype.matchAll, births = [RegExp])] export crate::object::string_proto_thunks::string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
+                    crate::fn_info!(#[realm(String.prototype.matchAll, births = [RegExp, "%RegExpStringIteratorPrototype%"])] export crate::object::string_proto_thunks::string_proto_match_all_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN))
                 }
                 "replace" => {
                     crate::fn_info!(#[realm(String.prototype.replace, calls = [js_string_replace_js])] export crate::object::string_proto_thunks::string_proto_replace_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN))

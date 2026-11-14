@@ -181,9 +181,17 @@ fn writes_to_the_builtin_prototypes_are_read_back() {
             let word = (*(p as *const ObjectHeader)).parent_class_id;
             crate::exception::catch_js_throw(|| set(p, "programAdded", 10.0))
                 .expect_err("a program add on an add-locked prototype is refused");
-            assert_eq!((*(p as *const ObjectHeader)).parent_class_id, word, "a refused add keeps the word");
+            assert_eq!(
+                (*(p as *const ObjectHeader)).parent_class_id,
+                word,
+                "a refused add keeps the word"
+            );
             for obj in [arr, o, object_ctor] {
-                assert_eq!(get(obj, "programAdded"), TAG_UNDEFINED, "a refused add is not read back");
+                assert_eq!(
+                    get(obj, "programAdded"),
+                    TAG_UNDEFINED,
+                    "a refused add is not read back"
+                );
                 agrees(obj, "programAdded");
             }
         }
@@ -202,10 +210,12 @@ fn a_deleted_and_readded_builtin_is_read_back() {
             (fp, "apply"),
             (op, "propertyIsEnumerable"),
         ] {
-            crate::object::own_override::as_builtin_definition(|| crate::object::js_object_delete_field(
-                proto as *mut ObjectHeader,
-                (atom(key) & POINTER_MASK) as *const crate::StringHeader,
-            ));
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::js_object_delete_field(
+                    proto as *mut ObjectHeader,
+                    (atom(key) & POINTER_MASK) as *const crate::StringHeader,
+                )
+            });
             for obj in [o, arr, object_ctor] {
                 agrees(obj, key);
             }
@@ -234,7 +244,11 @@ fn a_deleted_and_readded_builtin_is_read_back() {
             crate::exception::catch_js_throw(|| set(proto, key, 13.0))
                 .expect_err("a program add through the overflow is refused");
             for obj in [o, arr, object_ctor] {
-                assert_eq!(get(obj, key), TAG_UNDEFINED, "a refused add is not read back");
+                assert_eq!(
+                    get(obj, key),
+                    TAG_UNDEFINED,
+                    "a refused add is not read back"
+                );
                 agrees(obj, key);
             }
             crate::object::own_override::as_builtin_definition(|| set(proto, key, 12.0));
@@ -303,11 +317,13 @@ fn builtin_prototypes_stay_on_their_declared_layout_ids() {
         for (target, obj, desc, key) in cases {
             let boxed = f64::from_bits(POINTER_TAG | target as u64);
             let value = get(target, key);
-            crate::object::own_override::as_builtin_definition(|| crate::object::object_ops::js_object_define_property(
-                boxed,
-                f64::from_bits(atom(key)),
-                data_descriptor(value, true, false, true),
-            ));
+            crate::object::own_override::as_builtin_definition(|| {
+                crate::object::object_ops::js_object_define_property(
+                    boxed,
+                    f64::from_bits(atom(key)),
+                    data_descriptor(value, true, false, true),
+                )
+            });
             assert_eq!(get(target, key), value);
             assert_eq!(
                 crate::object::layout_desc::layout_id_of_word((*obj).parent_class_id),

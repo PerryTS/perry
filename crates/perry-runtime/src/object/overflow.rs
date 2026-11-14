@@ -153,7 +153,9 @@ unsafe fn allocate(capacity: u32) -> *mut Table {
 #[inline]
 unsafe fn key_hash(key: u64) -> u64 {
     if crate::symbol::js_is_symbol(f64::from_bits(key)) != 0 {
-        return (*((key & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader)).id;
+        return crate::symbol::identity_hash(
+            (key & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader,
+        );
     }
     crate::string::property_atom_hash(
         (key & crate::value::POINTER_MASK) as *const crate::StringHeader,
@@ -172,7 +174,7 @@ unsafe fn place(t: *mut Table, slot: u32) {
     let mut p = key_hash(key) as usize & mask;
     while *index(t).add(p) != EMPTY {
         let previous = *index(t).add(p);
-        if *key_at(t, previous) == key {
+        if crate::object::shapes::layout_probe::key_eq(*key_at(t, previous), key) {
             // GC_STORE_AUDIT(POINTER_FREE): place writes u32 slot ordinal into *mut u32 index column after hashing the key; never copies key bits or heap addresses.
             index(t).add(p).write(slot);
             return;
@@ -192,7 +194,7 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         let mut i = (*t).length;
         while i > 0 {
             i -= 1;
-            if *keys.add(i as usize) == key {
+            if crate::object::shapes::layout_probe::key_eq(*keys.add(i as usize), key) {
                 return (!super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)).then_some(i);
             }
         }
@@ -205,7 +207,7 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
         if i == EMPTY {
             return None;
         }
-        if *key_at(t, i) == key {
+        if crate::object::shapes::layout_probe::key_eq(*key_at(t, i), key) {
             return Some(i);
         }
         p = (p + 1) & mask;
@@ -215,7 +217,8 @@ pub(crate) unsafe fn find_hashed(t: *const Table, key: u64, hash: u64) -> Option
 pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
     if (*t).length < 8 {
         return (0..(*t).length).rev().find(|&i| {
-            *key_at(t, i) == key && !super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
+            crate::object::shapes::layout_probe::key_eq(*key_at(t, i), key)
+                && !super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
         });
     }
     let mask = (*t).index_capacity as usize - 1;
@@ -225,7 +228,7 @@ pub(crate) unsafe fn find(t: *const Table, key: u64) -> Option<u32> {
         if i == EMPTY {
             return None;
         }
-        if *key_at(t, i) == key {
+        if crate::object::shapes::layout_probe::key_eq(*key_at(t, i), key) {
             return Some(i);
         }
         p = (p + 1) & mask;
@@ -432,7 +435,8 @@ pub(crate) unsafe fn insert_key_bits(
     let key = key.get_nanbox_u64();
     let hit = if super::key_attrs::entry_is_private(attrs) {
         (0..(*t).length).find(|&i| {
-            *key_at(t, i) == key && super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
+            crate::object::shapes::layout_probe::key_eq(*key_at(t, i), key)
+                && super::key_attrs::entry_is_private(*attrs_at(t, i) as u8)
         })
     } else {
         find(t, key)
@@ -508,7 +512,38 @@ pub(crate) unsafe fn get_from(t: *const Table, obj: *const ObjectHeader, slot: u
     if *key_at(t, slot) == TAG_HOLE {
         return None;
     }
-    read_found_with_live(t, obj, slot, || super::object_live_slot_count(obj))
+    read_found_with_live(
+        t,
+        obj,
+        slot,
+        || super::object_live_slot_count(obj),
+        |obj, fixed, live| {
+            Some(super::field_get_set::object_field_at_with_live(obj, fixed, live).bits())
+        },
+    )
+}
+
+/// An existing entry read against its resolved inline bound, without user
+/// callbacks or diagnostics. Fixed references use their physical storage.
+pub(crate) unsafe fn get_from_storage(
+    t: *const Table,
+    obj: *const ObjectHeader,
+    slot: u32,
+    live: u32,
+) -> Option<u64> {
+    if slot >= (*t).length || *key_at(t, slot) == TAG_HOLE {
+        return None;
+    }
+    read_found_with_live(
+        t,
+        obj,
+        slot,
+        || live,
+        |obj, fixed, live| {
+            super::field_get_set::object_field_value_at_with_live(obj, fixed, live)
+                .map(|value| value.bits())
+        },
+    )
 }
 
 /// Read an entry just found in the actual table, using the receiver's current
@@ -526,7 +561,15 @@ pub(crate) unsafe fn get_found_from_record(
     record: super::shapes::ShapeRecordRef,
 ) -> Option<u64> {
     debug_assert!(slot < (*t).length && *key_at(t, slot) != TAG_HOLE);
-    read_found_with_live(t, obj, slot, || record.live_inline_slot_count())
+    read_found_with_live(
+        t,
+        obj,
+        slot,
+        || record.live_inline_slot_count(),
+        |obj, fixed, live| {
+            Some(super::field_get_set::object_field_at_with_live(obj, fixed, live).bits())
+        },
+    )
 }
 
 /// The single entry-value operation. General callers validate the entry above
@@ -538,12 +581,13 @@ unsafe fn read_found_with_live(
     obj: *const ObjectHeader,
     slot: u32,
     inline_bound: impl FnOnce() -> u32,
+    read_inline: impl FnOnce(*const ObjectHeader, u32, u32) -> Option<u64>,
 ) -> Option<u64> {
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         let fixed = *value_at(t, slot) as u32;
         let live = inline_bound();
         if fixed < live {
-            return Some(super::field_get_set::object_field_at_with_live(obj, fixed, live).bits());
+            return read_inline(obj, fixed, live);
         }
         return super::spill::spill_get_present(obj as usize, fixed as usize);
     }
@@ -613,7 +657,8 @@ pub(crate) unsafe fn reattach_fixed(obj: *mut ObjectHeader, key: u64) {
         return;
     }
     let slots = crate::array::array_elements_ptr(keys);
-    let Some(fixed) = (0..record.logical_key_count()).find(|&i| *slots.add(i as usize) == key)
+    let Some(fixed) = (0..record.logical_key_count())
+        .find(|&i| crate::object::shapes::layout_probe::key_eq(*slots.add(i as usize), key))
     else {
         return;
     };

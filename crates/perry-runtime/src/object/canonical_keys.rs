@@ -705,7 +705,8 @@ impl CanonicalTable {
 fn canonical_node_ids_exhausted() -> ! {
     // A fatal diagnostic must not run Rust I/O error callbacks.
     const _: () = assert!(NODE_ID_LIMIT == 16_777_215);
-    let message = b"perry: canonical key-list node ids exhausted (16777215 live lists in one agent)\n";
+    let message =
+        b"perry: canonical key-list node ids exhausted (16777215 live lists in one agent)\n";
     // SAFETY: the immutable bytes outlive the write and fit every CRT count.
     unsafe { libc::write(2, message.as_ptr().cast(), message.len() as _) };
     std::process::abort()
@@ -828,7 +829,7 @@ impl Appended {
             }
             Appended::Key(key) => crate::string::js_string_key_matches(stored, key),
             Appended::Slot(v) => {
-                if stored.bits() == v.bits() {
+                if crate::object::shapes::layout_probe::key_eq(stored.bits(), v.bits()) {
                     return true;
                 }
                 let mut sa = [0u8; crate::value::SHORT_STRING_MAX_LEN];
@@ -928,9 +929,9 @@ impl Appended {
 /// Never the symbol's ADDRESS: that is a function of where the image or the
 /// heap put it, so the edge table's occupancy, and with it every probe's
 /// cost, would move with an unrelated link-layout change, and a moved symbol
-/// would no longer reach its own edge. The exact check (`matches`) still
-/// compares the slot words, so two symbols with one description, or a serial
-/// collision, never share a list.
+/// would no longer reach its own edge. The exact check uses the header's
+/// identity too: two cells of one declared symbol share a list, while
+/// distinct symbols with one description remain distinct.
 ///
 /// Out of line, so `Appended::slot_hash`'s string path stays small enough to
 /// inline into every walk, as it did before symbols had their own arm.
@@ -943,7 +944,8 @@ unsafe fn non_string_slot_hash(v: JSValue) -> u64 {
     if v.is_pointer() {
         let sym = (v.bits() & crate::value::POINTER_MASK) as *const crate::symbol::SymbolHeader;
         if !sym.is_null() && crate::symbol::may_be_symbol_header(sym.cast()) {
-            return ((*sym).id ^ SYMBOL_EDGE_DOMAIN).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            return (crate::symbol::identity_hash(sym) ^ SYMBOL_EDGE_DOMAIN)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         }
     }
     v.bits() ^ 0x9E37_79B9_7F4A_7C15

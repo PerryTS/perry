@@ -950,7 +950,7 @@ pub(crate) fn promise_static_function_info(
     Some(match name {
         "resolve" => (fn_info!(#[realm(Promise.resolve, births = [Function])] export crate::object::global_this::bigint_promise::promise_resolve_static, 1; with_declared(1)), 1),
         "reject" => (fn_info!(#[realm(Promise.reject, births = [Function])] export crate::object::global_this::bigint_promise::promise_reject_static, 1; with_declared(1)), 1),
-        "all" => (fn_info!(#[realm(Promise.all, births = [Function])] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(#[realm(Promise.all, births = [TypeError, Function])] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
         "race" => (fn_info!(#[realm(Promise.race, births = [Function])] export crate::object::global_this::bigint_promise::promise_race_static, 1; with_declared(1)), 1),
         "allSettled" => (fn_info!(#[realm(Promise.allSettled, births = [Function])] export crate::object::global_this::bigint_promise::promise_all_settled_static, 1; with_declared(1)), 1),
         "any" => (fn_info!(#[realm(Promise.any, births = [Function])] export crate::object::global_this::bigint_promise::promise_any_static, 1; with_declared(1)), 1),

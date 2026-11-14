@@ -114,7 +114,7 @@ fn thunk_for(name: &str) -> *const crate::closure::JsFunctionInfo {
             crate::fn_info!(#[realm("%TypedArray%.prototype.every", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_every_metadata))] export crate::object::typed_array_proto_thunks::ta_every_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "fill" => {
-            crate::fn_info!(#[realm("%TypedArray%.prototype.fill", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_fill_metadata))] export crate::object::typed_array_proto_thunks::ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
+            crate::fn_info!(#[realm("%TypedArray%.prototype.fill", births = [TypeError, SyntaxError], spec = {length = 1}, emit = metadata(realm_typedarray_prototype_fill_metadata))] export crate::object::typed_array_proto_thunks::ta_fill_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))
         }
         "filter" => {
             crate::fn_info!(#[realm("%TypedArray%.prototype.filter", spec = {length = 1}, emit = metadata(realm_typedarray_prototype_filter_metadata))] export crate::object::typed_array_proto_thunks::ta_filter_thunk, 3; with_declared(3), with_flags(crate::closure::FN_BUILTIN))

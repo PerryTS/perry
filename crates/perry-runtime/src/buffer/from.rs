@@ -552,6 +552,7 @@ fn uint8array_length_or_throw(val: f64) -> u32 {
 /// `new Uint8Array(length)` — zero-filled buffer marked as Uint8Array.
 #[no_mangle]
 pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_uint8array_alloc, births = [RangeError, TypeError] }
     let length = uint8array_length_or_throw(length as f64);
     super::store::store_alloc(
         crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
@@ -570,6 +571,7 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
 /// `ArrayHeader*` and silently produced a zero-length buffer (closes #38).
 #[no_mangle]
 pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_uint8array_new, births = [RangeError, TypeError] }
     let bits = val.to_bits();
     let top16 = (bits >> 48) as u16;
     // ToIndex rejects BigInt and Symbol.
@@ -699,6 +701,7 @@ pub extern "C" fn js_uint8array_view(
     offset_value: f64,
     length_value: f64,
 ) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_uint8array_view, births = [RangeError, TypeError] }
     let bits = source.to_bits();
     if (bits >> 48) != 0x7FFD {
         return js_uint8array_new(source);
@@ -809,6 +812,7 @@ pub(super) fn array_buffer_to_index(value: f64) -> i32 {
 /// sharing the same pointer.
 #[no_mangle]
 pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_array_buffer_new, births = [RangeError, TypeError] }
     let buf = zeroed_array_buffer_storage(size);
 
     buf
@@ -816,6 +820,7 @@ pub extern "C" fn js_array_buffer_new(size: i32) -> *mut BufferHeader {
 
 #[no_mangle]
 pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_array_buffer_new_value, births = [RangeError, TypeError] }
     js_array_buffer_new(array_buffer_to_index(size_value))
 }
 
@@ -829,6 +834,7 @@ pub extern "C" fn js_array_buffer_new_value(size_value: f64) -> *mut BufferHeade
 /// agents, so cross-agent `Atomics.wait`/`notify` actually coordinate (#4913).
 #[no_mangle]
 pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_shared_array_buffer_new, births = [RangeError, TypeError] }
     let size = size.max(0) as u32;
     let buf = crate::shared_sab::alloc_shared_sab(size);
     // Register in the creating thread's tables too so local predicates
@@ -841,6 +847,7 @@ pub extern "C" fn js_shared_array_buffer_new(size: i32) -> *mut BufferHeader {
 
 #[no_mangle]
 pub extern "C" fn js_shared_array_buffer_new_value(size_value: f64) -> *mut BufferHeader {
+    crate::realm_decl! { operation js_shared_array_buffer_new_value, births = [RangeError, TypeError] }
     js_shared_array_buffer_new(array_buffer_to_index(size_value))
 }
 
@@ -910,6 +917,7 @@ fn dataview_to_index(value: f64, what: &str) -> i64 {
 /// out-of-range `byteOffset`/`byteLength` throw `RangeError`.
 #[no_mangle]
 pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: f64) -> f64 {
+    crate::realm_decl! { operation js_data_view_new, births = [RangeError, TypeError] }
     let v = crate::value::JSValue::from_bits(value.to_bits());
     // Step 2: Type(buffer) must be Object holding [[ArrayBufferData]].
     if !v.is_pointer() {

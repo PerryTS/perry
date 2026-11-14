@@ -969,6 +969,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     }
                 }
             }
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            if !key.is_null() {
+                crate::realm_reads::check_structure_named_lookup_miss(
+                    obj as usize,
+                    crate::value::js_nanbox_string(key as i64).to_bits(),
+                );
+            }
             return JSValue::undefined();
         }
         // Issue #179 Phase 2: lazy array dispatch. `.length` returns
@@ -1357,6 +1364,13 @@ pub(crate) fn get_field_by_name_object_tail(
                     return v;
                 }
             }
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            if !key.is_null() {
+                crate::realm_reads::check_structure_named_lookup_miss(
+                    obj as usize,
+                    crate::value::js_nanbox_string(key as i64).to_bits(),
+                );
+            }
             return JSValue::undefined();
         }
 
@@ -1377,6 +1391,13 @@ pub(crate) fn get_field_by_name_object_tail(
                 if let Some(v) = ordinary_object_prototype_property_value(obj, key) {
                     return v;
                 }
+            }
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            if !key.is_null() {
+                crate::realm_reads::check_structure_named_lookup_miss(
+                    obj as usize,
+                    crate::value::js_nanbox_string(key as i64).to_bits(),
+                );
             }
             return JSValue::undefined();
         }
@@ -1818,7 +1839,16 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        // Key not found
+        // Key not found: a STRUCTURE image must not silently answer a read
+        // the closed reach facts did not keep. The ordinary absence arm is
+        // shared; this diagnostic introduces no resolver or birth path.
+        #[cfg(any(test, debug_assertions, perry_diagnostics))]
+        if !key.is_null() {
+            crate::realm_reads::check_structure_named_lookup_miss(
+                obj as usize,
+                crate::value::js_nanbox_string(key as i64).to_bits(),
+            );
+        }
         JSValue::undefined()
     }
 }

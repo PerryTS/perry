@@ -288,6 +288,7 @@ pub extern "C" fn js_array_with(
     index: f64,
     value: f64,
 ) -> *mut ArrayHeader {
+    crate::realm_decl! { operation js_array_with, births = [RangeError] }
     // #5552: the replacement `value` is stored into the new array's slot — demote
     // a uniquely-owned (refcount==1) string to shared so a later `s += x` on the
     // source local can't corrupt it. No-op for SSO / non-string. The cloned

@@ -355,7 +355,12 @@ fn build_iterator_prototypes() {
     // intrinsic builders (#7251).
     let _no_move = crate::gc::GcSuppressScope::new();
     // Shared %IteratorPrototype% — carries [Symbol.iterator] returning `this`.
-    let shared = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%IteratorPrototype%", members = { [Symbol.iterator]; [Symbol.toStringTag] = "Iterator", attrs = writable | enumerable | configurable; }; } };
+    let shared = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%IteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_PROTOTYPE, members = {
+    [Symbol.iterator];
+    constructor = accessor(get = "%IteratorPrototype%.constructor.<get>", set = "%IteratorPrototype%.constructor.<set>");
+    [Symbol.toStringTag] = accessor(get = "%IteratorPrototype%[\"@@toStringTag\"].<get>", set = "%IteratorPrototype%[\"@@toStringTag\"].<set>");
+    map; filter; take; drop; flatMap; reduce; toArray; forEach; some; every; find; join; includes; [Symbol.dispose];
+    }; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(shared) };
     if shared.is_null() {
@@ -398,20 +403,24 @@ fn build_iterator_prototypes() {
         perry_abi::intrinsic_serials::INTRINSIC_SERIAL_STRING_ITERATOR_PROTOTYPE,
     );
     let regexp_string_proto = build_family_proto(
-        crate::fn_info!(regexp_string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+        crate::fn_info!(#[realm("%RegExpStringIteratorPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::regexp_string_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::codegen_abi::FN_PERMANENT_IMAGE)),
         "RegExp String Iterator",
         shared,
         perry_abi::intrinsic_serials::INTRINSIC_SERIAL_REGEXP_STRING_ITERATOR_PROTOTYPE,
     );
     let iterator_helper_proto = build_family_proto(
-        crate::fn_info!(iterator_helper_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("%IteratorHelperPrototype%.next", births = [Object])] export crate::object::iterator_prototypes::iterator_helper_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
         "Iterator Helper",
         shared,
         perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_HELPER_PROTOTYPE,
     );
     crate::iterator_helpers::install_prototype_methods(shared, iterator_helper_proto);
     crate::iterator_helpers::install_dispose(shared);
-    let wrap_proto = js_object_alloc(0, 0);
+    let wrap_proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm {
+        "%WrapForValidIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS,
+        intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_WRAP_FOR_VALID_ITERATOR_PROTOTYPE,
+        extends = "%IteratorPrototype%", members = { next; return; };
+    } };
     unsafe {
         super::proto_validity::prepare_intrinsic_prototype_serial(
             wrap_proto as usize,
@@ -499,7 +508,12 @@ fn build_family_proto(
     shared: *mut ObjectHeader,
     serial: u64,
 ) -> *mut ObjectHeader {
-    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; } };
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "%ArrayIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ARRAY_ITERATOR_PROTOTYPE, extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Array Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%MapIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_MAP_ITERATOR_PROTOTYPE, extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Map Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%SetIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_SET_ITERATOR_PROTOTYPE, extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "Set Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%StringIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS, intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_STRING_ITERATOR_PROTOTYPE, extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "String Iterator", attrs = writable | enumerable | configurable; }, never_move = true; "%RegExpStringIteratorPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS,
+    intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_REGEXP_STRING_ITERATOR_PROTOTYPE,
+    extends = "%IteratorPrototype%", members = { next; [Symbol.toStringTag] = "RegExp String Iterator", attrs = writable | enumerable | configurable; }, never_move = true;
+    "%IteratorHelperPrototype%", materialize_family = perry_abi::REALM_FAMILY_ITERATORS,
+    intrinsic_serial = perry_abi::intrinsic_serials::INTRINSIC_SERIAL_ITERATOR_HELPER_PROTOTYPE,
+    extends = "%IteratorPrototype%", members = { next; return; [Symbol.toStringTag] = "Iterator Helper", attrs = writable | enumerable | configurable; }, never_move = true; } };
     // SAFETY: the keyless newborn, unexposed, in this no-move window.
     unsafe { crate::object::shapes::stamp_born_prototype_root(proto) };
     if proto.is_null() {

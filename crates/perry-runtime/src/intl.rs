@@ -69,10 +69,10 @@ pub mod segments_view;
 use canon_aliases::canonicalize_unicode_extension_types;
 
 pub(crate) use date_collator::{
-    collator_bound_compare_thunk, date_time_format_bound_format_thunk,
-    date_time_format_bound_range_thunk, date_time_format_bound_range_to_parts_thunk,
-    date_time_format_bound_resolved_options_thunk, date_time_format_bound_to_parts_thunk,
-    resolve_collator_locale, temporal_locale_string, TemporalLocaleCtx,
+    date_time_format_bound_format_thunk, date_time_format_bound_range_thunk,
+    date_time_format_bound_range_to_parts_thunk, date_time_format_bound_resolved_options_thunk,
+    date_time_format_bound_to_parts_thunk, resolve_collator_locale, temporal_locale_string,
+    TemporalLocaleCtx,
 };
 pub(crate) use list_relative_plural::{
     canonicalize_calendar_id, canonicalize_offset_time_zone, is_valid_offset_time_zone,
@@ -1466,7 +1466,7 @@ fn make_instance_this(
                 bound_instance_function(
                     obj,
                     "",
-                    crate::fn_info!(#[realm(realm_decl! { "%CollatorCompare%", provider = closure, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); returns(prim(num)) } })] export crate::intl::date_collator::collator_bound_compare_thunk, 2; with_declared(2)),
+                    crate::fn_info!(#[realm(realm_decl! { "%CollatorCompare%", provider = closure, birth_domain = instance, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); returns(prim(num)) } })] export crate::intl::date_collator::collator_bound_compare_thunk, 2; with_declared(2)),
                     2,
                 )
             });
@@ -1794,7 +1794,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
     install_constructor(
         ns_obj,
         "DateTimeFormat",
-        crate::fn_info!(#[realm(Intl.DateTimeFormat, kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::date_time_format_constructor_thunk, 1; with_rest(0)),
+        crate::fn_info!(#[realm(Intl.DateTimeFormat, births = [RangeError, TypeError], kind = constructor, members = { supportedLocalesOf; })] export crate::intl::constructor_thunks::date_time_format_constructor_thunk, 1; with_rest(0)),
         0,
         &[
             // `format` is an accessor (getter) per ECMA-402 §11.4.3 — see below.

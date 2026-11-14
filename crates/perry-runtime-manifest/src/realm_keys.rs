@@ -46,7 +46,11 @@ pub(super) fn spelled(source: &str) -> Result<BTreeSet<String>, String> {
             skip_until = test_item_end(&ts, i + attr_len);
             continue;
         }
-        if !member_helper(token.text) || i > 0 && ts[i - 1].text == "fn" {
+        let qualified_get = token.text == "get"
+            && i >= 2
+            && ts[i - 1].text == "::"
+            && matches!(ts[i - 2].text, "dispatch" | "perex_dispatch");
+        if !(member_helper(token.text) || qualified_get) || i > 0 && ts[i - 1].text == "fn" {
             continue;
         }
         let open = i + 1 + usize::from(ts.get(i + 1).is_some_and(|t| t.text == "!"));
@@ -118,6 +122,12 @@ pub(super) fn attach(rows: &mut [crate::realm_json::Value], keys: &BTreeSet<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn regexp_dispatch_reads_are_spelled_keys_but_map_get_is_not() {
+        let keys = spelled(r#"dispatch::get(&receiver, b"sticky"); perex_dispatch::get(&receiver, b"unicodeSets"); map.get("not-a-property");"#).unwrap();
+        assert_eq!(keys, BTreeSet::from(["sticky".into(), "unicodeSets".into()]));
+    }
+
     #[test]
     fn reads_tokens_and_wrapped_literal_calls() {
         let keys = spelled(

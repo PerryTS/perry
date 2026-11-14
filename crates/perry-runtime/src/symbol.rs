@@ -21,6 +21,8 @@
 
 mod accessors;
 mod constructors;
+mod identity;
+pub(crate) use identity::{identity, identity_hash, Identity};
 mod get;
 #[cfg(test)]
 mod inherited_accessor_tests;
@@ -286,12 +288,18 @@ fn well_known_fast_slot(short_name: &str) -> Option<&'static std::sync::atomic::
 /// `description`: a symbol of node's own library that a runtime layout lists
 /// as a key (`runtime_layouts::runtime_symbol_of_atom`), the same symbol in
 /// every agent.
+#[cfg(test)]
 pub(crate) fn persistent_symbol(description: &str) -> *mut SymbolHeader {
+    persistent_symbol_with_identity(description, next_id())
+}
+
+/// A runtime-owned source atom has an identity independent of when it births.
+pub(crate) fn persistent_symbol_with_identity(description: &str, id: u64) -> *mut SymbolHeader {
     let sym_ptr = leak_symbol(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,
         description: std::ptr::null_mut(),
-        id: next_id(),
+        id,
     });
     record_registered_symbol_description(sym_ptr as usize, description);
     sym_ptr
@@ -316,7 +324,9 @@ fn well_known_symbol_slow(short_name: &str) -> *mut SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: perry_abi::SYMBOL_WELL_KNOWN,
         description: std::ptr::null_mut(),
-        id: next_id(),
+        id: perry_abi::well_known_symbol_number(short_name).map_or_else(next_id, |number| {
+            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + u64::from(number))
+        }),
     });
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(
@@ -908,6 +918,97 @@ mod symbol_identity_is_header {
         by_value
     }
 
+    #[test]
+    fn realm_symbol_identity_crosses_cell_addresses_on_all_key_paths() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let image = std::ptr::addr_of!(IMAGE_SYMBOL.symbol) as usize;
+            let native = space_cell(GC_TYPE_SYMBOL, SYMBOL_MAGIC);
+            // A native birth of the same declared identity as the image cell.
+            (*(native as *mut SymbolHeader)).id = (*(image as *const SymbolHeader)).id;
+            let a = boxed(image);
+            let b = boxed(native);
+            let distinct = js_symbol_new_empty();
+            assert_ne!(a.to_bits(), b.to_bits());
+            assert_eq!(js_symbol_equals(a, b), 1);
+            assert_eq!(crate::value::js_jsvalue_equals(a, b), 1);
+            assert_eq!(crate::value::js_jsvalue_same_value_zero(a, b), 1);
+            assert_eq!(crate::value::js_jsvalue_equals(a, distinct), 0);
+            assert_eq!(js_symbol_equals(a, boxed(8)), 0);
+
+            let iterator = well_known_symbol("iterator");
+            let same_iterator = space_cell(GC_TYPE_SYMBOL, SYMBOL_MAGIC);
+            (*(same_iterator as *mut SymbolHeader)).id = (*iterator).id;
+            for builtin in ["Map", "Set", "Array"] {
+                let proto = crate::object::builtin_prototype_value(builtin);
+                let expected = js_object_get_symbol_property(proto, boxed(iterator as usize));
+                assert_ne!(expected.to_bits(), crate::value::TAG_UNDEFINED, "{builtin}");
+                let fast = crate::object::layout_probe::perry_probe_get_keyed(
+                    crate::object::layout_probe::test_dir(),
+                    proto.to_bits(),
+                    boxed(same_iterator).to_bits(),
+                );
+                assert!(
+                    fast.to_bits() == expected.to_bits()
+                        || fast.to_bits() == crate::value::TAG_HOLE,
+                    "builtin symbol probe returned a wrong value: {builtin}: {fast:?}"
+                );
+            }
+
+            for overflow in [false, true] {
+                let obj = crate::object::js_object_alloc(0, 0);
+                let value = boxed(obj as usize);
+                js_object_set_symbol_property(value, a, 17.0);
+                if overflow {
+                    crate::object::overflow::ensure(obj);
+                }
+                let fast = crate::object::layout_probe::perry_probe_get_keyed(
+                    crate::object::layout_probe::test_dir(),
+                    value.to_bits(),
+                    b.to_bits(),
+                );
+                assert!(
+                    fast == 17.0 || fast.to_bits() == crate::value::TAG_HOLE,
+                    "cross-cell symbol probe returned a wrong value: {fast:?}, overflow={overflow}"
+                );
+                assert_eq!(js_object_get_symbol_property(value, b), 17.0);
+                js_object_set_symbol_property(value, b, 23.0);
+                assert_eq!(js_object_get_symbol_property(value, a), 23.0);
+                assert_eq!(js_object_delete_symbol_property(value, b), 1);
+                assert_eq!(
+                    js_object_get_symbol_property(value, a).to_bits(),
+                    crate::value::TAG_UNDEFINED
+                );
+                js_object_set_symbol_property(value, b, 31.0);
+                assert_eq!(js_object_get_symbol_property(value, a), 31.0);
+                assert_eq!(
+                    crate::array::js_array_length(
+                        js_object_get_own_property_symbols(value) as *const crate::ArrayHeader
+                    ),
+                    1
+                );
+            }
+            for fillers in [0, 40] {
+                let map = crate::map::js_map_alloc(4);
+                let set = crate::set::js_set_alloc(4);
+                for i in 0..fillers {
+                    crate::map::js_map_set(map, i as f64, -1.0);
+                    crate::set::js_set_add(set, i as f64);
+                }
+                crate::map::js_map_set(map, a, 17.0);
+                crate::set::js_set_add(set, a);
+                assert_eq!(crate::map::js_map_get(map, b), 17.0);
+                assert_eq!(crate::set::js_set_has(set, b), 1);
+                assert_eq!(crate::map::js_map_has(map, distinct), 0);
+                assert_eq!(crate::set::js_set_has(set, distinct), 0);
+                crate::map::js_map_set(map, b, 23.0);
+                crate::set::js_set_add(set, b);
+                assert_eq!(crate::map::js_map_size(map), (fillers + 1) as u32);
+                assert_eq!(crate::set::js_set_size(set), (fillers + 1) as u32);
+            }
+        }
+    }
+
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn symbol_identity_is_header() {
@@ -1022,6 +1123,51 @@ mod symbol_identity_is_header {
             assert_ne!(page, libc::MAP_FAILED);
             assert!(!is_registered_symbol(page as usize + 64));
             libc::munmap(page, 4096);
+        }
+    }
+}
+
+#[cfg(test)]
+mod realm_symbol_identity_tests {
+    use super::*;
+
+    #[test]
+    fn well_known_native_birth_uses_the_image_abi_identity() {
+        for (ordinal, name) in perry_abi::WELL_KNOWN_SYMBOLS.iter().enumerate() {
+            let symbol = well_known_symbol(name);
+            let expected =
+                perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + ordinal as u64);
+            assert_eq!(unsafe { (*symbol).id }, expected, "{name}");
+            assert_eq!(symbol, well_known_symbol(name));
+            assert_ne!(unsafe { (*symbol).id }, unsafe {
+                (*persistent_symbol(name)).id
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod runtime_atom_image_identity_tests {
+    #[test]
+    fn source_runtime_atom_and_image_cell_share_identity_on_every_key_path() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        unsafe {
+            let atom = &crate::object::runtime_layouts::NP_SYMBOL_K_CAPTURE;
+            let native = crate::object::runtime_layouts::runtime_symbol_of_atom(atom).unwrap();
+            let expected = perry_abi::runtime_symbol_identity(atom.index);
+            assert_eq!((*native).id, expected);
+            let image = super::alloc_symbol(std::ptr::null_mut(), false);
+            (*image).id = expected;
+            let native = crate::value::js_nanbox_pointer(native as i64);
+            let image = crate::value::js_nanbox_pointer(image as i64);
+            assert_ne!(native.to_bits(), image.to_bits());
+            assert_eq!(super::js_symbol_equals(native, image), 1);
+            let object = crate::object::js_object_alloc(0, 0);
+            let receiver = crate::value::js_nanbox_pointer(object as i64);
+            super::js_object_set_symbol_property(receiver, image, 42.0);
+            assert_eq!(super::js_object_get_symbol_property(receiver, native), 42.0);
+            super::js_object_set_symbol_property(receiver, native, 19.0);
+            assert_eq!(super::js_object_get_symbol_property(receiver, image), 19.0);
         }
     }
 }

@@ -115,6 +115,16 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
     if current != 0 {
         return current as *mut ObjectHeader;
     }
+    // A held prototype already has its shape in the image. Observe it at
+    // the same materialize point instead of allocating a sentinel whose
+    // inherited stores could mutate the real image prototype.
+    if crate::gc::image_cells::agent_uses_image()
+        && crate::object::layout_desc::holds_image_family(
+            crate::object::BuiltinConstructorIdentity::Object as u8,
+        )
+    {
+        return ensure_object_intrinsics().1;
+    }
     // The shape-only sentinel also lives in the intrinsic root cache.
     crate::gc::ensure_gc_initialized();
     if OBJECT_INTRINSICS_BUILDING.with(|b| b.swap(true, Ordering::AcqRel)) {

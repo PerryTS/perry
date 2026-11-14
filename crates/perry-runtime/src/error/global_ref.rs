@@ -23,6 +23,7 @@ static KEEP_JS_GLOBAL_GET_OR_THROW_UNRESOLVED: extern "C-unwind" fn(f64) -> f64 
 /// can run when the debug runtime is linked.
 #[no_mangle]
 pub extern "C-unwind" fn js_global_get_or_throw_unresolved(name_value: f64) -> f64 {
+    crate::realm_decl! { operation js_global_get_or_throw_unresolved, births = [ReferenceError] }
     // `js_get_global_this` lazily builds the realm on first use and can collect
     // while doing so. Generated code may pass a nursery string here from a
     // registered module-root slot, but this argument is only a copied NaN-box:
@@ -95,6 +96,7 @@ static KEEP_JS_GLOBAL_UPDATE: extern "C" fn(f64, f64, f64) -> f64 = js_global_up
 /// The boolean flags arrive NaN-boxed (codegen passes HIR `Bool` literals).
 #[no_mangle]
 pub extern "C" fn js_global_update(name_value: f64, is_increment: f64, is_prefix: f64) -> f64 {
+    crate::realm_decl! { operation js_global_update, births = [ReferenceError] }
     let is_increment = crate::value::js_is_truthy(is_increment);
     let is_prefix = crate::value::js_is_truthy(is_prefix) != 0;
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -188,6 +190,7 @@ static KEEP_JS_GLOBAL_ASSIGN_EXISTING_OR_THROW: extern "C" fn(f64, f64) -> f64 =
 /// that may CREATE the binding.
 #[no_mangle]
 pub extern "C" fn js_global_assign_existing_or_throw(name_value: f64, value: f64) -> f64 {
+    crate::realm_decl! { operation js_global_assign_existing_or_throw, births = [ReferenceError] }
     let scope = crate::gc::RuntimeHandleScope::new();
     let name_handle = scope.root_nanbox_f64(name_value);
     let value_handle = scope.root_nanbox_f64(value);

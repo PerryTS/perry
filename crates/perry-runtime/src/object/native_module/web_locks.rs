@@ -237,7 +237,7 @@ extern "C" fn worker_threads_lock_to_string_tag(_this: f64) -> f64 {
 }
 
 fn worker_threads_locks_proto_value() -> f64 {
-    let proto = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { "node:worker_threads.locks.<prototype>", members = { request, attrs = writable | enumerable | configurable; query, attrs = writable | enumerable | configurable; }; } };
+    let proto = crate::realm_decl! { birth crate::object::js_object_alloc(0, 0); realm { "node:worker_threads.locks.<prototype>", native_birth_owner = "node:worker_threads", members = { request, attrs = writable | enumerable | configurable; query, attrs = writable | enumerable | configurable; }; } };
     let request = web_locks_make_function(
         "request",
         crate::fn_info!(#[realm("node:worker_threads.locks.<prototype>.request", constructible = true, spec = {length = 2}, emit = metadata(realm_node_worker_threads_locks_prototype_request_metadata))] export crate::object::native_module::web_locks::worker_threads_locks_request, 3; with_declared(3)),

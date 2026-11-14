@@ -4,16 +4,21 @@
 use super::*;
 #[path = "lazy_image/family_bind.rs"]
 mod family_bind;
-#[cfg(any(debug_assertions, test))]
 pub(crate) use family_bind::holds as holds_image_family;
 pub(crate) use family_bind::seed as seed_image_family;
+pub(crate) use family_bind::seed_run as seed_image_run;
 
 /// This agent's program table, when its image carries a lazy span.
 #[inline(always)]
 fn span() -> Option<&'static crate::codegen_abi::PerryProgramTableV1> {
     // SAFETY: a bound image names its program's immutable table.
-    let table = unsafe { &*super::super::class_image::agent_layout_image().program };
-    (table.lazy_count != 0).then_some(table)
+    let image = super::super::class_image::agent_layout_image();
+    let table = unsafe { &*image.program };
+    if table.lazy_count == 0 {
+        return None;
+    }
+    assert!(table.valid_span(image), "invalid lazy layout span");
+    Some(table)
 }
 
 /// The descriptor for a lazy static row of this agent's executable image.
@@ -55,6 +60,39 @@ pub(super) fn section_span(
         return (end, end);
     }
     (first, last)
+}
+
+/// The current, unmodified image receiver row. The descriptor owns both
+/// its family and its reach rank; a program mutation's successor is not it.
+#[cfg(any(test, debug_assertions, perry_diagnostics))]
+pub(crate) unsafe fn structure_receiver(addr: usize) -> bool {
+    let Some(header) = crate::value::addr_class::realm::header(addr) else {
+        return false;
+    };
+    let header = header.as_ref();
+    let word_at = |ptr: usize| *(ptr as *const u32).add(1);
+    let owner = match header.obj_type {
+        crate::gc::GC_TYPE_OBJECT => addr,
+        crate::gc::GC_TYPE_CLOSURE => {
+            if descriptor(word_at(addr)).is_some() {
+                addr
+            } else {
+                (*(addr as *const crate::closure::ClosureHeader)).props as usize
+            }
+        }
+        crate::gc_array_type_pat!() if header.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED == 0 => {
+            crate::array::array_property_bag_resolved(addr as *const crate::array::ArrayHeader)
+                as usize
+        }
+        _ => return false,
+    };
+    if owner == 0 {
+        return false;
+    }
+    let word = word_at(owner);
+    word & crate::object::overflow::SHADOW_BIT == 0
+        && descriptor(word)
+            .is_some_and(|desc| (*desc).realm_rank == crate::codegen_abi::REALM_RANK_STRUCTURE)
 }
 
 /// The exotic kind of a lazy receiver row (function or native namespace),

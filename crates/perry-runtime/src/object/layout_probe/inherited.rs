@@ -213,7 +213,13 @@ pub(super) unsafe fn inherited_get<const ABSENT: bool>(
     }
     match link_of(dir, obj, r) {
         Next::Object(next) => chain_from::<ABSENT>(dir, obj, next, key_bits, hash),
-        Next::End => chain_absent::<ABSENT>(),
+        Next::End => {
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            if ABSENT {
+                crate::realm_reads::check_structure_named_miss(obj as usize, key_bits);
+            }
+            chain_absent::<ABSENT>()
+        }
         Next::Unknown => hole(),
     }
 }
@@ -243,15 +249,18 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
     key_bits: u64,
     hash: u64,
 ) -> f64 {
+    let _receiver = cur;
     // The complete walk continues at the hop this chain could not answer:
     // `next`, the link of `cur` the chain already derived.
     let walk = |cur: *const ObjectHeader, next: *const ObjectHeader| {
         if cur.is_null() {
             hole()
         } else {
-            inherited_walk_at::<ABSENT>(dir, next, key_bits, hash)
+            inherited_walk_at::<ABSENT>(dir, next, key_bits, hash, _receiver)
         }
     };
+    #[cfg(any(test, debug_assertions, perry_diagnostics))]
+    let receiver = cur;
     for _ in 0..MAX_HOPS {
         if (*next).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
             return hole();
@@ -299,7 +308,13 @@ pub(super) unsafe fn chain_from<const ABSENT: bool>(
                 cur = next;
                 next = p;
             }
-            Next::End => return chain_absent::<ABSENT>(),
+            Next::End => {
+                #[cfg(any(test, debug_assertions, perry_diagnostics))]
+                if ABSENT {
+                    crate::realm_reads::check_structure_named_miss(receiver as usize, key_bits);
+                }
+                return chain_absent::<ABSENT>();
+            }
             Next::Unknown => return hole(),
         }
     }
@@ -336,7 +351,7 @@ pub(super) unsafe fn list_position(
     if table.is_null() {
         let mut i = 0;
         while i < count {
-            if *list.add(i as usize) == key_bits {
+            if super::computed::key_eq(*list.add(i as usize), key_bits) {
                 return Ok((
                     i,
                     if i < (*r).position_bound_raw() {
@@ -373,7 +388,7 @@ pub(super) unsafe fn list_position(
         } else {
             *list.add(i as usize)
         };
-        if wd == key_bits {
+        if super::computed::key_eq(wd, key_bits) {
             return Ok((i, entry_load(table, pos, i)));
         }
         b = (b + 1) & mask;
@@ -414,8 +429,14 @@ pub(super) unsafe fn inherited_walk<const ABSENT: bool>(
     hash: u64,
 ) -> f64 {
     match walk_step::<ABSENT>(dir, obj, r) {
-        Ok(next) => inherited_walk_at::<ABSENT>(dir, next, key_bits, hash),
-        Err(v) => v,
+        Ok(next) => inherited_walk_at::<ABSENT>(dir, next, key_bits, hash, obj),
+        Err(v) => {
+            #[cfg(any(test, debug_assertions, perry_diagnostics))]
+            if ABSENT && v.to_bits() == crate::value::TAG_UNDEFINED {
+                crate::realm_reads::check_structure_named_miss(obj as usize, key_bits);
+            }
+            v
+        }
     }
 }
 
@@ -465,6 +486,7 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
     mut next: *const ObjectHeader,
     key_bits: u64,
     hash: u64,
+    _receiver: *const ObjectHeader,
 ) -> f64 {
     for _ in 0..MAX_HOPS {
         if (*next).class_id == crate::object::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID {
@@ -504,7 +526,13 @@ pub(super) unsafe fn inherited_walk_at<const ABSENT: bool>(
         }
         next = match walk_step::<ABSENT>(dir, next, rn) {
             Ok(p) => p,
-            Err(v) => return v,
+            Err(v) => {
+                #[cfg(any(test, debug_assertions, perry_diagnostics))]
+                if ABSENT && v.to_bits() == crate::value::TAG_UNDEFINED {
+                    crate::realm_reads::check_structure_named_miss(_receiver as usize, key_bits);
+                }
+                return v;
+            }
         };
     }
     hole()

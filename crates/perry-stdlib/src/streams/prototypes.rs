@@ -247,16 +247,30 @@ extern "C" fn bctl_byob_request(_: *const ClosureHeader, this: JsThis) -> f64 {
     }
 }
 extern "C" fn bctl_desired_size(_: *const ClosureHeader, this: JsThis) -> f64 {
-    unsafe { js_readable_stream_controller_desired_size(receiver(this, KIND_BYTE_CONTROLLER, RBSC)) }
+    unsafe {
+        js_readable_stream_controller_desired_size(receiver(this, KIND_BYTE_CONTROLLER, RBSC))
+    }
 }
 extern "C" fn bctl_close(_: *const ClosureHeader, this: JsThis) -> f64 {
     unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "close", &[]) }
 }
 extern "C" fn bctl_enqueue(_: *const ClosureHeader, this: JsThis, chunk: f64) -> f64 {
-    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "enqueue", &[chunk]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYTE_CONTROLLER, RBSC),
+            "enqueue",
+            &[chunk],
+        )
+    }
 }
 extern "C" fn bctl_error(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
-    unsafe { call(receiver(this, KIND_BYTE_CONTROLLER, RBSC), "error", &[reason]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYTE_CONTROLLER, RBSC),
+            "error",
+            &[reason],
+        )
+    }
 }
 
 extern "C" fn byob_closed(_: *const ClosureHeader, this: JsThis) -> f64 {
@@ -267,13 +281,27 @@ extern "C" fn byob_closed(_: *const ClosureHeader, this: JsThis) -> f64 {
     }
 }
 extern "C" fn byob_cancel(_: *const ClosureHeader, this: JsThis, reason: f64) -> f64 {
-    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "cancel", &[reason])) }
+    unsafe {
+        promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| {
+            call(r, "cancel", &[reason])
+        })
+    }
 }
 extern "C" fn byob_read(_: *const ClosureHeader, this: JsThis, view: f64) -> f64 {
-    unsafe { promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| call(r, "read", &[view])) }
+    unsafe {
+        promise_op(this, KIND_BYOB_READER, RSBYOBR, |r| {
+            call(r, "read", &[view])
+        })
+    }
 }
 extern "C" fn byob_release_lock(_: *const ClosureHeader, this: JsThis) -> f64 {
-    unsafe { call(receiver(this, KIND_BYOB_READER, RSBYOBR), "releaseLock", &[]) }
+    unsafe {
+        call(
+            receiver(this, KIND_BYOB_READER, RSBYOBR),
+            "releaseLock",
+            &[],
+        )
+    }
 }
 
 /// The byte stream a BYOB request receiver belongs to.
@@ -294,28 +322,28 @@ extern "C" fn req_respond_with_new_view(_: *const ClosureHeader, this: JsThis, v
 extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
     match family {
         READABLE_STREAM => {
-            protos::getter(proto, "locked", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.locked.<get>", effects = { returns(prim(bool)) })] export crate::streams::prototypes::rs_locked, 0; with_declared(0)));
-            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.cancel", effects = { stores(arg(0) -> islot(this, cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::rs_cancel, 1; with_declared(1)), 0);
-            protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader", effects = { reads(field(arg(0), mode)); coerce(field(arg(0), mode), ToPrimitive); returns(fresh(ReadableStreamDefaultReader.prototype, slots = {stream: this}) | fresh(ReadableStreamBYOBReader.prototype, slots = {stream: this})) })] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
-            protos::method(proto, "pipeThrough", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeThrough")] export crate::streams::prototypes::rs_pipe_through, 2; with_declared(2)), 1);
-            protos::method(proto, "pipeTo", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeTo")] export crate::streams::prototypes::rs_pipe_to, 2; with_declared(2)), 1);
-            protos::method(proto, "tee", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.tee")] export crate::streams::prototypes::rs_tee, 0; with_declared(0)), 0);
-            let values = protos::method(proto, "values", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.values")] export crate::streams::prototypes::rs_values, 0; with_declared(0)), 0);
+            protos::getter(proto, "locked", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.locked.<get>", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(bool)) })] export crate::streams::prototypes::rs_locked, 0; with_declared(0)));
+            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.cancel", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(this, cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::rs_cancel, 1; with_declared(1)), 0);
+            protos::method(proto, "getReader", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.getReader", calls = [js_readable_stream_get_reader_with_options], installed_by = js_stdlib_install_bundled_streams, effects = { reads(field(arg(0), mode)); coerce(field(arg(0), mode), ToPrimitive); returns(fresh(ReadableStreamDefaultReader.prototype, slots = {stream: this}) | fresh(ReadableStreamBYOBReader.prototype, slots = {stream: this})) })] export crate::streams::prototypes::rs_get_reader, 1; with_declared(1)), 0);
+            protos::method(proto, "pipeThrough", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeThrough", installed_by = js_stdlib_install_bundled_streams)] export crate::streams::prototypes::rs_pipe_through, 2; with_declared(2)), 1);
+            protos::method(proto, "pipeTo", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.pipeTo", installed_by = js_stdlib_install_bundled_streams)] export crate::streams::prototypes::rs_pipe_to, 2; with_declared(2)), 1);
+            protos::method(proto, "tee", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.tee", installed_by = js_stdlib_install_bundled_streams)] export crate::streams::prototypes::rs_tee, 0; with_declared(0)), 0);
+            let values = protos::method(proto, "values", perry_runtime::fn_info!(#[realm("ReadableStream.prototype.values", installed_by = js_stdlib_install_bundled_streams)] export crate::streams::prototypes::rs_values, 0; with_declared(0)), 0);
             protos::async_iterator(proto, values);
             // Node's own key order on the constructor: length, name, prototype, from.
-            protos::method(protos::constructor(proto), "from", perry_runtime::fn_info!(#[realm(ReadableStream.from)] export crate::streams::statics::readable_stream_from_static, 1; with_declared(1)), 1);
+            protos::method(protos::constructor(proto), "from", perry_runtime::fn_info!(#[realm(ReadableStream.from, installed_by = js_stdlib_install_bundled_streams)] export crate::streams::statics::readable_stream_from_static, 1; with_declared(1)), 1);
         }
         DEFAULT_CONTROLLER => {
-            protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.desiredSize.<get>", effects = { returns(prim(num | null)) })] export crate::streams::prototypes::ctl_desired_size, 0; with_declared(0)));
-            protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.close", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::ctl_close, 0; with_declared(0)), 0);
-            protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.enqueue", effects = { stores(arg(0) -> islot(islot(this, stream), queue)); returns(prim(undefined)) })] export crate::streams::prototypes::ctl_enqueue, 1; with_declared(1)), 0);
-            protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.error", effects = { stores(arg(0) -> islot(islot(this, stream), storedError)); returns(prim(undefined)) })] export crate::streams::prototypes::ctl_error, 1; with_declared(1)), 0);
+            protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.desiredSize.<get>", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(num | null)) })] export crate::streams::prototypes::ctl_desired_size, 0; with_declared(0)));
+            protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.close", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(undefined)) })] export crate::streams::prototypes::ctl_close, 0; with_declared(0)), 0);
+            protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.enqueue", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), queue)); returns(prim(undefined)) })] export crate::streams::prototypes::ctl_enqueue, 1; with_declared(1)), 0);
+            protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultController.prototype.error", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), storedError)); returns(prim(undefined)) })] export crate::streams::prototypes::ctl_error, 1; with_declared(1)), 0);
         }
         DEFAULT_READER => {
-            protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.read", effects = { returns(promise(fresh(Object.prototype, fields = {value: islot(islot(this, stream), queue) | prim(undefined), done: prim(bool)}), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_read, 0; with_declared(0)), 0);
-            protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.releaseLock", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::reader_release_lock, 0; with_declared(0)), 0);
-            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>", effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
-            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.cancel", effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_cancel, 1; with_declared(1)), 0);
+            protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.read", installed_by = js_stdlib_install_bundled_streams, effects = { returns(promise(fresh(Object.prototype, fields = {value: islot(islot(this, stream), queue) | prim(undefined), done: prim(bool)}), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_read, 0; with_declared(0)), 0);
+            protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.releaseLock", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(undefined)) })] export crate::streams::prototypes::reader_release_lock, 0; with_declared(0)), 0);
+            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.closed.<get>", births = [Promise], installed_by = js_stdlib_install_bundled_streams, effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_closed, 0; with_declared(0)));
+            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamDefaultReader.prototype.cancel", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::reader_cancel, 1; with_declared(1)), 0);
         }
         // Byte-stream internal slots the declarations name (the stream's live in
         // byob.rs): `queue` also holds the Uint8Array remainders the runtime
@@ -325,22 +353,29 @@ extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
         // `filledView` the view respondWithNewView fulfills that read with, and
         // the controller's `byobRequest` is the request object it hands out.
         BYTE_CONTROLLER => {
-            protos::getter(proto, "byobRequest", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.byobRequest.<get>", effects = { returns(prim(null) | islot(this, byobRequest)) })] export crate::streams::prototypes::bctl_byob_request, 0; with_declared(0)));
-            protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.desiredSize.<get>", effects = { returns(prim(num | null)) })] export crate::streams::prototypes::bctl_desired_size, 0; with_declared(0)));
-            protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.close", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::bctl_close, 0; with_declared(0)), 0);
-            protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.enqueue", effects = { stores(arg(0) -> islot(islot(this, stream), queue)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_enqueue, 1; with_declared(1)), 1);
-            protos::method(proto, "error", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.error", effects = { stores(arg(0) -> islot(islot(this, stream), storedError)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_error, 1; with_declared(1)), 0);
+            protos::getter(proto, "byobRequest", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.byobRequest.<get>", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(null) | islot(this, byobRequest)) })] export crate::streams::prototypes::bctl_byob_request, 0; with_declared(0)));
+            protos::getter(proto, "desiredSize", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.desiredSize.<get>", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(num | null)) })] export crate::streams::prototypes::bctl_desired_size, 0; with_declared(0)));
+            protos::method(proto, "close", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.close", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(undefined)) })] export crate::streams::prototypes::bctl_close, 0; with_declared(0)), 0);
+            protos::method(proto, "enqueue", perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.enqueue", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), queue)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_enqueue, 1; with_declared(1)), 1);
+            perry_runtime::fn_info!(#[realm("ReadableByteStreamController.prototype.error", spec = {length = 0}, emit = metadata, installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), storedError)); returns(prim(undefined)) })] export crate::streams::prototypes::bctl_error, 1; with_declared(1); bind published_info, bctl_error_metadata);
+            protos::method(proto, "error", published_info, bctl_error_metadata!(length));
         }
         BYOB_READER => {
-            protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.read", effects = { stores(arg(0) -> islot(islot(this, stream), pendingView)); returns(promise(fresh(Object.prototype, fields = {value: fresh(Int8Array.prototype) | fresh(Uint8Array.prototype) | fresh(Uint8ClampedArray.prototype) | fresh(Int16Array.prototype) | fresh(Uint16Array.prototype) | fresh(Int32Array.prototype) | fresh(Uint32Array.prototype) | fresh(Float16Array.prototype) | fresh(Float32Array.prototype) | fresh(Float64Array.prototype) | fresh(BigInt64Array.prototype) | fresh(BigUint64Array.prototype) | fresh(DataView.prototype) | fresh(Buffer.prototype) | islot(islot(this, stream), queue) | islot(islot(this, stream), filledView) | prim(undefined), done: prim(bool)}), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_read, 1; with_declared(1)), 1);
-            protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.releaseLock", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::byob_release_lock, 0; with_declared(0)), 0);
-            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.closed.<get>", effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_closed, 0; with_declared(0)));
-            protos::method(proto, "cancel", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.cancel", effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_cancel, 1; with_declared(1)), 0);
+            protos::method(proto, "read", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.read", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), pendingView)); returns(promise(fresh(Object.prototype, fields = {value: fresh(Int8Array.prototype) | fresh(Uint8Array.prototype) | fresh(Uint8ClampedArray.prototype) | fresh(Int16Array.prototype) | fresh(Uint16Array.prototype) | fresh(Int32Array.prototype) | fresh(Uint32Array.prototype) | fresh(Float16Array.prototype) | fresh(Float32Array.prototype) | fresh(Float64Array.prototype) | fresh(BigInt64Array.prototype) | fresh(BigUint64Array.prototype) | fresh(DataView.prototype) | fresh(Buffer.prototype) | islot(islot(this, stream), queue) | islot(islot(this, stream), filledView) | prim(undefined), done: prim(bool)}), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_read, 1; with_declared(1)), 1);
+            protos::method(proto, "releaseLock", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.releaseLock", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(undefined)) })] export crate::streams::prototypes::byob_release_lock, 0; with_declared(0)), 0);
+            protos::getter(proto, "closed", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.closed.<get>", births = [Promise], installed_by = js_stdlib_install_bundled_streams, effects = { returns(promise(prim(undefined), reject = islot(islot(this, stream), storedError) | fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_closed, 0; with_declared(0)));
+            perry_runtime::fn_info!(#[realm("ReadableStreamBYOBReader.prototype.cancel", spec = {length = 0}, emit = metadata, installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), cancelReason)); returns(promise(prim(undefined), reject = fresh(TypeError.prototype))) })] export crate::streams::prototypes::byob_cancel, 1; with_declared(1); bind published_info, byob_cancel_metadata);
+            protos::method(
+                proto,
+                "cancel",
+                published_info,
+                byob_cancel_metadata!(length),
+            );
         }
         BYOB_REQUEST => {
-            protos::getter(proto, "view", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.view.<get>", effects = { returns(prim(null) | islot(islot(this, stream), pendingView)) })] export crate::streams::prototypes::req_view, 0; with_declared(0)));
-            protos::method(proto, "respond", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respond", effects = { returns(prim(undefined)) })] export crate::streams::prototypes::req_respond, 1; with_declared(1)), 1);
-            protos::method(proto, "respondWithNewView", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respondWithNewView", effects = { stores(arg(0) -> islot(islot(this, stream), filledView)); returns(prim(undefined)) })] export crate::streams::prototypes::req_respond_with_new_view, 1; with_declared(1)), 1);
+            protos::getter(proto, "view", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.view.<get>", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(null) | islot(islot(this, stream), pendingView)) })] export crate::streams::prototypes::req_view, 0; with_declared(0)));
+            protos::method(proto, "respond", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respond", installed_by = js_stdlib_install_bundled_streams, effects = { returns(prim(undefined)) })] export crate::streams::prototypes::req_respond, 1; with_declared(1)), 1);
+            protos::method(proto, "respondWithNewView", perry_runtime::fn_info!(#[realm("ReadableStreamBYOBRequest.prototype.respondWithNewView", installed_by = js_stdlib_install_bundled_streams, effects = { stores(arg(0) -> islot(islot(this, stream), filledView)); returns(prim(undefined)) })] export crate::streams::prototypes::req_respond_with_new_view, 1; with_declared(1)), 1);
         }
         _ => {}
     }

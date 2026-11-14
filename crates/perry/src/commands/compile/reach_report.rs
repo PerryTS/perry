@@ -12,6 +12,35 @@ use perry_codegen::codegen::reach_report::Census;
 
 use super::{resolve::resolve_import_with_context, CompilationContext};
 
+pub(super) fn print_realm_reach(
+    reach: &perry_hir::realm_reach::RealmReach,
+    exec_only: &BTreeSet<String>,
+    fixture_exec: &BTreeSet<String>,
+    dumper_exec: &BTreeSet<String>,
+) -> Result<()> {
+    if std::env::var("PERRY_REALM_REACH").is_ok_and(|v| v == "1") {
+        let reasons: Vec<_> = reach.top.iter().map(|r| r.reason()).collect();
+        eprintln!(
+            "[realm-reach] {}/{} top={:?}",
+            reach.names.len(),
+            perry_codegen::realm_manifest::REALM.len(),
+            reasons
+        );
+        eprintln!(
+            "[realm-reach-json] {}",
+            serde_json::json!({
+                "names": reach.names, "top": reasons,
+                "reach": reach, "exec_only": exec_only,
+                "whole": reach.whole,
+                "projection": perry_codegen::realm_plan::RealmPlan::from_reach(reach).map_err(anyhow::Error::msg)?.cells,
+                "fixture_exec": fixture_exec, "dumper_exec": dumper_exec,
+                "full": perry_codegen::realm_manifest::REALM.len()
+            })
+        );
+    }
+    Ok(())
+}
+
 pub(super) struct Session {
     path: PathBuf,
     pub census: Arc<Census>,

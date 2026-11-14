@@ -143,7 +143,7 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
     key: *const crate::StringHeader,
     site_id: u64,
 ) -> f64 {
-    crate::realm_decl! { operation js_object_get_field_nonptr, calls = [js_object_get_field_by_name_f64, get_field_miss] }
+    crate::realm_decl! { operation js_object_get_field_nonptr, calls = [js_object_get_field_by_name_f64, get_field_miss, js_throw_type_error_property_access] }
     let bits = obj_bits as u64;
     let tag = bits >> 48;
     let obj_unmasked = bits as usize as *const ObjectHeader;

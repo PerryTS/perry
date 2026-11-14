@@ -72,3 +72,49 @@ fn early_realm_bootstrap_does_not_preempt_error_static_program_atoms() {
         .join()
         .expect("early realm bootstrap invariant");
 }
+
+#[test]
+fn unregistered_image_keys_and_runtime_atoms_share_the_derived_probe() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::js_object_alloc(0, 16);
+        let mut names = Vec::new();
+        let mut images = Vec::new();
+        for index in 0..9 {
+            let name = format!("rb6_unregistered_realm_key_{index}");
+            let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+            assert!(atom_lookup(name.as_bytes(), hash).is_none());
+            let image = program_atom_image(name.as_ptr(), name.len() as u32, hash);
+            crate::object::js_object_set_field_by_name(obj, image, (index + 1) as f64);
+            names.push((name, hash));
+            images.push(image);
+        }
+        let dir = crate::object::layout_probe::test_dir();
+        let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
+        for (index, ((name, hash), image)) in names.iter().zip(&images).enumerate() {
+            let atom = js_string_pool_atom(name.as_ptr(), name.len() as u32, *hash, 0);
+            assert_ne!(atom, *image, "the realm key was never registered");
+            let want = (index + 1) as f64;
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_get(
+                    dir,
+                    biased,
+                    crate::JSValue::string_ptr(atom).bits(),
+                    *hash,
+                ),
+                want,
+                "runtime atom {name}"
+            );
+            assert_eq!(
+                crate::object::layout_probe::perry_probe_get_keyed(
+                    dir,
+                    crate::value::js_nanbox_pointer(obj as i64).to_bits(),
+                    crate::JSValue::string_ptr(*image).bits(),
+                ),
+                want,
+                "reflected image key {name}"
+            );
+        }
+    }
+}

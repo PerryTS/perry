@@ -11,6 +11,7 @@ pub(crate) struct RealmAtoms {
     strings: BTreeMap<String, String>,
     key_records: BTreeMap<String, String>,
     symbols: BTreeMap<String, (String, u64)>,
+    providers: BTreeSet<String>,
 }
 
 impl RealmAtoms {
@@ -24,6 +25,7 @@ impl RealmAtoms {
             strings: BTreeMap::new(),
             key_records: BTreeMap::new(),
             symbols: BTreeMap::new(),
+            providers: plan.providers.keys().cloned().collect(),
         };
         let mut texts = plan.atoms.clone();
         let mut key_atoms = plan.key_atoms.clone();
@@ -71,7 +73,7 @@ impl RealmAtoms {
             // Key atom records and their strings share the ordinary emission
             // mechanism. Value-only strings need no extra lookup structure.
             if key_atoms.contains(&text) {
-                crate::layout_desc::atom(module, &mut pool, &mut result.key_records, &text)
+                crate::layout_desc::realm_atom(module, &mut pool, &mut result.key_records, &text)
                     .ok_or_else(|| format!("realm key cannot be an image atom: {text:?}"))?;
             }
             let entry = pool.entry(index);
@@ -109,7 +111,10 @@ impl RealmAtoms {
         let Slot::Cell(symbol, _) = self.symbol(key)? else {
             unreachable!()
         };
-        let id = self.symbols[key].1;
+        let id = match key.strip_prefix("@for:") {
+            Some(text) => crate::layout_desc::atom_hash(text),
+            None => self.symbols[key].1,
+        };
         let name = format!(
             "perry_atom_realm_symbol_{}",
             key.bytes().map(|b| format!("{b:02x}")).collect::<String>()
@@ -124,11 +129,11 @@ impl RealmAtoms {
             return Ok((name, id));
         }
         let (section, storage) = if module.target_triple.contains("apple") {
-            ("__DATA,__perry_atoms", "global")
+            ("__DATA,__realm_atoms", "global")
         } else if module.target_triple.contains("windows") {
-            (".perryatm$m", "constant")
+            (".realmats$m", "constant")
         } else {
-            ("perry_atoms", "global")
+            ("perry_realm_atoms", "global")
         };
         module.add_coalesced_global(&name, format!(
             "@{name} = weak_odr {storage} {} {{ i64 {}, ptr {}, i8 {}, [3 x i8] zeroinitializer, i32 0 }}, section \"{section}\", align 8",
@@ -203,6 +208,9 @@ impl RealmAtoms {
             RealmValue::Int32(v) => Slot::Bits(nanbox::INT32_TAG | u64::from(*v as u32)),
             RealmValue::String(text) => self.string(text)?,
             RealmValue::Symbol(key) => self.symbol(key)?,
+            RealmValue::Reference(name) if self.providers.contains(name) => {
+                Slot::Bits(nanbox::TAG_UNDEFINED)
+            }
             RealmValue::Reference(name) => {
                 Slot::Cell(crate::realm_plan::cell_symbol(name), POINTER_TAG)
             }
@@ -258,14 +266,28 @@ fn symbol_description(key: &str) -> Result<(String, bool), String> {
 
 fn symbol_identities() -> Result<BTreeMap<String, u64>, String> {
     let mut keys = BTreeSet::new();
+    let mut runtime_identities = BTreeMap::new();
     for entry in crate::realm_manifest::REALM {
         let declaration: RealmDeclaration =
             serde_json::from_str(entry.facts).map_err(|e| format!("realm {}: {e}", entry.name))?;
         if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
             for variant in &layout.variants {
                 for key in &variant.keys {
-                    if let RealmValue::Symbol(key) = key.atom.realm_value()? {
-                        keys.insert(key);
+                    if let RealmValue::Symbol(name) = key.atom.realm_value()? {
+                        if key.atom.kind == perry_abi::ATOM_KIND_PROGRAM_SYMBOL
+                            && key.atom.registered == Some(false)
+                        {
+                            let id = perry_abi::runtime_symbol_identity(key.atom.index);
+                            if runtime_identities
+                                .insert(name.clone(), id)
+                                .is_some_and(|old| old != id)
+                            {
+                                return Err(format!(
+                                    "conflicting runtime symbol source ordinal: {name}"
+                                ));
+                            }
+                        }
+                        keys.insert(name);
                     }
                 }
             }
@@ -295,10 +317,10 @@ fn symbol_identities() -> Result<BTreeMap<String, u64>, String> {
     }
     for key in keys {
         symbol_description(&key)?;
-        result.insert(
-            key,
-            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + result.len() as u64),
-        );
+        let id = runtime_identities.get(&key).copied().unwrap_or_else(|| {
+            perry_abi::symbol_identity(perry_abi::IMAGE_SYMBOL_ORDINAL_BASE + result.len() as u64)
+        });
+        result.insert(key, id);
     }
     Ok(result)
 }

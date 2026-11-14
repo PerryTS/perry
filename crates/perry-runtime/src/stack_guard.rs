@@ -105,6 +105,7 @@ pub(crate) fn check_native_stack() {
 #[optimize(size)]
 #[inline(never)]
 pub extern "C-unwind" fn js_stack_overflow() -> ! {
+    crate::realm_decl! { operation js_stack_overflow, births = [RangeError] }
     let (limit, relaxed) = LIMITS.with(|l| l.get());
     let armed = crate::agent_ptrs::read(AGENT_PTR_STACK_LIMIT) as usize;
     if limit == 0 || armed != limit {

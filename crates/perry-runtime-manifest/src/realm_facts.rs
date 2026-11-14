@@ -16,6 +16,14 @@ fn object<const N: usize>(values: [(&str, Value); N]) -> Value {
     Value::Object(values.into_iter().map(|(k, v)| (k.into(), v)).collect())
 }
 
+pub(super) fn birth_domain(ts: &[Token<'_>]) -> Result<String, String> {
+    let domain = path(ts)?;
+    if !matches!(domain.as_str(), "singleton" | "instance") {
+        return Err("birth_domain must be singleton or instance".into());
+    }
+    Ok(domain)
+}
+
 pub(super) fn path(ts: &[Token<'_>]) -> Result<String, String> {
     if ts.len() == 1 {
         if let Some(value) = &ts[0].string {
@@ -38,6 +46,7 @@ pub(super) fn path(ts: &[Token<'_>]) -> Result<String, String> {
 
 pub(super) struct Facts {
     pub name: String,
+    pub owner: Option<String>,
     pub members: Option<super::birth::Members>,
     pub kind: Option<String>,
     pub constructible: bool,
@@ -59,6 +68,9 @@ pub(super) struct Facts {
     pub native_key: Option<String>,
     pub builtin_constructor: bool,
     pub receiver: Option<String>,
+    pub native_birth_owner: Option<String>,
+    pub birth_domain: Option<String>,
+    pub installed_by: Option<String>,
     /// The native module a bound constructor also serves as the namespace of
     /// (its statics dispatch as that module).
     pub module: Option<String>,
@@ -116,6 +128,7 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
     let name = path(clauses.first().ok_or("empty realm declaration")?)?;
     let mut facts = Facts {
         name,
+        owner: None,
         members: None,
         kind: None,
         constructible: false,
@@ -137,6 +150,9 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         native_key: None,
         builtin_constructor: false,
         receiver: None,
+        native_birth_owner: None,
+        birth_domain: None,
+        installed_by: None,
         module: None,
         class_identity: None,
         non_constructable: false,
@@ -168,6 +184,10 @@ pub(super) fn parse(ts: &[Token<'_>]) -> Result<Facts, String> {
         }
         match field {
             "kind" => facts.kind = Some(path(&clause[2..])?),
+            "owner" => facts.owner = Some(path(&clause[2..])?),
+            "native_birth_owner" => facts.native_birth_owner = Some(path(&clause[2..])?),
+            "installed_by" => facts.installed_by = Some(path(&clause[2..])?),
+            "birth_domain" => facts.birth_domain = Some(birth_domain(&clause[2..])?),
             "capture" => {
                 if clause[2].text == "[" && clause.last().is_some_and(|t| t.text == "]") {
                     facts.capture_bindings = Some(
@@ -1074,6 +1094,18 @@ fn callable_birth(
     }
     if let Some(effects) = effects {
         declaration.insert("effects".into(), effects);
+    }
+    if let Some(owner) = facts.owner {
+        declaration.insert("owner".into(), string(owner));
+    }
+    if let Some(installer) = facts.installed_by {
+        declaration.insert("installed_by".into(), string(installer));
+    }
+    if let Some(domain) = facts.birth_domain {
+        declaration.insert("birth_domain".into(), string(domain));
+    }
+    if let Some(owner) = facts.native_birth_owner {
+        declaration.insert("native_birth_owner".into(), string(owner));
     }
     if let Some(constructor) = constructor {
         declaration.insert("constructor".into(), constructor);

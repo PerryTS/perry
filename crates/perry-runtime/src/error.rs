@@ -361,12 +361,14 @@ pub(crate) unsafe fn error_set_errors(
 /// Create a new Error with no message
 #[no_mangle]
 pub extern "C" fn js_error_new() -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_error_new, births = [Error] }
     unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", std::ptr::null_mut(), false) }
 }
 
 /// Create a new Error with a message
 #[no_mangle]
 pub extern "C" fn js_error_new_with_message(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_error_new_with_message, births = [Error] }
     unsafe { alloc_error(ERROR_KIND_ERROR, b"Error", message, true) }
 }
 
@@ -404,6 +406,7 @@ pub extern "C" fn js_error_new_with_cause(
 /// Create a new TypeError with a message
 #[no_mangle]
 pub extern "C" fn js_typeerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_typeerror_new, births = [TypeError] }
     unsafe { alloc_error(ERROR_KIND_TYPE_ERROR, b"TypeError", message, true) }
 }
 
@@ -425,6 +428,7 @@ pub extern "C" fn js_typeerror_new_with_cause(
 /// Create a new RangeError with a message
 #[no_mangle]
 pub extern "C" fn js_rangeerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_rangeerror_new, births = [RangeError] }
     unsafe { alloc_error(ERROR_KIND_RANGE_ERROR, b"RangeError", message, true) }
 }
 
@@ -442,6 +446,7 @@ pub(crate) fn throw_allocation_failed() -> ! {
 /// Create a new ReferenceError with a message
 #[no_mangle]
 pub extern "C" fn js_referenceerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_referenceerror_new, births = [ReferenceError] }
     unsafe { alloc_error(ERROR_KIND_REFERENCE_ERROR, b"ReferenceError", message, true) }
 }
 
@@ -755,18 +760,21 @@ pub fn stub_warn_or_throw(api: &'static str, reason: &'static str, issue: Option
 /// Create a new SyntaxError with a message
 #[no_mangle]
 pub extern "C" fn js_syntaxerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_syntaxerror_new, births = [SyntaxError] }
     unsafe { alloc_error(ERROR_KIND_SYNTAX_ERROR, b"SyntaxError", message, true) }
 }
 
 /// Create a new EvalError with a message
 #[no_mangle]
 pub extern "C" fn js_evalerror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_evalerror_new, births = [EvalError] }
     unsafe { alloc_error(ERROR_KIND_EVAL_ERROR, b"EvalError", message, true) }
 }
 
 /// Create a new URIError with a message
 #[no_mangle]
 pub extern "C" fn js_urierror_new(message: *mut StringHeader) -> *mut ErrorHeader {
+    crate::realm_decl! { operation js_urierror_new, births = [URIError] }
     unsafe { alloc_error(ERROR_KIND_URI_ERROR, b"URIError", message, true) }
 }
 
@@ -1185,6 +1193,7 @@ fn value_to_lossy_string(value: f64) -> String {
 
 #[no_mangle]
 pub extern "C" fn js_throw_type_error_const_assignment(name: f64) -> f64 {
+    crate::realm_decl! { operation js_throw_type_error_const_assignment, births = [TypeError] }
     let name = value_to_lossy_string(name);
     let msg = if name.is_empty() {
         "Assignment to constant variable.".to_string()
@@ -1197,6 +1206,7 @@ pub extern "C" fn js_throw_type_error_const_assignment(name: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolvable_assignment(name: f64) -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_unresolvable_assignment, births = [ReferenceError] }
     let name = value_to_lossy_string(name);
     let msg = if name.is_empty() {
         "Assignment to undeclared variable.".to_string()
@@ -1221,6 +1231,7 @@ fn throw_reference_error_message(message: &'static [u8]) -> ! {
 /// initialization`.
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_tdz(name: f64) -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_tdz, births = [ReferenceError] }
     let unnamed = name.to_bits() == crate::value::TAG_UNDEFINED;
     let name = value_to_lossy_string(name);
     let msg = if unnamed || name.is_empty() {
@@ -1240,6 +1251,7 @@ static KEEP_JS_THROW_REFERENCE_ERROR_TDZ: extern "C" fn(f64) -> f64 = js_throw_r
 
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_get() -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_unresolved_get, births = [ReferenceError] }
     throw_reference_error_message(b"identifier is not defined")
 }
 
@@ -1251,6 +1263,7 @@ pub use global_ref::{
 
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_unresolved_assignment, births = [ReferenceError] }
     throw_reference_error_message(b"assignment to undeclared variable")
 }
 
@@ -1262,6 +1275,7 @@ pub extern "C" fn js_throw_reference_error_unresolved_assignment() -> f64 {
 /// evaluated for their side effects first by codegen.
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_super_delete() -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_super_delete, births = [ReferenceError] }
     throw_reference_error_message(b"Unsupported reference to 'super'")
 }
 
@@ -1271,6 +1285,7 @@ pub extern "C" fn js_throw_reference_error_super_delete() -> f64 {
 /// super-must-be-called.
 #[no_mangle]
 pub extern "C" fn js_throw_reference_error_this_before_super() -> f64 {
+    crate::realm_decl! { operation js_throw_reference_error_this_before_super, births = [ReferenceError] }
     throw_reference_error_message(
         b"Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
     )
@@ -1612,6 +1627,7 @@ pub extern "C-unwind" fn js_throw_type_error_property_access(
     prop_name_ptr: *const u8,
     prop_name_len: usize,
 ) -> ! {
+    crate::realm_decl! { operation js_throw_type_error_property_access, births = [TypeError] }
     let receiver = if receiver_is_null != 0 {
         "null"
     } else {

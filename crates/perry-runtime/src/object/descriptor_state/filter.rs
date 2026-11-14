@@ -29,7 +29,8 @@ unsafe fn array_route(mut arr: *const ArrayHeader) -> DescriptorRoute {
         header = crate::gc::header_from_trusted_user_ptr(arr.cast());
     }
     DescriptorRoute {
-        bag: crate::array::array_property_bag(arr),
+        // This route already resolved forwarding and proved the array header.
+        bag: crate::array::array_property_bag_resolved(arr),
         integrity_array: if (*header)._reserved
             & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED)
             != 0

@@ -52,7 +52,7 @@ pub extern "C" fn js_object_group_by(items_value: f64, callback: f64) -> f64 {
             Sym(RuntimeHandle<'scope>),
         }
         let mut str_index: HashMap<String, usize> = HashMap::new();
-        let mut sym_index: HashMap<u64, usize> = HashMap::new();
+        let mut sym_index: HashMap<crate::symbol::Identity, usize> = HashMap::new();
         let mut order: Vec<GroupKey<'_>> = Vec::new();
         let mut groups: Vec<RootedValues<'_>> = Vec::new();
 
@@ -210,7 +210,7 @@ unsafe fn group_by_value_is_symbol(value: f64) -> bool {
 /// *address* does not: a fresh `Symbol(desc)` is a GC allocation, and keying on
 /// its address would start a second group for the same symbol the first time a
 /// collection moved it mid-loop.
-unsafe fn group_by_symbol_identity(value: f64) -> Option<u64> {
+unsafe fn group_by_symbol_identity(value: f64) -> Option<crate::symbol::Identity> {
     if !group_by_value_is_symbol(value) {
         return None;
     }
@@ -220,9 +220,9 @@ unsafe fn group_by_symbol_identity(value: f64) -> Option<u64> {
         // Registered but not header-shaped: fall back to the address. Nothing
         // in the tree produces this today; the branch exists so an unexpected
         // shape degrades to the previous behaviour instead of panicking.
-        return Some(raw as u64);
+        return Some(crate::symbol::Identity::Serial(raw as u64));
     }
-    Some((*sym).id)
+    Some(crate::symbol::identity(sym))
 }
 
 /// ToPropertyKey a non-Symbol group key into an owned Rust `String`.
