@@ -1645,8 +1645,11 @@ function __classInstance(className) {
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
 // so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
 // the compiled constructor, which returns `this`. `ctorIdx` is the constructor's
-// table slot, or -1 when the class has none.
+// table slot, or -1 when the class has none. Its arguments stay Perry values: a
+// closure passed to it must reach the compiled constructor as a closure, so
+// __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
 const __classRefs = new Map();
+const __perryClassCtors = new WeakSet();
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
@@ -1661,6 +1664,18 @@ function __classRef(className, ctorIdx) {
       return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
     };
     Object.defineProperty(ctor, 'name', { value: className });
+    // Instances are `{__class__}` objects, not linked to ctor.prototype: host
+    // `instanceof` walks the class table as class_instanceof does.
+    Object.defineProperty(ctor, Symbol.hasInstance, {
+      value: (obj) => {
+        if (!obj || typeof obj !== 'object') return false;
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          if (c === className) return true;
+        }
+        return false;
+      },
+    });
+    __perryClassCtors.add(ctor);
     __classRefs.set(className, ctor);
   }
   return ctor;
@@ -5178,7 +5193,7 @@ function __callHostFunction(fn, args, receiver = undefined) {
 // handling as __callHostFunction.
 function __constructHostFunction(fn, args) {
   try {
-    return Reflect.construct(fn, args.map(__hostCallback));
+    return Reflect.construct(fn, __perryClassCtors.has(fn) ? args : args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;

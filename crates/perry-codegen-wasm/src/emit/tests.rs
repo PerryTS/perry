@@ -745,3 +745,41 @@ console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " +
         "function 7 14 true 3\nfunction 18 4 true"
     );
 }
+
+// `new` on a class value hands its arguments to the compiled constructor as Perry
+// values: a closure argument stays a closure the array bridges can call.
+#[test]
+fn a_class_value_constructor_receives_a_closure_argument() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
+const MM: any = M;
+console.log(new MM((n: number) => n * 10).out.join(","));
+"#
+        ),
+        "10,20"
+    );
+}
+
+// Instances are `{__class__}` objects, so host `instanceof` on a class value walks
+// the class table, as compiled `instanceof` does.
+#[test]
+fn host_instanceof_on_a_class_value_walks_the_class_chain() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class P { }
+class Q extends P { }
+const refs: any[] = [P, Q];
+console.log(refs.length);
+"#,
+            r#"
+const P = __classRef("P", -1), Q = __classRef("Q", -1);
+console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
+  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
+"#
+        ),
+        "2\ntrue true false false false"
+    );
+}
