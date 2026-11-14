@@ -64,9 +64,7 @@ unsafe fn rooted_str(scope: &RuntimeHandleScope, s: Option<&str>) -> *const Stri
 /// A JS number argument, or `None` when it is absent or not a finite number.
 fn number_arg(value: f64) -> Option<f64> {
     let v = JSValue::from_bits(value.to_bits());
-    let n = if v.is_int32() {
-        v.as_int32() as f64
-    } else if v.is_number() {
+    let n = if v.is_number() {
         v.as_number()
     } else {
         return None;

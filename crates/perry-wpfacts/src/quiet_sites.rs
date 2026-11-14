@@ -186,6 +186,8 @@ pub(crate) fn collect(
             Verdict::OwnLength | Verdict::NativeMember | Verdict::T0Mono | Verdict::T0Set => None,
             Verdict::E0 => Some("verdict:guarded"),
             Verdict::No(_) => Some("verdict:none"),
+            // Newer verdicts the quiet rule does not list: not quiet (conservative).
+            Verdict::Dead | Verdict::OwnDataOrAbsent | Verdict::IntrinsicCall | Verdict::NsExport => Some("verdict:other"),
         };
         join(
             reads

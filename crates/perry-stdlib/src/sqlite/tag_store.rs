@@ -70,9 +70,7 @@ pub(crate) fn node_sqlite_tag_store_capacity(value: f64) -> usize {
     if js.is_undefined() {
         return 1000;
     }
-    let number = if js.is_int32() {
-        js.as_int32() as f64
-    } else if js.is_number() {
+    let number = if js.is_number() {
         js.as_number()
     } else {
         throw_type("The \"maxSize\" argument must be a positive integer.");

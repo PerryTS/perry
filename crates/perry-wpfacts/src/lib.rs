@@ -17,6 +17,7 @@
 //! `secret-tests/scratchpad/wpfacts-design-20261012.md`.
 
 pub mod bindings;
+mod booleans;
 mod builtins;
 pub mod call_kinds;
 pub mod canonical_numbers;
@@ -600,6 +601,7 @@ fn generate<'a>(
     g.m.map_values_sabotage = cfg.sabotage.as_deref() == Some("mapvals");
     g.m.literal_strings = literal_strings::enabled();
     g.m.literal_strings_sabotage = cfg.sabotage.as_deref() == Some("litstr");
+    booleans::configure(&mut g.m, cfg.sabotage.as_deref());
     g.m.rest_lane_sabotage = cfg.sabotage.as_deref() == Some("restlane");
     g.m.exact_rules = !cfg.no_exact_rules;
     g.m.exact_rule_sabotage = cfg.sabotage.as_deref() == Some("exactrule");
@@ -1128,6 +1130,7 @@ fn compute_act<'a>(
         let mut p = bindings::rep_probe(&g);
         p.extend(rest_lanes);
         p.extend(literal_strings::probe(&g, &templates));
+        p.extend(booleans::probe(&g, &templates));
         if g.m.zero_sign {
             p.push(format!("# zero-sign tolerated={zero_sign_tolerated}"));
         }

@@ -517,9 +517,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
 /// async-loop shape) and a NaN-boxed INT32 (the i32 loop-counter lowering).
 #[inline]
 fn numeric_index_key(key: JSValue) -> Option<f64> {
-    if key.is_int32() {
-        return Some(key.as_int32() as f64);
-    }
     // `is_number` accepts every non-Perry-tagged bit pattern, NaN included; a
     // NaN key is not an index and would only make the polymorphic read return
     // `undefined`, so screen it out here rather than paying for the probe.
@@ -2249,7 +2246,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // any more. See `bare_receiver`.
     let primitive_kind: Option<&'static str> = if jsval().is_any_string() {
         Some("string")
-    } else if jsval().is_int32() || jsval().is_number() {
+    } else if jsval().is_number() {
         Some("number")
     } else if jsval().is_bool() {
         Some("boolean")

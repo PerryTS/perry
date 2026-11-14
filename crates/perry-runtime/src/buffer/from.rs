@@ -265,9 +265,7 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
         return None;
     }
 
-    let length = if length_value.is_int32() {
-        length_value.as_int32() as f64
-    } else if length_value.is_number() {
+    let length = if length_value.is_number() {
         length_value.as_number()
     } else {
         return Some(super::pool::copy(0));
@@ -335,7 +333,6 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     if jsval.is_undefined()
         || jsval.is_null()
         || jsval.is_bool()
-        || jsval.is_int32()
         || jsval.is_number()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 }
@@ -1100,8 +1097,6 @@ pub extern "C" fn js_buffer_fill_value_range(
     let value = crate::JSValue::from_bits(fill_value.to_bits());
     let byte = if value.is_number() {
         Some(fill_value as i64 as u8)
-    } else if value.is_int32() {
-        Some(value.as_int32() as u8)
     } else if value.is_bool() {
         Some(u8::from(value.as_bool()))
     } else if value.is_undefined() || value.is_null() {
@@ -1193,9 +1188,6 @@ fn normalize_buffer_concat_total_length(total_length: f64) -> Option<usize> {
     if jsval.is_undefined() {
         return None;
     }
-    if jsval.is_int32() {
-        return Some((jsval.as_int32().max(0)) as usize);
-    }
     if jsval.is_bool() {
         return Some(if jsval.as_bool() { 1 } else { 0 });
     }
@@ -1241,13 +1233,15 @@ fn js_buffer_concat_impl(
         let arr_data =
             crate::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const f64;
 
-        // Helper to strip NaN-boxing tags from buffer element pointers
+        // A list element names a buffer by its tag alone: a POINTER_TAG'd
+        // value gives its payload, every other word (a Number, also one whose
+        // bits look like an address, a string, a handle) gives 0, which the
+        // check below rejects with ERR_INVALID_ARG_TYPE.
         let strip_nanbox = |bits: u64| -> u64 {
-            let top16 = (bits >> 48) as u16;
-            if top16 >= 0x7FF8 {
-                bits & 0x0000_FFFF_FFFF_FFFF
+            if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+                bits & crate::value::POINTER_MASK
             } else {
-                bits
+                0
             }
         };
 

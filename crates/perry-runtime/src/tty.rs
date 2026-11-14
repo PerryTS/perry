@@ -87,11 +87,13 @@ fn isatty_impl(fd: i32) -> bool {
             unsafe { libc::isatty(fd) != 0 }
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, tty);
-        unsafe { libc::isatty(fd) != 0 }
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, tty);
+            unsafe { libc::isatty(fd) != 0 }
+        }
     }
 }
 
@@ -112,16 +114,18 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
             }
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, tty);
-        unsafe {
-            let mut ws: libc::winsize = std::mem::zeroed();
-            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
-                Some((ws.ws_col as i32, ws.ws_row as i32))
-            } else {
-                None
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, tty);
+            unsafe {
+                let mut ws: libc::winsize = std::mem::zeroed();
+                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+                    Some((ws.ws_col as i32, ws.ws_row as i32))
+                } else {
+                    None
+                }
             }
         }
     }
@@ -140,13 +144,15 @@ fn isatty_impl(fd: i32) -> bool {
             crate::win_console::is_console_fd(fd)
         });
     }
-
-    crate::effect!(host_read, tty);
-    // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
-    // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
-    // and the same criterion libuv uses to classify a handle as `UV_TTY`.
-    // Piped/redirected handles fail the probe → false, matching Node.
-    crate::win_console::is_console_fd(fd)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+        // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+        // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+        // Piped/redirected handles fail the probe → false, matching Node.
+        crate::win_console::is_console_fd(fd)
+    }
 }
 
 #[cfg(windows)]
@@ -160,11 +166,13 @@ fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
             crate::win_console::window_size(fd)
         });
     }
-
-    crate::effect!(host_read, tty);
-    // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
-    // bottom-top+1) for the stdout/stderr console handle.
-    crate::win_console::window_size(fd)
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+        // bottom-top+1) for the stdout/stderr console handle.
+        crate::win_console::window_size(fd)
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -176,9 +184,11 @@ fn isatty_impl(_fd: i32) -> bool {
             false
         });
     }
-
-    crate::effect!(host_read, tty);
-    false
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        false
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -190,9 +200,11 @@ fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
             None
         });
     }
-
-    crate::effect!(host_read, tty);
-    None
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        None
+    }
 }
 
 pub(crate) fn is_tty_fd(fd: i32) -> bool {
@@ -208,10 +220,6 @@ fn validate_fd_number(fd: f64) -> i32 {
 
 fn tty_isatty_fd_arg(value: f64) -> Option<i32> {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        let fd = js_value.as_int32();
-        return (fd >= 0).then_some(fd);
-    }
     if !js_value.is_number() {
         return None;
     }
@@ -306,9 +314,6 @@ fn this_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
 fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
     let fd = crate::object::js_object_get_field_by_name_f64(obj, named_key(b"fd"));
     let jsval = JSValue::from_bits(fd.to_bits());
-    if jsval.is_int32() {
-        return Some(jsval.as_int32());
-    }
     if jsval.is_number() && fd.is_finite() && fd.fract() == 0.0 {
         return Some(fd as i32);
     }
@@ -492,9 +497,6 @@ impl ColorEnv<'_> {
             if jsval.is_bool() {
                 return Some(jsval.as_bool().to_string());
             }
-            if jsval.is_int32() {
-                return Some(jsval.as_int32().to_string());
-            }
             if jsval.is_number() && value.is_finite() {
                 return Some(value.to_string());
             }
@@ -663,9 +665,6 @@ fn has_colors_for_depth(count: f64, depth: u8) -> bool {
 
 fn count_value(count: f64) -> Result<f64, &'static str> {
     let jsval = JSValue::from_bits(count.to_bits());
-    if jsval.is_int32() {
-        return Ok(jsval.as_int32() as f64);
-    }
     if jsval.is_number() {
         return Ok(jsval.as_number());
     }
@@ -1079,9 +1078,6 @@ fn write_all_fd(fd: i32, bytes: &[u8]) -> bool {
 
 fn numeric_arg(value: f64, default: i32) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        return jsval.as_int32();
-    }
     if jsval.is_number() && value.is_finite() {
         return value as i32;
     }

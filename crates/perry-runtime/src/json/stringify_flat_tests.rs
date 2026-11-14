@@ -300,9 +300,6 @@ fn flat_direct_number_spelling_matches_the_existing_emitter() {
         ] {
             check(number.to_bits());
         }
-        for n in [i32::MIN, -1, 0, 1, i32::MAX] {
-            check(INT32_TAG | n as u32 as u64);
-        }
         for _ in 0..16384 {
             state ^= state << 13;
             state ^= state >> 7;

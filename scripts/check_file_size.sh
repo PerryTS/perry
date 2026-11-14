@@ -22,27 +22,27 @@ ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
 crates/perry/src/commands/compile/run_pipeline.rs	6371
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
-crates/perry-hir/src/lower_decl/body_stmt.rs	2063
+crates/perry-hir/src/lower_decl/body_stmt.rs	2056
 # Representation-aware codegen core; further decomposition is tracked in #1435.
 crates/perry-codegen/src/codegen/mod.rs	3709
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
 crates/perry-codegen/src/collectors/hir_facts.rs	2775
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2879
+crates/perry-codegen/src/expr/mod.rs	2881
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
 crates/perry-codegen/src/stmt/loops.rs	8453
 # Representation-aware map core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/map.rs	3025
+crates/perry-runtime/src/map.rs	3019
 # Representation-aware set core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/set.rs	2339
+crates/perry-runtime/src/set.rs	2368
 # Representation feedback core; further decomposition is tracked in #1435.
-crates/perry-runtime/src/typed_feedback.rs	2460
+crates/perry-runtime/src/typed_feedback.rs	2450
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
-crates/perry-runtime/src/snap_census/runner.rs	4768
+crates/perry-runtime/src/snap_census/runner.rs	4875
 # Native ABI proof cases; test organization is a separate follow-up.
 crates/perry-codegen/tests/native_proof_regressions.rs	15874
 # Representation feedback regression cases; test organization is a separate follow-up.
-crates/perry-runtime/src/typed_feedback/tests.rs	2304
+crates/perry-runtime/src/typed_feedback/tests.rs	2300
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
@@ -52,7 +52,7 @@ crates/perry-stdlib/src/streams.rs	2454
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2877
 # Shape registry table and publication invariants require a coordinated split.
-crates/perry-runtime/src/object/shapes.rs	4944
+crates/perry-runtime/src/object/shapes.rs	4950
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.

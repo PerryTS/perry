@@ -188,7 +188,8 @@ pub(crate) use helpers::{
     emit_string_addref_if_heap_string, expr_has_numeric_pointer_free_array_layout,
     expr_produces_fresh_heap_allocation, expr_produces_non_pointer_bits_by_construction,
     is_global_this_builtin_name, lower_expr_with_expected_type, lower_js_args_array,
-    store_needs_string_addref, unbox_ffi_str_arg, unbox_str_handle, unbox_to_i64,
+    store_needs_string_addref, unbox_ffi_str_arg, unbox_pointer_or_null, unbox_str_handle,
+    unbox_to_i64,
 };
 pub(crate) use i32_fast_path::temps as i32_temps;
 pub(crate) use i32_fast_path::{
@@ -3393,6 +3394,7 @@ pub(crate) mod int32_shadow;
 pub(crate) mod int_product;
 #[cfg(test)]
 mod kind_entry_selection_tests;
+pub(crate) mod booleans;
 pub(crate) mod literal_strings;
 #[cfg(test)]
 mod map_entry_fusion_tests;

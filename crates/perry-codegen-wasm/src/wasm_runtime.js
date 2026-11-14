@@ -1743,6 +1743,9 @@ const __memDispatch = {
       && __lookupData(args[0], Symbol.iterator) === __intrinsicArrayValues
       && __lookupData(__ArrayIteratorPrototype, "next") === __intrinsicArrayIteratorNext),
   rt_arrayRecordLength: (array) => array.length,
+  // A numeric typed array may be walked by index (HIR `typedArrayForOfAdmits`).
+  rt_typedArrayForOfAdmits: (v) => ArrayBuffer.isView(v) && !(v instanceof DataView)
+    && !(v instanceof BigInt64Array) && !(v instanceof BigUint64Array),
   rt_arrayRecordLiteral: (...values) => values,
   rt_arrayRecordCloseAbsent: () => !("return" in __ArrayIteratorPrototype),
   // ponytail: closes a fresh intrinsic iterator over `src`; JS cannot place its cursor at `index`.

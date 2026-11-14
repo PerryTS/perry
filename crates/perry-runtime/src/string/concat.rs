@@ -1619,26 +1619,6 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
             continue;
         }
 
-        // An INT32 number: digits from the lower 32 bits (a `C.prototype`
-        // ref word, bit 32 set, is not one and takes the slow path).
-        if (bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
-            let v = (bits & 0xFFFF_FFFF) as u32 as i32;
-            let len = {
-                let buf = num_bufs[i].write([0u8; 32]);
-                if v >= 0 {
-                    fast_itoa_u32(v as u32, buf)
-                } else {
-                    fast_itoa_i64(v as i64, buf)
-                }
-            };
-            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
-            piece_lens[i] = len as u32;
-            piece_u16[i] = len as u32;
-            total_blen = total_blen.saturating_add(len as u32);
-            total_u16 = total_u16.saturating_add(len as u32);
-            continue;
-        }
-
         // Anything else (bool, null, undefined, object, etc.) — slow path.
         let s = crate::value::js_jsvalue_to_string(value);
         if is_valid_string_ptr(s) {

@@ -225,7 +225,6 @@ pub(crate) unsafe fn params_from_array(
         const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
         const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
         const STRING_TAG: u64 = 0x7FFF;
-        const INT32_TAG: u64 = 0x7FFE;
 
         let top16 = bits >> 48;
 
@@ -243,9 +242,6 @@ pub(crate) unsafe fn params_from_array(
             } else {
                 params.push(Box::new(rusqlite::types::Null));
             }
-        } else if top16 == INT32_TAG {
-            let n = (bits & 0xFFFF_FFFF) as i32;
-            params.push(Box::new(n as i64));
         } else {
             // Regular f64 number
             if val.fract() == 0.0 && val >= i64::MIN as f64 && val <= i64::MAX as f64 {

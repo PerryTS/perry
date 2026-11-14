@@ -452,7 +452,7 @@ fn observe_tok(m: &mut Model, t: Tok, key: Key) {
             Some(shape) => shape.name.into(),
             None => return,
         },
-        TokKind::NativeProto(n) => format!("{n}.prototype").into(),
+        TokKind::NativeProto(n, _) => format!("{n}.prototype").into(),
         TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what, .. } => bobj_holder(what),
             TmplKind::Arr { .. } => return observe_members(m, &ix.array_proto, key),
@@ -718,7 +718,7 @@ fn observe_tokens(m: &Model, v: &mut Verdicts) {
                     });
                 }
             }
-            TokKind::NativeProto(n) => {
+            TokKind::NativeProto(n, _) => {
                 let set = families::entry_families(n).unwrap_or(0);
                 v.mark(set, || format!("L2:{n}.prototype is held as a value"));
             }

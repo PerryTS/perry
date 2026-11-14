@@ -42,6 +42,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_CLASS_FIELD_UPDATE",
     "PERRY_CODEGEN_UNITS",
     "PERRY_CODEGEN_UNIT_BYTES",
+    "PERRY_CODEGEN_UNIT_LOCALITY",
     "PERRY_CODEGEN_UNIT_SIZE",
     "PERRY_COLD_PATHS",
     "PERRY_COLLECTION_RECEIVER_TESTS",
@@ -73,6 +74,7 @@ pub(super) const COMPILE_ENV_VARS: &[&str] = &[
     "PERRY_FACTS_ARRAY_TIER",
     "PERRY_FACTS_AT_REST",
     "PERRY_FACTS_BIRTH_CENSUS",
+    "PERRY_FACTS_BOOLEANS",
     "PERRY_FACTS_BOUNDED_LOOPS",
     "PERRY_FACTS_BUDGET_SECS",
     "PERRY_FACTS_CALL_KINDS",
@@ -460,6 +462,10 @@ const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     (
         "PERRY_CODEGEN_UNIT_JOBS",
         "Controls scheduling or progress telemetry, not codegen partitioning or emitted bytes.",
+    ),
+    (
+        "PERRY_CODEGEN_UNIT_MAP",
+        "Writes IR/report files or diagnostic output without changing emitted objects.",
     ),
     (
         "PERRY_CODEGEN_UNIT_TIMINGS",

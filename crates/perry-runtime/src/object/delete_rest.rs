@@ -880,7 +880,7 @@ fn primitive_receiver_delete(obj_value: f64, key: f64) -> i32 {
             || super::field_get_set::canonical_array_index_bytes(bytes).is_some_and(|i| i < len);
         return i32::from(!own);
     }
-    if k.is_number() || k.is_int32() {
+    if k.is_number() {
         // ToPropertyKey: an integral Number in range names an index (`-0` is "0").
         let n = k.to_number();
         return i32::from(!(n >= 0.0 && n.fract() == 0.0 && n < f64::from(len)));

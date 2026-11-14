@@ -216,9 +216,11 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
-                self.prim_node(prim::BOOL)
-            }
+            "arrayRecordNeedsIterator"
+            | "arrayRecordForBound"
+            | "hasPathModule"
+            | "isBuiltin"
+            | "typedArrayForOfAdmits" => self.prim_node(prim::BOOL),
             // What codegen lowers them to: the cursor itself, the payload's
             // length, and `mode ? 0 : update`.
             "arrayRecordIndex" => match arg(0) {

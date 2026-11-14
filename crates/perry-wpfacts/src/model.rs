@@ -1693,6 +1693,12 @@ pub struct Model {
     /// that may be negative is claimed non-negative, a wrong claim the
     /// witness at the element site must catch.
     pub wide_key_sabotage: bool,
+    /// Booleans (`booleans`; `PERRY_FACTS_BOOLEANS=0` turns them off).
+    pub booleans: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=bools`): every binding and
+    /// field that may hold a Boolean is claimed to hold nothing else, a
+    /// wrong claim the witness at the truthiness test must catch.
+    pub booleans_sabotage: bool,
     /// Literal strings (`literal_strings`;
     /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
     pub literal_strings: bool,

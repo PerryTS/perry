@@ -118,7 +118,7 @@ fn boxed_primitive_source(value: f64, bits: u64) -> bool {
     }
     // Numbers: real doubles and INT32-tagged small integers — the latter are
     // bit-identical to a registered class ref, so the registry decides.
-    (jsv.is_number() || jsv.is_int32()) && crate::object::class_ref_id(value).is_none()
+    (jsv.is_number()) && crate::object::class_ref_id(value).is_none()
 }
 
 #[no_mangle]

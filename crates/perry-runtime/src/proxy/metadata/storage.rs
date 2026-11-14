@@ -18,7 +18,7 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     // but the constructor's actual function bag now owns the metadata.
     let _no_move = crate::gc::GcSuppressScope::new();
     let bits = normalize_target_bits(target);
-    let target = if bits & !POINTER_MASK == crate::value::INT32_TAG {
+    let target = if bits & !POINTER_MASK == crate::value::INTERNAL_WORD_TAG {
         crate::object::class_constructor_ref_value(bits as u32)
     } else {
         f64::from_bits(bits)

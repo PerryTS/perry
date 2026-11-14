@@ -42,7 +42,7 @@ pub extern "C" fn js_math_round(value: f64) -> f64 {
         && rounded.fract() == 0.0
         && rounded.abs() < 2_147_483_648.0
     {
-        return f64::from_bits(crate::value::INT32_TAG | (rounded as i32 as u32 as u64));
+        return f64::from_bits(crate::value::INTERNAL_WORD_TAG | (rounded as i32 as u32 as u64));
     }
     rounded
 }
@@ -444,12 +444,14 @@ pub extern "C" fn js_math_random() -> f64 {
             rng.random::<f64>()
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, random);
-        let mut rng = rand::rng();
-        rng.random::<f64>()
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, random);
+            let mut rng = rand::rng();
+            rng.random::<f64>()
+        }
     }
 }
 

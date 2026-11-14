@@ -154,12 +154,11 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 // ============================================================================
 // Truthiness check (mirrors js_is_truthy in value.rs)
@@ -175,12 +174,8 @@ fn is_truthy_bits(bits: u64) -> bool {
     if bits == TAG_TRUE {
         return true;
     }
-    // INT32_TAG: check if value is 0
-    if crate::value::is_int32_bits(bits) {
-        return (bits & INT32_MASK) != 0;
-    }
-    // Any other `0x7FFE` word (a `C.prototype` ref) is an object: truthy.
-    if (bits & TAG_MASK) == INT32_TAG {
+    // An internal word is no JS value; a slot scan that meets one keeps it.
+    if (bits & TAG_MASK) == INTERNAL_WORD_TAG {
         return true;
     }
     // String: empty string is falsy (check length == 0)
@@ -299,7 +294,7 @@ pub enum SerializedValue {
     },
     StringRef(u32),
     /// A raw 64-bit value that needs no pointer fixup.
-    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
+    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INTERNAL_WORD_TAG.
     Inline(u64),
 
     /// A UTF-8 string (copied from StringHeader + trailing bytes).
@@ -1478,7 +1473,3 @@ mod error_stack_clone_tests;
 #[cfg(test)]
 #[path = "thread/error_cause_clone_tests.rs"]
 mod error_cause_clone_tests;
-
-#[cfg(test)]
-#[path = "thread_int32_exact_tests.rs"]
-mod int32_exact_tests;

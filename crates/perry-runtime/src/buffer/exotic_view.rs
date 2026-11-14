@@ -153,14 +153,11 @@ pub fn is_node_buffer(addr: usize) -> bool {
 /// ordinary property key, its `ToPropertyKey` string. `dv[0] = 7` stores
 /// under `"0"`, `dv[-1] = 1` under `"-1"`, `dv[1.5]` under `"1.5"` (node:
 /// `Object.keys(dv)` lists each). The argument is the NaN-BOXED key as the
-/// index paths carry it, so the `INT32_TAG` form (`dv[0]` with a loop
-/// counter) and the plain-double form reach the same answer; a string /
+/// index paths carry it: a Number is a plain double; a string /
 /// symbol / pointer key answers `None` so the caller keeps its by-name route.
 pub fn canonical_index_key(index: f64) -> Option<String> {
     let jv = crate::value::JSValue::from_bits(index.to_bits());
-    let n = if jv.is_int32() {
-        f64::from(jv.as_int32())
-    } else if jv.is_number() {
+    let n = if jv.is_number() {
         index
     } else {
         return None;

@@ -140,12 +140,7 @@ unsafe fn construct_function_impl(
     // primitive callees, silently fell through to the empty-object fallback.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
-        if jv.is_undefined()
-            || jv.is_null()
-            || jv.is_bool()
-            || (jv.is_int32() && constructor_class_ref_id(func_value).is_none())
-            || jv.is_any_string()
-            || jv.is_bigint()
+        if jv.is_undefined() || jv.is_null() || jv.is_bool() || jv.is_any_string() || jv.is_bigint()
         {
             let desc =
                 unsafe { super::super::object_ops::describe_value_for_type_error(func_value) };

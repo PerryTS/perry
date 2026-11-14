@@ -154,7 +154,7 @@ mod tests {
             f64::NAN,
             f64::INFINITY,
             2147483648.0,
-            f64::from_bits(crate::value::INT32_TAG | 5),
+            f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5),
         ]
     }
 
@@ -200,7 +200,7 @@ mod tests {
                     let slots = crate::array::array_elements_ptr(born as *const ArrayHeader);
                     assert_eq!(
                         *slots,
-                        crate::value::INT32_TAG | u64::from(value as i32 as u32)
+                        crate::value::INTERNAL_WORD_TAG | u64::from(value as i32 as u32)
                     );
                 }
             }
