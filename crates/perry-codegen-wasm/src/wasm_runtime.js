@@ -1642,6 +1642,47 @@ function __classInstance(className) {
   return Object.defineProperty({}, "__class__", { value: className, writable: true, configurable: true });
 }
 
+// A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
+// so `new` on it builds what `new K()` builds — a `{__class__}` instance run through
+// the compiled constructor. `ctorIdx` is the constructor's
+// table slot, or -1 when the class has none. Its arguments stay Perry values: a
+// closure passed to it must reach the compiled constructor as a closure, so
+// __constructHostFunction does not wrap them for a constructor in __perryClassCtors.
+const __classRefs = new Map();
+const __perryClassCtors = new WeakSet();
+function __classRef(className, ctorIdx) {
+  let ctor = __classRefs.get(className);
+  if (!ctor) {
+    ctor = function (...args) {
+      if (new.target === undefined) {
+        throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
+      }
+      const self = __classInstance(className);
+      if (ctorIdx < 0) return self;
+      const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
+      const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+      const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+      // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
+      return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+    };
+    Object.defineProperty(ctor, 'name', { value: className });
+    // Instances are `{__class__}` objects, not linked to ctor.prototype: host
+    // `instanceof` walks the class table as class_instanceof does.
+    Object.defineProperty(ctor, Symbol.hasInstance, {
+      value: (obj) => {
+        if (!obj || typeof obj !== 'object') return false;
+        for (let c = obj.__class__; c; c = classParentTable[c] || null) {
+          if (c === className) return true;
+        }
+        return false;
+      },
+    });
+    __perryClassCtors.add(ctor);
+    __classRefs.set(className, ctor);
+  }
+  return ctor;
+}
+
 // A lowered sync generator drives its resume record, a wasm closure taking
 // `(op, arg)` (op 0 next, 1 return, 2 throw), or `(arg)` when it has no catch,
 // finally or `yield*`. The record's first five captures are the cells it shares
@@ -2106,6 +2147,7 @@ const __memDispatch = {
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, fieldCount) => __classInstance(String(className)),
+  class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_set_method: (classId, methodName, funcIdx) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
@@ -5153,7 +5195,7 @@ function __callHostFunction(fn, args, receiver = undefined) {
 // handling as __callHostFunction.
 function __constructHostFunction(fn, args) {
   try {
-    return Reflect.construct(fn, args.map(__hostCallback));
+    return Reflect.construct(fn, __perryClassCtors.has(fn) ? args : args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;

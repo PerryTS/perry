@@ -725,3 +725,104 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// A class used as a value is a constructor: `new` on it runs the class's constructor
+// and field initializers, and the instance keeps its methods and its class.
+#[test]
+fn a_class_used_as_a_value_constructs_its_instances() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class K { v = 3; constructor(x?: number) { if (x !== undefined) this.v = x; } twice() { return this.v * 2; } }
+class Bare { w = 4; }
+const KK: any = K;
+const kk = new KK(7);
+console.log(typeof KK + " " + kk.v + " " + kk.twice() + " " + (kk instanceof K) + " " + new KK().v);
+const r = { K, Bare };
+console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " + (KK === r.K));
+"#
+        ),
+        "function 7 14 true 3\nfunction 18 4 true"
+    );
+}
+
+// `new` on a class value hands its arguments to the compiled constructor as Perry
+// values: a closure argument stays a closure the array bridges can call.
+#[test]
+fn a_class_value_constructor_receives_a_closure_argument() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
+const MM: any = M;
+console.log(new MM((n: number) => n * 10).out.join(","));
+"#
+        ),
+        "10,20"
+    );
+}
+
+// Instances are `{__class__}` objects, so host `instanceof` on a class value walks
+// the class table, as compiled `instanceof` does.
+#[test]
+fn host_instanceof_on_a_class_value_walks_the_class_chain() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+class P { }
+class Q extends P { }
+const refs: any[] = [P, Q];
+console.log(refs.length);
+"#,
+            r#"
+const P = __classRef("P", -1), Q = __classRef("Q", -1);
+console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
+  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
+"#
+        ),
+        "2\ntrue true false false false"
+    );
+}
+
+// `new` on a class value yields what [[Construct]] yields: the instance, unless the
+// constructor returns an object. A bare `return;` keeps the initialized instance.
+#[test]
+fn a_class_value_constructor_returning_no_object_yields_the_instance() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
+class O { v = 1; constructor() { return { v: 5 } as any; } }
+const EE: any = E, OO: any = O;
+const e = new EE(1);
+console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
+"#
+        ),
+        "1 1 true 2 5 false"
+    );
+}
+
+#[test]
+fn a_class_declared_in_a_function_keeps_its_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(): any {
+  class Local extends Error {
+    who() { return "local"; }
+  }
+  return new Local("m");
+}
+const b = make();
+console.log(typeof b.who);
+console.log(b.who());
+function plain(n: number): any {
+  class P { v: number; constructor(v: number) { this.v = v; } twice() { return this.v * 2; } }
+  return new P(n);
+}
+console.log(plain(4).twice());
+"#
+        ),
+        "function\nlocal\n8"
+    );
+}

@@ -407,8 +407,46 @@ impl<'a> FuncEmitCtx<'a> {
                 }));
                 self.emit_memcall(func, "class_call_method", 3);
             }
-            Expr::ClassRef(_) => {
-                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            // A class declared in a function body. Without per-evaluation state
+            // (captured locals, static initializers, computed member names)
+            // every evaluation builds what the shared class builds; a class
+            // with such state is not represented here and stays `undefined`.
+            Expr::ClassExprFresh {
+                template,
+                named_statics,
+                computed_keys,
+                computed_statics,
+                static_init_order,
+                captured_args,
+                definition_steps,
+                ..
+            } if named_statics.is_empty()
+                && computed_keys.is_empty()
+                && computed_statics.is_empty()
+                && static_init_order.is_empty()
+                && captured_args.is_empty()
+                && definition_steps.is_empty() =>
+            {
+                self.emit_expr(func, &Expr::ClassRef(template.clone()));
+            }
+            Expr::ClassRef(class_name) => {
+                let class_id = self
+                    .emitter
+                    .string_map
+                    .get(class_name.as_str())
+                    .copied()
+                    .unwrap_or(0);
+                let class_bits = (STRING_TAG << 48) | (class_id as u64);
+                let ctor_slot = self
+                    .emitter
+                    .class_ctor_map
+                    .get(class_name.as_str())
+                    .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
+                    .map_or(-1.0, |&slot| slot as f64);
+                self.emit_frame_begin(func, 2);
+                self.emit_store_const(func, 0, f64::from_bits(class_bits));
+                self.emit_store_const(func, 1, ctor_slot);
+                self.emit_memcall(func, "class_ref", 2);
             }
             Expr::StaticFieldGet {
                 class_name,
