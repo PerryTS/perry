@@ -1611,6 +1611,8 @@ fn tls_image_row(st: &mut State) {
     let r = st.tls_ranges;
     let into = |v: usize| (v >= r[0] && v < r[1]) || (v >= r[2] && v < r[3]);
     let mut ptr_words = 0usize;
+    // The scan reads protected slots: census bookkeeping, no access of an init.
+    st.bookkeeping += 1;
     for (lo, hi) in [(r[0], r[1]), (r[2], r[3])] {
         let mut a = lo;
         while a + 8 <= hi {
@@ -1620,6 +1622,7 @@ fn tls_image_row(st: &mut State) {
             a += 8;
         }
     }
+    st.bookkeeping -= 1;
     input_record::event(
         st,
         "tls_image",
@@ -4444,6 +4447,27 @@ fn is_entry(st: &State, id: u32) -> bool {
     id != 0 && (id == st.entry_init || st.inits[id as usize].entry_module)
 }
 
+/// A root slot inside the entry module record. The entry record is imaged in
+/// configure state (its root slots hold undefined), so none of its words is
+/// a holder of an entry value; the record layout states the extent.
+fn in_entry_record(st: &State, slot: usize) -> bool {
+    st.entry_record != 0
+        && slot.wrapping_sub(st.entry_record) < crate::async_module::MODULE_RECORD_SIZE
+}
+
+/// The words of `b` that the collector traces, as (offset from the header,
+/// word): an array's elements up to its length, a promise's value, handler,
+/// next and meta fields; never the words past an object's logical extent.
+fn holder_words(b: &Birth, mut f: impl FnMut(usize, u64)) {
+    // SAFETY: a live birth is a collector object; the visitor reads its
+    // header and layout words.
+    unsafe {
+        crate::gc::visit_traced_slots(b.addr as *mut crate::gc::GcHeader, |slot| {
+            f(slot - b.addr, (slot as *const u64).read());
+        });
+    }
+}
+
 fn host_name(what: u8) -> &'static str {
     match what {
         1 => "argv",
@@ -4497,8 +4521,12 @@ fn k2a_rows(st: &mut State) {
     // was handed out again is history only.
     let live = |b: &Birth| st.cells.current(b.addr, b.size as usize, b.seq);
     let stale_births = st.births.as_slice().iter().filter(|b| !live(b)).count();
+    // A hold names an object by its address, which names one object only in
+    // a run that holds collection: a run that lets the collector move
+    // objects reports no hold rows (and says so in the summary).
+    let collected = !st.noprotect;
     let mut t: Vec<(usize, usize, u8, u64, u32)> = Vec::new();
-    if st.host_rule {
+    if collected && st.host_rule {
         t.extend(
             st.host_targets
                 .iter()
@@ -4506,7 +4534,7 @@ fn k2a_rows(st: &mut State) {
                 .map(|&(a, e, w, s)| (a, e, w, s, 0)),
         );
     }
-    if st.p_entry_rule {
+    if collected && st.p_entry_rule {
         for b in st.births.as_slice() {
             if is_entry(st, b.init) && live(b) {
                 t.push((b.addr, b.addr + b.size as usize, 255, b.seq, b.init));
@@ -4522,7 +4550,7 @@ fn k2a_rows(st: &mut State) {
     // key as P-entry (a)/(b)), not an entry value. It is no (c) target, and
     // its words are scanned as the holder's. Edges into adopted storage
     // (an entry-born meta's spill) are followed to a fixpoint.
-    let owned: Vec<(usize, usize, u32)> = if st.p_entry_rule {
+    let owned: Vec<(usize, usize, u32)> = if collected && st.p_entry_rule {
         let hs = crate::gc::GC_HEADER_SIZE;
         let meta_edges = [
             std::mem::offset_of!(crate::object::ObjectMeta, spill),
@@ -4626,8 +4654,7 @@ fn k2a_rows(st: &mut State) {
                 init,
                 seq,
             };
-            for off in (8..b.size as usize).step_by(8) {
-                let v = unsafe { ((b.addr + off) as *const u64).read() };
+            holder_words(&b, |off, v| {
                 if let Some(k) = find(v) {
                     held += 1;
                     if seen.insert((b.addr, k)) && rows.len() < CHECK_FAIL_MAX {
@@ -4645,11 +4672,11 @@ fn k2a_rows(st: &mut State) {
                         );
                     }
                 }
-            }
+            });
         }
         for (n, &slot) in st.globals_log.iter().enumerate() {
             let owner = st.slot_owner.get(n).copied().unwrap_or(0);
-            if is_entry(st, owner) {
+            if is_entry(st, owner) || in_entry_record(st, slot) {
                 continue;
             }
             let v = unsafe { (slot as *const u64).read() };
@@ -4675,8 +4702,13 @@ fn k2a_rows(st: &mut State) {
             ),
         ));
     }
+    let holds = if collected {
+        "collected"
+    } else {
+        "not-collected(no-hold)"
+    };
     let summary = format!(
-        "host_targets={};entry_births={};held_words={held};p_entry_ab={};stale_births={stale_births};resized={};remap_cleared={}",
+        "holds={holds};host_targets={};entry_births={};held_words={held};p_entry_ab={};stale_births={stale_births};resized={};remap_cleared={}",
         st.host_targets.len(),
         t.iter().filter(|x| x.2 == 255).count(),
         st.p_entry_log.len(),
@@ -5845,5 +5877,45 @@ mod cells_tests {
             .step_by(8)
             .filter(|&a| c.is_start(a));
         assert_eq!(starts.collect::<Vec<_>>(), vec![B + 2 * MB + 64]);
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    /// An array holder is scanned as the collector traces it: its elements up
+    /// to its length, never the words between its length and its capacity.
+    #[test]
+    fn holder_words_stop_at_the_array_length() {
+        const TAG: u64 = 0x7FFD_0000_0000_0000;
+        unsafe {
+            let a = crate::array::js_array_alloc_with_length(32);
+            for i in 0..32u32 {
+                crate::array::js_array_set_f64(a, i, f64::from_bits(TAG | i as u64));
+            }
+            (*a).length = 26;
+            let addr = a as usize - crate::gc::GC_HEADER_SIZE;
+            let b = Birth {
+                addr,
+                size: (*(addr as *const crate::gc::GcHeader)).size,
+                init: 1,
+                seq: 1,
+            };
+            let mut traced = Vec::new();
+            holder_words(&b, |_, v| {
+                if v & !0xFFFF == TAG {
+                    traced.push(v & 0xFFFF);
+                }
+            });
+            assert_eq!(traced, (0..26).collect::<Vec<u64>>());
+            // The physical extent holds the six words past the length too.
+            let physical = (8..b.size as usize)
+                .step_by(8)
+                .filter(|off| unsafe { ((addr + off) as *const u64).read() } & !0xFFFF == TAG)
+                .count();
+            assert_eq!(physical, 32);
+            (*a).length = 32;
+        }
     }
 }

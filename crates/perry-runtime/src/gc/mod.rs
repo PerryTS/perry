@@ -118,6 +118,7 @@ mod layout;
 mod layout_slot_visit;
 pub use layout::*;
 use layout_slot_visit::*;
+pub(crate) use layout_slot_visit::visit_traced_slots;
 mod mark;
 pub(crate) use mark::*;
 mod barrier;
