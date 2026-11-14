@@ -509,7 +509,10 @@ pub(super) fn own_method_inner(m: &mut Model, t: Tok, key: Key, call: CallId) {
     // written onto its chain runs what was stored, beside the description,
     // unless the read is final (DEC 250).
     if let (true, Some(n), Key::Named(a)) = (described, name.as_deref(), key) {
-        if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Call(t, call)) {
+        let holder = super::chain_holder(m, t);
+        if !locked_chain_read(m, t, a)
+            && !super::intrinsic_miss_on(m, holder, a, NativeMiss::Call(t, call))
+        {
             unknown_method(m, call, &format!("argument of a written method {n}"));
         }
     }
