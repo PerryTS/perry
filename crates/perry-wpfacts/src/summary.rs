@@ -584,7 +584,7 @@ impl Model {
                 None => break,
             }
         }
-        let k = self.maker_key(o, by_method);
+        let k = self.maker_key(o);
         self.made_at(site, Maker::Obj(k, by_method), vc)
     }
 
@@ -601,17 +601,22 @@ impl Model {
         c
     }
 
-    /// The maker as a context key: the object itself, except that a
-    /// method's receiver which a method made stands for the object that
-    /// chain of method calls started from (what a method makes from a
-    /// method's result is that origin's, never per the chain of calls).
-    fn maker_key(&self, mut o: Tok, by_method: bool) -> Tok {
-        if by_method {
-            while let TokKind::Obj(_, c) = self.toks[o as usize] {
-                match self.made_entry(c) {
-                    Some((_, Maker::Obj(m, true))) => o = m,
-                    _ => break,
-                }
+    /// The maker as a context key: the object itself, except that an
+    /// object which a method made stands for the object that chain of
+    /// method calls started from. That holds for a method's receiver (what
+    /// a method makes from a method's result is that origin's, never per
+    /// the chain of calls) and for a constructor run alike: what the
+    /// constructor of `new this.constructor()` in `clone()` births is the
+    /// origin's, at its own birth site. Both only merge contexts: a context
+    /// is a set of executions, and keying two of them as one unions their
+    /// facts, so every fact stays sound; the objects one site births in the
+    /// constructor runs of an origin and of everything its methods made are
+    /// one token (their per-copy facts are joined).
+    fn maker_key(&self, mut o: Tok) -> Tok {
+        while let TokKind::Obj(_, c) = self.toks[o as usize] {
+            match self.made_entry(c) {
+                Some((_, Maker::Obj(m, true))) => o = m,
+                _ => break,
             }
         }
         o
@@ -643,7 +648,7 @@ impl Model {
             return LAY_NONE;
         }
         match self.toks[t as usize] {
-            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t, true),
+            TokKind::Obj(..) if t <= LAY_MASK => LAY_TOK | self.maker_key(t),
             _ => self.layout_of(t),
         }
     }
