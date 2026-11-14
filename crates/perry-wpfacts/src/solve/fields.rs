@@ -663,6 +663,7 @@ impl Model {
                     (site != u32::MAX && builtins::own_values_filled(what))
                         || builtins::realm_object_own_props_unenumerable(what)
                         || (site != u32::MAX && builtins::realm_born_without_own_props(what))
+                        || (site != u32::MAX && builtins::realm_handle_without_own_props(what))
                         || (site != u32::MAX && self.typed_array_elements(t))
                 }
                 _ => true,

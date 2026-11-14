@@ -601,3 +601,65 @@ fn abscall_absent_member_of_array_buffer_is_a_type_error() {
 fn abscall_absent_member_of_fetched_buffer_is_a_type_error() {
     assert_eq!(abscall_proven("hb", true), (true, true));
 }
+
+/// R7HOLD4 RED, the r7 source (`Blob.prototype@call2455`: the Blob a
+/// `Response.prototype.blob()` fulfills with, three ImageBitmapLoader's
+/// `res.blob()`). In perry a Blob is a native handle: it owns no enumerable
+/// property but the ones the program stores on it (perry-runtime
+/// object/field_get_set/enumeration.rs:203-222), and `Object.assign` and
+/// spread copy nothing from it (object/assign.rs:779-792, alloc.rs:1197).
+/// So the copy gives `obj` no unknown key and `fromArray` stays `V`'s.
+#[test]
+fn red_r7hold4_assign_from_fetched_blob_stores_nothing() {
+    let s = r#"
+        class V { zz = 1; probe() { return this.zz; } fromArray(a: any) { return this.zz; } }
+        const json: any = JSON.parse(process.argv[2] ?? "{}");
+        const obj: any = json.c ? new V() : new ArrayBuffer(8);
+        async function main() {
+            const b: any = await new Response("x").blob();
+            Object.assign(obj, b);
+            obj.fromArray([1, 2, 3]);
+        }
+        main();
+        console.log(new V().probe());
+    "#;
+    let v = site(&facts(s), "zz").verdict.clone();
+    assert!(!matches!(v, Verdict::No(_)), "V escapes: {v:?}");
+}
+
+/// Control (i) of R7HOLD4: a host object (`process`) owns enumerable
+/// properties the model does not list: the copy gives `obj` unknown keys,
+/// so `obj.fromArray` may be any function and `V` escapes.
+#[test]
+fn control_r7hold4_assign_from_host_object_escapes() {
+    let s = r#"
+        class V { zz = 1; probe() { return this.zz; } fromArray(a: any) { return this.zz; } }
+        const json: any = JSON.parse(process.argv[2] ?? "{}");
+        const obj: any = json.c ? new V() : new ArrayBuffer(8);
+        Object.assign(obj, process);
+        obj.fromArray([1, 2, 3]);
+        console.log(new V().probe());
+    "#;
+    assert!(matches!(site(&facts(s), "zz").verdict, Verdict::No(_)));
+}
+
+/// Control (ii) of R7HOLD4: what the program stores on the Blob is its own
+/// enumerable property (enumeration.rs:203-222): a copy of it carries the
+/// stored value, here an unknown function, so `V` escapes.
+#[test]
+fn control_r7hold4_assign_from_blob_carries_its_expando() {
+    let s = r#"
+        class V { zz = 1; probe() { return this.zz; } fromArray(a: any) { return this.zz; } }
+        const json: any = JSON.parse(process.argv[2] ?? "{}");
+        const obj: any = json.c ? new V() : new ArrayBuffer(8);
+        async function main() {
+            const b: any = await new Response("x").blob();
+            b.fromArray = (globalThis as any)[json.k];
+            Object.assign(obj, b);
+            obj.fromArray([1, 2, 3]);
+        }
+        main();
+        console.log(new V().probe());
+    "#;
+    assert!(matches!(site(&facts(s), "zz").verdict, Verdict::No(_)));
+}

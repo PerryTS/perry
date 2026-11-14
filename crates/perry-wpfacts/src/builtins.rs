@@ -1895,6 +1895,22 @@ pub(crate) fn realm_born_without_own_props(what: &str) -> bool {
     )
 }
 
+/// Is a builtin object of kind `what` one perry's runtime makes as a native
+/// handle: the Blob a realm operation makes (`fresh(Blob.prototype)`:
+/// `Response.prototype.blob()`'s fulfillment, `Blob.prototype.slice()`)?
+/// Its value is a registry handle, with neither a shape nor own slots
+/// (perry-runtime object/global_this/fetch_globals.rs:505-507); its typed
+/// surface (`size`, `type`) is not own (Blob.prototype holds only methods,
+/// installed `enumerable: false`: proto_methods.rs:1633-1645,
+/// install_static.rs:890-901). It owns no enumerable property but what the
+/// program stores on it (object/field_get_set/enumeration.rs:203-222), and
+/// a copy of its own properties copies at most those (`Object.assign` and
+/// spread skip a handle source: object/assign.rs:779-792, alloc.rs:1197).
+/// A copy of its own enumerable properties reads only its fields.
+pub(crate) fn realm_handle_without_own_props(what: &str) -> bool {
+    what == "Blob.prototype"
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
