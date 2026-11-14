@@ -202,3 +202,99 @@ fn import_options_are_validated_before_loading() {
     }
     assert_eq!(js_module_dynamic_import_check_options(undefined()), 0);
 }
+
+fn key(name: &str) -> f64 {
+    crate::value::nanbox_string_key(crate::string::canonical_key(name.as_bytes()))
+}
+
+per_test_global! {
+    static WITH_READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+}
+
+/// A `with` getter that is valid on its first read and throws on any later one.
+extern "C" fn with_getter_valid_once(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    if WITH_READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+        return json(r#"{"type":"json"}"#);
+    }
+    crate::exception::throw_core(crate::error::CoreError::type_error(
+        crate::string::canonical_key(b"options.with read twice"),
+    ))
+}
+
+/// #13488: EvaluateImportCall reads `options.with` once; the loader takes
+/// `type` from the validated attributes rather than reading the getter again.
+#[test]
+fn import_options_with_is_read_once() {
+    let path = std::env::temp_dir().join(format!("perry-with-once-{}.json", std::process::id()));
+    std::fs::write(&path, "{\"answer\":42}").unwrap();
+    let scope = RuntimeHandleScope::new();
+    let options = scope.root_nanbox_f64(json("{}"));
+    let getter = crate::closure::js_closure_alloc(crate::fn_info!(with_getter_valid_once, 0), 0);
+    crate::object::js_object_define_getter(
+        options.get_nanbox_f64(),
+        key("with"),
+        js_nanbox_pointer(getter as i64),
+    );
+    WITH_READS.store(0, std::sync::atomic::Ordering::SeqCst);
+    let specifier = scope.root_nanbox_f64(string_value(path.to_str().unwrap()));
+    let promise =
+        js_module_dynamic_import_fallback(specifier.get_nanbox_f64(), options.get_nanbox_f64());
+    let promise = scope.root_nanbox_f64(promise);
+    assert_eq!(WITH_READS.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let namespace = scope.root_nanbox_f64(settled(promise.get_nanbox_f64(), 1));
+    let value = property(namespace.get_nanbox_f64(), b"default").unwrap();
+    assert_eq!(property(value, b"answer").unwrap(), 42.0);
+    std::fs::remove_file(path).unwrap();
+}
+
+extern "C" fn throwing_own_keys(
+    _closure: *const crate::ClosureHeader,
+    _this: crate::closure::JsThis,
+    _target: f64,
+) -> f64 {
+    crate::exception::throw_core(crate::error::CoreError::type_error(
+        crate::string::canonical_key(b"ownKeys trap"),
+    ))
+}
+
+/// #13488: the attributes are enumerated through [[OwnPropertyKeys]], so a
+/// Proxy `with` runs its `ownKeys` trap and a throw there rejects the import.
+#[test]
+fn import_options_with_proxy_runs_own_keys() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    crate::gc::gc_init();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::feature_hooks::js_runtime_install_proxy();
+    let scope = RuntimeHandleScope::new();
+    let handler = scope.root_nanbox_f64(json("{}"));
+    let trap = crate::closure::js_closure_alloc(crate::fn_info!(throwing_own_keys, 1), 0);
+    crate::object::property_ops::reflect::js_reflect_set(
+        handler.get_nanbox_f64(),
+        key("ownKeys"),
+        js_nanbox_pointer(trap as i64),
+        handler.get_nanbox_f64(),
+    );
+    let target = scope.root_nanbox_f64(json(r#"{"type":"json"}"#));
+    let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+        target.get_nanbox_f64(),
+        handler.get_nanbox_f64(),
+    ));
+    let options = scope.root_nanbox_f64(json("{}"));
+    crate::object::property_ops::reflect::js_reflect_set(
+        options.get_nanbox_f64(),
+        key("with"),
+        proxy.get_nanbox_f64(),
+        options.get_nanbox_f64(),
+    );
+    let promise = js_module_dynamic_import_check_options(options.get_nanbox_f64());
+    assert_ne!(promise, 0, "a throwing ownKeys trap must reject");
+    let promise = scope.root_nanbox_f64(js_nanbox_pointer(promise));
+    let error = scope.root_nanbox_f64(settled(promise.get_nanbox_f64(), 2));
+    assert_eq!(
+        string_bytes(property(error.get_nanbox_f64(), b"message").unwrap()).as_deref(),
+        Some("ownKeys trap")
+    );
+}

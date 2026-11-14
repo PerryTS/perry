@@ -40,13 +40,15 @@ fn type_error(message: &str) -> f64 {
 }
 
 /// EvaluateImportCall step 10 (import attributes): validate `import()`'s
-/// second argument before any module is loaded. `Err` carries the value the
-/// returned promise rejects with: a TypeError for a non-object `options` or
-/// `options.with`, or a non-string attribute value, and whatever a getter
-/// threw (IfAbruptRejectPromise).
-pub(super) fn check_options(options: f64) -> Result<(), f64> {
+/// second argument before any module is loaded. `options.with` is read once
+/// and its entries enumerated once (Proxy traps included); `Ok` carries the
+/// attributes as owned strings, so the loader never re-reads an accessor.
+/// `Err` carries the value the returned promise rejects with: a TypeError for
+/// a non-object `options` or `options.with`, or a non-string attribute value,
+/// and whatever a getter or trap threw (IfAbruptRejectPromise).
+pub(super) fn check_options(options: f64) -> Result<Vec<(String, String)>, f64> {
     if JSValue::from_bits(options.to_bits()).is_undefined() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if !crate::builtins::arithmetic::js_value_is_object(options) {
         return Err(type_error(
@@ -57,32 +59,32 @@ pub(super) fn check_options(options: f64) -> Result<(), f64> {
     let attributes = scope.root_nanbox_f64(property(options, b"with")?);
     let attributes = attributes.get_nanbox_f64();
     if JSValue::from_bits(attributes.to_bits()).is_undefined() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     if !crate::builtins::arithmetic::js_value_is_object(attributes) {
         return Err(type_error(
             "The 'with' option of import() must be an object",
         ));
     }
-    let object =
-        JSValue::from_bits(attributes.to_bits()).as_pointer::<crate::object::ObjectHeader>();
-    let entries = crate::exception::catch_js_throw(|| crate::object::js_object_entries(object))?;
+    let entries =
+        crate::exception::catch_js_throw(|| crate::object::js_object_entries_value(attributes))?;
     let entries = scope.root_raw_mut_ptr(entries);
-    let all_strings = entries.with_mut_ptr(|entries: *mut crate::array::ArrayHeader| {
-        (0..crate::array::js_array_length(entries)).all(|index| {
-            let entry = crate::array::js_array_get_f64(entries, index);
-            let entry =
-                JSValue::from_bits(entry.to_bits()).as_pointer::<crate::array::ArrayHeader>();
-            JSValue::from_bits(crate::array::js_array_get_f64(entry, 1).to_bits()).is_any_string()
-        })
+    let snapshot = entries.with_mut_ptr(|entries: *mut crate::array::ArrayHeader| {
+        (0..crate::array::js_array_length(entries))
+            .map(|index| {
+                let entry = crate::array::js_array_get_f64(entries, index);
+                let entry =
+                    JSValue::from_bits(entry.to_bits()).as_pointer::<crate::array::ArrayHeader>();
+                let value = crate::array::js_array_get_f64(entry, 1);
+                if !JSValue::from_bits(value.to_bits()).is_any_string() {
+                    return None;
+                }
+                let key = string_bytes(crate::array::js_array_get_f64(entry, 0))?;
+                Some((key, string_bytes(value)?))
+            })
+            .collect::<Option<Vec<_>>>()
     });
-    if all_strings {
-        Ok(())
-    } else {
-        Err(type_error(
-            "Every import attribute value of import() must be a string",
-        ))
-    }
+    snapshot.ok_or_else(|| type_error("Every import attribute value of import() must be a string"))
 }
 
 /// Codegen entry for a statically resolved `import()` site: `0` when the
@@ -91,7 +93,7 @@ pub(super) fn check_options(options: f64) -> Result<(), f64> {
 #[no_mangle]
 pub extern "C" fn js_module_dynamic_import_check_options(options: f64) -> i64 {
     match check_options(options) {
-        Ok(()) => 0,
+        Ok(_) => 0,
         Err(reason) => {
             let scope = RuntimeHandleScope::new();
             let reason = scope.root_nanbox_f64(reason);
@@ -106,20 +108,16 @@ pub extern "C" fn js_module_dynamic_import_check_options(options: f64) -> i64 {
 static KEEP_JS_MODULE_DYNAMIC_IMPORT_CHECK_OPTIONS: extern "C" fn(f64) -> i64 =
     js_module_dynamic_import_check_options;
 
-/// `None` leaves builtin/code-module resolution to the existing fallback.
-pub(super) fn load(specifier: &str, options: f64) -> Result<Option<f64>, f64> {
-    if JSValue::from_bits(options.to_bits()).is_undefined() {
-        return Ok(None);
-    }
-    let scope = RuntimeHandleScope::new();
-    let attributes = scope.root_nanbox_f64(property(options, b"with")?);
-    if JSValue::from_bits(attributes.get_nanbox_f64().to_bits()).is_undefined() {
-        return Ok(None);
-    }
-    let loader = string_bytes(property(attributes.get_nanbox_f64(), b"type")?);
-    let Some(loader @ ("toml" | "json" | "text" | "file")) = loader.as_deref() else {
+/// `attributes` is the snapshot [`check_options`] returned. `None` leaves
+/// builtin/code-module resolution to the existing fallback.
+pub(super) fn load(specifier: &str, attributes: &[(String, String)]) -> Result<Option<f64>, f64> {
+    let loader = attributes
+        .iter()
+        .find_map(|(key, value)| (key == "type").then_some(value.as_str()));
+    let Some(loader @ ("toml" | "json" | "text" | "file")) = loader else {
         return Ok(None);
     };
+    let scope = RuntimeHandleScope::new();
     let path = if specifier.starts_with("file://") {
         let url = scope.root_nanbox_f64(string_value(specifier));
         let decoded = crate::exception::catch_js_throw(|| {
