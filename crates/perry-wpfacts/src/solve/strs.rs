@@ -27,6 +27,11 @@ pub(crate) const NATIVE_CODE_TAIL: &str = "[native code] }";
 /// characters).
 pub(crate) const EXCL_MARK: &str = "\u{1}excl\u{1}";
 const PLUS_PREFIXES_K: usize = 256;
+/// Every character of a Number's text (ECMA-262 6.1.6.1.20: digits, the
+/// sign and exponent characters, "NaN", "Infinity").
+const NUM_TEXT_CHARS: &str = "0123456789+-.eNaInfity";
+/// Every character of an integer's text below 10^21, and of a BigInt's.
+const INT_TEXT_CHARS: &str = "0123456789-";
 
 /// The ASCII characters of `s` (bit c for c).
 pub(crate) fn ascii_mask(s: &str) -> u128 {
@@ -372,18 +377,29 @@ impl Model {
     /// which perry's runtime always spells ending in `[native code] }`,
     /// while no unknown code exists and the program writes none of those
     /// keys on it or the prototypes; `.1` says such a form was used (it
-    /// is any string once the realm is held, `realm_str_dsts`). A Number,
-    /// a BigInt, `Object.prototype` (the token is every builtin prototype)
-    /// and every other object may be any string.
+    /// is any string once the realm is held, `realm_str_dsts`). A Number
+    /// or a BigInt is an exclusion entry of the characters its text never
+    /// holds (rule NUM-TEXT). `Object.prototype` (the token is every
+    /// builtin prototype) and every other object may be any string.
     fn excl_parts(&mut self, n: NodeId) -> Option<(Vec<Result<String, (u128, String)>>, bool)> {
-        let (p, toks, strs) = {
+        let (p, toks, strs, rg) = {
             let x = &self.nodes[n as usize];
-            (x.prim, x.pts.to_sorted(), x.strs)
+            (x.prim, x.pts.to_sorted(), x.strs, x.range)
         };
-        if p & (prim::NUM | prim::BIGINT) != 0 {
-            return None;
-        }
         let mut out = Vec::new();
+        // Rule NUM-TEXT, ECMA-262 6.1.6.1.20 Number::toString(x, 10): the
+        // text is "NaN", "Infinity", "-Infinity" or digits with `-`, `.`,
+        // `e` and `+`; for an integer of magnitude below 10^21 digits and
+        // `-` alone. The interval (`range::Iv`, every Number an integer,
+        // never NaN or an infinity) within ±2^53 says the latter.
+        // 6.1.6.2.14 BigInt::toString: digits and `-`.
+        if p & prim::NUM != 0 {
+            let int = !rg.is_empty() && rg.lo >= -(1i64 << 53) && rg.hi <= 1i64 << 53;
+            out.push(Err((!ascii_mask(if int { INT_TEXT_CHARS } else { NUM_TEXT_CHARS }), String::new())));
+        }
+        if p & prim::BIGINT != 0 {
+            out.push(Err((!ascii_mask(INT_TEXT_CHARS), String::new())));
+        }
         let mut gated = false;
         if p & prim::STR != 0 {
             if strs < STRS_SET0 {
@@ -443,7 +459,8 @@ impl Model {
     /// exclusion entries on both, `X·s + t` is `X·(s t)`; `c + X·s` is
     /// `(c X)·s`, whose head holds no character of E that `c` lacks;
     /// `X1·s1 + X2·s2` is `(X1 s1 X2)·s2`, whose head holds no character
-    /// excluded on both sides and absent from `s1`. Exact for the first,
+    /// excluded on both sides and absent from `s1`; `X·s + t` of a left
+    /// operand with more values is `(X s)·t` likewise. Exact for the first,
     /// a superset for the others. Suffixes grow only from a left entry
     /// with an empty suffix or from the left operand's one value (a node
     /// holds one value alone during one stretch at most, sets only grow),
@@ -460,6 +477,7 @@ impl Model {
             for b in &rp {
                 let at = match (a, b) {
                     (Err((e, s)), Ok(t)) if s.is_empty() || alone => self.excl_atom(*e, &format!("{s}{t}")),
+                    (Err((e, s)), Ok(t)) => self.excl_atom(e & !ascii_mask(s), t),
                     (Ok(c), Err((e, s))) => self.excl_atom(e & !ascii_mask(c), s),
                     (Err((e1, s1)), Err((e2, s2))) => self.excl_atom(e1 & e2 & !ascii_mask(s1), s2),
                     _ => None,
