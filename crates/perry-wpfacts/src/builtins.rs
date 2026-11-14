@@ -2842,11 +2842,6 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::NUM);
         }
-        // The `Number.is*` predicates test the operand's type (ECMA-262
-        // 21.1.2.2-21.1.2.5): a Boolean, nothing converted.
-        (BuiltinNs::Number, "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
-            ret_prim(m, call, prim::BOOL)
-        }
         // 21.1.2.12/13 (%parseFloat%, %parseInt%): ToString, a Number.
         (BuiltinNs::Number, "parseFloat" | "parseInt") => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
