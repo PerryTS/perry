@@ -320,7 +320,7 @@ fn archive_functions(archive: &Path, out: &mut Vec<(String, String, u64)>) -> Op
 
 /// The cache identity of a resolved script: the list and each archive's path,
 /// size and modification time.
-fn fingerprint(archives: &[&Path], text: bool, data: Option<bool>) -> Option<u64> {
+pub(super) fn fingerprint(archives: &[&Path], text: bool, data: Option<bool>) -> Option<u64> {
     // FNV-1a: stable across processes and toolchains, unlike `DefaultHasher`.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut feed = |bytes: &[u8]| {

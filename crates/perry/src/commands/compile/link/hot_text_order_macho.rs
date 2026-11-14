@@ -129,31 +129,6 @@ fn order_file(placement: &Placement) -> String {
     out
 }
 
-/// The cache identity of an order file: the list and each archive's path,
-/// size and modification time (FNV-1a, stable across processes).
-fn fingerprint(archives: &[&Path]) -> Option<u64> {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut feed = |bytes: &[u8]| {
-        for b in bytes.iter().chain(std::iter::once(&0xff)) {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    feed(super::hot_text_order::DEFAULT_ORDER.as_bytes());
-    for archive in archives {
-        let meta = std::fs::metadata(archive).ok()?;
-        let modified = meta
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?;
-        feed(archive.as_os_str().as_encoded_bytes());
-        feed(&meta.len().to_le_bytes());
-        feed(&modified.as_nanos().to_le_bytes());
-    }
-    Some(h)
-}
-
 /// The `-order_file` of a Mach-O link that takes the default order (opt-in,
 /// see the module notes), kept in the compile cache per archive identity.
 /// `None` keeps today's link: the switch is not on, the program has its own
@@ -168,7 +143,9 @@ pub(super) fn order_file_path(cache: &Path, archives: &[&Path], verbose: u8) -> 
     ) {
         return None;
     }
-    let fingerprint = fingerprint(archives)?;
+    // The text-only identity: the ELF script of the same archives carries
+    // another extension.
+    let fingerprint = super::hot_text_order::fingerprint(archives, true, None)?;
     let dir = cache.join("function-order");
     let path = dir.join(format!("hot-text-{fingerprint:016x}.v1.ld64.txt"));
     if !path.is_file() {
