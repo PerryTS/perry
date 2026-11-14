@@ -311,9 +311,20 @@ impl Model {
             // A generic `Array.prototype` method ToObject's its `this`
             // (ECMA-262 23.1.3, 7.1.18): a string, number, boolean, symbol
             // or bigint share runs the method on that share's own wrapper
-            // object (`array_method_on_prim`); every other family's stays an
-            // unknown callee's call.
-            let boxed = if fam == Family::Array {
+            // object (`array_method_on_prim`). So does each `Object.prototype`
+            // method but `toLocaleString`: `valueOf` (20.1.3.7) and the Annex B
+            // accessor methods (B.2.2.2-5) begin with ToObject(this),
+            // `toString` (20.1.3.6) with it after `undefined` / `null`,
+            // `hasOwnProperty` / `propertyIsEnumerable` (20.1.3.2, 20.1.3.4)
+            // with it after ToPropertyKey of the key, `isPrototypeOf`
+            // (20.1.3.3) with it after a non-object argument answered false;
+            // the wrapper is new, so the order is not observable.
+            // `toLocaleString` (20.1.3.5) is Invoke(this, "toString"): the
+            // primitive itself is the callee's `this`, no wrapper. Every other
+            // family's stays an unknown callee's call.
+            let boxed = if fam == Family::Array
+                || (fam == Family::Object && builtins::object_proto_method_to_object(name))
+            {
                 foreign & builtins::ARRAY_BOXED_PRIMS
             } else {
                 0
@@ -323,10 +334,22 @@ impl Model {
                 let k = b & b.wrapping_neg();
                 b &= !k;
                 if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
-                    self.with_native(call, |m| builtins::array_method_on_prim(m, k, key, call));
+                    self.with_native(call, |m| builtins::method_on_prim(m, fam, k, key, call));
                 }
             }
-            if foreign & !boxed != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {
+            // `Object.prototype.toLocaleString` is Invoke(this, "toString")
+            // (20.1.3.5): GetV reads `toString` off the primitive's own
+            // prototype chain and calls it with the primitive as `this`
+            // (`prim_method`, as a read of `toString` on that value).
+            let mut local = 0;
+            if fam == Family::Object && name == "toLocaleString" {
+                local = foreign & !boxed & builtins::ARRAY_BOXED_PRIMS;
+                if local != 0 && self.bind_done.insert((call, f, u32::MAX - 6)) {
+                    let ts = self.atom("toString");
+                    self.with_native(call, |m| builtins::prim_method(m, local, Key::Named(ts), call));
+                }
+            }
+            if foreign & !boxed & !local != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {
                 self.unknown_callee_args(call, f, false);
             }
         } else if fam == Family::Str

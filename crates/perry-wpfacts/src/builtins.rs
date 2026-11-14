@@ -1520,12 +1520,21 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         return false;
     }
     match &m.toks[r as usize] {
-        // A builtin object of an undescribed kind (`primbox`) may be one.
+        // A builtin object of an undescribed kind (`primbox`) may be one. A
+        // box its creator makes an ordinary object, an array or a
+        // null-prototype object (`members::box_chain`: a `JSON.parse`
+        // object, a descriptor, an own-keys array) is none: only
+        // TypedArrayCreate makes an object with [[TypedArrayName]] (ECMA-262
+        // 10.4.5), and a later prototype change adds no internal slot.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what: w, .. } => {
                 typed
                     && !matches!(*w, "TypedArray" | "Buffer")
-                    && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
+                    && match members::bobj_family(w) {
+                        Family::Opaque => false,
+                        Family::Box => members::box_chain(w) != members::BoxChain::Unknown,
+                        _ => true,
+                    }
             }
             _ => true,
         },
@@ -1552,6 +1561,34 @@ pub(crate) const ARRAY_BOXED_PRIMS: u16 =
 /// then Object.prototype), so `slice`/`map`/`filter` make a new array of
 /// no elements and callbacks receive none.
 pub(crate) fn array_method_on_prim(m: &mut Model, k: u16, key: Atom, call: CallId) {
+    method_on_prim(m, Family::Array, k, key, call);
+}
+
+/// The `Object.prototype` methods whose steps convert `this` with
+/// ToObject (ECMA-262 20.1.3.2-4, 20.1.3.6-7, B.2.2.2-5): every function
+/// member but `toLocaleString` (20.1.3.5, Invoke(this, "toString") on the
+/// value itself).
+pub(crate) fn object_proto_method_to_object(name: &str) -> bool {
+    matches!(
+        name,
+        "hasOwnProperty"
+            | "isPrototypeOf"
+            | "propertyIsEnumerable"
+            | "toString"
+            | "valueOf"
+            | "__defineGetter__"
+            | "__defineSetter__"
+            | "__lookupGetter__"
+            | "__lookupSetter__"
+    )
+}
+
+/// A `fam` (`Array` or `Object`) prototype method `key` called with `this` a
+/// primitive of kind `k` (one of `ARRAY_BOXED_PRIMS`) whose first use of
+/// `this` is ToObject (7.1.18): it runs on a new wrapper object of `k`
+/// (22.1.1.1 String exotic objects, 21.1.1.1, 20.3.1.1, 20.4.1, 21.2.1),
+/// born at the call, as on any object of that family's model.
+pub(crate) fn method_on_prim(m: &mut Model, fam: Family, k: u16, key: Atom, call: CallId) {
     let what = match k {
         prim::STR => "BoxedString",
         prim::NUM => "BoxedNumber",
@@ -1564,7 +1601,7 @@ pub(crate) fn array_method_on_prim(m: &mut Model, k: u16, key: Atom, call: CallI
         let chars = m.num_fields(w);
         m.add_prim(chars, prim::STR);
     }
-    native_prototype_call(m, Family::Array, w, key, call);
+    native_prototype_call(m, fam, w, key, call);
 }
 
 /// Invoke the prototype member's model, rather than redispatching a
