@@ -166,6 +166,7 @@ fn collect_var_names_stmt(stmt: &ast::Stmt, out: &mut Vec<String>) {
         }
         While(w) => collect_var_names_stmt(&w.body, out),
         DoWhile(w) => collect_var_names_stmt(&w.body, out),
+        With(w) => collect_var_names_stmt(&w.body, out),
         Labeled(l) => collect_var_names_stmt(&l.body, out),
         Switch(sw) => {
             for case in &sw.cases {
@@ -748,8 +749,21 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         Continue(c) => Flow::Continue(c.label.as_ref().map(|l| l.sym.to_string())),
         Labeled(l) => exec_labeled(ctx, l, env_idx),
         Try(t) => exec_try(ctx, t, env_idx),
-        With(_) => throw_unsupported("with statement"),
+        With(w) => exec_with(ctx, w, env_idx),
     }
+}
+
+fn exec_with(ctx: &Ctx, w: &ast::WithStmt, env_idx: usize) -> Flow {
+    let object = eval_expr(ctx, &w.obj, env_idx);
+    if bridge::is_nullish(object) {
+        bridge::throw_type_error("Cannot convert undefined or null to object");
+    }
+    let object_idx = root_push(crate::object::alloc::js_object_coerce(object));
+    let with_env = env::env_new_with(root_get(env_idx), root_get(object_idx));
+    let with_idx = root_push(with_env);
+    let flow = exec_stmt(ctx, &w.body, with_idx);
+    roots_truncate(object_idx);
+    flow
 }
 
 fn exec_decl(ctx: &Ctx, decl: &ast::Decl, env_idx: usize) -> Flow {
