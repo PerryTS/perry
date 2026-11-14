@@ -368,6 +368,15 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // SKINROOT12: a same-key copy's named `__proto__` store runs into
+        // `t` only once the copy's own store into `t` may name `__proto__`
+        // (its key is the copy's key: B.2.2.1.2 applies under that key only).
+        if let Some(copy) = self.stores.get(site as usize).and_then(|s| s.proto_of) {
+            if !self.proto_copy_hit.contains(&(copy, t)) {
+                self.proto_copy_wait.entry((copy, t)).or_default().push((src, site));
+                return;
+            }
+        }
         // A call binding its rest array's argument at a known position
         // (`Model::rest_elem_node`), or a store under one constant index
         // (`Cons::StoreIndexed`): an element store, into index slot `i` of
@@ -591,7 +600,16 @@ impl Model {
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
-            if !self.unit_mode && self.is_builtin_proto(t) {
+            // SKINROOT11: a same-key copy's `__proto__` case is its own
+            // named store `D["__proto__"] = S["__proto__"]` (gen).
+            let named_copy = self.stores.get(site as usize).is_some_and(|s| s.proto_named);
+            if named_copy && self.proto_copy_hit.insert((site, t)) {
+                let pk = Key::Named(self.atom("__proto__"));
+                for (s, ps) in self.proto_copy_wait.remove(&(site, t)).unwrap_or_default() {
+                    self.store_into(t, pk, s, ps);
+                }
+            }
+            if !named_copy && !self.unit_mode && self.is_builtin_proto(t) {
                 self.given_prototype(t, src);
             }
             // A `JSON.parse` object: the setter gives it `src`'s objects or
@@ -599,7 +617,7 @@ impl Model {
             // nothing), which its lookups then read (10.1.8.1). Every such
             // store gives its value (any of them may run last);
             // `json_relink` only marks the token as relinked.
-            if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+            if let (false, &TokKind::Obj(tm, _)) = (named_copy, &self.toks[t as usize]) {
                 if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. })
                     && !self.is_marker(t)
                 {
@@ -607,7 +625,7 @@ impl Model {
                     self.given_prototype(t, src);
                 }
             }
-            if let TokKind::ClassObj(tm) = self.toks[t as usize] {
+            if let (false, &TokKind::ClassObj(tm)) = (named_copy, &self.toks[t as usize]) {
                 let objs = self.proto_objects(src);
                 self.cons(objs, Cons::ParentGiven { of: t });
                 let parent = self.proto_node(t);

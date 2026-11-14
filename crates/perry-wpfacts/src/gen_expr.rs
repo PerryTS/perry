@@ -1253,8 +1253,17 @@ impl<'a> Gen<'a> {
                 if let Some(kp) = self.for_in_key_of(fx.module, key) {
                     // A for-in run's key decides the stored key (FVA 4.3b).
                     let subj = self.enum_key_subject(fx, key);
+                    let named = self.same_key_proto_src(fx, key, value);
                     for (o, what) in [(t, "putvalue"), (rv, "putvalue-receiver")] {
                         let site = self.store_site(fx.module, fx.f, what.into(), owner, false);
+                        if let Some(nm) = named {
+                            self.m.stores[site as usize].proto_named = true;
+                            let ps = self.store_site(fx.module, fx.f, format!("{what}-proto"), owner, false);
+                            self.m.stores[ps as usize].proto_of = Some(site);
+                            self.mark_fn_phase(fx, e, target, ps);
+                            let key = Key::Named(self.m.atom("__proto__"));
+                            self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                        }
                         self.mark_fn_phase(fx, e, target, site);
                         self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                     }
@@ -1489,6 +1498,14 @@ impl<'a> Gen<'a> {
                     // rooted as any element store (DECISIONS 149b).
                     let site = self.store_site(fx.module, fx.f, "[]=".into(), None, false);
                     self.mark_rooted(e, site);
+                    if let Some(nm) = self.same_key_proto_src(fx, index, value) {
+                        self.m.stores[site as usize].proto_named = true;
+                        let ps = self.store_site(fx.module, fx.f, "[]=-proto".into(), None, false);
+                        self.m.stores[ps as usize].proto_of = Some(site);
+                        self.mark_rooted(e, ps);
+                        let key = Key::Named(self.m.atom("__proto__"));
+                        self.m.cons(o, Cons::Store { key, src: nm, site: ps });
+                    }
                     let subj = self.enum_key_subject(fx, index);
                     self.m.cons(kp, Cons::StoreKeyed { o, src: v, site, subj });
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {

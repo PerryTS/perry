@@ -538,6 +538,12 @@ pub enum Cons {
         of: Tok,
         from: Tok,
     },
+    /// SKINROOT13: the node is the subject `S` of a same-key copy whose own
+    /// read `S[k]` is an enumerable read (`Gen::enum_read`): dst ⊇ the
+    /// enumerable properties of S's chain under `key`, as that read finds
+    /// them (`Model::enum_read_key`); on a link the rule does not cover,
+    /// the ordinary read of `key`.
+    EnumLoad { key: Key, dst: NodeId },
     /// The node is the receiver of `o[idx](...)` with a computed key: its
     /// objects' own and program members under a number key; the full
     /// method lookup only if `idx` can hold another key (`IdxKeyCall`).
@@ -882,6 +888,7 @@ impl Cons {
             Cons::CreateProto { .. } => "createproto",
             Cons::ChainUnion { .. } => "chainunion",
             Cons::EnumChain { .. } => "enumchain",
+            Cons::EnumLoad { .. } => "enumload",
             Cons::ProtoGiven { .. } => "protogiven",
             Cons::ParentGiven { .. } => "parentgiven",
             Cons::ProtoClosure { .. } => "protoclosure",

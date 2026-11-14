@@ -434,6 +434,8 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            proto_of: None,
             in_loop: None,
         });
         id
@@ -451,6 +453,8 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            proto_of: None,
             in_loop: None,
         });
         id

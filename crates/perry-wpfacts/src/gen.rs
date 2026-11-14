@@ -492,6 +492,9 @@ pub struct Gen<'a> {
     pub(crate) local_copies: FxHashMap<(u32, u32), u32>,
     /// Per module: locals written anywhere (`=`, `++`).
     pub(crate) written: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// SKINROOT11: `const v = S[k]` lowered so far: (module, v) -> (k, S,
+    /// the function that holds the binding).
+    pub(crate) same_key_reads: FxHashMap<(u32, u32), (u32, perry_hir::Expr, FnIdx)>,
     /// Constant bindings' initializers: (module, global, id) -> init
     /// (`Gen::note_define_keys`, `Gen::const_key`).
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
@@ -806,6 +809,7 @@ impl<'a> Gen<'a> {
             local_copies: FxHashMap::default(),
             for_in_paths: FxHashMap::default(),
             written: FxHashMap::default(),
+            same_key_reads: FxHashMap::default(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
             param_calls: FxHashMap::default(),

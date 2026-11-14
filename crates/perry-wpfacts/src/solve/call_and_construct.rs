@@ -587,6 +587,8 @@ impl Model {
             deep: false,
             key_value: None,
             in_loop: None,
+            proto_named: false,
+            proto_of: None,
         });
         id
     }

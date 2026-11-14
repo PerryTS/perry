@@ -105,14 +105,20 @@ impl Model {
     /// built-in members); a deleted key reads `undefined`. No built-in
     /// member of a link the rule covers, no generic member.
     pub(super) fn enum_read_tok(&mut self, idx: NodeId, t: Tok, dst: NodeId, shape: KeyShapeId) {
-        if self.enum_obj(t) {
-            self.mark_use(t, crate::model::MARK_READ);
-        }
-        self.add_prim(dst, prim::UNDEF);
         let key = match self.key_nodes.get(&idx) {
             Some(&a) => Key::Named(a),
             None => Key::Any(shape),
         };
+        self.enum_read_key(idx, t, key, dst);
+    }
+
+    /// The enumerable read of `key` on `t` (`enum_read_tok`, `Cons::EnumLoad`);
+    /// `idx` keys its one-time chain walk.
+    pub(super) fn enum_read_key(&mut self, idx: NodeId, t: Tok, key: Key, dst: NodeId) {
+        if self.enum_obj(t) {
+            self.mark_use(t, crate::model::MARK_READ);
+        }
+        self.add_prim(dst, prim::UNDEF);
         self.enum_fields(t, t, key, dst);
         if self
             .idx_done

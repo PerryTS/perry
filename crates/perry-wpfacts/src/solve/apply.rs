@@ -1426,6 +1426,19 @@ impl Model {
                     self.idx_load_tok(idx, t, dst, shape, enumerable);
                 }
             }
+            Cons::EnumLoad { key, dst } => {
+                for &t in toks {
+                    if t != TOP
+                        && (self.enum_free(t)
+                            || self.enum_obj(t)
+                            || builtins::enum_free_instance(self, t))
+                    {
+                        self.enum_read_key(n, t, key, dst);
+                    } else {
+                        self.load_from(t, t, key, dst);
+                    }
+                }
+            }
             Cons::EnumChain { key, dst, of, from } => {
                 for &q in toks {
                     if q == TOP {

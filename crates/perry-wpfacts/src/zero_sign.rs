@@ -232,6 +232,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::OwnValues { .. }
         | Cons::Chain { .. }
         | Cons::EnumChain { .. }
+        | Cons::EnumLoad { .. }
         | Cons::IdxLoad { .. }
         | Cons::IdxOwnLoad { .. }
         | Cons::MCall { .. }
