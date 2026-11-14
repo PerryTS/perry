@@ -209,5 +209,5 @@ pub(crate) fn global_name_key(name: impl AsRef<[u8]>) -> *mut crate::StringHeade
 /// property the program read it from.
 #[inline(always)]
 pub(crate) fn has_own_property_body() -> usize {
-    array_error::object_prototype_has_own_property_thunk as usize
+    array_error::object_prototype_has_own_property_thunk as *const () as usize
 }

@@ -919,7 +919,8 @@ pub extern "C" fn perry_life_return() {
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn perry_life_depth() -> i64 {
-    table(|t| (t.measure.acts.len() | t.measure.loops.len() << 32) as i64).unwrap_or(0)
+    table(|t| (t.measure.acts.len() as u64 | (t.measure.loops.len() as u64) << 32) as i64)
+        .unwrap_or(0)
 }
 
 /// An iteration of the loop `id` begins (its body's statement list starts).
