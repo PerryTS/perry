@@ -1,0 +1,23 @@
+0 undefined undefined undefined undefined getp|length|name|prototype|s
+  length number
+  name string
+  prototype object
+  getp function
+  s number
+1 undefined undefined undefined undefined length|name|prototype
+  length number
+  name string
+  prototype object
+2 undefined undefined undefined undefined length|name|prototype
+  length number
+  name string
+  prototype object
+3 undefined undefined undefined undefined length|name|prototype
+  length number
+  name string
+  prototype object
+4 undefined undefined undefined undefined length|name|prototype
+  length number
+  name string
+  prototype object
+1 true 1 2
