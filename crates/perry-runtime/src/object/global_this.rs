@@ -117,7 +117,7 @@ pub(crate) use fetch_globals::thread_realm_global_addr;
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_for_name, global_this_headers_thunk, global_this_is_materialized,
-    global_this_request_thunk, realm_is_complete,
+    global_this_request_thunk, realm_core, realm_is_complete, realm_two_phase,
     global_this_response_thunk, is_thread_realm_global,
 };
 pub use fetch_globals::{

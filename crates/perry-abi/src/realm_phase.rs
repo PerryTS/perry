@@ -20,171 +20,65 @@
 //! a name is no part of its `#[realm]` declaration: the realm table and the
 //! facts built from it do not know when a slot is bound.
 
-/// Declared data names phase B binds. Reading one, by any path, runs phase B
-/// first.
-pub const REALM_REST_GLOBALS: &[&str] = &[
-    "WeakMap",
-    "WeakSet",
-    "WeakRef",
-    "Proxy",
-    "FinalizationRegistry",
-    "Atomics",
-    "Intl",
-    "WebAssembly",
-    "Temporal",
-    "PerformanceEntry",
-    "PerformanceMark",
-    "PerformanceMeasure",
-    "PerformanceObserver",
-    "PerformanceObserverEntryList",
-    "PerformanceResourceTiming",
-];
-
-/// Declared names phase A binds that are never read through the core entry:
-/// the global object itself (a value that shows every slot) and the accessors
-/// (their getters run with the global as `this`).
-pub const REALM_VALUE_GLOBALS: &[&str] = &[
-    "globalThis",
-    "global",
-    "localStorage",
-    "sessionStorage",
-    "crypto",
-    "navigator",
-];
-
-/// Declared data names phase A binds: the only names a compiled static read
-/// may reach through the core entry.
-pub const REALM_CORE_GLOBALS: &[&str] = &[
-    "Array",
-    "Object",
-    "String",
-    "Number",
-    "Boolean",
-    "Function",
-    "RegExp",
-    "Date",
-    "Error",
-    "TypeError",
-    "RangeError",
-    "SyntaxError",
-    "ReferenceError",
-    "EvalError",
-    "URIError",
-    "AggregateError",
-    "Symbol",
-    "Promise",
-    "Map",
-    "Set",
-    "BigInt",
-    "Uint8Array",
-    "Int8Array",
-    "Uint16Array",
-    "Int16Array",
-    "Uint32Array",
-    "Int32Array",
-    "Float16Array",
-    "Float32Array",
-    "Float64Array",
-    "Uint8ClampedArray",
-    "BigInt64Array",
-    "BigUint64Array",
-    "ArrayBuffer",
-    "SharedArrayBuffer",
-    "DataView",
-    "TextEncoder",
-    "TextDecoder",
-    "TextEncoderStream",
-    "TextDecoderStream",
-    "CompressionStream",
-    "DecompressionStream",
-    "ReadableStream",
-    "ReadableStreamDefaultController",
-    "ReadableStreamDefaultReader",
-    "ReadableByteStreamController",
-    "ReadableStreamBYOBReader",
-    "ReadableStreamBYOBRequest",
-    "WritableStream",
-    "TransformStream",
-    "Navigator",
-    "URL",
-    "URLSearchParams",
-    "URLPattern",
-    "AbortController",
-    "AbortSignal",
-    "EventTarget",
-    "Crypto",
-    "CryptoKey",
-    "SubtleCrypto",
-    "Event",
-    "CustomEvent",
-    "MessageEvent",
-    "DOMException",
-    "FormData",
-    "Blob",
-    "File",
-    "Headers",
-    "Request",
-    "Response",
-    "MessageChannel",
-    "MessagePort",
-    "BroadcastChannel",
-    "Storage",
-    "WebSocket",
-    "DisposableStack",
-    "AsyncDisposableStack",
-    "SuppressedError",
-    "Iterator",
-    "Buffer",
-    "eval",
-    "fetch",
-    "structuredClone",
-    "atob",
-    "btoa",
-    "setTimeout",
-    "clearTimeout",
-    "setInterval",
-    "clearInterval",
-    "setImmediate",
-    "clearImmediate",
-    "queueMicrotask",
-    "gc",
-    "parseInt",
-    "parseFloat",
-    "isNaN",
-    "isFinite",
-    "encodeURI",
-    "decodeURI",
-    "encodeURIComponent",
-    "decodeURIComponent",
-    "escape",
-    "unescape",
-    "console",
-    "process",
-    "Math",
-    "JSON",
-    "Reflect",
-    "performance",
-    "Performance",
-    "NaN",
-    "Infinity",
-    "undefined",
-];
-
-fn listed(list: &[&str], name: &str) -> bool {
-    list.iter().any(|listed| *listed == name)
+/// One list of names, three ways: the slice (tests, the compiler's audit),
+/// the names joined by spaces (a loop over them in the runtime: one string,
+/// no table of relocated pointers in the binary) and the membership test (a
+/// `match` on the name: code, no table either).
+macro_rules! realm_names {
+    ($(#[$doc:meta])* $list:ident, $joined:ident, $member:ident: $($name:literal)*) => {
+        $(#[$doc])*
+        pub const $list: &[&str] = &[$($name),*];
+        /// The same names in the same order, each followed by one space.
+        pub const $joined: &str = concat!($($name, " "),*);
+        /// Is `name` one of them?
+        pub fn $member(name: &str) -> bool {
+            matches!(name, $($name)|*)
+        }
+    };
 }
 
-/// Does phase B bind the declared global `name`?
-pub fn realm_rest_global(name: &str) -> bool {
-    listed(REALM_REST_GLOBALS, name)
+realm_names! {
+    /// Declared data names phase B binds. Reading one, by any path, runs
+    /// phase B first.
+    REALM_REST_GLOBALS, REALM_REST_NAMES, realm_rest_global:
+        "WeakMap" "WeakSet" "WeakRef" "Proxy" "FinalizationRegistry" "Atomics" "Intl"
+        "WebAssembly" "Temporal" "PerformanceEntry" "PerformanceMark" "PerformanceMeasure"
+        "PerformanceObserver" "PerformanceObserverEntryList" "PerformanceResourceTiming"
 }
 
-/// May a compiled static read of the global `name` use the core entry? True
-/// only for a declared data name phase A binds. Every other name (phase B's,
-/// the global itself, an accessor, a name the layout does not declare) is
-/// read through the full entry.
-pub fn realm_core_global(name: &str) -> bool {
-    listed(REALM_CORE_GLOBALS, name)
+realm_names! {
+    /// Declared names phase A binds that are never read through the core
+    /// entry: the global object itself (a value that shows every slot) and
+    /// the accessors (their getters run with the global as `this`).
+    REALM_VALUE_GLOBALS, REALM_VALUE_NAMES, realm_value_global:
+        "globalThis" "global" "localStorage" "sessionStorage" "crypto" "navigator"
+}
+
+realm_names! {
+    /// Declared data names phase A binds: the only names a compiled static
+    /// read may reach through the core entry (`js_get_global_core`). Every
+    /// other name (phase B's, the global itself, an accessor, a name the
+    /// layout does not declare) is read through the full entry.
+    REALM_CORE_GLOBALS, REALM_CORE_NAMES, realm_core_global:
+        "Array" "Object" "String" "Number" "Boolean" "Function" "RegExp" "Date" "Error"
+        "TypeError" "RangeError" "SyntaxError" "ReferenceError" "EvalError" "URIError"
+        "AggregateError" "Symbol" "Promise" "Map" "Set" "BigInt" "Uint8Array" "Int8Array"
+        "Uint16Array" "Int16Array" "Uint32Array" "Int32Array" "Float16Array" "Float32Array"
+        "Float64Array" "Uint8ClampedArray" "BigInt64Array" "BigUint64Array" "ArrayBuffer"
+        "SharedArrayBuffer" "DataView" "TextEncoder" "TextDecoder" "TextEncoderStream"
+        "TextDecoderStream" "CompressionStream" "DecompressionStream" "ReadableStream"
+        "ReadableStreamDefaultController" "ReadableStreamDefaultReader"
+        "ReadableByteStreamController" "ReadableStreamBYOBReader" "ReadableStreamBYOBRequest"
+        "WritableStream" "TransformStream" "Navigator" "URL" "URLSearchParams" "URLPattern"
+        "AbortController" "AbortSignal" "EventTarget" "Crypto" "CryptoKey" "SubtleCrypto"
+        "Event" "CustomEvent" "MessageEvent" "DOMException" "FormData" "Blob" "File" "Headers"
+        "Request" "Response" "MessageChannel" "MessagePort" "BroadcastChannel" "Storage"
+        "WebSocket" "DisposableStack" "AsyncDisposableStack" "SuppressedError" "Iterator"
+        "Buffer" "eval" "fetch" "structuredClone" "atob" "btoa" "setTimeout" "clearTimeout"
+        "setInterval" "clearInterval" "setImmediate" "clearImmediate" "queueMicrotask" "gc"
+        "parseInt" "parseFloat" "isNaN" "isFinite" "encodeURI" "decodeURI" "encodeURIComponent"
+        "decodeURIComponent" "escape" "unescape" "console" "process" "Math" "JSON" "Reflect"
+        "performance" "Performance" "NaN" "Infinity" "undefined"
 }
 
 /// The word a phase-B slot holds from the global's birth until phase B binds

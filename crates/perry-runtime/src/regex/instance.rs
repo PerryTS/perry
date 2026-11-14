@@ -259,7 +259,7 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
 // data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
 pub(crate) fn intrinsic_prototype() -> f64 {
     // `RegExp` is a phase-A family: the realm's core holds its private slot.
-    let global = crate::object::js_get_global_core();
+    let global = crate::object::realm_core();
     PROTOTYPE_READ
         .read(global)
         .expect("realm has installed the RegExp intrinsic")

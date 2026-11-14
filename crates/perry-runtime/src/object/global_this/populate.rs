@@ -79,10 +79,16 @@ mod two_phase_tests;
 /// program is not compiled for a two-phase realm, and for a global that is
 /// not the thread's own (a `vm` context, an eval realm, the Rust tests).
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
-    populate_phases(singleton_at_entry, RealmPhases::Both)
+    // Every install below is a builtin definition, which arms the own-override
+    // guard only on a Map, Set or Date owner (#10697).
+    super::super::own_override::as_builtin_definition(|| {
+        populate_global_this_builtins_inner(singleton_at_entry, RealmPhases::Both)
+    })
 }
 
 /// Phase A alone: the rows of `perry_abi::realm_phase` phase B does not bind.
+#[cold]
+#[inline(never)]
 pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
     populate_phases(singleton_at_entry, RealmPhases::Core)
 }
@@ -92,13 +98,14 @@ pub(crate) fn populate_realm_core(singleton_at_entry: *mut ObjectHeader) {
 /// layout is static, so no key is added and none moves) and its family's
 /// declaration order (the same `birth_family`). Runs inside the caller's
 /// no-move window, and no program code runs inside it.
+#[cold]
+#[inline(never)]
 pub(crate) fn populate_realm_rest(singleton_at_entry: *mut ObjectHeader) {
     populate_phases(singleton_at_entry, RealmPhases::Rest)
 }
 
+/// One phase of a two-phase realm, as a builtin definition like the one pass.
 fn populate_phases(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
-    // Every install below is a builtin definition, which arms the own-override
-    // guard only on a Map, Set or Date owner (#10697).
     super::super::own_override::as_builtin_definition(|| {
         populate_global_this_builtins_inner(singleton_at_entry, phases)
     })
@@ -117,12 +124,13 @@ pub(crate) enum RealmPhases {
 
 impl RealmPhases {
     /// Does this pass run the rows that are not a declared phase-B name?
-    #[inline]
+    #[inline(always)]
     fn core(self) -> bool {
         self != RealmPhases::Rest
     }
-    /// Does this pass bind the declared global `name`?
-    #[inline]
+    /// Does this pass bind the declared global `name`? The name is looked at
+    /// only in a phase of a two-phase realm.
+    #[inline(always)]
     fn binds(self, name: &str) -> bool {
         match self {
             RealmPhases::Both => true,
@@ -1273,7 +1281,8 @@ pub(crate) fn birth_lazy_family(identity: crate::object::BuiltinConstructorIdent
     // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
     let _realm = crate::snap_census::realm_build();
     let _no_move = crate::gc::GcSuppressScope::new();
-    let global = (js_get_global_core().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let global =
+        (fetch_globals::realm_core().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
     let mut state = FamilyBirthState::of_bound_realm();
     super::super::own_override::as_builtin_definition(|| {
         birth_family(
