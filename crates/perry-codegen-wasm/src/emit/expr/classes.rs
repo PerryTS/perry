@@ -538,6 +538,36 @@ impl<'a> FuncEmitCtx<'a> {
                     ],
                 );
             }
+            Expr::ClassMethodHome {
+                class_name,
+                is_static,
+            } => {
+                self.emit_class_bridge(
+                    func,
+                    "class_method_home",
+                    class_name,
+                    &[&Expr::Bool(*is_static)],
+                );
+            }
+            // Only a literal `extends null` is recorded; other dynamic heritage keeps
+            // the class table's static parent.
+            Expr::RegisterClassParentDynamic {
+                class_name,
+                parent_expr,
+            } if matches!(parent_expr.as_ref(), Expr::Null) => {
+                self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+            }
+            Expr::ObjectSuperPropertyGet {
+                home,
+                key,
+                receiver,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, home);
+                self.emit_store_arg(func, 1, key);
+                self.emit_store_arg(func, 2, receiver);
+                self.emit_memcall(func, "object_super_get", 3);
+            }
             Expr::ClassRef(class_name) => {
                 let ctor_slot = self.class_ctor_slot(class_name);
                 self.emit_class_bridge(func, "class_ref", class_name, &[&Expr::Number(ctor_slot)]);

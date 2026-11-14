@@ -2397,6 +2397,9 @@ const __memDispatch = {
     }
     return undefined;
   },
+  class_method_home: (className, isStatic) => __classHome(String(className), !!isStatic),
+  class_extends_null: (className) => { __nullParentClasses.add(String(className)); },
+  object_super_get: (home, key, receiver) => __superGet(home, key, receiver),
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (!__holdsProperties(obj)) return undefined;
@@ -5497,6 +5500,55 @@ function __classMethodValue(cls, mname, evaluation) {
     values.set(key, fn);
   }
   return fn;
+}
+
+// The [[HomeObject]] of a class method (`Expr::ClassMethodHome`): a token naming the
+// class and side, since a class's prototype is its method table, not a host object.
+const __classHomes = new Map();
+const __nullParentClasses = new Set();
+function __classHome(className, isStatic) {
+  const id = (isStatic ? 's:' : 'i:') + className;
+  let home = __classHomes.get(id);
+  if (!home) __classHomes.set(id, (home = { __classHome__: className, isStatic }));
+  return home;
+}
+
+// `super[key]` read with `receiver` as `this`: from the prototype of the home object.
+// An instance-side class home walks the parent chain's getters and methods, then the
+// host base's prototype (or Object.prototype); `extends null` has no prototype to read.
+function __superGet(home, key, receiver) {
+  const name = String(key);
+  if (home && home.__classHome__ !== undefined) {
+    const cls = home.__classHome__;
+    if (home.isStatic) {
+      for (let c = classParentTable[cls] || null; c; c = classParentTable[c] || null) {
+        const statics = classStaticTable[c];
+        if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
+      }
+      return Reflect.get(Function.prototype, name, receiver);
+    }
+    if (__nullParentClasses.has(cls)) __throwNullReceiver(null, name);
+    let last = null;
+    for (let c = classParentTable[cls] || null; c; c = classParentTable[c] || null) {
+      last = c;
+      const methods = classMethodTable[c];
+      if (!methods) continue;
+      if (('__get_' + name) in methods) {
+        const fn = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
+        return __bitsToJsValue(fn(__jsValueToBits(receiver)));
+      }
+      if (Object.prototype.hasOwnProperty.call(methods, name)) {
+        const evaluation = receiver && typeof receiver === 'object' ? __instanceEvaluation.get(receiver) : undefined;
+        return __classMethodValue(c, name, evaluation);
+      }
+    }
+    const host = last && !classMethodTable[last] ? globalThis[last] : undefined;
+    const base = typeof host === 'function' ? host.prototype : Object.prototype;
+    return Reflect.get(base, name, receiver);
+  }
+  const proto = home === null || home === undefined ? null : Object.getPrototypeOf(home);
+  if (proto === null) __throwNullReceiver(proto, name);
+  return Reflect.get(proto, name, receiver);
 }
 
 // `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into

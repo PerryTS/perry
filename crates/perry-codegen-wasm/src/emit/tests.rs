@@ -1901,3 +1901,22 @@ console.log(bare() === bare());
         "x1 y1 x2 y2\nfalse"
     );
 }
+
+// `super.x` in a class method reads from the prototype of the method's home: a parent
+// class's getter runs on the receiver, a class without `extends` reads Object.prototype,
+// and `extends null` has no prototype, so the read throws.
+#[test]
+fn a_super_property_read_uses_the_home_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class N extends null { m() { return super.x; } }
+try { console.log(N.prototype.m.call({})); } catch (e) { console.log(e instanceof TypeError); }
+class A { get g() { return "g" + this.k; } }
+class B extends A { k = 1; m() { return super.g + " " + typeof super.toString + " " + super.nope; } }
+console.log(new B().m());
+"#
+        ),
+        "true\ng1 function undefined"
+    );
+}
