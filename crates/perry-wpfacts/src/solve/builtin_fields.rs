@@ -229,6 +229,7 @@ impl Model {
         for h in hs {
             self.realm_hold_tok(h, Some(reason));
         }
+        builtins::note_realm_held(self);
     }
 
     /// Unknown code exists: every String form that held only while it did
@@ -269,6 +270,12 @@ impl Model {
 
     /// Interpreted code can obtain native functions by their realm paths.
     pub(crate) fn builtin_fields_interp(&mut self) {
+        if crate::unksrc::on() {
+            crate::unksrc::note("interp", "interpreted code runs", u32::MAX, u32::MAX);
+            if !self.realm_held {
+                crate::unksrc::held("interp", "interpreted code runs", u32::MAX, u32::MAX);
+            }
+        }
         if self.keysnap.is_some() && !self.realm_held {
             self.keysnap_at(true, "interpreted code (builtin_fields_interp)", None, u32::MAX, None);
         }
@@ -284,5 +291,6 @@ impl Model {
         for h in hs {
             self.builtin_fields_sink(h, None);
         }
+        builtins::note_realm_held(self);
     }
 }

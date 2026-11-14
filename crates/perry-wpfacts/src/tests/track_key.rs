@@ -197,3 +197,199 @@ fn program_object_to_string_constant_is_unknown() {
     let v = recv(&prog(SAN, TAB, pre, READ), "p");
     assert!(v.iter().any(|x| x == "B"), "{v:?}");
 }
+
+// NAMEEXCL: the node part of a three.js track name is
+// `node.name ? node.name : node.uuid`, the name made by
+// `GLTFParser.createUniqueName` and the uuid by `MathUtils.generateUUID`.
+const UNIQUE: &str = "const used: any = {};
+function unique( originalName: any ): any {
+  const sanitizedName = sanitize( originalName || \x27\x27 );
+  if ( sanitizedName in used ) { return sanitizedName + \x27_\x27 + ( ++ used[ sanitizedName ] ); }
+  else { used[ sanitizedName ] = 0; return sanitizedName; }
+}
+const u1: any = unique( String( n ) );
+const u2: any = unique( String( n ) );";
+
+fn uuid_pre() -> String {
+    let lut: Vec<String> = (0..256).map(|i| format!("\x27{i:02x}\x27")).collect();
+    format!(
+        "const _lut = [ {} ];
+function generateUUID(): any {{
+  const d0 = Math.random() * 0xffffffff | 0;
+  const d1 = Math.random() * 0xffffffff | 0;
+  const d2 = Math.random() * 0xffffffff | 0;
+  const d3 = Math.random() * 0xffffffff | 0;
+  const uuid = _lut[ d0 & 0xff ] + _lut[ d0 >> 8 & 0xff ] + _lut[ d0 >> 16 & 0xff ] + _lut[ d0 >> 24 & 0xff ] + \x27-\x27 +
+    _lut[ d1 & 0xff ] + _lut[ d1 >> 8 & 0xff ] + \x27-\x27 + _lut[ d1 >> 16 & 0x0f | 0x40 ] + _lut[ d1 >> 24 & 0xff ] + \x27-\x27 +
+    _lut[ d2 & 0x3f | 0x80 ] + _lut[ d2 >> 8 & 0xff ] + \x27-\x27 + _lut[ d2 >> 16 & 0xff ] + _lut[ d2 >> 24 & 0xff ] +
+    _lut[ d3 & 0xff ] + _lut[ d3 >> 8 & 0xff ] + _lut[ d3 >> 16 & 0xff ] + _lut[ d3 >> 24 & 0xff ];
+  return uuid.toLowerCase();
+}}",
+        lut.join(", ")
+    )
+}
+
+const OBJ_READ: &str = "const y: any = h[ p.objectName ]; console.log( y.q );";
+
+#[test]
+fn unique_name_keeps_exclusion() {
+    let v = recv(&prog("u2", "\x27position\x27", UNIQUE, OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+    let v = recv(&prog("u2", "\x27position\x27", UNIQUE, READ), "p");
+    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+}
+
+#[test]
+fn uuid_keeps_exclusion() {
+    let pre = format!("{}\nconst id: any = generateUUID();", uuid_pre());
+    let v = recv(&prog("id", "\x27position\x27", &pre, OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+    let v = recv(&prog("id", "\x27position\x27", &pre, READ), "p");
+    assert_eq!(v, vec!["A".to_string()], "{v:?}");
+}
+
+fn name_or_uuid_pre(extra: &str) -> String {
+    format!(
+        "{UNIQUE}\n{}\nclass O {{ name: any = \x27\x27; uuid: any = generateUUID(); }}
+const o: any = new O();
+if ( String( t ) === \x27x\x27 ) o.name = unique( String( n ) );
+{extra}",
+        uuid_pre()
+    )
+}
+const NAME_OR_UUID: &str = "( o.name ? o.name : o.uuid )";
+
+#[test]
+fn node_name_or_uuid() {
+    let pre = name_or_uuid_pre("");
+    let v = recv(&prog(NAME_OR_UUID, TAB, &pre, OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+    let v = recv(&prog(NAME_OR_UUID, TAB, &pre, READ), "p");
+    assert_eq!(v, four(), "{v:?}");
+}
+
+// Control: a name field also written with a raw host string: any word.
+#[test]
+fn node_name_raw_write_is_any() {
+    let pre = name_or_uuid_pre("if ( String( t ) === \x27y\x27 ) o.name = String( n );");
+    let v = recv(&prog(NAME_OR_UUID, TAB, &pre, OBJ_READ), "q");
+    assert!(v.iter().any(|x| x == "B"), "{v:?}");
+}
+
+// Controls: the text of a possibly fractional Number, and of a host
+// Number, may hold `.`: the key `_1.5` may be read.
+const DOT_KEYS: &str = "const g: any = {{}}; g[ \x27_1.5\x27 ] = new A(); g[ \x27_x\x27 ] = new S();";
+#[test]
+fn fractional_number_text_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}");
+    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( Number( n ) / 2 ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+
+#[test]
+fn host_number_text_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}");
+    let tail = "const z: any = g[ \x27_\x27 + Number( n ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+
+// Rule NUM-TEXT: an integer of a known interval prints digits and `-`
+// only, so the node part keeps every exclusion: objectName is undefined.
+#[test]
+fn integer_suffix_keeps_exclusion() {
+    let node = "sanitize( String( n ) ) + \x27_\x27 + ( Number( n ) & 7 )";
+    let v = recv(&prog(node, "\x27position\x27", "", OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+// Rule NUM-TEXT: any Number\x27s text holds no `[`: with `.` possible the
+// track has no way through `[`, objectIndex is undefined.
+#[test]
+fn host_number_text_has_no_bracket() {
+    let node = "sanitize( String( n ) ) + \x27_\x27 + Number( n )";
+    let tail = "const y: any = h[ p.objectIndex ]; console.log( y.q );";
+    let v = recv(&prog(node, "\x27position\x27", "", tail), "q");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+// toLowerCase keeps the exclusion entry (ECMA-262 22.1.3.28).
+#[test]
+fn lower_case_keeps_exclusion() {
+    let v = recv(&prog("sanitize( String( n ) ).toLowerCase()", "\x27position\x27", "", OBJ_READ), "q");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+// Control (rule INT-OR-NAN): `++` of a value that may be 0.5 may be 1.5,
+// so its text may hold `.`: the key `_1.5` may be read.
+#[test]
+fn step_of_fraction_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}") + " let w: any = String( t ) === \x27a\x27 ? 0.5 : Object;";
+    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ w ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+
+// Controls (rule PREFIX-AND-FREE). A truncated product whose right operand
+// may hold `.` keeps no exclusion of `.`: the node part may be `00.ctl`,
+// so objectName may be `ctl`.
+#[test]
+fn truncated_product_with_dot_keeps_no_dot_exclusion() {
+    let pre = format!(
+        "{}\nconst sfx: any = String( t ) === \x27a\x27 ? \x27.ctl\x27 : \x2700\x27;
+const d0: any = Math.random() * 255 | 0;
+const dn: any = _lut[ d0 & 0xff ] + sfx;",
+        uuid_pre()
+    );
+    let v = recv(&prog("dn", "\x27position\x27", &pre, OBJ_READ), "q");
+    assert!(v.iter().any(|x| x == "B"), "{v:?}");
+}
+
+// A key made by a truncated product is read by its prefix as before: it
+// never names a field whose name lacks the prefix.
+#[test]
+fn truncated_product_key_keeps_its_prefix() {
+    let pre = format!(
+        "{}\nconst g: any = {{}}; g[ \x27zz\x27 ] = new A(); g[ \x2700ff\x27 ] = new S();
+const d0: any = Math.random() * 255 | 0;
+const d1: any = Math.random() * 255 | 0;",
+        uuid_pre()
+    );
+    let tail = "const z: any = g[ _lut[ d0 & 0xff ] + _lut[ d1 & 0xff ] ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert_eq!(v, vec!["S".to_string()], "{v:?}");
+}
+
+// Control (Step rule, member `++`): a field also written with 0.5 may be
+// 1.5 after `++`, so its text may hold `.`: the key `_1.5` may be read.
+#[test]
+fn member_step_of_fraction_may_hold_dot() {
+    let pre = DOT_KEYS.replace("{{}}", "{}")
+        + " class P { p: any = 0; } const op: any = new P(); if ( String( t ) === \x27a\x27 ) op.p = 0.5;";
+    let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ op.p ) ]; console.log( z.p );";
+    let v = recv(&prog(SAN, TAB, &pre, tail), "p");
+    assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+// The node part `'' or the uuid` reaches `+ '.'` first as `''` alone:
+// `'.' + table` keeps the table's exclusions (rule CONST-AND-PARTS), so
+// objectName stays undefined. Control: `'' or a raw string` may hold `.`.
+fn part_then_table(part: &str) -> Vec<String> {
+    let pre = name_or_uuid_pre(&format!(
+        "function trackKey( o: any, t: any ): any {{ const k0: any = ( {part} ); const k1: any = k0 + \x27.\x27; return k1 + PATH[ String( t ) ]; }}"
+    ));
+    let tail = "const p2 = parse( trackKey( o, t ) ); const y2: any = h[ p2.objectName ]; console.log( y2.q );";
+    recv(&prog("\x27a\x27", "\x27position\x27", &pre, tail), "q")
+}
+
+#[test]
+fn empty_or_uuid_then_table_keeps_exclusion() {
+    let v = part_then_table("String( t ) === \x27z\x27 ? \x27\x27 : o.uuid");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn empty_or_raw_string_then_table_may_hold_dot() {
+    let v = part_then_table("String( t ) === \x27z\x27 ? \x27\x27 : String( n )");
+    assert!(v.iter().any(|x| x == "B"), "{v:?}");
+}

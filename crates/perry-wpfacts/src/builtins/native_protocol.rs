@@ -254,7 +254,8 @@ fn written_by(
     // includes the other units' code, which holds every built-in object.
     (
         hit(TOP) && (m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np)))),
-        hit(np)
+        realm_replaced(m, np, a)
+            || hit(np)
             || other_global(np)
             // A prototype write is a chain contribution, separate from
             // the namespace's own hit above and its TOP reachability.
@@ -264,6 +265,40 @@ fn written_by(
                 && global()
                 && !locked_chain_read(m, np, a)),
     )
+}
+
+/// Unknown code holds the realm (ECMA-262 9.3, `Model::realm_held`): it may
+/// have replaced (or made an accessor of) any member the realm declares on a
+/// namespace, a host object or the global object, which no `LockHolder`
+/// covers (perry-abi lock.rs locks prototypes only), with any function or
+/// value it made. A call of such a member is the realm's function or unknown
+/// code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`), a read
+/// is the realm's value or the opaque member. Monotone: `note_realm_held`
+/// replays the lookups parked before it held. The Object.prototype method
+/// namespaces (`builtin_function`: members of a locked prototype) and the
+/// module's own `require` are not members of the realm.
+fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
+    if !m.realm_held {
+        return false;
+    }
+    let TokKind::Builtin(ns) = m.toks[np as usize] else {
+        return false;
+    };
+    if super::builtin_function(m, np) || ns == BuiltinNs::Require {
+        return false;
+    }
+    let name = m.atoms[a as usize].as_str();
+    if name == crate::STAR_KEY || matches!(members::ns_member(ns, name), Some(Some(_))) {
+        return true;
+    }
+    super::global_object(m, np)
+        && (super::global_function(m, name) || super::effects::declared_function(name).is_some())
+}
+
+/// Unknown code now holds the realm: the lookups parked past a member it may
+/// have replaced (`realm_replaced`) take the opaque member.
+pub fn note_realm_held(m: &mut Model) {
+    replay_native_missing(m);
 }
 
 /// Built-in object `np` was handed to unknown code (not reached along a

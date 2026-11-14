@@ -285,6 +285,11 @@ impl Model {
         // rule's result takes its interval from the rule only.
         if prim & prim::NUM != 0 && !node.ruled {
             changed |= grow_range(node, iv.num);
+            if iv.frac && !node.frac {
+                node.frac = true;
+                node.drange = true;
+                changed = true;
+            }
         }
         // A String brings its code interval the same way.
         if prim & prim::STR != 0 && !node.cruled {
@@ -777,6 +782,9 @@ impl Model {
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
+        if crate::unksrc::on() {
+            crate::unksrc::note("topval", why, u32::MAX, self.cur_fn as u32);
+        }
         // Explain and the dump name each origin: its own node.
         if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
@@ -2151,6 +2159,7 @@ impl Model {
         crate::model::Rg {
             num: nd.range,
             chr: nd.crange,
+            frac: nd.frac,
         }
     }
 

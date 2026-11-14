@@ -50,7 +50,7 @@ pub use native_protocol::{
     global_field, global_user_key, global_value_written, is_builtin_module, native_accessor_known,
     native_accessor_written, native_parent_ctor, native_parent_keys, native_parent_summarized,
     native_parent_value, native_proto, native_written, native_written_by, note_global_in_top,
-    note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write, WriteValue,
+    note_handed_to_unknown, note_native_accessor, note_realm_held, note_native_data_write, note_native_write, WriteValue,
     require_parts, settle_native_given,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
@@ -343,6 +343,13 @@ enum Recv {
 fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize>, recv: Recv) {
     // −0 tolerance: unknown code receives the arguments.
     m.zs_call_args(call);
+    if crate::unksrc::on() {
+        let f = crate::unksrc::call_fn(m, call);
+        crate::unksrc::note("method", why, call, f);
+        if !m.realm_held {
+            crate::unksrc::held("method", why, call, f);
+        }
+    }
     // Unknown code runs, handed values or not: it holds the realm.
     if !m.realm_held {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
@@ -1754,6 +1761,29 @@ pub(crate) fn realm_object_own_props_unenumerable(what: &str) -> bool {
     )
 }
 
+/// Does the realm's constructor create a builtin object of kind `what` with
+/// no own property at all, only internal slots: Map, Set, WeakMap, WeakSet
+/// (ECMA-262 24.1.1.1, 24.2.2.1, 24.3.1.1, 24.4.1.1), Date (21.4.2.1),
+/// ArrayBuffer, SharedArrayBuffer, DataView (25.1.4.1, 25.2.3.1, 25.3.2.1),
+/// WeakRef, FinalizationRegistry (26.1.1.1, 26.2.1.1)? A copy of its own
+/// enumerable properties reads only what the program stored on it (its
+/// fields). Only for a birth of this unit's code (`site != u32::MAX`).
+pub(crate) fn realm_born_without_own_props(what: &str) -> bool {
+    matches!(
+        what,
+        "Map"
+            | "Set"
+            | "WeakMap"
+            | "WeakSet"
+            | "Date"
+            | "ArrayBuffer"
+            | "SharedArrayBuffer"
+            | "DataView"
+            | "WeakRef"
+            | "FinalizationRegistry"
+    )
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
@@ -2103,6 +2133,7 @@ fn any_written(m: &mut Model, dst: NodeId) {
 
 mod accessor_lookup;
 mod methods;
+pub(crate) mod object_statics;
 pub(crate) use accessor_lookup::{
     annexb_lookup, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
 };
@@ -2497,6 +2528,28 @@ fn ns_method_inner(
             true,
         );
     };
+    // Unknown code holds the realm: it may have replaced this member of the
+    // namespace (`native_protocol::realm_replaced`, the one write predicate).
+    // The call is the realm's function below or unknown code, now or when
+    // the realm comes to be held later in the solve (the replay). Every
+    // namespace member call passes here, method and value call alike.
+    {
+        let t = m.tok(TokKind::Builtin(ns));
+        let a = m.atom(name);
+        if !builtin_function(m, t) && opaque_written(m, t, a, NativeMiss::Call(t, call)) {
+            let prev = m.cur_this.replace(t);
+            unknown_method(
+                m,
+                call,
+                &format!("argument of builtin {ns:?}.{name} (unknown code may have replaced it)"),
+            );
+            m.cur_this = prev;
+        }
+    }
+    // VALUE-CALL-MODELS: the eight Object statics run the direct call's steps.
+    if object_statics::value_call(m, ns, name, call) {
+        return;
+    }
     match (ns, name) {
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
@@ -2620,13 +2673,33 @@ fn ns_method_inner(
             | "decodeURIComponent" | "encodeURI" | "decodeURI" | "escape" | "unescape" | "atob"
             | "btoa" | "String" | "Number" | "Boolean" | "BigInt",
         ) => {
-            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
-            ret_prim(m, call, prim::ALL);
+            // ECMA-262 19.2.2-19.2.6, B.2.1, 20.3.1.1, 21.1.1.1, 21.2.1.1,
+            // 22.1.1.1; HTML atob/btoa (DOMString): each converts its
+            // arguments by ToString / ToNumber (ToPrimitive on an object),
+            // `Boolean` by ToBoolean (no call); the result kind is fixed.
+            if name != "Boolean" {
+                implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            }
+            let p = match name {
+                "parseInt" | "parseFloat" | "Number" => prim::NUM,
+                "isNaN" | "isFinite" | "Boolean" => prim::BOOL,
+                "BigInt" => prim::BIGINT,
+                _ => prim::STR,
+            };
+            ret_prim(m, call, p);
         }
+        // EnumerableOwnProperties(key) and GetOwnPropertyKeys(string) are
+        // Strings, GetOwnPropertyKeys(symbol) Symbols (ECMA-262 20.1.2.18,
+        // 20.1.2.10, 20.1.2.11; a Proxy's `ownKeys` result is filtered by
+        // type, 10.5.11).
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
             let pb = site_tmpl(m, call, "keys");
             let fa = m.field_any(pb);
-            m.add_prim(fa, prim::STR | prim::SYMBOL);
+            let p = match name {
+                "getOwnPropertySymbols" => prim::SYMBOL,
+                _ => prim::STR,
+            };
+            m.add_prim(fa, p);
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {
@@ -2668,28 +2741,9 @@ fn ns_method_inner(
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
-        // Called as a value (through a variable, a member read, `.call`) it is
-        // the named call (ECMA-262 20.1.2.2 OrdinaryObjectCreate(proto); the
-        // this value is not read): one object per source site whose
-        // [[Prototype]] is the argument, as gen_rest/builtin_objects.rs
-        // `Expr::ObjectCreate` models it. No argument: `undefined` is neither
-        // an Object nor null (step 1 throws), so there is no result.
-        (BuiltinNs::Object, "create")
-            if m.calls[call as usize].args.len() <= 1 && m.calls[call as usize].spread.is_empty() =>
-        {
-            if let Some(p) = arg(m, call, 0) {
-                let r = m.reason("E10 Object.create (as a value call)");
-                m.cons(p, Cons::CreateProto { reason: r });
-                let t = site_obj_create(m, call);
-                let pn = m.proto_node(t);
-                m.edge(p, pn);
-                ret_tok(m, call, t);
-            }
-        }
-        // With a properties argument ObjectDefineProperties reads its
-        // descriptors (20.1.2.3.1), not modeled for a value call: the
-        // arguments stay with unknown code. Neither reads the this value
-        // (20.1.2.2, 20.1.2.23, 28.1.13): it is given to no one.
+        // Only a call with a spread argument (`object_statics::value_call`
+        // models every other). Neither reads the this value (ECMA-262
+        // 20.1.2.2, 20.1.2.23, 28.1.13): it is given to no one.
         (BuiltinNs::Object, "create") => unknown_method_at(
             m,
             call,
@@ -2871,7 +2925,33 @@ fn ns_method_inner(
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             ret_prim(m, call, prim::NUM);
         }
-        (BuiltinNs::Number, _) | (BuiltinNs::String, _) if name == "raw" => {
+        // The `Number.is*` predicates test the operand's type (ECMA-262
+        // 21.1.2.2-21.1.2.5): a Boolean, nothing converted.
+        (BuiltinNs::Number, "isFinite" | "isInteger" | "isNaN" | "isSafeInteger") => {
+            ret_prim(m, call, prim::BOOL)
+        }
+        // 21.1.2.12/13 (%parseFloat%, %parseInt%): ToString, a Number.
+        (BuiltinNs::Number, "parseFloat" | "parseInt") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::NUM);
+        }
+        // 22.1.2.1/2: ToNumber of each code unit / point, a String.
+        (BuiltinNs::String, "fromCharCode" | "fromCodePoint") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::STR);
+        }
+        // 21.2.2.1/2: ToIndex of `bits`, ToBigInt of the value, a BigInt.
+        (BuiltinNs::BigInt, "asIntN" | "asUintN") => {
+            implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
+            ret_prim(m, call, prim::BIGINT);
+        }
+        // `String.raw` (22.1.2.4) reads `raw`, its `length` and elements and
+        // ToStrings them and the substitutions: a String.
+        (BuiltinNs::String, "raw") => {
+            implicit_args(m, call, "String.raw template", Protocol::Any);
+            ret_prim(m, call, prim::STR);
+        }
+        (BuiltinNs::Number, _) if name == "raw" => {
             // `String.raw` reads `raw` and its elements.
             implicit_args(m, call, "String.raw template", Protocol::Any);
             ret_prim(m, call, prim::ALL);
@@ -3020,6 +3100,9 @@ fn ns_method_inner(
         (BuiltinNs::Function, _) => {
             // Not a method of the Function constructor (TypeError).
         }
+        // `ArrayBuffer.isView(a)` (ECMA-262 25.1.5.1): a Boolean; it reads
+        // only the argument's [[ViewedArrayBuffer]] slot and runs no code.
+        (BuiltinNs::ArrayBuffer, "isView") => ret_prim(m, call, prim::BOOL),
         // A key the namespace's description (its own keys and its chain)
         // declares absent is no method (TypeError); one the program added
         // is the receiver's own field or chain value (`method_on`).
@@ -3272,11 +3355,12 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Date => ret_prim(m, call, prim::STR),
-        BuiltinNs::String
-        | BuiltinNs::Number
-        | BuiltinNs::BigInt
-        | BuiltinNs::Boolean
-        | BuiltinNs::Symbol => {
+        // Called as functions: String 22.1.1.1, Number 21.1.1.1 (ToNumeric),
+        // BigInt 21.2.1.1 (ToPrimitive, then ToBigInt), Symbol 20.4.1.1
+        // (ToString of the description) convert by ToPrimitive; Boolean
+        // 20.3.1.1 is ToBoolean (no call). The result kind is fixed.
+        BuiltinNs::Boolean => ret_prim(m, call, prim::BOOL),
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::BigInt | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
             // The call form gives one primitive kind (NewTarget undefined):
             // `String(v)` a String (22.1.1.1), `Number(v)` a Number

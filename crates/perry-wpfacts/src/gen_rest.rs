@@ -403,7 +403,14 @@ impl<'a> Gen<'a> {
                 );
                 let (t, n) = self.bobj(mi, "arraybox");
                 let fa = self.m.field_any(t);
-                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
+                // Symbols; 28.1.11 Reflect.ownKeys: both.
+                let p = match e {
+                    Expr::ObjectGetOwnPropertySymbols(..) => prim::SYMBOL,
+                    Expr::ReflectOwnKeys(..) => prim::STR | prim::SYMBOL,
+                    _ => prim::STR,
+                };
+                self.m.add_prim(fa, p);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
@@ -484,7 +491,6 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
             | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
@@ -493,8 +499,6 @@ impl<'a> Gen<'a> {
             | Expr::RegExpExecIndex
             | Expr::JsonIsRawJson(..)
             | Expr::PerformanceNow
-            | Expr::Atob(..)
-            | Expr::Btoa(..)
             | Expr::IterResultGetDone
             | Expr::CryptoRandomUUID
             | Expr::CryptoRandomUUIDv7
@@ -522,8 +526,6 @@ impl<'a> Gen<'a> {
             | Expr::PodLayoutOffsetOf { .. }
             | Expr::ChildProcessGetProcessStatus(..)
             | Expr::ChildProcessKillProcess(..)
-            | Expr::StringFromCharCode(..)
-            | Expr::StringFromCodePoint(..)
             | Expr::StringAt { .. }
             | Expr::StringCodePointAt { .. }
             | Expr::ArrayIterationPatched
@@ -541,9 +543,35 @@ impl<'a> Gen<'a> {
                     Protocol::ToPrimitive,
                 )
             }
-            Expr::StringRaw { .. }
-            | Expr::StringFromCharCodeSpread(..)
-            | Expr::PathFormat(..)
+            // `Symbol(d)` is a Symbol (ECMA-262 20.4.1.1: ToString of `d`
+            // unless undefined).
+            Expr::SymbolNew(..) => self.prim_kids(
+                fx,
+                e,
+                prim::SYMBOL,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `atob` / `btoa` (HTML base64 utilities: a DOMString, ToString
+            // of the operand), `String.fromCharCode` / `fromCodePoint`
+            // (22.1.2.1, 22.1.2.2: ToNumber of each operand): a String.
+            Expr::Atob(..)
+            | Expr::Btoa(..)
+            | Expr::StringFromCharCode(..)
+            | Expr::StringFromCodePoint(..) => self.prim_kids(
+                fx,
+                e,
+                prim::STR,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `String.raw` (22.1.2.4) reads `raw`, its `length` and elements
+            // and ToStrings them and the substitutions; a spread
+            // `fromCharCode` iterates its operand: a String.
+            Expr::StringRaw { .. } | Expr::StringFromCharCodeSpread(..) => {
+                self.prim_kids(fx, e, prim::STR, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::PathFormat(..)
             | Expr::PathWin32 { .. }
             | Expr::FsReadFileSync(..)
             | Expr::FsWriteFileSync(..)
@@ -597,7 +625,7 @@ impl<'a> Gen<'a> {
                 self.prim_kids(
                     fx,
                     e,
-                    prim::ALL,
+                    prim::STR,
                     "URI operand ToString",
                     Protocol::ToPrimitive,
                 )

@@ -20,18 +20,11 @@ impl<'a> Gen<'a> {
     /// [[Get]], getters run. The values of `value`, `get` and `set`, the keys
     /// a definition uses.
     pub(crate) fn descriptor_reads(&mut self, desc: NodeId) -> [NodeId; 3] {
-        let mut used = [desc; 3];
-        for name in DESCRIPTOR_KEYS {
-            let a = self.m.atom(name);
-            let v = self.load(desc, Key::Named(a));
-            match name {
-                "value" => used[0] = v,
-                "get" => used[1] = v,
-                "set" => used[2] = v,
-                _ => {}
-            }
-        }
-        used
+        crate::builtins::object_statics::descriptor_reads(&mut self.m, desc, |m| {
+            let n = m.node_l("load");
+            m.own(n);
+            n
+        })
     }
 
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
@@ -151,24 +144,9 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
-        let r = self
-            .m
-            .reason("getOwnPropertyDescriptor (accessors handed out)");
-        self.m.cons(
-            o,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Any,
-            },
-        );
-        let vals = self.load(o, Key::any());
+        let vals = self.tmp("load");
         let (t, n) = self.bobj(mi, "descriptor");
-        let fa = self.m.field_any(t);
-        self.m.edge(vals, fa);
-        // get/set functions of the object: handed to user code without a
-        // receiver — ⊤-called.
-        self.m.add_tok(fa, TOP);
-        self.m.add_prim(fa, prim::ALL);
+        crate::builtins::object_statics::own_descriptor(&mut self.m, o, vals, t);
         n
     }
 

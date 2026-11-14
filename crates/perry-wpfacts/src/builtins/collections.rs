@@ -1802,8 +1802,34 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             ret_tok(m, call, t);
             implicit_args(m, call, "buffer resize argument", Protocol::ToPrimitive);
         }
+        // DataView.prototype get*/set* (ECMA-262 25.3.4.5-25.3.4.26, GetViewValue
+        // and SetViewValue 25.3.1.5/25.3.1.6): ToIndex of the offset and
+        // ToNumber / ToBigInt of a stored value (ToPrimitive on an object),
+        // ToBoolean of `littleEndian` (no call). A get is a Number, a BigInt
+        // for the 64-bit integer kinds; a set is undefined. A spread argument
+        // may land at any position: ToPrimitive on its elements.
+        ("DataView", Some(n)) if dataview_access(n).is_some() => {
+            let (get, big) = dataview_access(n).expect("the guard found it");
+            let r = m.reason("DataView offset / value conversion");
+            let converted = if get { 1 } else { 2 };
+            for &a in c.args.iter().take(converted).chain(c.spread.iter()) {
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+            }
+            let p = match (get, big) {
+                (true, true) => prim::BIGINT,
+                (true, false) => prim::NUM,
+                (false, _) => prim::UNDEF,
+            };
+            ret_prim(m, call, p);
+        }
         // A method the buffer's or DataView's prototype chain declares
-        // (`getInt8`, `slice` spread, `toString`): its arguments converted,
+        // (`slice` spread, `toString`): its arguments converted,
         // its result a primitive.
         ("DataView" | "ArrayBuffer" | "SharedArrayBuffer", Some(n))
             if !super::loads::buffer_member_absent(m, Some(what), n) =>
@@ -1862,5 +1888,19 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             members::BoxChain::Null => {}
         },
         (_, Some(n)) => undescribed_method(m, fam, t, n, call, &format!("argument of {kind}.{n}")),
+    }
+}
+
+/// A DataView.prototype accessor method (ECMA-262 25.3.4): `(is a get, is a
+/// 64-bit BigInt kind)`.
+fn dataview_access(n: &str) -> Option<(bool, bool)> {
+    match n {
+        "getInt8" | "getUint8" | "getInt16" | "getUint16" | "getInt32" | "getUint32"
+        | "getFloat16" | "getFloat32" | "getFloat64" => Some((true, false)),
+        "getBigInt64" | "getBigUint64" => Some((true, true)),
+        "setInt8" | "setUint8" | "setInt16" | "setUint16" | "setInt32" | "setUint32"
+        | "setFloat16" | "setFloat32" | "setFloat64" => Some((false, false)),
+        "setBigInt64" | "setBigUint64" => Some((false, true)),
+        _ => None,
     }
 }

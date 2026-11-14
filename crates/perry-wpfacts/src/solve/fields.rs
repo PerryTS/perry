@@ -662,6 +662,7 @@ impl Model {
                 TmplKind::BObj { what, site, .. } => {
                     (site != u32::MAX && builtins::own_values_filled(what))
                         || builtins::realm_object_own_props_unenumerable(what)
+                        || (site != u32::MAX && builtins::realm_born_without_own_props(what))
                         || (site != u32::MAX && self.typed_array_elements(t))
                 }
                 _ => true,
@@ -819,6 +820,25 @@ impl Model {
             self.add_tok(n, s);
         }
         n
+    }
+
+    /// Rule TYPED-ELEM (read). ECMA-262 10.4.5.4 [[Get]] of typed array
+    /// `t`: a key that is a Number (and no BigInt, String, Symbol or
+    /// object) is ToString of a Number, always a CanonicalNumericIndexString
+    /// (7.1.21: ToString(ToNumber(s)) is s), so the read is
+    /// TypedArrayGetElement (10.4.5.15): a Number (a BigInt on a BigInt
+    /// array, `typed_array_elem_prim`) or `undefined`, never an own
+    /// property, the chain or a value a store wrote; a store under such a
+    /// key stores the converted number only (10.4.5.16,
+    /// `typed_array_element_store`). An own property under an unknown
+    /// String key stays an ordinary field (the model has no fact for
+    /// "canonical numeric string": coarser, not wrong); a BigInt key
+    /// may spell a non-canonical digit name (10.4.5.5: OrdinarySet /
+    /// OrdinaryGet), and a key that may be a String or an object
+    /// (`named`, `index_needs_general_key`) may spell any name: each keeps
+    /// `num_fields`.
+    pub(crate) fn typed_array_number_key(&self, t: Tok, prim: u16, named: bool) -> bool {
+        !named && prim & prim::BIGINT == 0 && self.typed_array_elements(t)
     }
 
     /// The fields of `t` a number key may name (DECISIONS 217): those under

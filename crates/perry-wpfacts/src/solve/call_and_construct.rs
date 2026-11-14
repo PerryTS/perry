@@ -235,6 +235,15 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
+        if crate::unksrc::on() {
+            let kind = if t == TOP { "callee-top" } else { "callee-builtin" };
+            let why = format!("{:?}", self.toks[t as usize]);
+            let f = crate::unksrc::call_fn(self, call);
+            crate::unksrc::note(kind, &why, call, f);
+            if !self.realm_held {
+                crate::unksrc::held(kind, &why, call, f);
+            }
+        }
         // Unknown code runs, handed values or not: it holds the realm.
         if !self.realm_held {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
@@ -732,6 +741,15 @@ impl Model {
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
+                }
+                if crate::unksrc::on() {
+                    let kind = if t == TOP { "new-top" } else { "new-builtin" };
+                    let why = format!("{:?}", self.toks[t as usize]);
+                    let f = crate::unksrc::call_fn(self, call);
+                    crate::unksrc::note(kind, &why, call, f);
+                    if !self.realm_held {
+                        crate::unksrc::held(kind, &why, call, f);
+                    }
                 }
                 if !self.realm_held {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");

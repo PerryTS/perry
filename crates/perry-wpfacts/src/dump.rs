@@ -326,6 +326,10 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
+            Verdict::Dead => "dead".to_string(),
+            Verdict::OwnDataOrAbsent => "own-data-or-absent".to_string(),
+            Verdict::NsExport => "ns-export".to_string(),
+            Verdict::IntrinsicCall => "intrinsic-call".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(

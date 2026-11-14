@@ -1367,6 +1367,14 @@ pub struct Node {
     pub rsteps: u8,
     /// The result node of a `Cons::Range` rule: its interval is the rule's.
     pub ruled: bool,
+    /// Rule INT-OR-NAN (ECMA-262 7.1.4 ToNumber): some Number it holds may
+    /// be other than NaN, an infinity, `-0` or an integer in
+    /// `[-2^53, 2^53]`. Beside `range`: a node whose interval is top because
+    /// it may hold NaN (`++` of a function) keeps the fact that it holds no
+    /// fraction. Grows like `range`: a value copy carries it (`Rg::frac`),
+    /// any other Number arrival sets it, a rule's result takes it from the
+    /// rule only.
+    pub frac: bool,
     /// The code interval of the Strings it holds (`range::CHAR_ANY`: each
     /// is `""` or one code unit); ⊤ says nothing.
     pub crange: range::Iv,

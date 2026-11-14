@@ -187,6 +187,43 @@ pub enum Verdict {
     /// Proven in the typed body behind the entry guard on the receiver
     /// binding (design §11.4); the generic body keeps the site.
     E0,
+    /// A read or call no value reaches: the receiver's (a value call's
+    /// callee's) node holds no value and no primitive at the fixpoint, and
+    /// none of its nodes left a value out (`dropped`). The solve is an
+    /// inclusion over-approximation of every evaluation, and a function
+    /// unknown code can enter holds ⊤ in its parameters and receiver
+    /// (`escape_fn_params`), so an empty node means the expression never
+    /// produces a value: the site is never reached (ECMA-262 13.3.2: the
+    /// member access evaluates its base first). Names no slot or body.
+    Dead,
+    /// A named read whose receivers are each a prefix-stable fact unit with
+    /// no accessor, no [[Prototype]] write (`super_relink`: no `__proto__`
+    /// store, no computed store whose key may be `__proto__`), no escape and
+    /// no hard operation, whose prototype chain is proven not to hold the
+    /// key (the `absent_key` walk over the chain): OrdinaryGet (ECMA-262
+    /// 10.1.8.1) finds the key as an own data property, one of the values
+    /// stored under it, or reaches the chain's end and gives `undefined`.
+    OwnDataOrAbsent,
+    /// A value call whose callee set is exactly one builtin function object
+    /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
+    /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
+    /// store of another value onto the member it was read from adds that
+    /// value to the callee node. Only while no unknown code exists
+    /// (`!realm_held`): unknown code holds the realm (9.3) and may replace
+    /// the member (the intrinsics' members are writable, 10.4.1 / 17), a
+    /// write the solve does not replay into the read (`realm_hold_tok`).
+    /// Whole-program solves only. `receivers` names the intrinsic.
+    IntrinsicCall,
+    /// A named read whose receivers are all module namespace exotic objects
+    /// of the program's own modules, under a name each module exports
+    /// itself (`ns_own`; no `export *` resolution): [[Get]] gives the export
+    /// binding's current value, `GetBindingValue` of the module's binding
+    /// (ECMA-262 10.4.6.8). No code writes a namespace ([[Set]] 10.4.6.9 and
+    /// [[DefineOwnProperty]] 10.4.6.6 change nothing, [[Prototype]] is null
+    /// and fixed, 10.4.6.1-2), unknown code holding it included: exact under
+    /// a held realm. The claim is the binding, not a value: an `export let`
+    /// its module reassigns is read live.
+    NsExport,
     No(String),
 }
 
@@ -1265,6 +1302,11 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         let key = &m.atoms[s.key as usize];
         let (mut receivers, mut top, mut verdict, mut fixed_shape, mut targets) =
             judge(m, &by_id, &runtime, s, &key, toks, prim, top_recv);
+        // Dead needs every value of the sources: a node that left one out
+        // (`dropped`) is not empty in the program.
+        if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
+            verdict = Verdict::No("dead site (no receiver flows)".into());
+        }
         // Design §11.4: a site whose receiver is the `this` of a method of
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
@@ -1483,6 +1525,18 @@ fn judge(
 ) -> (Vec<String>, bool, Verdict, bool, FxHashMap<FnIdx, String>) {
     if s.value_call {
         let top = toks.contains(&TOP);
+        if prim == 0 && toks.iter().all(|&t| m.closed_marker(t)) {
+            return (Vec::new(), false, Verdict::Dead, true, FxHashMap::default());
+        }
+        if !m.unit_mode {
+            if let Some(name) = intrinsic_callee(m, toks, prim) {
+                if !m.realm_held {
+                    return (vec![name], false, Verdict::IntrinsicCall, true, FxHashMap::default());
+                }
+                let why = "intrinsic callee: unknown code holds the realm and may replace the member";
+                return (Vec::new(), false, Verdict::No(why.into()), true, FxHashMap::default());
+            }
+        }
         return match callee_set(m, runtime, toks, prim, top_recv) {
             Ok(t) if t.len() == 1 => (Vec::new(), top, Verdict::T0Mono, true, t),
             Ok(t) => (Vec::new(), top, Verdict::T0Set, true, t),
@@ -1545,10 +1599,15 @@ fn judge(
             ),
         };
     }
+    if let Some(receivers) = ns_export(m, s, toks, prim) {
+        return (receivers, false, Verdict::NsExport, true, FxHashMap::default());
+    }
     let mut receivers = Vec::new();
     let mut top = false;
     let mut verdict: Option<Verdict> = None;
     let mut slots: Vec<Option<u32>> = Vec::new();
+    // Receivers read by an own data lookup or `undefined` (OwnDataOrAbsent).
+    let mut own_or_absent = 0usize;
     let mut fixed_shape = true;
     // A call: the nodes whose values the lookups give.
     let mut callee: Vec<NodeId> = Vec::new();
@@ -1651,6 +1710,7 @@ fn judge(
                     _ if unwritten && tf.fixed_layout && absent_key(m, t, key, s.key) => {
                         slots.push(None)
                     }
+                    _ if own_data_or_absent(m, tf, t, key, s.key) => own_or_absent += 1,
                     Some(_) | None => {
                         // Not a definite birth field: a prototype member
                         // or a key added after birth.
@@ -1697,7 +1757,7 @@ fn judge(
     // receivers it is over (the value-call rule, `callee_set`).
     let none = toks.iter().all(|&t| m.closed_marker(t));
     if none && prim == 0 {
-        verdict.get_or_insert(Verdict::No("dead site (no receiver flows)".into()));
+        verdict.get_or_insert(Verdict::Dead);
     }
     if none && prim != 0 {
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
@@ -1733,6 +1793,10 @@ fn judge(
                 Err(why) => Verdict::No(why),
             }
         }
+        None if own_or_absent > 0 && statics > 0 => {
+            Verdict::No("receivers mix class objects and instances".into())
+        }
+        None if own_or_absent > 0 => Verdict::OwnDataOrAbsent,
         None if statics > 0 && !slots.is_empty() => {
             Verdict::No("receivers mix class objects and instances".into())
         }
@@ -1886,6 +1950,14 @@ fn host_member(
     if !native {
         return Some(Err("host member undescribed or written".into()));
     }
+    // Unknown code holds the realm (9.3, `realm_held`): a host object's
+    // members are writable, and the solve does not replay unknown code's
+    // replacement of one (`realm_hold_tok`), as for `Verdict::IntrinsicCall`.
+    if m.realm_held {
+        return Some(Err(
+            "host member: unknown code holds the realm and may replace the member".into(),
+        ));
+    }
     receivers.sort();
     receivers.dedup();
     Some(Ok(receivers))
@@ -1935,6 +2007,15 @@ fn builtin_protos_unwritten(
             "native member: interpreted code may write the key onto a builtin prototype".into(),
         );
     }
+    // Unknown code holds the realm (9.3, `realm_held`): it may replace a
+    // builtin prototype's member that the runtime lets a store replace, a
+    // write the solve does not replay (`realm_hold_tok`). Only a final read
+    // survives it, as for `Verdict::IntrinsicCall`.
+    if fam.is_some() && !locked && m.realm_held {
+        return Err(
+            "native member: unknown code holds the realm and may replace the member".into(),
+        );
+    }
     let (through_top, own) = match objproto {
         _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),
@@ -1961,6 +2042,13 @@ fn builtin_protos_unwritten(
 /// [[Get]] then walks to the end of the chain: the read gives `undefined`.
 /// A private name is never absent (its read throws without the brand).
 fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    chain_absent(m, t, key, a, true)
+}
+
+/// The `absent_key` walk: `t`'s prototype chain holds no `a` and ends at
+/// `%Object.prototype%`, which lacks it. `own`: `t` itself holds nothing
+/// under `a` either.
+fn chain_absent(m: &Model, t: Tok, key: &str, a: Atom, own: bool) -> bool {
     let holds_nothing = |n: Option<&NodeId>| {
         n.is_none_or(|&n| {
             let nd = &m.nodes[n as usize];
@@ -1976,7 +2064,7 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
         return false;
     };
-    if m.is_private_atom(a) || !unwritten(t) {
+    if m.is_private_atom(a) || (own && !unwritten(t)) {
         return false;
     }
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
@@ -2009,6 +2097,74 @@ fn absent_key(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         }
     }
     ends && crate::builtins::object_proto_lacks(key) && builtin_protos_unwritten(m, None, a).is_ok()
+}
+
+/// [`Verdict::OwnDataOrAbsent`] for receiver `t` (layout `tf`) and key `a`:
+/// what [[Get]] finds is `t`'s own data property or nothing. `t`'s own
+/// keys hold only data (no accessor on the token or its template), its
+/// [[Prototype]] is never written (`super_relink`: a `__proto__` store or
+/// a computed store whose key may be `__proto__` runs the
+/// `Object.prototype.__proto__` setter, B.2.2.1.2), unknown code never
+/// has it (no escape, no hard operation), and the chain lacks the key. The
+/// optimistic JSON-key rule keeps tokens out of `super_relink` by
+/// assumption: with it on, no claim.
+fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom) -> bool {
+    !m.optimistic_json_key
+        && tf.prefix_stable
+        && !m.super_relink.contains(&t)
+        && !m.is_escaped(t)
+        && !m.hard.contains_key(&t)
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && m
+            .tmpl_of(t)
+            .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
+        && chain_absent(m, t, key, a, false)
+        && object_proto_unwritten(m, a)
+}
+
+/// `%Object.prototype%` holds nothing stored under `a` by the program: no
+/// named store of `a`, no computed store onto it.
+fn object_proto_unwritten(m: &Model, a: Atom) -> bool {
+    let Some(&op) = m.tok_index.get(&TokKind::ObjectProto) else {
+        return false;
+    };
+    let empty = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    empty(m.fields.get(&(op, a))) && empty(m.field_any.get(&op))
+}
+
+/// [`Verdict::IntrinsicCall`]: the callee set is one `BuiltinFn` token of a
+/// named native (closed markers stand for their callers' values beside
+/// them), no ⊤, no primitive. Its name. The caller adds `!realm_held`.
+fn intrinsic_callee(m: &Model, toks: &[Tok], prim: u16) -> Option<String> {
+    if prim != 0 {
+        return None;
+    }
+    let mut it = toks.iter().copied().filter(|&t| !m.closed_marker(t));
+    let t = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    matches!(m.toks[t as usize], TokKind::BuiltinFn(Native::Member { .. })).then(|| m.tok_name(t))
+}
+
+/// [`Verdict::NsExport`]: every receiver is a module namespace token of
+/// this program's modules (`ns_own` names what each module exports itself;
+/// a unit's stand-in namespace has none), the key one of those names, no
+/// primitive, no ⊤. A call reads the binding the same way, but the solve
+/// lets an unproven call escape its namespace receiver to the callee
+/// (DECISIONS 116): the read alone is claimed.
+fn ns_export(m: &Model, s: &crate::gen::ReadSite, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    if s.is_call || prim != 0 || toks.is_empty() || m.is_private_atom(s.key) {
+        return None;
+    }
+    toks.iter()
+        .all(|&t| matches!(m.toks[t as usize], TokKind::ModNs(_)) && m.ns_own.contains(&(t, s.key)))
+        .then(|| toks.iter().map(|&t| m.tok_name(t)).collect())
 }
 
 /// Obligation 3 of [`native_member`]: no object `t` denotes holds key `a`

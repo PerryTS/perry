@@ -3,7 +3,10 @@
 //! BigInt beside a Number throws a TypeError. So `n * w`, `w + n` with `n`
 //! a Number is a Number even when `w` may be a BigInt, and a typed array
 //! store under that key is an element store (ToNumber(v), never `v`).
-//! Two operands that may both be BigInts, and unary `-`, keep the BigInt.
+//! Two operands that may both be BigInts, and unary `-`, keep the BigInt:
+//! the store is an ordinary one too (a large BigInt spells no canonical
+//! numeric string, 10.4.5.5), which a read under that key sees; a Number
+//! key reads the element only (10.4.5.4, rule TYPED-ELEM).
 //! `escapes`: node runs a method of `o`, so the facts must not prove it.
 
 use super::*;
@@ -53,15 +56,15 @@ case!(
 case!(
     maybe_bigint_times_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w * w] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w * w] = o; (globalThis as any).hostTake(ta[w * w]); console.log(g(o));"
 );
 case!(
     maybe_bigint_plus_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + w] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + w] = o; (globalThis as any).hostTake(ta[w + w]); console.log(g(o));"
 );
 case!(
     negated_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[-w] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[-w] = o; (globalThis as any).hostTake(ta[-w]); console.log(g(o));"
 );

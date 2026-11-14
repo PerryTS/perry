@@ -1671,7 +1671,10 @@ pub(crate) fn keyread(g: &Gen) {
     let dec = |a: Atom| -> String {
         let s = &m.atoms[a as usize];
         let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
-        if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+        if let Some((p, e, t)) = m.atom_pfx_excl(a) {
+            let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+            format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
             let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
             let e = u128::from_str_radix(h, 16).unwrap_or(0);
             let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
@@ -1723,7 +1726,10 @@ fn keyread_fn(names: &[&str], name: &str, file: &str) -> bool {
 fn key_dec(m: &Model, a: Atom) -> String {
     let s = &m.atoms[a as usize];
     let esc = |t: &str| t.chars().take(60).map(|c| if (c as u32) < 32 || c == ' ' { format!("\\x{:02x}", c as u32) } else { c.to_string() }).collect::<String>();
-    if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+    if let Some((p, e, t)) = m.atom_pfx_excl(a) {
+        let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
+        format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
         let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
         let e = u128::from_str_radix(h, 16).unwrap_or(0);
         let cs: String = (0..128u32).filter(|b| e >> b & 1 == 1).map(|b| esc(&char::from_u32(b).unwrap().to_string())).collect();
@@ -1919,7 +1925,7 @@ impl Model {
             s => {
                 let ok = self.str_atoms(s).iter().all(|&a| {
                     let t = &self.atoms[a as usize];
-                    if t.starts_with(crate::solve::strs::EXCL_MARK) {
+                    if t.starts_with(crate::solve::strs::EXCL_MARK) || t.starts_with(crate::solve::strs::PFXEXCL_MARK) {
                         true
                     } else if t.starts_with(crate::solve::strs::PREFIX_MARK)
                         || t.starts_with(crate::solve::strs::INFIX_MARK)
