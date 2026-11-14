@@ -2239,6 +2239,11 @@ impl Model {
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
+                if self.keysnap.is_some() {
+                    if let Some(&c) = calls.first() {
+                        self.keysnap_note(c, t, origin);
+                    }
+                }
                 self.escape(origin, r);
             }
             TokKind::Func(f, _) => {

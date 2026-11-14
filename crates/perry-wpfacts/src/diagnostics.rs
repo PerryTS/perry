@@ -1748,6 +1748,11 @@ pub struct KeySnap {
     call_pos: FxHashMap<NodeId, (String, u32)>,
     at_hold: bool,
     at_esc: bool,
+    /// KEYSNAP2: module files, the `name`/`uuid` loads of GLTFLoader's
+    /// chain functions, the last unknown-callee call before the hold.
+    mod_file: Vec<String>,
+    loads: Vec<(String, u32, String, NodeId)>,
+    unk: Option<(CallId, Tok, Tok)>,
 }
 
 pub(crate) fn keysnap_plan(g: &mut Gen) {
@@ -1761,6 +1766,8 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
         let file = file_of(f.module);
         if keyread_fn(KEYREAD_NAMES, &f.name, &file)
             || (file.ends_with("three.core.js") && f.name.contains("_setValue"))
+            || f.name == "generateUUID"
+            || f.name.ends_with("createUniqueName")
         {
             want[i] = true;
             fn_file.insert(i as u32, file);
@@ -1783,7 +1790,16 @@ pub(crate) fn keysnap_plan(g: &mut Gen) {
     for &(mi, off, r) in &g.call_results_at {
         call_pos.insert(r, (file_of(mi), off));
     }
-    g.m.keysnap = Some(Box::new(KeySnap { nodes, fn_file, call_pos, at_hold: false, at_esc: false }));
+    let mod_file: Vec<String> = (0..g.modules.len() as u32).map(file_of).collect();
+    let mut loads = Vec::new();
+    for &(mi, off, a, dst) in &g.load_sites {
+        let k = g.m.atoms[a as usize].to_string();
+        let file = file_of(mi);
+        if is(dst) && file.ends_with("GLTFLoader.js") && (k == "name" || k == "uuid") {
+            loads.push((file, off, k, dst));
+        }
+    }
+    g.m.keysnap = Some(Box::new(KeySnap { nodes, fn_file, call_pos, at_hold: false, at_esc: false, mod_file, loads, unk: None }));
 }
 
 impl Model {
@@ -1840,7 +1856,197 @@ impl Model {
                 nd.prim, nd.pts.contains_tok(TOP), toks.len(), first.join(", ")
             );
         }
+        self.keysnap2(&ks);
         eprintln!("KS end");
         self.keysnap = Some(ks);
+    }
+}
+
+impl Model {
+    /// KEYSNAP2: the last call whose callee is an unknown function value
+    /// (its receiver escapes next).
+    pub(crate) fn keysnap_note(&mut self, call: CallId, callee: Tok, recv: Tok) {
+        if let Some(ks) = self.keysnap.as_mut() {
+            ks.unk = Some((call, callee, recv));
+        }
+    }
+
+    fn ks2_kind(&self, t: Tok) -> String {
+        let k: String = format!("{:?}", self.toks[t as usize]).chars().take(48).collect();
+        if crate::builtins::builtin_function(self, t) { format!("{k}[bfn]") } else { k }
+    }
+
+    fn ks2_fn(&self, ks: &KeySnap, f: FnIdx) -> String {
+        match self.funcs.get(f as usize) {
+            Some(fi) => format!("{}@{}", fi.name, ks.mod_file.get(fi.module as usize).map_or("?", |s| s.as_str())),
+            None => "-".into(),
+        }
+    }
+
+    fn ks2_strs(&self, n: NodeId) -> String {
+        match self.nodes[n as usize].strs {
+            0 => "-".to_string(),
+            STRS_TOP => "ANY".to_string(),
+            s => self.str_atoms(s).iter().take(24).map(|&a| key_dec(self, a)).collect::<Vec<_>>().join(" | "),
+        }
+    }
+
+    /// EXCL-OK: every string entry is an exclusion entry or a constant
+    /// without `. [ ] : /`; OPEN otherwise ("-": no strings).
+    fn ks2_verdict(&self, n: NodeId) -> &'static str {
+        match self.nodes[n as usize].strs {
+            0 => "-",
+            STRS_TOP => "OPEN",
+            s => {
+                let ok = self.str_atoms(s).iter().all(|&a| {
+                    let t = &self.atoms[a as usize];
+                    if t.starts_with(crate::solve::strs::EXCL_MARK) {
+                        true
+                    } else if t.starts_with(crate::solve::strs::PREFIX_MARK)
+                        || t.starts_with(crate::solve::strs::INFIX_MARK)
+                        || t.starts_with(crate::solve::strs::SUFFIX_MARK)
+                    {
+                        false
+                    } else {
+                        !t.chars().any(|c| matches!(c, '.' | '[' | ']' | ':' | '/'))
+                    }
+                });
+                if ok { "EXCL-OK" } else { "OPEN" }
+            }
+        }
+    }
+
+    fn ks2_node(&self, ks: &KeySnap, n: NodeId) -> String {
+        let nd = &self.nodes[n as usize];
+        let f = self.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+        let l = self.labels.get(n as usize).copied().unwrap_or("?");
+        let toks: Vec<Tok> = nd.pts.to_sorted();
+        let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+        for &t in &toks {
+            let k = self.ks2_kind(t);
+            let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string() + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+            *hist.entry(k).or_default() += 1;
+        }
+        let first: Vec<String> = toks.iter().take(16).map(|&t| format!("{t}:{}", self.ks2_kind(t))).collect();
+        format!(
+            "n{n} {} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={} toks=[{}]",
+            self.ks2_fn(ks, f), nd.prim, nd.pts.contains_tok(TOP), toks.len(), self.ks2_strs(n), first.join(", ")
+        )
+    }
+
+    fn keysnap2(&self, ks: &KeySnap) {
+        let name_a = self.atoms.iter().position(|s| &**s == "name").map(|a| a as Atom);
+        let want: crate::pts::FxHashSet<NodeId> = ks.loads.iter().map(|l| l.3).collect();
+        let uc = ks.unk.map(|u| u.0);
+        let mut recv_of: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+        let mut stores: Vec<(NodeId, NodeId, SiteId)> = Vec::new();
+        let mut callee: Vec<(NodeId, String)> = Vec::new();
+        for (n, nd) in self.nodes.iter().enumerate() {
+            let n = n as NodeId;
+            for c in nd.cons.iter() {
+                match c {
+                    Cons::Load { dst, .. } if want.contains(dst) => recv_of.entry(*dst).or_default().push(n),
+                    Cons::Store { key: Key::Named(a), src, site } if Some(*a) == name_a => stores.push((n, *src, *site)),
+                    Cons::Call { call } if Some(*call) == uc => callee.push((n, "Call".into())),
+                    Cons::New { call } | Cons::NewProgram { call } if Some(*call) == uc => callee.push((n, "New".into())),
+                    Cons::CallThis { call, this } if Some(*call) == uc => callee.push((n, format!("CallThis this={this}"))),
+                    Cons::MCall { key, call } if Some(*call) == uc => callee.push((n, format!("MCall(receiver) key={key:?}"))),
+                    _ => {}
+                }
+            }
+        }
+        // A1: the name/uuid loads and their field nodes.
+        let mut rset: crate::pts::FxHashSet<Tok> = crate::pts::FxHashSet::default();
+        for (file, off, k, dst) in &ks.loads {
+            eprintln!("KS2 load {file} {off} .{k} {}", self.ks2_node(ks, *dst));
+            for &r in recv_of.get(dst).map_or(&[][..], |v| v.as_slice()) {
+                eprintln!("KS2   recv {}", self.ks2_node(ks, r));
+                let toks = self.nodes[r as usize].pts.to_sorted();
+                let ka = self.atoms.iter().position(|s| &**s == k.as_str()).map(|a| a as Atom);
+                let mut seen: crate::pts::FxHashSet<NodeId> = crate::pts::FxHashSet::default();
+                for &t in &toks {
+                    if k == "name" {
+                        rset.insert(t);
+                    }
+                    if let Some(fnode) = ka.and_then(|a| self.fields.get(&(t, a)).copied()) {
+                        if seen.insert(fnode) && seen.len() <= 24 {
+                            eprintln!("KS2   field tok {t}:{} -> {}", self.ks2_kind(t), self.ks2_node(ks, fnode));
+                        }
+                    }
+                }
+                eprintln!("KS2   fields distinct={}", seen.len());
+            }
+        }
+        // A2: every `name` store whose receiver meets the `node.name` receivers.
+        let mut by_site: BTreeMap<SiteId, (NodeId, NodeId, usize)> = BTreeMap::new();
+        for &(s, v, site) in &stores {
+            let k = self.nodes[s as usize].pts.to_sorted().iter().filter(|t| rset.contains(t)).count();
+            if k > 0 {
+                by_site.entry(site).or_insert((s, v, k));
+            }
+        }
+        eprintln!("KS2 name-stores total={} meeting={} rset={}", stores.len(), by_site.len(), rset.len());
+        for (site, (s, v, k)) in &by_site {
+            let st = self.stores.get(*site as usize);
+            eprintln!(
+                "KS2 store site={site} {} desc={:?} common={k} verdict={} recv=n{s}",
+                st.map_or("-".into(), |st| self.ks2_fn(ks, st.func)),
+                st.map_or("", |st| st.desc.as_str()),
+                self.ks2_verdict(*v)
+            );
+            eprintln!("KS2   value {}", self.ks2_node(ks, *v));
+        }
+        // B1/B2: the unknown call.
+        if let Some((c, t, x)) = ks.unk {
+            if let Some(cs) = self.calls.get(c as usize) {
+                let pos = |r: NodeId| ks.call_pos.get(&r).map_or("? 0".to_string(), |p| format!("{} {}", p.0, p.1));
+                eprintln!(
+                    "KS2 call c{c} this={:?} nargs={} nspread={} ret=n{} at {} site={} region=n{} fn={}",
+                    cs.this, cs.args.len(), cs.spread.len(), cs.ret, pos(cs.ret), cs.site, cs.region,
+                    self.ks2_fn(ks, self.node_fn.get(cs.ret as usize).copied().unwrap_or(NO_FN))
+                );
+                let site_ret = self.calls.get(cs.site as usize).map(|s| s.ret);
+                if let Some(sr) = site_ret {
+                    eprintln!("KS2   site-call c{} ret=n{sr} at {} fn={}", cs.site, pos(sr), self.ks2_fn(ks, self.node_fn.get(sr as usize).copied().unwrap_or(NO_FN)));
+                }
+                eprintln!(
+                    "KS2   made_root={:?} keyed={:?} bound_synth={} protocol={} contract_new={} ctor={}",
+                    self.made_root.get(&c),
+                    self.solver_keyed.iter().filter(|(_, v)| v.0 == c).map(|(k, _)| *k).take(3).collect::<Vec<_>>(),
+                    self.bound_synth.contains(&c), self.protocol_calls.contains(&c), self.contract_new.contains(&c), self.ctor_calls.contains(&c)
+                );
+                if let ThisArg::Node(tn) = cs.this {
+                    eprintln!("KS2   this {}", self.ks2_node(ks, tn));
+                }
+                for &a in cs.args.iter().take(4) {
+                    eprintln!("KS2   arg {}", self.ks2_node(ks, a));
+                }
+            }
+            eprintln!("KS2 callee tok {t} {} name={}", self.ks2_kind(t), self.callee_name(t));
+            eprintln!("KS2 recv tok {x} {} name={}", self.ks2_kind(x), self.tok_name(x));
+            if let TokKind::Obj(tm, ctx) = self.toks[x as usize] {
+                if let Some(tp) = self.tmpls.get(tm as usize) {
+                    eprintln!("KS2 tmpl {tm} ctx={ctx} display={:?} kind={:?}", tp.display, tp.kind);
+                }
+            }
+            for (n, how) in &callee {
+                eprintln!("KS2 callee-node {how} {}", self.ks2_node(ks, *n));
+            }
+            let cn: crate::pts::FxHashSet<NodeId> = callee.iter().map(|c| c.0).collect();
+            let mut k = 0;
+            for (n, nd) in self.nodes.iter().enumerate() {
+                for c in nd.cons.iter() {
+                    if let Cons::Load { key, dst } = c {
+                        if cn.contains(dst) && k < 8 {
+                            k += 1;
+                            let kk = match key { Key::Named(a) => self.atoms[*a as usize].to_string(), Key::Any(_) => "any".into() };
+                            eprintln!("KS2 callee-from n{dst} <- load .{kk} recv {}", self.ks2_node(ks, n as NodeId));
+                        }
+                    }
+                }
+            }
+        } else {
+            eprintln!("KS2 call none (no unknown-callee call noted)");
+        }
     }
 }

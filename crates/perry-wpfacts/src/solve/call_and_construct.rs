@@ -82,6 +82,9 @@ impl Model {
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
+                if self.keysnap.is_some() {
+                    self.keysnap_note(call, t, x);
+                }
                 self.escape(x, r);
             }
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
