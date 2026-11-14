@@ -725,3 +725,89 @@ console.log(first.join(","));
         "0,1,2,3"
     );
 }
+
+// A closure is a `{funcIdx, captures}` record on the host side: `typeof` still answers
+// "function", and a call through an object property runs it. A plain object with the
+// same keys stays an object.
+#[test]
+fn a_closure_used_as_a_value_is_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = () => 1;
+function named(): number { return 2; }
+console.log(typeof f + " " + typeof (() => 1) + " " + typeof named);
+const o: any = {}; o.h = f;
+console.log(typeof o.h + " " + o.h() + " " + ({ g(n: number) { return n + 1; } }).g(41));
+const fake: any = { funcIdx: 0, captures: [] };
+console.log(typeof fake);
+"#
+        ),
+        "function function function\nfunction 1 42\nobject"
+    );
+}
+
+#[test]
+fn an_async_body_calls_a_closure_held_by_an_object() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() { console.log(typeof o.h + " " + o.h(21)); }
+main();
+"#
+        ),
+        "function 42"
+    );
+}
+
+// An async body runs as JS: a closure held in a local is a NaN-boxed handle there, so
+// calling it must go through closure dispatch, not a direct JS call on the number.
+#[test]
+fn an_async_body_calls_a_closure_held_in_a_local() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() {
+  const f = o.h;
+  if (typeof f === "function") console.log(f(21));
+  const m: any = Math.max;
+  console.log(m(3, 7));
+  const t = o.t;
+  t();
+}
+o.t = () => { throw new Error("boom"); };
+main().catch((e: any) => console.log("caught " + e.message));
+"#
+        ),
+        "42\n7\ncaught boom"
+    );
+}
+
+#[test]
+fn an_arrow_function_reads_the_this_it_was_created_with() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class B {
+  children: any;
+  n = 1;
+  add = (c: any) => { this.children = c; };
+  nested = () => { const f = () => this.n * 10; return f(); };
+  later() { return () => this.n + 1; }
+}
+const b = new B();
+b.add([7]);
+const detached = b.add;
+console.log(b.children[0]);
+detached("d");
+console.log(b.children);
+console.log(b.nested());
+const f = b.later();
+console.log(f());
+"#
+        ),
+        "7\nd\n10\n2"
+    );
+}

@@ -14,6 +14,7 @@ impl<'a> FuncEmitCtx<'a> {
                 body,
                 captures,
                 mutable_captures,
+                captures_this,
                 ..
             } => {
                 // Compile closure body as a function (it was already registered if it's in module.functions)
@@ -31,17 +32,23 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
                     self.emit_memcall(func, "closure_new", 2);
-                    // Set captures
-                    for (i, cap_id) in captures.iter().chain(mutable_captures.iter()).enumerate() {
+                    // Set captures; the captured `this` follows them (see compile_closure).
+                    let cap_ids = captures.iter().chain(mutable_captures.iter()).map(Some);
+                    let this_cap = captures_this.then_some(None);
+                    for (i, cap_id) in cap_ids.chain(this_cap).enumerate() {
                         // Duplicate closure handle (it's returned by closure_new)
                         // closure_set_capture(handle, idx, value) -> handle (chaining)
                         func.instruction(&f64_const(i as f64));
                         func.instruction(&Instruction::I64ReinterpretF64);
-                        if let Some(&local_idx) = self.local_map.get(cap_id) {
-                            func.instruction(&Instruction::LocalGet(local_idx));
-                        } else {
-                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                        }
+                        match cap_id.map(|id| self.local_map.get(id)) {
+                            None => func.instruction(&Instruction::LocalGet(self.this_local)),
+                            Some(Some(&local_idx)) => {
+                                func.instruction(&Instruction::LocalGet(local_idx))
+                            }
+                            Some(None) => {
+                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64))
+                            }
+                        };
                         self.emit_frame_begin(func, 3);
                         func.instruction(&Instruction::LocalSet(self.temp_local));
                         self.emit_slot_addr(func, 2);
@@ -322,8 +329,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "new_dynamic", (args.len() + 1) as u32);
             }
             Expr::This => {
-                // 'this' is passed as first parameter (local 0) in methods
-                func.instruction(&Instruction::LocalGet(0));
+                func.instruction(&Instruction::LocalGet(self.this_local));
             }
             Expr::SuperCall(args) => {
                 // Call parent constructor: super(args)

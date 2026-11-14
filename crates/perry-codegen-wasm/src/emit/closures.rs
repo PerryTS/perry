@@ -4,11 +4,19 @@ use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId};
 use perry_hir::walker::walk_expr_children;
 
+/// A closure's function id, params, body, captures, mutable captures, and whether
+/// it captures the enclosing `this` (an arrow function's lexical `this`).
+pub(super) type CollectedClosure = (
+    FuncId,
+    Vec<Param>,
+    Vec<Stmt>,
+    Vec<LocalId>,
+    Vec<LocalId>,
+    bool,
+);
+
 /// Recursively collect all Expr::Closure nodes from statements
-pub(super) fn collect_closures_from_stmts(
-    stmts: &[Stmt],
-    out: &mut Vec<(FuncId, Vec<Param>, Vec<Stmt>, Vec<LocalId>, Vec<LocalId>)>,
-) {
+pub(super) fn collect_closures_from_stmts(stmts: &[Stmt], out: &mut Vec<CollectedClosure>) {
     for stmt in stmts {
         match stmt {
             Stmt::Let { init, .. } => {
@@ -89,16 +97,14 @@ pub(super) fn collect_closures_from_stmts(
 
 /// Collect every `Expr::Closure` under `expr`. Descends through `walk_expr_children`,
 /// so a closure under any variant is registered; an unregistered one emits `undefined`.
-pub(super) fn collect_closures_from_expr(
-    expr: &Expr,
-    out: &mut Vec<(FuncId, Vec<Param>, Vec<Stmt>, Vec<LocalId>, Vec<LocalId>)>,
-) {
+pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClosure>) {
     if let Expr::Closure {
         func_id,
         params,
         body,
         captures,
         mutable_captures,
+        captures_this,
         ..
     } = expr
     {
@@ -108,6 +114,7 @@ pub(super) fn collect_closures_from_expr(
             body.clone(),
             captures.clone(),
             mutable_captures.clone(),
+            *captures_this,
         ));
     }
     // A closure's children are its parameter defaults; its body is statements.
