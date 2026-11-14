@@ -247,10 +247,11 @@ pub(crate) fn cluster_default_value() -> f64 {
         "cluster.default".len(),
     ));
     // The export declaration owns EventEmitter and its statics (no events
-    // attach hook is installed by a cluster-only program).
-    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
-        "EventEmitter",
-    ));
+    // attach hook is installed by a cluster-only program); it is read through
+    // the slot the events install fills (`js_nm_install_cluster` runs it).
+    let event_emitter = scope.root_nanbox_f64(
+        crate::stream_hooks::event_emitter_constructor_value("EventEmitter"),
+    );
     if let Some(event_emitter_proto) =
         crate::object::ordinary_function_prototype_value_for_read(event_emitter.get_nanbox_f64())
     {
@@ -757,8 +758,9 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     // The export declaration owns EventEmitter and its statics (no events
-    // attach hook is installed by a cluster-only program).
-    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
+    // attach hook is installed by a cluster-only program); it is read through
+    // the slot the events install fills (`js_nm_install_cluster` runs it).
+    let event_emitter = crate::stream_hooks::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
