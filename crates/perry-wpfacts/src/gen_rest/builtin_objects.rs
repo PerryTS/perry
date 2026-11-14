@@ -104,29 +104,9 @@ impl<'a> Gen<'a> {
                 // (`Cons::DefineAll`); any other map's own values are these
                 // descriptors, defined under a computed key.
                 let descs = self.tmp("own-descriptors");
-                let [value, dget, dset] = self.descriptor_reads(descs);
+                let reads = self.descriptor_reads(descs);
                 let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-                let star = self.m.atom(crate::STAR_KEY);
-                for (f, setter) in [(dget, false), (dset, true)] {
-                    self.m.cons(
-                        f,
-                        Cons::Accessor {
-                            holder: on,
-                            key: star,
-                            setter,
-                        },
-                    );
-                }
-                self.m.cons(
-                    pn,
-                    Cons::DefineAll {
-                        o: on,
-                        descs,
-                        value,
-                        site,
-                        reason: r,
-                    },
-                );
+                crate::builtins::object_statics::define_all(&mut self.m, on, pn, descs, reads, site, r);
                 on
             }
             Expr::ObjectGetOwnPropertyDescriptor(o, k)
@@ -147,7 +127,6 @@ impl<'a> Gen<'a> {
             Expr::ObjectCreate(proto, props) => {
                 let p = self.expr(fx, proto);
                 let r = self.m.reason("E10 Object.create");
-                self.m.cons(p, Cons::CreateProto { reason: r });
                 let site = self.next_site(mi);
                 let tm = self.m.tmpls.len() as TmplId;
                 self.m.tmpls.push(Template {
@@ -177,8 +156,7 @@ impl<'a> Gen<'a> {
                     static_methods: Vec::new(),
                 });
                 let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
-                let pn = self.m.proto_node(t);
-                self.m.edge(p, pn);
+                crate::builtins::object_statics::create_proto(&mut self.m, p, t, r);
                 let n = self.tok_node(t);
                 if let Some(props) = props {
                     let pv = self.expr(fx, props);
@@ -226,14 +204,7 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let pn = self.expr(fx, p);
                 let r = self.m.reason("E6 Object.setPrototypeOf");
-                self.m.cons(
-                    on,
-                    Cons::Hard {
-                        kind: Hard::E6SetPrototypeOf,
-                        reason: r,
-                    },
-                );
-                self.m.cons(on, Cons::ProtoFrom { src: pn });
+                crate::builtins::object_statics::set_prototype_of(&mut self.m, on, pn, r);
                 // ECMA-262 20.1.2.23 step 5: Object.setPrototypeOf returns O
                 // itself; 28.1.13 step 4: Reflect.setPrototypeOf returns the
                 // Boolean of O.[[SetPrototypeOf]](proto), never O.

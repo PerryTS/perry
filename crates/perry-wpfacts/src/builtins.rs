@@ -2042,6 +2042,7 @@ fn any_written(m: &mut Model, dst: NodeId) {
 
 mod accessor_lookup;
 mod methods;
+pub(crate) mod object_statics;
 pub(crate) use accessor_lookup::{
     annexb_lookup, is_realm_accessor, lookup_native_descriptor, realm_accessor_call,
 };
@@ -2436,6 +2437,10 @@ fn ns_method_inner(
             true,
         );
     };
+    // VALUE-CALL-MODELS: the eight Object statics run the direct call's steps.
+    if object_statics::value_call(m, ns, name, call) {
+        return;
+    }
     match (ns, name) {
         (BuiltinNs::Other | BuiltinNs::Console, n)
             if host_of(ns, n, true) == Some(BuiltinNs::Console) =>
@@ -2607,8 +2612,9 @@ fn ns_method_inner(
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible" | "hasOwn") => {
             ret_prim(m, call, prim::BOOL);
         }
-        // Neither reads the this value (ECMA-262 20.1.2.2, 20.1.2.23,
-        // 28.1.13): called as a value on any receiver, it is given to no one.
+        // Only a call with a spread argument (`object_statics::value_call`
+        // models every other). Neither reads the this value (ECMA-262
+        // 20.1.2.2, 20.1.2.23, 28.1.13): it is given to no one.
         (BuiltinNs::Object, "create") => unknown_method_at(
             m,
             call,

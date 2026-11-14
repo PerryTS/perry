@@ -276,6 +276,7 @@ mod numeric_key_names;
 mod index_key_read;
 mod proto_key_read;
 mod spread_root;
+mod builtin_value_call;
 mod typed_array_key_read;
 mod unheld_key;
 mod unit_alias;

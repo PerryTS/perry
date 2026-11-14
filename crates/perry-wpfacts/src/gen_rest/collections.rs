@@ -180,11 +180,9 @@ impl<'a> Gen<'a> {
                 let it = self.iterate(v);
                 // Each entry's key and value: its `"0"` and `"1"` (a
                 // [[Get]] under a number key), not every member of its chain.
-                let num = Key::Named(self.m.atom(crate::model::NUM_KEY));
-                let inner = self.load(it, num);
+                let inner = self.tmp("load");
                 let (t, n) = self.bobj(mi, "fromEntries");
-                let fa = self.m.field_any(t);
-                self.m.edge(inner, fa);
+                crate::builtins::object_statics::from_entries(&mut self.m, it, inner, t);
                 n
             }
             Expr::ObjectValues(x) => {
@@ -205,14 +203,6 @@ impl<'a> Gen<'a> {
                 let f = self.expr(fx, key_fn);
                 let num = self.prim_node(prim::NUM);
                 let k = self.callback(f, vec![it, num]);
-                let why = self.m.reason("groupBy key");
-                self.m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
                 let group = self.new_arr_from(mi, "group", &[it]);
                 // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
                 // a Map (`members::box_chain`).
@@ -222,9 +212,7 @@ impl<'a> Gen<'a> {
                     "groups"
                 };
                 let (t, n) = self.bobj(mi, kind);
-                let fa = self.m.field_any(t);
-                self.m.edge(group, fa);
-                self.m.edge(k, fa);
+                crate::builtins::object_statics::group_by(&mut self.m, k, group, t);
                 n
             }
             Expr::ArrayFrom(x, _) => {
