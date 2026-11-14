@@ -204,6 +204,14 @@ pub enum Verdict {
     /// 10.1.8.1) finds the key as an own data property, one of the values
     /// stored under it, or reaches the chain's end and gives `undefined`.
     OwnDataOrAbsent,
+    /// A member read or method call whose receiver node holds only
+    /// `undefined` and/or `null` (no object token but closed markers, no ⊤,
+    /// no other primitive) and left no value out (`dropped`): evaluating the
+    /// member access evaluates its base, then GetValue's ToObject throws a
+    /// TypeError before any property lookup (ECMA-262 13.3.2.1, 6.2.5.5,
+    /// 7.1.18; for a call 13.3.6.1 throws before the arguments are
+    /// evaluated). The site runs (unlike Dead) and names no slot or body.
+    Throws,
     /// A value call whose callee set is exactly one builtin function object
     /// (one `BuiltinFn` token, nothing else, no ⊤, no primitive): the call
     /// is that intrinsic's [[Call]] (ECMA-262 7.3.13 Call, 10.3.1). A program
@@ -1307,11 +1315,11 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
-        // A claim naming the TypeError arm of a nullish receiver
-        // (`nullish_arms`) needs every value of the sources too.
+        // Throws and a claim naming the TypeError arm of a nullish receiver
+        // (`nullish_arms`) need every value of the sources too.
         let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
-        if nullish
-            && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)
+        if (verdict == Verdict::Throws
+            || (nullish && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)))
             && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
         {
             verdict = Verdict::No("primitive receiver (a source left a value out)".into());
@@ -1802,6 +1810,10 @@ fn judge(
         verdict.get_or_insert(Verdict::Dead);
     }
     if none && prim != 0 {
+        use crate::model::prim::{NULL, UNDEF};
+        if prim & !(NULL | UNDEF) == 0 {
+            verdict.get_or_insert(Verdict::Throws);
+        }
         verdict.get_or_insert(Verdict::No("primitive receiver".into()));
     }
     let mut targets = FxHashMap::default();
