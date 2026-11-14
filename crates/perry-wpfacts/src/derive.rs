@@ -1950,6 +1950,14 @@ fn host_member(
     if !native {
         return Some(Err("host member undescribed or written".into()));
     }
+    // Unknown code holds the realm (9.3, `realm_held`): a host object's
+    // members are writable, and the solve does not replay unknown code's
+    // replacement of one (`realm_hold_tok`), as for `Verdict::IntrinsicCall`.
+    if m.realm_held {
+        return Some(Err(
+            "host member: unknown code holds the realm and may replace the member".into(),
+        ));
+    }
     receivers.sort();
     receivers.dedup();
     Some(Ok(receivers))
@@ -1997,6 +2005,15 @@ fn builtin_protos_unwritten(
     if fam.is_some() && !locked && m.interp_runs {
         return Err(
             "native member: interpreted code may write the key onto a builtin prototype".into(),
+        );
+    }
+    // Unknown code holds the realm (9.3, `realm_held`): it may replace a
+    // builtin prototype's member that the runtime lets a store replace, a
+    // write the solve does not replay (`realm_hold_tok`). Only a final read
+    // survives it, as for `Verdict::IntrinsicCall`.
+    if fam.is_some() && !locked && m.realm_held {
+        return Err(
+            "native member: unknown code holds the realm and may replace the member".into(),
         );
     }
     let (through_top, own) = match objproto {
