@@ -1146,6 +1146,22 @@ pub const METHOD_SITE_BY_NAME_DIRECT: u64 = 0x7FFC_0000_0000_0012;
 const _: () = assert!(METHOD_SITE_BY_NAME | 2 == METHOD_SITE_BY_NAME_DIRECT);
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;
+/// `object::ObjectMeta::flags`.
+pub const OBJECT_META_FLAGS_OFFSET: usize = 24;
+/// `object::ObjectMeta::overflow` (the object's overflow table, 0 = none).
+pub const OBJECT_META_OVERFLOW_OFFSET: usize = 120;
+/// The one-bit state flags of `ObjectMeta::flags` (prototype role, exotic
+/// read receiver, native alias, sealed intrinsic, ...): an object with all of
+/// them clear is a plain holder of its own properties.
+pub const OBJECT_META_STATE_FLAGS: u64 = 0xFF;
+/// `object::overflow::Table::summary` (a `u32`): the OR of every entry's
+/// attribute summary ever recorded.
+pub const OVERFLOW_TABLE_SUMMARY_OFFSET: usize = 20;
+/// The summary bits (`key_attrs::SUMMARY_ACCESSOR | SUMMARY_NON_WRITABLE |
+/// SUMMARY_PRIVATE`) that must be clear for "every entry of this table is a
+/// plain writable data property": then an own key's present fixed slot may be
+/// overwritten in place.
+pub const OVERFLOW_SUMMARY_BLOCKS_PLAIN_STORE: u32 = 0x13;
 
 /// `closure::CAPTURES_THIS_FLAG` / `closure::NO_THIS_REBIND_FLAG`, the high
 /// bits of `ClosureHeader::capture_count`. A closure with the first and not

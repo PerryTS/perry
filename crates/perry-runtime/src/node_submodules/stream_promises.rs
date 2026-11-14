@@ -42,9 +42,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & crate::value::POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 
@@ -500,7 +497,6 @@ fn is_invalid_pipeline_body(value: f64) -> bool {
         || jsval.is_null()
         || jsval.is_bool()
         || jsval.is_number()
-        || jsval.is_int32()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }

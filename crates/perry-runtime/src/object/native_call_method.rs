@@ -45,6 +45,7 @@ mod typed_array;
 mod vtable_guard_scan_tests;
 
 use crate::object::native_module::is_namespace_inherited_method;
+pub(super) use crate::typedarray_hook_slots::dispatch_typed_array_method;
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
 };
@@ -67,7 +68,7 @@ pub(crate) use proto_dispatch::{
     is_self_redispatching_proto_method, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
-pub(super) use typed_array::dispatch_typed_array_method;
+pub(crate) use typed_array::typed_array_method_tower;
 
 /// The receiver predicate of a class instance's fast method call
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled
@@ -516,9 +517,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
 /// async-loop shape) and a NaN-boxed INT32 (the i32 loop-counter lowering).
 #[inline]
 fn numeric_index_key(key: JSValue) -> Option<f64> {
-    if key.is_int32() {
-        return Some(key.as_int32() as f64);
-    }
     // `is_number` accepts every non-Perry-tagged bit pattern, NaN included; a
     // NaN key is not an index and would only make the polymorphic read return
     // `undefined`, so screen it out here rather than paying for the probe.
@@ -594,8 +592,12 @@ unsafe fn native_call_method_value_inner(
     // a numerically-named vtable method (`class C { 3() {} }`) keeps working.
     if !is_symbol_key {
         if let Some(index) = numeric_index_key(key_jsval) {
+            // The index entry takes a receiver HANDLE (clear top 16 bits =
+            // a raw pointer); a Number receiver with that shape is handed
+            // over as a Number the entry cannot read as an address.
+            let receiver = crate::value::addr_class::number_receiver_for_dispatch(object);
             let field =
-                crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
+                crate::object::js_object_get_index_polymorphic(receiver.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
             // An undefined answer may still name a numerically-named vtable
             // method below; an array has none, so its element read is the
@@ -833,12 +835,9 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
     } else {
-        let bits = value.to_bits();
-        if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            bits as *const u8
-        } else {
-            return None;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return None;
     };
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -1538,8 +1537,6 @@ pub(crate) unsafe fn native_call_method_tower(
     {
         let raw_addr = if jsval().is_pointer() {
             crate::value::js_nanbox_get_pointer(object()) as usize
-        } else if (object().to_bits() >> 48) == 0 {
-            object().to_bits() as usize
         } else {
             0
         };
@@ -2249,7 +2246,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // any more. See `bare_receiver`.
     let primitive_kind: Option<&'static str> = if jsval().is_any_string() {
         Some("string")
-    } else if jsval().is_int32() || jsval().is_number() {
+    } else if jsval().is_number() {
         Some("number")
     } else if jsval().is_bool() {
         Some("boolean")

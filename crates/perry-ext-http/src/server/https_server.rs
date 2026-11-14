@@ -475,8 +475,11 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
                 let raw = addr as *const RawClosureHeader;
                 let closure = JsClosure::from_raw(raw);
                 if !closure.is_null() {
-                    let _ =
-                        closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                    let _ = closure.call2(
+                        perry_ffi::JsThis::from_f64(server_this),
+                        req_f64,
+                        res_root.get(),
+                    );
                 }
                 js_promise_run_microtasks();
             }
@@ -490,7 +493,11 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
             let raw = handler_rooted.get() as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }
@@ -504,7 +511,11 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
             let raw = addr as *const RawClosureHeader;
             let closure = JsClosure::from_raw(raw);
             if !closure.is_null() {
-                let _ = closure.call2(perry_ffi::JsThis::from_f64(server_this), req_f64, res_root.get());
+                let _ = closure.call2(
+                    perry_ffi::JsThis::from_f64(server_this),
+                    req_f64,
+                    res_root.get(),
+                );
             }
             js_promise_run_microtasks();
         }
@@ -515,7 +526,7 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
     // synthesizing a premature empty response and freeing the handles out
     // from under the pending work.
     pending.response = res_root.get();
-        crate::server::server::finalize_or_park_request(&pending);
+    crate::server::server::finalize_or_park_request(&pending);
 }
 
 /// `httpsServer.address()` mirroring `http.Server.address()`.

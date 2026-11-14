@@ -326,6 +326,8 @@ pub(crate) mod census;
 mod census_field_repr;
 mod heap_snapshot;
 mod heap_stats;
+#[cfg(perry_gc_instruments)]
+pub(crate) mod life_why;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
@@ -1918,5 +1920,6 @@ pub(crate) use roots::for_each_global_root_slot;
 /// end of a turn that has old samples (`wpfacts_check/life_measure.rs`).
 #[cfg(perry_gc_instruments)]
 pub(crate) fn life_collect_full() {
-    let _ = gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
 }

@@ -44,9 +44,9 @@ pub(crate) mod field_base;
 #[cfg(test)]
 mod field_base_tests;
 pub(crate) mod fn_base;
-mod held_len;
 #[cfg(test)]
 mod fn_base_tests;
+mod held_len;
 mod if_stmt;
 pub(crate) mod indexed_owner_loop;
 mod let_buffer_views;
@@ -57,11 +57,11 @@ mod let_stmt_facts;
 #[cfg(test)]
 mod let_stmt_var_redeclare_tests;
 mod loops;
-pub(crate) use loops::bounded_poll;
-pub(crate) use loops::this_field_fast_off;
 pub(crate) use crate::expr::index_get::descriptor_read;
 pub(crate) use crate::expr::index_get::descriptor_read::scoped as cold_scoped;
+pub(crate) use loops::bounded_poll;
 pub(crate) use loops::create_poll_refreshed_receiver_cache;
+pub(crate) use loops::this_field_fast_off;
 mod masked_window_region;
 mod number_local_loop;
 pub(crate) use number_local_loop::numeric_callbacks;
@@ -699,12 +699,12 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             // larger append reserve (`collectors::loop_pushed_arrays`). The
             // flag is taken by that birth; clear it if another path bound
             // the value without one.
-            ctx.pushed_array_birth =
-                if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty()) {
-                    crate::expr::inline_birth::list_slots(ctx, *id)
-                } else {
-                    0
-                };
+            ctx.pushed_array_birth = if matches!(init, Some(perry_hir::Expr::Array(elems, _)) if elems.is_empty())
+            {
+                crate::expr::inline_birth::list_slots(ctx, *id)
+            } else {
+                0
+            };
             let snap_frame = crate::expr::snap_env_site::enter_let(ctx, *id, init.as_ref());
             let lowered = lower_let(ctx, *id, name, init.as_ref(), ty, *mutable);
             ctx.snap_lowering = snap_frame;
@@ -911,7 +911,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(_c, b, d)| (b.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled break '{}' outside any loop", label))?
                 };
-            let exit = ctx.loop_targets.iter().rposition(|(_c, b, _d)| *b == target);
+            let exit = ctx
+                .loop_targets
+                .iter()
+                .rposition(|(_c, b, _d)| *b == target);
             crate::verify_facts::life::at_exit(ctx, exit);
             // Pop any try frames escaped by this labeled break (the target
             // loop/label may sit outside one or more open `try` frames —
@@ -937,7 +940,10 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         .map(|(c, _b, d)| (c.clone(), *d))
                         .ok_or_else(|| anyhow!("labeled continue '{}' outside any loop", label))?
                 };
-            let exit = ctx.loop_targets.iter().rposition(|(c, _b, _d)| *c == target);
+            let exit = ctx
+                .loop_targets
+                .iter()
+                .rposition(|(c, _b, _d)| *c == target);
             crate::verify_facts::life::at_exit(ctx, exit);
             for _ in target_depth..ctx.try_depth {
                 try_stmt::emit_try_end(ctx);

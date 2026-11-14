@@ -1707,6 +1707,14 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 ret_tok(m, call, t);
             }
         }
+        // A view of the receiver's bytes: a Buffer, as the receiver is (not
+        // a container of primitives).
+        ("Buffer", Some("subarray" | "slice")) => typed_array_methods::buffer_view(m, t, call),
+        // The receiver, filled or byte-swapped in place.
+        ("Buffer", Some("fill" | "swap16" | "swap32" | "swap64")) => {
+            implicit_args(m, call, "buffer method argument", Protocol::Any);
+            ret_tok(m, call, t);
+        }
         // A `Buffer.prototype` method the runtime declares the effects of.
         ("Buffer", Some(n)) if effects::declared_at("Buffer.prototype", n).is_some() => {
             let e = effects::declared_at("Buffer.prototype", n).expect("declared");

@@ -251,7 +251,7 @@ fn setting_number<'a>(
         let n = f64::from_bits(raw.bits());
         // NaN-boxed tags are NaNs too; only the untagged bands are JS NaN.
         let is_js_nan = n.is_nan() && (raw.bits() >> 48) & 0x7FFF < 0x7FFA;
-        if !raw.is_int32() && (n.is_infinite() || is_js_nan) {
+        if n.is_infinite() || is_js_nan {
             return SettingNumber::NonFinite(n);
         }
     }
@@ -380,7 +380,7 @@ fn describe_received(value: JsValue) -> String {
         "Received undefined".to_string()
     } else if value.is_bool() {
         format!("Received type boolean ({})", value.to_bool())
-    } else if value.is_int32() || value.is_number() {
+    } else if value.is_number() {
         format!("Received type number ({})", fmt_number(value.to_number()))
     } else if value.is_short_string() {
         format!(

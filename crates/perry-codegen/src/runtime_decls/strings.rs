@@ -787,7 +787,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
         // Value records (DESIGN-p4l4 B7): the birth claim and the identity
         // witness of a compiled comparison.
-        module.declare_function("perry_verify_facts_record_claim", crate::types::VOID, &[DOUBLE]);
+        module.declare_function(
+            "perry_verify_facts_record_claim",
+            crate::types::VOID,
+            &[DOUBLE],
+        );
         module.declare_function(
             "perry_verify_facts_record_identity",
             I32,

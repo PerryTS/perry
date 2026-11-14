@@ -97,6 +97,7 @@ fn use_of(m: &Model, c: &Cons, reads: &FxHashSet<NodeId>) -> Option<String> {
         | Cons::NotNullish { .. }
         | Cons::NotUndefined { .. }
         | Cons::Falsy { .. }
+        | Cons::Objects { .. }
         | Cons::RetInto { .. }
         | Cons::ArgInto { .. }
         | Cons::Call { .. }

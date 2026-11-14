@@ -1449,6 +1449,12 @@ pub struct Model {
     /// that may be negative is claimed non-negative, a wrong claim the
     /// witness at the element site must catch.
     pub wide_key_sabotage: bool,
+    /// Booleans (`booleans`; `PERRY_FACTS_BOOLEANS=0` turns them off).
+    pub booleans: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=bools`): every binding and
+    /// field that may hold a Boolean is claimed to hold nothing else, a
+    /// wrong claim the witness at the truthiness test must catch.
+    pub booleans_sabotage: bool,
     /// Literal strings (`literal_strings`;
     /// `PERRY_FACTS_LITERAL_STRINGS=0` turns them off).
     pub literal_strings: bool,
@@ -1841,6 +1847,9 @@ pub struct Model {
     /// A hand-written built-in rule's positions hold what a spread
     /// argument supplies (`Model::positional`, `reach::spread_args`).
     pub reach_spread_args: bool,
+    /// An accessor installed on a built-in prototype is called by reads
+    /// and writes the solve does not walk (`reach::proto_accessors`).
+    pub reach_proto_accessors: bool,
     /// Shared prototype-chain value nodes: (token, key) → node.
     /// `true`: with the builtin prototypes' members; `false`: the program
     /// prototypes only (an own key shadows the builtin ones, DECISIONS 234).

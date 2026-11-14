@@ -35,9 +35,7 @@ fn as_str(v: f64) -> String {
 
 fn as_num(v: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
+    {
         assert!(
             jv.is_number(),
             "expected a number, got bits {:x}",
@@ -460,12 +458,7 @@ extern "C" fn host_double_thunk(
 }
 
 fn as_num_raw(v: f64) -> f64 {
-    let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    }
+    v
 }
 
 fn host_double_fn() -> f64 {

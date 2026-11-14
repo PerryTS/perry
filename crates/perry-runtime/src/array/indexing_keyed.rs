@@ -175,9 +175,7 @@ pub extern "C" fn js_array_get_index_or_string(arr: *const ArrayHeader, idx: f64
         return array_get_property_by_key(arr, key);
     }
 
-    let numeric = if crate::value::is_int32_bits(bits) {
-        Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
-    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
+    let numeric = if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
     } else {
         None
@@ -278,9 +276,7 @@ pub extern "C" fn js_array_set_index_or_string(
     // Treat numeric keys according to the array-index boundary. Only
     // integers in 0..2^32-2 extend element storage; 2^32-1 and larger are
     // ordinary string properties.
-    let numeric = if crate::value::is_int32_bits(bits) {
-        Some(crate::value::JSValue::from_bits(bits).as_int32() as f64)
-    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
+    let numeric = if !(0x7FF8..=0x7FFF).contains(&top16) {
         Some(idx)
     } else {
         None
@@ -449,9 +445,7 @@ fn canonical_index_of_set_key(idx: f64) -> Option<u32> {
         return crate::object::canonical_array_index(name);
     }
     // Numeric key.
-    let n = if crate::value::is_int32_bits(bits) {
-        crate::value::JSValue::from_bits(bits).as_int32() as f64
-    } else if !(0x7FF8..=0x7FFF).contains(&top16) {
+    let n = if !(0x7FF8..=0x7FFF).contains(&top16) {
         idx
     } else {
         return None;

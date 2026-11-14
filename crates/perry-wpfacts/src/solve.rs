@@ -228,7 +228,9 @@ impl Model {
             let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
-            node.pts = self.sets.retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
+            node.pts = self
+                .sets
+                .retain(old, |t| !escaped_beside_top(esc, pm, ab, t));
             if node.pts.len() != before {
                 node.dropped = true;
                 self.charge_work(before as u64);
@@ -293,6 +295,7 @@ impl Model {
                 | Cons::NotNullish { .. }
                 | Cons::Fulfil { .. }
                 | Cons::Falsy { .. }
+                | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::TopSink { .. }
                 | Cons::RuntimeStore { .. }
@@ -714,7 +717,11 @@ impl Model {
         self.nodes[n as usize].cons.push(c);
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
-            let seen = cs.iter().rev().take(4).any(|x| matches!(x, Cons::Raise { region: r } if *r == region));
+            let seen = cs
+                .iter()
+                .rev()
+                .take(4)
+                .any(|x| matches!(x, Cons::Raise { region: r } if *r == region));
             if !seen {
                 self.cons(n, Cons::Raise { region });
             }
@@ -1052,11 +1059,15 @@ impl Model {
             // lookup on it reaches what the program gave or stored up the
             // chain (`Object.setPrototypeOf(EventEmitter, p)` then
             // `Readable.apply`).
-            TokKind::BuiltinFn(Native::Member { identity, holder: None })
-                if crate::builtins::realm_parent_constructor(identity).is_some() =>
-            {
+            TokKind::BuiltinFn(Native::Member {
+                identity,
+                holder: None,
+            }) if crate::builtins::realm_parent_constructor(identity).is_some() => {
                 let parent = crate::builtins::realm_parent_constructor(identity).unwrap();
-                let p = self.tok(TokKind::BuiltinFn(Native::Member { identity: parent, holder: None }));
+                let p = self.tok(TokKind::BuiltinFn(Native::Member {
+                    identity: parent,
+                    holder: None,
+                }));
                 self.add_tok(n, p);
             }
             TokKind::Func(_, _)
@@ -1425,7 +1436,11 @@ impl Model {
     pub fn sink_node(&mut self, n: NodeId, reason: u32) {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            self.raise_top(region, n, "a native hands a value to unknown code, which may throw");
+            self.raise_top(
+                region,
+                n,
+                "a native hands a value to unknown code, which may throw",
+            );
         }
         if self.sunk_nodes.insert(n) {
             self.cons(n, Cons::TopSink { reason });
@@ -1685,6 +1700,7 @@ impl Model {
             Cons::Fulfil { dst } => format!("fulfil {n} {dst}"),
             Cons::Falsy { dst } => format!("falsy {n} {dst}"),
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
+            Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
                 "topifany {n} {dst} {from} {}",
                 reason.map_or(-1, |r| r as i64)

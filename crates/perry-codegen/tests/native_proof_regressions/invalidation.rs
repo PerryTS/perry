@@ -901,6 +901,12 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
     );
 }
 
+/// The loops below are compiled with the quiet-site facts the solve gives a
+/// local Array literal (`with_quiet_sites`): since #14537 a facts-less
+/// compile refuses every ordinary hoist, so without them these claims would
+/// hold whatever the walker does with the alias. With every site claimed
+/// quiet, the only reason left to drop the proof is the length change
+/// itself.
 fn assert_array_alias_blocks_loop_proof(ir: &str) {
     let cond_ir = block_between(ir, "\nfor.cond.", "\nfor.body.");
     assert!(
@@ -938,7 +944,7 @@ fn local_array_alias_push_blocks_length_and_bounds_proofs() {
         field_writeback: None,
     });
 
-    let ir = compile_ir("array_alias_push_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_push_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -946,7 +952,7 @@ fn local_array_alias_push_blocks_length_and_bounds_proofs() {
 fn local_array_alias_pop_blocks_length_and_bounds_proofs() {
     let body = aliased_array_loop(Expr::ArrayPop(2));
 
-    let ir = compile_ir("array_alias_pop_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_pop_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -959,7 +965,7 @@ fn local_array_alias_splice_blocks_length_and_bounds_proofs() {
         items: vec![int(1)],
     });
 
-    let ir = compile_ir("array_alias_splice_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_splice_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -973,7 +979,7 @@ fn local_array_alias_length_set_blocks_length_and_bounds_proofs() {
         byte_end: 0,
     });
 
-    let ir = compile_ir("array_alias_length_set_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_length_set_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1010,7 +1016,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_container_alias_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_container_alias_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1035,7 +1041,7 @@ fn direct_array_length_set_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_length_set_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_length_set_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1052,7 +1058,7 @@ fn non_mutating_array_alias_preserves_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_non_mutating_alias_keeps_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_non_mutating_alias_keeps_loop_proof.ts", body);
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
     assert!(
         !cond_ir.contains("plen."),
@@ -1079,7 +1085,7 @@ fn loop_length_effect_artifact_records_consumed_preservation_fact() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_loop_length_effect_preserves.ts", body.clone());
+    let ir = compile_ir_quiet("array_loop_length_effect_preserves.ts", body.clone());
     let cond_ir = block_between(&ir, "\nfor.cond.", "\nfor.body.");
     assert!(
         !cond_ir.contains("plen."),
@@ -1090,7 +1096,8 @@ fn loop_length_effect_artifact_records_consumed_preservation_fact() {
         "accepted length effect should keep bounded IndexSet facts:\n{ir}"
     );
 
-    let artifact = compile_artifact_json("artifact_array_loop_length_effect_preserves.ts", body);
+    let artifact =
+        compile_artifact_json_quiet("artifact_array_loop_length_effect_preserves.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -1122,7 +1129,7 @@ fn async_microtask_effect_blocks_length_and_bounds_proofs_with_artifact_reason()
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_await_blocks_loop_proof.ts", body.clone());
+    let ir = compile_ir_quiet("array_await_blocks_loop_proof.ts", body.clone());
     assert_array_alias_blocks_loop_proof(&ir);
 
     let artifact = compile_artifact_json("artifact_array_await_blocks_loop_proof.ts", body);
@@ -1154,7 +1161,7 @@ fn local_array_alias_generic_receiver_call_blocks_length_and_bounds_proofs() {
         vec![int(1)],
     ));
 
-    let ir = compile_ir("array_alias_generic_call_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_alias_generic_call_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1174,7 +1181,11 @@ fn generic_call_blocks_length_and_bounds_proofs_even_without_direct_array_arg() 
     ];
     let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
 
-    let ir = compile_ir_with_opts("array_unknown_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_unknown_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1198,7 +1209,11 @@ fn nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
-    let ir = compile_ir_with_opts("array_nested_escape_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_nested_escape_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1222,7 +1237,11 @@ fn object_nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
-    let ir = compile_ir_with_opts("array_object_escape_call_blocks_loop_proof.ts", body, opts);
+    let ir = compile_ir_with_opts(
+        "array_object_escape_call_blocks_loop_proof.ts",
+        body,
+        with_quiet_sites(opts),
+    );
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1241,7 +1260,7 @@ fn native_method_call_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("array_native_call_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("array_native_call_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 
@@ -1265,7 +1284,7 @@ fn loop_local_array_alias_blocks_length_and_bounds_proofs() {
         Stmt::Return(Some(int(0))),
     ];
 
-    let ir = compile_ir("loop_local_array_alias_blocks_loop_proof.ts", body);
+    let ir = compile_ir_quiet("loop_local_array_alias_blocks_loop_proof.ts", body);
     assert_array_alias_blocks_loop_proof(&ir);
 }
 

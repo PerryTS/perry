@@ -73,7 +73,12 @@ fn every_collecting_call_clears_the_cold_arm_valid_slot_first() {
         let clear = text
             .find("store i8 0, ptr %cold_valid")
             .unwrap_or_else(|| panic!("{callee} leaves the cold-arm proof valid: {text}"));
-        let call = text.find(&format!("@{callee}(")).expect("the call is emitted");
-        assert!(clear < call, "{callee}: the clear must precede the call: {text}");
+        let call = text
+            .find(&format!("@{callee}("))
+            .expect("the call is emitted");
+        assert!(
+            clear < call,
+            "{callee}: the clear must precede the call: {text}"
+        );
     }
 }

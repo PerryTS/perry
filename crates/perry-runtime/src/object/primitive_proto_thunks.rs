@@ -238,9 +238,6 @@ fn number_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
         return payload;
     }
     let jv = crate::value::JSValue::from_bits(receiver.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
-    }
     if jv.is_number() {
         return receiver;
     }

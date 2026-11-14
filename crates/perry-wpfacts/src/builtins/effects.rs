@@ -792,7 +792,8 @@ impl Run {
     fn held(&mut self, m: &mut Model, o: &RealmOperand, holder: Tok) -> NodeId {
         match o {
             RealmOperand::Native(path) => {
-                let e = declared_member(path).expect("interpretable() takes a declared native only");
+                let e =
+                    declared_member(path).expect("interpretable() takes a declared native only");
                 if !names_callee(e.effects) {
                     return self.operand(m, o);
                 }
@@ -1121,7 +1122,9 @@ fn run(
                 let Some(value) = run.node(m, src) else {
                     continue;
                 };
-                if let (RealmSlotRoot::Callee, [], RealmSlotStep::Internal(k)) = (dst.root, inner, st) {
+                if let (RealmSlotRoot::Callee, [], RealmSlotStep::Internal(k)) =
+                    (dst.root, inner, st)
+                {
                     if k != CALLEE_SELF {
                         let at = run.callee_slot(m, k);
                         m.edge(value, at);

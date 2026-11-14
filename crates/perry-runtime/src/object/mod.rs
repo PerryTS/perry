@@ -60,6 +60,10 @@ mod assign;
 mod spread;
 pub use spread::js_object_spread_fresh;
 #[cfg(test)]
+mod pointer_shaped_number_tests;
+#[cfg(test)]
+mod raw_ptr_from_value_tests;
+#[cfg(test)]
 mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
@@ -156,7 +160,9 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
-pub(crate) use global_this::{birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of};
+pub(crate) use global_this::{
+    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of,
+};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -363,8 +369,8 @@ pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
-pub(crate) use global_this_tables::*;
 pub use global_this_tables::BuiltinConstructorIdentity;
+pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
 pub(crate) use iterator_prototypes::{
@@ -884,6 +890,8 @@ fn shape_cache_insert(
         unsafe {
             let gc_header = (keys_array as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *mut crate::gc::GcHeader;
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(gc_header);
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
     }
@@ -1447,6 +1455,8 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     if crate::gc_type_is_not_array!((*gc_header).obj_type) {
         return false;
     }
+    #[cfg(perry_gc_instruments)]
+    crate::arena::alloc_life::shape_shared(gc_header);
     (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     true
 }

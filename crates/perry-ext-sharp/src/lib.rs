@@ -42,9 +42,7 @@ unsafe fn opts_number_field(opts: f64, name: &str) -> Option<f64> {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let field =
         JsValue::from_bits(js_object_get_field_by_name_boxed(rooted_opts.get(), key).to_bits());
-    if field.is_int32() {
-        Some(((field.bits() & 0xFFFF_FFFF) as u32 as i32) as f64)
-    } else if field.is_number() {
+    if field.is_number() {
         Some(f64::from_bits(field.bits()))
     } else {
         None

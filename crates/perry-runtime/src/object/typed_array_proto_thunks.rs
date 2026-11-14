@@ -407,7 +407,7 @@ fn uint8_at_index(args: &[f64], len: usize) -> Option<usize> {
 
 fn uint8_search_needle(value: f64) -> Option<u8> {
     let js_value = crate::value::JSValue::from_bits(value.to_bits());
-    if !js_value.is_number() && !js_value.is_int32() {
+    if !js_value.is_number() {
         return None;
     }
     let number = js_value.to_number();

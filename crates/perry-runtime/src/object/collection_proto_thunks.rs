@@ -536,16 +536,11 @@ fn map_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> *mut cra
     }
 }
 
-/// Read the original receiver after its brand has been checked. Some native
-/// callers pass a raw pointer as `this`; normalize it before rooting
-/// or exposing it to JavaScript. The backing collection is not the receiver.
+/// Read the original receiver after its brand has been checked. The
+/// receiver is a value (its brand check decoded it by the tag), so it is
+/// handed on as it came. The backing collection is not the receiver.
 fn collection_this_value(this: crate::closure::JsThis) -> f64 {
-    let bits = this.bits();
-    if bits >> 48 == 0 {
-        crate::value::js_nanbox_pointer(bits as i64)
-    } else {
-        f64::from_bits(bits)
-    }
+    f64::from_bits(this.bits())
 }
 
 pub(super) extern "C" fn set_proto_add_thunk(

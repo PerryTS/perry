@@ -139,11 +139,29 @@ pub fn life_measure_requested() -> bool {
     std::env::var_os("PERRY_LIFE_MEASURE").is_some_and(|v| !v.is_empty())
 }
 
-/// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
+/// Dead-body removal is on (the default; `PERRY_FACTS_DCE=0` turns it off): a
 /// body the whole-program reach calls inactive is emitted as a trap.
 pub fn dce_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DCE").as_deref() == Ok("1"))
+    *ON.get_or_init(|| dce_switch(std::env::var("PERRY_FACTS_DCE").ok().as_deref()))
+}
+
+/// The value of `PERRY_FACTS_DCE` decides removal: on unless it is `0`.
+pub fn dce_switch(value: Option<&str>) -> bool {
+    value != Some("0")
+}
+
+#[cfg(test)]
+mod dce_switch_tests {
+    use super::dce_switch;
+
+    #[test]
+    fn removal_is_on_by_default_and_zero_turns_it_off() {
+        assert!(dce_switch(None));
+        assert!(dce_switch(Some("1")));
+        assert!(dce_switch(Some("")));
+        assert!(!dce_switch(Some("0")));
+    }
 }
 
 /// The facts-consumed lowerings carry their witnesses: this build, or a
