@@ -22,7 +22,7 @@ ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
 crates/perry/src/commands/compile/run_pipeline.rs	6371
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
-crates/perry-hir/src/lower_decl/body_stmt.rs	2063
+crates/perry-hir/src/lower_decl/body_stmt.rs	2056
 # Representation-aware codegen core; further decomposition is tracked in #1435.
 crates/perry-codegen/src/codegen/mod.rs	3709
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.

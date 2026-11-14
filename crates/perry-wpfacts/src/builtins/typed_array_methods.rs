@@ -70,6 +70,32 @@ pub(super) fn buffer_slice(m: &mut Model, t: Tok, what: &'static str, call: Call
     species(m, t, call, vec![num]);
 }
 
+/// `Buffer.prototype.subarray` / `slice` (Node; the runtime's
+/// `buffer_dispatch`) on Buffer `t`: start and end ToIntegerOrInfinity,
+/// then a new Buffer over the receiver's bytes (%TypedArray%.prototype.
+/// subarray, 23.2.3.28, makes one of the receiver's kind; Node's Buffer
+/// `slice` is the same view). The runtime constructs no species. Its
+/// elements are Numbers, and the receiver's buffer is shared with it. With
+/// a spread argument the positions are not known: every argument and the
+/// spread value are used implicitly, the result is the same view.
+pub(super) fn buffer_view(m: &mut Model, t: Tok, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if c.spread.is_empty() {
+        for &a in c.args.iter().take(2) {
+            to_prim(m, a, "buffer view start/end ToIntegerOrInfinity");
+        }
+    } else {
+        implicit_args(m, call, "buffer view argument", Protocol::Any);
+    }
+    let out = site_tmpl(m, call, "Buffer");
+    let fa = m.field_any(out);
+    m.add_prim(fa, prim::NUM);
+    let recv = m.node_l("buffer-receiver");
+    m.add_tok(recv, t);
+    m.cons(recv, Cons::ShareBuffer { ta: out });
+    ret_tok(m, call, out);
+}
+
 fn fresh(m: &mut Model, call: CallId) -> Tok {
     let out = site_tmpl(m, call, "TypedArray");
     let fa = m.field_any(out);
