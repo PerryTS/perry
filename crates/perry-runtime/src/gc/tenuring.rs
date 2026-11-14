@@ -58,8 +58,8 @@
 //! leave the loop blind.
 //!
 //! The loop is always on. The occupancy rule's result is capped at
-//! [`OCCUPANCY_MAX_SURVIVALS`] (2): a small influx no longer climbs the
-//! ladder 2 -> 3 -> 4 (see that constant for the measurement). The
+//! [`OCCUPANCY_MAX_SURVIVALS`] (3): a small influx no longer climbs the
+//! ladder to 4 (see that constant for the measurement). The
 //! survival-rate lock and the sweep seed are not capped and still reach 1.
 //! `PERRY_GC_TENURING_SURVIVALS_MAX=4` restores the old climb (whose neutral
 //! state — influx below `desired`, survivor cohorts that die in place —
@@ -201,25 +201,25 @@ pub(super) const OCCUPANCY_MIN_SURVIVALS: u8 = 2;
 /// The highest threshold the **occupancy rule** may select by default.
 ///
 /// The occupancy rule raises S when the Eden survivor influx is small
-/// (`1 + desired / influx`), i.e. exactly when few objects survive. A higher S
-/// then keeps every survivor in the semispaces for up to three copies before it
-/// may be promoted; on a small influx that buys nothing measurable and costs
-/// the copies. With the floor also at 2 the occupancy rule holds S at 2, and
-/// only the two paths that measure lifetime — the survival-rate lock and the
-/// sweep seed — move it (to 1).
+/// (`1 + desired / influx`), i.e. exactly when few objects survive. At S=4 every
+/// survivor stays in the semispaces for up to three copies before it may be
+/// promoted. The ceiling of 3 drops the last of those rounds; the survival-rate
+/// lock and the sweep seed still take S to 1, and the floor stays at 2.
 ///
-/// Measured on qb10 (tenure2 lane, 2026-11-14, `instructions:u`, one binary,
-/// `PERRY_GC_TENURING_SURVIVALS=2` against the adaptive default, whose ladder
-/// climbed 2 -> 3 -> 4 on these programs): chess search -1.43 %, perft -1.42 %,
-/// legal -1.03 %, evaluate -0.31 %; a medium-lived record benchmark -1.1 to
-/// -1.7 %; a promise fan-out -0.13 %; peak RSS equal or lower. The pin also
-/// switched the lock off, which cost +14 to +32 % on retaining programs, so the
-/// cap applies to the occupancy rule only and the lock is untouched.
+/// Measured on qb10 (tenure3 lane, 2026-11-14, one binary, arms set by
+/// `PERRY_GC_TENURING_SURVIVALS_MAX`, `instructions:u` x3, peak RSS x5 and x20
+/// on chess search): against 4, a ceiling of 3 gives chess search -0.77 %, a
+/// medium-lived record benchmark -0.57 to -0.77 %, every other program within
+/// +-0.003 %, and peak RSS equal within one page everywhere (search: the same
+/// x20 median and modes). A ceiling of 2 gains about twice as much on the same
+/// programs but costs peak RSS: +64 KiB on chess search on one main, +2 MB on
+/// the medium-lived benchmark at a 10-minor lifetime on a later one, because
+/// cohorts that a third survivor round would have let die are promoted.
 ///
 /// `PERRY_GC_TENURING_SURVIVALS_MAX=<n>` (clamped to
 /// `OCCUPANCY_MIN_SURVIVALS..=GC_TENURING_SURVIVALS_MAX`) changes the cap;
 /// `=4` is the previous climb.
-pub(super) const OCCUPANCY_MAX_SURVIVALS: u8 = 2;
+pub(super) const OCCUPANCY_MAX_SURVIVALS: u8 = 3;
 const _: () = assert!(OCCUPANCY_MIN_SURVIVALS <= OCCUPANCY_MAX_SURVIVALS);
 const _: () = assert!(OCCUPANCY_MAX_SURVIVALS <= GC_TENURING_SURVIVALS_MAX);
 
@@ -950,7 +950,7 @@ pub(super) fn retune_after_scavenge(
     // the floor: the lowest threshold that PRODUCES the measurement it needs to
     // say anything at all. Evidence, not the ladder, is what lets it move.
     //
-    // The ceiling is `occupancy_max_survivals()` (2 by default; see
+    // The ceiling is `occupancy_max_survivals()` (3 by default; see
     // `OCCUPANCY_MAX_SURVIVALS`). Capped HERE for the same reason as the floor:
     // the sweep seed's `compute_target_survivals(...) != 1` test must keep
     // seeing the raw formula. The lock above and the unlock step are not capped.
