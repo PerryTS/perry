@@ -430,6 +430,76 @@ pub(crate) const IC_SLOT_OVERFLOW_BIT: u32 = 1 << 30;
 /// strict-aware `[[Set]]`. Nothing is remembered.
 #[no_mangle]
 pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, strict: i32) -> f64 {
+    use crate::object::layout_probe::OwnSet;
+    // The frame-free keyed probe (DESIGN_R §3): the key's atom, then the
+    // static store's own-slot leaf; every other case is one tail call.
+    let (found, atom, hash) =
+        unsafe { crate::object::layout_probe::keyed_own_set(target.to_bits(), key.to_bits(), value) };
+    match found {
+        OwnSet::Stored => value,
+        OwnSet::Slot(obj, address, slot) => set_dynamic_slot_any(obj, address, slot, value),
+        OwnSet::Table(t, address) => set_dynamic_table_barrier(t, address, value),
+        OwnSet::Absent(obj, r) => set_dynamic_absent(target, value, atom, hash, obj, r, strict),
+        OwnSet::Rest => set_dynamic_rest(target, key, value, strict),
+    }
+}
+
+/// [`js_put_value_set_dynamic`]'s barriered own-slot store
+/// ([`crate::object::layout_probe::OwnSet::Slot`]).
+#[inline(never)]
+fn set_dynamic_slot_any(obj: *mut crate::ObjectHeader, address: *mut u64, slot: u32, value: f64) -> f64 {
+    unsafe {
+        crate::object::layout_probe::own_slot_store_any(
+            obj,
+            address,
+            slot,
+            crate::object::layout_probe::store_bits(value),
+        )
+    };
+    // Opaque: a returned argument lets IPO take the call out of tail position.
+    core::hint::black_box(value)
+}
+
+/// [`js_put_value_set_dynamic`]'s barrier for an overflow value word the
+/// leaf wrote ([`crate::object::layout_probe::OwnSet::Table`]).
+#[inline(never)]
+fn set_dynamic_table_barrier(t: *mut crate::object::overflow::Table, address: *mut u64, value: f64) -> f64 {
+    crate::gc::runtime_write_barrier_slot(
+        t as usize,
+        address as usize,
+        crate::object::layout_probe::store_bits(value),
+    );
+    // Opaque: a returned argument lets IPO take the call out of tail position.
+    core::hint::black_box(value)
+}
+
+/// [`js_put_value_set_dynamic`] for a key its receiver's own list proves
+/// absent ([`crate::object::layout_probe::OwnSet::Absent`]): the overflow
+/// append when the receiver admits it, else the complete store of the atom.
+#[inline(never)]
+fn set_dynamic_absent(
+    target: f64,
+    value: f64,
+    atom: u64,
+    hash: u64,
+    obj: *mut crate::ObjectHeader,
+    r: *const crate::object::layout_probe::ShapeRecord,
+    strict: i32,
+) -> f64 {
+    unsafe {
+        if crate::object::layout_probe::keyed_add_admitted(obj, r, atom, hash) {
+            if let Some(stored) = keyed_append(obj, atom, value) {
+                return stored;
+            }
+        }
+    }
+    set_dynamic_complete(target, f64::from_bits(atom), value, strict)
+}
+
+/// [`js_put_value_set_dynamic`] for every case the leaf hands back: the
+/// complete keyed store.
+#[inline(never)]
+fn set_dynamic_rest(target: f64, key: f64, value: f64, strict: i32) -> f64 {
     use crate::object::layout_probe::KeyedStore;
     // The keyed store probe: one key resolution (the key's atom), then the
     // store a static `target.key = value` site makes when the receiver owns
@@ -462,6 +532,13 @@ pub extern "C" fn js_put_value_set_dynamic(target: f64, key: f64, value: f64, st
             }
         }
     };
+    set_dynamic_complete(target, key, value, strict)
+}
+
+/// The keyed store after its probe: an own overwrite, a family store, the
+/// migrate-on-miss, a tombstone re-add, the dynamic add, else `[[Set]]`.
+#[inline(never)]
+fn set_dynamic_complete(target: f64, key: f64, value: f64, strict: i32) -> f64 {
     let key = match own_overwrite_first(target, key, value) {
         Ok(stored) => return stored,
         Err(key) => key,

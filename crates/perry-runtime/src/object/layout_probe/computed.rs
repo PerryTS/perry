@@ -402,6 +402,35 @@ pub(super) unsafe fn key_leaf(dir: *const u8, key_bits: u64) -> Option<(u64, u64
     None
 }
 
+/// The keyed store's frame-free common path (DESIGN_R §3): the key's
+/// recorded atom ([`key_leaf`]), then the [`super::own_set`] a static store
+/// runs, with the atom and its hash; [`super::OwnSet::Rest`] when the leaf
+/// resolves no atom. No call.
+///
+/// # Safety
+/// Any value bits.
+#[inline(always)]
+pub(crate) unsafe fn keyed_own_set(obj_bits: u64, key_bits: u64, value: f64) -> (super::OwnSet, u64, u64) {
+    let dir = super::super::ordinary_dir_addr();
+    match key_leaf(dir, key_bits) {
+        Some((key, hash)) => (super::own_set(dir, obj_bits, key, hash, value), key, hash),
+        None => (super::OwnSet::Rest, 0, 0),
+    }
+}
+
+/// [`append_admitted`] for the keyed store's [`super::OwnSet::Absent`].
+///
+/// # Safety
+/// As for [`append_admitted`].
+pub(crate) unsafe fn keyed_add_admitted(
+    obj: *mut ObjectHeader,
+    r: *const ShapeRecord,
+    key: u64,
+    hash: u64,
+) -> bool {
+    append_admitted(super::super::ordinary_dir_addr(), obj, r, key, hash)
+}
+
 /// [`computed_key`] in full, for every key [`key_leaf`] does not answer.
 #[inline(never)]
 pub(super) unsafe fn computed_key_complete(dir: *const u8, key_bits: u64) -> Option<(u64, u64)> {
