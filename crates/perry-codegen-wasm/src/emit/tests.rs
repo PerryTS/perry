@@ -760,3 +760,27 @@ main();
         "function 42"
     );
 }
+
+// An async body runs as JS: a closure held in a local is a NaN-boxed handle there, so
+// calling it must go through closure dispatch, not a direct JS call on the number.
+#[test]
+fn an_async_body_calls_a_closure_held_in_a_local() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {}; o.h = (n: number) => n * 2;
+async function main() {
+  const f = o.h;
+  if (typeof f === "function") console.log(f(21));
+  const m: any = Math.max;
+  console.log(m(3, 7));
+  const t = o.t;
+  t();
+}
+o.t = () => { throw new Error("boom"); };
+main().catch((e: any) => console.log("caught " + e.message));
+"#
+        ),
+        "42\n7\ncaught boom"
+    );
+}

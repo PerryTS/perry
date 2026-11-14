@@ -418,9 +418,19 @@ impl WasmModuleEmitter {
                                 .join(", ")
                         )
                     }
+                    // The callee is a NaN-boxed value here, so a direct JS call on it
+                    // throws; `__jsMethodInvoke` runs a Perry closure or a host function.
                     _ => {
                         let callee_js = self.emit_js_expr(callee, locals);
-                        format!("{}({})", callee_js, args_js.join(", "))
+                        format!(
+                            "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({}) }}, [{}]))",
+                            callee_js,
+                            args_js
+                                .iter()
+                                .map(|a| format!("toJsValue({})", a))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
                     }
                 }
             }
