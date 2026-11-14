@@ -60,14 +60,18 @@ impl WasmModuleEmitter {
     ) {
         let pad = "  ".repeat(indent);
         match stmt {
+            // A HIR local lives for the whole function, as a WASM local does: the
+            // lowering of `try`/`finally` and `for...of` reads a local from the `catch` or
+            // `finally` beside the block that declared it. `var` gives the JS binding that
+            // scope; a block-scoped `let` is undeclared there.
             Stmt::Let { id, init, .. } => {
                 let name = format!("__l{}", id);
                 locals.insert(*id, name.clone());
                 if let Some(init_expr) = init {
                     let val = self.emit_js_expr(init_expr, locals);
-                    out.push_str(&format!("{pad}    let {name} = {val};\n"));
+                    out.push_str(&format!("{pad}    var {name} = {val};\n"));
                 } else {
-                    out.push_str(&format!("{pad}    let {name} = u64ToF64(TAG_UNDEFINED);\n"));
+                    out.push_str(&format!("{pad}    var {name} = u64ToF64(TAG_UNDEFINED);\n"));
                 }
             }
             Stmt::Expr(e) => {
@@ -257,16 +261,23 @@ impl WasmModuleEmitter {
             },
             Expr::LocalSet(id, val) => {
                 let v = self.emit_js_expr(val, locals);
-                match locals.get(id) {
-                    Some(name) => format!("({} = {})", name, v),
-                    None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
-                        Some(&gidx) => format!(
-                            "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
-                            gidx, v
-                        ),
-                        None => format!("(__l{} = {})", id, v),
-                    },
-                }
+                self.emit_js_local_set(*id, &v, locals)
+            }
+            // `x++` / `--x`: the local is read once, as a number; a postfix update yields
+            // the value it read.
+            Expr::Update { id, op, prefix } => {
+                let old = self.emit_js_expr(&Expr::LocalGet(*id), locals);
+                let sign = match op {
+                    UpdateOp::Increment => "+",
+                    UpdateOp::Decrement => "-",
+                };
+                let set = self.emit_js_local_set(*id, &format!("(__u {sign} 1)"), locals);
+                let result = if *prefix {
+                    set
+                } else {
+                    format!("({set}, __u)")
+                };
+                format!("((__u) => {result})(+toJsValue({old}))")
             }
             // An id with no WASM global is the HIR's unresolved-global sentinel (the receiver
             // of `Promise.resolve`, `fetch`, `JSON.parse`); in JS that receiver is globalThis.
@@ -526,6 +537,28 @@ impl WasmModuleEmitter {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
                     "__perry_borrowed_proof" => "u64ToF64(TAG_FALSE)".to_string(),
+                    // `for...of` asks whether its source can be walked by index before
+                    // choosing the array loop; the answer comes from the bridge the WASM
+                    // arm calls.
+                    "__perry_runtime" if method == "arrayRecordNeedsIterator" => {
+                        let args_js: Vec<String> = args
+                            .iter()
+                            .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
+                            .collect();
+                        format!(
+                            "fromJsValue(__memDispatch.rt_arrayRecordNeedsIterator({}))",
+                            args_js.join(", ")
+                        )
+                    }
+                    // The iterator protocol and array destructuring are not emitted as JS:
+                    // throwing names the gap where an undefined result would run on with
+                    // wrong values.
+                    "__perry_runtime" => format!(
+                        "(() => {{ throw new TypeError({}); }})()",
+                        js_string_literal(&format!(
+                            "{method} is not supported in an async function body on the web target"
+                        ))
+                    ),
                     "console" => {
                         let args_js: Vec<String> = args
                             .iter()
@@ -589,6 +622,26 @@ impl WasmModuleEmitter {
                         }
                     }
                 }
+            }
+            Expr::ArrayJoin { array, separator } => {
+                let a = self.emit_js_expr(array, locals);
+                let sep = separator
+                    .as_ref()
+                    .map(|sep| format!("toJsValue({})", self.emit_js_expr(sep, locals)))
+                    .unwrap_or_default();
+                format!("fromJsValue(toJsValue({}).join({}))", a, sep)
+            }
+            Expr::ObjectKeys(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.keys(toJsValue({})))", o)
+            }
+            Expr::ObjectValues(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.values(toJsValue({})))", o)
+            }
+            Expr::ObjectEntries(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.entries(toJsValue({})))", o)
             }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
@@ -810,10 +863,10 @@ impl WasmModuleEmitter {
                 }
                 // A user class, including the `__AnonShape_*` class of an object literal,
                 // has no JS constructor. Birth it as the WASM arm does (`class_new`'s
-                // `{__class__}` object) and run the compiled constructor, which returns
-                // `this`.
+                // `{__class__}` object, whose tag is not enumerable) and run the compiled
+                // constructor, which returns `this`.
                 let instance = format!(
-                    "fromJsValue({{__class__: {}}})",
+                    "fromJsValue(__classInstance({}))",
                     js_string_literal(class_name)
                 );
                 let Some(&ctor_idx) = self.class_ctor_map.get(class_name.as_str()) else {
@@ -862,6 +915,26 @@ impl WasmModuleEmitter {
                 // Fallback: return undefined for unhandled expressions
                 "u64ToF64(TAG_UNDEFINED)".to_string()
             }
+        }
+    }
+
+    /// JS that stores `value` in local `id` and yields it. A local the body does not bind
+    /// is a module-level `let` held in its exported WASM global.
+    fn emit_js_local_set(
+        &self,
+        id: LocalId,
+        value: &str,
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        match locals.get(&id) {
+            Some(name) => format!("({} = {})", name, value),
+            None => match self.module_let_globals.get(&(self.current_mod_idx, id)) {
+                Some(&gidx) => format!(
+                    "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                    gidx, value
+                ),
+                None => format!("(__l{} = {})", id, value),
+            },
         }
     }
 }
