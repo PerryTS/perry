@@ -8,8 +8,9 @@ use super::*;
 /// The getters are one value, the setters two: the `__proto__` setter of
 /// `Object.prototype` (20.1.3.8.2), the only one that relinks (perry-runtime
 /// property_ops/common.rs `legacy_dunder_proto_set`), and every other one.
-/// A query names the `__proto__` setter only under the key `__proto__`; a key
-/// of unknown string never names it (DECISIONS 217, `is_proto_key`).
+/// A setter query reads the `__proto__` setter under every key that may be
+/// `__proto__` on a holder `Object.prototype` answers for: the named key, and
+/// a key whose strings are not known to exclude it (`key_may_name_str`).
 const REALM_GETTER: &str = "%RealmAccessor.get%";
 const REALM_SETTER: &str = "%RealmAccessor.set%";
 const REALM_PROTO_SETTER: &str = "%RealmAccessor.__proto__.set%";
@@ -193,7 +194,7 @@ pub(crate) fn lookup_native_descriptor(
     setter: bool,
 ) {
     let Key::Named(a) = key else {
-        native_accessor_any(m, origin, holder, dst, setter);
+        native_accessor_any(m, origin, holder, key, dst, setter);
         return;
     };
     let name = m.atoms[a as usize].clone();
@@ -263,12 +264,20 @@ fn realm_accessor_into(m: &mut Model, dst: NodeId, proto: bool, setter: bool) {
 /// write the model does not place on the holder (through ⊤, or onto it under
 /// any key) may have installed a program function: that write answers ⊤,
 /// now or when it arrives (`NativeMiss::Lookup`).
-fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, setter: bool) {
+fn native_accessor_any(
+    m: &mut Model,
+    origin: Tok,
+    holder: Tok,
+    key: Key,
+    dst: NodeId,
+    setter: bool,
+) {
     // The realm's own accessors on this holder: those its declaration may
-    // hold under a key of unknown string. Such a key never names `__proto__`
-    // (DECISIONS 217, `is_proto_key`), so `Object.prototype` holds none; a
-    // primitive member may be an accessor (`Map.prototype.size`); a family
-    // without a member table or a namespace may hold any.
+    // hold under the key. A primitive member may be an accessor
+    // (`Map.prototype.size`); a family without a member table or a namespace
+    // may hold any. `ObjectProto` answers for `Object.prototype`, whose own
+    // `__proto__` is an accessor (20.1.3.8): a setter query under a key that
+    // may be `__proto__` may read its setter, the one that relinks.
     let family = match m.toks[holder as usize] {
         TokKind::BuiltinFn(Native::Any) => {
             m.add_top(dst, |_| "unrepresented native accessor descriptor".into());
@@ -287,6 +296,12 @@ fn native_accessor_any(m: &mut Model, origin: Tok, holder: Tok, dst: NodeId, set
     };
     if family.is_none_or(|f| members::any_member(f).1 != 0) {
         realm_accessor_into(m, dst, false, setter);
+    }
+    if setter
+        && matches!(m.toks[holder as usize], TokKind::ObjectProto)
+        && m.key_may_name_str(key, "__proto__")
+    {
+        realm_accessor_into(m, dst, true, setter);
     }
     let star = m.atom(crate::STAR_KEY);
     if native_accessor_written(m, holder, star) {
