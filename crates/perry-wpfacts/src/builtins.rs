@@ -932,6 +932,13 @@ pub(crate) fn object_proto_lacks(name: &str) -> bool {
     members::member(members::Family::Object, name).is_none()
 }
 
+/// `%Array.prototype%`'s intrinsic description lacks `name`, and so does
+/// `%Object.prototype%`'s, which follows it on an array's chain
+/// (`derive::array_absent`).
+pub(crate) fn array_chain_lacks(name: &str) -> bool {
+    members::member(members::Family::Array, name).is_none()
+}
+
 /// May key `a` have been written onto a builtin prototype (`Object.prototype`
 /// stands for every one of them here): a store, an accessor, a delete or a
 /// reach into unmodeled code on it, another unit's such write, or a store

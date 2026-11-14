@@ -1645,6 +1645,12 @@ fn judge(
             TokKind::Obj(tm, _) => {
                 let Some(tf) = by_id.get(tm) else {
                     receivers.push(m.tok_name(t));
+                    // An array the program stores no named key on reads
+                    // `undefined` under a key its chain lacks.
+                    if !s.is_call && array_absent(m, t, key, s.key) {
+                        own_or_absent += 1;
+                        continue;
+                    }
                     verdict.get_or_insert(Verdict::No("receiver is not a fact unit".into()));
                     continue;
                 };
@@ -2120,6 +2126,54 @@ fn own_data_or_absent(m: &Model, tf: &TemplateFacts, t: Tok, key: &str, a: Atom)
             .is_some_and(|tm| m.tmpls[tm as usize].accessor_keys.is_empty())
         && chain_absent(m, t, key, a, false)
         && object_proto_unwritten(m, a)
+}
+
+/// [[Get]] of named key `a` (`key`) on array token `t` gives `undefined`.
+/// `t` is an Array exotic object (`exact_array`, a `TmplKind::Arr` birth)
+/// whose [[Prototype]] is `%Array.prototype%`: its own keys are its indices
+/// and `length` (ECMA-262 10.4.2), any other own key one the program
+/// stores (`fields`; under an unknown key `named_any`, whose values its
+/// named keys read, apart from its elements in `field_any`; another
+/// unit's named stores, `cell_arrs`; an accessor); no `__proto__`
+/// relink, no hard operation and no escape gives unknown code the array. The key is
+/// no index, not `length` and no private name; [[Get]] is OrdinaryGet
+/// (10.1.8.1) and walks `%Array.prototype%` and `%Object.prototype%`,
+/// whose descriptions lack it, and no write reaches either under it
+/// ([`builtin_protos_unwritten`] for the Array family: `%Array.prototype%`
+/// takes named adds, perry-abi lock.rs `add_locked`, so neither interpreted
+/// code nor a held realm may run).
+fn array_absent(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
+    let holds_nothing = |n: Option<&NodeId>| {
+        n.is_none_or(|&n| {
+            let nd = &m.nodes[n as usize];
+            !nd.dropped && nd.pts.is_empty() && nd.prim == 0
+        })
+    };
+    let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+        return false;
+    };
+    matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { .. })
+        && exact_array(m, t)
+        && key != "length"
+        && !key.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !matches!(key, "Infinity" | "NaN")
+        && !m.is_private_atom(a)
+        && !m.optimistic_json_key
+        && holds_nothing(m.fields.get(&(t, a)))
+        && holds_nothing(if m.elems_apart(t) {
+            m.named_any.get(&t)
+        } else {
+            m.field_any.get(&t)
+        })
+        && holds_nothing(m.cell_arrs.get(&t))
+        && m.accessor_keys.get(&t).is_none_or(|k| k.is_empty())
+        && m.tmpls[tm as usize].accessor_keys.is_empty()
+        && !m.super_relink.contains(&t)
+        && !m.hard.contains_key(&t)
+        && !m.is_escaped(t)
+        && crate::builtins::array_chain_lacks(key)
+        && object_proto_unwritten(m, a)
+        && builtin_protos_unwritten(m, Some(crate::builtins::NativeFamily::Array), a).is_ok()
 }
 
 /// `%Object.prototype%` holds nothing stored under `a` by the program: no
