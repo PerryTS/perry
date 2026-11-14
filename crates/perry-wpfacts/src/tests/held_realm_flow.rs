@@ -164,3 +164,43 @@ const GEN: &str = "class P { *[Symbol.iterator]() { yield 1; } }\n(globalThis as
 fn generator_next_through_held_prototype() {
     held_only(&format!("{GEN}const g: any = new P()[Symbol.iterator]();\ng.next(o)"));
 }
+
+// SKINEFF1: skin c2820, `Array.prototype.toLocaleString`s element call
+// (collections.rs recv_call) runs `ArrayBuffer.prototype.resize` with
+// `this` a value that is no ArrayBuffer (`Object.prototype.valueOf`, a
+// program object). resize starts with RequireInternalSlot(this,
+// [[ArrayBufferMaxByteLength]]) (ECMA-262 25.1.6.6 step 2), before ToIndex
+// of its argument: it throws a TypeError and touches nothing. Today the call
+// is one of an unknown callee (call_and_construct.rs, the `Top | BuiltinFn`
+// arm): its receiver escapes and an intrinsic receiver holds the realm.
+// `no_this_value`'s [[ArrayBufferData]] brand: it only throws.
+#[test]
+fn skineff1_resize_program_receiver() {
+    let body = format!("{OBJ}const h: any = {{ r: ArrayBuffer.prototype.resize, o }};\ntry {{ h.r(1); }} catch (e) {{}}\nconst r = o.m();\n");
+    let v = m_calls(&body);
+    assert!(mono(&v), "resize on a non-ArrayBuffer receiver only throws: o does not escape: {v:?}");
+}
+
+/// The other [[ArrayBufferData]] methods on a receiver that is no buffer
+/// (ECMA-262 25.1.6.7 steps 2-4, 25.1.6.8-9, 25.2.5.3, 25.2.5.6): each only
+/// throws before its arguments are coerced; o does not escape.
+#[test]
+fn skineff2_buffer_methods_program_receiver() {
+    for f in ["ArrayBuffer.prototype.slice", "ArrayBuffer.prototype.transfer", "ArrayBuffer.prototype.transferToFixedLength", "SharedArrayBuffer.prototype.slice", "SharedArrayBuffer.prototype.grow"] {
+        let body = format!("{OBJ}const h: any = {{ r: {f}, o }};\ntry {{ h.r(o, o); }} catch (e) {{}}\nconst r = o.m();\n");
+        let v = m_calls(&body);
+        assert!(mono(&v), "{f} on a non-buffer receiver only throws: {v:?}");
+    }
+}
+
+/// Soundness: a receiver that may be an instance of a class extending
+/// ArrayBuffer (its `super()` allocates [[ArrayBufferData]]) or a program
+/// literal. The literal only throws; the instance keeps the method's path
+/// (resize reaches unknown-callee flow today): o, a field of both, is not
+/// claimed.
+#[test]
+fn skineff2_maybe_buffer_receiver_keeps_the_buffer_path() {
+    let body = format!("{OBJ}class B extends ArrayBuffer {{ k: any = o; }}\nconst h: any = Math.random() > 0.5 ? new B(8) : {{ resize: ArrayBuffer.prototype.resize, k: o }};\ntry {{ h.resize(1); }} catch (e) {{}}\nconst r = o.m();\n");
+    let v = m_calls(&body);
+    assert!(!mono(&v), "an ArrayBuffer subclass instance may carry the slot: {v:?}");
+}

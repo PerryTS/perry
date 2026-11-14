@@ -1514,7 +1514,21 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 /// runtime's check: `typed_array_proto_thunks.rs` `ta_receiver_or_throw`.
 pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) -> bool {
     let typed = fam == Family::Opaque && what == Some("TypedArray");
-    if !(typed || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
+    // `ArrayBuffer.prototype.{resize, slice, transfer, transferToFixedLength}`
+    // and `SharedArrayBuffer.prototype.{grow, slice}` start with
+    // RequireInternalSlot(this, [[ArrayBufferData]]) (or
+    // [[ArrayBufferMaxByteLength]]) and IsSharedArrayBuffer, before any
+    // argument coercion (ECMA-262 25.1.6.6 step 2, 25.1.6.7 steps 2-4,
+    // 25.1.6.8-9 via ArrayBufferCopyAndDetach step 2, 25.2.5.3 step 2,
+    // 25.2.5.6 steps 2-3; the runtime: typed_array.rs
+    // `array_buffer_method`, `array_buffer_slice_thunk`,
+    // `shared_array_buffer_slice_thunk`). Only AllocateArrayBuffer and
+    // AllocateSharedArrayBuffer make the slot: the solver's
+    // BObj{ArrayBuffer | SharedArrayBuffer} (an Opaque kind, kept open below).
+    let buffer =
+        fam == Family::Opaque && matches!(what, Some("ArrayBuffer" | "SharedArrayBuffer"));
+    let slot = typed || buffer;
+    if !(slot || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
         || m.is_marker(r)
     {
         return false;
@@ -1528,7 +1542,7 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // 10.4.5), and a later prototype change adds no internal slot.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what: w, .. } => {
-                typed
+                slot
                     && !matches!(*w, "TypedArray" | "Buffer")
                     && match members::bobj_family(w) {
                         Family::Opaque => false,
@@ -1536,12 +1550,33 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
                         _ => true,
                     }
             }
-            _ => true,
+            // An instance of a class whose chain may reach a built-in
+            // constructor (`extends ArrayBuffer`, `extends Number`, an
+            // `extends` value) was allocated by that constructor's
+            // `super()` with its internal slots (ECMA-262 10.1.13
+            // OrdinaryCreateFromConstructor in the base constructor): it may
+            // carry the brand. Every other program object is ordinary.
+            _ => !builtin_heritage(m, *tm),
         },
         TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => typed,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => slot,
         _ => false,
     }
+}
+
+/// Does template `tm` or a parent template it extends have a parent that is
+/// no class of the program (a native parent, or an `extends` value), whose
+/// constructor may allocate its instances?
+fn builtin_heritage(m: &Model, tm: TmplId) -> bool {
+    let mut at = Some(tm);
+    while let Some(t) = at {
+        let k = &m.tmpls[t as usize];
+        if k.native_parent.is_some() || k.parent_value.is_some() {
+            return true;
+        }
+        at = k.parent.filter(|&p| p != t);
+    }
+    false
 }
 
 /// The primitive kinds whose ToObject wrapper an `Array.prototype` method
