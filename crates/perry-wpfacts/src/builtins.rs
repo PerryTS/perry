@@ -3215,13 +3215,20 @@ pub fn call_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             }
         }
         BuiltinNs::Date => ret_prim(m, call, prim::STR),
-        BuiltinNs::String
-        | BuiltinNs::Number
-        | BuiltinNs::BigInt
-        | BuiltinNs::Boolean
-        | BuiltinNs::Symbol => {
+        // Called as functions: String 22.1.1.1, Number 21.1.1.1 (ToNumeric),
+        // BigInt 21.2.1.1 (ToPrimitive, then ToBigInt), Symbol 20.4.1.1
+        // (ToString of the description) convert by ToPrimitive; Boolean
+        // 20.3.1.1 is ToBoolean (no call). The result kind is fixed.
+        BuiltinNs::Boolean => ret_prim(m, call, prim::BOOL),
+        BuiltinNs::String | BuiltinNs::Number | BuiltinNs::BigInt | BuiltinNs::Symbol => {
             implicit_args(m, call, "ToPrimitive", Protocol::ToPrimitive);
-            ret_prim(m, call, prim::ALL);
+            let p = match ns {
+                BuiltinNs::String => prim::STR,
+                BuiltinNs::Number => prim::NUM,
+                BuiltinNs::BigInt => prim::BIGINT,
+                _ => prim::SYMBOL,
+            };
+            ret_prim(m, call, p);
         }
         BuiltinNs::Object => {
             let c = m.calls[call as usize].clone();
