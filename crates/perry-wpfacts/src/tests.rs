@@ -2151,5 +2151,6 @@ mod scope_a;
 mod new_verdicts;
 mod lit_fact;
 mod arr_absent;
+mod prim_recv;
 mod held_realm_verdicts;
 mod held_realm_flow;

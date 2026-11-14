@@ -1307,6 +1307,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if verdict == Verdict::Dead && recvs.iter().any(|&r| m.nodes[r as usize].dropped) {
             verdict = Verdict::No("dead site (no receiver flows)".into());
         }
+        // A claim naming the TypeError arm of a nullish receiver
+        // (`nullish_arms`) needs every value of the sources too.
+        let nullish = prim & (crate::model::prim::NULL | crate::model::prim::UNDEF) != 0;
+        if nullish
+            && matches!(verdict, Verdict::NativeMember | Verdict::OwnLength)
+            && recvs.iter().any(|&r| m.nodes[r as usize].dropped)
+        {
+            verdict = Verdict::No("primitive receiver (a source left a value out)".into());
+        }
         // Design §11.4: a site whose receiver is the `this` of a method of
         // class C runs, in the typed body behind the entry guard
         // `class_id(this) == C`, on C's instances only: E0 when it is T0
@@ -1452,11 +1461,35 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
 /// The receivers of an `OwnLength` read: every token an Array exotic
 /// ([`exact_array`]) or a closed marker (its callers' values are beside
 /// it), every primitive a String, and at least one receiver.
+/// A receiver set of primitives only (every token a closed marker) that
+/// holds `undefined` and/or `null` beside the primitives `rest`: the
+/// operation's own dispatch on the value's kind throws the TypeError for a
+/// nullish value (ECMA-262 13.3.2.1, 7.1.18 ToObject) and runs `rest`'s
+/// family member for the others. `Some((rest, arms))`: the primitive bits
+/// left and the receivers naming the TypeError arms; `None` when no
+/// nullish value flows or an object token sits beside it.
+fn nullish_arms(m: &Model, toks: &[Tok], prim: u16) -> Option<(u16, Vec<String>)> {
+    use crate::model::prim::{NULL, UNDEF};
+    let nn = prim & (NULL | UNDEF);
+    if nn == 0 || !toks.iter().all(|&t| m.closed_marker(t)) {
+        return None;
+    }
+    let mut arms = Vec::new();
+    if nn & UNDEF != 0 {
+        arms.push("primitive:undefined (TypeError)".to_string());
+    }
+    if nn & NULL != 0 {
+        arms.push("primitive:null (TypeError)".to_string());
+    }
+    Some((prim & !nn, arms))
+}
+
 fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
+    let (prim, arms) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     if prim != 0 && prim != crate::model::prim::STR {
         return None;
     }
-    let mut receivers = Vec::new();
+    let mut receivers = arms;
     for &t in toks {
         if m.closed_marker(t) {
             continue;
@@ -1471,7 +1504,10 @@ fn own_length(m: &Model, toks: &[Tok], prim: u16) -> Option<Vec<String>> {
     }
     receivers.sort();
     receivers.dedup();
-    (!receivers.is_empty()).then_some(receivers)
+    receivers
+        .iter()
+        .any(|r| !r.ends_with("(TypeError)"))
+        .then_some(receivers)
 }
 
 /// Is every value of token `t` an Array exotic object (ECMA-262 10.4.2)?
@@ -1861,7 +1897,8 @@ fn native_member(
 ) -> Result<Vec<String>, Option<String>> {
     use crate::builtins::NativeFamily;
     let mut fam: Option<NativeFamily> = None;
-    let mut receivers = Vec::new();
+    // A nullish value beside one primitive family: its TypeError arm.
+    let (prim, mut receivers) = nullish_arms(m, toks, prim).unwrap_or((prim, Vec::new()));
     let join = |f: NativeFamily, fam: &mut Option<NativeFamily>| match fam {
         None => {
             *fam = Some(f);

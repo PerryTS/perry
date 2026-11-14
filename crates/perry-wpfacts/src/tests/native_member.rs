@@ -145,12 +145,8 @@ fn a_receiver_of_two_families_is_no_native_member() {
             "v.slice(1)",
             "slice",
         ),
-        // A string or undefined.
-        (
-            "const v: any = process.argv.length > 2 ? \"abc\" : undefined;",
-            "v.charAt(0)",
-            "charAt",
-        ),
+        // A string or undefined is a two-kind receiver the claim covers
+        // (the String member or the TypeError): tests/prim_recv.rs.
         // A Map or a Set (both define `has`).
         (
             "const v: any = process.argv.length > 2 ? new Map() : new Set();",
