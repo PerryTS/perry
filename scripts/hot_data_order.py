@@ -27,9 +27,12 @@ are pooled by the linker and never listed.
 
   check --perry PERRY [--runtime-dir DIR] [--program FILE.ts[::ARGS]]...
   check --names-only --runtime-dir DIR
-      The gate. (1) Names: every listed key must still exist in the runtime
-      archives; a missing core key fails at once, the rest may lose
-      --max-missing-pct percent. (2) Coverage: compile the smoke program(s),
+      The gate. (1) Names: the listed keys must still exist in the runtime
+      archives; the core tier may lose --max-core-missing-pct percent, the
+      whole list --max-missing-pct percent (5% each: an unnamed constant's
+      key moves when its bytes do, e.g. an edited message, so the data list
+      loses lines faster than the hot-text list; rebuild it when the gate
+      goes red). (2) Coverage: compile the smoke program(s),
       run them under lackey and fail when more than --max-outside-pct percent
       of the runtime data sections they read lie outside the hot runs.
 
@@ -419,9 +422,10 @@ def cmd_check(a):
           f"({pct:.2f}%), of the core tier {len(core_missing)} of {core}")
     for k in core_missing[:40]:
         print(f"  missing core section: {k}")
-    if len(core_missing) > a.max_core_missing:
+    core_pct = 100.0 * len(core_missing) / max(core, 1)
+    if core_pct > a.max_core_missing_pct:
         failed = True
-        print(f"FAIL: {len(core_missing)} core-tier data sections no longer exist (allowed {a.max_core_missing}): rebuild the list.")
+        print(f"FAIL: {core_pct:.2f}% of the core-tier data sections no longer exist (allowed {a.max_core_missing_pct}%): rebuild the list.")
     if pct > a.max_missing_pct:
         failed = True
         print(f"FAIL: {pct:.2f}% of the listed data sections no longer exist (allowed {a.max_missing_pct}%): rebuild the list.")
@@ -536,8 +540,8 @@ def main():
     c.add_argument("--order", default=ORDER)
     c.add_argument("--program", action="append", default=[])
     c.add_argument("--compile-arg", action="append", default=[])
-    c.add_argument("--max-core-missing", type=int, default=0)
-    c.add_argument("--max-missing-pct", type=float, default=2.0)
+    c.add_argument("--max-core-missing-pct", type=float, default=5.0)
+    c.add_argument("--max-missing-pct", type=float, default=5.0)
     c.add_argument("--max-outside-pct", type=float, default=10.0)
     c.add_argument("--require-coverage", action="store_true")
     c.add_argument("-v", "--verbose", action="store_true")
