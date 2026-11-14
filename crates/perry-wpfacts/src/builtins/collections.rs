@@ -1009,6 +1009,17 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
     if !m.rest_elem_sabotage && !crate::rest_elems::fused_fill(m, call) {
         m.rest_used(t);
     }
+    // DEADFN15 C1, C2: a rest array keeps its front for one `shift()`
+    // site in its function's own body outside any loop (one run per
+    // activation), the only method call that writes it.
+    if m.is_rest_arr(t) && !crate::const_arrays::method_reads_only(name) {
+        let site = m.calls[call as usize].site;
+        let own = name == Some("shift")
+            && m.rest_owner_of(t).is_some_and(|f| m.call_place.get(&site) == Some(&(f, 0)));
+        if !own || *m.rest_front_site.entry(t).or_insert(site) != site {
+            m.rest_front_widen(t);
+        }
+    }
     if let Some(name) = name {
         if matches!(members::member(Family::Array, name), Some(Mem::Fn)) {
             let owner = if matches!(members::member(Family::Object, name), Some(Mem::Fn)) {
@@ -1141,7 +1152,13 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
             ret_prim(m, call, prim::NUM);
         }
         Some("pop" | "shift" | "at") => {
-            m.edge(elems, c.ret);
+            if name == Some("shift") && m.is_rest_arr(t) && !m.rest_front_open.contains(&t) {
+                let f = m.rest_front(t);
+                m.edge(f, c.ret);
+                m.rest_front_reads.entry(t).or_default().push(c.ret);
+            } else {
+                m.edge(elems, c.ret);
+            }
             ret_prim(m, call, prim::UNDEF);
         }
         // The removed elements, in an array made through the receiver's

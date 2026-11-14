@@ -59,6 +59,7 @@ mod sloppy_this_wrapper;
 mod computed_method_key;
 mod rest_instances;
 mod rest_positions;
+mod rest_shift;
 mod builtin_fn_identity;
 mod builtin_fn_keys;
 mod builtin_members;

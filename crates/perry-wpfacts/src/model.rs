@@ -1357,6 +1357,9 @@ pub struct Node {
     /// setter, nor a class's `prototype` or `constructor` (15.7.14
     /// ClassDefinitionEvaluation, 10.2.8 MakeMethod with enumerable false).
     pub enum_key: bool,
+    /// DEADFN15: a rest array arriving here may be reached by another
+    /// activation of its function (`Model::rest_front_watch`).
+    pub front_watch: bool,
     /// The integer interval of the Numbers it holds (`range::Iv`).
     pub range: range::Iv,
     /// The interval grew since the node was last delivered.
@@ -1801,6 +1804,19 @@ pub struct Model {
     /// Rest parameter arrays (`Model::is_rest_arr`): index-exact
     /// (`Model::index_slot`) from their birth.
     pub rest_param_tmpls: crate::pts::FxHashSet<TmplId>,
+    /// DEADFN15: the function whose rest parameter makes template `tm`.
+    pub rest_owner: std::collections::HashMap<TmplId, FnIdx>,
+    /// DEADFN15: the function and loop depth of each source call site.
+    pub call_place: std::collections::HashMap<CallId, (FnIdx, u32)>,
+    /// DEADFN15: per rest array token, what was stored directly at its
+    /// index 0 (`Model::rest_front`), the one site that shifts it, whether
+    /// it lost its confinement (`rest_front_widen`), the shift results read
+    /// from the front, and the nodes watched for it.
+    pub rest_fronts: std::collections::HashMap<Tok, NodeId>,
+    pub rest_front_site: std::collections::HashMap<Tok, SiteId>,
+    pub rest_front_open: std::collections::HashSet<Tok>,
+    pub rest_front_reads: std::collections::HashMap<Tok, Vec<NodeId>>,
+    pub rest_front_watch_fn: std::collections::HashMap<NodeId, FnIdx>,
     /// Rule RT (`builtins::regex_tail`): the tails of the analysable regex
     /// literals, the tail of each literal's template (its
     /// [[OriginalSource]] and [[OriginalFlags]], 22.2.3.1; no program

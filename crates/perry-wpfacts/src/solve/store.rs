@@ -823,6 +823,17 @@ impl Model {
                 let s = self.index_slot(t, i);
                 self.edge(src, s);
             }
+            // DEADFN15: the front (`rest_front`) gets index 0's stores and
+            // the stores at an index not known; a `length` store may move
+            // index 0 (C1).
+            if self.is_rest_arr(t) {
+                if self.is_array_length(t, key) {
+                    self.rest_front_widen(t);
+                } else if matches!((slot, fixed, key), (Some(0), _, _) | (_, Some(0), _) | (None, None, Key::Any(_))) {
+                    let n = self.rest_front(t);
+                    self.edge(src, n);
+                }
+            }
             match slot.is_some() || fixed.is_some() {
                 true => self.arr_written_at(t),
                 false => self.arr_written(t),

@@ -55,6 +55,7 @@ impl<'a> Gen<'a> {
             site: id,
             region: self.region(),
         });
+        self.m.call_place.insert(id, (self.m.cur_fn, self.loop_depth));
         if let Some((f, m)) = self.m.clause {
             if self.m.cur_fn == f {
                 self.m.call_reach.insert(id, m);

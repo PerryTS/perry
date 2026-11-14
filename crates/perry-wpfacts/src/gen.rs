@@ -1371,8 +1371,13 @@ impl<'a> Gen<'a> {
         let mut rest = None;
         let mut mapped = None;
         let mut arguments = None;
+        // DEADFN15 C3 (c): `this` and the parameters but the rest one.
+        self.m.rest_front_watch(this, fx);
         for p in params {
             let n = self.local(mi, p.id);
+            if !p.is_rest {
+                self.m.rest_front_watch(n, fx);
+            }
             // `arguments` beside a user rest parameter is no rest itself
             // (the HIR appends it after `...r`), but the same object: every
             // argument, never a positional one.
@@ -1384,6 +1389,7 @@ impl<'a> Gen<'a> {
                     None => {
                         let t = self.new_arr_template(mi, "rest");
                         self.m.rest_param_tmpls.insert(t);
+                        self.m.rest_owner.insert(t, self.m.cur_fn);
                         t
                     }
                 };
@@ -2187,6 +2193,8 @@ impl<'a> Gen<'a> {
                 if self.m.cur_fn != NO_FN {
                     let f = self.m.cur_fn;
                     self.m.captures.insert((n, f));
+                    // DEADFN15 C3 (a): a captured variable is shared.
+                    self.m.rest_front_watch(n, NO_FN);
                 }
             }
             return n;

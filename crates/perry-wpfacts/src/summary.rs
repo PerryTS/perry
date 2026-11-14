@@ -1431,6 +1431,9 @@ impl Model {
                     .map(|j| self.node_named("ctx", || format!("ctx{c}.{j}")))
                     .collect();
                 self.sum.ctx_of.insert((g, key, vc), c);
+                for &x in &cn {
+                    self.rest_front_watch(x, NO_FN);
+                }
                 self.sum.ctx_nodes.push(cn);
                 self.sum.ctx_lay.push(lay);
                 self.sum.ctx_vc.push(vc);
@@ -1462,13 +1465,17 @@ impl Model {
     /// what an escaped, widened or unknown caller's run reads holds what
     /// any call passes (the merged array, as before runs had their own).
     fn rest_template_any(&mut self, f: FnIdx) -> Option<NodeId> {
+        let t = self.rest_template_tok(f)?;
+        Some(self.field_any(t))
+    }
+
+    /// The rest template token of `f` (`rest_template_any`).
+    fn rest_template_tok(&mut self, f: FnIdx) -> Option<Tok> {
         let r = self.funcs[f as usize].rest?;
         let mut ts = Vec::new();
         self.nodes[r as usize].pts.sorted_into(&mut ts);
-        let t = ts
-            .into_iter()
-            .find(|&t| matches!(self.toks[t as usize], TokKind::Obj(tm, NO_CTX) if self.rest_param_tmpls.contains(&tm)))?;
-        Some(self.field_any(t))
+        ts.into_iter()
+            .find(|&t| matches!(self.toks[t as usize], TokKind::Obj(tm, NO_CTX) if self.rest_param_tmpls.contains(&tm)))
     }
 
     pub(crate) fn bind_summarized(&mut self, call: CallId, ft: Tok) {
@@ -1557,6 +1564,19 @@ impl Model {
         let rest_fa = (rest != NO_NODE && !exact).then(|| self.field_any_node_of_node(rest));
         let first = if has_arguments { 0 } else { terms.len() };
         let merged = (rest != NO_NODE).then(|| self.rest_template_any(f)).flatten();
+        // DEADFN15: the template's front gets this call's first rest
+        // argument (any argument where positions are not known).
+        let merged_front = match merged {
+            Some(_) => self.rest_template_tok(f).map(|t| self.rest_front(t)),
+            None => None,
+        };
+        // C3 (c): a rest array of `f` in a parameter or `this` of a run of
+        // `f` may be another activation's.
+        for &p in &terms {
+            self.rest_front_watch(p, f);
+        }
+        let this_term = self.sum.insts[inst as usize].this;
+        self.rest_front_watch(this_term, f);
         if rest != NO_NODE {
             for i in first..nargs {
                 let a = self.calls[c].args[i];
@@ -1567,6 +1587,11 @@ impl Model {
                 self.edge(a, d);
                 if let Some(m) = merged {
                     self.edge(a, m);
+                }
+                if let Some(mf) = merged_front {
+                    if !exact || i == first {
+                        self.edge(a, mf);
+                    }
                 }
             }
         }
@@ -1586,6 +1611,9 @@ impl Model {
             }
             if let Some(m) = merged {
                 self.edge(elems, m);
+            }
+            if let Some(mf) = merged_front {
+                self.edge(elems, mf);
             }
             for i in 0..terms.len() {
                 if caps[i].is_some() {

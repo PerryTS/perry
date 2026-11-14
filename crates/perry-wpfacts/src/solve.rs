@@ -1022,6 +1022,10 @@ impl Model {
             if delta.is_empty() && dprim == 0 && !dstrs && !drange {
                 continue;
             }
+            if self.nodes[n as usize].front_watch && !delta.is_empty() {
+                let ts: Vec<Tok> = delta.iter().copied().collect();
+                self.rest_front_arrived(n, &ts);
+            }
             // Only a node's string constants (`Node::strs`) and/or its
             // intervals (`model::range`: a Number's, a String's code) grew:
             // re-deliver them along the edges (STR with the constants, the

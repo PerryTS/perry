@@ -339,6 +339,9 @@ impl Model {
             self.objtag_widen(t);
         }
         self.ta_len_open(t);
+        if self.is_rest_arr(t) {
+            self.rest_front_widen(t);
+        }
         self.index_slots_merge(t);
         self.arr_len_top(t);
         self.map_open(t);
