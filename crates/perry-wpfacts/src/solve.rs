@@ -250,6 +250,10 @@ impl Model {
             let at = std::panic::Location::caller();
             self.prov_arrivals(n, &mut fresh.iter().copied(), false, at);
         }
+        if self.keysnap.is_some() && !self.realm_held && !fresh.is_empty() {
+            let at = std::panic::Location::caller();
+            self.keysnap_arrivals(n, &fresh, at);
+        }
         self.fresh = fresh;
         self.fresh_seen = seen;
         if top_new && self.diagnostic.is_some() {
