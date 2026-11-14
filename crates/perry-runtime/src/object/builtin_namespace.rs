@@ -407,6 +407,9 @@ fn violated(i: usize, member: &[u8], why: &str) -> ! {
 /// function-valued member, so a guarded site's check can compare the member
 /// it is about to bypass with the one the realm installed. Never consulted
 /// by anything but [`js_builtin_namespace_contract_check`].
+// Inlined into each seal (the realm seal's loop and phase B's one-namespace
+// seal), so that the realm seal stays the one function it was.
+#[inline(always)]
 fn contract_mode() -> bool {
     // SAFETY: a NUL-terminated literal; `getenv` only reads the environment.
     let v = unsafe { libc::getenv(c"PERRY_CHECK_CONTRACTS".as_ptr()) };

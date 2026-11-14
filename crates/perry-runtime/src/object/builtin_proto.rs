@@ -273,7 +273,15 @@ pub(crate) fn seal_realm_family_of(
     let is_object = unsafe { crate::value::addr_class::try_read_gc_header(proto) }
         .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
     if proto != 0 && is_object {
-        seal_built_intrinsic(*family, proto as *mut ObjectHeader);
+        // `seal_built_intrinsic`'s three steps, written out: that function
+        // keeps its one caller (and its place in the start-up text).
+        let proto = proto as *mut ObjectHeader;
+        let _no_move = crate::gc::GcSuppressScope::new();
+        super::own_override::as_builtin_definition(|| unsafe {
+            trace_seal(*family, (*proto).parent_class_id);
+            seal_object(proto, *family);
+            crate::agent_ptrs::publish_intrinsic_proto(*family as usize, proto);
+        });
     }
 }
 
