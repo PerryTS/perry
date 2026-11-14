@@ -899,6 +899,28 @@ pub(crate) fn ordinary_dir_addr() -> *const u8 {
     ShapeSlab::ordinary_dir_addr()
 }
 
+/// The property-atom index (`string::intern`) the directory at `dir` names:
+/// null until the agent's first atom, and for `PERRY_EMPTY_SHAPE_DIR`. One
+/// load from the directory in hand; no thread-local is named, so the
+/// directory's static stays private to its module.
+///
+/// # Safety
+/// `dir` is an agent's ordinary directory or `PERRY_EMPTY_SHAPE_DIR`.
+#[inline(always)]
+pub(crate) unsafe fn dir_atoms(dir: *const u8) -> *const u8 {
+    *(dir.add(shapes_store::DIR_ATOMS_OFFSET) as *const *const u8)
+}
+
+/// `string::intern` publishes the agent's atom index when its slots move.
+pub(crate) fn publish_agent_atoms(table: *const u8) {
+    ShapeSlab::publish_agent_atoms(table);
+}
+
+/// `string::intern` retracts the agent's atom index when it is dropped.
+pub(crate) fn retract_agent_atoms(table: *const u8) {
+    ShapeSlab::retract_agent_atoms(table);
+}
+
 /// [`positional_key_words`] for the computed-key read
 /// (`object::dynamic_key_read`), which also refuses a shape whose
 /// [[Prototype]] identity is PER-OBJECT.

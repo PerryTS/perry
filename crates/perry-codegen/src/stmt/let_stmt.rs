@@ -1175,25 +1175,15 @@ pub(crate) fn lower_let(
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
-    // And one PROFITABILITY term, which is not a safety term at all (#7128).
-    // Every rule above answers "may we?"; this one answers "should we?". A
-    // local written after its declaration, with no i32-consuming read anywhere
-    // and at least one double-consuming read inside a loop, pays a
-    // `sitofp`/`uitofp` per iteration and buys nothing back — measured at
-    // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
-    // where the mixed representation additionally costs the loop its
-    // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    // Representation RFC §10 (P1): the whole-program facts' representation
-    // is the decision for a local they cover (`codegen/facts_rep.rs`).
+    // "Should we?" is the whole-program facts' answer (representation RFC
+    // §10.3, P1; `codegen/facts_rep.rs`): a local they cover takes an i32
+    // slot exactly when they give it `I32`, which carries int demand (an
+    // index, a bitwise operand, `Math.imul` reached along copies). A counter
+    // that only feeds double arithmetic (#7128, `15_mandelbrot`) is `F64`
+    // there and stays out. A local the facts do not cover keeps the
+    // collectors' value proof.
     let facts_rep = crate::codegen::facts_rep::local(ctx, id);
-    let unprofitable = match facts_rep {
-        Some(crate::codegen::FactsRep::I32) => false,
-        Some(_) => true,
-        None => ctx
-            .native_facts
-            .unprofitable_canonical_i32_locals()
-            .contains(&id),
-    };
+    let no_int_demand = !matches!(facts_rep, None | Some(crate::codegen::FactsRep::I32));
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
@@ -1203,7 +1193,7 @@ pub(crate) fn lower_let(
     let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
     let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
-        && !unprofitable
+        && !no_int_demand
         && init_in_i32_range;
     let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
@@ -1246,7 +1236,7 @@ pub(crate) fn lower_let(
                 closure_referenced: ctx.repsel_closure_ref_locals.contains(&id),
                 array_row_alias: ctx.array_row_aliases.contains_key(&id),
                 not_index_used_or_bounded: !canonical_safe_local,
-                no_i32_consuming_use: unprofitable,
+                no_i32_consuming_use: no_int_demand,
                 context: ctx.repsel_context_denial,
             },
         );

@@ -188,6 +188,9 @@ pub struct ObjectMeta {
     /// `POINTER_TAG`-boxed `GC_TYPE_ARRAY` a sloppy MAPPED one, whose element
     /// `i` is the box parameter `i` aliases (see `object/arguments.rs`).
     ///
+    /// Written at birth together with `arguments_birth`; every arguments
+    /// object has this record from birth on.
+    ///
     /// It replaces `ARGUMENTS_OBJECTS`, a thread-local table keyed by the
     /// owner's ADDRESS that cost a hash insert per call, a rekey per move and
     /// a dead-owner prune per collection. The mapped array is a traced child
@@ -208,6 +211,17 @@ pub struct ObjectMeta {
     ///
     /// Placed before `native_state` for the same reason as `proto_serial`.
     pub instance_birth: u64,
+    /// An `arguments` object's birth word, 0 on every other object: the low
+    /// 32 bits are its born length, the high 32 bits the LayoutWord it was
+    /// born with. The live shape still equal to that word proves every index
+    /// below the length is an own data slot (`object/arguments.rs`). It lives
+    /// here, not in the object's cell, so the cell is exactly its property
+    /// slots and the inline capacity stays a function of the cell size alone.
+    ///
+    /// POD, never a heap edge.
+    ///
+    /// Placed before `native_state` for the same reason as `proto_serial`.
+    pub arguments_birth: u64,
     /// #340/#341 honest tags: packed state for a runtime class whose instances
     /// are ORDINARY objects rather than small registry handles
     /// (`TextEncoder` / `TextDecoder` today; the other twelve families follow).

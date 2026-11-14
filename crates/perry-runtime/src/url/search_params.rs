@@ -21,6 +21,21 @@ pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
 /// reader lists them and no script can name them.
 const URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "#<perry:url-search-params-entries>";
 
+/// The entries array, or one of its `[name, value]` pairs, as the value its
+/// slot holds: a `POINTER_TAG` array pointer. The slots are JS value slots (a
+/// field of the params object, an element of the entries array), so the edge
+/// carries its tag like every other value. One body for all the writers.
+#[inline(never)]
+fn entries_value(array: *mut ArrayHeader) -> f64 {
+    crate::value::js_nanbox_pointer(array as i64)
+}
+
+/// The array an entries slot holds; null for a slot that holds no pointer.
+#[inline(never)]
+fn entries_array_of(slot_value: f64) -> *mut ArrayHeader {
+    crate::value::js_nanbox_get_pointer(slot_value) as *mut ArrayHeader
+}
+
 /// True when a keys array leads with the native params' private entries
 /// slot. Only the layout carries that key as a private entry, so an ordinary
 /// object whose first key has the same spelling never passes.
@@ -320,11 +335,11 @@ pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) ->
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&value));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
 
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(obj, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
 
     obj
@@ -339,7 +354,7 @@ pub(crate) fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(S
     let params = resolve_search_params_receiver(params);
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *mut ArrayHeader = f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
+    let entries_ptr = entries_array_of(entries_f64);
 
     if entries_ptr.is_null() {
         return Vec::new();
@@ -350,7 +365,7 @@ pub(crate) fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(S
 
     for i in 0..len {
         let pair_f64 = crate::array::js_array_get_f64(entries_ptr, i as u32);
-        let pair_ptr: *mut ArrayHeader = f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader;
+        let pair_ptr = entries_array_of(pair_f64);
 
         if !pair_ptr.is_null() {
             let key_f64 = crate::array::js_array_get_f64(pair_ptr, 0);
@@ -650,10 +665,10 @@ pub extern "C" fn js_url_search_params_set(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -682,10 +697,10 @@ pub extern "C" fn js_url_search_params_append(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -709,10 +724,10 @@ pub extern "C" fn js_url_search_params_delete(params: *mut ObjectHeader, name_va
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -764,10 +779,10 @@ pub extern "C" fn js_url_search_params_delete2(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -787,8 +802,7 @@ pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
     }
     let params = resolve_search_params_receiver(params);
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *const ArrayHeader =
-        f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader;
+    let entries_ptr = entries_array_of(entries_f64);
     if entries_ptr.is_null() {
         return 0;
     }
@@ -866,10 +880,10 @@ pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,

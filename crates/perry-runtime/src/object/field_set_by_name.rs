@@ -421,11 +421,12 @@ pub extern "C" fn js_object_set_field_by_name(
         // cell as an `ObjectHeader` and corrupt its boxed payload (which segfaults
         // on the next deref). The cell's `temporal_rs` slots are immutable, but a
         // user-defined *expando* property is legal and lives in the exotic side
-        // table (like Date/RegExp). `obj` still carries its NaN-box tag here
-        // (`0x7FFD…` for a real cell), so route through `exotic_expando_kind_of_value`,
-        // which checks the tag before masking to the cleaned heap address.
+        // table (like Date/RegExp). `obj` is this entry's typed receiver pointer,
+        // with its POINTER_TAG (`0x7FFD…`) or stripped of it by a native caller:
+        // the receiver-word classifier takes both; the value classifier takes
+        // only values.
         if let Some((addr, kind @ super::exotic_expando::ExoticKind::Temporal)) =
-            super::exotic_expando::exotic_expando_kind_of_value(f64::from_bits(obj as u64))
+            super::exotic_expando::exotic_expando_kind_of_receiver_word(obj as u64)
         {
             if !key.is_null() {
                 unsafe {

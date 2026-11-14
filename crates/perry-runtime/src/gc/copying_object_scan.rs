@@ -37,7 +37,7 @@ use super::*;
 /// not stored.
 #[derive(Clone)]
 struct PlainObjectPlan {
-    prefix: [Option<GcMutableSlot>; 5],
+    prefix: [Option<GcMutableSlot>; 4],
     #[cfg(any(test, debug_assertions))]
     next_prefix: usize,
     payload: HeapSlotRange,
@@ -121,9 +121,9 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
-            prefix: [None; 5],
+            prefix: [None; 4],
             #[cfg(any(test, debug_assertions))]
-            next_prefix: 5,
+            next_prefix: 4,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
         };
@@ -170,7 +170,7 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
     let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);
     let prototype_edge = crate::object::gc_shape_prototype_edge_slot(shape, false);
     // Visit order of the generic walk: prefix (none for objects), keys edge,
-    // prototype edge, evaluation holder, meta, the private arguments tail, payload.
+    // prototype edge, evaluation holder, meta, payload.
     PlainObjectPlan {
         prefix: [
             keys_edge.map(GcMutableSlot::runtime_root),
@@ -178,7 +178,6 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
             crate::object::shapes::evaluation_holder_slot(shape, false)
                 .map(GcMutableSlot::runtime_root),
             meta.map(|slot| GcMutableSlot::pointer(slot.cast())),
-            crate::object::arguments_mapping_slot(obj).map(|slot| GcMutableSlot::new(slot, None)),
         ],
         #[cfg(any(test, debug_assertions))]
         next_prefix: 0,
