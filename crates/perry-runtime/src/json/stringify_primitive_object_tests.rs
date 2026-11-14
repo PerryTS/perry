@@ -76,11 +76,17 @@ fn primitive_object_preflight_rejects_callback_and_hole_tags() {
         POINTER_TAG | 0x12345678,
         BIGINT_TAG | 1,
         crate::value::TAG_HOLE,
-        0x0000_0012_3456_7888,
     ] {
         assert!(!field_is_primitive(bits));
     }
-    for bits in [TAG_UNDEFINED, TAG_NULL, TAG_TRUE, 1.5f64.to_bits()] {
+    // A word without a tag is a Number, an address-shaped subnormal included.
+    for bits in [
+        TAG_UNDEFINED,
+        TAG_NULL,
+        TAG_TRUE,
+        1.5f64.to_bits(),
+        0x0000_0012_3456_7888,
+    ] {
         assert!(field_is_primitive(bits));
     }
 }
