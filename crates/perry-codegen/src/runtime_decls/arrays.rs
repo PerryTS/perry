@@ -447,6 +447,7 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // inspecting its runtime GC kind (Map/Set/Array/string/iterable).
     // Returns a NaN-boxed array JSValue.
     module.declare_function("js_for_of_to_array", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_typed_array_for_of_admits", DOUBLE, &[DOUBLE]);
 
     declare_phase_b_objects(module);
 }

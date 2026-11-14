@@ -568,15 +568,17 @@ pub extern "C" fn js_process_cwd() -> *mut StringHeader {
             js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, cwd);
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|_| String::new());
-        let bytes = cwd.as_bytes();
-        js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, cwd);
+            let cwd = std::env::current_dir()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| String::new());
+            let bytes = cwd.as_bytes();
+            js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+        }
     }
 }
 static PROCESS_ENTRY_PATH: OnceLock<String> = OnceLock::new();
@@ -612,18 +614,20 @@ pub extern "C" fn js_process_argv_value() -> f64 {
         crate::snap_census::argv_read(value);
         return value;
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, argv);
-        if crate::process::worker_restrictions::in_node_worker() {
-            if let Some(value) =
-                crate::object::native_namespace_prop_override_get("process", "argv")
-            {
-                return value;
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, argv);
+            if crate::process::worker_restrictions::in_node_worker() {
+                if let Some(value) =
+                    crate::object::native_namespace_prop_override_get("process", "argv")
+                {
+                    return value;
+                }
             }
+            crate::value::js_nanbox_pointer(js_process_argv() as i64)
         }
-        crate::value::js_nanbox_pointer(js_process_argv() as i64)
     }
 }
 pub(crate) fn allocate_process_argv(capacity: u32) -> *mut ArrayHeader {
@@ -684,50 +688,52 @@ pub extern "C" fn js_process_argv() -> *mut ArrayHeader {
             result
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, argv);
-        use crate::array::js_array_push_f64;
-        use crate::value::js_nanbox_string;
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, argv);
+            use crate::array::js_array_push_f64;
+            use crate::value::js_nanbox_string;
 
-        // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
-        let args: Vec<String> = crate::process::process_args_lossy().collect();
-        // Match Node.js behavior: argv[0] = binary path (like node path),
-        // argv[1] = source entry path (like script path), argv[2+] = user args.
-        // Node.js: ["/usr/bin/node", "/path/to/script.js", ...user_args]
-        // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
-        // If an older/foreign codegen does not seed the entry path, retain the
-        // historical binary-path fallback while keeping user args at index 2+.
-        let arr = allocate_process_argv((args.len() + 1) as u32);
+            // #9401: never `std::env::args()` — it panics on a non-UTF-8 argument.
+            let args: Vec<String> = crate::process::process_args_lossy().collect();
+            // Match Node.js behavior: argv[0] = binary path (like node path),
+            // argv[1] = source entry path (like script path), argv[2+] = user args.
+            // Node.js: ["/usr/bin/node", "/path/to/script.js", ...user_args]
+            // Compiled: ["/path/to/binary", "/path/to/entry.ts", ...user_args]
+            // If an older/foreign codegen does not seed the entry path, retain the
+            // historical binary-path fallback while keeping user args at index 2+.
+            let arr = allocate_process_argv((args.len() + 1) as u32);
 
-        let mut result = arr;
-        if let Some(binary_path) = args.first() {
-            // Node exposes execPath here; argv0 separately retains the launch name.
-            let exec_path = crate::process::process_exec_path_string();
-            let bytes = exec_path.as_bytes();
-            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            let nanboxed = js_nanbox_string(str_ptr as i64);
-            result = js_array_push_f64(result, nanboxed);
-            // argv[1]: compiler-seeded source entry path.
-            let entry_path = PROCESS_ENTRY_PATH
-                .get()
-                .map(String::as_str)
-                .unwrap_or(binary_path);
-            let entry_bytes = entry_path.as_bytes();
-            let str_ptr2 = js_string_from_bytes(entry_bytes.as_ptr(), entry_bytes.len() as u32);
-            let nanboxed2 = js_nanbox_string(str_ptr2 as i64);
-            result = js_array_push_f64(result, nanboxed2);
+            let mut result = arr;
+            if let Some(binary_path) = args.first() {
+                // Node exposes execPath here; argv0 separately retains the launch name.
+                let exec_path = crate::process::process_exec_path_string();
+                let bytes = exec_path.as_bytes();
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                let nanboxed = js_nanbox_string(str_ptr as i64);
+                result = js_array_push_f64(result, nanboxed);
+                // argv[1]: compiler-seeded source entry path.
+                let entry_path = PROCESS_ENTRY_PATH
+                    .get()
+                    .map(String::as_str)
+                    .unwrap_or(binary_path);
+                let entry_bytes = entry_path.as_bytes();
+                let str_ptr2 = js_string_from_bytes(entry_bytes.as_ptr(), entry_bytes.len() as u32);
+                let nanboxed2 = js_nanbox_string(str_ptr2 as i64);
+                result = js_array_push_f64(result, nanboxed2);
+            }
+            // argv[2+]: user arguments
+            for arg in args.iter().skip(1) {
+                let bytes = arg.as_bytes();
+                let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                let nanboxed = js_nanbox_string(str_ptr as i64);
+                result = js_array_push_f64(result, nanboxed);
+            }
+
+            result
         }
-        // argv[2+]: user arguments
-        for arg in args.iter().skip(1) {
-            let bytes = arg.as_bytes();
-            let str_ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            let nanboxed = js_nanbox_string(str_ptr as i64);
-            result = js_array_push_f64(result, nanboxed);
-        }
-
-        result
     }
 }
 /// The OS process id for names and log lines. `std::process::id()` panics on
@@ -766,23 +772,25 @@ pub extern "C" fn js_process_pid() -> f64 {
             }
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        #[cfg(unix)]
-        unsafe {
-            libc::getpid() as f64
-        }
-        #[cfg(windows)]
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
         {
-            extern "system" {
-                fn GetCurrentProcessId() -> u32;
+            #[cfg(unix)]
+            unsafe {
+                libc::getpid() as f64
             }
-            unsafe { GetCurrentProcessId() as f64 }
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            0.0
+            #[cfg(windows)]
+            {
+                extern "system" {
+                    fn GetCurrentProcessId() -> u32;
+                }
+                unsafe { GetCurrentProcessId() as f64 }
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                0.0
+            }
         }
     }
 }
@@ -807,21 +815,23 @@ pub extern "C" fn js_process_ppid() -> f64 {
             }
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        #[cfg(unix)]
-        unsafe {
-            libc::getppid() as f64
-        }
-        #[cfg(windows)]
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
         {
-            // Fallback: return 1 (system process)
-            1.0
-        }
-        #[cfg(not(any(unix, windows)))]
-        {
-            0.0
+            #[cfg(unix)]
+            unsafe {
+                libc::getppid() as f64
+            }
+            #[cfg(windows)]
+            {
+                // Fallback: return 1 (system process)
+                1.0
+            }
+            #[cfg(not(any(unix, windows)))]
+            {
+                0.0
+            }
         }
     }
 }
@@ -899,18 +909,20 @@ pub extern "C" fn js_process_hrtime_bigint() -> f64 {
             js_nanbox_bigint(bi as i64)
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, clock);
-        use crate::bigint_hooks::js_bigint_from_u64;
-        use crate::value::js_nanbox_bigint;
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, clock);
+            use crate::bigint_hooks::js_bigint_from_u64;
+            use crate::value::js_nanbox_bigint;
 
-        let elapsed = get_hrtime_start().elapsed();
-        // Add a base offset so the value is always > 0 even on the first call
-        let nanos = elapsed.as_nanos() as u64 + 1_000_000_000;
-        let bi = js_bigint_from_u64(nanos);
-        js_nanbox_bigint(bi as i64)
+            let elapsed = get_hrtime_start().elapsed();
+            // Add a base offset so the value is always > 0 even on the first call
+            let nanos = elapsed.as_nanos() as u64 + 1_000_000_000;
+            let bi = js_bigint_from_u64(nanos);
+            js_nanbox_bigint(bi as i64)
+        }
     }
 }
 /// process.hrtime(prior?) -> [seconds, nanoseconds] integer array.
@@ -982,64 +994,66 @@ pub extern "C" fn js_process_hrtime(prior: f64) -> f64 {
             f64::from_bits(JSValue::pointer(arr as *const u8).bits())
         });
     }
-
     #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
     {
-        crate::effect!(host_read, clock);
-        use crate::value::JSValue;
-        // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
-        // is supplied but isn't an Array (e.g. `process.hrtime('abc')`).
-        // Undefined falls through to the no-prior baseline read; an array
-        // with NaN-y entries is silently zeroed by `extract_hrtime_prior`,
-        // matching Node's lenient numeric coercion inside the array.
-        let prior_jv = JSValue::from_bits(prior.to_bits());
-        if !prior_jv.is_undefined() && !crate::process::is_array_value(prior_jv) {
-            let message = format!(
-                "The \"time\" argument must be an instance of Array. Received {}",
-                crate::fs::validate::describe_received(prior)
-            );
-            crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
-        }
-        // #3039 — a supplied prior tuple must have exactly two elements; Node
-        // throws RangeError [ERR_OUT_OF_RANGE] ("It must be 2. Received <len>")
-        // for any other length.
-        if !prior_jv.is_undefined() {
-            let arr = prior_jv.as_pointer::<crate::array::ArrayHeader>();
-            let len = crate::array::js_array_length(arr);
-            if len != 2 {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, clock);
+            use crate::value::JSValue;
+            // #2013 — Node throws TypeError ERR_INVALID_ARG_TYPE when `prior`
+            // is supplied but isn't an Array (e.g. `process.hrtime('abc')`).
+            // Undefined falls through to the no-prior baseline read; an array
+            // with NaN-y entries is silently zeroed by `extract_hrtime_prior`,
+            // matching Node's lenient numeric coercion inside the array.
+            let prior_jv = JSValue::from_bits(prior.to_bits());
+            if !prior_jv.is_undefined() && !crate::process::is_array_value(prior_jv) {
                 let message = format!(
-                    "The value of \"time\" is out of range. It must be 2. Received {}",
-                    len
+                    "The \"time\" argument must be an instance of Array. Received {}",
+                    crate::fs::validate::describe_received(prior)
                 );
-                crate::fs::validate::throw_range_error_with_code(&message);
+                crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
             }
-        }
-        let elapsed = get_hrtime_start().elapsed();
-        let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
-        let mut secs = (total_ns / 1_000_000_000) as i64;
-        let mut nanos = (total_ns % 1_000_000_000) as i64;
+            // #3039 — a supplied prior tuple must have exactly two elements; Node
+            // throws RangeError [ERR_OUT_OF_RANGE] ("It must be 2. Received <len>")
+            // for any other length.
+            if !prior_jv.is_undefined() {
+                let arr = prior_jv.as_pointer::<crate::array::ArrayHeader>();
+                let len = crate::array::js_array_length(arr);
+                if len != 2 {
+                    let message = format!(
+                        "The value of \"time\" is out of range. It must be 2. Received {}",
+                        len
+                    );
+                    crate::fs::validate::throw_range_error_with_code(&message);
+                }
+            }
+            let elapsed = get_hrtime_start().elapsed();
+            let total_ns = elapsed.as_nanos() as u64 + 1_000_000_000;
+            let mut secs = (total_ns / 1_000_000_000) as i64;
+            let mut nanos = (total_ns % 1_000_000_000) as i64;
 
-        let undef_bits = crate::value::TAG_UNDEFINED;
-        if prior.to_bits() != undef_bits {
-            let (prev_s, prev_ns) = extract_hrtime_prior(prior);
-            let mut diff_s = secs - prev_s;
-            let mut diff_ns = nanos - prev_ns;
-            if diff_ns < 0 {
-                diff_s -= 1;
-                diff_ns += 1_000_000_000;
+            let undef_bits = crate::value::TAG_UNDEFINED;
+            if prior.to_bits() != undef_bits {
+                let (prev_s, prev_ns) = extract_hrtime_prior(prior);
+                let mut diff_s = secs - prev_s;
+                let mut diff_ns = nanos - prev_ns;
+                if diff_ns < 0 {
+                    diff_s -= 1;
+                    diff_ns += 1_000_000_000;
+                }
+                if diff_s < 0 {
+                    diff_s = 0;
+                    diff_ns = 0;
+                }
+                secs = diff_s;
+                nanos = diff_ns;
             }
-            if diff_s < 0 {
-                diff_s = 0;
-                diff_ns = 0;
-            }
-            secs = diff_s;
-            nanos = diff_ns;
-        }
 
-        let arr = crate::array::js_array_alloc(2);
-        let arr = crate::array::js_array_push(arr, JSValue::number(secs as f64));
-        let arr = crate::array::js_array_push(arr, JSValue::number(nanos as f64));
-        f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+            let arr = crate::array::js_array_alloc(2);
+            let arr = crate::array::js_array_push(arr, JSValue::number(secs as f64));
+            let arr = crate::array::js_array_push(arr, JSValue::number(nanos as f64));
+            f64::from_bits(JSValue::pointer(arr as *const u8).bits())
+        }
     }
 }
 /// Read the two numeric fields of a prior hrtime tuple (an array). The
