@@ -2149,6 +2149,7 @@ mod peelk20;
 mod peelk21;
 mod skinroot10;
 mod skinroot14;
+mod skinroot17;
 mod peelk22;
 mod peelk23;
 mod fn_number_key;

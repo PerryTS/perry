@@ -1266,6 +1266,29 @@ pub(super) fn native_method(
                 Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
             }
         }
+        // A typed array's prototypes, under a key neither `%TypedArray%.prototype`
+        // nor the kind's own prototype declares (ECMA-262 23.2.3, 23.2.7: the
+        // realm's declarations list their members) and no write may have
+        // added: [[Get]] continues on `Object.prototype` (as for `Array`
+        // above), whose method runs with the receiver as `this`
+        // (`Object.prototype.valueOf`, 20.1.3.7: ToObject(this value), no
+        // program code). A well-known symbol key stays as before.
+        (n0, n) if typed_array_proto_name(n0)
+            && !n.starts_with("@@")
+            && !typed_array_proto_declares(m, n0, n)
+            && !native_written(m, np, a) =>
+        {
+            m.native_missing
+                .push((np, a, NativeMiss::Call(origin, call)));
+            match members::member(Family::Object, n) {
+                Some(Mem::Fn) => {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, origin, Key::Named(a), call);
+                }
+                None => {}
+                Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
+            }
+        }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
     }
@@ -1287,4 +1310,37 @@ pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
         TokKind::NativeProto(_, ns) => ns.is_some(),
         _ => super::global_object(m, np),
     }
+}
+
+/// `%TypedArray%.prototype` or a concrete kind's own prototype.
+fn typed_array_proto_name(n: &str) -> bool {
+    matches!(
+        n,
+        "%TypedArray%"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
+/// The realm declares `name` on `%TypedArray%.prototype` or on the kind's own
+/// prototype (`constructor`, `BYTES_PER_ELEMENT`), or on `Uint8Array.prototype`
+/// (base64/hex: those keep today's model on every kind).
+fn typed_array_proto_declares(m: &Model, native: &str, name: &str) -> bool {
+    let declared = |holder: Option<usize>| {
+        holder.is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    };
+    declared(m.declarations.named("%TypedArray%.prototype", m))
+        || declared(m.declarations.named("Uint8Array.prototype", m))
+        || (native != "%TypedArray%"
+            && declared(m.declarations.named(&format!("{native}.prototype"), m)))
 }
