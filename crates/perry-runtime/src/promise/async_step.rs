@@ -370,7 +370,14 @@ pub extern "C" fn js_promise_resolved_then(
                 || super::then::promise_inherited_user_then(inner_addr).is_some()
             {
                 bump(&MT_FAST_PATH_MISS);
-                let promise_val = box_promise_ptr(inner);
+                // `Promise.resolve(inner)` is `inner` only when its
+                // `constructor` is %Promise%; otherwise it is a new promise
+                // whose PromiseResolveThenableJob calls `inner.then`, so an
+                // abrupt `then` (a non-object `constructor` failing
+                // SpeciesConstructor) rejects it instead of throwing here
+                // (#13556, test262 Promise/resolve/arg-uniq-ctor).
+                let resolved = js_promise_resolved(value);
+                let promise_val = box_promise_ptr(resolved);
                 let fulfilled_val = closure_ptr_to_arg(on_fulfilled);
                 let rejected_val = closure_ptr_to_arg(on_rejected);
                 let result =
