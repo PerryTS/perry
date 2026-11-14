@@ -289,7 +289,11 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         // receiver) for this body's calls only (`Model::bind_via`), with
         // the raise of the code it may run. A born token's own field binds
         // the instance's copy of the call the same way on its own lookup:
-        // the binding is the token's, no effect of the body.
+        // the binding is the token's, no effect of the body. Only a rest
+        // array (8.6.3: a fresh array per call) is born so: any other
+        // literal whose methods its body calls keeps the merged token, as
+        // its born tokens' method runs would birth again from born tokens.
+        let rest = m.rest_param_tmpls.contains(&tm);
         let bound = |n: NodeId, c: &Cons| match c {
             Cons::ThisTo { origin } => *origin == t,
             Cons::BuiltinCallee => m.callee_sites.get(&n).is_some_and(|v| {
@@ -300,7 +304,8 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         };
         let own_cons = |n: NodeId| {
             let cs = &m.nodes[n as usize].cons;
-            let binds = cs.iter().any(|c| bound(n, c))
+            let binds = rest
+                && cs.iter().any(|c| bound(n, c))
                 && cs.iter().all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
             binds || cs.iter().all(|c| cache(n, c))
         };
