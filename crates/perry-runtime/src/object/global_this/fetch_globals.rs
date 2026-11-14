@@ -58,7 +58,19 @@ const REALM_MODE_POISON: u8 = 2;
 /// always was.
 #[inline(always)]
 pub(crate) fn realm_two_phase() -> bool {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return true;
+    }
     REALM_MODE.load(Ordering::Relaxed) != 0
+}
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Tests: THIS thread runs as a thread of a two-phase program
+    /// ([`core_realm_for_test`]); the process-wide mode stays off for the
+    /// other test threads.
+    static TEST_TWO_PHASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// This thread's realm global for a runtime reader of a phase-A intrinsic
@@ -110,6 +122,7 @@ fn realm_poison_seen(reader: &str) -> ! {
 #[cfg(test)]
 pub(crate) fn core_realm_for_test() -> f64 {
     assert_eq!(THREAD_GLOBAL_THIS.with(|c| c.core.get()), 0);
+    TEST_TWO_PHASE.with(|c| c.set(true));
     realm_setup(RealmPhases::Core, true)
 }
 
