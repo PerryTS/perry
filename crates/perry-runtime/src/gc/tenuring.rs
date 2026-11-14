@@ -57,10 +57,14 @@
 //! locked, unlike survivor occupancy, which is zero at S=1 and would
 //! leave the loop blind.
 //!
-//! There is no env knob here (see CLAUDE.md's GC knob kill-policy): the
-//! loop is always on, and its neutral state — influx below `desired`,
-//! survivor cohorts that die in place — computes S=4, which is
-//! bit-for-bit the previous fixed behaviour.
+//! The loop is always on. The occupancy rule's result is capped at
+//! [`OCCUPANCY_MAX_SURVIVALS`] (2): a small influx no longer climbs the
+//! ladder 2 -> 3 -> 4 (see that constant for the measurement). The
+//! survival-rate lock and the sweep seed are not capped and still reach 1.
+//! `PERRY_GC_TENURING_SURVIVALS_MAX=4` restores the old climb (whose neutral
+//! state — influx below `desired`, survivor cohorts that die in place —
+//! computes S=4, the previous fixed behaviour); the unit tests that pin the
+//! climb run under that setting, so both states stay exercised.
 //!
 //! ## Seeding the lock from a non-copying collection (#7598)
 //!
@@ -194,6 +198,31 @@ const _: () = assert!(GC_TENURING_SURVIVALS_MAX <= GC_MAX_PROMOTION_AGE + 1);
 /// on cc, which is why the clamp sticks there rather than oscillating.
 pub(super) const OCCUPANCY_MIN_SURVIVALS: u8 = 2;
 
+/// The highest threshold the **occupancy rule** may select by default.
+///
+/// The occupancy rule raises S when the Eden survivor influx is small
+/// (`1 + desired / influx`), i.e. exactly when few objects survive. A higher S
+/// then keeps every survivor in the semispaces for up to three copies before it
+/// may be promoted; on a small influx that buys nothing measurable and costs
+/// the copies. With the floor also at 2 the occupancy rule holds S at 2, and
+/// only the two paths that measure lifetime — the survival-rate lock and the
+/// sweep seed — move it (to 1).
+///
+/// Measured on qb10 (tenure2 lane, 2026-11-14, `instructions:u`, one binary,
+/// `PERRY_GC_TENURING_SURVIVALS=2` against the adaptive default, whose ladder
+/// climbed 2 -> 3 -> 4 on these programs): chess search -1.43 %, perft -1.42 %,
+/// legal -1.03 %, evaluate -0.31 %; a medium-lived record benchmark -1.1 to
+/// -1.7 %; a promise fan-out -0.13 %; peak RSS equal or lower. The pin also
+/// switched the lock off, which cost +14 to +32 % on retaining programs, so the
+/// cap applies to the occupancy rule only and the lock is untouched.
+///
+/// `PERRY_GC_TENURING_SURVIVALS_MAX=<n>` (clamped to
+/// `OCCUPANCY_MIN_SURVIVALS..=GC_TENURING_SURVIVALS_MAX`) changes the cap;
+/// `=4` is the previous climb.
+pub(super) const OCCUPANCY_MAX_SURVIVALS: u8 = 2;
+const _: () = assert!(OCCUPANCY_MIN_SURVIVALS <= OCCUPANCY_MAX_SURVIVALS);
+const _: () = assert!(OCCUPANCY_MAX_SURVIVALS <= GC_TENURING_SURVIVALS_MAX);
+
 /// Consecutive cycles the computed target must exceed the current threshold
 /// before it is raised (by one step).
 const RAISE_DEBOUNCE_CYCLES: u8 = 2;
@@ -297,6 +326,9 @@ thread_local! {
     /// promotion age. This is thread-local for the same reason as the adaptive
     /// state: runtime tests share one process and may run on different threads.
     static TENURING_SURVIVALS_TEST_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
+    /// Scoped occupancy-ceiling override, the test form of
+    /// `PERRY_GC_TENURING_SURVIVALS_MAX`.
+    static OCCUPANCY_MAX_TEST_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 }
 
 /// The survivals threshold the next copying minor should promote at:
@@ -440,6 +472,63 @@ fn tenuring_survivals_override() -> Option<u8> {
 #[inline]
 pub(super) fn saturated_tenuring_pin(pin: u8) -> u8 {
     pin.min(GC_MAX_PROMOTION_AGE)
+}
+
+/// The ceiling the occupancy rule may raise the threshold to:
+/// [`OCCUPANCY_MAX_SURVIVALS`] unless `PERRY_GC_TENURING_SURVIVALS_MAX=<u8>`
+/// is set (read once per process). Values outside
+/// `OCCUPANCY_MIN_SURVIVALS..=GC_TENURING_SURVIVALS_MAX` are clamped with one
+/// stderr warning; `=4` restores the previous 2 -> 3 -> 4 climb. It bounds the
+/// occupancy rule only: the survival-rate lock, the sweep seed and the unlock
+/// step are unaffected, and `PERRY_GC_TENURING_SURVIVALS` still pins S for
+/// every minor regardless of this ceiling.
+fn occupancy_max_survivals() -> u8 {
+    #[cfg(test)]
+    if let Some(forced) = OCCUPANCY_MAX_TEST_OVERRIDE.with(Cell::get) {
+        return forced;
+    }
+    use std::sync::OnceLock;
+    static CEILING: OnceLock<u8> = OnceLock::new();
+    *crate::once_init::get_or_init(&CEILING, || {
+        std::env::var("PERRY_GC_TENURING_SURVIVALS_MAX")
+            .ok()
+            .and_then(|v| v.trim().parse::<u8>().ok())
+            .map(|max| {
+                let effective = clamped_occupancy_max(max);
+                if effective != max {
+                    eprintln!(
+                        "[gc] PERRY_GC_TENURING_SURVIVALS_MAX={max} is outside \
+                         {OCCUPANCY_MIN_SURVIVALS}..={GC_TENURING_SURVIVALS_MAX}; using {effective}"
+                    );
+                }
+                effective
+            })
+            .unwrap_or(OCCUPANCY_MAX_SURVIVALS)
+    })
+}
+
+#[inline]
+fn clamped_occupancy_max(max: u8) -> u8 {
+    max.clamp(OCCUPANCY_MIN_SURVIVALS, GC_TENURING_SURVIVALS_MAX)
+}
+
+/// Set the occupancy ceiling for a test on this thread (the test form of
+/// `PERRY_GC_TENURING_SURVIVALS_MAX`, same clamp). Restores on drop.
+#[cfg(test)]
+pub(super) fn set_occupancy_max_for_test(max: u8) -> OccupancyMaxTestGuard {
+    OccupancyMaxTestGuard(
+        OCCUPANCY_MAX_TEST_OVERRIDE.with(|cell| cell.replace(Some(clamped_occupancy_max(max)))),
+    )
+}
+
+#[cfg(test)]
+pub(super) struct OccupancyMaxTestGuard(Option<u8>);
+
+#[cfg(test)]
+impl Drop for OccupancyMaxTestGuard {
+    fn drop(&mut self) {
+        OCCUPANCY_MAX_TEST_OVERRIDE.with(|cell| cell.set(self.0));
+    }
 }
 
 #[cfg(test)]
@@ -860,9 +949,16 @@ pub(super) fn retune_after_scavenge(
     // So until one survivor round has actually been rated, occupancy holds at
     // the floor: the lowest threshold that PRODUCES the measurement it needs to
     // say anything at all. Evidence, not the ladder, is what lets it move.
+    //
+    // The ceiling is `occupancy_max_survivals()` (2 by default; see
+    // `OCCUPANCY_MAX_SURVIVALS`). Capped HERE for the same reason as the floor:
+    // the sweep seed's `compute_target_survivals(...) != 1` test must keep
+    // seeing the raw formula. The lock above and the unlock step are not capped.
     let measured = SURVIVOR_ROUND_MEASURED.with(Cell::get);
     let target = if measured {
-        compute_target_survivals(eden_live_bytes, desired).max(OCCUPANCY_MIN_SURVIVALS)
+        compute_target_survivals(eden_live_bytes, desired)
+            .max(OCCUPANCY_MIN_SURVIVALS)
+            .min(occupancy_max_survivals())
     } else {
         OCCUPANCY_MIN_SURVIVALS
     };
