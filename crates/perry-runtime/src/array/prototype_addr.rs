@@ -223,7 +223,7 @@ pub(crate) fn note_realm_intrinsic(
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, Some(identity))
+    realm_intrinsic_addr(&intrinsic_entry(identity).prototype, identity, true)
 }
 
 /// This realm's intrinsic prototype of `identity` if the realm has bound it,
@@ -246,7 +246,7 @@ pub(crate) fn intrinsic_prototype_addr_if_bound(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, None)
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, identity, false)
 }
 
 /// This realm's original constructor of `identity` if the realm has bound
@@ -264,29 +264,40 @@ pub(crate) fn intrinsic_constructor_addr_if_bound(
 
 /// The one materialize point of the realm's intrinsics: builds the realm when
 /// this thread has none yet, then births a `lazy` family
-/// (`BuiltinConstructorDeclaration::lazy`) whose prototype `family` names
-/// the first time it is asked for. Every reader that may build goes through
+/// (`BuiltinConstructorDeclaration::lazy`) whose prototype is asked for
+/// (`prototype`) the first time. Every reader that may build goes through
 /// here; the `_if_bound` readers never build (an unborn family was never
 /// written either).
+///
+/// Two-phase realm (`perry_abi::realm_phase`): an unbound entry while the
+/// realm is not complete is a family whose phase has not run. A phase-A
+/// family needs the core; a phase-B family (`realm_rest_global`) the complete
+/// realm, so this is the point that runs phase B for every internal birth of
+/// one (a `WeakMap`'s inherited read, a `WeakRef`'s `constructor`). The name
+/// is looked at only in that state: with the realm complete, as from its
+/// allocation in a realm populated in one pass, the test is the one load it
+/// was.
 fn realm_intrinsic_addr(
     cell: &Cell<usize>,
-    family: Option<crate::object::BuiltinConstructorIdentity>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
 ) -> usize {
     let mut addr = cell.get();
-    if addr == 0 && !crate::object::global_this_is_materialized() {
-        crate::object::js_get_global_this();
+    if addr == 0 && !crate::object::realm_is_complete() {
+        if crate::codegen_abi::realm_rest_global(identity.name()) {
+            crate::object::js_get_global_this();
+        } else if !crate::object::global_this_is_materialized() {
+            crate::object::js_get_global_core();
+        }
         addr = cell.get();
     }
     if addr == 0 {
-        match family {
-            Some(identity) if identity.declaration().lazy => {
-                crate::object::birth_lazy_family(identity);
-                addr = cell.get();
-                if addr == 0 {
-                    return 0;
-                }
-            }
-            _ => return 0,
+        if prototype && identity.declaration().lazy {
+            crate::object::birth_lazy_family(identity);
+            addr = cell.get();
+        }
+        if addr == 0 {
+            return 0;
         }
     }
     heal_prototype_addr(cell, addr)

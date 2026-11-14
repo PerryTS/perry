@@ -558,6 +558,12 @@ pub(super) fn compile_module_entry(
             // Apple pointer tags the emitted key lists cannot carry statically,
             // stored before the first birth can read a list.
             crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            // Two-phase realm: tell the runtime before anything can touch a
+            // realm (an atomic store). Check mode poisons phase-B slots.
+            if crate::expr::property_get::globalget::realm_two_phase() {
+                let poison = if crate::verify_facts::enabled() { "1" } else { "0" };
+                blk.call_void("js_realm_two_phase", &[(I32, poison)]);
+            }
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",

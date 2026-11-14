@@ -14,21 +14,102 @@ crate::perry_thread_local! {
 
 crate::perry_thread_local! {
     /// The same word as `THREAD_GLOBAL_THIS` from the moment this thread's
-    /// realm is COMPLETE: its global's population has run both phases, or is
-    /// running them back to back. 0 before that. The population has two
-    /// phases (`populate::populate_realm_core`, then `populate::populate_realm_rest`);
-    /// [`js_get_global_this`] promises the complete realm and reads this cell.
+    /// realm is COMPLETE: phase B of its global's population has run or is
+    /// running. 0 before that. A realm populated in one pass (every realm of
+    /// a program not compiled for two phases, and a realm whose first touch
+    /// is the full entry) is complete from its global's allocation.
+    /// [`js_get_global_this`] promises the complete realm and reads this
+    /// cell; [`js_get_global_core`] reads `THREAD_GLOBAL_THIS`.
     static THREAD_GLOBAL_COMPLETE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+crate::perry_thread_local! {
+    /// Phase A is running alone on this thread (a two-phase realm's first
+    /// touch through the core entry): its own readers of the global get the
+    /// realm being built, as the population's readers always did, and do not
+    /// start phase B from inside it.
+    static REALM_CORE_RUNNING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The program's realm mode, set by its compiled entry before anything can
+/// touch a realm ([`js_realm_two_phase`]): bit 0, the realm global is
+/// populated in two phases; bit 1, phase-B slots are born poisoned (check
+/// mode). 0, the default: one pass, at the first touch.
+static REALM_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+const REALM_MODE_TWO_PHASE: u8 = 1;
+const REALM_MODE_POISON: u8 = 2;
+
+/// A program compiled with `PERRY_REALM_TWO_PHASE=1` calls this once from its
+/// entry, before its first module init: its compiled static reads of
+/// phase-A names use the core entry, so the runtime may leave phase B for
+/// later. `poison != 0` (check mode, `PERRY_VERIFY_FACTS=1`): a phase-B slot
+/// holds `REALM_UNBOUND_POISON` until phase B binds it.
+#[no_mangle]
+pub extern "C" fn js_realm_two_phase(poison: i32) {
+    let mode = REALM_MODE_TWO_PHASE | if poison != 0 { REALM_MODE_POISON } else { 0 };
+    REALM_MODE.store(mode, Ordering::Release);
+}
+
+/// A check-mode program read `value` from the realm global through a compiled
+/// shape site whose receiver came from the core entry. The poison word there
+/// means the site read a slot phase B had not bound: the compiler chose the
+/// core entry for a name the runtime binds in phase B. Check-mode builds only;
+/// a release build emits no call.
+#[no_mangle]
+pub extern "C" fn js_realm_check_global_read(value: f64) {
+    if value.to_bits() == crate::codegen_abi::REALM_UNBOUND_POISON {
+        realm_poison_seen("a compiled global read");
+    }
+}
+
+/// Report a read of an unbound phase-B slot and exit with check mode's code.
+#[cold]
+#[inline(never)]
+fn realm_poison_seen(reader: &str) -> ! {
+    eprintln!("PERRY_FALSE_PROOF realm-phase: {reader} saw a phase-B slot of the realm global before phase B bound it");
+    std::process::exit(86);
+}
+
+/// Tests: this thread's first touch of the realm as a two-phase program's
+/// core entry makes it (phase A alone, phase-B slots poisoned), without the
+/// process-wide mode other test threads would see.
+#[cfg(test)]
+pub(crate) fn core_realm_for_test() -> f64 {
+    assert_eq!(THREAD_GLOBAL_THIS.with(|c| c.get()), 0);
+    realm_setup(RealmPhases::Core, true)
+}
+
 /// Is THIS thread's realm complete: every declared slot of its global bound,
-/// or being bound by the population that is running? The predicate of the
-/// cold by-name readers; never materializes anything. While the two phases
-/// run back to back it is true from the global's allocation, exactly as
+/// or being bound by the phase B that is running? The predicate of the cold
+/// by-name readers; never materializes anything. In a realm populated in one
+/// pass it is true from the global's allocation, exactly as
 /// [`global_this_is_materialized`] is.
-#[allow(dead_code)] // the by-name readers ask it once a row is in the second phase
+#[inline]
 pub(crate) fn realm_is_complete() -> bool {
     THREAD_GLOBAL_COMPLETE.with(|c| c.get()) != 0
+}
+
+/// This thread's realm global for a BY-NAME read of the declared global
+/// `name`: the complete realm for a name phase B binds (and for any name the
+/// layout does not declare), the core for a phase-A name. One load when the
+/// realm is complete; the name is only looked at before that.
+#[inline]
+pub(crate) fn global_for_name(name: &str) -> f64 {
+    let mine = THREAD_GLOBAL_COMPLETE.with(|c| c.get());
+    if mine != 0 {
+        return f64::from_bits(mine);
+    }
+    global_for_name_slow(name)
+}
+
+#[cold]
+#[inline(never)]
+fn global_for_name_slow(name: &str) -> f64 {
+    if crate::codegen_abi::realm_core_global(name) {
+        js_get_global_core()
+    } else {
+        js_get_global_this()
+    }
 }
 
 #[cfg(test)]
@@ -123,23 +204,106 @@ pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
 }
 
 /// The phase-B driver: run the second phase of the population on this
-/// thread's realm global (`populate::populate_realm_rest`). Called once, right
-/// after the first phase; the caller holds the bootstrap's no-move window.
+/// thread's realm global (`populate::populate_realm_rest`), whose phase A has
+/// finished. Everything that can see a phase-B slot comes through here first
+/// (through [`js_get_global_this`]). Atomic for the program: no program code
+/// runs inside it and no collection moves anything (a no-move window, as for
+/// phase A), so no reference to a phase-B object exists before every one of
+/// them is born, linked and sealed.
+#[cold]
+#[inline(never)]
 fn complete_realm() {
     let global = THREAD_GLOBAL_THIS.with(|c| c.get());
-    debug_assert_eq!(global, THREAD_GLOBAL_COMPLETE.with(|c| c.get()));
+    debug_assert!(global != 0 && !REALM_CORE_RUNNING.with(|c| c.get()));
+    // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
+    let _realm = crate::snap_census::realm_build();
+    let window = crate::gc::GcSuppressScope::new();
+    // Complete from here on: phase B's own readers see the realm it is
+    // building, and none of them starts it again.
+    THREAD_GLOBAL_COMPLETE.with(|c| c.set(global));
     populate_realm_rest(
         crate::value::js_nanbox_get_pointer(f64::from_bits(global)) as *mut ObjectHeader
     );
+    drop(window);
 }
 
 /// Issue #611: lazily allocate `globalThis` for computed global access.
+///
+/// The FULL entry: this thread's realm global with every declared slot
+/// bound. Everything that can observe the global object as a value, a name
+/// phase B binds, an undeclared name, or that stores to the global, gets it
+/// from here.
 #[no_mangle]
 pub extern "C" fn js_get_global_this() -> f64 {
     let mine = THREAD_GLOBAL_COMPLETE.with(|c| c.get());
     if mine != 0 {
         return f64::from_bits(mine);
     }
+    realm_slow(true)
+}
+
+/// The CORE entry: the same object as [`js_get_global_this`], with at least
+/// phase A's slots bound (`perry_abi::realm_phase`). Its only callers:
+/// a compiled static read of a `REALM_CORE_GLOBALS` name (the read's shape
+/// site loads that name's slot and nothing else), and the runtime's readers
+/// of a phase-A intrinsic (`array::realm_intrinsic_addr`,
+/// `closure::shape::function_prototype_ptr_materialized`,
+/// `regex::instance::intrinsic_prototype`, [`global_for_name`]). The value is
+/// never handed to program code as the global object.
+///
+/// In a program not compiled for a two-phase realm the first touch builds the
+/// complete realm in one pass, whichever entry it comes through.
+#[no_mangle]
+pub extern "C" fn js_get_global_core() -> f64 {
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
+    if mine != 0 {
+        return f64::from_bits(mine);
+    }
+    realm_slow(false)
+}
+
+/// Keepalive anchor: `js_get_global_core`, `js_realm_two_phase` and
+/// `js_realm_check_global_read` are referenced only from codegen-generated
+/// `.o` files (see `KEEP_JS_MODULE_TOP_THIS`).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GET_GLOBAL_CORE: extern "C" fn() -> f64 = js_get_global_core;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_TWO_PHASE: extern "C" fn(i32) = js_realm_two_phase;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_CHECK_GLOBAL_READ: extern "C" fn(f64) = js_realm_check_global_read;
+
+/// The cold half of both entries. `complete`: the caller needs phase B.
+#[cold]
+#[inline(never)]
+fn realm_slow(complete: bool) -> f64 {
+    if THREAD_GLOBAL_THIS.with(|c| c.get()) == 0 {
+        let mode = REALM_MODE.load(Ordering::Acquire);
+        let phases = if complete || mode & REALM_MODE_TWO_PHASE == 0 {
+            RealmPhases::Both
+        } else {
+            RealmPhases::Core
+        };
+        return realm_setup(phases, mode & REALM_MODE_POISON != 0);
+    }
+    // The core exists and the caller needs the rest. Phase A's own readers
+    // (the population reads the global it is filling) get the realm as it is.
+    if complete
+        && THREAD_GLOBAL_COMPLETE.with(|c| c.get()) == 0
+        && !REALM_CORE_RUNNING.with(|c| c.get())
+    {
+        complete_realm();
+    }
+    f64::from_bits(THREAD_GLOBAL_THIS.with(|c| c.get()))
+}
+
+/// First access on this thread: allocate the realm global and populate it,
+/// `phases` = `Both` (one pass, every row in its declared place) or `Core`
+/// (phase A alone; [`complete_realm`] runs phase B on demand).
+/// `poison` (check mode): a slot phase B binds is born holding the poison word.
+fn realm_setup(phases: RealmPhases, poison: bool) -> f64 {
     // Register this thread's GC root scanners before the global exists, so the
     // global (and the `Array`/`Object` intrinsics it holds) is born under a live
     // root and survives later collections on this thread. Worker threads and the
@@ -173,6 +337,21 @@ pub extern "C" fn js_get_global_this() -> f64 {
             *fields.add(slot) = crate::value::TAG_UNDEFINED;
         }
     }
+    if phases == RealmPhases::Core && poison {
+        // Check mode: a slot phase B binds is born holding the poison word,
+        // so a reader that skips phase B cannot take it for `undefined`.
+        // SAFETY: as above; a declared key's slot is its layout position.
+        unsafe {
+            let fields =
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+            for name in crate::codegen_abi::REALM_REST_GLOBALS {
+                if let Some(slot) = crate::object::runtime_layouts::builtin_global_slot(name) {
+                    // GC_STORE_AUDIT(INIT): unpublished record; an internal word, no managed edge.
+                    *fields.add(slot) = crate::codegen_abi::REALM_UNBOUND_POISON;
+                }
+            }
+        }
+    }
     THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
     // The thread-local cache stores the tagged JSValue, independently of
     // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
@@ -182,10 +361,13 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
     let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(cache_slot as i64);
-    // The two phases run back to back: the realm counts as complete from its
-    // allocation, as it always did. The cell is a second copy of the tagged
-    // word, so it is registered (marked and rewritten) like the first.
-    THREAD_GLOBAL_COMPLETE.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
+    // A realm populated in one pass counts as complete from its allocation,
+    // as it always did; phase A alone leaves the cell 0 for the phase-B
+    // driver. The cell is a second copy of the tagged word, so it is
+    // registered (marked and rewritten) like the first.
+    if phases == RealmPhases::Both {
+        THREAD_GLOBAL_COMPLETE.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
+    }
     let complete_slot = THREAD_GLOBAL_COMPLETE.with(|c| c.as_ptr() as usize);
     crate::gc::js_gc_register_global_root(complete_slot as i64);
     // Publish to the process-global GC-root slot so this thread's collector marks
@@ -197,9 +379,13 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
-    // Phase A (the core), then phase B (the rest) through its driver.
-    populate_realm_core(new_ptr as *mut ObjectHeader);
-    complete_realm();
+    if phases == RealmPhases::Both {
+        populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    } else {
+        REALM_CORE_RUNNING.with(|c| c.set(true));
+        populate_realm_core(new_ptr as *mut ObjectHeader);
+        REALM_CORE_RUNNING.with(|c| c.set(false));
+    }
     drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved

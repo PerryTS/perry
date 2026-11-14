@@ -31,13 +31,18 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // an ordinary data read instead of rematerializing a weak intern after
     // every collection. This shared lookup consults the live shape; stores,
     // deletions, accessors and prototype changes keep their ordinary semantics.
-    let global = js_get_global_this();
+    // A phase-A name needs the realm's core only; any other name the
+    // complete realm (`global_for_name`: one load once the realm is complete).
+    let global = super::super::global_this::global_for_name(name);
     if let Some(value) = unsafe {
         super::super::native_get::try_data_get_bytes(
             crate::value::JSValue::from_bits(global.to_bits()),
             name.as_bytes(),
         )
     } {
+        // A by-name read gets the realm its name needs (`global_for_name`),
+        // so it cannot see a slot phase B has not bound.
+        debug_assert_ne!(value.bits(), crate::codegen_abi::REALM_UNBOUND_POISON);
         return f64::from_bits(value.bits());
     }
 
