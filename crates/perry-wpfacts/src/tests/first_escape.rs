@@ -423,8 +423,9 @@ fn blob_ctor_escapes(ctor: &str) -> bool {
     let s = format!(
         r#"
         class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        function id(x: any): any {{ return x; }}
         const b: any = new Blob(["ab"]);
-        const s: any = b.slice(0, 1);
+        const s: any = id(b).slice(0, 1);
         const C: any = {ctor};
         const v = new V();
         const w: any = new C(["c"], v);
@@ -434,6 +435,9 @@ fn blob_ctor_escapes(ctor: &str) -> bool {
     matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
 }
 
+/// (PROTOCTOR: the Blob reaches `.slice` through `id`, as r7's bufferView
+/// reaches it through a value; a direct `b.slice` lowers to the native
+/// module call `blob.slice`, whose result is ⊤: a separate gap.)
 /// RED on 7aac20dd17: the constructor of a Blob is %Blob%; `new Blob(parts,
 /// options)` reads only `type`/`endings` of V (absent on V and its chain), so V
 /// stays proven.
@@ -446,4 +450,63 @@ fn red_arrsrc_new_of_a_blob_constructor_is_known() {
 #[test]
 fn control_arrsrc_new_of_a_host_constructor_escapes() {
     assert!(blob_ctor_escapes("(globalThis as any).hostGet()"));
+}
+
+/// PROTOCTOR: `new C(args)` where C is a built-in constructor value read
+/// from a realm chain; V passed as an argument stays proven when `new` is
+/// the known construction, escapes when it is unknown.
+fn protoctor_escapes(setup: &str, ctor: &str, args: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        {setup}
+        const C: any = {ctor};
+        const v = new V();
+        const w: any = new C({args});
+        console.log(typeof w, v.probe());
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+/// The global `Blob` value and a Blob's `constructor` are one token.
+#[test]
+fn protoctor_global_blob_value_constructs() {
+    assert!(!protoctor_escapes("", "Blob", "[\"c\"], v"));
+}
+
+/// `(new ArrayBuffer(8)).constructor` is %ArrayBuffer%: `new` of it is an
+/// ArrayBuffer (ToIndex of V reads V's chain only), no hold.
+#[test]
+fn protoctor_array_buffer_constructor_is_array_buffer() {
+    assert!(!protoctor_escapes("const ab: any = new ArrayBuffer(8);", "ab.constructor", "v"));
+}
+
+/// `[].constructor` is %Array%.
+#[test]
+fn protoctor_array_constructor_is_array() {
+    assert!(!protoctor_escapes("const a: any = [];", "a.constructor", "v"));
+}
+
+/// The runtime's array-iterator chain holds no `constructor`
+/// (%ArrayIteratorPrototype%, %IteratorPrototype%): the read finds
+/// `Object.prototype.constructor`, %Object%; `new Object(v)` is v.
+#[test]
+fn protoctor_chain_without_constructor_is_object() {
+    assert!(!protoctor_escapes(
+        "const it: any = [][Symbol.iterator]();",
+        "it.constructor",
+        "v"
+    ));
+}
+
+/// Control (can fail): a program store of an unknown value into
+/// `Blob.prototype.constructor` keeps the unknown constructor.
+#[test]
+fn control_protoctor_written_blob_constructor_escapes() {
+    assert!(protoctor_escapes(
+        "(Blob.prototype as any).constructor = (globalThis as any).hostGet(); const b: any = new Blob([\"ab\"]);",
+        "b.constructor",
+        "[\"c\"], v"
+    ));
 }

@@ -162,6 +162,20 @@ pub(super) fn family_member(
         (Family::Box, Some(members::BoxChain::Object)) => Family::Object,
         _ => fam,
     };
+    // Rule PROTO-CONSTRUCTOR on an iterator of a known kind: the runtime's
+    // iterator prototypes hold no `constructor` (%ArrayIteratorPrototype%,
+    // %IteratorPrototype%: the realm declares none), so the lookup finds
+    // `Object.prototype.constructor`, %Object%, as the runtime does.
+    if fam == Family::Iterator {
+        if let Some(c) = iterator_realm_proto(what).and_then(|p| realm_proto_constructor(p, &name)) {
+            let f = m.tok(TokKind::BuiltinFn(Native::Member {
+                identity: c,
+                holder: None,
+            }));
+            m.add_tok(dst, f);
+            return;
+        }
+    }
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
@@ -322,6 +336,21 @@ fn realm_chain_load(
         members::RealmFind::Own(p, _) => {
             if let Some(k) = realm_prim(p) {
                 m.add_prim(dst, k);
+            } else if let Some(c) = realm_constructor(p) {
+                // Rule PROTO-CONSTRUCTOR: a realm constructor the chain holds
+                // (`Blob.prototype.constructor` is %Blob%: WebIDL 3.7.3, the
+                // interface prototype object's `constructor` is the interface
+                // object; ECMA-262 per family). The value is the one the
+                // global name reads (`namespace_native`: the same token), so
+                // `new` of it runs that constructor's declaration. A chain
+                // whose prototypes hold no `constructor` finds
+                // `Object.prototype`'s: %Object%. A store into the chain is
+                // `intrinsic_miss`'s, as for every key here.
+                let f = m.tok(TokKind::BuiltinFn(Native::Member {
+                    identity: c,
+                    holder: None,
+                }));
+                m.add_tok(dst, f);
             } else if let V::Accessor { get: Some(g), .. } = p.value {
                 match members::realm_entry(g).filter(|e| !e.effects.is_empty()) {
                     Some(e) => super::effects::getter_load(m, e, t, a, dst),
@@ -333,6 +362,42 @@ fn realm_chain_load(
         }
     }
     true
+}
+
+/// The realm constructor a lookup of `name` on realm prototype `native`
+/// finds (`Blob.prototype.constructor`: %Blob%; a chain whose prototypes
+/// hold no `constructor` ends at `Object.prototype`'s: %Object%).
+fn realm_proto_constructor(native: &str, name: &str) -> Option<&'static str> {
+    let e = members::realm_entry(native)
+        .filter(|e| e.kind == perry_hir::realm_manifest::RealmKind::Prototype)?;
+    match members::realm_chain_find(e, name) {
+        members::RealmFind::Own(p, _) => realm_constructor(p),
+        members::RealmFind::Absent => None,
+    }
+}
+
+/// The realm prototype of a built-in iterator kind (`TmplKind::BObj::what`);
+/// `None` for an iterator of unknown kind.
+fn iterator_realm_proto(what: Option<&'static str>) -> Option<&'static str> {
+    Some(match what? {
+        members::ARRAY_ITERATOR => "%ArrayIteratorPrototype%",
+        members::MAP_ITERATOR => "%MapIteratorPrototype%",
+        members::SET_ITERATOR => "%SetIteratorPrototype%",
+        members::STRING_ITERATOR => "%StringIteratorPrototype%",
+        _ => return None,
+    })
+}
+
+/// The realm constructor the realm's own data property `p` holds (a
+/// `constructor` member: `Reference("Blob")`); `None` for any other value.
+fn realm_constructor(p: &perry_hir::realm_manifest::RealmOwn) -> Option<&'static str> {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue as V};
+    let V::Reference(r) = p.value else {
+        return None;
+    };
+    members::realm_entry(r)
+        .filter(|e| e.kind == RealmKind::Constructor)
+        .map(|e| e.name)
 }
 
 /// The primitive kind of the realm's own data property `p`; `None` for
@@ -1369,6 +1434,28 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::BuiltinFn(_) | TokKind::Bound(_) => {
             m.add_prim(dst, prim::ALL);
             family_any(m, Some(t), Family::Function, None, key, dst);
+        }
+        // Rule PROTO-CONSTRUCTOR on a realm-declared prototype the chain
+        // reaches (`Blob.prototype` of a `Blob.prototype.slice` result): the
+        // realm constructor it holds, the global name's token. A store under
+        // the key (now, or later in the solve) answers what was stored, as a
+        // lookup that passes the prototype (`native_skips`).
+        TokKind::NativeProto(native, _)
+            if matches!(key, Key::Named(a)
+                if realm_proto_constructor(&native, &m.atoms[a as usize]).is_some()) =>
+        {
+            let Key::Named(a) = key else { unreachable!() };
+            let c = realm_proto_constructor(&native, &m.atoms[a as usize]).expect("guarded");
+            let f = m.tok(TokKind::BuiltinFn(Native::Member {
+                identity: c,
+                holder: None,
+            }));
+            m.add_tok(dst, f);
+            if native_written(m, t, a) {
+                super::native_protocol::answer_stored(m, t, a, NativeMiss::Load(dst));
+            } else {
+                m.native_missing.push((t, a, NativeMiss::Load(dst)));
+            }
         }
         TokKind::NativeProto(..) => {
             let bf = builtin_fn(m, "native proto / builtin fn computed key");
