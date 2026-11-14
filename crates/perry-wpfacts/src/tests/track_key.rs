@@ -260,7 +260,6 @@ if ( String( t ) === \x27x\x27 ) o.name = unique( String( n ) );
 const NAME_OR_UUID: &str = "( o.name ? o.name : o.uuid )";
 
 #[test]
-#[ignore = "NAMEEXCL3 open: a field holding '' beside the uuid, with the table read as property part ('position' is green); local probe ( t ? '' : o.uuid ) with TAB is red too"]
 fn node_name_or_uuid() {
     let pre = name_or_uuid_pre("");
     let v = recv(&prog(NAME_OR_UUID, TAB, &pre, OBJ_READ), "q");
@@ -371,4 +370,26 @@ fn member_step_of_fraction_may_hold_dot() {
     let tail = "const z: any = g[ sanitize( String( n ) ) + \x27_\x27 + ( ++ op.p ) ]; console.log( z.p );";
     let v = recv(&prog(SAN, TAB, &pre, tail), "p");
     assert!(v.iter().any(|x| x == "A"), "{v:?}");
+}
+// The node part `'' or the uuid` reaches `+ '.'` first as `''` alone:
+// `'.' + table` keeps the table's exclusions (rule CONST-AND-PARTS), so
+// objectName stays undefined. Control: `'' or a raw string` may hold `.`.
+fn part_then_table(part: &str) -> Vec<String> {
+    let pre = name_or_uuid_pre(&format!(
+        "function trackKey( o: any, t: any ): any {{ const k0: any = ( {part} ); const k1: any = k0 + \x27.\x27; return k1 + PATH[ String( t ) ]; }}"
+    ));
+    let tail = "const p2 = parse( trackKey( o, t ) ); const y2: any = h[ p2.objectName ]; console.log( y2.q );";
+    recv(&prog("\x27a\x27", "\x27position\x27", &pre, tail), "q")
+}
+
+#[test]
+fn empty_or_uuid_then_table_keeps_exclusion() {
+    let v = part_then_table("String( t ) === \x27z\x27 ? \x27\x27 : o.uuid");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn empty_or_raw_string_then_table_may_hold_dot() {
+    let v = part_then_table("String( t ) === \x27z\x27 ? \x27\x27 : String( n )");
+    assert!(v.iter().any(|x| x == "B"), "{v:?}");
 }

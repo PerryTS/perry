@@ -948,6 +948,35 @@ impl Model {
                 continue;
             }
             let c = self.atoms[a as usize].clone();
+            // Rule CONST-AND-PARTS, ECMA-262 13.15.3: `c + r` with every
+            // part of ToString(r) known is `X·(c t)` per constant part (X
+            // free of every ASCII character: a superset of `c t` alone) and
+            // `c X s` per exclusion entry, each keeping what that part
+            // excludes. A prefix entry `c t` or `c` would lose it (`'' +
+            // '.'` is `.`, and `. + r` must still exclude what r excludes).
+            // Both read back as exclusion entries (`atom_excl` folds `c`
+            // into the head), so no prefix grows; on the left they are rule
+            // M8's (`excl_plus`), so loops end.
+            if let (false, Some(ps)) = (trunc, rparts.as_ref()) {
+                gated |= rgated;
+                for b in ps {
+                    let at = match b {
+                        Ok(t) => {
+                            let p = format!("{c}{t}");
+                            if p.is_empty() {
+                                return (STRS_TOP, false);
+                            }
+                            match self.excl_atom(!0, &p) {
+                                Some(at) => at,
+                                None => return (STRS_TOP, false),
+                            }
+                        }
+                        Err((e, s2)) => self.pfx_excl_atom(&c, *e, s2),
+                    };
+                    out.push(at);
+                }
+                continue;
+            }
             for t in &tails {
                 let p = format!("{c}{t}");
                 if p.is_empty() {
