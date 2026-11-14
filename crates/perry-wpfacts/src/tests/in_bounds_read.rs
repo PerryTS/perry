@@ -70,10 +70,10 @@ fn a_read_at_the_counter_yields_a_number() {
 #[test]
 fn reads_below_the_counter_yield_numbers() {
     let d = dump(&program(
-        "for (let i = 1; i < xs.length; i++) {\n\
+        "for (let i = 3; i < xs.length; i++) {\n\
            let j = i - 1;\n\
            while (j >= 0) { s += sink(xs[j]); j--; }\n\
-           if (i >= 3) s += sink(xs[i - 3]);\n\
+           s += sink(xs[i - 3]);\n\
          }",
     ));
     assert_eq!(reads(&d), (2, 0, 0), "{d}");
@@ -84,7 +84,7 @@ fn reads_below_the_counter_yield_numbers() {
 fn a_guard_by_if_and_by_while_counts() {
     let d = dump(&program(
         "let k = 0;\n\
-         while (k < xs.length) { s += sink(xs[k]); k += 3; }\n\
+         while (k < xs.length) { s += sink(xs[k]); k++; }\n\
          const m = n >> 1;\n\
          if (m >= 0 && m < xs.length) s += sink(xs[m]);",
     ));

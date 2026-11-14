@@ -340,9 +340,14 @@ impl Model {
     /// (`arr_grow_only`): between the test and the read its length only
     /// grew. Any other Array may have been shortened in between (through
     /// another name, in a callee). `arr_len_top` withdraws it
-    /// (`kept_reads`).
+    /// (`kept_reads`). Not with `PERRY_FACTS_ELEM_UNDEF=0`: every computed
+    /// read then yields `undefined`.
     pub(crate) fn kept_read(&self, t: Tok) -> bool {
-        self.inbounds_read && t != TOP && self.is_arr(t) && self.arr_grow_only(t)
+        self.inbounds_read
+            && self.elem_undef
+            && t != TOP
+            && self.is_arr(t)
+            && self.arr_grow_only(t)
     }
 
     /// The read of `t` under `key` into `dst` is a kept in-bounds read.
