@@ -262,10 +262,10 @@ pub(super) unsafe fn transform_write(writable_id: usize, chunk: f64) -> *mut Pro
         perry_runtime::fn_info!(transform_write_job, 0; with_declared(0)),
         5,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(job, 0, transform_cb);
+    perry_runtime::closure::closure_set_capture_ref(job, 0, transform_cb);
     perry_runtime::closure::closure_set_capture_word(job, 1, readable_id as i64);
     perry_runtime::closure::js_closure_set_capture_ptr(job, 2, chunk.to_bits() as i64);
-    perry_runtime::closure::js_closure_set_capture_ptr(job, 3, promise as i64);
+    perry_runtime::closure::closure_set_capture_ref(job, 3, promise as i64);
     perry_runtime::closure::closure_set_capture_word(job, 4, writable_id as i64);
     // #6607: a `writer.close()` in the same synchronous run must not close the
     // readable ahead of this queued job — count it so transform_close defers.
@@ -317,11 +317,10 @@ extern "C" fn transform_write_job2(
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
     unsafe {
-        let transform_cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0);
+        let transform_cb = perry_runtime::closure::closure_capture_ref(closure, 0);
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
         let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as u64;
-        let promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+        let promise = perry_runtime::closure::closure_capture_ref(closure, 3) as *mut Promise;
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 4) as usize;
         let chunk = f64::from_bits(chunk_bits);
         if transform_cb != 0 && readable_id != 0 {
@@ -344,14 +343,14 @@ extern "C" fn transform_write_job2(
                         3,
                     );
                     perry_runtime::closure::closure_set_capture_word(fc, 0, readable_id as i64);
-                    perry_runtime::closure::js_closure_set_capture_ptr(fc, 1, promise as i64);
+                    perry_runtime::closure::closure_set_capture_ref(fc, 1, promise as i64);
                     perry_runtime::closure::closure_set_capture_word(fc, 2, writable_id as i64);
                     let rc = perry_runtime::closure::js_closure_alloc(
                         perry_runtime::fn_info!(transform_write_settle_rejected, 1; with_declared(1)),
                         3,
                     );
                     perry_runtime::closure::closure_set_capture_word(rc, 0, readable_id as i64);
-                    perry_runtime::closure::js_closure_set_capture_ptr(rc, 1, promise as i64);
+                    perry_runtime::closure::closure_set_capture_ref(rc, 1, promise as i64);
                     perry_runtime::closure::closure_set_capture_word(rc, 2, writable_id as i64);
                     let _ = perry_runtime::promise::js_promise_then(inner, fc, rc);
                     return f64::from_bits(TAG_UNDEFINED);
@@ -550,8 +549,7 @@ extern "C" fn transform_write_settle_fulfilled(
 ) -> f64 {
     unsafe {
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        let promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        let promise = perry_runtime::closure::closure_capture_ref(closure, 1) as *mut Promise;
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
         settle_transform_write(readable_id, promise);
         transform_write_job_done(writable_id);
@@ -569,8 +567,7 @@ extern "C" fn transform_write_settle_rejected(
 ) -> f64 {
     unsafe {
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
-        let promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+        let promise = perry_runtime::closure::closure_capture_ref(closure, 1) as *mut Promise;
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as usize;
         if readable_id != 0 {
             js_readable_stream_controller_error(controller_value(readable_id), reason);
@@ -644,8 +641,7 @@ pub(super) unsafe fn transform_abort_pending_writes(writable_id: usize, reason: 
     {
         for job in jobs {
             let closure = job as *const ClosureHeader;
-            let promise =
-                perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as *mut Promise;
+            let promise = perry_runtime::closure::closure_capture_ref(closure, 3) as *mut Promise;
             js_promise_reject(promise, reason);
             transform_write_job_done(writable_id);
         }
@@ -893,11 +889,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
                             1,
                             readable_id as i64,
                         );
-                        perry_runtime::closure::js_closure_set_capture_ptr(
-                            fulfill,
-                            2,
-                            promise as i64,
-                        );
+                        perry_runtime::closure::closure_set_capture_ref(fulfill, 2, promise as i64);
                         perry_runtime::closure::closure_set_capture_word(
                             reject,
                             0,
@@ -908,11 +900,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
                             1,
                             readable_id as i64,
                         );
-                        perry_runtime::closure::js_closure_set_capture_ptr(
-                            reject,
-                            2,
-                            promise as i64,
-                        );
+                        perry_runtime::closure::closure_set_capture_ref(reject, 2, promise as i64);
                         let _ = perry_runtime::promise::js_promise_then(inner, fulfill, reject);
                         return;
                     }
@@ -982,8 +970,7 @@ extern "C" fn transform_flush_fulfilled(
     unsafe {
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let close_promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        let close_promise = perry_runtime::closure::closure_capture_ref(closure, 2) as *mut Promise;
         finish_transform_close(writable_id, readable_id, close_promise);
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -1000,8 +987,7 @@ extern "C" fn transform_flush_rejected(
     unsafe {
         let writable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as usize;
         let readable_id = perry_runtime::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let close_promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 2) as *mut Promise;
+        let close_promise = perry_runtime::closure::closure_capture_ref(closure, 2) as *mut Promise;
         error_transform_close(writable_id, readable_id, close_promise, reason.to_bits());
     }
     f64::from_bits(TAG_UNDEFINED)

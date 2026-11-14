@@ -79,9 +79,7 @@ extern "C" fn events_on_queue_listener(
     _this: perry_runtime::closure::JsThis,
     rest: f64,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+    let state = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut ArrayHeader;
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED_F64_BITS);
     }
@@ -121,9 +119,7 @@ extern "C" fn events_on_next(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+    let state = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut ArrayHeader;
     if state.is_null() {
         return events_resolved_iter_promise(f64::from_bits(TAG_UNDEFINED_F64_BITS), true);
     }
@@ -160,9 +156,7 @@ extern "C" fn events_on_return(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+    let state = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut ArrayHeader;
     if state.is_null() {
         return events_resolved_iter_promise(f64::from_bits(TAG_UNDEFINED_F64_BITS), true);
     }
@@ -202,9 +196,9 @@ extern "C" fn events_on_async_iterator(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use perry_runtime::closure::js_closure_alloc;
 
-    let state = perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut ArrayHeader;
+    let state = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut ArrayHeader;
     register_events_on_arities();
 
     let packed = b"next\0return\0";
@@ -218,13 +212,13 @@ extern "C" fn events_on_async_iterator(
         perry_runtime::fn_info!(events_on_next, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(next_cl, 0, state as i64);
+    perry_runtime::closure::closure_set_capture_ref(next_cl, 0, state as i64);
     perry_runtime::object::js_object_set_field(obj, 0, JSValue::pointer(next_cl as *const u8));
     let ret_cl = js_closure_alloc(
         perry_runtime::fn_info!(events_on_return, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(ret_cl, 0, state as i64);
+    perry_runtime::closure::closure_set_capture_ref(ret_cl, 0, state as i64);
     perry_runtime::object::js_object_set_field(obj, 1, JSValue::pointer(ret_cl as *const u8));
 
     let iter_val = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
@@ -247,7 +241,7 @@ extern "C" fn events_on_async_iterator(
 }
 
 unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader, state: *mut ArrayHeader) {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use perry_runtime::closure::js_closure_alloc;
 
     register_events_on_arities();
     let async_iterator = perry_runtime::symbol::well_known_symbol("asyncIterator");
@@ -258,7 +252,7 @@ unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader, state: *mut 
         perry_runtime::fn_info!(events_on_async_iterator, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, state as i64);
+    perry_runtime::closure::closure_set_capture_ref(closure, 0, state as i64);
     perry_runtime::symbol::js_object_set_symbol_property(
         js_nanbox_pointer(queue as i64),
         js_nanbox_pointer(async_iterator as i64),
@@ -380,9 +374,7 @@ pub unsafe extern "C" fn js_events_on(
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut ArrayHeader {
-    use perry_runtime::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let target_value = scope.root_nanbox_f64(target_value);
@@ -414,7 +406,7 @@ pub unsafe extern "C" fn js_events_on(
         perry_runtime::fn_info!(events_on_queue_listener, 1; with_rest(0)),
         1,
     ));
-    js_closure_set_capture_ptr(
+    perry_runtime::closure::closure_set_capture_ref(
         listener.get_raw_mut_ptr(),
         0,
         state.get_raw_mut_ptr::<ArrayHeader>() as i64,
@@ -453,7 +445,7 @@ pub unsafe extern "C" fn js_events_on(
             perry_runtime::fn_info!(events_on_return, 0; with_declared(0)),
             1,
         ));
-        js_closure_set_capture_ptr(
+        perry_runtime::closure::closure_set_capture_ref(
             close_listener.get_raw_mut_ptr(),
             0,
             state.get_raw_mut_ptr::<ArrayHeader>() as i64,
