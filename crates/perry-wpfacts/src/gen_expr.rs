@@ -1367,7 +1367,7 @@ impl<'a> Gen<'a> {
                 index,
             } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
@@ -1469,7 +1469,7 @@ impl<'a> Gen<'a> {
                 value,
             } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
@@ -1513,7 +1513,7 @@ impl<'a> Gen<'a> {
             }
             Expr::IndexUpdate { object, index, op, .. } => {
                 let o = self.expr(fx, object);
-                let i = self.expr_zs(fx, index);
+                let i = self.index_key_node(fx, index);
                 self.m.nodes[i as usize].int_use = true;
                 let r = self.m.reason("ToPropertyKey");
                 self.m.cons(
