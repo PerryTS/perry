@@ -979,7 +979,7 @@ struct State {
     /// First (a)/(b) hit per init: (init, rule, word, pc, input seq).
     /// Pushed in signal context: the capacity is reserved up front.
     p_entry_log: Vec<(u32, u8, usize, usize, u64)>,
-    /// The open host-value scope (1 argv, 2 execPath; 0 none) and the births
+    /// The open host-value scope (1 argv, 2 execPath, 3 argv0; 0 none) and the births
     /// made inside one: (start, end, what, input seq).
     host_what: u8,
     host_targets: Vec<(usize, usize, u8, u64)>,
@@ -4440,6 +4440,7 @@ fn host_name(what: u8) -> &'static str {
     match what {
         1 => "argv",
         2 => "exec_path",
+        3 => "argv0",
         _ => "entry_birth",
     }
 }

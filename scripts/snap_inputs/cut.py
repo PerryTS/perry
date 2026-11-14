@@ -7,6 +7,10 @@
 # Without account.json / native.jsonl (a fixture run) the accounting is the runtime ir stamp itself.
 # Self-contained (SNAPK3c): the accounting (realpos/TOT) and resumable-frame cutinfo of SNAP23's cut23.py are inlined.
 # Classes: N neutral | M guard member (unset env, compare_literal predicate, style bit, tty) | B blocker (key).
+# Product line: the PRODUCT cut is the first blocker no member rule passes; every blocker kind is a STOP unless a member
+#   rule passes it, and the output prints the reason for each passable member kind and for each stop. "before init N" is the
+#   outermost open frame's boundary (a CommonJS body cannot be cut mid-run); the blocking init is printed beside it. WHAT-IF lines
+#   are hypothetical and name their assumption.
 # SNAPK3c: the job_queue rows' jobs= field (kind:owner:code) is grouped by (kind, callback symbol, queueing init, module).
 import json,sys,bisect,collections,io,contextlib,csv
 import os
@@ -107,7 +111,7 @@ if _eb:
     if not SETTLE: ENTRY.add(max(ENTRY)+1)
 RECINITS={i for _,i,_ in SETTLE if i and i not in ENTRY}
 SETTLE_BY_SEQ.update({s:(i,st) for s,i,st in SETTLE})
-# owner 11-08: the argv reads that are has-flag predicates are guard members; the init is the module that calls hasFlag.
+# the argv reads that are has-flag predicates are guard members; the init is the module that calls hasFlag.
 def fullname(i): return iname.get(inits.get(i),"")
 HASFLAG={i for i in inits if "supports_color" in fullname(i) and fullname(i).endswith("index_js")}
 NEUT={"effect","result","stack.payload","stack.capture","stack.rendered","init_enter","init_part","init_exit",
@@ -116,10 +120,16 @@ FUN={1:"exec_path",2:"stack_maps",3:"stack_bounds",4:"parse",5:"parallelism",6:"
 NFUN={"stack_maps","stack_bounds","parse","gc","unwind"}
 CL=("clock_gettime","__clock_gettime","__vdso_clock_gettime")
 unset_seen=set(); ev=[]; EBI=set()   # (ir, seq, op, init, cls, key, detail)
+def env_read(op,v):
+    # (name, "unset"|"set"|value) of a getenv/env_get/env_has row
+    if op in("getenv","getenv.program"):
+        n,_,val=v.partition("="); return dec(n),val
+    n=v.split('"')[1] if '"' in v else v[:40]
+    return n,("unset" if ("unset" in v or v.rstrip().endswith(("=0","=None","=false")) or "present=0" in v) else "set")
 def envread(name,val,init,op):
     if init in ENTRY: return "N",None          # entry body re-runs live
     if val in("unset","<unset>",None): return "M",("env-unset",name)
-    if MODEL and name!="USER": return "M",("env-value",name)   # owner 11-06 P1: named env reads guarded; USER = accepted cap (11-08 Q2)
+    if MODEL and name!="USER": return "M",("env-value",name)   # named env reads are guarded; USER is a stop
     return "B",("env-value",name)
 for r in rows:
     op=r["op"]; v=dec(r["value_hex"]); init=r["init"]; ir=r["ir"]; seq=r["seq"]
@@ -128,26 +138,27 @@ for r in rows:
         try:
             a=int(d["at_seq"]); i=bisect.bisect_left(seqs,a); ir=rows[min(i,len(rows)-1)]["ir"]; seq=a
         except ValueError: pass
-    c,k="B",("op",op)
+    c,k="B",("op",op); sp=r["stack_parts"]
     if op=="env_block":
         ebi=init or next((x["init"] for x in rows if x["seq"]>seq and x["init"]),0); EBI.add(ebi)
-        ev.append((ir,seq,op,init,"B",("env_block",mod(ebi)),v[:120])); continue
+        ev.append((ir,seq,op,init,"B",("env_block",mod(ebi)),v[:120],sp)); continue
     if MODEL and init in EBI and op in("getenv","env_get","env_has"):
-        ev.append((ir,seq,op,init,"B",("env_block",mod(init)),v[:120])); continue   # the spread reads every name
+        n,val=env_read(op,v)
+        if val=="unset": unset_seen.add(n)   # the scan reads every name, but a key read unset is still an unset key: a later delete is idempotent
+        ev.append((ir,seq,op,init,"B",("env_block",mod(init)),v[:120],sp)); continue   # the spread reads every name
     if op in NEUT or op in("initial_environment","k2a"): c,k="N",None
-    elif MODEL and init in HASFLAG and (op.startswith("argv") or op=="host_value"): c,k="M",("argv-pred",)   # owner 11-08 Q1 hasFlag predicate guard
+    elif MODEL and init in HASFLAG and (op.startswith("argv") or op=="host_value"): c,k="M",("argv-pred",)   # hasFlag predicate guard
     elif op=="record_settle": c,k=("B",("record_async",)) if d.get("status")=="ASYNC" and int(d.get("init",0)) not in ENTRY else ("N",None)
     elif op in("worker_flag","tls_image"): c,k="N",None   # retired (T0) / accounting
     elif op=="worker_spawn": c,k=("N",None) if d.get("policy")=="live" else ("B",("worker_spawn",))
     elif op=="job_queue" and d.get("policy")=="image": c,k="N",None   # the walk root holds the jobs; R1 filters the boundaries
     elif d.get("policy")=="STOP": c,k="B",(op,d.get("what") or d.get("rule") or "")
     elif op in("getenv","getenv.program"):
-        n,_,val=v.partition("="); n=dec(n)
+        n,val=env_read(op,v)
         if val=="unset": unset_seen.add(n)
         c,k=envread(n,val,init,op)
     elif op in("env_get","env_has"):
-        n=v.split('"')[1] if '"' in v else v[:40]
-        val="unset" if ("unset" in v or v.rstrip().endswith(("=0","=None","=false")) or "present=0" in v) else "set"
+        n,val=env_read(op,v)
         c,k=envread(n,val,init,op)
     elif op=="compare_literal": c,k="M",("pred",d.get("src",""))
     elif op=="stdout_style_bit": c,k="M",("stylebit",)
@@ -165,8 +176,8 @@ for r in rows:
         else: c,k="B",("clock",s0[:40])
     elif op=="native.unsetenv":
         name=dec(v.split(";")[0])
-        c,k=("N",None) if (";was=unset" in v and name in unset_seen) else ("B",("unsetenv",name))
-    ev.append((ir,seq,op,init,c,k,v[:120]))
+        c,k=("M",("env-unset-delete",name)) if (";was=unset" in v and name in unset_seen) else ("B",("unsetenv",name))
+    ev.append((ir,seq,op,init,c,k,v[:120],sp))
 # native STOP syscalls (tracer domain -> runtime domain via markers)
 mk=[];nat=[]
 for l in (open(D+P+"-native.jsonl") if os.path.exists(D+P+"-native.jsonl") else []):
@@ -189,7 +200,7 @@ for x in nat:
     elif nm in("getuid","getgid","geteuid","getegid"): c,k="B",("ids",)
     else: c,k="B",("syscall",nm)
     pcs=x.get("pcs_scan") or []
-    ev.append((ri,-1,"nat:"+nm,init,c,k,(path[:50]+" "+(sym(pcs[0])[:50] if pcs else ""))))
+    ev.append((ri,-1,"nat:"+nm,init,c,k,(path[:50]+" "+(sym(pcs[0])[:50] if pcs else "")),rows[max(0,bisect.bisect_right(irs,ri)-1)]["stack_parts"]))
 
 # --- SNAPK3c: identity of the pending jobs at each job_queue row
 def jobs_of(v):
@@ -229,11 +240,24 @@ def first_block(removed):
     for e in ev:
         if e[4]=="B" and e[5] not in removed: return e
     return None
+ENTER_SEQ={}   # init -> seq of its init_enter row (the boundary before that module body)
+for r in rows:
+    if r["op"]=="init_enter":
+        f=parse(r["stack_parts"])
+        if f: ENTER_SEQ.setdefault(f[-1][0],r["seq"])
+def outer_frame(stack):
+    # the outermost open module frame at a row: stack_parts are init:phase:job; job frames are not module bodies. A CommonJS body
+    # cannot be cut mid-run, so the realizable boundary is before this frame.
+    fr=[f[0] for f in parse(stack) if len(f)>2 and f[2]==0]
+    return fr[0] if fr else None
 def cut(e):
+    # (boundary row, its real Ir position, outermost open frame at the blocker or None)
     s=stop_seq_of(e) if e else rows[-1]["seq"]+1
+    F=outer_frame(e[7]) if e else None
+    if F is not None and F in ENTER_SEQ: s=min(s,ENTER_SEQ[F]+1)   # the boundary row of F's init_enter is itself a candidate
     with contextlib.redirect_stdout(io.StringIO()): best,bl=cutinfo(s)
-    if best is None: return {"seq":-1,"init":-1,"ir":0},0   # blocker before the first resumable init boundary
-    r,cls=best; return r,realpos(r["ir"])
+    if best is None: return {"seq":-1,"init":-1,"ir":0},0,F   # blocker before the first resumable init boundary
+    r,cls=best; return r,realpos(r["ir"]),F
 out={"V":V,"TOT":TOT,"ledger":[]}
 print("run",V,"real_init_Ir",TOT,"rows",len(rows),"events",len(ev))
 print("class counts:",collections.Counter(e[4] for e in ev))
@@ -241,18 +265,18 @@ removed=set(); prev=None
 print("first B events:")
 for e in [x for x in ev if x[4]=="B"][:12]: print("  B ir=%d seq=%d %s init %d %s %s | %s"%(e[0],e[1],e[2],e[3],mod(e[3]),e[5],e[6][:100]))
 for step in range(60):
-    e=first_block(removed); r,rp=cut(e)
+    e=first_block(removed); r,rp,F=cut(e)
     pct=100*rp/TOT
     if prev is not None: out["ledger"][-1]["gain_pct"]=round(pct-prev,3)
     if e is None:
         print("END no more blockers: cut at seq",r["seq"],"init",r["init"],"%.2f%%"%pct); out["final"]=pct; break
     n=sum(1 for x in ev if x[5]==e[5])
     ninit=len({x[3] for x in ev if x[5]==e[5]})
-    print("%2d cut %6.2f%% before init %4d | blocker %-40s first: %s init %d %s | %s | rows %d inits %d"%(step,pct,r["init"],str(e[5])[:40],e[2],e[3],mod(e[3]),e[6][:90],n,ninit))
-    out["ledger"].append({"step":step,"cut_pct":round(pct,3),"cut_before_init":r["init"],"key":list(map(str,e[5])),"op":e[2],"init":e[3],"module":mod(e[3]),"detail":e[6],"rows":n,"inits":ninit})
+    print("%2d cut %6.2f%% before init %4d (blocking init %d, outermost open frame %s) | blocker %-40s first: %s init %d %s | %s | rows %d inits %d"%(step,pct,r["init"],e[3],F,str(e[5])[:40],e[2],e[3],mod(e[3]),e[6][:90],n,ninit))
+    out["ledger"].append({"step":step,"cut_pct":round(pct,3),"cut_before_init":r["init"],"blocking_init":e[3],"outer_frame":F,"key":list(map(str,e[5])),"op":e[2],"init":e[3],"module":mod(e[3]),"detail":e[6],"rows":n,"inits":ninit})
     removed.add(e[5]); prev=pct; ASYNC_OK[0]=("record_async",) in removed
 # guard members inside the first cut
-e0=first_block(set()); r0,_=cut(e0)
+e0=first_block(set()); r0,_,_=cut(e0)
 mem=collections.Counter(e[5] for e in ev if e[4]=="M" and e[1]<r0["seq"] and e[1]>=0)
 print("guard members before the first cut:",sorted(mem.items(),key=str)[:40])
 out["members_first_cut"]=[[list(map(str,k)),n] for k,n in mem.items()]
@@ -264,8 +288,54 @@ with open(OUT+"cutk3-%s%s.tsv"%(V,"-model" if MODEL else ""),"w") as t:
 bk=collections.Counter(e[5] for e in ev if e[4]=="B")
 print("B keys total:",len(bk)); print("top B keys by rows:",bk.most_common(30))
 json.dump(out,open(OUT+"cutk3-%s%s.json"%(V,"-model" if MODEL else ""),"w"),indent=1)
-# guard members inside the product cut (owner-accepted USER cap: worker, env_block fromEnv, job_queue, ids removed)
-rm4=set(tuple(map(str,L["key"])) for L in out["ledger"][:4])
-e4=next((e for e in ev if e[4]=="B" and tuple(map(str,e[5])) not in rm4),None); r4,p4=cut(e4)
+# --- the PRODUCT cut. A blocker is a STOP unless a rule passes it; passable things are the guard members (class M), each with the
+# reason that makes it passable. Nothing is passed by position in the ladder.
+def stop_why(k):
+    t=k[0]
+    if t=="ids": return "uid/gid read: no startup guard member exists for it; the program must read it lazily"
+    if t=="env-value" and len(k)>1 and k[1]=="USER": return "env value USER copied into an init: the cut stays before it (the USER copy is a stop)"
+    if t=="op" and len(k)>1 and k[1]=="tty.winsize": return "tty.winsize read: no member (stream size is a host value)"
+    if t=="env_block": return "env enumeration reads every name: no member can cover it"
+    if t=="p_entry": return "entry-birth hold: an imaged word holds an entry-built value"
+    if t=="record_async": return "first suspended module body: no cut inside or after a suspension"
+    if t=="unsetenv": return "delete of an env key that was not read unset: a host write"
+    if t=="host_value": return "imaged read of a host value (argv, execPath, argv0)"
+    return "no member rule passes this kind"
+def member_why(k):
+    t=k[0]
+    if t=="env-unset": return "member '%s unset': an unset env key is guarded"%k[1]
+    if t=="env-unset-delete": return "member '%s unset' also covers the later delete (idempotent; the key was read unset)"%k[1]
+    if t=="env-value": return "member '%s = build-time literal': a named env value is guarded; USER is excepted"%k[1]
+    if t=="tty": return "member 'isatty(fd)': the image is built for terminal users"
+    if t=="stylebit": return "member 'stdout style bit' (terminal user)"
+    if t=="pred": return "member 'compare_literal' on a host-value or env string, e.g. %s (the dispatch sentinel predicate)"%k[1]
+    if t=="argv-pred": return "member 'argv holds none of the flags' (hasFlag predicate); MATCHED BY MODULE NAME (known gap: not derived from the program)"
+    return "guard member"
+def product(removed):
+    ASYNC_OK[0]=("record_async",) in removed
+    e=first_block(removed); r,rp,F=cut(e)
+    return e,r,rp,F
+def show(tag,removed,why):
+    e,r,rp,F=product(removed)
+    if e is None: print("%s %.2f%% before init %d; no blocker left%s"%(tag,100*rp/TOT,r["init"],why)); return e,r,rp
+    print("%s %.2f%% before init %d (blocking init %d, outermost open frame %s); STOP %s on %s: %s%s"%(tag,100*rp/TOT,r["init"],e[3],F,str(e[5])[:60],e[2],stop_why(e[5]),why))
+    return e,r,rp
+e4,r4,p4=show("PRODUCT cut",set(),"")
 m4=collections.Counter(e[5] for e in ev if e[4]=="M" and 0<=e[1]<r4["seq"])
-print("PRODUCT cut %.2f%% before init %d; guard members %d keys:"%(100*p4/TOT,r4["init"],len(m4)),sorted(m4.items(),key=str))
+print("PRODUCT guard members: %d keys, each passable only for its reason:"%len(m4))
+kinds=collections.OrderedDict()   # one line per member kind: keys and rows, the reason of the first key
+for k,n in sorted(m4.items(),key=str):
+    g=kinds.setdefault(k[0],[0,0,k]); g[0]+=1; g[1]+=n
+for t,(nk,nr,k0) in kinds.items(): print("  %-16s %3d keys %4d rows: %s"%(t,nk,nr,member_why(k0) if nk==1 else member_why(k0).replace("'%s"%k0[1],"'<key>") if len(k0)>1 and t.startswith("env") else member_why(k0)))
+na=sum(1 for e in ev if e[5]==("argv-pred",))
+if na: print("NOTE argv-pred (%d rows in the whole run) is matched by MODULE NAME (a supports_color index module), a known gap: not derived from the program"%na)
+need=sorted({k[1] for k in m4 if k[0]=="env-unset-delete"})
+if need: print("PRODUCT members needed for a delete of a key read unset: %s"%", ".join("'%s unset'"%n for n in need))
+# what-ifs: hypothetical; the first drops one stop kind, the next also the following one. Never the product.
+wi=set(); out["whatif"]=[]
+for key,asm in ((("ids",),"the application reads uid/gid lazily"),(("env-value","USER"),"the USER init copy is lifted")):
+    wi.add(key); tag="WHAT-IF (HYPOTHETICAL: assumes %s) cut"%("; and ".join(a for k,a in ((("ids",),"the application reads uid/gid lazily"),(("env-value","USER"),"the USER init copy is lifted")) if k in wi))
+    e,r,rp=show(tag,wi,"")
+    out["whatif"].append({"removed":[list(k) for k in wi],"cut_pct":round(100*rp/TOT,3),"cut_before_init":r["init"],"next_stop":list(map(str,e[5])) if e else None})
+out["product"]={"cut_pct":round(100*p4/TOT,3),"cut_before_init":r4["init"],"stop":list(map(str,e4[5])) if e4 else None}
+json.dump(out,open(OUT+"cutk3-%s%s.json"%(V,"-model" if MODEL else ""),"w"),indent=1)
