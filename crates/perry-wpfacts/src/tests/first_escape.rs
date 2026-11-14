@@ -825,3 +825,113 @@ fn control_r7hold7_number_key_without_copy_no_escape() {
 fn control_r7hold7_numeric_prefix_name_is_copied() {
     assert!(r7hold7_escapes("1 + j.s", "[\"1x\"]", true));
 }
+
+/// R7HOLD8 Part A: `i * j.stride + j.offset` with `j.offset` a JSON value: if
+/// it is a String the sum is a String (ECMA-262 13.15.3
+/// ApplyStringOrNumericBinaryOperator: either primitive a String ->
+/// concatenation), e.g. `"1x"` (i*stride = 1, offset = "x"). The key of the
+/// element store may therefore be a non-index name: `a["1x"]` may read `f`.
+fn r7hold8_sum_key_escapes(key: &str, read: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const j: any = JSON.parse(process.argv[2] ?? "{{}}");
+        const i: number = Number(process.argv[3]);
+        const a: any = j.arr;
+        const f: any = (globalThis as any)[j.k];
+        const k = {key};
+        a[k] = f;
+        a{read}(new V());
+        console.log(new V().probe());
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+#[test]
+fn r7hold8_number_plus_maybe_string_is_maybe_a_string() {
+    assert!(r7hold8_sum_key_escapes("i * j.stride + j.offset", "[\"1x\"]"));
+}
+
+/// Control: a Number-only sum (`i * j.stride + 1`) is an index key: the
+/// element store never names `"1x"`, so the read never sees `f`.
+#[test]
+fn control_r7hold8_number_only_sum_never_names_a_non_index() {
+    assert!(!r7hold8_sum_key_escapes("i * j.stride + 1", "[\"1x\"]"));
+}
+
+/// R7HOLD9 rule 1 pin: `new Blob(x)` converts `x` as a `sequence<BlobPart>`
+/// (WebIDL: GetMethod(x, @@iterator), then the iterator it returns is
+/// stepped, ECMA-262 7.4.2/7.4.4); `next` is called on that iterator, never
+/// on `x` itself. `x` has no `@@iterator` (nor has Object.prototype): the
+/// conversion throws before any `next`, so `x` never reaches `u`.
+fn r7hold9_blob_part_escapes(part: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const u: any = (globalThis as any)[process.argv[2] ?? "x"];
+        const w = new V();
+        const x: any = {part};
+        try {{ new Blob(x); }} catch (e) {{}}
+        console.log(w.probe());
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+#[test]
+fn red_r7hold9_blob_part_next_is_not_called_on_the_iterable() {
+    assert!(!r7hold9_blob_part_escapes("{ next: u, w }"));
+}
+
+/// Control: `x`'s own `@@iterator` returns `{ next: u, w }`: the runtime
+/// calls `u` with that iterator as `this`, so `w` reaches unknown code.
+#[test]
+fn control_r7hold9_blob_part_iterator_next_is_called() {
+    assert!(r7hold9_blob_part_escapes(
+        "{ [Symbol.iterator]() { return { next: u, w }; } }"
+    ));
+}
+
+/// R7HOLD9 rule 2: `ArrayBuffer.prototype.resize` called with a `this` that
+/// is no ArrayBuffer throws a TypeError before it reads anything (ECMA-262
+/// 25.1.6.6 step 2 RequireInternalSlot(O, [[ArrayBufferMaxByteLength]]);
+/// the runtime: typed_array.rs `array_buffer_method`, brand check first):
+/// `o` never reaches unknown code and the call has no value.
+fn r7hold9_resize_escapes(recv: &str) -> bool {
+    let s = format!(
+        r#"
+        class V {{ zz = 1; probe() {{ return this.zz; }} }}
+        const o: any = {{ m: ArrayBuffer.prototype.resize, w: new V() }};
+        const buf: any = new ArrayBuffer(8, {{ maxByteLength: 16 }});
+        buf.m = o.m;
+        buf.w = o.w;
+        const c = process.argv.length > 3;
+        let r: any = undefined;
+        try {{ r = ({recv}).m(8); }} catch (e) {{}}
+        console.log(o.w.probe(), r);
+        "#
+    );
+    matches!(site(&facts(&s), "zz").verdict, Verdict::No(_))
+}
+
+#[test]
+fn red_r7hold9_arraybuffer_method_on_a_non_buffer_throws() {
+    assert!(!r7hold9_resize_escapes("o"));
+}
+
+/// Control: `this` possibly the real buffer (`c ? o : buf`, `buf` holding
+/// the same `m` and `w`): the buffer case keeps its model, so the verdict
+/// is the buffer-only one, whatever that model gives.
+#[test]
+fn control_r7hold9_arraybuffer_method_on_a_buffer_keeps_its_model() {
+    assert!(!r7hold9_resize_escapes("buf"));
+}
+
+/// The receiver either `o` or the buffer: each runs on its own (`o` throws,
+/// the buffer keeps its model): the verdict is the buffer-only one.
+#[test]
+fn red_r7hold9_arraybuffer_method_on_a_buffer_or_a_non_buffer() {
+    assert!(!r7hold9_resize_escapes("c ? o : buf"));
+}
+

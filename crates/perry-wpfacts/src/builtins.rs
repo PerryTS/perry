@@ -1593,9 +1593,25 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
 /// array); a `TypedArray`/`Buffer` object, an undescribed (`Box`/`Opaque`
 /// family) builtin object, a marker or an unknown value may have it. The
 /// runtime's check: `typed_array_proto_thunks.rs` `ta_receiver_or_throw`.
+///
+/// An `ArrayBuffer.prototype` method (`what` `ArrayBuffer`: `slice`,
+/// `resize`, `transfer`, `transferToFixedLength`) starts with
+/// RequireInternalSlot(this, [[ArrayBufferData]]) or
+/// [[ArrayBufferMaxByteLength]] and IsSharedArrayBuffer (ECMA-262 25.1.6.6
+/// step 2, 25.1.6.7 step 2, 25.1.6.8, 25.1.6.9): a TypeError before `this`'s
+/// properties or an argument are read. The slot is missing from every
+/// object no ArrayBuffer constructor made, exactly the objects the typed
+/// arm above lists; a buffer kind (`ArrayBuffer`, `SharedArrayBuffer`,
+/// `TypedArray`, `Buffer`, `DataView`), an undescribed builtin object, a
+/// marker or an unknown value may have it. The runtime's check:
+/// `global_this/typed_array.rs` `array_buffer_receiver_addr` (`slice`,
+/// `array_buffer_method`).
 pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) -> bool {
     let typed = fam == Family::Opaque && what == Some("TypedArray");
-    if !(typed || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
+    let buffer = fam == Family::Opaque && what == Some("ArrayBuffer");
+    if !(typed
+        || buffer
+        || matches!(fam, Family::Num | Family::Bool | Family::Sym | Family::BigInt))
         || m.is_marker(r)
     {
         return false;
@@ -1604,14 +1620,19 @@ pub(crate) fn no_this_value(m: &Model, fam: Family, what: Option<&str>, r: Tok) 
         // A builtin object of an undescribed kind (`primbox`) may be one.
         TokKind::Obj(tm, _) => match &m.tmpls[*tm as usize].kind {
             TmplKind::BObj { what: w, .. } => {
-                typed
-                    && !matches!(*w, "TypedArray" | "Buffer")
+                (typed || buffer)
+                    && !matches!(
+                        *w,
+                        "TypedArray" | "Buffer" | "DataView" | "ArrayBuffer" | "SharedArrayBuffer"
+                    )
                     && !matches!(members::bobj_family(w), Family::Box | Family::Opaque)
             }
             _ => true,
         },
         TokKind::Proto(_) | TokKind::ObjectProto | TokKind::BuiltinFn(_) => true,
-        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => typed,
+        TokKind::Func(..) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Builtin(_) => {
+            typed || buffer
+        }
         _ => false,
     }
 }
