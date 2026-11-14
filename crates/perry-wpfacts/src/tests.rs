@@ -2149,5 +2149,6 @@ mod given_proto_members;
 mod sound1;
 mod scope_a;
 mod new_verdicts;
+mod lit_fact;
 mod held_realm_verdicts;
 mod held_realm_flow;
