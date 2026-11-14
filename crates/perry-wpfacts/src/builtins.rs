@@ -1796,6 +1796,27 @@ pub(crate) fn realm_born_without_own_props(what: &str) -> bool {
     )
 }
 
+/// Is a builtin object of kind `what` a primitive's wrapper
+/// (`Family::Wrapper`: `Object(x)` and `new Object(x)` (ECMA-262 20.1.1.1),
+/// the ToObject of `Object.assign`'s target (20.1.2.1, 7.1.18), `new
+/// Number/String/Boolean(x)` (21.1.1.1, 22.1.1.1, 20.3.1.1), a method's
+/// ToObject(this))? It is born with no own property but a String
+/// wrapper's indices and its non-enumerable `length` (10.4.3.3
+/// StringCreate); for a non-primitive argument `Object(x)` is `x` itself,
+/// a value of its own, and for undefined or null a new ordinary object with
+/// none. A copy of its own enumerable properties reads what the program
+/// stored on it (its fields) and a String wrapper's indices
+/// (`wrapper_may_wrap_string`). Only for a birth of this unit's code.
+pub(crate) fn wrapper_own_props_are_stores(what: &str) -> bool {
+    members::bobj_family(what) == Family::Wrapper
+}
+
+/// May a wrapper of kind `what` wrap a String (`wrapper_own_props_are_stores`):
+/// its own index properties are the characters of the string (10.4.3.5).
+pub(crate) fn wrapper_may_wrap_string(what: &str) -> bool {
+    matches!(what, "BoxedString" | "Object()" | "Object(prim)")
+}
+
 /// A builtin object whose template is a container the model fills
 /// (`Family::Box`: `JSON.parse` values, `Object.keys` and `Reflect.ownKeys`
 /// arrays, `Object.groupBy` and `Object.fromEntries` results, property
