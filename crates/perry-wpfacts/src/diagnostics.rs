@@ -2082,6 +2082,34 @@ impl Model {
         }
     }
 
+    /// `ks3_call` for a rule that names the call it serves.
+    pub(crate) fn keysnap_call_pos(&mut self, call: CallId) -> String {
+        let Some(ks) = self.keysnap.take() else { return String::new() };
+        let s = self.ks3_call(&ks, call);
+        self.keysnap = Some(ks);
+        s
+    }
+
+    /// The first-arrival chain of `t` back from `n`, up to `hops` nodes.
+    fn ks3_chain(&self, ks: &KeySnap, n: NodeId, t: Tok, hops: usize) {
+        let mut cur = n;
+        for _ in 0..hops {
+            let Some(&(src, why, at)) = ks.first.get(&(cur, t)) else { return };
+            let rs = self.reasons.get(why as usize).map_or("-", |s| s.as_str());
+            let f = at.file();
+            let f = f.rsplit_once("src/").map_or(f, |(_, x)| x);
+            if src == NO_NODE {
+                eprintln!("KS3     hop seed into n{cur} reason {rs:?} added at {f}:{}", at.line());
+                return;
+            }
+            eprintln!("KS3     hop {} -> n{cur} | edge {} | added at {f}:{}", self.ks3_node_pos(ks, src), self.ks3_edge(src, cur), at.line());
+            if src == cur {
+                return;
+            }
+            cur = src;
+        }
+    }
+
     /// `file:line:col (byte off)` of a module byte offset.
     fn ks3_pos(&self, ks: &KeySnap, mi: u32, off: u32) -> String {
         let file = ks.mod_file.get(mi as usize).map_or("?", |s| s.as_str());
@@ -2194,6 +2222,9 @@ impl Model {
                     None => "not recorded".into(),
                 };
                 eprintln!("KS3   tok {t} {} name={} first: {first}", self.ks2_kind(t), self.tok_name(t));
+                if matches!(self.toks[t as usize], TokKind::Builtin(_)) || self.tok_name(t).contains("json") {
+                    self.ks3_chain(ks, *n, t, 8);
+                }
             }
         }
     }
