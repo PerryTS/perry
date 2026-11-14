@@ -843,10 +843,20 @@ fn install_typed_array_iterator_symbol(proto_obj: *mut ObjectHeader) {
         crate::object::BuiltinConstructorIdentity::Array,
     ) != 0
     {
-        let global = crate::value::js_nanbox_get_pointer(js_get_global_core()) as *mut ObjectHeader;
-        super::populate::alias_typed_array_proto_to_string(global);
+        alias_to_string_late();
     }
     (ctor, proto)
+}
+
+/// [`ensure_typed_array_intrinsic`] built the intrinsic after the realm's
+/// `Array`: alias its `toString` now. Its own copy of the alias, out of line,
+/// so the population keeps the inlined one it always had.
+#[cold]
+#[inline(never)]
+fn alias_to_string_late() {
+    let global =
+        crate::value::js_nanbox_get_pointer(fetch_globals::realm_core()) as *mut ObjectHeader;
+    super::populate::alias_typed_array_proto_to_string(global);
 }
 
 /// Public accessor for the `%TypedArray%.prototype` object. Returns the cached
