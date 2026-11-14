@@ -477,6 +477,32 @@ impl Model {
             }
         }
         eprintln!("perry: wpfacts census depth {:?}", depth);
+        // Maker contexts by kind and by the depth of the maker's chain:
+        // a method's (bym), a constructor run of an object a method made
+        // (ctor-of-mmade), one with a method-made object further up its
+        // chain (ctor-in-mchain), and a constructor run on a pure
+        // constructor chain (ctor).
+        let mut split: std::collections::BTreeMap<(usize, usize), usize> = Default::default();
+        for &(_, m) in self.sum.made.iter() {
+            let crate::summary::Maker::Obj(o, bym) = m else { continue };
+            let (mut d, mut first, mut any, mut x) = (0usize, None, false, o);
+            while let TokKind::Obj(_, c) = self.toks[x as usize] {
+                match (c < crate::summary::BORN).then(|| self.sum.made.get((crate::summary::BORN - 1 - c) as usize).copied()).flatten() {
+                    Some((_, crate::summary::Maker::Obj(m2, b2))) => {
+                        d += 1;
+                        first.get_or_insert(b2);
+                        any |= b2;
+                        x = m2;
+                    }
+                    _ => break,
+                }
+            }
+            let kind = if bym { 0 } else if first == Some(true) { 1 } else if any { 2 } else { 3 };
+            *split.entry((kind, d.min(15))).or_default() += 1;
+        }
+        for ((k, d), n) in split {
+            eprintln!("perry: wpfacts census split\t{}\tdepth={d}\tctxs={n}", ["method", "ctor-of-mmade", "ctor-in-mchain", "ctor"][k]);
+        }
         let mut v: Vec<_> = mk.into_iter().collect();
         v.sort_by(|a, b| b.1 .0.cmp(&a.1 .0).then(a.0.cmp(&b.0)));
         for (k, (n, o, _)) in v.iter().take(25) {
